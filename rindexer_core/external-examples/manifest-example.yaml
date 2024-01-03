@@ -1,0 +1,44 @@
+description: This is an example manifest file for the rindexer project.
+repository: https://github.com/joshstevens19/rindexer
+indexers:
+  - name: ExampleContract
+    networks:
+      - mainnet
+      - rinkeby
+    source:
+      - address: '0x2E645469f354BB4F5c8a05B3b30A929361cf77eC'
+        network: mainnet
+        startBlock: 6175244
+        endBlock: 7175245 # optional
+        pollingEvery: 15000 # optional
+      - address: '0x2E645469f354BB4F5c8a05B3b30A929361cf77eC'
+        network: rinkeby
+        startBlock: 6175244
+        endBlock: 7175245 # optional
+        pollingEvery: 15000 # optional
+      - abi: ExampleABI
+    context:
+      contracts:
+        - abi: InjectedContractABI
+          name: InjectedContract
+          network: mainnet
+          address: '0x2E645469f354BB4F5c8a05B3b30A929361cf77eC'
+    mapping:
+      # entities:
+      #   - Gravatar
+      abis:
+        - name: ExampleABI
+          file: ./abis/ExampleABI.json
+        - name: InjectedContractABI
+          file: ./abis/InjectedContractABI.json
+networks:
+  - name: mainnet
+    chainId: 1
+    url: https://mainnet.infura.io/v3/${INFURA_KEY}
+    maxBlockRange: 100000 # optional
+    maxHistoricalTaskConcurrency: 20 # optional
+  - name: rinkeby
+    chainId: 13
+    url: https://rinkeby.infura.io/v3/${INFURA_KEY}
+    maxBlockRange: 100000 # optional
+    maxHistoricalTaskConcurrency: 20 # optional
