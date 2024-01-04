@@ -1,19 +1,9 @@
 pub mod generator;
 mod helpers;
-mod manifest;
+mod indexer;
+pub mod manifest;
 mod node;
 
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+// export 3rd party dependencies
+pub use ethers;
+pub use lazy_static::lazy_static;

@@ -5,40 +5,43 @@ indexers:
     networks:
       - mainnet
       - rinkeby
-    source:
-      - address: '0x2E645469f354BB4F5c8a05B3b30A929361cf77eC'
+    sources:
+      - name: MyFirstContract
+        address: '0x2E645469f354BB4F5c8a05B3b30A929361cf77eC'
         network: mainnet
         startBlock: 6175244
         endBlock: 7175245 # optional
         pollingEvery: 15000 # optional
-      - address: '0x2E645469f354BB4F5c8a05B3b30A929361cf77eC'
+        abi: Example
+      - name: MySecondContract
+        address: '0x2E645469f354BB4F5c8a05B3b30A929361cf77eC'
         network: rinkeby
         startBlock: 6175244
         endBlock: 7175245 # optional
         pollingEvery: 15000 # optional
-      - abi: ExampleABI
+        abi: Example
     context:
       contracts:
-        - abi: InjectedContractABI
-          name: InjectedContract
+        - abi: Injected
+          name: Injected
           network: mainnet
           address: '0x2E645469f354BB4F5c8a05B3b30A929361cf77eC'
-    mapping:
+    mappings:
       # entities:
       #   - Gravatar
       abis:
-        - name: ExampleABI
-          file: ./abis/ExampleABI.json
-        - name: InjectedContractABI
-          file: ./abis/InjectedContractABI.json
+        - name: Example
+          file: /Users/joshstevens/code/rindexer/rindexer_core/external-examples/lens-registry-events-abi.json
+        - name: Injected
+          file: /Users/joshstevens/code/rindexer/rindexer_core/external-examples/lens-registry-events-abi.json
 networks:
   - name: mainnet
     chainId: 1
-    url: https://mainnet.infura.io/v3/${INFURA_KEY}
+    url: https://mainnet.infura.io/v3/1d8d3f3d6a4f4c0a8f6b4e4c8c9f2b4d
     maxBlockRange: 100000 # optional
     maxHistoricalTaskConcurrency: 20 # optional
   - name: rinkeby
     chainId: 13
-    url: https://rinkeby.infura.io/v3/${INFURA_KEY}
+    url: https://rinkeby.infura.io/v3/1d8d3f3d6a4f4c0a8f6b4e4c8c9f2b4d
     maxBlockRange: 100000 # optional
     maxHistoricalTaskConcurrency: 20 # optional

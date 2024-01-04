@@ -1,4 +1,3 @@
-// use ethers::contract::abigen;
 use ethers::utils::keccak256;
 use serde_json::Value;
 use std::error::Error;
@@ -308,7 +307,9 @@ mod tests {
 
     #[test]
     fn generate_works() {
-        let mut file = File::create("src/generator/generated______output.rs").unwrap();
+        let name = camel_to_snake(&"LensRegistry".to_string());
+        let location = format!("src/generator/output/{}.rs", name);
+        let mut file = File::create(location).unwrap();
 
         let code = generate_event_bindings_from_abi(LENS_REGISTRY_EVENTS_ABI).unwrap();
 
