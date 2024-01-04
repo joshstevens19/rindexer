@@ -1,3 +1,8 @@
+use std::fs;
+use std::io::Write;
+use std::path::Path;
+use std::{error::Error, fs::File};
+
 pub fn capitalize_first_letter(s: &str) -> String {
     s.chars()
         .enumerate()
@@ -20,4 +25,15 @@ pub fn camel_to_snake(name: &str) -> String {
         snake_case.push(ch.to_lowercase().next().unwrap());
     }
     snake_case
+}
+
+pub fn write_file(path: &str, contents: &str) -> Result<(), Box<dyn Error>> {
+    let path = Path::new(path);
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+
+    let mut file = File::create(path)?;
+    file.write_all(contents.as_bytes())?;
+    Ok(())
 }
