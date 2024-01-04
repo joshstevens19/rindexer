@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::Path;
+use std::process::Command;
 use std::{error::Error, fs::File};
 
 pub fn capitalize_first_letter(s: &str) -> String {
@@ -27,6 +28,13 @@ pub fn camel_to_snake(name: &str) -> String {
     snake_case
 }
 
+fn format_file(file_path: &str) {
+    Command::new("rustfmt")
+        .arg(file_path)
+        .status()
+        .expect("Failed to execute rustfmt.");
+}
+
 pub fn write_file(path: &str, contents: &str) -> Result<(), Box<dyn Error>> {
     let path = Path::new(path);
     if let Some(dir) = path.parent() {
@@ -35,5 +43,45 @@ pub fn write_file(path: &str, contents: &str) -> Result<(), Box<dyn Error>> {
 
     let mut file = File::create(path)?;
     file.write_all(contents.as_bytes())?;
+    format_file(path.to_str().unwrap());
+    Ok(())
+}
+
+pub fn create_mod_file(path: &Path) -> Result<(), Box<dyn Error>> {
+    let entries = fs::read_dir(path)?;
+
+    let mut mods = Vec::new();
+    let mut dirs = Vec::new();
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(dir_name) = path.file_name().and_then(|n| n.to_str()) {
+                dirs.push(dir_name.to_owned());
+                create_mod_file(&path)?;
+            }
+        } else if let Some(ext) = path.extension() {
+            if ext == "rs" && path.file_stem().map_or(true, |s| s != "mod") {
+                if let Some(file_stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    mods.push(file_stem.to_owned());
+                }
+            }
+        }
+    }
+
+    if !mods.is_empty() || !dirs.is_empty() {
+        let mod_path = path.join("mod.rs");
+        let mut mod_file = File::create(mod_path)?;
+
+        for module in mods {
+            writeln!(mod_file, "pub mod {};", module)?;
+        }
+
+        for dir in dirs {
+            writeln!(mod_file, "pub mod {};", dir)?;
+        }
+    }
+
     Ok(())
 }

@@ -246,40 +246,41 @@ fn generate_event_bindings_code(
     abi_path: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let code = format!(
-        r#"use ethers::types::{{U256, Address}};
-use std::any::Any;
+        r#"
+            use ethers::types::{{U256, Address}};
+            use std::any::Any;
 
-use super::event_callback_registry::EventCallbackRegistry;
+            use crate::generator::event_callback_registry::EventCallbackRegistry;
 
-{structs}
+            {structs}
 
-trait EventCallback {{
-    fn call(&self, data: &dyn Any);
-}}
+            trait EventCallback {{
+                fn call(&self, data: &dyn Any);
+            }}
 
-{event_callback_structs}
+            {event_callback_structs}
 
-pub enum RindexerEventType {{
-    {event_enums}
-}}
+            pub enum RindexerEventType {{
+                {event_enums}
+            }}
 
-impl RindexerEventType {{
-    pub fn topic_id(&self) -> &'static str {{
-        match self {{
-            {topic_ids_match_arms}
-        }}
-    }}
-    
-    pub fn register(self, registry: &mut EventCallbackRegistry) {{
-        let topic_id = self.topic_id();
-        let callback: Box<dyn Fn(&dyn Any) + 'static> = match self {{
-            {register_match_arms}
-        }};
-    
-        registry.register_event(topic_id, callback);
-    }}
-}}
-"#,
+            impl RindexerEventType {{
+                pub fn topic_id(&self) -> &'static str {{
+                    match self {{
+                        {topic_ids_match_arms}
+                    }}
+                }}
+                
+                pub fn register(self, registry: &mut EventCallbackRegistry) {{
+                    let topic_id = self.topic_id();
+                    let callback: Box<dyn Fn(&dyn Any) + 'static> = match self {{
+                        {register_match_arms}
+                    }};
+                
+                    registry.register_event(topic_id, callback);
+                }}
+            }}
+        "#,
         structs = generate_structs_from_abi(abi_path)?,
         event_callback_structs = generate_event_callback_structs_code(&event_info),
         event_enums = generate_event_enums_code(&event_info),
