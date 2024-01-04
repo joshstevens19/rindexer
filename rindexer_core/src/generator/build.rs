@@ -1,5 +1,6 @@
-use std::error::Error;
+use std::{error::Error, path::Path};
 
+use crate::helpers::create_mod_file;
 use crate::{
     helpers::{camel_to_snake, write_file},
     manifest::yaml::{read_manifest, Indexer, Network},
@@ -77,6 +78,8 @@ pub fn build(manifest_location: &str, output: &str) -> Result<(), Box<dyn Error>
         write_events(output, &indexer)?;
     }
 
+    create_mod_file(Path::new(output))?;
+
     Ok(())
 }
 
@@ -94,7 +97,7 @@ mod tests {
         build(MANIFEST, "src/generator/rindexer").unwrap();
     }
 
-     #[test]
+    #[test]
     fn blah() {
         Abigen::new("MyFirstContract", "/Users/joshstevens/code/rindexer/rindexer_core/external-examples/lens-registry-events-abi.json").unwrap().generate().unwrap().write_to_file("src/generator/rindexer/my_first_contact2").unwrap();
     }
