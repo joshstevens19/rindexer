@@ -1,8 +1,9 @@
 use std::any::Any;
 use std::collections::HashMap;
 
+
 pub struct EventCallbackRegistry {
-    events: HashMap<&'static str, Box<dyn Fn(&dyn Any)>>,
+    pub events: HashMap<&'static str, Box<dyn Fn(&dyn Any)>>,
 }
 
 impl EventCallbackRegistry {
