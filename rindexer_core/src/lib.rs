@@ -1,7 +1,7 @@
 // public
 pub mod generator;
-pub mod manifest;
 pub mod indexer;
+pub mod manifest;
 
 // private
 mod helpers;

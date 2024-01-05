@@ -1,7 +1,6 @@
 use std::any::Any;
 use std::collections::HashMap;
 
-
 pub struct EventCallbackRegistry {
     pub events: HashMap<&'static str, Box<dyn Fn(&dyn Any)>>,
 }
