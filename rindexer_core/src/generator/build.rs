@@ -82,23 +82,3 @@ pub fn build(manifest_location: &str, output: &str) -> Result<(), Box<dyn Error>
 
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use ethers::contract::Abigen;
-
-    use super::build;
-
-    const MANIFEST: &str =
-        "/Users/joshstevens/code/rindexer/rindexer_core/external-examples/manifest-example.yaml";
-
-    #[test]
-    fn generate() {
-        build(MANIFEST, "src/generator/rindexer").unwrap();
-    }
-
-    #[test]
-    fn blah() {
-        Abigen::new("MyFirstContract", "/Users/joshstevens/code/rindexer/rindexer_core/external-examples/lens-registry-events-abi.json").unwrap().generate().unwrap().write_to_file("src/generator/rindexer/my_first_contact2").unwrap();
-    }
-}
