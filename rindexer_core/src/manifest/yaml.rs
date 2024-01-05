@@ -21,7 +21,7 @@ pub struct Indexer {
     pub mappings: Mappings,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Source {
     pub name: String,
     pub address: String,
