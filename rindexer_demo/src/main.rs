@@ -1,7 +1,7 @@
 mod rindexer;
 
 use rindexer::lens_registry_example::events::lens_registry::{
-    LensRegistryEventType, NonceUpdatedEvent,
+    HandleLinkedEvent, HandleUnlinkedEvent, LensRegistryEventType, NonceUpdatedEvent,
 };
 
 use rindexer_core::{
@@ -15,15 +15,26 @@ async fn main() {
 
     let mut registry = EventCallbackRegistry::new();
 
-    let event_type = LensRegistryEventType::NonceUpdated(NonceUpdatedEvent {
+    LensRegistryEventType::NonceUpdated(NonceUpdatedEvent {
         callback: Box::new(|data| {
-            // Handle the event using data
             println!("NonceUpdated event: {:?}", data);
         }),
-    });
+    })
+    .register(&mut registry);
 
-    // Register the event using the RindexerEventType
-    event_type.register(&mut registry);
+    LensRegistryEventType::HandleLinked(HandleLinkedEvent {
+        callback: Box::new(|data| {
+            println!("HandleLinked event: {:?}", data);
+        }),
+    })
+    .register(&mut registry);
+
+    LensRegistryEventType::HandleUnlinked(HandleUnlinkedEvent {
+        callback: Box::new(|data| {
+            println!("HandleUnlinked event: {:?}", data);
+        }),
+    })
+    .register(&mut registry);
 
     start(registry).await
 }

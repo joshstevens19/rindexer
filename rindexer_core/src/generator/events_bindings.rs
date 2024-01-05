@@ -33,7 +33,7 @@ fn format_param_type(param: &Value) -> String {
                 .map(format_param_type)
                 .collect::<Vec<_>>()
                 .join(",");
-            format!("tuple({})", formatted_components)
+            format!("({})", formatted_components)
         }
         _ => param["type"].as_str().unwrap_or_default().to_string(),
     }
@@ -137,6 +137,7 @@ fn generate_topic_ids_match_arms_code(event_type_name: &str, event_info: &[Event
         .iter()
         .map(|info| {
             let event_signature = format!("{}({})", info.name, info.signature);
+            println!("event_signature: {}", event_signature);
             let topic_id = compute_topic_id(&event_signature);
             format!(
                 "{}::{}(_) => \"0x{}\",",
