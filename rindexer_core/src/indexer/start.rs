@@ -17,7 +17,7 @@ pub async fn start(registry: EventCallbackRegistry) -> () {
             .address(event.source.address.parse::<Address>().unwrap())
             .topic0(event.topic_id.parse::<H256>().unwrap())
             .from_block(event.source.start_block.unwrap());
-        // .to_block(6175245);
+            //.to_block(49929866);
 
         let result = event.provider.get_logs(&filter).await.unwrap();
 
