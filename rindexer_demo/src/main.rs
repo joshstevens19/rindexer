@@ -9,10 +9,13 @@ use rindexer_core::{
     indexer::start::start,
 };
 
-use crate::rindexer::lens_registry_example::events::lens_registry::NonceUpdatedData;
+use crate::rindexer::lens_registry_example::{events::lens_registry::NonceUpdatedData, contexts::blah};
 
 fn main() {
-    generate();
+    
+    blah();
+
+    // generate();
     let mut registry = EventCallbackRegistry::new();
 
     let event_type = LensRegistryEventType::NonceUpdated(NonceUpdatedEvent {
@@ -28,20 +31,10 @@ fn main() {
     // Triggering an event...
     println!("hey {}", registry.events.len());
 
-    let address: Address = "0xD4F2F33680FCCb36748FA9831851643781608844"
-        .to_string()
-        .parse()
-        .unwrap();
-
     let hey = registry
-        .events
-        .get("0xc906270cebe7667882104effe64262a73c422ab9176a111e05ea837b021065fc")
+        .find_event("0xc906270cebe7667882104effe64262a73c422ab9176a111e05ea837b021065fc")
         .unwrap();
-    hey(&NonceUpdatedData {
-        nonce: 1.into(),
-        signer: address,
-        timestamp: 1.into(),
-    });
+    println!("hey {:?}", (&hey.source, &hey.topic_id));
 
     start(registry);
 }

@@ -3,7 +3,12 @@ use serde_json::Value;
 use std::error::Error;
 use std::fs;
 
-use crate::helpers::{camel_to_snake, capitalize_first_letter};
+use crate::{
+    helpers::{camel_to_snake, capitalize_first_letter},
+    manifest::yaml::Source,
+};
+
+use super::networks_bindings::network_provider_fn_name_by_name;
 
 struct EventInfo {
     name: String,
@@ -220,26 +225,51 @@ fn generate_register_match_arms_code(event_type_name: &str, event_info: &[EventI
         .join("\n")
 }
 
+fn generate_source_type_fn_code(source: &Source) -> String {
+    format!(
+        r#"
+            fn source(&self) -> Source {{
+                Source {{
+                    name: "{name}".to_string(),
+                    address: "{address}".to_string(),
+                    network: "{network}".to_string(),
+                    start_block: Some({start_block}),
+                    end_block: None,
+                    polling_every: Some({polling_every}),
+                    abi: "{abi}".to_string(),
+                }}
+            }}
+            "#,
+        name = source.name,
+        address = source.address,
+        network = source.network,
+        start_block = source.start_block.unwrap_or(0),
+        // end_block = source.end_block.unwrap_or(0),
+        polling_every = source.polling_every.unwrap_or(1000),
+        abi = source.abi
+    )
+}
+
 fn generate_event_callback_structs_code(event_info: &[EventInfo]) -> String {
     event_info
         .iter()
         .map(|info| {
             format!(
                 r#"
-pub struct {name}Event {{
-    pub callback: Box<dyn Fn(&{struct_name})>,
-}}
+                    pub struct {name}Event {{
+                        pub callback: Box<dyn Fn(&{struct_name})>,
+                    }}
 
-impl EventCallback for {name}Event {{
-    fn call(&self, data: &dyn Any) {{
-        if let Some(specific_data) = data.downcast_ref::<{struct_name}>() {{
-            (self.callback)(specific_data);
-        }} else {{
-            println!("{name}Event: Unexpected data type - expected: {struct_name} - received: {{:?}}", data)
-        }}
-    }}
-}}
-"#,
+                    impl EventCallback for {name}Event {{
+                        fn call(&self, data: &dyn Any) {{
+                            if let Some(specific_data) = data.downcast_ref::<{struct_name}>() {{
+                                (self.callback)(specific_data);
+                            }} else {{
+                                println!("{name}Event: Unexpected data type - expected: {struct_name} - received: {{:?}}", data)
+                            }}
+                        }}
+                    }}
+                "#,
                 name = info.name,
                 struct_name = info.struct_name
             )
@@ -249,17 +279,20 @@ impl EventCallback for {name}Event {{
 }
 
 fn generate_event_bindings_code(
-    name: &str,
+    source: &Source,
     event_info: Vec<EventInfo>,
     abi_path: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let event_type_name = generate_event_type_name(name);
+    let event_type_name = generate_event_type_name(&source.name);
     let code = format!(
         r#"
-            use ethers::types::{{U256, Address}};
+            use ethers::{{types::{{Address, U256}}, providers::{{Provider, Http}}}};
             use std::any::Any;
 
-            use rindexer_core::generator::event_callback_registry::EventCallbackRegistry;
+            use rindexer_core::{{
+                generator::event_callback_registry::{{EventCallbackRegistry, EventInformation}},
+                manifest::yaml::Source,
+            }};
 
             {structs}
 
@@ -279,14 +312,29 @@ fn generate_event_bindings_code(
                         {topic_ids_match_arms}
                     }}
                 }}
+
+                {source_type_fn}
+
+                fn get_provider(&self) -> &'static Provider<Http> {{
+                    &crate::rindexer::networks::{network_provider_fn_name}()
+                }}
                 
                 pub fn register(self, registry: &mut EventCallbackRegistry) {{
                     let topic_id = self.topic_id();
+                    let source = self.source();
+                    let provider = self.get_provider();
                     let callback: Box<dyn Fn(&dyn Any) + 'static> = match self {{
                         {register_match_arms}
                     }};
                 
-                    registry.register_event(topic_id, callback);
+                   registry.register_event({{
+                        EventInformation {{
+                            topic_id,
+                            source,
+                            provider,
+                            callback,
+                        }}
+                    }});
                 }}
             }}
         "#,
@@ -295,6 +343,8 @@ fn generate_event_bindings_code(
         event_callback_structs = generate_event_callback_structs_code(&event_info),
         event_enums = generate_event_enums_code(&event_info),
         topic_ids_match_arms = generate_topic_ids_match_arms_code(&event_type_name, &event_info),
+        source_type_fn = generate_source_type_fn_code(&source),
+        network_provider_fn_name = network_provider_fn_name_by_name(&source.network),
         register_match_arms = generate_register_match_arms_code(&event_type_name, &event_info)
     );
 
@@ -302,9 +352,9 @@ fn generate_event_bindings_code(
 }
 
 pub fn generate_event_bindings_from_abi(
-    name: &str,
+    source: &Source,
     abi_path: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let event_names = extract_event_names_and_signatures_from_abi(abi_path)?;
-    generate_event_bindings_code(name, event_names, abi_path)
+    generate_event_bindings_code(source, event_names, abi_path)
 }

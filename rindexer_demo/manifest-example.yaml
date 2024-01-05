@@ -12,11 +12,19 @@ indexers:
         endBlock: 7175245 # optional
         pollingEvery: 15000 # optional
         abi: LensRegistry
+    context:
+      contracts:
+        - abi: Injected
+          name: Injected
+          network: polygon
+          address: '0x2E645469f354BB4F5c8a05B3b30A929361cf77eC'
     mappings:
       # entities:
       #   - Gravatar
       abis:
         - name: LensRegistry
+          file: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
+        - name: Injected
           file: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
 networks:
   - name: polygon
