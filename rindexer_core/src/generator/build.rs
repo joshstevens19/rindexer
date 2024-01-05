@@ -1,11 +1,14 @@
 use std::{error::Error, path::Path};
 
+use ethers::contract::Abigen;
+
 use crate::helpers::create_mod_file;
 use crate::{
     helpers::{camel_to_snake, write_file},
     manifest::yaml::{read_manifest, Indexer, Network},
 };
 
+use super::events_bindings::{abigen_source_file_name, abigen_source_name};
 use super::{
     context_bindings::generate_context_code, events_bindings::generate_event_bindings_from_abi,
     networks_bindings::generate_networks_code,
@@ -62,6 +65,21 @@ fn write_events(output: &str, indexer: &Indexer) -> Result<(), Box<dyn Error>> {
                 ),
             ),
             &events_code,
+        )?;
+
+        // write ABI gen
+        let abi_gen = Abigen::new(abigen_source_name(&source), &abi.file)?.generate()?;
+
+        write_file(
+            &generate_file_location(
+                output,
+                &format!(
+                    "{}/events/{}",
+                    camel_to_snake(&indexer.name),
+                    abigen_source_file_name(&source)
+                ),
+            ),
+            &abi_gen.to_string(),
         )?;
     }
 
