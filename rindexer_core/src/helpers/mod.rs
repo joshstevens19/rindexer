@@ -4,19 +4,6 @@ use std::path::Path;
 use std::process::Command;
 use std::{error::Error, fs::File};
 
-pub fn capitalize_first_letter(s: &str) -> String {
-    s.chars()
-        .enumerate()
-        .map(|(i, c)| {
-            if i == 0 {
-                c.to_uppercase().to_string()
-            } else {
-                c.to_string()
-            }
-        })
-        .collect()
-}
-
 pub fn camel_to_snake(name: &str) -> String {
     let mut snake_case = String::new();
     for (i, ch) in name.chars().enumerate() {
@@ -75,11 +62,19 @@ pub fn create_mod_file(path: &Path) -> Result<(), Box<dyn Error>> {
         let mut mod_file = File::create(mod_path)?;
 
         for module in mods {
-            writeln!(mod_file, "pub mod {};", module)?;
+            if module.contains("_abi_gen") {
+                writeln!(mod_file, "mod {};", module)?;
+            } else {
+                writeln!(mod_file, "pub mod {};", module)?;
+            }
         }
 
         for dir in dirs {
-            writeln!(mod_file, "pub mod {};", dir)?;
+            if dir.contains("_abi_gen") {
+                writeln!(mod_file, "mod {};", dir)?;
+            } else {
+                writeln!(mod_file, "pub mod {};", dir)?;
+            }
         }
     }
 

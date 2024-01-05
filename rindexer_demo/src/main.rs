@@ -1,21 +1,18 @@
 mod rindexer;
 
-use ethers::types::Address;
 use rindexer::lens_registry_example::events::lens_registry::{
     LensRegistryEventType, NonceUpdatedEvent,
 };
+
 use rindexer_core::{
     generator::{build::build, event_callback_registry::EventCallbackRegistry},
     indexer::start::start,
 };
 
-use crate::rindexer::lens_registry_example::{events::lens_registry::NonceUpdatedData, contexts::blah};
+#[tokio::main]
+async fn main() {
+    //generate();
 
-fn main() {
-    
-    blah();
-
-    // generate();
     let mut registry = EventCallbackRegistry::new();
 
     let event_type = LensRegistryEventType::NonceUpdated(NonceUpdatedEvent {
@@ -28,15 +25,7 @@ fn main() {
     // Register the event using the RindexerEventType
     event_type.register(&mut registry);
 
-    // Triggering an event...
-    println!("hey {}", registry.events.len());
-
-    let hey = registry
-        .find_event("0xc906270cebe7667882104effe64262a73c422ab9176a111e05ea837b021065fc")
-        .unwrap();
-    println!("hey {:?}", (&hey.source, &hey.topic_id));
-
-    start(registry);
+    start(registry).await
 }
 
 fn generate() {

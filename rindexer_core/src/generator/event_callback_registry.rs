@@ -1,6 +1,9 @@
 use std::any::Any;
 
-use ethers::providers::{Http, Provider};
+use ethers::{
+    providers::{Http, Provider},
+    types::{Bytes, Log, H256},
+};
 
 use crate::manifest::yaml::Source;
 
@@ -8,7 +11,14 @@ pub struct EventInformation {
     pub topic_id: &'static str,
     pub source: Source,
     pub provider: &'static Provider<Http>,
-    pub callback: Box<dyn Fn(&dyn Any)>,
+    pub callback: Box<dyn Fn(Box<dyn Any>)>,
+    pub decoder: Box<dyn Fn(Vec<H256>, Bytes) -> Box<dyn Any>>,
+}
+
+impl EventInformation {
+    pub fn decode_log(&self, log: Log) -> Box<dyn Any> {
+        (self.decoder)(log.topics, log.data)
+    }
 }
 
 pub struct EventCallbackRegistry {
@@ -28,7 +38,7 @@ impl EventCallbackRegistry {
         self.events.push(event);
     }
 
-    pub fn trigger_event(&self, topic_id: &'static str, data: &dyn Any) {
+    pub fn trigger_event(&self, topic_id: &'static str, data: Box<dyn Any>) {
         if let Some(callback) = self.find_event(&topic_id).map(|e| &e.callback) {
             callback(data);
         } else {

@@ -3,10 +3,7 @@ use serde_json::Value;
 use std::error::Error;
 use std::fs;
 
-use crate::{
-    helpers::{camel_to_snake, capitalize_first_letter},
-    manifest::yaml::Source,
-};
+use crate::{helpers::camel_to_snake, manifest::yaml::Source};
 
 use super::networks_bindings::network_provider_fn_name_by_name;
 
@@ -62,6 +59,18 @@ fn format_event_signature(item: &Value) -> String {
         .unwrap_or_default()
 }
 
+pub fn abigen_source_name(source: &Source) -> String {
+    format!("Rindexer{}Gen", source.name)
+}
+
+fn abigen_source_mod_name(source: &Source) -> String {
+    camel_to_snake(&abigen_source_name(source))
+}
+
+pub fn abigen_source_file_name(source: &Source) -> String {
+    format!("{}_abi_gen", camel_to_snake(&source.name))
+}
+
 fn extract_event_names_and_signatures_from_abi(
     abi_path: &str,
 ) -> Result<Vec<EventInfo>, Box<dyn Error>> {
@@ -88,72 +97,7 @@ fn extract_event_names_and_signatures_from_abi(
         })
 }
 
-fn map_base_solidity_type_to_rust(solidity_type: &str) -> String {
-    match solidity_type {
-        "uint256" | "uint" => "U256".to_string(),
-        "int256" | "int" => "U256".to_string(),
-        "uint128" | "uint64" | "uint32" | "uint16" | "uint8" => "u64".to_string(),
-        "int128" | "int64" | "int32" | "int16" | "int8" => "i64".to_string(),
-        "address" => "Address".to_string(),
-        "bool" => "bool".to_string(),
-        "string" => "String".to_string(),
-        // Dynamic byte array
-        "bytes" => "Vec<u8>".to_string(),
-        // Fixed size bytes (bytes1, bytes2, ..., bytes32)
-        typ if typ.starts_with("bytes") && typ.len() > 5 => {
-            let size: usize = typ[5..].parse().unwrap_or(0);
-            format!("[u8; {}]", size).to_string()
-        }
-        // Arrays
-        typ if typ.ends_with("[]") => {
-            let inner_type = &typ[..typ.len() - 2];
-            format!("Vec<{}>", map_base_solidity_type_to_rust(inner_type)).to_string()
-        }
-        // Nested Arrays (handling two-dimensional arrays)
-        typ if typ.ends_with("[][]") => {
-            let inner_type = &typ[..typ.len() - 4];
-            format!("Vec<Vec<{}>>", map_base_solidity_type_to_rust(inner_type)).to_string()
-        }
-        // Custom Types (Enums and Structs)
-        // "enum" => "YourCustomEnum".to_string(),
-        // Fallback for unsupported or unrecognized types
-        _ => "String".to_string(),
-    }
-}
-
-fn map_solidity_type_to_rust(
-    param: &Value,
-    parent_struct_name: &str,
-    structs: &mut String,
-) -> String {
-    match param["type"].as_str() {
-        Some("tuple") => {
-            let tuple_struct_name = format!(
-                "{}{}",
-                parent_struct_name,
-                capitalize_first_letter(param["name"].as_str().unwrap_or("Tuple"))
-            );
-            let mut fields = String::new();
-            for component in param["components"].as_array().unwrap_or(&Vec::new()) {
-                let component_name = component["name"].as_str().unwrap_or("field");
-                let component_type =
-                    map_solidity_type_to_rust(component, &tuple_struct_name, structs);
-                fields.push_str(&format!(
-                    "    pub {}: {},\n",
-                    component_name, component_type
-                ));
-            }
-            structs.push_str(&format!(
-                "#[derive(Debug, serde::Serialize, serde::Deserialize)]\npub struct {} {{\n{}\n}}\n\n",
-                tuple_struct_name, fields
-            ));
-            tuple_struct_name
-        }
-        _ => map_base_solidity_type_to_rust(param["type"].as_str().unwrap_or_default()),
-    }
-}
-
-fn generate_structs_from_abi(abi_path: &str) -> Result<String, Box<dyn std::error::Error>> {
+fn generate_structs(abi_path: &str, source: &Source) -> Result<String, Box<dyn std::error::Error>> {
     let abi_str = fs::read_to_string(abi_path)?;
     let abi_json: Value = serde_json::from_str(&abi_str)?;
 
@@ -164,20 +108,11 @@ fn generate_structs_from_abi(abi_path: &str) -> Result<String, Box<dyn std::erro
             let event_name = item["name"].as_str().unwrap_or_default();
             let struct_name = format!("{}Data", event_name);
 
-            let mut fields = String::new();
-            for param in item["inputs"].as_array().unwrap_or(&Vec::new()) {
-                let param_name = param["name"].as_str().unwrap_or("");
-                let snake_case_name = camel_to_snake(param_name);
-                let param_type = map_solidity_type_to_rust(param, &struct_name, &mut structs);
-                fields.push_str(&format!(
-                    "    #[serde(rename = \"{}\")]\n    pub {}: {},\n",
-                    param_name, snake_case_name, param_type
-                ));
-            }
-
             structs.push_str(&format!(
-                "#[derive(Debug, serde::Serialize, serde::Deserialize)]\npub struct {} {{\n{}\n}}\n\n",
-                struct_name, fields
+                "pub type {struct_name} = {abigen_mod_name}::{event_name}Filter;\n",
+                struct_name = struct_name,
+                abigen_mod_name = abigen_source_mod_name(source),
+                event_name = event_name
             ));
         }
     }
@@ -225,6 +160,34 @@ fn generate_register_match_arms_code(event_type_name: &str, event_info: &[EventI
         .join("\n")
 }
 
+fn generate_decoder_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> String {
+    event_info
+        .iter()
+        .map(|info| {
+            format!(
+                "{}::{}(event) => Box::new(move |data| event.call(data)),",
+                event_type_name, info.name
+            );
+
+            format!(
+                r#"
+                    {event_type_name}::{event_info_name}(_) => {{
+                        Box::new(move |topics: Vec<H256>, data: Bytes| {{
+                            match contract.decode_event::<{event_info_name}Data>(&"{event_info_name}".to_string(), topics, data.into()) {{
+                                Ok(filter) => Box::new(filter) as Box<dyn Any>,
+                                Err(error) => Box::new(error) as Box<dyn Any>,
+                            }}
+                        }})
+                    }}
+                "#,
+                event_type_name = event_type_name,
+                event_info_name = info.name
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn generate_source_type_fn_code(source: &Source) -> String {
     format!(
         r#"
@@ -261,11 +224,11 @@ fn generate_event_callback_structs_code(event_info: &[EventInfo]) -> String {
                     }}
 
                     impl EventCallback for {name}Event {{
-                        fn call(&self, data: &dyn Any) {{
-                            if let Some(specific_data) = data.downcast_ref::<{struct_name}>() {{
-                                (self.callback)(specific_data);
+                        fn call(&self, data: Box<dyn Any>) {{
+                            if let Ok(specific_data) = data.downcast::<{struct_name}>() {{
+                                (self.callback)(specific_data.as_ref());
                             }} else {{
-                                println!("{name}Event: Unexpected data type - expected: {struct_name} - received: {{:?}}", data)
+                                println!("{name}Event: Unexpected data type - expected: {struct_name}")
                             }}
                         }}
                     }}
@@ -286,18 +249,21 @@ fn generate_event_bindings_code(
     let event_type_name = generate_event_type_name(&source.name);
     let code = format!(
         r#"
-            use ethers::{{types::{{Address, U256}}, providers::{{Provider, Http}}}};
-            use std::any::Any;
+            use std::{{any::Any, sync::Arc}};
 
+            use ethers::{{providers::{{Http, Provider}}, abi::Address, types::{{Bytes, H256}}}};
+            
             use rindexer_core::{{
                 generator::event_callback_registry::{{EventCallbackRegistry, EventInformation}},
                 manifest::yaml::Source,
             }};
 
+            use super::{abigen_file_name}::{abigen_mod_name}::{{self, {abigen_name}}};
+
             {structs}
 
             trait EventCallback {{
-                fn call(&self, data: &dyn Any);
+                fn call(&self, data: Box<dyn Any>);
             }}
 
             {event_callback_structs}
@@ -318,12 +284,30 @@ fn generate_event_bindings_code(
                 fn get_provider(&self) -> &'static Provider<Http> {{
                     &crate::rindexer::networks::{network_provider_fn_name}()
                 }}
+
+                pub fn contract(&self) -> {abigen_name}<Provider<Http>> {{
+                    let address: Address = "{contract_address}"
+                        .parse()
+                        .unwrap();
+
+                    {abigen_name}::new(address, Arc::new(self.get_provider().clone()))
+                }}
+
+                pub fn decoder(&self) -> Box<dyn Fn(Vec<H256>, Bytes) -> Box<dyn Any>> {{
+                    let contract = self.contract();
+
+                    match self {{
+                        {decoder_match_arms}
+                    }}
+                }}
                 
                 pub fn register(self, registry: &mut EventCallbackRegistry) {{
                     let topic_id = self.topic_id();
                     let source = self.source();
                     let provider = self.get_provider();
-                    let callback: Box<dyn Fn(&dyn Any) + 'static> = match self {{
+                    let decoder = self.decoder();
+                    
+                    let callback: Box<dyn Fn(Box<dyn Any>) + 'static> = match self {{
                         {register_match_arms}
                     }};
                 
@@ -333,18 +317,24 @@ fn generate_event_bindings_code(
                             source,
                             provider,
                             callback,
+                            decoder
                         }}
                     }});
                 }}
             }}
         "#,
-        structs = generate_structs_from_abi(abi_path)?,
+        abigen_mod_name = abigen_source_mod_name(&source),
+        abigen_file_name = abigen_source_file_name(&source),
+        abigen_name = abigen_source_name(&source),
+        structs = generate_structs(abi_path, &source)?,
         event_type_name = &event_type_name,
         event_callback_structs = generate_event_callback_structs_code(&event_info),
         event_enums = generate_event_enums_code(&event_info),
         topic_ids_match_arms = generate_topic_ids_match_arms_code(&event_type_name, &event_info),
         source_type_fn = generate_source_type_fn_code(&source),
         network_provider_fn_name = network_provider_fn_name_by_name(&source.network),
+        contract_address = &source.address,
+        decoder_match_arms = generate_decoder_match_arms_code(&event_type_name, &event_info),
         register_match_arms = generate_register_match_arms_code(&event_type_name, &event_info)
     );
 
