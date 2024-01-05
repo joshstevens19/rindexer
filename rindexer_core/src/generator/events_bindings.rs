@@ -188,25 +188,32 @@ fn generate_event_enums_code(event_info: &[EventInfo]) -> String {
         .join("\n")
 }
 
-fn generate_topic_ids_match_arms_code(event_info: &[EventInfo]) -> String {
+fn generate_event_type_name(name: &str) -> String {
+    format!("{}EventType", name)
+}
+
+fn generate_topic_ids_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> String {
     event_info
         .iter()
         .map(|info| {
             let event_signature = format!("{}({})", info.name, info.signature);
             let topic_id = compute_topic_id(&event_signature);
-            format!("RindexerEventType::{}(_) => \"0x{}\",", info.name, topic_id)
+            format!(
+                "{}::{}(_) => \"0x{}\",",
+                event_type_name, info.name, topic_id
+            )
         })
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-fn generate_register_match_arms_code(event_info: &[EventInfo]) -> String {
+fn generate_register_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> String {
     event_info
         .iter()
         .map(|info| {
             format!(
-                "RindexerEventType::{}(event) => Box::new(move |data| event.call(data)),",
-                info.name
+                "{}::{}(event) => Box::new(move |data| event.call(data)),",
+                event_type_name, info.name
             )
         })
         .collect::<Vec<_>>()
@@ -220,7 +227,7 @@ fn generate_event_callback_structs_code(event_info: &[EventInfo]) -> String {
             format!(
                 r#"
 pub struct {name}Event {{
-    callback: Box<dyn Fn(&{struct_name})>,
+    pub callback: Box<dyn Fn(&{struct_name})>,
 }}
 
 impl EventCallback for {name}Event {{
@@ -228,7 +235,7 @@ impl EventCallback for {name}Event {{
         if let Some(specific_data) = data.downcast_ref::<{struct_name}>() {{
             (self.callback)(specific_data);
         }} else {{
-            // Handle the error or unexpected data type
+            println!("{name}Event: Unexpected data type - expected: {struct_name} - received: {{:?}}", data)
         }}
     }}
 }}
@@ -242,15 +249,17 @@ impl EventCallback for {name}Event {{
 }
 
 fn generate_event_bindings_code(
+    name: &str,
     event_info: Vec<EventInfo>,
     abi_path: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
+    let event_type_name = generate_event_type_name(name);
     let code = format!(
         r#"
             use ethers::types::{{U256, Address}};
             use std::any::Any;
 
-            use crate::generator::event_callback_registry::EventCallbackRegistry;
+            use rindexer_core::generator::event_callback_registry::EventCallbackRegistry;
 
             {structs}
 
@@ -260,11 +269,11 @@ fn generate_event_bindings_code(
 
             {event_callback_structs}
 
-            pub enum RindexerEventType {{
+            pub enum {event_type_name} {{
                 {event_enums}
             }}
 
-            impl RindexerEventType {{
+            impl {event_type_name} {{
                 pub fn topic_id(&self) -> &'static str {{
                     match self {{
                         {topic_ids_match_arms}
@@ -282,20 +291,22 @@ fn generate_event_bindings_code(
             }}
         "#,
         structs = generate_structs_from_abi(abi_path)?,
+        event_type_name = &event_type_name,
         event_callback_structs = generate_event_callback_structs_code(&event_info),
         event_enums = generate_event_enums_code(&event_info),
-        topic_ids_match_arms = generate_topic_ids_match_arms_code(&event_info),
-        register_match_arms = generate_register_match_arms_code(&event_info)
+        topic_ids_match_arms = generate_topic_ids_match_arms_code(&event_type_name, &event_info),
+        register_match_arms = generate_register_match_arms_code(&event_type_name, &event_info)
     );
 
     Ok(code)
 }
 
 pub fn generate_event_bindings_from_abi(
+    name: &str,
     abi_path: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let event_names = extract_event_names_and_signatures_from_abi(abi_path)?;
-    generate_event_bindings_code(event_names, abi_path)
+    generate_event_bindings_code(name, event_names, abi_path)
 }
 
 #[cfg(test)]
@@ -312,7 +323,7 @@ mod tests {
         let location = format!("src/generator/output/{}.rs", name);
         let mut file = File::create(location).unwrap();
 
-        let code = generate_event_bindings_from_abi(LENS_REGISTRY_EVENTS_ABI).unwrap();
+        let code = generate_event_bindings_from_abi("name", LENS_REGISTRY_EVENTS_ABI).unwrap();
 
         file.write_all(code.as_bytes()).unwrap();
     }

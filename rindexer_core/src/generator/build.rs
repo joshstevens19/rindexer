@@ -50,7 +50,7 @@ fn write_events(output: &str, indexer: &Indexer) -> Result<(), Box<dyn Error>> {
             .find(|&obj| obj.name == source.abi)
             .unwrap();
 
-        let events_code = generate_event_bindings_from_abi(&abi.file)?;
+        let events_code = generate_event_bindings_from_abi(&source.name, &abi.file)?;
 
         write_file(
             &generate_file_location(

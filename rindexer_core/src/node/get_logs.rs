@@ -6,7 +6,7 @@ use ethers::types::{Filter, Log};
 // let provider = Provider::new_client(rpc_url)?;
 pub async fn get_logs(
     filter: Filter,
-    provider: Provider<RetryClient<HttpProvider>>,
+    provider: Provider<HttpProvider>,
 ) -> Result<Vec<Log>, ProviderError> {
     // let filter = Filter::new()
     //             .address(self.config.chain.system_config_contract)

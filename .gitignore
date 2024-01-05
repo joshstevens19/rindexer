@@ -13,3 +13,4 @@ Cargo.lock
 # MSVC Windows builds of rustc generate these, which store debugging information
 *.pdb
 rindexer_core/src/generator/rindexer/*
+rindexer_demo/src/rindexer/*

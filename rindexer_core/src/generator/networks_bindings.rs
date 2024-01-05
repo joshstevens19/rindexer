@@ -46,7 +46,7 @@ pub fn generate_networks_code(
     networks: &Vec<Network>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let mut output = r#"
-            use lazy_static::lazy_static;
+            use rindexer_core::lazy_static;
             use ethers::providers::{Provider, Http};
 
             lazy_static! {

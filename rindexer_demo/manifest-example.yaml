@@ -1,0 +1,26 @@
+description: This is an example manifest file for the rindexer project.
+repository: https://github.com/joshstevens19/rindexer
+indexers:
+  - name: LensRegistryExample
+    networks:
+      - polygon
+    sources:
+      - name: LensRegistry
+        address: '0xD4F2F33680FCCb36748FA9831851643781608844'
+        network: polygon
+        startBlock: 6175244
+        endBlock: 7175245 # optional
+        pollingEvery: 15000 # optional
+        abi: LensRegistry
+    mappings:
+      # entities:
+      #   - Gravatar
+      abis:
+        - name: LensRegistry
+          file: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
+networks:
+  - name: polygon
+    chainId: 137
+    url: https://polygon-mainnet.g.alchemy.com/v2/QLjF9OO90XrczIsf6Nud7RoSc8mLSyra
+    maxBlockRange: 100000 # optional
+    maxHistoricalTaskConcurrency: 20 # optional
