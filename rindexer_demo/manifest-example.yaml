@@ -9,7 +9,7 @@ indexers:
         address: '0xD4F2F33680FCCb36748FA9831851643781608844'
         network: polygon
         startBlock: 49424866
-        # endBlock: 7175245 # optional
+        endBlock: 99424866 # optional
         # pollingEvery: 15000 # optional
         abi: LensRegistry
     context:
