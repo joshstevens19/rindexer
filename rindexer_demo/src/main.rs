@@ -36,7 +36,9 @@ async fn main() {
     })
     .register(&mut registry);
 
-    start(registry).await
+    let result = start(registry).await;
+
+    println!("{:?}", result);
 }
 
 fn generate() {

@@ -198,7 +198,7 @@ fn generate_source_type_fn_code(source: &Source) -> String {
                     address: "{address}".to_string(),
                     network: "{network}".to_string(),
                     start_block: Some({start_block}),
-                    end_block: None,
+                    end_block: Some({end_block}),
                     polling_every: Some({polling_every}),
                     abi: "{abi}".to_string(),
                 }}
@@ -207,8 +207,8 @@ fn generate_source_type_fn_code(source: &Source) -> String {
         name = source.name,
         address = source.address,
         network = source.network,
-        start_block = source.start_block.unwrap_or(0),
-        // end_block = source.end_block.unwrap_or(0),
+        start_block = source.start_block.unwrap(),
+        end_block = source.end_block.unwrap(),
         polling_every = source.polling_every.unwrap_or(1000),
         abi = source.abi
     )
