@@ -1,63 +1,77 @@
 use ethers::{
-    abi::Address,
     providers::Middleware,
-    types::{Filter, H256},
+    types::{Filter, H256, U64, Address, Log},
 };
+use std::sync::Arc;
+use tokio::sync::Semaphore;
 
 use crate::generator::event_callback_registry::EventCallbackRegistry;
 
-pub async fn start(registry: EventCallbackRegistry) -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Get the current block numbers for networks
-    // 2. Get the logs between blocks for each event and resync back
-    // 3. When hits the head block, start listening to new blocks and pushing activity to check for new logs
-    // 4. Use blooms to filter out logs that are not relevant
+async fn fetch_logs<M: Middleware + Clone + 'static>(
+    provider: Arc<M>,
+    filter: Filter
+) -> Result<Vec<Log>, Box<dyn std::error::Error>> {
+    println!("Fetching logs for filter: {:?}", filter);
+    let logs = provider.get_logs(&filter).await?;
+    Ok(logs)
+}
 
+pub async fn start(
+    registry: EventCallbackRegistry,
+    max_concurrency: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
     let max_block_range = 2000;
 
+    let semaphore = Arc::new(Semaphore::new(max_concurrency));
+
+    let mut handles = Vec::new();
+
     for event in &registry.events {
-        let snapshot_block = event.provider.get_block_number().await?.as_u64();
-        let start_block = event.source.start_block.unwrap_or(snapshot_block);
-        let end_block = event.source.end_block.unwrap();
+        let latest_block = event.provider.get_block_number().await?.as_u64();
+        let start_block = event.source.start_block.unwrap_or(latest_block);
+        let mut end_block = event.source.end_block.unwrap_or(latest_block);
+        if end_block > latest_block {
+            end_block = latest_block;
+        }
 
-        let mut current_block = start_block;
+        println!(
+            "Starting event: {} from block: {} to block: {}",
+            event.topic_id, start_block, end_block
+        );
 
-        while current_block < end_block && current_block < snapshot_block {
+        for current_block in (start_block..end_block).step_by(max_block_range as usize) {
             let next_block = std::cmp::min(current_block + max_block_range, end_block);
-            println!("current_block: {}", current_block);
-            println!("next_block: {}", next_block);
-            let filter: Filter = Filter::new()
+            let filter = Filter::new()
                 .address(event.source.address.parse::<Address>()?)
                 .topic0(event.topic_id.parse::<H256>()?)
-                .from_block(current_block)
-                .to_block(next_block);
+                .from_block(U64::from(current_block))
+                .to_block(U64::from(next_block));
 
-            let logs = event.provider.get_logs(&filter).await?;
+            println!("current_block: {:?}", current_block);
+            println!("next_block: {:?}", next_block);
 
-            println!("logs: {}", logs.len());
+            let provider_clone = Arc::new(event.provider.clone());
+            let event_clone = event.clone(); // Assuming EventInformation implements Clone
+            let registry_clone = registry.clone(); // Clone the registry
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
 
-            for log in logs {
-                let decoded = event.decode_log(log);
-                registry.trigger_event(event.topic_id, decoded)
-            }
+            let handle = tokio::spawn(async move {
+                let logs = fetch_logs(provider_clone, filter).await.expect("Failed to fetch logs");
+                drop(permit); // Release the semaphore slot
 
-            current_block = next_block + 1;
+                for log in logs {
+                    let decoded = event_clone.decode_log(log);
+                    registry_clone.trigger_event(event_clone.topic_id, decoded);
+                }
+            });
+
+            handles.push(handle);
         }
     }
 
+    for handle in handles {
+        handle.await.expect("Task failed");
+    }
+
     Ok(())
-
-    // for event in &registry.events {
-    //     let filter: Filter = Filter::new()
-    //         .address(event.source.address.parse::<Address>().unwrap())
-    //         .topic0(event.topic_id.parse::<H256>().unwrap())
-    //         .from_block(event.source.start_block.unwrap());
-    //         //.to_block(49929866);
-
-    //     let result = event.provider.get_logs(&filter).await.unwrap();
-
-    //     for log in result {
-    //         let decoded = event.decode_log(log);
-    //         registry.trigger_event(event.topic_id, decoded)
-    //     }
-    // }
 }

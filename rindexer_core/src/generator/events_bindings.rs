@@ -153,7 +153,7 @@ fn generate_register_match_arms_code(event_type_name: &str, event_info: &[EventI
         .iter()
         .map(|info| {
             format!(
-                "{}::{}(event) => Box::new(move |data| event.call(data)),",
+                "{}::{}(event) => Arc::new(move |data| event.call(data)),",
                 event_type_name, info.name
             )
         })
@@ -166,17 +166,17 @@ fn generate_decoder_match_arms_code(event_type_name: &str, event_info: &[EventIn
         .iter()
         .map(|info| {
             format!(
-                "{}::{}(event) => Box::new(move |data| event.call(data)),",
+                "{}::{}(event) => Arc::new(move |data| event.call(data)),",
                 event_type_name, info.name
             );
 
             format!(
                 r#"
                     {event_type_name}::{event_info_name}(_) => {{
-                        Box::new(move |topics: Vec<H256>, data: Bytes| {{
+                        Arc::new(move |topics: Vec<H256>, data: Bytes| {{
                             match contract.decode_event::<{event_info_name}Data>(&"{event_info_name}".to_string(), topics, data.into()) {{
-                                Ok(filter) => Box::new(filter) as Box<dyn Any>,
-                                Err(error) => Box::new(error) as Box<dyn Any>,
+                                Ok(filter) => Arc::new(filter) as Arc<dyn Any>,
+                                Err(error) => Arc::new(error) as Arc<dyn Any>,
                             }}
                         }})
                     }}
@@ -208,7 +208,8 @@ fn generate_source_type_fn_code(source: &Source) -> String {
         address = source.address,
         network = source.network,
         start_block = source.start_block.unwrap(),
-        end_block = source.end_block.unwrap(),
+        // TODO! FIX
+        end_block = source.end_block.unwrap_or(99424866),
         polling_every = source.polling_every.unwrap_or(1000),
         abi = source.abi
     )
@@ -221,13 +222,13 @@ fn generate_event_callback_structs_code(event_info: &[EventInfo]) -> String {
             format!(
                 r#"
                     pub struct {name}Event {{
-                        pub callback: Box<dyn Fn(&{struct_name})>,
+                        pub callback: Arc<dyn Fn(&{struct_name}) + Send + Sync>,
                     }}
 
                     impl EventCallback for {name}Event {{
-                        fn call(&self, data: Box<dyn Any>) {{
-                            if let Ok(specific_data) = data.downcast::<{struct_name}>() {{
-                                (self.callback)(specific_data.as_ref());
+                        fn call(&self, data: Arc<dyn Any>) {{
+                            if let Some(specific_data) = data.downcast_ref::<{struct_name}>() {{
+                                (self.callback)(specific_data);
                             }} else {{
                                 println!("{name}Event: Unexpected data type - expected: {struct_name}")
                             }}
@@ -264,7 +265,7 @@ fn generate_event_bindings_code(
             {structs}
 
             trait EventCallback {{
-                fn call(&self, data: Box<dyn Any>);
+                fn call(&self, data: Arc<dyn Any>);
             }}
 
             {event_callback_structs}
@@ -294,7 +295,7 @@ fn generate_event_bindings_code(
                     {abigen_name}::new(address, Arc::new(self.get_provider().clone()))
                 }}
 
-                pub fn decoder(&self) -> Box<dyn Fn(Vec<H256>, Bytes) -> Box<dyn Any>> {{
+                pub fn decoder(&self) -> Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any> + Send + Sync> {{
                     let contract = self.contract();
 
                     match self {{
@@ -308,7 +309,7 @@ fn generate_event_bindings_code(
                     let provider = self.get_provider();
                     let decoder = self.decoder();
                     
-                    let callback: Box<dyn Fn(Box<dyn Any>) + 'static> = match self {{
+                    let callback: Arc<dyn Fn(Arc<dyn Any>) + Send + Sync> = match self {{
                         {register_match_arms}
                     }};
                 
