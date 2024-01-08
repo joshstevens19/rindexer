@@ -1,5 +1,7 @@
 mod rindexer;
 
+use std::sync::Arc;
+
 use rindexer::lens_registry_example::events::lens_registry::{
     HandleLinkedEvent, HandleUnlinkedEvent, LensRegistryEventType, NonceUpdatedEvent,
 };
@@ -11,32 +13,32 @@ use rindexer_core::{
 
 #[tokio::main]
 async fn main() {
-    //generate();
+    // generate();
 
     let mut registry = EventCallbackRegistry::new();
 
-    LensRegistryEventType::NonceUpdated(NonceUpdatedEvent {
-        callback: Box::new(|data| {
-            println!("NonceUpdated event: {:?}", data);
-        }),
-    })
-    .register(&mut registry);
+    // LensRegistryEventType::NonceUpdated(NonceUpdatedEvent {
+    //     callback: Arc::new(|data| {
+    //         println!("NonceUpdated event: {:?}", data);
+    //     }),
+    // })
+    // .register(&mut registry);
 
-    LensRegistryEventType::HandleLinked(HandleLinkedEvent {
-        callback: Box::new(|data| {
-            println!("HandleLinked event: {:?}", data);
-        }),
-    })
-    .register(&mut registry);
+    // LensRegistryEventType::HandleLinked(HandleLinkedEvent {
+    //     callback: Arc::new(|data| {
+    //         println!("HandleLinked event: {:?}", data);
+    //     }),
+    // })
+    // .register(&mut registry);
 
     LensRegistryEventType::HandleUnlinked(HandleUnlinkedEvent {
-        callback: Box::new(|data| {
+        callback: Arc::new(|data| {
             println!("HandleUnlinked event: {:?}", data);
         }),
     })
     .register(&mut registry);
 
-    let result = start(registry).await;
+    let result = start(registry, 100).await;
 
     println!("{:?}", result);
 }
