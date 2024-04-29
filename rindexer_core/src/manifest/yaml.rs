@@ -1,3 +1,5 @@
+use regex::Regex;
+use std::env;
 use std::error::Error;
 use std::fs::File;
 use std::io::Read;
@@ -78,9 +80,23 @@ pub struct Global {
     pub mappings: Option<Mappings>,
 }
 
+fn substitute_env_variables(contents: &str) -> Result<String, String> {
+    // safe unwrap here, because the regex is hardcoded
+    let re = Regex::new(r"\$\{([^}]+)\}").unwrap();
+    let result = re.replace_all(contents, |caps: &regex::Captures| {
+        let var_name = &caps[1];
+        env::var(var_name).unwrap_or_else(|_| var_name.to_string())
+    });
+    Ok(result.to_string())
+}
+
 pub fn read_manifest(file_path: &str) -> Result<Manifest, Box<dyn Error>> {
     let mut file = File::open(file_path)?;
     let mut contents = String::new();
+    // rewrite the env variables
+    // let mut substituted_contents =
+    //     substitute_env_variables(&contents)?;
+
     file.read_to_string(&mut contents)?;
 
     let manifest: Manifest = serde_yaml::from_str(&contents)?;

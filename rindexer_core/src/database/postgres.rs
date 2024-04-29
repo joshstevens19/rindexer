@@ -38,8 +38,8 @@ impl PostgresClient {
             &connection_string().map_err(PostgresConnectionError::DatabaseConnectionConfigWrong)?,
             NoTls,
         )
-            .await
-            .map_err(PostgresConnectionError::CanNotConnectToDb)?;
+        .await
+        .map_err(PostgresConnectionError::CanNotConnectToDb)?;
         tokio::spawn(async move {
             if let Err(e) = connection.await {
                 eprintln!("connection error: {}", e);
@@ -63,8 +63,8 @@ impl PostgresClient {
         query: &T,
         params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
     ) -> Result<u64, tokio_postgres::Error>
-        where
-            T: ?Sized + tokio_postgres::ToStatement,
+    where
+        T: ?Sized + tokio_postgres::ToStatement,
     {
         self.db.execute(query, params).await
     }
@@ -88,8 +88,8 @@ impl PostgresClient {
         query: &T,
         params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
     ) -> Result<Vec<Row>, tokio_postgres::Error>
-        where
-            T: ?Sized + tokio_postgres::ToStatement,
+    where
+        T: ?Sized + tokio_postgres::ToStatement,
     {
         let rows = self.db.query(query, params).await?;
         Ok(rows)
@@ -100,8 +100,8 @@ impl PostgresClient {
         query: &T,
         params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
     ) -> Result<Row, tokio_postgres::Error>
-        where
-            T: ?Sized + tokio_postgres::ToStatement,
+    where
+        T: ?Sized + tokio_postgres::ToStatement,
     {
         let rows = self.db.query_one(query, params).await?;
         Ok(rows)
@@ -112,8 +112,8 @@ impl PostgresClient {
         query: &T,
         params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
     ) -> Result<Option<Row>, tokio_postgres::Error>
-        where
-            T: ?Sized + tokio_postgres::ToStatement,
+    where
+        T: ?Sized + tokio_postgres::ToStatement,
     {
         let rows = self.db.query_opt(query, params).await?;
         Ok(rows)

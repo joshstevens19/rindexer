@@ -8,8 +8,6 @@ eth_getLogs - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60add
 
 checklist v1.0:
 
-- rindexer contract mappings
-- rindexer mappings functions (ability to call smart contract functions)
 - postgres support
 - from command line shortcuts https://ponder.sh/docs/api-reference/create-ponder
 - use with foundry - https://ponder.sh/docs/advanced/foundry
@@ -20,6 +18,7 @@ future features:
 - POC with shadow events using foundry as you index
 - graphql API / rest API
 - rindexer schema designer
+- no code indexer using config only
 
 // cargo new node --lib
 
