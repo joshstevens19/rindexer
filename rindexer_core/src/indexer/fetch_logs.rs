@@ -86,6 +86,7 @@ pub fn fetch_logs<M: Middleware + Clone + Send + 'static>(
 pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
     provider: Arc<M>,
     initial_filter: Filter,
+    live_indexing: bool,
 ) -> impl tokio_stream::Stream<Item = Result<Vec<Log>, Box<<M as Middleware>::Error>>> + Send + Unpin
 {
     let (tx, rx) = mpsc::unbounded_channel();
@@ -94,15 +95,32 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
         let snapshot_to_block = initial_filter.clone().get_to_block().unwrap();
         let mut current_filter = initial_filter;
         loop {
+            // when hits head lets make sure no overlap
+            let from_block = current_filter.get_from_block().unwrap();
+            let to_block = current_filter.get_to_block().unwrap();
+            if from_block > to_block {
+                current_filter = current_filter.from_block(to_block);
+            }
+            println!("Fetching logs for filter: {:?}", current_filter);
             match provider.get_logs(&current_filter).await {
                 Ok(logs) => {
                     if logs.is_empty() {
-                        println!("No logs left");
+                        if live_indexing {
+                            println!("Waiting for more logs..");
+                            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                            let current_block = provider.get_block_number().await.unwrap();
+                            println!("Current block: {:?}", current_block);
+                            current_filter = current_filter
+                                .from_block(current_block)
+                                .to_block(current_block);
+                            continue;
+                        }
+                        println!("All logs fetched!");
                         break;
                     }
 
                     if tx.send(Ok(logs.clone())).is_err() {
-                        println!("Failed to send logs to stream");
+                        println!("Failed to send logs to stream consumer!");
                         break;
                     }
 
@@ -129,6 +147,12 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
                         }
                     }
 
+                    if live_indexing {
+                        println!("Error fetching logs: retry in 500ms {:?}", err);
+                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                        continue;
+                    }
+                    eprintln!("Error fetching logs: exiting... {:?}", err);
                     let _ = tx.send(Err(Box::new(err)));
                     break;
                 }
