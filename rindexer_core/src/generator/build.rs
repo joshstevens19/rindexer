@@ -33,17 +33,14 @@ fn write_global(
     networks: &Vec<Network>,
 ) -> Result<(), Box<dyn Error>> {
     if let Some(global) = global {
-        if let Some(context) = &global.context {
-            if let Some(mappings) = &global.mappings {
-                let context_code =
-                    generate_context_code(&global.context, &mappings, networks, true)?;
-                write_file(
-                    &generate_file_location(output, "global_context"),
-                    &context_code,
-                )?;
-            } else {
-                Err("Mappings not found in global, if global contracts is defined mappings must")?
-            }
+        if let Some(mappings) = &global.mappings {
+            let context_code = generate_context_code(&global.context, &mappings, networks, true)?;
+            write_file(
+                &generate_file_location(output, "global_context"),
+                &context_code,
+            )?;
+        } else {
+            Err("Mappings not found in global, if global contracts is defined mappings must")?
         }
     }
 
