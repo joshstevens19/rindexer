@@ -4,9 +4,10 @@ use ethers::{
 };
 use std::sync::Arc;
 use tokio::sync::Semaphore;
+use tokio_stream::StreamExt;
 
 use crate::generator::event_callback_registry::EventCallbackRegistry;
-use crate::indexer::fetch_logs::fetch_logs;
+use crate::indexer::fetch_logs::{fetch_logs, fetch_logs_stream};
 
 pub async fn start(
     registry: EventCallbackRegistry,
@@ -48,15 +49,33 @@ pub async fn start(
             let permit = semaphore.clone().acquire_owned().await.unwrap();
 
             let handle = tokio::spawn(async move {
-                let logs = fetch_logs(provider_clone, filter)
-                    .await
-                    .expect("Failed to fetch logs");
-                drop(permit); // Release the semaphore slot
+                // let logs = fetch_logs(provider_clone, filter)
+                //     .await
+                //     .expect("Failed to fetch logs");
+                // drop(permit);
+                //
+                // for log in logs {
+                //     let decoded = event_clone.decode_log(log);
+                //     registry_clone.trigger_event(event_clone.topic_id, decoded);
+                // }
 
-                for log in logs {
-                    let decoded = event_clone.decode_log(log);
-                    registry_clone.trigger_event(event_clone.topic_id, decoded);
+                let mut logs_stream = fetch_logs_stream(provider_clone, filter);
+
+                while let Some(logs) = logs_stream.next().await {
+                    match logs {
+                        Ok(logs) => {
+                            for log in logs {
+                                let decoded = event_clone.decode_log(log);
+                                registry_clone.trigger_event(event_clone.topic_id, decoded);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Error fetching logs: {:?}", e);
+                            break; // Optionally handle errors more gracefully
+                        }
+                    }
                 }
+                drop(permit);
             });
 
             handles.push(handle);

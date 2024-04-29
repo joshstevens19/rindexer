@@ -43,7 +43,7 @@ async fn main() {
 
     LensRegistryEventType::HandleLinked(HandleLinkedEvent {
         callback: Arc::new(|data| {
-            println!("HandleLinked event: {:?}", data);
+            // println!("HandleLinked event: {:?}", data);
         }),
     })
     .register(&mut registry);
