@@ -8,7 +8,7 @@ indexers:
       - name: LensRegistry
         address: '0xD4F2F33680FCCb36748FA9831851643781608844'
         network: polygon
-        startBlock: 1
+        startBlock: 56385000
         # endBlock: 99424866 # optional
         # pollingEvery: 15000 # optional
         abi: LensRegistry
@@ -41,3 +41,11 @@ global:
     abis:
       - name: InjectedGlobal
         file: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
+  databases:
+    postgres:
+       name: ${DATABASE_NAME}
+       user: ${DATABASE_USER}
+       password: ${DATABASE_PASSWORD}
+       host: ${DATABASE_HOST}
+       port: ${DATABASE_PORT}
+
