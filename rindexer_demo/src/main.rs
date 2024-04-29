@@ -34,9 +34,16 @@ async fn main() {
     // })
     // .register(&mut registry);
 
-    LensRegistryEventType::HandleUnlinked(HandleUnlinkedEvent {
+    // LensRegistryEventType::HandleUnlinked(HandleUnlinkedEvent {
+    //     callback: Arc::new(|data| {
+    //         println!("HandleUnlinked event: {:?}", data);
+    //     }),
+    // })
+    // .register(&mut registry);
+
+    LensRegistryEventType::HandleLinked(HandleLinkedEvent {
         callback: Arc::new(|data| {
-            println!("HandleUnlinked event: {:?}", data);
+            println!("HandleLinked event: {:?}", data);
         }),
     })
     .register(&mut registry);

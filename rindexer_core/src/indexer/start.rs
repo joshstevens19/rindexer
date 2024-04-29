@@ -1,26 +1,18 @@
 use ethers::{
     providers::Middleware,
-    types::{Address, Filter, Log, H256, U64},
+    types::{Address, Filter, H256, U64},
 };
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 use crate::generator::event_callback_registry::EventCallbackRegistry;
-
-async fn fetch_logs<M: Middleware + Clone + 'static>(
-    provider: Arc<M>,
-    filter: Filter,
-) -> Result<Vec<Log>, Box<dyn std::error::Error>> {
-    println!("Fetching logs for filter: {:?}", filter);
-    let logs = provider.get_logs(&filter).await?;
-    Ok(logs)
-}
+use crate::indexer::fetch_logs::fetch_logs;
 
 pub async fn start(
     registry: EventCallbackRegistry,
     max_concurrency: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let max_block_range = 2000;
+    let max_block_range = 20000000000;
 
     let semaphore = Arc::new(Semaphore::new(max_concurrency));
 
