@@ -1,0 +1,3 @@
+[submodule "rindexer_demo/contracts/lib/forge-std"]
+	path = rindexer_demo/contracts/lib/forge-std
+	url = https://github.com/foundry-rs/forge-std

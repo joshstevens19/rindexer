@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "rindexer_core",
+    "rindexer_cli",
+    "rindexer_demo"
+]

@@ -1,0 +1,14 @@
+[package]
+name = "rindexer_cli"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+# internal dependencies
+rindexer_core = { path = "../rindexer_core" }
+
+# external dependencies
+ethers = { version = "2.0", features = ["rustls", "openssl"] }
+clap = { version = "4.4.11", features = ["derive"] }
