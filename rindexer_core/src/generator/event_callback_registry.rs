@@ -1,5 +1,7 @@
 use std::{any::Any, sync::Arc};
 
+use futures::future::BoxFuture;
+
 use ethers::{
     providers::{Http, Provider},
     types::{Bytes, Log, H256},
@@ -11,8 +13,8 @@ pub struct EventInformation {
     pub topic_id: &'static str,
     pub source: Source,
     pub provider: &'static Provider<Http>,
-    pub callback: Arc<dyn Fn(Arc<dyn Any>) + Send + Sync>,
-    pub decoder: Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any> + Send + Sync>,
+    pub callback: Arc<dyn Fn(Arc<dyn Any + Send + Sync>) -> BoxFuture<'static, ()> + Send + Sync>,
+    pub decoder: Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync>,
 }
 
 impl Clone for EventInformation {
@@ -28,7 +30,7 @@ impl Clone for EventInformation {
 }
 
 impl EventInformation {
-    pub fn decode_log(&self, log: Log) -> Arc<dyn Any> {
+    pub fn decode_log(&self, log: Log) -> Arc<dyn Any + Send + Sync> {
         (self.decoder)(log.topics, log.data)
     }
 }
@@ -51,7 +53,7 @@ impl EventCallbackRegistry {
         self.events.push(event);
     }
 
-    pub fn trigger_event(&self, topic_id: &'static str, data: Arc<dyn Any>) {
+    pub fn trigger_event(&self, topic_id: &'static str, data: Arc<dyn Any + Send + Sync>) {
         if let Some(callback) = self.find_event(&topic_id).map(|e| &e.callback) {
             callback(data);
         } else {
