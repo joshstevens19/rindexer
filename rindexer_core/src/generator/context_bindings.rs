@@ -36,6 +36,7 @@ fn generate_contracts_code(
     contracts: &Vec<Contract>,
     mappings: &Mappings,
     networks: &Vec<Network>,
+    for_global: bool,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let mut output = r#"
         use std::sync::Arc;
@@ -65,7 +66,11 @@ fn generate_contracts_code(
         )?);
     }
 
-    output.push_str(format!("use super::super::networks::{{{}}};", network_import).as_str());
+    if for_global {
+        output.push_str("use super::networks::get_polygon_provider;");
+    } else {
+        output.push_str(format!("use super::super::networks::{{{}}};", network_import).as_str());
+    }
     output.push_str(&code);
 
     Ok(output)
@@ -75,6 +80,7 @@ pub fn generate_context_code(
     context: &Option<Context>,
     mappings: &Mappings,
     networks: &Vec<Network>,
+    for_global: bool,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let mut output = String::new();
 
@@ -83,6 +89,7 @@ pub fn generate_context_code(
             &context.contracts,
             mappings,
             networks,
+            for_global,
         )?);
     }
 

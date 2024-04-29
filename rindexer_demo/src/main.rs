@@ -2,8 +2,11 @@ mod rindexer;
 
 use std::sync::Arc;
 
-use rindexer::lens_registry_example::events::lens_registry::{
-    HandleLinkedEvent, HandleUnlinkedEvent, LensRegistryEventType, NonceUpdatedEvent,
+use rindexer::lens_registry_example::{
+    contexts::get_injected,
+    events::lens_registry::{
+        HandleLinkedEvent, HandleUnlinkedEvent, LensRegistryEventType, NonceUpdatedEvent,
+    },
 };
 
 use rindexer_core::{
@@ -41,6 +44,16 @@ async fn main() {
     let result = start(registry, 100).await;
 
     println!("{:?}", result);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_generate() {
+        generate();
+    }
 }
 
 fn generate() {
