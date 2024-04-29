@@ -3,6 +3,7 @@ use std::{error::Error, path::Path};
 use ethers::contract::Abigen;
 
 use crate::helpers::create_mod_file;
+use crate::manifest::yaml::Global;
 use crate::{
     helpers::{camel_to_snake, write_file},
     manifest::yaml::{read_manifest, Indexer, Network},
@@ -26,12 +27,35 @@ fn write_networks(output: &str, networks: &Vec<Network>) -> Result<(), Box<dyn E
     Ok(())
 }
 
-fn write_context(
+fn write_global(
+    output: &str,
+    global: &Option<Global>,
+    networks: &Vec<Network>,
+) -> Result<(), Box<dyn Error>> {
+    if let Some(global) = global {
+        if let Some(context) = &global.context {
+            if let Some(mappings) = &global.mappings {
+                let context_code =
+                    generate_context_code(&global.context, &mappings, networks, true)?;
+                write_file(
+                    &generate_file_location(output, "global_context"),
+                    &context_code,
+                )?;
+            } else {
+                Err("Mappings not found in global, if global contracts is defined mappings must")?
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn write_indexer_context(
     output: &str,
     indexer: &Indexer,
     networks: &Vec<Network>,
 ) -> Result<(), Box<dyn Error>> {
-    let context_code = generate_context_code(&indexer.context, &indexer.mappings, networks)?;
+    let context_code = generate_context_code(&indexer.context, &indexer.mappings, networks, false)?;
 
     write_file(
         &generate_file_location(
@@ -44,7 +68,7 @@ fn write_context(
     Ok(())
 }
 
-fn write_events(output: &str, indexer: &Indexer) -> Result<(), Box<dyn Error>> {
+fn write_indexer_events(output: &str, indexer: &Indexer) -> Result<(), Box<dyn Error>> {
     for source in &indexer.sources {
         let abi = &indexer
             .mappings
@@ -90,10 +114,11 @@ pub fn build(manifest_location: &str, output: &str) -> Result<(), Box<dyn Error>
     let manifest = read_manifest(manifest_location)?;
 
     write_networks(output, &manifest.networks)?;
+    write_global(output, &manifest.global, &manifest.networks)?;
 
     for indexer in manifest.indexers {
-        write_context(output, &indexer, &manifest.networks)?;
-        write_events(output, &indexer)?;
+        write_indexer_context(output, &indexer, &manifest.networks)?;
+        write_indexer_events(output, &indexer)?;
     }
 
     create_mod_file(Path::new(output))?;

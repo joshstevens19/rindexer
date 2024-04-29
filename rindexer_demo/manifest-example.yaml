@@ -19,8 +19,6 @@ indexers:
           network: polygon
           address: '0x2E645469f354BB4F5c8a05B3b30A929361cf77eC'
     mappings:
-      # entities:
-      #   - Gravatar
       abis:
         - name: LensRegistry
           file: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
@@ -32,3 +30,14 @@ networks:
     url: https://polygon-mainnet.g.alchemy.com/v2/QLjF9OO90XrczIsf6Nud7RoSc8mLSyra
     maxBlockRange: 100000 # optional
     maxHistoricalTaskConcurrency: 20 # optional
+global:
+  context:
+    contracts:
+      - abi: InjectedGlobal
+        name: InjectedGlobal
+        network: polygon
+        address: '0x2E645469f354BB4F5c8a05B3b30A929361cf77eC'
+  mappings:
+    abis:
+      - name: InjectedGlobal
+        file: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json

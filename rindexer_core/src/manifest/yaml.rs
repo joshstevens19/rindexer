@@ -10,6 +10,7 @@ pub struct Manifest {
     pub repository: Option<String>,
     pub indexers: Vec<Indexer>,
     pub networks: Vec<Network>,
+    pub global: Option<Global>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -69,6 +70,12 @@ pub struct Network {
     pub max_block_range: Option<u64>,
     #[serde(rename = "maxConcurrency")]
     pub max_concurrency: Option<u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Global {
+    pub context: Option<Context>,
+    pub mappings: Option<Mappings>,
 }
 
 pub fn read_manifest(file_path: &str) -> Result<Manifest, Box<dyn Error>> {

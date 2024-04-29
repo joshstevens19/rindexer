@@ -1,6 +1,6 @@
 use ethers::{
     providers::Middleware,
-    types::{Filter, H256, U64, Address, Log},
+    types::{Address, Filter, Log, H256, U64},
 };
 use std::sync::Arc;
 use tokio::sync::Semaphore;
@@ -9,7 +9,7 @@ use crate::generator::event_callback_registry::EventCallbackRegistry;
 
 async fn fetch_logs<M: Middleware + Clone + 'static>(
     provider: Arc<M>,
-    filter: Filter
+    filter: Filter,
 ) -> Result<Vec<Log>, Box<dyn std::error::Error>> {
     println!("Fetching logs for filter: {:?}", filter);
     let logs = provider.get_logs(&filter).await?;
@@ -56,7 +56,9 @@ pub async fn start(
             let permit = semaphore.clone().acquire_owned().await.unwrap();
 
             let handle = tokio::spawn(async move {
-                let logs = fetch_logs(provider_clone, filter).await.expect("Failed to fetch logs");
+                let logs = fetch_logs(provider_clone, filter)
+                    .await
+                    .expect("Failed to fetch logs");
                 drop(permit); // Release the semaphore slot
 
                 for log in logs {
