@@ -7,9 +7,9 @@ use tokio::sync::Semaphore;
 use tokio_stream::StreamExt;
 
 use crate::generator::event_callback_registry::EventCallbackRegistry;
-use crate::indexer::fetch_logs::{fetch_logs, fetch_logs_stream};
+use crate::indexer::fetch_logs::fetch_logs_stream;
 
-pub async fn start(
+pub async fn start_indexing(
     registry: EventCallbackRegistry,
     max_concurrency: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -21,6 +21,7 @@ pub async fn start(
 
     for event in &registry.events {
         let latest_block = event.provider.get_block_number().await?.as_u64();
+        let live_indexing = event.source.end_block.is_some();
         let start_block = event.source.start_block.unwrap_or(latest_block);
         let mut end_block = event.source.end_block.unwrap_or(latest_block);
         if end_block > latest_block {
@@ -44,22 +45,12 @@ pub async fn start(
             println!("next_block: {:?}", next_block);
 
             let provider_clone = Arc::new(event.provider.clone());
-            let event_clone = event.clone(); // Assuming EventInformation implements Clone
-            let registry_clone = registry.clone(); // Clone the registry
+            let event_clone = event.clone();
+            let registry_clone = registry.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
 
             let handle = tokio::spawn(async move {
-                // let logs = fetch_logs(provider_clone, filter)
-                //     .await
-                //     .expect("Failed to fetch logs");
-                // drop(permit);
-                //
-                // for log in logs {
-                //     let decoded = event_clone.decode_log(log);
-                //     registry_clone.trigger_event(event_clone.topic_id, decoded);
-                // }
-
-                let mut logs_stream = fetch_logs_stream(provider_clone, filter);
+                let mut logs_stream = fetch_logs_stream(provider_clone, filter, live_indexing);
 
                 while let Some(logs) = logs_stream.next().await {
                     match logs {
@@ -71,7 +62,7 @@ pub async fn start(
                         }
                         Err(e) => {
                             eprintln!("Error fetching logs: {:?}", e);
-                            break; // Optionally handle errors more gracefully
+                            break;
                         }
                     }
                 }
