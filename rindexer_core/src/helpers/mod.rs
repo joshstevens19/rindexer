@@ -61,19 +61,13 @@ pub fn create_mod_file(path: &Path) -> Result<(), Box<dyn Error>> {
         let mod_path = path.join("mod.rs");
         let mut mod_file = File::create(mod_path)?;
 
-        for module in mods {
-            if module.contains("_abi_gen") {
-                writeln!(mod_file, "mod {};", module)?;
-            } else {
-                writeln!(mod_file, "pub mod {};", module)?;
-            }
-        }
+        writeln!(mod_file, "#![allow(dead_code)]")?;
 
-        for dir in dirs {
-            if dir.contains("_abi_gen") {
-                writeln!(mod_file, "mod {};", dir)?;
+        for item in mods.iter().chain(dirs.iter()) {
+            if item.contains("_abi_gen") {
+                writeln!(mod_file, "mod {};", item)?;
             } else {
-                writeln!(mod_file, "pub mod {};", dir)?;
+                writeln!(mod_file, "pub mod {};", item)?;
             }
         }
     }
