@@ -41,7 +41,7 @@ global:
     abis:
       - name: InjectedGlobal
         file: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
-  databases:
+  clients:
     postgres:
        name: ${DATABASE_NAME}
        user: ${DATABASE_USER}

@@ -65,7 +65,7 @@ fn write_indexer_context(
     Ok(())
 }
 
-fn write_indexer_events(output: &str, indexer: &Indexer) -> Result<(), Box<dyn Error>> {
+fn write_indexer_events(output: &str, indexer: &Indexer, global: &Option<Global>) -> Result<(), Box<dyn Error>> {
     for source in &indexer.sources {
         let abi = &indexer
             .mappings
@@ -74,7 +74,13 @@ fn write_indexer_events(output: &str, indexer: &Indexer) -> Result<(), Box<dyn E
             .find(|&obj| obj.name == source.abi)
             .unwrap();
 
-        let events_code = generate_event_bindings_from_abi(&source, &abi.file)?;
+        let clients = if let Some(global) = global {
+            &global.clients
+        } else {
+            &None
+        };
+
+        let events_code = generate_event_bindings_from_abi(source, clients, &abi.file)?;
 
         write_file(
             &generate_file_location(
@@ -115,7 +121,7 @@ pub fn build(manifest_location: &str, output: &str) -> Result<(), Box<dyn Error>
 
     for indexer in manifest.indexers {
         write_indexer_context(output, &indexer, &manifest.networks)?;
-        write_indexer_events(output, &indexer)?;
+        write_indexer_events(output, &indexer, &manifest.global)?;
     }
 
     create_mod_file(Path::new(output))?;
