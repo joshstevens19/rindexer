@@ -90,13 +90,13 @@ async fn main() {
     LensRegistryEventType::HandleLinked(HandleLinkedEvent {
         callback: Arc::new(|data| {
             println!("HandleLinked event: {:?}", data);
-            let appender = Arc::new(AsyncCsvAppender::new("events.csv".to_string()));
+            // let appender = Arc::new(AsyncCsvAppender::new("events.csv".to_string()));
             Box::pin(async move {
                 // Your asynchronous callback implementation
                 // Simulated async operation (e.g., database insertion)
                 // tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                appender.append(data.clone()).await.unwrap();
-                println!("HandleLinked event: {:?}", data);
+                // appender.append(data.clone()).await.unwrap();
+                // println!("HandleLinked event: {:?}", data);
             })
         }),
     })

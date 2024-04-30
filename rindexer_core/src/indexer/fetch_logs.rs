@@ -104,7 +104,11 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
             println!("Fetching logs for filter: {:?}", current_filter);
             match provider.get_logs(&current_filter).await {
                 Ok(logs) => {
-                    println!("Fetched logs: {} - filter: {:?}", logs.len(), current_filter);
+                    println!(
+                        "Fetched logs: {} - filter: {:?}",
+                        logs.len(),
+                        current_filter
+                    );
                     if logs.is_empty() {
                         if live_indexing {
                             println!("Waiting for more logs..");

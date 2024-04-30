@@ -2,6 +2,7 @@ use ethers::{
     providers::Middleware,
     types::{Address, Filter, H256, U64},
 };
+use std::any::Any;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio_stream::StreamExt;
@@ -56,10 +57,14 @@ pub async fn start_indexing(
                     match logs {
                         Ok(logs) => {
                             println!("start_indexing::Fetched logs: {:?}", logs.len());
-                            for log in logs {
-                                let decoded = event_clone.decode_log(log);
-                                registry_clone.trigger_event(event_clone.topic_id, decoded).await;
-                            }
+                            let decoded_logs = logs
+                                .iter()
+                                .map(|log| event_clone.decode_log(log.clone()))
+                                .collect::<Vec<Arc<dyn Any + Send + Sync>>>();
+
+                            registry_clone
+                                .trigger_event(event_clone.topic_id, decoded_logs)
+                                .await;
                         }
                         Err(e) => {
                             eprintln!("Error fetching logs: {:?}", e);

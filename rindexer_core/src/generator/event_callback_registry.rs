@@ -13,7 +13,8 @@ pub struct EventInformation {
     pub topic_id: &'static str,
     pub source: Source,
     pub provider: &'static Provider<Http>,
-    pub callback: Arc<dyn Fn(Arc<dyn Any + Send + Sync>) -> BoxFuture<'static, ()> + Send + Sync>,
+    pub callback:
+        Arc<dyn Fn(Vec<Arc<dyn Any + Send + Sync>>) -> BoxFuture<'static, ()> + Send + Sync>,
     pub decoder: Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync>,
 }
 
@@ -53,7 +54,11 @@ impl EventCallbackRegistry {
         self.events.push(event);
     }
 
-    pub async fn trigger_event(&self, topic_id: &'static str, data: Arc<dyn Any + Send + Sync>) {
+    pub async fn trigger_event(
+        &self,
+        topic_id: &'static str,
+        data: Vec<Arc<dyn Any + Send + Sync>>,
+    ) {
         if let Some(callback) = self.find_event(topic_id).map(|e| &e.callback) {
             callback(data).await;
         } else {
