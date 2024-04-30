@@ -8,7 +8,11 @@ use rindexer::lens_registry_example::{
 };
 
 use crate::rindexer::lens_registry_example::events::lens_registry::HandleLinkedData;
-use rindexer_core::{generator::{build::build, event_callback_registry::EventCallbackRegistry}, indexer::start::start_indexing, rindexer_main, PostgresClient, AsyncCsvAppender};
+use rindexer_core::{
+    generator::{build::build, event_callback_registry::EventCallbackRegistry},
+    indexer::start::start_indexing,
+    rindexer_main, AsyncCsvAppender, PostgresClient,
+};
 
 #[macro_export]
 macro_rules! create_and_register_event {
