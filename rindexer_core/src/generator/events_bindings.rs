@@ -4,6 +4,7 @@ use std::error::Error;
 use std::fs;
 
 use crate::{helpers::camel_to_snake, manifest::yaml::Source};
+use crate::manifest::yaml::Clients;
 
 use super::networks_bindings::network_provider_fn_name_by_name;
 
@@ -223,14 +224,15 @@ fn generate_source_type_fn_code(source: &Source) -> String {
     )
 }
 
-fn generate_event_callback_structs_code(event_info: &[EventInfo]) -> String {
+fn generate_event_callback_structs_code(event_info: &[EventInfo], clients: &Option<Clients>) -> String {
     event_info
         .iter()
         .map(|info| {
             format!(
                 r#"
                     pub struct {name}Event {{
-                        pub callback: Arc<dyn Fn(&Vec<{struct_name}>) -> BoxFuture<'_, ()> + Send + Sync>,
+                        pub callback: Arc<dyn Fn(&Vec<{struct_name}>{callback_client}) -> BoxFuture<'_, ()> + Send + Sync>,
+                        {client}
                     }}
 
                     #[async_trait]
@@ -245,7 +247,7 @@ fn generate_event_callback_structs_code(event_info: &[EventInfo]) -> String {
                                 .collect();
 
                             if specific_data.len() == data_len {{
-                                (self.callback)(&specific_data).await;
+                                (self.callback)(&specific_data{self_inject_client}).await;
                             }} else {{
                                 println!("{name}Event: Unexpected data type - expected: {struct_name}")
                             }}
@@ -253,7 +255,11 @@ fn generate_event_callback_structs_code(event_info: &[EventInfo]) -> String {
                     }}
                 "#,
                 name = info.name,
-                struct_name = info.struct_name
+                struct_name = info.struct_name,
+                // should handle many clients later for now its only postgres
+                callback_client = if clients.is_some() { ", Arc<PostgresClient>" } else { "" },
+                client = if clients.is_some() { "pub client: Arc<PostgresClient>," } else { "" },
+                self_inject_client = if clients.is_some() { ", self.client.clone()" } else { "" }
             )
         })
         .collect::<Vec<_>>()
@@ -262,8 +268,9 @@ fn generate_event_callback_structs_code(event_info: &[EventInfo]) -> String {
 
 fn generate_event_bindings_code(
     source: &Source,
+    clients: &Option<Clients>,
     event_info: Vec<EventInfo>,
-    abi_path: &str,
+    abi_path: &str
 ) -> Result<String, Box<dyn std::error::Error>> {
     let event_type_name = generate_event_type_name(&source.name);
     let code = format!(
@@ -280,6 +287,7 @@ fn generate_event_bindings_code(
                 FutureExt,
                 generator::event_callback_registry::{{EventCallbackRegistry, EventInformation}},
                 manifest::yaml::Source,
+                {client_import}
             }};
 
             use super::{abigen_file_name}::{abigen_mod_name}::{{self, {abigen_name}}};
@@ -350,15 +358,16 @@ fn generate_event_bindings_code(
                 }}
             }}
         "#,
-        abigen_mod_name = abigen_source_mod_name(&source),
-        abigen_file_name = abigen_source_file_name(&source),
-        abigen_name = abigen_source_name(&source),
-        structs = generate_structs(abi_path, &source)?,
+        client_import = if clients.is_some() { "PostgresClient," } else { "" },
+        abigen_mod_name = abigen_source_mod_name(source),
+        abigen_file_name = abigen_source_file_name(source),
+        abigen_name = abigen_source_name(source),
+        structs = generate_structs(abi_path, source)?,
         event_type_name = &event_type_name,
-        event_callback_structs = generate_event_callback_structs_code(&event_info),
+        event_callback_structs = generate_event_callback_structs_code(&event_info, clients),
         event_enums = generate_event_enums_code(&event_info),
         topic_ids_match_arms = generate_topic_ids_match_arms_code(&event_type_name, &event_info),
-        source_type_fn = generate_source_type_fn_code(&source),
+        source_type_fn = generate_source_type_fn_code(source),
         network_provider_fn_name = network_provider_fn_name_by_name(&source.network),
         contract_address = &source.address,
         decoder_match_arms = generate_decoder_match_arms_code(&event_type_name, &event_info),
@@ -370,8 +379,9 @@ fn generate_event_bindings_code(
 
 pub fn generate_event_bindings_from_abi(
     source: &Source,
+    clients: &Option<Clients>,
     abi_path: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let event_names = extract_event_names_and_signatures_from_abi(abi_path)?;
-    generate_event_bindings_code(source, event_names, abi_path)
+    generate_event_bindings_code(source, clients, event_names, abi_path)
 }

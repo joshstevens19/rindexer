@@ -4,101 +4,39 @@ use std::sync::Arc;
 
 use rindexer::lens_registry_example::{
     contexts::get_injected,
-    events::lens_registry::{HandleLinkedEvent, HandleUnlinkedEvent, LensRegistryEventType},
+    events::lens_registry::{HandleLinkedEvent, LensRegistryEventType},
 };
 
-use crate::rindexer::lens_registry_example::events::lens_registry::HandleLinkedData;
 use rindexer_core::{
     generator::{build::build, event_callback_registry::EventCallbackRegistry},
     indexer::start::start_indexing,
-    rindexer_main, AsyncCsvAppender, PostgresClient,
+    PostgresClient,
 };
-
-#[macro_export]
-macro_rules! create_and_register_event {
-    ($registry:expr, $event_enum:ident::$event_variant:ident, $data_type:ty, $callback:block) => {{
-        use futures::FutureExt;
-        use std::sync::Arc; // Make sure futures is in your dependencies for .boxed()
-
-        let event = $event_enum::$event_variant({
-            let callback: Arc<dyn Fn(Arc<$data_type>) -> _ + Send + Sync> =
-                Arc::new(move |data: Arc<$data_type>| {
-                    Box::pin(async move {
-                        let data_ref = &*data; // Dereference Arc to get to the data
-                        $callback
-                    })
-                });
-
-            HandleLinkedEvent {
-                // Assume HandleLinkedEvent, you can parameterize this as needed
-                callback,
-            }
-        });
-
-        event.register($registry);
-    }};
-}
 
 #[tokio::main]
 async fn main() {
-    // generate();
-
+    // 1. Create the event callback registry
     let mut registry = EventCallbackRegistry::new();
 
-    // LensRegistryEventType::NonceUpdated(NonceUpdatedEvent {
-    //     callback: Arc::new(|data| {
-    //         println!("NonceUpdated event: {:?}", data);
-    //     }),
-    // })
-    // .register(&mut registry);
+    // 2. create postgres client
+    let postgres = Arc::new(PostgresClient::new().await.unwrap());
 
-    // LensRegistryEventType::HandleLinked(HandleLinkedEvent {
-    //     callback: Arc::new(|data| {
-    //         println!("HandleLinked event: {:?}", data);
-    //     }),
-    // })
-    // .register(&mut registry);
-
-    // LensRegistryEventType::HandleLinked(HandleLinkedEvent {
-    //     callback: Arc::new(|data| {
-    //         let fut = async move {
-    //             // Your asynchronous callback implementation
-    //             println!("HandleLinked event: {:?}", data);
-    //         };
-    //         Box::pin(fut)
-    //     }),
-    // })
-    // .register(&mut registry);
-
-    // LensRegistryEventType::HandleUnlinked(HandleUnlinkedEvent {
-    //     callback: Arc::new(|data| {
-    //         println!("HandleUnlinked event: {:?}", data);
-    //     }),
-    // })
-    // .register(&mut registry);
-
-    // Create your HandleLinkedEvent instance with its callback function using the macro
-    // let handle_linked_event = event_handler!(handle_linked_event<HandleLinkedData>, {
-    //     // Your asynchronous callback implementation
-    //     // Simulated async operation (e.g., database insertion)
-    //     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    //     println!("HandleLinked event: {:?}", data);
-    // }, &mut registry);
-
-    // let appender = Arc::new(AsyncCsvAppender::new("events.csv".to_string()));
-
+    // 3. register event you wish to listen to
     LensRegistryEventType::HandleLinked(HandleLinkedEvent {
-        callback: Arc::new(|data| {
+        // 4. write your callback it must be thread safe
+        callback: Arc::new(|data, client| {
             println!("HandleLinked event: {:?}", data);
-            // let appender = Arc::new(AsyncCsvAppender::new("events.csv".to_string()));
+            // needs to wrap as a pin to use async with closure and be safely passed around
             Box::pin(async move {
-                // Your asynchronous callback implementation
-                // Simulated async operation (e.g., database insertion)
-                // tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                // appender.append(data.clone()).await.unwrap();
-                // println!("HandleLinked event: {:?}", data);
+                // you can grab any smart contract you mapped in the manifest here
+                let injected_provider = get_injected();
+                
+                // you can do a SQL query or a write here
+                let query = client.query("SELECT 1", &[]).await.unwrap();
+                println!("HandleLinked postgres hit: {:?}", query);
             })
         }),
+        client: postgres.clone(),
     })
     .register(&mut registry);
 

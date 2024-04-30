@@ -75,9 +75,24 @@ pub struct Network {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct PostgresClient {
+    pub name: String,
+    pub user: String,
+    pub password: String,
+    pub host: String,
+    pub port: String
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Clients {
+    pub postgres: Option<PostgresClient>
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Global {
     pub context: Option<Context>,
     pub mappings: Option<Mappings>,
+    pub clients: Option<Clients>
 }
 
 fn substitute_env_variables(contents: &str) -> Result<String, String> {
