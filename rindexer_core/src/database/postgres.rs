@@ -1,9 +1,11 @@
 use std::env;
+use dotenv::dotenv;
 use thiserror::Error;
 
 use tokio_postgres::{Client, NoTls, Row, Transaction};
 
 fn connection_string() -> Result<String, env::VarError> {
+    dotenv().ok();
     Ok(format!(
         "postgresql://{}:{}@{}:{}/{}",
         env::var("DATABASE_USER")?,
