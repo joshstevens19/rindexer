@@ -230,13 +230,21 @@ fn generate_event_callback_structs_code(event_info: &[EventInfo]) -> String {
             format!(
                 r#"
                     pub struct {name}Event {{
-                        pub callback: Arc<dyn Fn(&{struct_name}) -> BoxFuture<'_, ()> + Send + Sync>,
+                        pub callback: Arc<dyn Fn(&Vec<{struct_name}>) -> BoxFuture<'_, ()> + Send + Sync>,
                     }}
 
                     #[async_trait]
                     impl EventCallback for {name}Event {{
-                        async fn call(&self, data: Arc<dyn Any + Send + Sync>) {{
-                             if let Ok(specific_data) = Arc::downcast::<{struct_name}>(data) {{
+                        async fn call(&self, data: Vec<Arc<dyn Any + Send + Sync>>) {{
+                            let data_len = data.len();
+
+                            let specific_data: Vec<{struct_name}> = data.into_iter()
+                                .filter_map(|item| {{
+                                    item.downcast::<{struct_name}>().ok().map(|arc| (*arc).clone())
+                                }})
+                                .collect();
+
+                            if specific_data.len() == data_len {{
                                 (self.callback)(&specific_data).await;
                             }} else {{
                                 println!("{name}Event: Unexpected data type - expected: {struct_name}")
@@ -265,8 +273,6 @@ fn generate_event_bindings_code(
             use std::future::Future;
             use std::pin::Pin;
 
-            use futures::FutureExt;
-
             use ethers::{{providers::{{Http, Provider}}, abi::Address, types::{{Bytes, H256}}}};
             
             use rindexer_core::{{
@@ -284,7 +290,7 @@ fn generate_event_bindings_code(
 
             #[async_trait]
             trait EventCallback {{
-                async fn call(&self, data: Arc<dyn Any + Send + Sync>);
+                async fn call(&self, data: Vec<Arc<dyn Any + Send + Sync>>);
             }}
 
             {event_callback_structs}
@@ -328,7 +334,7 @@ fn generate_event_bindings_code(
                     let provider = self.get_provider();
                     let decoder = self.decoder();
                     
-                    let callback: Arc<dyn Fn(Arc<dyn Any + Send + Sync>) -> BoxFuture<'static, ()> + Send + Sync> = match self {{
+                    let callback: Arc<dyn Fn(Vec<Arc<dyn Any + Send + Sync>>) -> BoxFuture<'static, ()> + Send + Sync> = match self {{
                         {register_match_arms}
                     }};
                 
