@@ -6,13 +6,14 @@ use ethers::{
     providers::{Http, Provider},
     types::{Bytes, Log, H256},
 };
+use ethers::prelude::RetryClient;
 
 use crate::manifest::yaml::Source;
 
 pub struct EventInformation {
     pub topic_id: &'static str,
     pub source: Source,
-    pub provider: &'static Provider<Http>,
+    pub provider: &'static Arc<Provider<RetryClient<Http>>>,
     pub callback:
         Arc<dyn Fn(Vec<Arc<dyn Any + Send + Sync>>) -> BoxFuture<'static, ()> + Send + Sync>,
     pub decoder: Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync>,

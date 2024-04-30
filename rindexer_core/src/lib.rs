@@ -10,6 +10,7 @@ mod simple_file_formatters;
 pub use simple_file_formatters::csv::AsyncCsvAppender;
 
 mod helpers;
+pub mod provider;
 
 // export 3rd party dependencies
 pub use async_trait::async_trait;

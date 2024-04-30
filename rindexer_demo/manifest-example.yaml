@@ -48,4 +48,3 @@ global:
        password: ${DATABASE_PASSWORD}
        host: ${DATABASE_HOST}
        port: ${DATABASE_PORT}
-

@@ -30,10 +30,14 @@ async fn main() {
             Box::pin(async move {
                 // you can grab any smart contract you mapped in the manifest here
                 let injected_provider = get_injected();
-                
-                // you can do a SQL query or a write here
-                let query = client.query("SELECT 1", &[]).await.unwrap();
-                println!("HandleLinked postgres hit: {:?}", query);
+
+                for handle_linked_data in data {
+                    let handle_id = handle_linked_data.handle.id.to_string();
+                    client
+                        .execute("INSERT INTO hello VALUES($1)", &[&handle_id])
+                        .await
+                        .unwrap();
+                }
             })
         }),
         client: postgres.clone(),
