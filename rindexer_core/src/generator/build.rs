@@ -90,7 +90,7 @@ fn write_indexer_events(output: &str, indexer: &Indexer) -> Result<(), Box<dyn E
 
         // write ABI gen
         let abi_gen = Abigen::new(abigen_source_name(&source), &abi.file)?.generate()?;
-
+        
         write_file(
             &generate_file_location(
                 output,

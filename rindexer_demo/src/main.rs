@@ -8,23 +8,32 @@ use rindexer::lens_registry_example::{
 };
 
 use crate::rindexer::lens_registry_example::events::lens_registry::HandleLinkedData;
-use rindexer_core::{
-    generator::{build::build, event_callback_registry::EventCallbackRegistry},
-    indexer::start::start_indexing,
-    PostgresClient,
-};
+use rindexer_core::{generator::{build::build, event_callback_registry::EventCallbackRegistry}, indexer::start::start_indexing, rindexer_main, PostgresClient, AsyncCsvAppender};
 
-// // Macro to create event handlers and register them
-// macro_rules! event_handler {
-//     ($handler:ident<$data:ty>, $data:expr, $body:block, $registry:expr) => {{
-//         let callback = move |data: &$data| async move $body;
-//         let event = Event {
-//             callback: Arc::new(callback),
-//         };
-//         $registry.register(event);
-//         event
-//     }};
-// }
+#[macro_export]
+macro_rules! create_and_register_event {
+    ($registry:expr, $event_enum:ident::$event_variant:ident, $data_type:ty, $callback:block) => {{
+        use futures::FutureExt;
+        use std::sync::Arc; // Make sure futures is in your dependencies for .boxed()
+
+        let event = $event_enum::$event_variant({
+            let callback: Arc<dyn Fn(Arc<$data_type>) -> _ + Send + Sync> =
+                Arc::new(move |data: Arc<$data_type>| {
+                    Box::pin(async move {
+                        let data_ref = &*data; // Dereference Arc to get to the data
+                        $callback
+                    })
+                });
+
+            HandleLinkedEvent {
+                // Assume HandleLinkedEvent, you can parameterize this as needed
+                callback,
+            }
+        });
+
+        event.register($registry);
+    }};
+}
 
 #[tokio::main]
 async fn main() {
@@ -72,12 +81,17 @@ async fn main() {
     //     println!("HandleLinked event: {:?}", data);
     // }, &mut registry);
 
+    // let appender = Arc::new(AsyncCsvAppender::new("events.csv".to_string()));
+
     LensRegistryEventType::HandleLinked(HandleLinkedEvent {
         callback: Arc::new(|data| {
+            println!("HandleLinked event: {:?}", data);
+            let appender = Arc::new(AsyncCsvAppender::new("events.csv".to_string()));
             Box::pin(async move {
                 // Your asynchronous callback implementation
                 // Simulated async operation (e.g., database insertion)
                 // tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                appender.append(data.clone()).await.unwrap();
                 println!("HandleLinked event: {:?}", data);
             })
         }),
