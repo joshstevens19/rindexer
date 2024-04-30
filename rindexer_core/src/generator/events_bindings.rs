@@ -280,7 +280,7 @@ fn generate_event_bindings_code(
             use std::future::Future;
             use std::pin::Pin;
 
-            use ethers::{{providers::{{Http, Provider}}, abi::Address, types::{{Bytes, H256}}}};
+            use ethers::{{providers::{{Http, Provider, RetryClient}}, abi::Address, types::{{Bytes, H256}}}};
             
             use rindexer_core::{{
                 async_trait,
@@ -316,11 +316,11 @@ fn generate_event_bindings_code(
 
                 {source_type_fn}
 
-                fn get_provider(&self) -> &'static Provider<Http> {{
+                fn get_provider(&self) -> &'static Arc<Provider<RetryClient<Http>>> {{
                     &crate::rindexer::networks::{network_provider_fn_name}()
                 }}
 
-                pub fn contract(&self) -> {abigen_name}<Provider<Http>> {{
+                pub fn contract(&self) -> {abigen_name}<Arc<Provider<RetryClient<Http>>>> {{
                     let address: Address = "{contract_address}"
                         .parse()
                         .unwrap();

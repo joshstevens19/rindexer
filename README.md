@@ -8,7 +8,6 @@ eth_getLogs - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60add
 
 checklist v1.0:
 
-- postgres support
 - from command line shortcuts https://ponder.sh/docs/api-reference/create-ponder
 - use with foundry - https://ponder.sh/docs/advanced/foundry
 - handle reorgs

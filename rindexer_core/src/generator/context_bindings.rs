@@ -14,7 +14,7 @@ fn generate_contract_code(
         r#"
             abigen!({contract_name}, "{contract_path}");
 
-            pub fn get_{contract_fn_name}() -> {contract_name}<Provider<Http>> {{
+            pub fn get_{contract_fn_name}() -> {contract_name}<Arc<Provider<RetryClient<Http>>>> {{
                 let address: Address = "{contract_address}"
                 .parse()
                 .unwrap();
@@ -25,7 +25,7 @@ fn generate_contract_code(
         contract_name = contract.name,
         contract_fn_name = camel_to_snake(&contract.name),
         contract_address = contract.address,
-        network_fn_name = network_provider_fn_name(&network),
+        network_fn_name = network_provider_fn_name(network),
         contract_path = abi.file
     );
 
@@ -35,12 +35,12 @@ fn generate_contract_code(
 fn generate_contracts_code(
     contracts: &Vec<Contract>,
     mappings: &Mappings,
-    networks: &Vec<Network>,
+    networks: &[Network],
     for_global: bool,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let mut output = r#"
         use std::sync::Arc;
-        use ethers::{contract::abigen, abi::Address, providers::{Provider, Http}};
+        use ethers::{contract::abigen, abi::Address, providers::{Provider, Http, RetryClient}};
     "#
     .to_string();
 
@@ -53,10 +53,10 @@ fn generate_contracts_code(
             .find(|&obj| obj.name == contract.network)
             .unwrap();
 
-        network_import.push_str(network_provider_fn_name(&network).as_str());
+        network_import.push_str(network_provider_fn_name(network).as_str());
 
         code.push_str(&generate_contract_code(
-            &contract,
+            contract,
             mappings
                 .abis
                 .iter()
@@ -79,7 +79,7 @@ fn generate_contracts_code(
 pub fn generate_context_code(
     context: &Option<Context>,
     mappings: &Mappings,
-    networks: &Vec<Network>,
+    networks: &[Network],
     for_global: bool,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let mut output = String::new();

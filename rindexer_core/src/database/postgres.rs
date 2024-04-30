@@ -2,7 +2,7 @@ use std::env;
 use dotenv::dotenv;
 use thiserror::Error;
 
-use tokio_postgres::{Client, NoTls, Row, Transaction};
+use tokio_postgres::{Client, Error, NoTls, Row, Statement, Transaction};
 
 fn connection_string() -> Result<String, env::VarError> {
     dotenv().ok();
@@ -69,6 +69,10 @@ impl PostgresClient {
         T: ?Sized + tokio_postgres::ToStatement,
     {
         self.db.execute(query, params).await
+    }
+    
+    pub async fn prepare(&self, query: &str) -> Result<Statement, Error> {
+        self.db.prepare_typed(query, &[]).await
     }
 
     pub async fn transaction(&mut self) -> Result<Transaction, tokio_postgres::Error> {
