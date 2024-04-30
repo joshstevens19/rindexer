@@ -53,9 +53,9 @@ impl EventCallbackRegistry {
         self.events.push(event);
     }
 
-    pub fn trigger_event(&self, topic_id: &'static str, data: Arc<dyn Any + Send + Sync>) {
-        if let Some(callback) = self.find_event(&topic_id).map(|e| &e.callback) {
-            callback(data);
+    pub async fn trigger_event(&self, topic_id: &'static str, data: Arc<dyn Any + Send + Sync>) {
+        if let Some(callback) = self.find_event(topic_id).map(|e| &e.callback) {
+            callback(data).await;
         } else {
             println!(
                 "EventCallbackRegistry: No event found for topic_id: {}",

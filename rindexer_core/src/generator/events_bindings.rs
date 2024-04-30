@@ -262,7 +262,6 @@ fn generate_event_bindings_code(
         r#"
             use std::{{any::Any, sync::Arc}};
 
-            use async_trait::async_trait;
             use std::future::Future;
             use std::pin::Pin;
 
@@ -271,6 +270,8 @@ fn generate_event_bindings_code(
             use ethers::{{providers::{{Http, Provider}}, abi::Address, types::{{Bytes, H256}}}};
             
             use rindexer_core::{{
+                async_trait,
+                FutureExt,
                 generator::event_callback_registry::{{EventCallbackRegistry, EventInformation}},
                 manifest::yaml::Source,
             }};

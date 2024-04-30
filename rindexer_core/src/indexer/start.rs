@@ -55,9 +55,10 @@ pub async fn start_indexing(
                 while let Some(logs) = logs_stream.next().await {
                     match logs {
                         Ok(logs) => {
+                            println!("start_indexing::Fetched logs: {:?}", logs.len());
                             for log in logs {
                                 let decoded = event_clone.decode_log(log);
-                                registry_clone.trigger_event(event_clone.topic_id, decoded);
+                                registry_clone.trigger_event(event_clone.topic_id, decoded).await;
                             }
                         }
                         Err(e) => {
