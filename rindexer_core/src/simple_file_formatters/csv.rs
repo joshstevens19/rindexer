@@ -1,8 +1,8 @@
-use tokio::sync::Mutex;
-use std::sync::Arc;
-use serde::Serialize;
 use csv::Writer;
+use serde::Serialize;
 use std::fs::File;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[derive(Debug)]
 pub struct AsyncCsvAppender {
@@ -32,6 +32,8 @@ impl AsyncCsvAppender {
             writer.flush()?;
 
             Ok::<(), csv::Error>(())
-        }).await.expect("Failed to run CSV write operation")
+        })
+        .await
+        .expect("Failed to run CSV write operation")
     }
 }
