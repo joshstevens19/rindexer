@@ -225,14 +225,39 @@ fn generate_source_type_fn_code(source: &Source) -> String {
 }
 
 fn generate_event_callback_structs_code(event_info: &[EventInfo], clients: &Option<Clients>) -> String {
+    let clients_enabled = clients.is_some();
     event_info
         .iter()
         .map(|info| {
             format!(
                 r#"
+                    type {name}EventCallbackType = Arc<dyn Fn(&Vec<{struct_name}>, Arc<EventContext>) -> BoxFuture<'_, ()> + Send + Sync>;
+
                     pub struct {name}Event {{
-                        pub callback: Arc<dyn Fn(&Vec<{struct_name}>{callback_client}) -> BoxFuture<'_, ()> + Send + Sync>,
-                        {client}
+                        callback: {name}EventCallbackType,
+                        context: Arc<EventContext>,
+                    }}
+
+                    impl {name}Event {{
+                        pub async fn new(
+                            callback: {name}EventCallbackType,
+                            options: NewEventOptions,
+                        ) -> Self {{
+                            // let mut csv = None;
+                            // if options.enabled_csv {{
+                            //     let csv_appender = Arc::new(AsyncCsvAppender::new("events.csv".to_string()));
+                            //     csv_appender.ap
+                            //     csv = Some(Arc::new(AsyncCsvAppender::new("events.csv".to_string())));
+                            // }}
+
+                            Self {{
+                                callback,
+                                context: Arc::new(EventContext {{
+                                    {client}
+                                    csv: Arc::new(AsyncCsvAppender::new("events.csv".to_string())),
+                                }}),
+                            }}
+                        }}
                     }}
 
                     #[async_trait]
@@ -247,7 +272,7 @@ fn generate_event_callback_structs_code(event_info: &[EventInfo], clients: &Opti
                                 .collect();
 
                             if specific_data.len() == data_len {{
-                                (self.callback)(&specific_data{self_inject_client}).await;
+                                (self.callback)(&specific_data, self.context.clone()).await;
                             }} else {{
                                 println!("{name}Event: Unexpected data type - expected: {struct_name}")
                             }}
@@ -256,10 +281,7 @@ fn generate_event_callback_structs_code(event_info: &[EventInfo], clients: &Opti
                 "#,
                 name = info.name,
                 struct_name = info.struct_name,
-                // should handle many clients later for now its only postgres
-                callback_client = if clients.is_some() { ", Arc<PostgresClient>" } else { "" },
-                client = if clients.is_some() { "pub client: Arc<PostgresClient>," } else { "" },
-                self_inject_client = if clients.is_some() { ", self.client.clone()" } else { "" }
+                client = if clients_enabled { "client: Arc::new(PostgresClient::new().await.unwrap())," } else { "" },
             )
         })
         .collect::<Vec<_>>()
@@ -284,6 +306,7 @@ fn generate_event_bindings_code(
             
             use rindexer_core::{{
                 async_trait,
+                AsyncCsvAppender,
                 FutureExt,
                 generator::event_callback_registry::{{EventCallbackRegistry, EventInformation}},
                 manifest::yaml::Source,
@@ -299,6 +322,22 @@ fn generate_event_bindings_code(
             #[async_trait]
             trait EventCallback {{
                 async fn call(&self, data: Vec<Arc<dyn Any + Send + Sync>>);
+            }}
+
+            pub struct EventContext {{
+                {event_context_client}
+                pub csv: Arc<AsyncCsvAppender>,
+            }}
+
+            // TODO: NEED TO SPEC OUT OPTIONS
+            pub struct NewEventOptions {{
+                pub enabled_csv: bool,
+            }}
+
+            impl NewEventOptions {{
+                pub fn default() -> Self {{
+                    Self {{ enabled_csv: false }}
+                }}
             }}
 
             {event_callback_structs}
@@ -364,6 +403,7 @@ fn generate_event_bindings_code(
         abigen_name = abigen_source_name(source),
         structs = generate_structs(abi_path, source)?,
         event_type_name = &event_type_name,
+        event_context_client = if clients.is_some() { "pub client: Arc<PostgresClient>," } else { "" },
         event_callback_structs = generate_event_callback_structs_code(&event_info, clients),
         event_enums = generate_event_enums_code(&event_info),
         topic_ids_match_arms = generate_topic_ids_match_arms_code(&event_type_name, &event_info),
