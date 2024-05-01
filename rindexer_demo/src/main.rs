@@ -10,7 +10,7 @@ use rindexer::lens_registry_example::{
 use crate::rindexer::lens_registry_example::events::lens_registry::NewEventOptions;
 use rindexer_core::{
     generator::{build::build, event_callback_registry::EventCallbackRegistry},
-    indexer::start::start_indexing,
+    indexer::start::{start_indexing, StartIndexingSettings},
     AsyncCsvAppender, PostgresClient,
 };
 
@@ -113,7 +113,7 @@ async fn main() {
     )
     .register(&mut registry);
 
-    let _ = start_indexing(registry, 100).await;
+    let _ = start_indexing(registry, StartIndexingSettings::default()).await;
 }
 
 #[cfg(test)]

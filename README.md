@@ -8,6 +8,8 @@ eth_getLogs - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60add
 
 checklist v1.0:
 
+- allow indexing in order of events registered
+- allow indexing 1 logs chunk at a events when orders matters 
 - from command line shortcuts https://ponder.sh/docs/api-reference/create-ponder
 - use with foundry - https://ponder.sh/docs/advanced/foundry
 - handle reorgs

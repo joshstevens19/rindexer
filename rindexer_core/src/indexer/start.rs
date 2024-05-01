@@ -10,13 +10,46 @@ use tokio_stream::StreamExt;
 use crate::generator::event_callback_registry::EventCallbackRegistry;
 use crate::indexer::fetch_logs::fetch_logs_stream;
 
+pub struct ConcurrentSettings {
+    /// The max amount of concurrency you want to do side by side for indexing, the higher, the faster
+    /// note it will depend on your RPC client - this is based per event
+    max_concurrency: usize,
+}
+
+impl ConcurrentSettings {
+    #[allow(clippy::should_implement_trait)]
+    pub fn default() -> Self {
+        Self { max_concurrency: 100 }
+    }
+}
+
+
+pub struct StartIndexingSettings {
+    /// If events  rely on other event data you can set this to true,
+    /// and it does it in the order its registered
+    /// default is false as it opts for the fastest processes
+    index_in_event_registry_order: bool,
+    concurrent: Option<ConcurrentSettings>,
+}
+
+impl StartIndexingSettings {
+    #[allow(clippy::should_implement_trait)]
+    pub fn default() -> Self {
+        Self { index_in_event_registry_order: false, concurrent: Some(ConcurrentSettings::default()) }
+    }
+}
+
 pub async fn start_indexing(
     registry: EventCallbackRegistry,
-    max_concurrency: usize,
+    settings: StartIndexingSettings
 ) -> Result<(), Box<dyn std::error::Error>> {
     let max_block_range = 20000000000;
 
-    let semaphore = Arc::new(Semaphore::new(max_concurrency));
+    let semaphore = if let Some(concurrent_settings) = settings.concurrent {
+        Arc::new(Semaphore::new(concurrent_settings.max_concurrency))
+    } else {
+        Arc::new(Semaphore::new(ConcurrentSettings::default().max_concurrency))
+    };
 
     let mut handles = Vec::new();
 
