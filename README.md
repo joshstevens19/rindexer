@@ -12,6 +12,7 @@ checklist v1.0:
 - allow indexing 1 logs chunk at a events when orders matters 
 - from command line shortcuts https://ponder.sh/docs/api-reference/create-ponder
 - use with foundry - https://ponder.sh/docs/advanced/foundry
+- docs
 - handle reorgs
 
 future features:
