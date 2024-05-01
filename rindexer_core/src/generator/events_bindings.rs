@@ -124,7 +124,7 @@ fn generate_structs(abi_path: &str, source: &Source) -> Result<String, Box<dyn s
 fn generate_event_enums_code(event_info: &[EventInfo]) -> String {
     event_info
         .iter()
-        .map(|info| format!("{}({}Event),", info.name, info.name))
+        .map(|info| format!("{}({}Event<TExtensions>),", info.name, info.name))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -231,16 +231,17 @@ fn generate_event_callback_structs_code(event_info: &[EventInfo], clients: &Opti
         .map(|info| {
             format!(
                 r#"
-                    type {name}EventCallbackType = Arc<dyn Fn(&Vec<{struct_name}>, Arc<EventContext>) -> BoxFuture<'_, ()> + Send + Sync>;
+                    type {name}EventCallbackType<TExtensions> = Arc<dyn Fn(&Vec<{struct_name}>, Arc<EventContext<TExtensions>>) -> BoxFuture<'_, ()> + Send + Sync>;
 
-                    pub struct {name}Event {{
-                        callback: {name}EventCallbackType,
-                        context: Arc<EventContext>,
+                    pub struct {name}Event<TExtensions> where TExtensions: Send + Sync {{
+                        callback: {name}EventCallbackType<TExtensions>,
+                        context: Arc<EventContext<TExtensions>>,
                     }}
 
-                    impl {name}Event {{
+                    impl<TExtensions> {name}Event<TExtensions> where TExtensions: Send + Sync {{
                         pub async fn new(
-                            callback: {name}EventCallbackType,
+                            callback: {name}EventCallbackType<TExtensions>,
+                            extensions: TExtensions,
                             options: NewEventOptions,
                         ) -> Self {{
                             // let mut csv = None;
@@ -255,13 +256,14 @@ fn generate_event_callback_structs_code(event_info: &[EventInfo], clients: &Opti
                                 context: Arc::new(EventContext {{
                                     {client}
                                     csv: Arc::new(AsyncCsvAppender::new("events.csv".to_string())),
+                                    extensions: Arc::new(extensions),
                                 }}),
                             }}
                         }}
                     }}
 
                     #[async_trait]
-                    impl EventCallback for {name}Event {{
+                    impl<TExtensions> EventCallback for {name}Event<TExtensions> where TExtensions: Send + Sync {{
                         async fn call(&self, data: Vec<Arc<dyn Any + Send + Sync>>) {{
                             let data_len = data.len();
 
@@ -324,9 +326,10 @@ fn generate_event_bindings_code(
                 async fn call(&self, data: Vec<Arc<dyn Any + Send + Sync>>);
             }}
 
-            pub struct EventContext {{
+            pub struct EventContext<TExtensions> where TExtensions: Send + Sync {{
                 {event_context_client}
                 pub csv: Arc<AsyncCsvAppender>,
+                pub extensions: Arc<TExtensions>,
             }}
 
             // TODO: NEED TO SPEC OUT OPTIONS
@@ -340,13 +343,20 @@ fn generate_event_bindings_code(
                 }}
             }}
 
+            // didn't want to use option or none made harder DX
+            // so a blank struct makes interface nice
+            pub struct NoExtensions {{}}
+            pub fn no_extensions() -> NoExtensions {{
+                NoExtensions {{}}
+            }}
+
             {event_callback_structs}
 
-            pub enum {event_type_name} {{
+            pub enum {event_type_name}<TExtensions> where TExtensions: 'static + Send + Sync {{
                 {event_enums}
             }}
 
-            impl {event_type_name} {{
+            impl<TExtensions> {event_type_name}<TExtensions> where TExtensions: 'static + Send + Sync {{
                 pub fn topic_id(&self) -> &'static str {{
                     match self {{
                         {topic_ids_match_arms}
