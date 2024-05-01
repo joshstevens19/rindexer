@@ -229,6 +229,7 @@ fn generate_event_callback_structs_code(event_info: &[EventInfo], clients: &Opti
     event_info
         .iter()
         .map(|info| {
+            let csv_file_name = format!("{:?}-{:?}", &info.struct_name, &info.signature);
             format!(
                 r#"
                     type {name}EventCallbackType<TExtensions> = Arc<dyn Fn(&Vec<{struct_name}>, Arc<EventContext<TExtensions>>) -> BoxFuture<'_, ()> + Send + Sync>;
@@ -255,7 +256,7 @@ fn generate_event_callback_structs_code(event_info: &[EventInfo], clients: &Opti
                                 callback,
                                 context: Arc::new(EventContext {{
                                     {client}
-                                    csv: Arc::new(AsyncCsvAppender::new("events.csv".to_string())),
+                                    csv: Arc::new(AsyncCsvAppender::new("{csv_file_name}.csv".to_string())),
                                     extensions: Arc::new(extensions),
                                 }}),
                             }}
@@ -284,6 +285,7 @@ fn generate_event_callback_structs_code(event_info: &[EventInfo], clients: &Opti
                 name = info.name,
                 struct_name = info.struct_name,
                 client = if clients_enabled { "client: Arc::new(PostgresClient::new().await.unwrap())," } else { "" },
+                csv_file_name = csv_file_name
             )
         })
         .collect::<Vec<_>>()

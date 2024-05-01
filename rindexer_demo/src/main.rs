@@ -119,14 +119,6 @@ async fn main() {
                 })
             }),
             no_extensions(), // HeyBaby { bobby: true },
-            // NewEventOptions {
-            //     enabled_csv: false,
-            //     // extensions: Arc::new(None),
-            //     // extensions: Arc::new(HeyBaby {
-            //     //     bobby: true,
-            //     //     jakey: "string".to_string(),
-            //     // }),
-            // },
             NewEventOptions::default(),
         )
         .await,
