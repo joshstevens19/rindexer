@@ -229,7 +229,7 @@ fn generate_event_callback_structs_code(event_info: &[EventInfo], clients: &Opti
     event_info
         .iter()
         .map(|info| {
-            let csv_file_name = format!("{:?}-{:?}", &info.struct_name, &info.signature);
+            let csv_file_name = format!("{:?}-{:?}", &info.struct_name, &info.signature).to_lowercase();
             format!(
                 r#"
                     type {name}EventCallbackType<TExtensions> = Arc<dyn Fn(&Vec<{struct_name}>, Arc<EventContext<TExtensions>>) -> BoxFuture<'_, ()> + Send + Sync>;
