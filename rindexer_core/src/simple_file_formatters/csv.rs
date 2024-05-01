@@ -1,10 +1,8 @@
-use csv::Writer;
-use serde::Serialize;
 use std::fs::File;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use csv::Writer;
 
-#[derive(Debug)]
 pub struct AsyncCsvAppender {
     path: String,
     writer_lock: Arc<Mutex<()>>,
@@ -18,22 +16,36 @@ impl AsyncCsvAppender {
         }
     }
 
-    pub async fn append<T: Serialize + Send + 'static>(&self, data: T) -> Result<(), csv::Error> {
-        let path = self.path.clone();
+    pub async fn append(&self, data: Vec<String>) -> Result<(), csv::Error> {
         let lock = self.writer_lock.clone();
+        let path = self.path.clone();
 
         tokio::task::spawn_blocking(move || {
             let _guard = lock.lock();
-
             let file = File::options().create(true).append(true).open(&path)?;
             let mut writer = Writer::from_writer(file);
 
-            writer.serialize(data)?;
-            writer.flush()?;
+            writer.write_record(data)?;
 
-            Ok::<(), csv::Error>(())
+            Ok(())
+        }).await
+            .expect("Failed to run CSV write operation")
+    }
+
+    pub async fn append_header(&self, header: Vec<String>) -> Result<(), csv::Error> {
+        let lock = self.writer_lock.clone();
+        let path = self.path.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let _guard = lock.lock();
+            let file = File::options().create(true).append(true).open(&path)?;
+            let mut writer = Writer::from_writer(file);
+
+            writer.write_record(header)?;
+
+            Ok(())
         })
-        .await
-        .expect("Failed to run CSV write operation")
+            .await
+            .expect("Failed to run CSV write operation")
     }
 }
