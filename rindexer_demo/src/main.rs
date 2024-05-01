@@ -1,5 +1,6 @@
 mod rindexer;
 
+use ethers::types::Address;
 use std::sync::Arc;
 
 use rindexer::lens_registry_example::{
@@ -7,12 +8,18 @@ use rindexer::lens_registry_example::{
     events::lens_registry::{HandleLinkedEvent, LensRegistryEventType},
 };
 
-use crate::rindexer::lens_registry_example::events::lens_registry::NewEventOptions;
+use crate::rindexer::lens_registry_example::events::lens_registry::{
+    no_extensions, EventContext, NewEventOptions,
+};
 use rindexer_core::{
     generator::{build::build, event_callback_registry::EventCallbackRegistry},
     indexer::start::{start_indexing, StartIndexingSettings},
     AsyncCsvAppender, PostgresClient,
 };
+
+pub struct HeyBaby {
+    pub bobby: bool,
+}
 
 #[tokio::main]
 async fn main() {
@@ -93,6 +100,10 @@ async fn main() {
                             .unwrap();
                     }
 
+                    // let bob = &context.extensions.bobby;
+
+                    // println!("${:?}", bob)
+
                     // csv!
                     // for handle_linked_data in data {
                     //     context
@@ -107,6 +118,15 @@ async fn main() {
                     // }
                 })
             }),
+            no_extensions(), // HeyBaby { bobby: true },
+            // NewEventOptions {
+            //     enabled_csv: false,
+            //     // extensions: Arc::new(None),
+            //     // extensions: Arc::new(HeyBaby {
+            //     //     bobby: true,
+            //     //     jakey: "string".to_string(),
+            //     // }),
+            // },
             NewEventOptions::default(),
         )
         .await,
