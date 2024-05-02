@@ -10,33 +10,52 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Manifest {
     pub name: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub repository: Option<String>,
+
     pub indexers: Vec<Indexer>,
+
     pub networks: Vec<Network>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub global: Option<Global>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Indexer {
     pub name: String,
+
     pub networks: Vec<String>,
+
     pub sources: Vec<Source>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<Context>,
+
     pub mappings: Mappings,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Source {
     pub name: String,
+    
     pub address: String,
+    
     pub network: String,
-    #[serde(rename = "startBlock")]
+    
+    #[serde(rename = "startBlock", skip_serializing_if = "Option::is_none")]
     pub start_block: Option<u64>,
-    #[serde(rename = "endBlock")]
+    
+    #[serde(rename = "endBlock", skip_serializing_if = "Option::is_none")]
     pub end_block: Option<u64>,
-    #[serde(rename = "pollingEvery")]
+    
+    #[serde(rename = "pollingEvery", skip_serializing_if = "Option::is_none")]
     pub polling_every: Option<u64>,
+    
     pub abi: String,
 }
 
@@ -67,12 +86,16 @@ pub struct ABI {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Network {
     pub name: String,
+    
     #[serde(rename = "chainId")]
     pub chain_id: u32,
+    
     pub url: String,
-    #[serde(rename = "maxBlockRange")]
+    
+    #[serde(rename = "maxBlockRange", skip_serializing_if = "Option::is_none")]
     pub max_block_range: Option<u64>,
-    #[serde(rename = "maxConcurrency")]
+    
+    #[serde(rename = "maxConcurrency", skip_serializing_if = "Option::is_none")]
     pub max_concurrency: Option<u32>,
 }
 
@@ -92,8 +115,13 @@ pub struct Clients {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Global {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<Context>,
+    
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mappings: Option<Mappings>,
+    
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub clients: Option<Clients>,
 }
 
@@ -107,7 +135,7 @@ fn substitute_env_variables(contents: &str) -> Result<String, String> {
     Ok(result.to_string())
 }
 
-pub fn read_manifest(file_path: &str) -> Result<Manifest, Box<dyn Error>> {
+pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, Box<dyn Error>> {
     let mut file = File::open(file_path)?;
     let mut contents = String::new();
     // rewrite the env variables
@@ -120,10 +148,7 @@ pub fn read_manifest(file_path: &str) -> Result<Manifest, Box<dyn Error>> {
     Ok(manifest)
 }
 
-pub fn write_yaml_file<T>(data: &T, file_path: &PathBuf) -> Result<(), Box<dyn Error>>
-    where
-        T: serde::Serialize,
-{
+pub fn write_manifest(data: &Manifest, file_path: &PathBuf) -> Result<(), Box<dyn Error>> {
     let yaml_string = serde_yaml::to_string(data)?;
 
     let mut file = File::create(file_path)?;
@@ -133,12 +158,11 @@ pub fn write_yaml_file<T>(data: &T, file_path: &PathBuf) -> Result<(), Box<dyn E
 
 #[cfg(test)]
 mod tests {
-    const MANIFEST: &str =
-        "/Users/joshstevens/code/rindexer/rindexer_core/external-examples/manifest-example.yaml";
+    use std::path::PathBuf;
 
     #[test]
     fn read_works() {
-        let manifest = super::read_manifest(MANIFEST).unwrap();
+        let manifest = super::read_manifest(&PathBuf::from("/Users/joshstevens/code/rindexer/rindexer_core/external-examples/manifest-example.yaml")).unwrap();
 
         println!("{:?}", manifest);
     }

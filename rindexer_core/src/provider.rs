@@ -1,6 +1,8 @@
-use ethers::providers::{Http, Provider, RetryClient, RetryClientBuilder};
+use ethers::providers::{Http, Provider, ProviderError, RetryClient, RetryClientBuilder};
 use std::sync::Arc;
 use std::time::Duration;
+use ethers::middleware::Middleware;
+use ethers::types::U256;
 use thiserror::Error;
 use url::Url;
 
@@ -28,4 +30,11 @@ pub fn create_retry_client(
                 Box::<ethers::providers::HttpRateLimitRetryPolicy>::default(),
             ),
     )))
+}
+
+pub async fn get_chain_id(rpc_url: &str) -> Result<U256, ProviderError> {
+    let url = Url::parse(rpc_url).unwrap();
+    let provider = Provider::new( Http::new(url));
+
+    provider.get_chainid().await
 }
