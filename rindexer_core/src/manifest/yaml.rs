@@ -2,12 +2,14 @@ use regex::Regex;
 use std::env;
 use std::error::Error;
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Write};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Manifest {
+    pub name: String,
     pub description: Option<String>,
     pub repository: Option<String>,
     pub indexers: Vec<Indexer>,
@@ -116,6 +118,17 @@ pub fn read_manifest(file_path: &str) -> Result<Manifest, Box<dyn Error>> {
 
     let manifest: Manifest = serde_yaml::from_str(&contents)?;
     Ok(manifest)
+}
+
+pub fn write_yaml_file<T>(data: &T, file_path: &PathBuf) -> Result<(), Box<dyn Error>>
+    where
+        T: serde::Serialize,
+{
+    let yaml_string = serde_yaml::to_string(data)?;
+
+    let mut file = File::create(file_path)?;
+    file.write_all(yaml_string.as_bytes())?;
+    Ok(())
 }
 
 #[cfg(test)]
