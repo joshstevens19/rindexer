@@ -1,4 +1,5 @@
 use std::{error::Error, path::Path};
+use std::path::PathBuf;
 
 use ethers::contract::Abigen;
 
@@ -117,7 +118,7 @@ fn write_indexer_events(
     Ok(())
 }
 
-pub fn build(manifest_location: &str, output: &str) -> Result<(), Box<dyn Error>> {
+pub fn build(manifest_location: &PathBuf, output: &str) -> Result<(), Box<dyn Error>> {
     let manifest = read_manifest(manifest_location)?;
 
     write_networks(output, &manifest.networks)?;

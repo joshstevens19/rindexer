@@ -1,7 +1,8 @@
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use regex::Regex;
-use rindexer_core::manifest::yaml::{write_yaml_file, Manifest};
+use rindexer_core::manifest::yaml::{read_manifest, write_manifest, Manifest, Network};
+use rindexer_core::provider::{get_chain_id};
 use std::io::Write;
 use std::path::PathBuf;
 use std::{env, fs, io};
@@ -123,8 +124,31 @@ fn print_error_message(error_message: &str) {
     println!("{}", error_message.red());
 }
 
+fn rindexer_yaml_exists() -> bool {
+    fs::metadata(YAML_NAME).is_ok()
+}
+
+fn rindexer_yaml_does_not_exist() -> bool {
+    !rindexer_yaml_exists()
+}
+
+fn validate_rindexer_yaml_does_not_exist() {
+    if rindexer_yaml_does_not_exist() {
+        print_error_message("rindexer.yaml does not exist in the current directory. Please use rindexer init to create a new project.");
+        std::process::exit(1);
+    }
+}
+
+fn read_rindexer_yaml(rindexer_yaml_path: &PathBuf) -> Manifest {
+    read_manifest(rindexer_yaml_path).unwrap()
+}
+
+fn write_rindexer_yaml(manifest: &Manifest, rindexer_yaml_path: &PathBuf) {
+    write_manifest(manifest, rindexer_yaml_path).unwrap();
+}
+
 fn handle_init_command(rindexer_yaml_path: &PathBuf, details: &InitDetails) {
-    if fs::metadata(YAML_NAME).is_ok() {
+    if rindexer_yaml_exists() {
         print_error_message("rindexer.yaml already exists in the current directory.");
     }
 
@@ -135,10 +159,6 @@ fn handle_init_command(rindexer_yaml_path: &PathBuf, details: &InitDetails) {
     let project_description = prompt_for_optional_input::<String>("Project description", None);
     let repository = prompt_for_optional_input::<String>("Repository", None);
 
-    println!("Project name: {:?}", project_name);
-    println!("Project description: {:?}", project_description);
-    println!("Repository: {:?}", repository);
-
     let manifest = Manifest {
         name: project_name,
         description: project_description,
@@ -148,10 +168,42 @@ fn handle_init_command(rindexer_yaml_path: &PathBuf, details: &InitDetails) {
         global: None,
     };
 
-    write_yaml_file(&manifest, rindexer_yaml_path).unwrap();
+    write_rindexer_yaml(&manifest, rindexer_yaml_path);
 }
 
-fn main() {
+async fn handle_add_network_command(rindexer_yaml_path: &PathBuf, details: &AddNetworkDetails) {
+    validate_rindexer_yaml_does_not_exist();
+
+    // TODO validate that network name does not already exist
+    let network_name = prompt_for_input("Network name", None, &details.name);
+    let rpc_url = prompt_for_input("RPC URL", Some(VALID_URL), &details.rpc_url);
+
+    let chain_id = get_chain_id(rpc_url.as_str()).await;
+    match chain_id {
+        Ok(chain_id) => {
+            let max_block_range = prompt_for_optional_input::<u64>("Max block range", None);
+            let max_concurrency = prompt_for_optional_input::<u32>("Max concurrency:", None);
+
+            let mut manifest = read_rindexer_yaml(rindexer_yaml_path);
+
+            manifest.networks.push(Network {
+                name: network_name,
+                chain_id: chain_id.to_string().parse().expect("Failed to parse chain ID"),
+                url: rpc_url,
+                max_block_range,
+                max_concurrency,
+            });
+
+            write_rindexer_yaml(&manifest, rindexer_yaml_path);
+        }
+        Err(_) => {
+            print_error_message("Failed to fetch chain ID from the provided RPC URL.");
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() {
     let cli = CLI::parse();
 
     let path = env::current_dir().unwrap();
@@ -165,20 +217,7 @@ fn main() {
             ListCategory::Global => println!("Listing global settings..."),
         },
         Commands::AddNetwork { details } => {
-            println!("Adding a new network...");
-
-            let network_name = prompt_for_input("Network name", None, &details.name);
-            let rpc_url = prompt_for_input("RPC URL", Some(VALID_URL), &details.rpc_url);
-
-            // For optional fields, we also provide a prompt, but allow skipping.
-            let max_block_range = prompt_for_optional_input::<u64>("Max block range", None);
-            let max_concurrency = prompt_for_optional_input::<u32>("Max concurrency:", None);
-
-            println!("Network name: {}", network_name);
-            println!("RPC URL: {}", rpc_url);
-            println!("Max block range: {:?}", max_block_range);
-            println!("Max concurrency: {:?}", max_concurrency);
-            // Further processing or saving the details
+            handle_add_network_command(&rindexer_yaml_path, details).await
         }
         Commands::RemoveNetwork { network_name } => println!("Removing network: {}", network_name),
         // Commands::AddIndexer { details } => println!("Adding indexer: {}, For network: {}", details.name, details.network),
