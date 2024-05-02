@@ -1,6 +1,6 @@
+use ethers::providers::{Http, Provider, RetryClient, RetryClientBuilder};
 use std::sync::Arc;
 use std::time::Duration;
-use ethers::providers::{Http, Provider, RetryClient, RetryClientBuilder};
 use thiserror::Error;
 use url::Url;
 

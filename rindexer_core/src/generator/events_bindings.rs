@@ -3,8 +3,8 @@ use serde_json::Value;
 use std::error::Error;
 use std::fs;
 
-use crate::{helpers::camel_to_snake, manifest::yaml::Source};
 use crate::manifest::yaml::Clients;
+use crate::{helpers::camel_to_snake, manifest::yaml::Source};
 
 use super::networks_bindings::network_provider_fn_name_by_name;
 
@@ -224,7 +224,10 @@ fn generate_source_type_fn_code(source: &Source) -> String {
     )
 }
 
-fn generate_event_callback_structs_code(event_info: &[EventInfo], clients: &Option<Clients>) -> String {
+fn generate_event_callback_structs_code(
+    event_info: &[EventInfo],
+    clients: &Option<Clients>,
+) -> String {
     let clients_enabled = clients.is_some();
     event_info
         .iter()
@@ -296,7 +299,7 @@ fn generate_event_bindings_code(
     source: &Source,
     clients: &Option<Clients>,
     event_info: Vec<EventInfo>,
-    abi_path: &str
+    abi_path: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let event_type_name = generate_event_type_name(&source.name);
     let code = format!(
@@ -409,13 +412,21 @@ fn generate_event_bindings_code(
                 }}
             }}
         "#,
-        client_import = if clients.is_some() { "PostgresClient," } else { "" },
+        client_import = if clients.is_some() {
+            "PostgresClient,"
+        } else {
+            ""
+        },
         abigen_mod_name = abigen_source_mod_name(source),
         abigen_file_name = abigen_source_file_name(source),
         abigen_name = abigen_source_name(source),
         structs = generate_structs(abi_path, source)?,
         event_type_name = &event_type_name,
-        event_context_client = if clients.is_some() { "pub client: Arc<PostgresClient>," } else { "" },
+        event_context_client = if clients.is_some() {
+            "pub client: Arc<PostgresClient>,"
+        } else {
+            ""
+        },
         event_callback_structs = generate_event_callback_structs_code(&event_info, clients),
         event_enums = generate_event_enums_code(&event_info),
         topic_ids_match_arms = generate_topic_ids_match_arms_code(&event_type_name, &event_info),

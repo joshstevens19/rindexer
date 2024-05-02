@@ -1,5 +1,5 @@
-use std::env;
 use dotenv::dotenv;
+use std::env;
 use thiserror::Error;
 
 use tokio_postgres::{Client, Error, NoTls, Row, Statement, Transaction};
@@ -70,7 +70,7 @@ impl PostgresClient {
     {
         self.db.execute(query, params).await
     }
-    
+
     pub async fn prepare(&self, query: &str) -> Result<Statement, Error> {
         self.db.prepare_typed(query, &[]).await
     }

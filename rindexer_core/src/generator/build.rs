@@ -65,7 +65,11 @@ fn write_indexer_context(
     Ok(())
 }
 
-fn write_indexer_events(output: &str, indexer: &Indexer, global: &Option<Global>) -> Result<(), Box<dyn Error>> {
+fn write_indexer_events(
+    output: &str,
+    indexer: &Indexer,
+    global: &Option<Global>,
+) -> Result<(), Box<dyn Error>> {
     for source in &indexer.sources {
         let abi = &indexer
             .mappings
