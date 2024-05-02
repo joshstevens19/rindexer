@@ -59,7 +59,7 @@ async fn main() {
     )
     .register(&mut registry);
 
-    let _ = start_indexing(registry, StartIndexingSettings::default()).await;
+    let _ = start_indexing(registry.complete(), StartIndexingSettings::default()).await;
 
     // // 2. register event you wish to listen to
     // LensRegistryEventType::HandleLinked(

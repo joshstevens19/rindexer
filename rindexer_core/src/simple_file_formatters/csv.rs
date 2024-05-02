@@ -1,7 +1,7 @@
+use csv::Writer;
 use std::fs::File;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use csv::Writer;
 
 pub struct AsyncCsvAppender {
     path: String,
@@ -28,8 +28,9 @@ impl AsyncCsvAppender {
             writer.write_record(data)?;
 
             Ok(())
-        }).await
-            .expect("Failed to run CSV write operation")
+        })
+        .await
+        .expect("Failed to run CSV write operation")
     }
 
     pub async fn append_header(&self, header: Vec<String>) -> Result<(), csv::Error> {
@@ -45,7 +46,7 @@ impl AsyncCsvAppender {
 
             Ok(())
         })
-            .await
-            .expect("Failed to run CSV write operation")
+        .await
+        .expect("Failed to run CSV write operation")
     }
 }
