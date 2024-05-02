@@ -31,11 +31,11 @@ fn write_networks(output: &str, networks: &Vec<Network>) -> Result<(), Box<dyn E
 fn write_global(
     output: &str,
     global: &Option<Global>,
-    networks: &Vec<Network>,
+    networks: &[Network],
 ) -> Result<(), Box<dyn Error>> {
     if let Some(global) = global {
         if let Some(mappings) = &global.mappings {
-            let context_code = generate_context_code(&global.context, &mappings, networks, true)?;
+            let context_code = generate_context_code(&global.context, &mappings, networks)?;
             write_file(
                 &generate_file_location(output, "global_context"),
                 &context_code,
@@ -44,24 +44,6 @@ fn write_global(
             Err("Mappings not found in global, if global contracts is defined mappings must")?
         }
     }
-
-    Ok(())
-}
-
-fn write_indexer_context(
-    output: &str,
-    indexer: &Indexer,
-    networks: &Vec<Network>,
-) -> Result<(), Box<dyn Error>> {
-    let context_code = generate_context_code(&indexer.context, &indexer.mappings, networks, false)?;
-
-    write_file(
-        &generate_file_location(
-            output,
-            &format!("{}/contexts", camel_to_snake(&indexer.name)),
-        ),
-        &context_code,
-    )?;
 
     Ok(())
 }
@@ -125,7 +107,6 @@ pub fn build(manifest_location: &PathBuf, output: &str) -> Result<(), Box<dyn Er
     write_global(output, &manifest.global, &manifest.networks)?;
 
     for indexer in manifest.indexers {
-        write_indexer_context(output, &indexer, &manifest.networks)?;
         write_indexer_events(output, &indexer, &manifest.global)?;
     }
 

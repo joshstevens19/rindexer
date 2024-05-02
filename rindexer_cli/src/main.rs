@@ -16,7 +16,7 @@ struct CLI {
 }
 
 #[derive(Parser, Debug)]
-struct AddNetworkDetails {
+struct NetworkDetails {
     /// Name of the network
     #[clap(short, long)]
     name: Option<String>,
@@ -46,10 +46,12 @@ enum ListCategory {
 }
 
 /// Indexer details for adding an indexer
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Debug)]
 struct IndexerDetails {
     name: String,
-    network: String,
+
+    #[clap(short, long)]
+    network: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -84,7 +86,7 @@ enum Commands {
     #[clap(name = "network-add")]
     AddNetwork {
         #[clap(flatten)]
-        details: AddNetworkDetails,
+        details: NetworkDetails,
     },
     #[clap(name = "network-remove")]
     /// Removes an existing network
@@ -93,10 +95,10 @@ enum Commands {
         network_name: String,
     },
     /// Adds a new indexer
-    // AddIndexer {
-    //     #[clap(name = "indexer")]
-    //     details: IndexerDetails,
-    // },
+    AddIndexer {
+        #[clap(flatten)]
+        details: IndexerDetails,
+    },
     /// Removes an existing indexer
     RemoveIndexer {
         #[clap(name = "indexer_name")]
@@ -192,7 +194,7 @@ fn handle_ls_networks_command(rindexer_yaml_path: &PathBuf) {
     }
 }
 
-async fn handle_add_network_command(rindexer_yaml_path: &PathBuf, details: &AddNetworkDetails) {
+async fn handle_add_network_command(rindexer_yaml_path: &PathBuf, details: &NetworkDetails) {
     validate_rindexer_yaml_does_not_exist();
 
     // TODO validate that network name does not already exist
@@ -241,7 +243,7 @@ async fn main() {
             handle_add_network_command(&rindexer_yaml_path, details).await
         }
         Commands::RemoveNetwork { network_name } => println!("Removing network: {}", network_name),
-        // Commands::AddIndexer { details } => println!("Adding indexer: {}, For network: {}", details.name, details.network),
+        Commands::AddIndexer { details } => println!("Adding indexer"),
         Commands::RemoveIndexer { indexer_name } => println!("Removing indexer: {}", indexer_name),
         Commands::AddContract { indexer_name } => {
             println!("Adding contract to indexer: {}", indexer_name)
