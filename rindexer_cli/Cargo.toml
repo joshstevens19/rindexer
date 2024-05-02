@@ -12,3 +12,5 @@ rindexer_core = { path = "../rindexer_core" }
 # external dependencies
 ethers = { version = "2.0", features = ["rustls", "openssl"] }
 clap = { version = "4.4.11", features = ["derive"] }
+regex = "1.5.4"
+colored = "2.0"
