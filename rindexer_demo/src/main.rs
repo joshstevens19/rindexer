@@ -1,10 +1,11 @@
 mod rindexer;
 
+use std::path::PathBuf;
+use std::str::FromStr;
 use ethers::types::Address;
 use std::sync::Arc;
 
 use rindexer::lens_registry_example::{
-    contexts::get_injected,
     events::lens_registry::{HandleLinkedEvent, LensRegistryEventType},
 };
 
@@ -16,6 +17,7 @@ use rindexer_core::{
     indexer::start::{start_indexing, StartIndexingSettings},
     AsyncCsvAppender, PostgresClient,
 };
+use crate::rindexer::global_context::get_injected_global;
 
 pub struct HeyBaby {
     pub bobby: bool,
@@ -35,7 +37,7 @@ async fn main() {
                 // needs to wrap as a pin to use async with closure and be safely passed around
                 Box::pin(async move {
                     // you can grab any smart contract you mapped in the manifest here
-                    let injected_provider = get_injected();
+                    let injected_provider = get_injected_global();
                     // let state = injected_provider.get_state().await.unwrap();
 
                     // you can write data to your postgres
@@ -135,7 +137,7 @@ mod tests {
 
 fn generate() {
     build(
-        "/Users/joshstevens/code/rindexer/rindexer_demo/manifest-example.yaml",
+        &PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/manifest-example.yaml").unwrap(),
         "/Users/joshstevens/code/rindexer/rindexer_demo/src/rindexer",
     )
     .unwrap();

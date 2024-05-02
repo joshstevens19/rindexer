@@ -232,7 +232,7 @@ fn generate_event_callback_structs_code(
     event_info
         .iter()
         .map(|info| {
-            let csv_file_name = format!("{:?}-{:?}", &info.struct_name, &info.signature).to_lowercase();
+            let csv_file_name = format!("{}-{}.csv", &info.struct_name, &info.signature).to_lowercase();
             format!(
                 r#"
                     type {name}EventCallbackType<TExtensions> = Arc<dyn Fn(&Vec<{struct_name}>, Arc<EventContext<TExtensions>>) -> BoxFuture<'_, ()> + Send + Sync>;
@@ -259,7 +259,7 @@ fn generate_event_callback_structs_code(
                                 callback,
                                 context: Arc::new(EventContext {{
                                     {client}
-                                    csv: Arc::new(AsyncCsvAppender::new("{csv_file_name}.csv".to_string())),
+                                    csv: Arc::new(AsyncCsvAppender::new("{csv_file_name}".to_string())),
                                     extensions: Arc::new(extensions),
                                 }}),
                             }}
