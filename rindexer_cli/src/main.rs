@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 use regex::Regex;
 use rindexer_core::manifest::yaml::{read_manifest, write_manifest, Manifest, Network};
-use rindexer_core::provider::{get_chain_id};
+use rindexer_core::provider::get_chain_id;
 use std::io::Write;
 use std::path::PathBuf;
 use std::{env, fs, io};
@@ -211,7 +211,10 @@ async fn handle_add_network_command(rindexer_yaml_path: &PathBuf, details: &Netw
 
             manifest.networks.push(Network {
                 name: network_name,
-                chain_id: chain_id.to_string().parse().expect("Failed to parse chain ID"),
+                chain_id: chain_id
+                    .to_string()
+                    .parse()
+                    .expect("Failed to parse chain ID"),
                 url: rpc_url,
                 max_block_range,
                 max_concurrency,

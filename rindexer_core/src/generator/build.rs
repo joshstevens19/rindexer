@@ -53,7 +53,7 @@ fn write_indexer_events(
     indexer: &Indexer,
     global: &Option<Global>,
 ) -> Result<(), Box<dyn Error>> {
-    for source in &indexer.sources {
+    for source in &indexer.contracts {
         let abi = &indexer
             .mappings
             .abis

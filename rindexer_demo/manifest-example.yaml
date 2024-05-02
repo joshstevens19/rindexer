@@ -5,7 +5,7 @@ indexers:
   - name: LensRegistryExample
     networks:
       - polygon
-    sources:
+    contracts:
       - name: LensRegistry
         address: '0xD4F2F33680FCCb36748FA9831851643781608844'
         network: polygon
