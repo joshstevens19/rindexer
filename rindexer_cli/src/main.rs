@@ -171,6 +171,27 @@ fn handle_init_command(rindexer_yaml_path: &PathBuf, details: &InitDetails) {
     write_rindexer_yaml(&manifest, rindexer_yaml_path);
 }
 
+fn render_network(network: &Network, include_end_space: bool) {
+    println!("Network Name: {}", network.name);
+    println!("Chain Id: {}", network.chain_id);
+    println!("RPC URL: {}", network.url);
+    println!("Max Block Range: {}", network.max_block_range.unwrap_or(0));
+    println!("Max Concurrency: {}", network.max_concurrency.unwrap_or(0));
+    if include_end_space {
+        println!(" ");
+    }
+}
+
+fn handle_ls_networks_command(rindexer_yaml_path: &PathBuf) {
+    let manifest = read_rindexer_yaml(rindexer_yaml_path);
+
+    println!("All Networks:");
+    println!(" ");
+    for network in manifest.networks {
+        render_network(&network, true);
+    }
+}
+
 async fn handle_add_network_command(rindexer_yaml_path: &PathBuf, details: &AddNetworkDetails) {
     validate_rindexer_yaml_does_not_exist();
 
@@ -213,7 +234,7 @@ async fn main() {
         Commands::Init { details } => handle_init_command(&rindexer_yaml_path, details),
         Commands::Ls { category } => match category {
             ListCategory::Indexers => println!("Listing indexers..."),
-            ListCategory::Networks => println!("Listing networks..."),
+            ListCategory::Networks => handle_ls_networks_command(&rindexer_yaml_path),
             ListCategory::Global => println!("Listing global settings..."),
         },
         Commands::AddNetwork { details } => {
