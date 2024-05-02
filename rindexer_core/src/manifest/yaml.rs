@@ -31,7 +31,7 @@ pub struct Indexer {
 
     pub networks: Vec<String>,
 
-    pub sources: Vec<Source>,
+    pub contracts: Vec<Source>,
 
     pub mappings: Mappings,
 }
