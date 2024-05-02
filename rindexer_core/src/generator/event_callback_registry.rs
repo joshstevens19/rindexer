@@ -2,11 +2,11 @@ use std::{any::Any, sync::Arc};
 
 use futures::future::BoxFuture;
 
+use ethers::prelude::RetryClient;
 use ethers::{
     providers::{Http, Provider},
     types::{Bytes, Log, H256},
 };
-use ethers::prelude::RetryClient;
 
 use crate::manifest::yaml::Source;
 
@@ -68,5 +68,9 @@ impl EventCallbackRegistry {
                 topic_id
             );
         }
+    }
+
+    pub fn complete(&self) -> Arc<Self> {
+        Arc::new(self.clone())
     }
 }
