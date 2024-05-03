@@ -36,7 +36,7 @@ rindexer ls indexers
 
 rindexer ls networks
 
-rindexer ls global 
+rindexer ls global
 
 rindexer init 
 1. Project Name

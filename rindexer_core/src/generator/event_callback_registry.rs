@@ -8,11 +8,11 @@ use ethers::{
     types::{Bytes, Log, H256},
 };
 
-use crate::manifest::yaml::Source;
+use crate::manifest::yaml::Contract;
 
 pub struct EventInformation {
     pub topic_id: &'static str,
-    pub source: Source,
+    pub contract: Contract,
     pub provider: &'static Arc<Provider<RetryClient<Http>>>,
     pub callback:
         Arc<dyn Fn(Vec<Arc<dyn Any + Send + Sync>>) -> BoxFuture<'static, ()> + Send + Sync>,
@@ -23,7 +23,7 @@ impl Clone for EventInformation {
     fn clone(&self) -> Self {
         EventInformation {
             topic_id: self.topic_id,
-            source: self.source.clone(),
+            contract: self.contract.clone(),
             provider: self.provider,
             callback: Arc::clone(&self.callback),
             decoder: Arc::clone(&self.decoder),

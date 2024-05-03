@@ -79,33 +79,35 @@ pub async fn start_indexing(
 
     for event in registry.events.clone() {
         let latest_block = event.provider.get_block_number().await?.as_u64();
-        let live_indexing = event.source.end_block.is_some();
-        let start_block = event.source.start_block.unwrap_or(latest_block);
-        let end_block = std::cmp::min(event.source.end_block.unwrap_or(latest_block), latest_block);
+        for contract in &event.contract.details {
+            let live_indexing = contract.end_block.is_some();
+            let start_block = contract.start_block.unwrap_or(latest_block);
+            let end_block = std::cmp::min(contract.end_block.unwrap_or(latest_block), latest_block);
 
-        println!(
-            "Starting event: {} from block: {} to block: {}",
-            event.topic_id, start_block, end_block
-        );
+            println!(
+                "Starting event: {} from block: {} to block: {}",
+                event.topic_id, start_block, end_block
+            );
 
-        let event_processing_config = EventProcessingConfig {
-            event: event.clone(),
-            start_block,
-            end_block,
-            max_block_range,
-            semaphore: semaphore.clone(),
-            registry: registry.clone(),
-            live_indexing,
-            execute_event_logs_in_order: settings.execute_event_logs_in_order,
-        };
+            let event_processing_config = EventProcessingConfig {
+                event: event.clone(),
+                start_block,
+                end_block,
+                max_block_range,
+                semaphore: semaphore.clone(),
+                registry: registry.clone(),
+                live_indexing,
+                execute_event_logs_in_order: settings.execute_event_logs_in_order,
+            };
 
-        if settings.execute_in_event_order {
-            // Sequential processing of events
-            process_event_sequentially(event_processing_config).await?;
-        } else {
-            // Concurrent processing of events
-            let handle = tokio::spawn(process_event_concurrently(event_processing_config));
-            handles.push(handle);
+            if settings.execute_in_event_order {
+                // Sequential processing of events
+                process_event_sequentially(event_processing_config).await?;
+            } else {
+                // Concurrent processing of events
+                let handle = tokio::spawn(process_event_concurrently(event_processing_config));
+                handles.push(handle);
+            }
         }
     }
 
@@ -252,7 +254,17 @@ async fn process_logs(
 
 fn build_filter(event: &EventInformation, current_block: u64, next_block: u64) -> Filter {
     Filter::new()
-        .address(event.source.address.parse::<Address>().unwrap())
+        // TODO: MULTICHAIN
+        .address(
+            event
+                .contract
+                .details
+                .first()
+                .unwrap()
+                .address
+                .parse::<Address>()
+                .unwrap(),
+        )
         .topic0(event.topic_id.parse::<H256>().unwrap())
         .from_block(U64::from(current_block))
         .to_block(U64::from(next_block))

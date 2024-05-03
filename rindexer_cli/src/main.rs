@@ -48,10 +48,26 @@ enum ListCategory {
 /// Indexer details for adding an indexer
 #[derive(Parser, Debug)]
 struct IndexerDetails {
-    name: String,
+    #[clap(long)]
+    name: Option<String>,
 
-    #[clap(short, long)]
+    #[clap(long)]
     network: Option<String>,
+
+    #[clap(long)]
+    contract_address: Option<String>,
+
+    #[clap(long)]
+    contract_name: Option<String>,
+
+    #[clap(long)]
+    start_block: Option<u64>,
+
+    #[clap(long)]
+    end_block: Option<u64>,
+
+    #[clap(long)]
+    abi_location: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -126,6 +142,10 @@ fn print_error_message(error_message: &str) {
     println!("{}", error_message.red());
 }
 
+fn print_success_message(success_message: &str) {
+    println!("{}", success_message.green());
+}
+
 fn rindexer_yaml_exists() -> bool {
     fs::metadata(YAML_NAME).is_ok()
 }
@@ -154,7 +174,7 @@ fn handle_init_command(rindexer_yaml_path: &PathBuf, details: &InitDetails) {
         print_error_message("rindexer.yaml already exists in the current directory.");
     }
 
-    println!("{}", "Initializing new rindexer project...".green());
+    print_success_message("Initializing new rindexer project...");
 
     let project_name = prompt_for_input("Project Name", None, &details.name);
 
@@ -171,6 +191,9 @@ fn handle_init_command(rindexer_yaml_path: &PathBuf, details: &InitDetails) {
     };
 
     write_rindexer_yaml(&manifest, rindexer_yaml_path);
+    print_success_message(
+        "Project initialized successfully. Add a network next - rindexer add-network",
+    );
 }
 
 fn render_network(network: &Network, include_end_space: bool) {
@@ -221,11 +244,19 @@ async fn handle_add_network_command(rindexer_yaml_path: &PathBuf, details: &Netw
             });
 
             write_rindexer_yaml(&manifest, rindexer_yaml_path);
+            print_success_message("Network added successfully");
         }
         Err(_) => {
             print_error_message("Failed to fetch chain ID from the provided RPC URL.");
         }
     }
+}
+
+async fn handle_add_new_index(rindexer_yaml_path: &PathBuf, details: IndexerDetails) {
+    validate_rindexer_yaml_does_not_exist();
+
+    let indexer_name = prompt_for_input("Indexer name", None, &details.name);
+    let network_name = prompt_for_input("Network name", None, &details.network);
 }
 
 #[tokio::main]
