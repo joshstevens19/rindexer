@@ -39,7 +39,7 @@ async fn main() {
                     // you can grab any smart contract you mapped in the manifest here
                     let injected_provider = get_injected_global();
                     // let state = injected_provider.get_state().await.unwrap();
-    
+
                     // you can write data to your postgres
                     for handle_linked_data in data {
                         let handle_id = handle_linked_data.handle.id.to_string();
@@ -49,7 +49,7 @@ async fn main() {
                             .await
                             .unwrap();
                     }
-    
+
                     // context.csv - you can use this write csvs
                     // context.extensions - you can use this to pass any context you wish over
                 })

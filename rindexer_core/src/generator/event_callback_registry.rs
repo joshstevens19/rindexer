@@ -8,15 +8,43 @@ use ethers::{
     types::{Bytes, Log, H256},
 };
 
-use crate::manifest::yaml::Contract;
+type Decoder = Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync>;
+
+#[derive(Clone)]
+pub struct NetworkContract {
+    pub network: String,
+
+    pub address: String,
+
+    pub provider: &'static Arc<Provider<RetryClient<Http>>>,
+
+    pub decoder: Decoder,
+
+    pub start_block: Option<u64>,
+
+    pub end_block: Option<u64>,
+
+    pub polling_every: Option<u64>,
+}
+
+impl NetworkContract {
+    pub fn decode_log(&self, log: Log) -> Arc<dyn Any + Send + Sync> {
+        (self.decoder)(log.topics, log.data)
+    }
+}
+
+#[derive(Clone)]
+pub struct ContractInformation {
+    pub name: String,
+    pub details: Vec<NetworkContract>,
+    pub abi: String,
+}
 
 pub struct EventInformation {
     pub topic_id: &'static str,
-    pub contract: Contract,
-    pub provider: &'static Arc<Provider<RetryClient<Http>>>,
+    pub contract: ContractInformation,
     pub callback:
         Arc<dyn Fn(Vec<Arc<dyn Any + Send + Sync>>) -> BoxFuture<'static, ()> + Send + Sync>,
-    pub decoder: Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync>,
 }
 
 impl Clone for EventInformation {
@@ -24,16 +52,8 @@ impl Clone for EventInformation {
         EventInformation {
             topic_id: self.topic_id,
             contract: self.contract.clone(),
-            provider: self.provider,
             callback: Arc::clone(&self.callback),
-            decoder: Arc::clone(&self.decoder),
         }
-    }
-}
-
-impl EventInformation {
-    pub fn decode_log(&self, log: Log) -> Arc<dyn Any + Send + Sync> {
-        (self.decoder)(log.topics, log.data)
     }
 }
 
