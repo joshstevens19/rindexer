@@ -157,9 +157,9 @@ fn generate_register_match_arms_code(event_type_name: &str, event_info: &[EventI
                 r#"
                     {}::{}(event) => {{
                         let event = Arc::new(event);
-                        Arc::new(move |data| {{
+                        Arc::new(move |data, network| {{
                             let event = event.clone();
-                            async move {{ event.call(data).await }}.boxed()
+                            async move {{ event.call(data, network).await }}.boxed()
                         }})
                     }},
                 "#,
@@ -242,16 +242,16 @@ fn generate_contract_type_fn_code(contract: &Contract) -> String {
 
 fn generate_event_callback_structs_code(
     event_info: &[EventInfo],
-    clients: &Option<Databases>,
+    databases: &Option<Databases>,
 ) -> String {
-    let clients_enabled = clients.is_some();
+    let databases_enabled = databases.is_some();
     event_info
         .iter()
         .map(|info| {
             let csv_file_name = format!("{}-{}.csv", &info.struct_name, &info.signature).to_lowercase();
             format!(
                 r#"
-                    type {name}EventCallbackType<TExtensions> = Arc<dyn Fn(&Vec<{struct_name}>, Arc<EventContext<TExtensions>>) -> BoxFuture<'_, ()> + Send + Sync>;
+                    type {name}EventCallbackType<TExtensions> = Arc<dyn Fn(&Vec<{struct_name}>, String, Arc<EventContext<TExtensions>>) -> BoxFuture<'_, ()> + Send + Sync>;
 
                     pub struct {name}Event<TExtensions> where TExtensions: Send + Sync {{
                         callback: {name}EventCallbackType<TExtensions>,
@@ -274,7 +274,7 @@ fn generate_event_callback_structs_code(
                             Self {{
                                 callback,
                                 context: Arc::new(EventContext {{
-                                    {client}
+                                    {database}
                                     csv: Arc::new(AsyncCsvAppender::new("{csv_file_name}".to_string())),
                                     extensions: Arc::new(extensions),
                                 }}),
@@ -284,7 +284,7 @@ fn generate_event_callback_structs_code(
 
                     #[async_trait]
                     impl<TExtensions> EventCallback for {name}Event<TExtensions> where TExtensions: Send + Sync {{
-                        async fn call(&self, data: Vec<Arc<dyn Any + Send + Sync>>) {{
+                        async fn call(&self, data: Vec<Arc<dyn Any + Send + Sync>>, network: String) {{
                             let data_len = data.len();
 
                             let specific_data: Vec<{struct_name}> = data.into_iter()
@@ -294,7 +294,7 @@ fn generate_event_callback_structs_code(
                                 .collect();
 
                             if specific_data.len() == data_len {{
-                                (self.callback)(&specific_data, self.context.clone()).await;
+                                (self.callback)(&specific_data, network, self.context.clone()).await;
                             }} else {{
                                 println!("{name}Event: Unexpected data type - expected: {struct_name}")
                             }}
@@ -303,7 +303,7 @@ fn generate_event_callback_structs_code(
                 "#,
                 name = info.name,
                 struct_name = info.struct_name,
-                client = if clients_enabled { "client: Arc::new(PostgresClient::new().await.unwrap())," } else { "" },
+                database = if databases_enabled { "database: Arc::new(PostgresClient::new().await.unwrap())," } else { "" },
                 csv_file_name = csv_file_name
             )
         })
@@ -413,11 +413,11 @@ fn generate_event_bindings_code(
 
             #[async_trait]
             trait EventCallback {{
-                async fn call(&self, data: Vec<Arc<dyn Any + Send + Sync>>);
+                async fn call(&self, data: Vec<Arc<dyn Any + Send + Sync>>, network: String);
             }}
 
             pub struct EventContext<TExtensions> where TExtensions: Send + Sync {{
-                {event_context_client}
+                {event_context_database}
                 pub csv: Arc<AsyncCsvAppender>,
                 pub extensions: Arc<TExtensions>,
             }}
@@ -488,7 +488,7 @@ fn generate_event_bindings_code(
                         abi: contract_information.abi,
                     }};
                     
-                    let callback: Arc<dyn Fn(Vec<Arc<dyn Any + Send + Sync>>) -> BoxFuture<'static, ()> + Send + Sync> = match self {{
+                    let callback: Arc<dyn Fn(Vec<Arc<dyn Any + Send + Sync>>, String) -> BoxFuture<'static, ()> + Send + Sync> = match self {{
                         {register_match_arms}
                     }};
                 
@@ -512,8 +512,8 @@ fn generate_event_bindings_code(
         abigen_name = abigen_contract_name(contract),
         structs = generate_structs(contract)?,
         event_type_name = &event_type_name,
-        event_context_client = if clients.is_some() {
-            "pub client: Arc<PostgresClient>,"
+        event_context_database = if clients.is_some() {
+            "pub database: Arc<PostgresClient>,"
         } else {
             ""
         },

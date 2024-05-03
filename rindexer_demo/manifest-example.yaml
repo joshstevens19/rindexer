@@ -16,6 +16,11 @@ indexers:
 #            startBlock: 56399431 # optional
 #            # endBlock: 56416447 # optional
 #            # pollingEvery: 15000 # optional
+          - address: '0x2E645469f354BB4F5c8a05B3b30A929361cf77eC'
+            network: base
+            startBlock: 56399431 # optional
+            # endBlock: 56416447 # optional
+            # pollingEvery: 15000 # optional
         abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
 networks:
   - name: polygon
@@ -23,6 +28,9 @@ networks:
     url: https://polygon-mainnet.g.alchemy.com/v2/QLjF9OO90XrczIsf6Nud7RoSc8mLSyra
     maxBlockRange: 100000 # optional
     maxHistoricalTaskConcurrency: 20 # optional
+  - name: base
+    chainId: 8453
+    url: https://base-mainnet.g.alchemy.com/v2/fb_ZprvGkE5uIH6bK6BvfFVDSABpTPXk
 global:
   contracts:
     - name: InjectedGlobal

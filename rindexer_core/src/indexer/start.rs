@@ -229,7 +229,7 @@ async fn process_logs(
                         .map(|log| network_contract.decode_log(log.clone()))
                         .collect::<Vec<Arc<dyn Any + Send + Sync>>>();
 
-                    registry.trigger_event(topic_id, decoded_logs).await;
+                    registry.trigger_event(topic_id, network_contract.network.clone(), decoded_logs).await;
                 }
                 Err(e) => {
                     eprintln!("Error fetching logs: {:?}", e);
@@ -238,7 +238,6 @@ async fn process_logs(
             }
         }
     } else {
-        // Process logs concurrently as they arrive, without waiting for the order
         let mut handles = Vec::new();
         while let Some(log_result) = logs_stream.next().await {
             match log_result {
@@ -246,10 +245,12 @@ async fn process_logs(
                     for log in logs {
                         let decoded_log = network_contract.decode_log(log);
                         let registry_clone = registry.clone();
+                        let network_contract_clone = network_contract.clone(); // Clone network_contract
                         // Spawn a task for each log to process concurrently
                         let handle = tokio::spawn(async move {
+                            let network = network_contract_clone.network.clone(); // Assuming network is also an Arc
                             registry_clone
-                                .trigger_event(topic_id, vec![decoded_log])
+                                .trigger_event(topic_id, network, vec![decoded_log])
                                 .await;
                         });
                         handles.push(handle);
