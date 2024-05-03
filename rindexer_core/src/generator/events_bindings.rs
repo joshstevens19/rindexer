@@ -4,7 +4,7 @@ use std::error::Error;
 use std::fs;
 
 use crate::helpers::camel_to_snake;
-use crate::manifest::yaml::{Contract, Databases};
+use crate::manifest::yaml::{Contract, ContractDetails, Databases};
 
 use super::networks_bindings::network_provider_fn_name_by_name;
 
@@ -183,7 +183,7 @@ fn generate_decoder_match_arms_code(event_type_name: &str, event_info: &[EventIn
                 r#"
                     {event_type_name}::{event_info_name}(_) => {{
                         Arc::new(move |topics: Vec<H256>, data: Bytes| {{
-                            match contract.decode_event::<{event_info_name}Data>(&"{event_info_name}".to_string(), topics, data.into()) {{
+                            match contract.decode_event::<{event_info_name}Data>("{event_info_name}", topics, data) {{
                                 Ok(filter) => Arc::new(filter) as Arc<dyn Any + Send + Sync>,
                                 Err(error) => Arc::new(error) as Arc<dyn Any + Send + Sync>,
                             }}
@@ -311,6 +311,76 @@ fn generate_event_callback_structs_code(
         .join("\n")
 }
 
+fn build_get_provider_fn(networks: Vec<String>) -> String {
+    let mut function = String::new();
+    function.push_str(
+        "fn get_provider(&self, network: &str) -> &'static Arc<Provider<RetryClient<Http>>> {\n",
+    );
+
+    // Iterate through the networks and generate conditional branches
+    for (index, network) in networks.iter().enumerate() {
+        if index > 0 {
+            function.push_str(" else ");
+        }
+
+        function.push_str(&format!(
+            r#"
+            if network == "{network}" {{
+                return crate::rindexer::networks::{network_provider_fn_name}();
+            }}"#,
+            network = network,
+            network_provider_fn_name = network_provider_fn_name_by_name(network)
+        ));
+    }
+
+    function.push_str(
+        r#"
+        else {
+            panic!("Network not supported")
+        }
+    }"#,
+    );
+
+    function
+}
+
+fn build_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &str) -> String {
+    let mut function = String::new();
+    function.push_str("fn contract(&self, network: &str) -> RindexerLensRegistryGen<Arc<Provider<RetryClient<Http>>>> {\n");
+
+    // Handling each contract detail with an `if` or `else if`
+    for (index, contract_detail) in contracts_details.iter().enumerate() {
+        if index == 0 {
+            function.push_str("    if ");
+        } else {
+            function.push_str("    else if ");
+        }
+
+        function.push_str(&format!(
+            r#"network == "{network}" {{
+        let address: Address = "{address}"
+            .parse()
+            .unwrap();
+        {abi_gen_name}::new(address, Arc::new(self.get_provider(network).clone()))
+    }}"#,
+            network = contract_detail.network,
+            address = contract_detail.address,
+            abi_gen_name = abi_gen_name
+        ));
+    }
+
+    // Add a fallback else statement to handle unsupported networks
+    function.push_str(
+        r#"
+    else {
+        panic!("Network not supported");
+    }
+}"#,
+    );
+
+    function
+}
+
 fn generate_event_bindings_code(
     contract: &Contract,
     clients: &Option<Databases>,
@@ -330,7 +400,7 @@ fn generate_event_bindings_code(
                 async_trait,
                 AsyncCsvAppender,
                 FutureExt,
-                generator::event_callback_registry::{{EventCallbackRegistry, EventInformation}},
+                generator::event_callback_registry::{{EventCallbackRegistry, EventInformation, ContractInformation, NetworkContract}},
                 manifest::yaml::{{Contract, ContractDetails}},
                 {client_import}
             }};
@@ -385,20 +455,12 @@ fn generate_event_bindings_code(
 
                 {contract_type_fn}
 
-                fn get_provider(&self) -> &'static Arc<Provider<RetryClient<Http>>> {{
-                    &crate::rindexer::networks::{network_provider_fn_name}()
-                }}
+                {build_get_provider_fn}
 
-                pub fn contract(&self) -> {abigen_name}<Arc<Provider<RetryClient<Http>>>> {{
-                    let address: Address = "{contract_address}"
-                        .parse()
-                        .unwrap();
+                {build_contract_fn}
 
-                    {abigen_name}::new(address, Arc::new(self.get_provider().clone()))
-                }}
-
-                pub fn decoder(&self) -> Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync> {{
-                    let contract = self.contract();
+                pub fn decoder(&self, network: &str) -> Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync> {{
+                    let contract = self.contract(network);
 
                     match self {{
                         {decoder_match_arms}
@@ -407,9 +469,24 @@ fn generate_event_bindings_code(
                 
                 pub fn register(self, registry: &mut EventCallbackRegistry) {{
                     let topic_id = self.topic_id();
-                    let contract = self.contract_information();
-                    let provider = self.get_provider();
-                    let decoder = self.decoder();
+                    let contract_information = self.contract_information();
+                    let contract = ContractInformation {{
+                        name: contract_information.name,
+                        details: contract_information
+                            .details
+                            .iter()
+                            .map(|c| NetworkContract {{
+                                network: c.network.clone(),
+                                provider: self.get_provider(&c.network),
+                                decoder: self.decoder(&c.network),
+                                address: c.address.clone(),
+                                start_block: c.start_block,
+                                end_block: c.end_block,
+                                polling_every: c.polling_every,
+                            }})
+                            .collect(),
+                        abi: contract_information.abi,
+                    }};
                     
                     let callback: Arc<dyn Fn(Vec<Arc<dyn Any + Send + Sync>>) -> BoxFuture<'static, ()> + Send + Sync> = match self {{
                         {register_match_arms}
@@ -419,9 +496,7 @@ fn generate_event_bindings_code(
                         EventInformation {{
                             topic_id,
                             contract,
-                            provider,
                             callback,
-                            decoder
                         }}
                     }});
                 }}
@@ -446,11 +521,12 @@ fn generate_event_bindings_code(
         event_enums = generate_event_enums_code(&event_info),
         topic_ids_match_arms = generate_topic_ids_match_arms_code(&event_type_name, &event_info),
         contract_type_fn = generate_contract_type_fn_code(contract),
-        // TODO! FIX MULTICHAIN
-        network_provider_fn_name =
-            network_provider_fn_name_by_name(&contract.details.first().unwrap().network),
-        // TODO! FIX MULTICHAIN
-        contract_address = &contract.details.first().unwrap().address,
+        build_get_provider_fn =
+            build_get_provider_fn(contract.details.iter().map(|c| c.network.clone()).collect()),
+        build_contract_fn = build_contract_fn(
+            contract.details.iter().collect(),
+            &abigen_contract_name(contract)
+        ),
         decoder_match_arms = generate_decoder_match_arms_code(&event_type_name, &event_info),
         register_match_arms = generate_register_match_arms_code(&event_type_name, &event_info)
     );
