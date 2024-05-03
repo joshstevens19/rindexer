@@ -3,8 +3,8 @@ use serde_json::Value;
 use std::error::Error;
 use std::fs;
 
-use crate::manifest::yaml::Clients;
-use crate::{helpers::camel_to_snake, manifest::yaml::Source};
+use crate::helpers::camel_to_snake;
+use crate::manifest::yaml::{Contract, Databases};
 
 use super::networks_bindings::network_provider_fn_name_by_name;
 
@@ -60,16 +60,16 @@ fn format_event_signature(item: &Value) -> String {
         .unwrap_or_default()
 }
 
-pub fn abigen_source_name(source: &Source) -> String {
-    format!("Rindexer{}Gen", source.name)
+pub fn abigen_contract_name(contract: &Contract) -> String {
+    format!("Rindexer{}Gen", contract.name)
 }
 
-fn abigen_source_mod_name(source: &Source) -> String {
-    camel_to_snake(&abigen_source_name(source))
+fn abigen_contract_mod_name(contract: &Contract) -> String {
+    camel_to_snake(&abigen_contract_name(contract))
 }
 
-pub fn abigen_source_file_name(source: &Source) -> String {
-    format!("{}_abi_gen", camel_to_snake(&source.name))
+pub fn abigen_contract_file_name(contract: &Contract) -> String {
+    format!("{}_abi_gen", camel_to_snake(&contract.name))
 }
 
 fn extract_event_names_and_signatures_from_abi(
@@ -98,8 +98,8 @@ fn extract_event_names_and_signatures_from_abi(
         })
 }
 
-fn generate_structs(abi_path: &str, source: &Source) -> Result<String, Box<dyn std::error::Error>> {
-    let abi_str = fs::read_to_string(abi_path)?;
+fn generate_structs(contract: &Contract) -> Result<String, Box<dyn Error>> {
+    let abi_str = fs::read_to_string(&contract.abi)?;
     let abi_json: Value = serde_json::from_str(&abi_str)?;
 
     let mut structs = String::new();
@@ -112,7 +112,7 @@ fn generate_structs(abi_path: &str, source: &Source) -> Result<String, Box<dyn s
             structs.push_str(&format!(
                 "pub type {struct_name} = {abigen_mod_name}::{event_name}Filter;\n",
                 struct_name = struct_name,
-                abigen_mod_name = abigen_source_mod_name(source),
+                abigen_mod_name = abigen_contract_mod_name(contract),
                 event_name = event_name
             ));
         }
@@ -198,35 +198,51 @@ fn generate_decoder_match_arms_code(event_type_name: &str, event_info: &[EventIn
         .join("\n")
 }
 
-fn generate_source_type_fn_code(source: &Source) -> String {
+fn generate_contract_type_fn_code(contract: &Contract) -> String {
+    let mut details = String::new();
+    details.push_str("vec![");
+    for contract in contract.details.iter() {
+        let item = format!(
+            r#"
+            ContractDetails {{
+                network: "{network}".to_string(),
+                address: "{address}".to_string(),
+                start_block: Some({start_block}),
+                end_block: Some({end_block}),
+                polling_every: Some({polling_every}),
+            }},
+        "#,
+            network = contract.network,
+            address = contract.address,
+            // TODO! FIX
+            start_block = contract.start_block.unwrap(),
+            // TODO! FIX
+            end_block = contract.end_block.unwrap_or(99424866),
+            // TODO! FIX
+            polling_every = contract.polling_every.unwrap_or(1000)
+        );
+        details.push_str(&item);
+    }
+    details.push(']');
     format!(
         r#"
-            fn source(&self) -> Source {{
-                Source {{
+            fn contract_information(&self) -> Contract {{
+                Contract {{
                     name: "{name}".to_string(),
-                    address: "{address}".to_string(),
-                    network: "{network}".to_string(),
-                    start_block: Some({start_block}),
-                    end_block: Some({end_block}),
-                    polling_every: Some({polling_every}),
+                    details: {details},
                     abi: "{abi}".to_string(),
                 }}
             }}
             "#,
-        name = source.name,
-        address = source.address,
-        network = source.network,
-        start_block = source.start_block.unwrap(),
-        // TODO! FIX
-        end_block = source.end_block.unwrap_or(99424866),
-        polling_every = source.polling_every.unwrap_or(1000),
-        abi = source.abi
+        name = contract.name,
+        details = details,
+        abi = contract.abi
     )
 }
 
 fn generate_event_callback_structs_code(
     event_info: &[EventInfo],
-    clients: &Option<Clients>,
+    clients: &Option<Databases>,
 ) -> String {
     let clients_enabled = clients.is_some();
     event_info
@@ -296,12 +312,11 @@ fn generate_event_callback_structs_code(
 }
 
 fn generate_event_bindings_code(
-    source: &Source,
-    clients: &Option<Clients>,
+    contract: &Contract,
+    clients: &Option<Databases>,
     event_info: Vec<EventInfo>,
-    abi_path: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let event_type_name = generate_event_type_name(&source.name);
+    let event_type_name = generate_event_type_name(&contract.name);
     let code = format!(
         r#"
             use std::{{any::Any, sync::Arc}};
@@ -316,7 +331,7 @@ fn generate_event_bindings_code(
                 AsyncCsvAppender,
                 FutureExt,
                 generator::event_callback_registry::{{EventCallbackRegistry, EventInformation}},
-                manifest::yaml::Source,
+                manifest::yaml::{{Contract, ContractDetails}},
                 {client_import}
             }};
 
@@ -368,7 +383,7 @@ fn generate_event_bindings_code(
                     }}
                 }}
 
-                {source_type_fn}
+                {contract_type_fn}
 
                 fn get_provider(&self) -> &'static Arc<Provider<RetryClient<Http>>> {{
                     &crate::rindexer::networks::{network_provider_fn_name}()
@@ -392,7 +407,7 @@ fn generate_event_bindings_code(
                 
                 pub fn register(self, registry: &mut EventCallbackRegistry) {{
                     let topic_id = self.topic_id();
-                    let source = self.source();
+                    let contract = self.contract_information();
                     let provider = self.get_provider();
                     let decoder = self.decoder();
                     
@@ -403,7 +418,7 @@ fn generate_event_bindings_code(
                    registry.register_event({{
                         EventInformation {{
                             topic_id,
-                            source,
+                            contract,
                             provider,
                             callback,
                             decoder
@@ -417,10 +432,10 @@ fn generate_event_bindings_code(
         } else {
             ""
         },
-        abigen_mod_name = abigen_source_mod_name(source),
-        abigen_file_name = abigen_source_file_name(source),
-        abigen_name = abigen_source_name(source),
-        structs = generate_structs(abi_path, source)?,
+        abigen_mod_name = abigen_contract_mod_name(contract),
+        abigen_file_name = abigen_contract_file_name(contract),
+        abigen_name = abigen_contract_name(contract),
+        structs = generate_structs(contract)?,
         event_type_name = &event_type_name,
         event_context_client = if clients.is_some() {
             "pub client: Arc<PostgresClient>,"
@@ -430,9 +445,12 @@ fn generate_event_bindings_code(
         event_callback_structs = generate_event_callback_structs_code(&event_info, clients),
         event_enums = generate_event_enums_code(&event_info),
         topic_ids_match_arms = generate_topic_ids_match_arms_code(&event_type_name, &event_info),
-        source_type_fn = generate_source_type_fn_code(source),
-        network_provider_fn_name = network_provider_fn_name_by_name(&source.network),
-        contract_address = &source.address,
+        contract_type_fn = generate_contract_type_fn_code(contract),
+        // TODO! FIX MULTICHAIN
+        network_provider_fn_name =
+            network_provider_fn_name_by_name(&contract.details.first().unwrap().network),
+        // TODO! FIX MULTICHAIN
+        contract_address = &contract.details.first().unwrap().address,
         decoder_match_arms = generate_decoder_match_arms_code(&event_type_name, &event_info),
         register_match_arms = generate_register_match_arms_code(&event_type_name, &event_info)
     );
@@ -440,11 +458,10 @@ fn generate_event_bindings_code(
     Ok(code)
 }
 
-pub fn generate_event_bindings_from_abi(
-    source: &Source,
-    clients: &Option<Clients>,
-    abi_path: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let event_names = extract_event_names_and_signatures_from_abi(abi_path)?;
-    generate_event_bindings_code(source, clients, event_names, abi_path)
+pub fn generate_event_bindings(
+    contract: &Contract,
+    databases: &Option<Databases>,
+) -> Result<String, Box<dyn Error>> {
+    let event_names = extract_event_names_and_signatures_from_abi(&contract.abi)?;
+    generate_event_bindings_code(contract, databases, event_names)
 }

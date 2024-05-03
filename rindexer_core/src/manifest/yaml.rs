@@ -29,69 +29,44 @@ pub struct Manifest {
 pub struct Indexer {
     pub name: String,
 
-    pub networks: Vec<String>,
-
-    pub contracts: Vec<Source>,
-
-    pub mappings: Mappings,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Source {
-    pub name: String,
-    
-    pub address: String,
-    
-    pub network: String,
-    
-    #[serde(rename = "startBlock", skip_serializing_if = "Option::is_none")]
-    pub start_block: Option<u64>,
-    
-    #[serde(rename = "endBlock", skip_serializing_if = "Option::is_none")]
-    pub end_block: Option<u64>,
-    
-    #[serde(rename = "pollingEvery", skip_serializing_if = "Option::is_none")]
-    pub polling_every: Option<u64>,
-    
-    pub abi: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Context {
     pub contracts: Vec<Contract>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Contract {
-    pub abi: String,
-    pub name: String,
+pub struct ContractDetails {
     pub network: String,
+
     pub address: String,
+
+    #[serde(rename = "startBlock", skip_serializing_if = "Option::is_none")]
+    pub start_block: Option<u64>,
+
+    #[serde(rename = "endBlock", skip_serializing_if = "Option::is_none")]
+    pub end_block: Option<u64>,
+
+    #[serde(rename = "pollingEvery", skip_serializing_if = "Option::is_none")]
+    pub polling_every: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Mappings {
-    pub abis: Vec<ABI>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ABI {
+pub struct Contract {
     pub name: String,
-    pub file: String,
+    pub details: Vec<ContractDetails>,
+    pub abi: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Network {
     pub name: String,
-    
+
     #[serde(rename = "chainId")]
     pub chain_id: u32,
-    
+
     pub url: String,
-    
+
     #[serde(rename = "maxBlockRange", skip_serializing_if = "Option::is_none")]
     pub max_block_range: Option<u64>,
-    
+
     #[serde(rename = "maxConcurrency", skip_serializing_if = "Option::is_none")]
     pub max_concurrency: Option<u32>,
 }
@@ -106,25 +81,22 @@ pub struct PostgresClient {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Clients {
+pub struct Databases {
     pub postgres: Option<PostgresClient>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Global {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub context: Option<Context>,
-    
+    pub contracts: Option<Vec<Contract>>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub mappings: Option<Mappings>,
-    
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub clients: Option<Clients>,
+    pub databases: Option<Databases>,
 }
 
 fn substitute_env_variables(contents: &str) -> Result<String, String> {
     // safe unwrap here, because the regex is hardcoded
-    let re = Regex::new(r"\$\{([^}]+)\}").unwrap();
+    let re = Regex::new(r"\$\{([^}]+)}").unwrap();
     let result = re.replace_all(contents, |caps: &regex::Captures| {
         let var_name = &caps[1];
         env::var(var_name).unwrap_or_else(|_| var_name.to_string())

@@ -1,14 +1,15 @@
 mod rindexer;
 
+use ethers::types::Address;
 use std::path::PathBuf;
 use std::str::FromStr;
-use ethers::types::Address;
 use std::sync::Arc;
 
-use rindexer::lens_registry_example::{
-    events::lens_registry::{HandleLinkedEvent, LensRegistryEventType},
+use rindexer::lens_registry_example::events::lens_registry::{
+    HandleLinkedEvent, LensRegistryEventType,
 };
 
+use crate::rindexer::global_contracts::get_injected_global;
 use crate::rindexer::lens_registry_example::events::lens_registry::{
     no_extensions, EventContext, NewEventOptions,
 };
@@ -17,7 +18,6 @@ use rindexer_core::{
     indexer::start::{start_indexing, StartIndexingSettings},
     AsyncCsvAppender, PostgresClient,
 };
-use crate::rindexer::global_context::get_injected_global;
 
 pub struct HeyBaby {
     pub bobby: bool,
@@ -39,7 +39,7 @@ async fn main() {
                     // you can grab any smart contract you mapped in the manifest here
                     let injected_provider = get_injected_global();
                     // let state = injected_provider.get_state().await.unwrap();
-
+    
                     // you can write data to your postgres
                     for handle_linked_data in data {
                         let handle_id = handle_linked_data.handle.id.to_string();
@@ -49,7 +49,7 @@ async fn main() {
                             .await
                             .unwrap();
                     }
-
+    
                     // context.csv - you can use this write csvs
                     // context.extensions - you can use this to pass any context you wish over
                 })
@@ -137,7 +137,8 @@ mod tests {
 
 fn generate() {
     build(
-        &PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/manifest-example.yaml").unwrap(),
+        &PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/manifest-example.yaml")
+            .unwrap(),
         "/Users/joshstevens/code/rindexer/rindexer_demo/src/rindexer",
     )
     .unwrap();

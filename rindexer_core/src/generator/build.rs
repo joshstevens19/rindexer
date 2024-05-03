@@ -1,5 +1,5 @@
-use std::{error::Error, path::Path};
 use std::path::PathBuf;
+use std::{error::Error, path::Path};
 
 use ethers::contract::Abigen;
 
@@ -10,9 +10,9 @@ use crate::{
     manifest::yaml::{read_manifest, Indexer, Network},
 };
 
-use super::events_bindings::{abigen_source_file_name, abigen_source_name};
+use super::events_bindings::{abigen_contract_file_name, abigen_contract_name};
 use super::{
-    context_bindings::generate_context_code, events_bindings::generate_event_bindings_from_abi,
+    context_bindings::generate_context_code, events_bindings::generate_event_bindings,
     networks_bindings::generate_networks_code,
 };
 
@@ -34,15 +34,11 @@ fn write_global(
     networks: &[Network],
 ) -> Result<(), Box<dyn Error>> {
     if let Some(global) = global {
-        if let Some(mappings) = &global.mappings {
-            let context_code = generate_context_code(&global.context, &mappings, networks)?;
-            write_file(
-                &generate_file_location(output, "global_context"),
-                &context_code,
-            )?;
-        } else {
-            Err("Mappings not found in global, if global contracts is defined mappings must")?
-        }
+        let context_code = generate_context_code(&global.contracts, networks)?;
+        write_file(
+            &generate_file_location(output, "global_contracts"),
+            &context_code,
+        )?;
     }
 
     Ok(())
@@ -53,21 +49,14 @@ fn write_indexer_events(
     indexer: &Indexer,
     global: &Option<Global>,
 ) -> Result<(), Box<dyn Error>> {
-    for source in &indexer.contracts {
-        let abi = &indexer
-            .mappings
-            .abis
-            .iter()
-            .find(|&obj| obj.name == source.abi)
-            .unwrap();
-
-        let clients = if let Some(global) = global {
-            &global.clients
+    for contract in &indexer.contracts {
+        let databases = if let Some(global) = global {
+            &global.databases
         } else {
             &None
         };
 
-        let events_code = generate_event_bindings_from_abi(source, clients, &abi.file)?;
+        let events_code = generate_event_bindings(contract, databases)?;
 
         write_file(
             &generate_file_location(
@@ -75,14 +64,14 @@ fn write_indexer_events(
                 &format!(
                     "{}/events/{}",
                     camel_to_snake(&indexer.name),
-                    camel_to_snake(&source.name)
+                    camel_to_snake(&contract.name)
                 ),
             ),
             &events_code,
         )?;
 
         // write ABI gen
-        let abi_gen = Abigen::new(abigen_source_name(&source), &abi.file)?.generate()?;
+        let abi_gen = Abigen::new(abigen_contract_name(&contract), &contract.abi)?.generate()?;
 
         write_file(
             &generate_file_location(
@@ -90,7 +79,7 @@ fn write_indexer_events(
                 &format!(
                     "{}/events/{}",
                     camel_to_snake(&indexer.name),
-                    abigen_source_file_name(&source)
+                    abigen_contract_file_name(&contract)
                 ),
             ),
             &abi_gen.to_string(),
