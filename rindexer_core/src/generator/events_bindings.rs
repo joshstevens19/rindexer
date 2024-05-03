@@ -459,7 +459,7 @@ fn generate_event_bindings_code(
 
                 {build_contract_fn}
 
-                pub fn decoder(&self, network: &str) -> Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync> {{
+                fn decoder(&self, network: &str) -> Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync> {{
                     let contract = self.contract(network);
 
                     match self {{
