@@ -32,8 +32,9 @@ async fn main() {
     LensRegistryEventType::HandleLinked(
         HandleLinkedEvent::new(
             // 4. write your callback it must be in an Arc
-            Arc::new(|data, context| {
+            Arc::new(|data, network, context| {
                 println!("HandleLinked event: {:?}", data);
+                println!("HandleLinked network: {:?}", network);
                 // needs to wrap as a pin to use async with closure and be safely passed around
                 Box::pin(async move {
                     // you can grab any smart contract you mapped in the manifest here
@@ -44,7 +45,7 @@ async fn main() {
                     for handle_linked_data in data {
                         let handle_id = handle_linked_data.handle.id.to_string();
                         context
-                            .client
+                            .database
                             .execute("INSERT INTO hello VALUES($1)", &[&handle_id])
                             .await
                             .unwrap();

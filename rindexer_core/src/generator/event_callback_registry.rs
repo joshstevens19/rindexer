@@ -44,7 +44,7 @@ pub struct EventInformation {
     pub topic_id: &'static str,
     pub contract: ContractInformation,
     pub callback:
-        Arc<dyn Fn(Vec<Arc<dyn Any + Send + Sync>>) -> BoxFuture<'static, ()> + Send + Sync>,
+        Arc<dyn Fn(Vec<Arc<dyn Any + Send + Sync>>, String) -> BoxFuture<'static, ()> + Send + Sync>,
 }
 
 impl Clone for EventInformation {
@@ -78,10 +78,11 @@ impl EventCallbackRegistry {
     pub async fn trigger_event(
         &self,
         topic_id: &'static str,
+        network: String,
         data: Vec<Arc<dyn Any + Send + Sync>>,
     ) {
         if let Some(callback) = self.find_event(topic_id).map(|e| &e.callback) {
-            callback(data).await;
+            callback(data, network).await;
         } else {
             println!(
                 "EventCallbackRegistry: No event found for topic_id: {}",
