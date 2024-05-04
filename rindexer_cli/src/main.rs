@@ -1,10 +1,16 @@
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use regex::Regex;
-use rindexer_core::manifest::yaml::{read_manifest, write_manifest, Manifest, Network};
+use rindexer_core::generator::build::build;
+use rindexer_core::manifest::yaml::{
+    read_manifest, write_manifest, Contract, ContractDetails, Databases, Global, Indexer, Manifest,
+    Network, PostgresClient,
+};
 use rindexer_core::provider::get_chain_id;
+use rindexer_core::write_file;
 use std::io::Write;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::{env, fs, io};
 
 /// Main structure for the CLI application
@@ -83,6 +89,9 @@ struct InitDetails {
     /// RPC URL of the network
     #[clap(short, long)]
     repository: Option<String>,
+
+    #[clap(short, long)]
+    database: Option<bool>,
 }
 
 /// Define the subcommands for the CLI
@@ -98,6 +107,9 @@ enum Commands {
         #[clap(flatten)]
         details: InitDetails,
     },
+    #[clap(name = "generate")]
+    /// Generate the project from the rindexer.yaml
+    Generate,
     /// Adds a new network
     #[clap(name = "network-add")]
     AddNetwork {
@@ -169,28 +181,127 @@ fn write_rindexer_yaml(manifest: &Manifest, rindexer_yaml_path: &PathBuf) {
     write_manifest(manifest, rindexer_yaml_path).unwrap();
 }
 
-fn handle_init_command(rindexer_yaml_path: &PathBuf, details: &InitDetails) {
-    if rindexer_yaml_exists() {
-        print_error_message("rindexer.yaml already exists in the current directory.");
+fn generate_rindexer_rust_project(path: PathBuf, rindexer_yaml_path: &PathBuf) {
+    let manifest = read_rindexer_yaml(rindexer_yaml_path);
+
+    if let Err(err) = fs::create_dir_all(path.join("abis")) {
+        print_error_message(&format!("Failed to create directory: {}", err));
+        return;
     }
 
+    let cargo = format!(
+        r#"
+            [package]
+            name = "{project_name}"
+            version = "0.1.0"
+            edition = "2021"
+
+            [dependencies]
+            rindexer_core = {{ path = "../rindexer_core" }}
+            tokio = {{ version = "1", features = ["full"] }}
+            ethers = {{ version = "2.0", features = ["rustls", "openssl"] }}
+            serde = {{ version = "1.0.194", features = ["derive"] }}
+        "#,
+        project_name = manifest.name,
+    );
+
+    write_file(path.join("Cargo.toml").to_str().unwrap(), &cargo).unwrap();
+
+    if let Err(err) = fs::create_dir_all(path.join("src")) {
+        print_error_message(&format!("Failed to create directory: {}", err));
+        return;
+    }
+
+    let main_code = r#"
+            mod rindexer;
+
+            #[tokio::main]
+            async fn main() {{
+                println!("Hello, world!");
+            }}
+        "#;
+
+    write_file(
+        path.join("src").join("main.rs").to_str().unwrap(),
+        main_code,
+    )
+    .unwrap();
+
+    let rindexer_path = path.join("src").join("rindexer");
+    build(rindexer_yaml_path, rindexer_path.to_str().unwrap()).unwrap();
+}
+
+fn handle_init_command(details: &InitDetails) {
     print_success_message("Initializing new rindexer project...");
 
     let project_name = prompt_for_input("Project Name", None, &details.name);
-
+    let path = PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo_cli").unwrap();
+    if path.exists() {
+        print_error_message("Directory already exists. Please choose a different project name.");
+        return;
+    }
     let project_description = prompt_for_optional_input::<String>("Project description", None);
     let repository = prompt_for_optional_input::<String>("Repository", None);
+    let database = prompt_for_input("Enable Postgres? (yes/no)", None, &None);
 
     let manifest = Manifest {
-        name: project_name,
+        name: project_name.clone(),
         description: project_description,
         repository,
-        networks: vec![],
-        indexers: vec![],
-        global: None,
+        networks: vec![Network {
+            name: "INSERT HERE".to_string(),
+            chain_id: 404,
+            url: "INSERT HERE".to_string(),
+            max_block_range: None,
+            max_concurrency: None,
+        }],
+        indexers: vec![Indexer {
+            name: "INSERT HERE".to_string(),
+            contracts: vec![Contract {
+                name: "INSERT HERE".to_string(),
+                details: vec![ContractDetails {
+                    network: "INSERT HERE".to_string(),
+                    address: "INSERT HERE".to_string(),
+                    start_block: None,
+                    end_block: None,
+                    polling_every: None,
+                }],
+                abi: "INSERT HERE".to_string(),
+            }],
+        }],
+        global: if database == "yes" {
+            Some(Global {
+                contracts: None,
+                databases: Some(Databases {
+                    postgres: Some(PostgresClient {
+                        name: "${DATABASE_NAME}".to_string(),
+                        user: "${DATABASE_USER}".to_string(),
+                        password: "${DATABASE_PASSWORD}".to_string(),
+                        host: "${DATABASE_HOST}".to_string(),
+                        port: "${DATABASE_PORT}".to_string(),
+                    }),
+                }),
+            })
+        } else {
+            None
+        },
     };
 
-    write_rindexer_yaml(&manifest, rindexer_yaml_path);
+    let rindexer_yaml_path = path.join(YAML_NAME);
+    let rindexer_abis_folder = path.join("ABIs");
+
+    if let Err(err) = fs::create_dir_all(path) {
+        print_error_message(&format!("Failed to create directory: {}", err));
+        return;
+    }
+
+    if let Err(err) = fs::create_dir_all(rindexer_abis_folder) {
+        print_error_message(&format!("Failed to create directory: {}", err));
+        return;
+    }
+
+    write_rindexer_yaml(&manifest, &rindexer_yaml_path);
+
     print_success_message(
         "Project initialized successfully. Add a network next - rindexer add-network",
     );
@@ -252,22 +363,23 @@ async fn handle_add_network_command(rindexer_yaml_path: &PathBuf, details: &Netw
     }
 }
 
-async fn handle_add_new_index(rindexer_yaml_path: &PathBuf, details: IndexerDetails) {
-    validate_rindexer_yaml_does_not_exist();
-
-    let indexer_name = prompt_for_input("Indexer name", None, &details.name);
-    let network_name = prompt_for_input("Network name", None, &details.network);
-}
+// async fn handle_add_new_index(rindexer_yaml_path: &PathBuf, details: IndexerDetails) {
+//     validate_rindexer_yaml_does_not_exist();
+//
+//     let indexer_name = prompt_for_input("Indexer name", None, &details.name);
+//     let network_name = prompt_for_input("Network name", None, &details.network);
+// }
 
 #[tokio::main]
 async fn main() {
     let cli = CLI::parse();
 
-    let path = env::current_dir().unwrap();
+    let path = PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo_cli").unwrap();
     let rindexer_yaml_path = path.join(YAML_NAME);
 
     match &cli.command {
-        Commands::Init { details } => handle_init_command(&rindexer_yaml_path, details),
+        Commands::Init { details } => handle_init_command(details),
+        Commands::Generate => generate_rindexer_rust_project(path, &rindexer_yaml_path),
         Commands::Ls { category } => match category {
             ListCategory::Indexers => println!("Listing indexers..."),
             ListCategory::Networks => handle_ls_networks_command(&rindexer_yaml_path),

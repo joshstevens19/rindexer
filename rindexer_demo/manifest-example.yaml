@@ -8,20 +8,14 @@ indexers:
         details:
           - address: '0xD4F2F33680FCCb36748FA9831851643781608844'
             network: polygon
-            startBlock: 56399431 # optional
-            # endBlock: 56416447 # optional
-            # pollingEvery: 15000 # optional
-#          - address: '0xD4F2F33680FCCb36748FA9831851643781608844'
-#            network: base
-#            startBlock: 56399431 # optional
-#            # endBlock: 56416447 # optional
-#            # pollingEvery: 15000 # optional
-          - address: '0x2E645469f354BB4F5c8a05B3b30A929361cf77eC'
-            network: base
-            startBlock: 56399431 # optional
-            # endBlock: 56416447 # optional
-            # pollingEvery: 15000 # optional
+            startBlock: 56399431
         abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
+      - name: LensHub
+        details:
+          - address: '0xDb46d1Dc155634FbC732f92E853b10B288AD5a1d'
+            network: polygon
+            startBlock: 56399431
+        abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-hub-events-abi.json
 networks:
   - name: polygon
     chainId: 137

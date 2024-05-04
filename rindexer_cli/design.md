@@ -20,6 +20,10 @@ Options:
 
 rindexer ls
 
+rindexer generate-typings
+
+rindexer generate-full-project
+
 rindexer start indexer --mainifest <path> --port <port>
 
 rindexer start graphql --mainifest <path> --port <port>

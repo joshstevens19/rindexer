@@ -43,8 +43,9 @@ pub struct ContractInformation {
 pub struct EventInformation {
     pub topic_id: &'static str,
     pub contract: ContractInformation,
-    pub callback:
-        Arc<dyn Fn(Vec<Arc<dyn Any + Send + Sync>>, String) -> BoxFuture<'static, ()> + Send + Sync>,
+    pub callback: Arc<
+        dyn Fn(Vec<Arc<dyn Any + Send + Sync>>, String) -> BoxFuture<'static, ()> + Send + Sync,
+    >,
 }
 
 impl Clone for EventInformation {
