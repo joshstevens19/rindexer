@@ -10,7 +10,9 @@ use crate::{
     manifest::yaml::{read_manifest, Indexer, Network},
 };
 
-use super::events_bindings::{abigen_contract_file_name, abigen_contract_name};
+use super::events_bindings::{
+    abigen_contract_file_name, abigen_contract_name, generate_event_handlers,
+};
 use super::{
     context_bindings::generate_context_code, events_bindings::generate_event_bindings,
     networks_bindings::generate_networks_code,
@@ -21,7 +23,7 @@ fn generate_file_location(output: &str, location: &str) -> String {
 }
 
 fn write_networks(output: &str, networks: &Vec<Network>) -> Result<(), Box<dyn Error>> {
-    let networks_code = generate_networks_code(&networks)?;
+    let networks_code = generate_networks_code(networks)?;
 
     write_file(&generate_file_location(output, "networks"), &networks_code)?;
 
@@ -71,7 +73,7 @@ fn write_indexer_events(
         )?;
 
         // write ABI gen
-        let abi_gen = Abigen::new(abigen_contract_name(&contract), &contract.abi)?.generate()?;
+        let abi_gen = Abigen::new(abigen_contract_name(contract), &contract.abi)?.generate()?;
 
         write_file(
             &generate_file_location(
@@ -79,7 +81,7 @@ fn write_indexer_events(
                 &format!(
                     "{}/events/{}",
                     camel_to_snake(&indexer.name),
-                    abigen_contract_file_name(&contract)
+                    abigen_contract_file_name(contract)
                 ),
             ),
             &abi_gen.to_string(),
@@ -97,6 +99,31 @@ pub fn build(manifest_location: &PathBuf, output: &str) -> Result<(), Box<dyn Er
 
     for indexer in manifest.indexers {
         write_indexer_events(output, &indexer, &manifest.global)?;
+    }
+
+    create_mod_file(Path::new(output))?;
+
+    Ok(())
+}
+
+pub fn generate_code(manifest_location: &PathBuf, output: &str) -> Result<(), Box<dyn Error>> {
+    let manifest = read_manifest(manifest_location)?;
+
+    for indexer in manifest.indexers {
+        for contract in indexer.contracts {
+            let result = generate_event_handlers(&indexer.name, &contract).unwrap();
+            write_file(
+                &generate_file_location(
+                    output,
+                    &format!(
+                        "indexers/{}/{}",
+                        camel_to_snake(&indexer.name),
+                        camel_to_snake(&contract.name)
+                    ),
+                ),
+                &result,
+            )?;
+        }
     }
 
     create_mod_file(Path::new(output))?;

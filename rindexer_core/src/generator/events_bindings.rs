@@ -8,6 +8,7 @@ use crate::manifest::yaml::{Contract, ContractDetails, Databases};
 
 use super::networks_bindings::network_provider_fn_name_by_name;
 
+#[derive(Debug)]
 struct EventInfo {
     name: String,
     signature: String,
@@ -138,7 +139,6 @@ fn generate_topic_ids_match_arms_code(event_type_name: &str, event_info: &[Event
         .iter()
         .map(|info| {
             let event_signature = format!("{}({})", info.name, info.signature);
-            println!("event_signature: {}", event_signature);
             let topic_id = compute_topic_id(&event_signature);
             format!(
                 "{}::{}(_) => \"0x{}\",",
@@ -346,7 +346,10 @@ fn build_get_provider_fn(networks: Vec<String>) -> String {
 
 fn build_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &str) -> String {
     let mut function = String::new();
-    function.push_str("fn contract(&self, network: &str) -> RindexerLensRegistryGen<Arc<Provider<RetryClient<Http>>>> {\n");
+    function.push_str(&format!(
+        r#"fn contract(&self, network: &str) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> {{"#,
+        abi_gen_name = abi_gen_name
+    ));
 
     // Handling each contract detail with an `if` or `else if`
     for (index, contract_detail) in contracts_details.iter().enumerate() {
@@ -540,4 +543,85 @@ pub fn generate_event_bindings(
 ) -> Result<String, Box<dyn Error>> {
     let event_names = extract_event_names_and_signatures_from_abi(&contract.abi)?;
     generate_event_bindings_code(contract, databases, event_names)
+}
+
+pub fn generate_event_handlers(
+    indexer_name: &str,
+    contract: &Contract,
+) -> Result<String, Box<dyn Error>> {
+    let event_names = extract_event_names_and_signatures_from_abi(&contract.abi)?;
+
+    let mut imports = String::new();
+    imports.push_str(
+        "use rindexer_core::generator::event_callback_registry::EventCallbackRegistry;\n",
+    );
+    imports.push_str("use std::sync::Arc;\n");
+    imports.push_str(&format!(
+        r#"use crate::rindexer::{indexer_name_formatted}::events::{handler_registry_name}::{{no_extensions, NewEventOptions, {event_type_name}"#,
+        indexer_name_formatted = camel_to_snake(indexer_name),
+        handler_registry_name = camel_to_snake(&contract.name),
+        event_type_name = generate_event_type_name(&contract.name)
+    ));
+
+    let mut handlers = String::new();
+
+    let mut registry_fn = String::new();
+    registry_fn.push_str(&format!(
+        r#"pub async fn {handler_registry_fn_name}_handlers(registry: &mut EventCallbackRegistry) {{"#,
+        handler_registry_fn_name = camel_to_snake(&contract.name),
+    ));
+
+    let mut code = String::new();
+
+    for event in event_names {
+        let event_type_name = generate_event_type_name(&contract.name);
+
+        imports.push_str(&format!(
+            r#",{handler_name}Event"#,
+            handler_name = event.name,
+        ));
+
+        let handler_fn_name = camel_to_snake(&event.name);
+        let handler = format!(
+            r#"
+            async fn {handler_fn_name}_handler(registry: &mut EventCallbackRegistry) {{
+                {event_type_name}::{handler_name}(
+                    {handler_name}Event::new(
+                        Arc::new(|data, network, context| {{
+                            Box::pin(async move {{
+                                println!("{handler_name} event: {{:?}}", data);
+                            }})
+                        }}),
+                        no_extensions(),
+                        NewEventOptions::default(),
+                    )
+                    .await,
+                )
+                .register(registry);
+            }}
+        "#,
+            handler_fn_name = handler_fn_name,
+            handler_name = event.name,
+            event_type_name = event_type_name
+        );
+
+        handlers.push_str(&handler);
+
+        registry_fn.push_str(&format!(
+            r#"
+                {handler_fn_name}_handler(registry).await;
+            "#,
+            handler_fn_name = handler_fn_name
+        ));
+    }
+
+    imports.push_str("};\n");
+
+    registry_fn.push('}');
+
+    code.push_str(&imports);
+    code.push_str(&handlers);
+    code.push_str(&registry_fn);
+
+    Ok(code)
 }

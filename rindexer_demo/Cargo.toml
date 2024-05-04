@@ -3,8 +3,6 @@ name = "rindexer_demo"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 # internal dependencies
 rindexer_core = { path = "../rindexer_core" }
@@ -13,5 +11,3 @@ rindexer_core = { path = "../rindexer_core" }
 tokio = { version = "1", features = ["full"] }
 ethers = { version = "2.0", features = ["rustls", "openssl"] }
 serde = { version = "1.0.194", features = ["derive"] }
-#serde = "1.0"
-#serde_json = "1.0"
