@@ -6,9 +6,16 @@ use std::{error::Error, fs::File};
 
 pub fn camel_to_snake(name: &str) -> String {
     let mut snake_case = String::new();
-    for (i, ch) in name.chars().enumerate() {
-        if ch.is_uppercase() && i != 0 {
-            snake_case.push('_');
+    let mut prev_char_was_upper = false;
+
+    for ch in name.chars() {
+        if ch.is_uppercase() {
+            if !snake_case.is_empty() && !prev_char_was_upper {
+                snake_case.push('_');
+            }
+            prev_char_was_upper = true;
+        } else {
+            prev_char_was_upper = false;
         }
         snake_case.push(ch.to_lowercase().next().unwrap());
     }
