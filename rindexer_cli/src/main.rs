@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use regex::Regex;
-use rindexer_core::generator::build::build;
+use rindexer_core::generator::build::generate_rindexer_code;
 use rindexer_core::manifest::yaml::{
     read_manifest, write_manifest, Contract, ContractDetails, Databases, Global, Indexer, Manifest,
     Network, PostgresClient,
@@ -228,7 +228,7 @@ fn generate_rindexer_rust_project(path: PathBuf, rindexer_yaml_path: &PathBuf) {
     .unwrap();
 
     let rindexer_path = path.join("src").join("rindexer");
-    build(rindexer_yaml_path, rindexer_path.to_str().unwrap()).unwrap();
+    generate_rindexer_code(rindexer_yaml_path, rindexer_path.to_str().unwrap()).unwrap();
 }
 
 fn handle_init_command(details: &InitDetails) {
