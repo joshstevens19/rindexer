@@ -91,7 +91,10 @@ fn write_indexer_events(
     Ok(())
 }
 
-pub fn build(manifest_location: &PathBuf, output: &str) -> Result<(), Box<dyn Error>> {
+pub fn generate_rindexer_code(
+    manifest_location: &PathBuf,
+    output: &str,
+) -> Result<(), Box<dyn Error>> {
     let manifest = read_manifest(manifest_location)?;
 
     write_networks(output, &manifest.networks)?;
@@ -106,7 +109,10 @@ pub fn build(manifest_location: &PathBuf, output: &str) -> Result<(), Box<dyn Er
     Ok(())
 }
 
-pub fn generate_code(manifest_location: &PathBuf, output: &str) -> Result<(), Box<dyn Error>> {
+pub fn generate_indexers_handlers_code(
+    manifest_location: &PathBuf,
+    output: &str,
+) -> Result<(), Box<dyn Error>> {
     let manifest = read_manifest(manifest_location)?;
 
     for indexer in manifest.indexers {

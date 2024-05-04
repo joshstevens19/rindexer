@@ -1,4 +1,5 @@
 use ethers::utils::keccak256;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::error::Error;
 use std::fs;
@@ -8,36 +9,67 @@ use crate::manifest::yaml::{Contract, ContractDetails, Databases};
 
 use super::networks_bindings::network_provider_fn_name_by_name;
 
-#[derive(Debug)]
-struct EventInfo {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ABIItem {
+    anonymous: bool,
+
+    inputs: Vec<ABIInput>,
+
     name: String,
+
+    #[serde(rename = "type")]
+    type_: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ABIInput {
+    pub indexed: Option<bool>,
+
+    #[serde(rename = "internalType")]
+    pub internal_type: String,
+
+    pub name: String,
+
+    #[serde(rename = "type")]
+    pub type_: String,
+
+    pub components: Option<Vec<ABIInput>>,
+}
+
+#[derive(Debug)]
+pub struct EventInfo {
+    pub name: String,
+    pub inputs: Vec<ABIInput>,
     signature: String,
     struct_name: String,
 }
 
 impl EventInfo {
-    pub fn new(name: String, signature: String) -> Self {
-        let struct_name = format!("{}Data", name);
+    pub fn new(item: &ABIItem, signature: String) -> Self {
+        let struct_name = format!("{}Data", item.name);
         EventInfo {
-            name,
+            name: item.name.clone(),
+            inputs: item.inputs.clone(),
             signature,
             struct_name,
         }
     }
 }
 
-fn format_param_type(param: &Value) -> String {
-    match param["type"].as_str() {
-        Some("tuple") => {
-            let components = param["components"].as_array().unwrap();
-            let formatted_components = components
+fn format_param_type(input: &ABIInput) -> String {
+    match input.type_.as_str() {
+        "tuple" => {
+            let formatted_components = input
+                .components
+                .as_ref()
+                .unwrap()
                 .iter()
                 .map(format_param_type)
                 .collect::<Vec<_>>()
                 .join(",");
             format!("({})", formatted_components)
         }
-        _ => param["type"].as_str().unwrap_or_default().to_string(),
+        _ => input.type_.to_string(),
     }
 }
 
@@ -48,17 +80,12 @@ fn compute_topic_id(event_signature: &str) -> String {
         .collect()
 }
 
-fn format_event_signature(item: &Value) -> String {
-    item["inputs"]
-        .as_array()
-        .map(|params| {
-            params
-                .iter()
-                .map(format_param_type)
-                .collect::<Vec<_>>()
-                .join(",")
-        })
-        .unwrap_or_default()
+fn format_event_signature(item: &ABIItem) -> String {
+    item.inputs
+        .iter()
+        .map(format_param_type)
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 pub fn abigen_contract_name(contract: &Contract) -> String {
@@ -73,30 +100,26 @@ pub fn abigen_contract_file_name(contract: &Contract) -> String {
     format!("{}_abi_gen", camel_to_snake(&contract.name))
 }
 
-fn extract_event_names_and_signatures_from_abi(
+pub fn extract_event_names_and_signatures_from_abi(
     abi_path: &str,
 ) -> Result<Vec<EventInfo>, Box<dyn Error>> {
     let abi_str = fs::read_to_string(abi_path)?;
-    let abi_json: Value = serde_json::from_str(&abi_str)?;
+    let abi_json: Vec<ABIItem> = serde_json::from_str(&abi_str)?;
 
-    abi_json
-        .as_array()
-        .ok_or("Invalid ABI JSON format".into())
-        .map(|events| {
-            events
-                .iter()
-                .filter_map(|item| {
-                    if item["type"] == "event" {
-                        let name = item["name"].as_str()?.to_owned();
-                        let signature = format_event_signature(item);
+    let result = abi_json
+        .iter()
+        .filter_map(|item| {
+            if item.type_ == "event" {
+                let signature = format_event_signature(item);
 
-                        Some(EventInfo::new(name, signature))
-                    } else {
-                        None
-                    }
-                })
-                .collect()
+                Some(EventInfo::new(item, signature))
+            } else {
+                None
+            }
         })
+        .collect();
+
+    Ok(result)
 }
 
 fn generate_structs(contract: &Contract) -> Result<String, Box<dyn Error>> {
