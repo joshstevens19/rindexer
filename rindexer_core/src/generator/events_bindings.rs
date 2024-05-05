@@ -41,17 +41,18 @@ pub struct EventInfo {
     pub name: String,
     pub inputs: Vec<ABIInput>,
     signature: String,
-    struct_name: String,
+    struct_result: String,
+    struct_data: String,
 }
 
 impl EventInfo {
     pub fn new(item: &ABIItem, signature: String) -> Self {
-        let struct_name = format!("{}Data", item.name);
         EventInfo {
             name: item.name.clone(),
             inputs: item.inputs.clone(),
             signature,
-            struct_name,
+            struct_result: format!("{}Result", item.name),
+            struct_data: format!("{}Data", item.name),
         }
     }
 }
@@ -131,11 +132,21 @@ fn generate_structs(contract: &Contract) -> Result<String, Box<dyn Error>> {
     for item in abi_json.as_array().ok_or("Invalid ABI JSON format")?.iter() {
         if item["type"] == "event" {
             let event_name = item["name"].as_str().unwrap_or_default();
-            let struct_name = format!("{}Data", event_name);
+            let struct_result = format!("{}Result", event_name);
+            let struct_data = format!("{}Data", event_name);
 
             structs.push_str(&format!(
-                "pub type {struct_name} = {abigen_mod_name}::{event_name}Filter;\n",
-                struct_name = struct_name,
+                r#"
+                    pub type {struct_data} = {abigen_mod_name}::{event_name}Filter;
+
+                    #[derive(Debug)]
+                    pub struct {struct_result} {{
+                        pub event_data: {struct_data},
+                        pub tx_information: TxInformation
+                      }}
+                "#,
+                struct_result = struct_result,
+                struct_data = struct_data,
                 abigen_mod_name = abigen_contract_mod_name(contract),
                 event_name = event_name
             ));
@@ -180,9 +191,9 @@ fn generate_register_match_arms_code(event_type_name: &str, event_info: &[EventI
                 r#"
                     {}::{}(event) => {{
                         let event = Arc::new(event);
-                        Arc::new(move |data, network| {{
+                        Arc::new(move |result| {{
                             let event = event.clone();
-                            async move {{ event.call(data, network).await }}.boxed()
+                            async move {{ event.call(result).await }}.boxed()
                         }})
                     }},
                 "#,
@@ -271,10 +282,10 @@ fn generate_event_callback_structs_code(
     event_info
         .iter()
         .map(|info| {
-            let csv_file_name = format!("{}-{}.csv", &info.struct_name, &info.signature).to_lowercase();
+            let csv_file_name = format!("{}-{}.csv", &info.struct_result, &info.signature).to_lowercase();
             format!(
                 r#"
-                    type {name}EventCallbackType<TExtensions> = Arc<dyn Fn(&Vec<{struct_name}>, String, Arc<EventContext<TExtensions>>) -> BoxFuture<'_, ()> + Send + Sync>;
+                    type {name}EventCallbackType<TExtensions> = Arc<dyn Fn(&Vec<{struct_result}>, Arc<EventContext<TExtensions>>) -> BoxFuture<'_, ()> + Send + Sync>;
 
                     pub struct {name}Event<TExtensions> where TExtensions: Send + Sync {{
                         callback: {name}EventCallbackType<TExtensions>,
@@ -307,25 +318,31 @@ fn generate_event_callback_structs_code(
 
                     #[async_trait]
                     impl<TExtensions> EventCallback for {name}Event<TExtensions> where TExtensions: Send + Sync {{
-                        async fn call(&self, data: Vec<Arc<dyn Any + Send + Sync>>, network: String) {{
-                            let data_len = data.len();
+                        async fn call(&self, events: Vec<EventResult>) {{
+                            let events_len = events.len();
 
-                            let specific_data: Vec<{struct_name}> = data.into_iter()
+                            let result: Vec<{struct_result}> = events.into_iter()
                                 .filter_map(|item| {{
-                                    item.downcast::<{struct_name}>().ok().map(|arc| (*arc).clone())
+                                    item.decoded_data.downcast::<{struct_data}>()
+                                        .ok()
+                                        .map(|arc| {struct_result} {{
+                                            event_data: (*arc).clone(),
+                                            tx_information: item.tx_information
+                                        }})
                                 }})
                                 .collect();
 
-                            if specific_data.len() == data_len {{
-                                (self.callback)(&specific_data, network, self.context.clone()).await;
+                            if result.len() == events_len {{
+                                (self.callback)(&result, self.context.clone()).await;
                             }} else {{
-                                println!("{name}Event: Unexpected data type - expected: {struct_name}")
+                                println!("{name}Event: Unexpected data type - expected: {struct_data}")
                             }}
                         }}
                     }}
                 "#,
                 name = info.name,
-                struct_name = info.struct_name,
+                struct_result = info.struct_result,
+                struct_data = info.struct_data,
                 database = if databases_enabled { "database: Arc::new(PostgresClient::new().await.unwrap())," } else { "" },
                 csv_file_name = csv_file_name
             )
@@ -426,7 +443,7 @@ fn generate_event_bindings_code(
                 async_trait,
                 AsyncCsvAppender,
                 FutureExt,
-                generator::event_callback_registry::{{EventCallbackRegistry, EventInformation, ContractInformation, NetworkContract}},
+                generator::event_callback_registry::{{EventCallbackRegistry, EventInformation, ContractInformation, NetworkContract, EventResult, TxInformation}},
                 manifest::yaml::{{Contract, ContractDetails}},
                 {client_import}
             }};
@@ -439,7 +456,7 @@ fn generate_event_bindings_code(
 
             #[async_trait]
             trait EventCallback {{
-                async fn call(&self, data: Vec<Arc<dyn Any + Send + Sync>>, network: String);
+                async fn call(&self, events: Vec<EventResult>);
             }}
 
             pub struct EventContext<TExtensions> where TExtensions: Send + Sync {{
@@ -514,7 +531,7 @@ fn generate_event_bindings_code(
                         abi: contract_information.abi,
                     }};
                     
-                    let callback: Arc<dyn Fn(Vec<Arc<dyn Any + Send + Sync>>, String) -> BoxFuture<'static, ()> + Send + Sync> = match self {{
+                    let callback: Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, ()> + Send + Sync> = match self {{
                         {register_match_arms}
                     }};
                 
@@ -610,9 +627,9 @@ pub fn generate_event_handlers(
             async fn {handler_fn_name}_handler(registry: &mut EventCallbackRegistry) {{
                 {event_type_name}::{handler_name}(
                     {handler_name}Event::new(
-                        Arc::new(|data, network, context| {{
+                        Arc::new(|result, context| {{
                             Box::pin(async move {{
-                                println!("{handler_name} event: {{:?}}", data);
+                                println!("{handler_name} event: {{:?}}", result);
                             }})
                         }}),
                         no_extensions(),

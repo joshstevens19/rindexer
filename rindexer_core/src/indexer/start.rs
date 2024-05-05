@@ -2,14 +2,13 @@ use ethers::{
     providers::Middleware,
     types::{Address, Filter, H256, U64},
 };
-use std::any::Any;
 use std::error::Error;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio_stream::StreamExt;
 
 use crate::generator::event_callback_registry::{
-    EventCallbackRegistry, EventInformation, NetworkContract,
+    EventCallbackRegistry, EventResult, NetworkContract,
 };
 use crate::indexer::fetch_logs::fetch_logs_stream;
 
@@ -105,17 +104,14 @@ pub async fn start_indexing(
             };
 
             if settings.execute_in_event_order {
-                // Sequential processing of events
                 process_event_sequentially(event_processing_config).await?;
             } else {
-                // Concurrent processing of events
                 let handle = tokio::spawn(process_event_concurrently(event_processing_config));
                 handles.push(handle);
             }
         }
     }
 
-    // Await all handles, whether they were started concurrently or sequentially
     for handle in handles {
         handle.await??;
     }
@@ -224,14 +220,12 @@ async fn process_logs(
         while let Some(log_result) = logs_stream.next().await {
             match log_result {
                 Ok(logs) => {
-                    let decoded_logs = logs
+                    let fn_data = logs
                         .iter()
-                        .map(|log| network_contract.decode_log(log.clone()))
-                        .collect::<Vec<Arc<dyn Any + Send + Sync>>>();
+                        .map(|log| EventResult::new(network_contract.clone(), log))
+                        .collect::<Vec<_>>();
 
-                    registry
-                        .trigger_event(topic_id, network_contract.network.clone(), decoded_logs)
-                        .await;
+                    registry.trigger_event(topic_id, fn_data).await;
                 }
                 Err(e) => {
                     eprintln!("Error fetching logs: {:?}", e);
@@ -245,15 +239,11 @@ async fn process_logs(
             match log_result {
                 Ok(logs) => {
                     for log in logs {
-                        let decoded_log = network_contract.decode_log(log);
+                        let fn_data = EventResult::new(network_contract.clone(), &log);
                         let registry_clone = registry.clone();
-                        let network_contract_clone = network_contract.clone(); // Clone network_contract
-                                                                               // Spawn a task for each log to process concurrently
+
                         let handle = tokio::spawn(async move {
-                            let network = network_contract_clone.network.clone(); // Assuming network is also an Arc
-                            registry_clone
-                                .trigger_event(topic_id, network, vec![decoded_log])
-                                .await;
+                            registry_clone.trigger_event(topic_id, vec![fn_data]).await;
                         });
                         handles.push(handle);
                     }

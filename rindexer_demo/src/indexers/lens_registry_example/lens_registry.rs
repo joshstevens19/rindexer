@@ -8,9 +8,9 @@ use std::sync::Arc;
 async fn handle_linked_handler(registry: &mut EventCallbackRegistry) {
     LensRegistryEventType::HandleLinked(
         HandleLinkedEvent::new(
-            Arc::new(|data, network, context| {
+            Arc::new(|result, context| {
                 Box::pin(async move {
-                    println!("HandleLinked event: {:?}", data);
+                    println!("HandleLinked event: {:?}", result);
                 })
             }),
             no_extensions(),
@@ -24,9 +24,9 @@ async fn handle_linked_handler(registry: &mut EventCallbackRegistry) {
 async fn handle_unlinked_handler(registry: &mut EventCallbackRegistry) {
     LensRegistryEventType::HandleUnlinked(
         HandleUnlinkedEvent::new(
-            Arc::new(|data, network, context| {
+            Arc::new(|result, context| {
                 Box::pin(async move {
-                    println!("HandleUnlinked event: {:?}", data);
+                    println!("HandleUnlinked event: {:?}", result);
                 })
             }),
             no_extensions(),
@@ -40,9 +40,9 @@ async fn handle_unlinked_handler(registry: &mut EventCallbackRegistry) {
 async fn nonce_updated_handler(registry: &mut EventCallbackRegistry) {
     LensRegistryEventType::NonceUpdated(
         NonceUpdatedEvent::new(
-            Arc::new(|data, network, context| {
+            Arc::new(|result, context| {
                 Box::pin(async move {
-                    println!("NonceUpdated event: {:?}", data);
+                    println!("NonceUpdated event: {:?}", result);
                 })
             }),
             no_extensions(),
