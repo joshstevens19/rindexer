@@ -1,7 +1,7 @@
 mod indexers;
 mod rindexer;
 
-use crate::indexers::lens_registry_example::lens_hub::lens_hub_handlers;
+// use crate::indexers::lens_registry_example::lens_hub::lens_hub_handlers;
 use rindexer_core::generator::build::generate_indexers_handlers_code;
 use rindexer_core::manifest::yaml::read_manifest;
 use rindexer_core::{

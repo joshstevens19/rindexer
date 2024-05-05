@@ -53,10 +53,7 @@ impl PostgresClient {
         Ok(Self { db })
     }
 
-    pub async fn batch_execute(
-        &self,
-        sql: &str,
-    ) -> Result<(), tokio_postgres::Error> {
+    pub async fn batch_execute(&self, sql: &str) -> Result<(), tokio_postgres::Error> {
         self.db.batch_execute(sql).await
     }
 
@@ -164,7 +161,11 @@ pub fn generate_event_table_sql(abi_inputs: &[EventInfo], schema_name: &str) -> 
                 } else {
                     vec![format!(
                         "\"{}{}\" {}",
-                        if prefix.is_some() { format!("{}_", prefix.as_ref().unwrap()) } else { "".to_string() },
+                        if prefix.is_some() {
+                            format!("{}_", prefix.as_ref().unwrap())
+                        } else {
+                            "".to_string()
+                        },
                         camel_to_snake(&input.name),
                         solidity_type_to_db_type(&input.type_)
                     )]
