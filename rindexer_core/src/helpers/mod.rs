@@ -7,18 +7,23 @@ use std::{error::Error, fs::File};
 pub fn camel_to_snake(name: &str) -> String {
     let mut snake_case = String::new();
     let mut prev_char_was_upper = false;
+    let mut current_char_is_upper = false;
 
-    for ch in name.chars() {
-        if ch.is_uppercase() {
-            if !snake_case.is_empty() && !prev_char_was_upper {
-                snake_case.push('_');
-            }
-            prev_char_was_upper = true;
-        } else {
-            prev_char_was_upper = false;
+    for (i, ch) in name.chars().enumerate() {
+        current_char_is_upper = ch.is_uppercase();
+
+        if current_char_is_upper
+            && i > 0
+            && (!prev_char_was_upper
+                || (i < name.len() - 1 && !name.chars().nth(i + 1).unwrap().is_uppercase()))
+        {
+            snake_case.push('_');
         }
+
         snake_case.push(ch.to_lowercase().next().unwrap());
+        prev_char_was_upper = current_char_is_upper;
     }
+
     snake_case
 }
 

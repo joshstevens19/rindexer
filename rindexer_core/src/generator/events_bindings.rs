@@ -1,3 +1,8 @@
+use crate::database::postgres::{
+    generate_columns_names_only, generate_columns_with_data_types, generate_injected_param,
+    solidity_type_to_db_type, solidity_type_to_ethereum_sql_type,
+};
+use crate::EthereumSqlTypeWrapper;
 use ethers::utils::keccak256;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -428,7 +433,7 @@ fn generate_event_bindings_code(
     contract: &Contract,
     clients: &Option<Databases>,
     event_info: Vec<EventInfo>,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<String, Box<dyn Error>> {
     let event_type_name = generate_event_type_name(&contract.name);
     let code = format!(
         r#"
@@ -577,6 +582,96 @@ fn generate_event_bindings_code(
     Ok(code)
 }
 
+#[derive(PartialEq)]
+pub enum GenerateAbiPropertiesType {
+    PostgresWithDataTypes,
+    PostgresColumnsNamesOnly,
+    Object,
+}
+
+#[derive(Debug)]
+pub struct GenerateAbiNamePropertiesResult {
+    pub value: String,
+    pub abi_type: String,
+    pub ethereum_sql_type_wrapper: Option<String>,
+}
+
+impl GenerateAbiNamePropertiesResult {
+    pub fn new(value: String, abi_type: &str) -> Self {
+        Self {
+            value,
+            ethereum_sql_type_wrapper: solidity_type_to_ethereum_sql_type(abi_type),
+            abi_type: abi_type.to_string(),
+        }
+    }
+}
+
+pub fn generate_abi_name_properties(
+    inputs: &[ABIInput],
+    properties_type: &GenerateAbiPropertiesType,
+    prefix: Option<&str>,
+) -> Vec<GenerateAbiNamePropertiesResult> {
+    fn generate_name_format(name: &str) -> String {
+        camel_to_snake(name)
+    }
+
+    inputs
+        .iter()
+        .flat_map(|input| {
+            if let Some(components) = &input.components {
+                generate_abi_name_properties(
+                    components,
+                    properties_type,
+                    Some(&generate_name_format(&input.name)),
+                )
+            } else {
+                match properties_type {
+                    GenerateAbiPropertiesType::PostgresWithDataTypes => {
+                        let value = format!(
+                            "\"{}{}\" {}",
+                            if prefix.is_some() {
+                                format!("{}_", prefix.as_ref().unwrap())
+                            } else {
+                                "".to_string()
+                            },
+                            generate_name_format(&input.name),
+                            solidity_type_to_db_type(&input.type_)
+                        );
+
+                        vec![GenerateAbiNamePropertiesResult::new(value, &input.type_)]
+                    }
+                    GenerateAbiPropertiesType::PostgresColumnsNamesOnly => {
+                        let value = format!(
+                            "\"{}{}\"",
+                            if prefix.is_some() {
+                                format!("{}_", prefix.as_ref().unwrap())
+                            } else {
+                                "".to_string()
+                            },
+                            generate_name_format(&input.name),
+                        );
+
+                        vec![GenerateAbiNamePropertiesResult::new(value, &input.type_)]
+                    }
+                    GenerateAbiPropertiesType::Object => {
+                        let value = format!(
+                            "{}{}",
+                            if prefix.is_some() {
+                                format!("{}.", prefix.as_ref().unwrap())
+                            } else {
+                                "".to_string()
+                            },
+                            generate_name_format(&input.name),
+                        );
+
+                        vec![GenerateAbiNamePropertiesResult::new(value, &input.type_)]
+                    }
+                }
+            }
+        })
+        .collect()
+}
+
 pub fn generate_event_bindings(
     contract: &Contract,
     databases: &Option<Databases>,
@@ -593,7 +688,12 @@ pub fn generate_event_handlers(
 
     let mut imports = String::new();
     imports.push_str(
-        "use rindexer_core::generator::event_callback_registry::EventCallbackRegistry;\n",
+        r#"
+            use rindexer_core::{
+                generator::event_callback_registry::{EventCallbackRegistry},
+                EthereumSqlTypeWrapper
+            };
+        "#,
     );
     imports.push_str("use std::sync::Arc;\n");
     imports.push_str(&format!(
@@ -621,16 +721,80 @@ pub fn generate_event_handlers(
             handler_name = event.name,
         ));
 
-        let handler_fn_name = camel_to_snake(&event.name);
+        let columns = generate_columns_names_only(&event.inputs);
+
+        let insert_sql = format!(
+            // NOTE IF YOU CHANGE PARAMETERS BELOW MAIN ONES CHANGE THE COUNT 4 ON generate_injected_param
+            "INSERT INTO {}.{} (contract_address, {}, \"tx_hash\", \"block_number\", \"block_hash\") {}",
+            camel_to_snake(indexer_name),
+            camel_to_snake(&event.name),
+            &columns.join(", "),
+            // NOTE IF YOU CHANGE PARAMETERS ABOVE MAIN ONES CHANGE THE COUNT 4 HERE
+            generate_injected_param(4 + columns.len())
+        );
+
+        let postgres_params =
+            generate_abi_name_properties(&event.inputs, &GenerateAbiPropertiesType::Object, None);
+
+        let mut params_sql = String::new();
+        params_sql.push_str("&[&EthereumSqlTypeWrapper::Address(&result.tx_information.address),");
+        for postgres_param in postgres_params {
+            if postgres_param.ethereum_sql_type_wrapper.is_some() {
+                params_sql.push_str(&format!(
+                    "&{}(&result.event_data.{}{}),",
+                    postgres_param.ethereum_sql_type_wrapper.unwrap(),
+                    postgres_param.value,
+                    if postgres_param.abi_type.contains("bytes") {
+                        let static_bytes = postgres_param
+                            .abi_type
+                            .replace("bytes", "")
+                            .replace("[]", "");
+                        if !static_bytes.is_empty() {
+                            ".into()"
+                        } else {
+                            ""
+                        }
+                    } else {
+                        ""
+                    }
+                ));
+            } else {
+                params_sql.push_str(&format!("&result.event_data.{},", postgres_param.value))
+            }
+        }
+
+        params_sql.push_str(
+            "&EthereumSqlTypeWrapper::H256(&result.tx_information.transaction_hash.unwrap()),",
+        );
+        params_sql.push_str(
+            "&EthereumSqlTypeWrapper::U64(&result.tx_information.block_number.unwrap()),",
+        );
+        params_sql
+            .push_str("&EthereumSqlTypeWrapper::H256(&result.tx_information.block_hash.unwrap())");
+        params_sql.push(']');
+
+        let postgres = format!(
+            r#"for result in results {{
+                    context
+                        .database
+                        .execute("{insert_sql}",
+                        {params_sql})
+                        .await.unwrap();
+                }}
+        "#,
+            insert_sql = insert_sql.replace("\"", "\\\""),
+            params_sql = params_sql
+        );
+
         let handler = format!(
             r#"
             async fn {handler_fn_name}_handler(registry: &mut EventCallbackRegistry) {{
                 {event_type_name}::{handler_name}(
                     {handler_name}Event::new(
-                        Arc::new(|result, context| {{
+                        Arc::new(|results, context| {{
                             Box::pin(async move {{
-                                println!("{handler_name} event: {{:?}}", result);
-                            }})
+                                println!("{handler_name} event: {{:?}}", results);
+                                {postgres}}})
                         }}),
                         no_extensions(),
                         NewEventOptions::default(),
@@ -640,9 +804,10 @@ pub fn generate_event_handlers(
                 .register(registry);
             }}
         "#,
-            handler_fn_name = handler_fn_name,
+            handler_fn_name = camel_to_snake(&event.name),
             handler_name = event.name,
-            event_type_name = event_type_name
+            event_type_name = event_type_name,
+            postgres = postgres
         );
 
         handlers.push_str(&handler);
@@ -651,7 +816,7 @@ pub fn generate_event_handlers(
             r#"
                 {handler_fn_name}_handler(registry).await;
             "#,
-            handler_fn_name = handler_fn_name
+            handler_fn_name = camel_to_snake(&event.name)
         ));
     }
 

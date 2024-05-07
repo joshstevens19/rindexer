@@ -11,3 +11,4 @@ rindexer_core = { path = "../rindexer_core" }
 tokio = { version = "1", features = ["full"] }
 ethers = { version = "2.0", features = ["rustls", "openssl"] }
 serde = { version = "1.0.194", features = ["derive"] }
+serde_json = "1.0.111"
