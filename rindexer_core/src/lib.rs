@@ -4,7 +4,9 @@ pub mod indexer;
 pub mod manifest;
 
 mod database;
-pub use database::postgres::{create_tables_for_indexer_sql, PostgresClient};
+pub use database::postgres::{
+    create_tables_for_indexer_sql, EthereumSqlTypeWrapper, PostgresClient,
+};
 
 mod simple_file_formatters;
 pub use simple_file_formatters::csv::AsyncCsvAppender;
