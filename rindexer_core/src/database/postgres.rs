@@ -4,8 +4,8 @@ use std::{env, str};
 use thiserror::Error;
 
 use crate::generator::{
-    extract_event_names_and_signatures_from_abi, generate_abi_name_properties, ABIInput, EventInfo,
-    GenerateAbiPropertiesType,
+    extract_event_names_and_signatures_from_abi, generate_abi_name_properties, read_abi_file,
+    ABIInput, EventInfo, GenerateAbiPropertiesType,
 };
 use crate::helpers::camel_to_snake;
 use crate::manifest::yaml::Indexer;
@@ -210,7 +210,8 @@ pub fn create_tables_for_indexer_sql(indexer: &Indexer) -> String {
     ));
 
     for contract in &indexer.contracts {
-        let event_names = extract_event_names_and_signatures_from_abi(&contract.abi).unwrap();
+        let abi_items = read_abi_file(&contract.abi).unwrap();
+        let event_names = extract_event_names_and_signatures_from_abi(&abi_items).unwrap();
 
         sql.push_str(&generate_event_table_sql(&event_names, &schema_name));
     }

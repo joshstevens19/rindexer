@@ -255,20 +255,21 @@ fn handle_init_command(details: &InitDetails) {
             max_block_range: None,
             max_concurrency: None,
         }],
-        indexers: vec![Indexer {
-            name: "INSERT HERE".to_string(),
-            contracts: vec![Contract {
-                name: "INSERT HERE".to_string(),
-                details: vec![ContractDetails {
-                    network: "INSERT HERE".to_string(),
-                    address: "INSERT HERE".to_string(),
-                    start_block: None,
-                    end_block: None,
-                    polling_every: None,
-                }],
-                abi: "INSERT HERE".to_string(),
-            }],
-        }],
+        // indexers: vec![Indexer {
+        //     name: "INSERT HERE".to_string(),
+        //     contracts: vec![Contract {
+        //         name: "INSERT HERE".to_string(),
+        //         details: vec![ContractDetails {
+        //             network: "INSERT HERE".to_string(),
+        //             address: "INSERT HERE".to_string(),
+        //             start_block: None,
+        //             end_block: None,
+        //             polling_every: None,
+        //         }],
+        //         abi: "INSERT HERE".to_string(),
+        //     }],
+        // }],
+        indexers: vec![],
         global: if database == "yes" {
             Some(Global {
                 contracts: None,

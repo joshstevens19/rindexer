@@ -4,7 +4,7 @@ use std::{error::Error, path::Path};
 use ethers::contract::Abigen;
 
 use crate::helpers::create_mod_file;
-use crate::manifest::yaml::Global;
+use crate::manifest::yaml::{Contract, Global};
 use crate::{
     helpers::{camel_to_snake, write_file},
     manifest::yaml::{read_manifest, Indexer, Network},
@@ -46,19 +46,40 @@ fn write_global(
     Ok(())
 }
 
+fn identify_filter(contract: &mut Contract) -> bool {
+    // TODO look into how we can mix and match
+    let filter_count = contract
+        .details
+        .iter()
+        .filter(|details| details.address_or_filter().is_filter())
+        .count();
+
+    if filter_count != contract.details.len() {
+        panic!("Cannot mix and match address and filter for the same contract definition.");
+    }
+
+    let is_filter = filter_count > 0;
+    if is_filter {
+        contract.override_name(format!("{}Filter", contract.name));
+    }
+
+    is_filter
+}
+
 fn write_indexer_events(
     output: &str,
-    indexer: &Indexer,
+    indexer: Indexer,
     global: &Option<Global>,
 ) -> Result<(), Box<dyn Error>> {
-    for contract in &indexer.contracts {
+    for mut contract in indexer.contracts {
         let databases = if let Some(global) = global {
             &global.databases
         } else {
             &None
         };
-        
-        let events_code = generate_event_bindings(contract, databases)?;
+
+        let is_filter = identify_filter(&mut contract);
+        let events_code = generate_event_bindings(&contract, is_filter, databases)?;
 
         write_file(
             &generate_file_location(
@@ -73,7 +94,7 @@ fn write_indexer_events(
         )?;
 
         // write ABI gen
-        let abi_gen = Abigen::new(abigen_contract_name(contract), &contract.abi)?.generate()?;
+        let abi_gen = Abigen::new(abigen_contract_name(&contract), &contract.abi)?.generate()?;
 
         write_file(
             &generate_file_location(
@@ -81,7 +102,7 @@ fn write_indexer_events(
                 &format!(
                     "{}/events/{}",
                     camel_to_snake(&indexer.name),
-                    abigen_contract_file_name(contract)
+                    abigen_contract_file_name(&contract)
                 ),
             ),
             &abi_gen.to_string(),
@@ -101,7 +122,7 @@ pub fn generate_rindexer_code(
     write_global(output, &manifest.global, &manifest.networks)?;
 
     for indexer in manifest.indexers {
-        write_indexer_events(output, &indexer, &manifest.global)?;
+        write_indexer_events(output, indexer, &manifest.global)?;
     }
 
     create_mod_file(Path::new(output))?;
@@ -116,8 +137,9 @@ pub fn generate_indexers_handlers_code(
     let manifest = read_manifest(manifest_location)?;
 
     for indexer in manifest.indexers {
-        for contract in indexer.contracts {
-            let result = generate_event_handlers(&indexer.name, &contract).unwrap();
+        for mut contract in indexer.contracts {
+            let is_filter = identify_filter(&mut contract);
+            let result = generate_event_handlers(&indexer.name, is_filter, &contract).unwrap();
             write_file(
                 &generate_file_location(
                     output,

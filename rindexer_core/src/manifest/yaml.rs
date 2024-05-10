@@ -104,6 +104,12 @@ pub struct Contract {
     pub abi: String,
 }
 
+impl Contract {
+    pub fn override_name(&mut self, name: String) {
+        self.name = name;
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Network {
     pub name: String,
@@ -161,7 +167,7 @@ pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, Box<dyn Error>> {
     //     substitute_env_variables(&contents)?;
 
     file.read_to_string(&mut contents)?;
-    
+
     println!("{:?}", contents);
 
     let manifest: Manifest = serde_yaml::from_str(&contents)?;

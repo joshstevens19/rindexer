@@ -1,11 +1,10 @@
-use ethers::prelude::H256;
-use ethers::types::U256;
+use ethers::types::{U256, H256};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
-use std::str::FromStr;
 use std::{error::Error, fs::File};
+use std::str::FromStr;
 
 pub fn camel_to_snake(s: &str) -> String {
     let mut snake_case = String::new();
@@ -14,7 +13,10 @@ pub fn camel_to_snake(s: &str) -> String {
     for (i, c) in s.chars().enumerate() {
         if c.is_uppercase() {
             // Insert an underscore if it's not the first character and the previous character wasn't uppercase
-            if i > 0 && (!previous_was_uppercase || (i + 1 < s.len() && s.chars().nth(i + 1).unwrap().is_lowercase())) {
+            if i > 0
+                && (!previous_was_uppercase
+                    || (i + 1 < s.len() && s.chars().nth(i + 1).unwrap().is_lowercase()))
+            {
                 snake_case.push('_');
             }
             snake_case.push(c.to_ascii_lowercase());
@@ -27,7 +29,6 @@ pub fn camel_to_snake(s: &str) -> String {
 
     snake_case
 }
-
 
 fn format_file(file_path: &str) {
     Command::new("rustfmt")
@@ -94,12 +95,24 @@ pub fn u256_to_hex(value: U256) -> String {
 }
 
 pub fn parse_hex(input: &str) -> H256 {
-    if input.starts_with("0x") {
-        H256::from_str(input).unwrap()
+    // Normalize the input by removing the '0x' prefix if it exists.
+    let normalized_input = if input.starts_with("0x") {
+        &input[2..]
     } else {
-        let formatted = format!("0x{}", input);
-        H256::from_str(&formatted).unwrap()
+        input
+    };
+
+    // Ensure the input has the correct length of 64 hex characters.
+    if normalized_input.len() != 64 {
+        panic!("Failed to parse H256 from input '{}': Invalid input length", input);
     }
+
+    // Add "0x" prefix and parse the input string.
+    let formatted = format!("0x{}", normalized_input.to_lowercase());
+
+    H256::from_str(&formatted).unwrap_or_else(|err| {
+        panic!("Failed to parse H256 from input '{}': {:?}", input, err);
+    })
 }
 
 #[cfg(test)]
@@ -114,5 +127,48 @@ mod tests {
         assert_eq!(camel_to_snake("camel"), "camel");
         assert_eq!(camel_to_snake("collectNFTId"), "collect_nft_id");
         assert_eq!(camel_to_snake("ERC20"), "erc20");
+    }
+
+    #[test]
+    fn test_parse_hex_valid() {
+        let test_cases = [
+            ("0x4a1a2197f307222cd67a1762d9a352f64558d9be", "0x4a1a2197f307222cd67a1762d9a352f64558d9be000000000000000000000000"),
+            ("4a1a2197f307222cd67a1762d9a352f64558d9be", "0x4a1a2197f307222cd67a1762d9a352f64558d9be000000000000000000000000"),
+            ("0X4A1A2197F307222CD67A1762D9A352F64558D9BE", "0x4a1a2197f307222cd67a1762d9a352f64558d9be000000000000000000000000"),
+            ("4A1A2197F307222CD67A1762D9A352F64558D9BE", "0x4a1a2197f307222cd67a1762d9a352f64558d9be000000000000000000000000"),
+        ];
+
+        for (input, expected) in test_cases {
+            let parsed = parse_hex(input);
+            assert_eq!(format!("{:?}", parsed), expected);
+        }
+    }
+
+    #[test]
+    fn test_parse_hex_invalid_length() {
+        let invalid_cases = [
+            "0x12345",
+            "0x4A1a2197f3",
+            "123456789",
+        ];
+
+        for input in &invalid_cases {
+            let result = std::panic::catch_unwind(|| parse_hex(input));
+            assert!(result.is_err(), "Expected panic for input: {}", input);
+        }
+    }
+
+    #[test]
+    fn test_parse_hex_non_hex_chars() {
+        let invalid_cases = [
+            "0xZZZ2197f307222cd67a1762d9a352f64558d9be",
+            "GHIJKL",
+            "0x4a1a2197-3072",
+        ];
+
+        for input in &invalid_cases {
+            let result = std::panic::catch_unwind(|| parse_hex(input));
+            assert!(result.is_err(), "Expected panic for input: {}", input);
+        }
     }
 }

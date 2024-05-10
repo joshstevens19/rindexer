@@ -9,7 +9,6 @@ eth_getLogs - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60add
 checklist v1.0:
 
 - csv autogenerate code
-- event filter to sync all events without contracts and by indexed arguments also
 - internal tables in postgres like last seen blocks etc
 - finish command line https://ponder.sh/docs/api-reference/create-ponder
 - look into logging for better dev ex seeing what's happening with internal logs with files for traces
