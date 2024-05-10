@@ -1,31 +1,33 @@
+use ethers::prelude::H256;
+use ethers::types::U256;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
+use std::str::FromStr;
 use std::{error::Error, fs::File};
 
-pub fn camel_to_snake(name: &str) -> String {
+pub fn camel_to_snake(s: &str) -> String {
     let mut snake_case = String::new();
-    let mut prev_char_was_upper = false;
-    let mut current_char_is_upper = false;
+    let mut previous_was_uppercase = false;
 
-    for (i, ch) in name.chars().enumerate() {
-        current_char_is_upper = ch.is_uppercase();
-
-        if current_char_is_upper
-            && i > 0
-            && (!prev_char_was_upper
-                || (i < name.len() - 1 && !name.chars().nth(i + 1).unwrap().is_uppercase()))
-        {
-            snake_case.push('_');
+    for (i, c) in s.chars().enumerate() {
+        if c.is_uppercase() {
+            // Insert an underscore if it's not the first character and the previous character wasn't uppercase
+            if i > 0 && (!previous_was_uppercase || (i + 1 < s.len() && s.chars().nth(i + 1).unwrap().is_lowercase())) {
+                snake_case.push('_');
+            }
+            snake_case.push(c.to_ascii_lowercase());
+            previous_was_uppercase = true;
+        } else {
+            snake_case.push(c);
+            previous_was_uppercase = false;
         }
-
-        snake_case.push(ch.to_lowercase().next().unwrap());
-        prev_char_was_upper = current_char_is_upper;
     }
 
     snake_case
 }
+
 
 fn format_file(file_path: &str) {
     Command::new("rustfmt")
@@ -85,4 +87,32 @@ pub fn create_mod_file(path: &Path) -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+pub fn u256_to_hex(value: U256) -> String {
+    format!("0x{:x}", value)
+}
+
+pub fn parse_hex(input: &str) -> H256 {
+    if input.starts_with("0x") {
+        H256::from_str(input).unwrap()
+    } else {
+        let formatted = format!("0x{}", input);
+        H256::from_str(&formatted).unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_camel_to_snake() {
+        assert_eq!(camel_to_snake("CamelCase"), "camel_case");
+        assert_eq!(camel_to_snake("camelCase"), "camel_case");
+        assert_eq!(camel_to_snake("Camel"), "camel");
+        assert_eq!(camel_to_snake("camel"), "camel");
+        assert_eq!(camel_to_snake("collectNFTId"), "collect_nft_id");
+        assert_eq!(camel_to_snake("ERC20"), "erc20");
+    }
 }

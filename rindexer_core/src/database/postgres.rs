@@ -10,8 +10,6 @@ use crate::generator::{
 use crate::helpers::camel_to_snake;
 use crate::manifest::yaml::Indexer;
 use bytes::BytesMut;
-use ethers::core::k256::elliptic_curve::consts::U32;
-use ethers::types::Opcode::SMOD;
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type};
 use tokio_postgres::{Client, Error, NoTls, Row, Statement, Transaction};
 
@@ -306,8 +304,7 @@ impl<'a> ToSql for EthereumSqlTypeWrapper<'a> {
                 Ok(IsNull::No)
             }
             EthereumSqlTypeWrapper::VecU64(values) => {
-                let results: Vec<String> =
-                    values.iter().map(|s| s.to_string()).collect();
+                let results: Vec<String> = values.iter().map(|s| s.to_string()).collect();
                 if results.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
@@ -320,8 +317,7 @@ impl<'a> ToSql for EthereumSqlTypeWrapper<'a> {
                 Ok(IsNull::No)
             }
             EthereumSqlTypeWrapper::VecU128(values) => {
-                let results: Vec<String> =
-                    values.iter().map(|s| s.to_string()).collect();
+                let results: Vec<String> = values.iter().map(|s| s.to_string()).collect();
                 if results.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
@@ -334,8 +330,7 @@ impl<'a> ToSql for EthereumSqlTypeWrapper<'a> {
                 Ok(IsNull::No)
             }
             EthereumSqlTypeWrapper::VecU256(values) => {
-                let results: Vec<String> =
-                    values.iter().map(|s| s.to_string()).collect();
+                let results: Vec<String> = values.iter().map(|s| s.to_string()).collect();
                 if results.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
@@ -348,8 +343,7 @@ impl<'a> ToSql for EthereumSqlTypeWrapper<'a> {
                 Ok(IsNull::No)
             }
             EthereumSqlTypeWrapper::VecU512(values) => {
-                let hexes: Vec<String> =
-                    values.iter().map(|s| format!("{:?}", s)).collect();
+                let hexes: Vec<String> = values.iter().map(|s| format!("{:?}", s)).collect();
                 if hexes.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
@@ -362,8 +356,7 @@ impl<'a> ToSql for EthereumSqlTypeWrapper<'a> {
                 Ok(IsNull::No)
             }
             EthereumSqlTypeWrapper::VecH128(values) => {
-                let hexes: Vec<String> =
-                    values.iter().map(|s| format!("{:?}", s)).collect();
+                let hexes: Vec<String> = values.iter().map(|s| format!("{:?}", s)).collect();
                 if hexes.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
@@ -376,8 +369,7 @@ impl<'a> ToSql for EthereumSqlTypeWrapper<'a> {
                 Ok(IsNull::No)
             }
             EthereumSqlTypeWrapper::VecH160(values) => {
-                let hexes: Vec<String> =
-                    values.iter().map(|s| format!("{:?}", s)).collect();
+                let hexes: Vec<String> = values.iter().map(|s| format!("{:?}", s)).collect();
                 if hexes.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
@@ -390,8 +382,7 @@ impl<'a> ToSql for EthereumSqlTypeWrapper<'a> {
                 Ok(IsNull::No)
             }
             EthereumSqlTypeWrapper::VecH256(values) => {
-                let hexes: Vec<String> =
-                    values.iter().map(|s| format!("{:?}", s)).collect();
+                let hexes: Vec<String> = values.iter().map(|s| format!("{:?}", s)).collect();
                 if hexes.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
@@ -404,8 +395,7 @@ impl<'a> ToSql for EthereumSqlTypeWrapper<'a> {
                 Ok(IsNull::No)
             }
             EthereumSqlTypeWrapper::VecH512(values) => {
-                let hexes: Vec<String> =
-                    values.iter().map(|s| format!("{:?}", s)).collect();
+                let hexes: Vec<String> = values.iter().map(|s| format!("{:?}", s)).collect();
                 if hexes.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
@@ -417,8 +407,7 @@ impl<'a> ToSql for EthereumSqlTypeWrapper<'a> {
                 String::to_sql(&hex, _ty, out)
             }
             EthereumSqlTypeWrapper::VecAddress(values) => {
-                let addresses: Vec<String> =
-                    values.iter().map(|s| format!("{:?}", s)).collect();
+                let addresses: Vec<String> = values.iter().map(|s| format!("{:?}", s)).collect();
                 if addresses.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
@@ -427,8 +416,7 @@ impl<'a> ToSql for EthereumSqlTypeWrapper<'a> {
             }
             EthereumSqlTypeWrapper::Bool(value) => bool::to_sql(value, _ty, out),
             EthereumSqlTypeWrapper::VecBool(values) => {
-                let bools: Vec<i8> =
-                    values.iter().map(|&b| if b { 1 } else { 0 }).collect();
+                let bools: Vec<i8> = values.iter().map(|&b| if b { 1 } else { 0 }).collect();
                 if bools.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
@@ -441,8 +429,7 @@ impl<'a> ToSql for EthereumSqlTypeWrapper<'a> {
                 Ok(IsNull::No)
             }
             EthereumSqlTypeWrapper::VecU16(values) => {
-                let results: Vec<String> =
-                    values.iter().map(|s| s.to_string()).collect();
+                let results: Vec<String> = values.iter().map(|s| s.to_string()).collect();
                 if results.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
@@ -462,8 +449,7 @@ impl<'a> ToSql for EthereumSqlTypeWrapper<'a> {
                 Ok(IsNull::No)
             }
             EthereumSqlTypeWrapper::VecBytes(values) => {
-                let hexes: Vec<String> =
-                    values.iter().map(|s| format!("{:?}", s)).collect();
+                let hexes: Vec<String> = values.iter().map(|s| format!("{:?}", s)).collect();
                 if hexes.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
@@ -476,8 +462,7 @@ impl<'a> ToSql for EthereumSqlTypeWrapper<'a> {
                 Ok(IsNull::No)
             }
             EthereumSqlTypeWrapper::VecU32(values) => {
-                let results: Vec<String> =
-                    values.iter().map(|s| s.to_string()).collect();
+                let results: Vec<String> = values.iter().map(|s| s.to_string()).collect();
                 if results.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
@@ -490,8 +475,7 @@ impl<'a> ToSql for EthereumSqlTypeWrapper<'a> {
                 Ok(IsNull::No)
             }
             EthereumSqlTypeWrapper::VecU8(values) => {
-                let results: Vec<String> =
-                    values.iter().map(|s| s.to_string()).collect();
+                let results: Vec<String> = values.iter().map(|s| s.to_string()).collect();
                 if results.is_empty() {
                     Ok(IsNull::Yes)
                 } else {

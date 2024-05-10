@@ -57,7 +57,7 @@ fn write_indexer_events(
         } else {
             &None
         };
-
+        
         let events_code = generate_event_bindings(contract, databases)?;
 
         write_file(

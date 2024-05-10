@@ -1,13 +1,14 @@
 use crate::database::postgres::{
-    generate_columns_names_only, generate_columns_with_data_types, generate_injected_param,
-    solidity_type_to_db_type, solidity_type_to_ethereum_sql_type,
+    generate_columns_names_only, generate_injected_param, solidity_type_to_db_type,
+    solidity_type_to_ethereum_sql_type,
 };
-use crate::EthereumSqlTypeWrapper;
+use crate::generator::event_callback_registry::AddressOrFilter;
 use ethers::utils::keccak256;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::error::Error;
 use std::fs;
+use ethers::abi::ParamType::Address;
 
 use crate::helpers::camel_to_snake;
 use crate::manifest::yaml::{Contract, ContractDetails, Databases};
@@ -16,22 +17,19 @@ use super::networks_bindings::network_provider_fn_name_by_name;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ABIItem {
-    anonymous: bool,
-
+    #[serde(default)]
     inputs: Vec<ABIInput>,
 
+    #[serde(default)]
     name: String,
 
-    #[serde(rename = "type")]
+    #[serde(rename = "type", default)]
     type_: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ABIInput {
     pub indexed: Option<bool>,
-
-    #[serde(rename = "internalType")]
-    pub internal_type: String,
 
     pub name: String,
 
@@ -110,7 +108,9 @@ pub fn extract_event_names_and_signatures_from_abi(
     abi_path: &str,
 ) -> Result<Vec<EventInfo>, Box<dyn Error>> {
     let abi_str = fs::read_to_string(abi_path)?;
+    println!("abi_str {:?}", abi_str);
     let abi_json: Vec<ABIItem> = serde_json::from_str(&abi_str)?;
+    println!("abi_json {:?}", abi_json);
 
     let result = abi_json
         .iter()
@@ -237,30 +237,84 @@ fn generate_decoder_match_arms_code(event_type_name: &str, event_info: &[EventIn
         .join("\n")
 }
 
+fn generate_indexed_vec_string(indexed: &Option<Vec<String>>) -> String {
+    match indexed {
+        Some(values) => {
+            format!(
+                "Some(vec![{}])",
+                values
+                    .iter()
+                    .map(|s| format!("\"{}\".to_string()", s))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
+        None => "None".to_string(),
+    }
+}
+
 fn generate_contract_type_fn_code(contract: &Contract) -> String {
     let mut details = String::new();
     details.push_str("vec![");
     for contract in contract.details.iter() {
-        let item = format!(
-            r#"
-            ContractDetails {{
-                network: "{network}".to_string(),
-                address: "{address}".to_string(),
-                start_block: Some({start_block}),
-                end_block: Some({end_block}),
-                polling_every: Some({polling_every}),
-            }},
-        "#,
-            network = contract.network,
-            address = contract.address,
-            // TODO! FIX
-            start_block = contract.start_block.unwrap(),
-            // TODO! FIX
-            end_block = contract.end_block.unwrap_or(99424866),
-            // TODO! FIX
-            polling_every = contract.polling_every.unwrap_or(1000)
-        );
-        details.push_str(&item);
+        match contract.address_or_filter() {
+            AddressOrFilter::Address(address) => {
+                let item = format!(
+                    r#"
+                        ContractDetails::new_with_address(
+                            "{network}".to_string(),
+                            "{address}".to_string(),
+                            Some({start_block}),
+                            Some({end_block}),
+                            Some({polling_every}),
+                        ),
+                    "#,
+                    network = contract.network,
+                    address = address,
+                    // TODO! FIX
+                    start_block = contract.start_block.unwrap(),
+                    // TODO! FIX
+                    end_block = contract.end_block.unwrap_or(99424866),
+                    // TODO! FIX
+                    polling_every = contract.polling_every.unwrap_or(1000)
+                );
+                details.push_str(&item);
+            }
+            AddressOrFilter::Filter(filter_details) => {
+                let indexed_1 = generate_indexed_vec_string(&filter_details.indexed_1);
+                let indexed_2 = generate_indexed_vec_string(&filter_details.indexed_2);
+                let indexed_3 = generate_indexed_vec_string(&filter_details.indexed_3);
+
+                let item = format!(
+                    r#"
+                        ContractDetails::new_with_filter(
+                            "{network}".to_string(),
+                            FilterDetails {{
+                                event_name: "{event_name}".to_string(),
+                                indexed_1: {indexed_1},
+                                indexed_2: {indexed_2},
+                                indexed_3: {indexed_3},
+                            }},
+                            Some({start_block}),
+                            Some({end_block}),
+                            Some({polling_every}),
+                        ),
+                    "#,
+                    network = contract.network,
+                    event_name = filter_details.event_name,
+                    indexed_1 = indexed_1,
+                    indexed_2 = indexed_2,
+                    indexed_3 = indexed_3,
+                    // TODO! FIX
+                    start_block = contract.start_block.unwrap(),
+                    // TODO! FIX
+                    end_block = contract.end_block.unwrap_or(99424866),
+                    // TODO! FIX
+                    polling_every = contract.polling_every.unwrap_or(1000)
+                );
+                details.push_str(&item);
+            }
+        };
     }
     details.push(']');
     format!(
@@ -395,9 +449,15 @@ fn build_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &st
         r#"fn contract(&self, network: &str) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> {{"#,
         abi_gen_name = abi_gen_name
     ));
-
+    
     // Handling each contract detail with an `if` or `else if`
     for (index, contract_detail) in contracts_details.iter().enumerate() {
+        let address = if let AddressOrFilter::Address(address) = contract_detail.address_or_filter() {
+            address
+        } else {
+            "0x0000000000000000000000000000000000000000".to_string()
+        };
+
         if index == 0 {
             function.push_str("    if ");
         } else {
@@ -406,13 +466,13 @@ fn build_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &st
 
         function.push_str(&format!(
             r#"network == "{network}" {{
-        let address: Address = "{address}"
-            .parse()
-            .unwrap();
-        {abi_gen_name}::new(address, Arc::new(self.get_provider(network).clone()))
-    }}"#,
+                    let address: Address = "{address}"
+                        .parse()
+                        .unwrap();
+                    {abi_gen_name}::new(address, Arc::new(self.get_provider(network).clone()))
+                }}"#,
             network = contract_detail.network,
-            address = contract_detail.address,
+            address = address,
             abi_gen_name = abi_gen_name
         ));
     }
@@ -420,10 +480,10 @@ fn build_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &st
     // Add a fallback else statement to handle unsupported networks
     function.push_str(
         r#"
-    else {
-        panic!("Network not supported");
-    }
-}"#,
+            else {
+                panic!("Network not supported");
+            }
+        }"#,
     );
 
     function
@@ -448,7 +508,7 @@ fn generate_event_bindings_code(
                 async_trait,
                 AsyncCsvAppender,
                 FutureExt,
-                generator::event_callback_registry::{{EventCallbackRegistry, EventInformation, ContractInformation, NetworkContract, EventResult, TxInformation}},
+                generator::event_callback_registry::{{EventCallbackRegistry, EventInformation, ContractInformation, NetworkContract, EventResult, TxInformation, FilterDetails}},
                 manifest::yaml::{{Contract, ContractDetails}},
                 {client_import}
             }};
@@ -527,7 +587,7 @@ fn generate_event_bindings_code(
                                 network: c.network.clone(),
                                 provider: self.get_provider(&c.network),
                                 decoder: self.decoder(&c.network),
-                                address: c.address.clone(),
+                                address_or_filter: c.address_or_filter(),
                                 start_block: c.start_block,
                                 end_block: c.end_block,
                                 polling_every: c.polling_every,
