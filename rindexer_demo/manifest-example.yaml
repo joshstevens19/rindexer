@@ -6,10 +6,19 @@ indexers:
     contracts:
       - name: LensRegistry
         details:
-          - address: '0xD4F2F33680FCCb36748FA9831851643781608844'
+          - address: 0xD4F2F33680FCCb36748FA9831851643781608844
             network: polygon
             startBlock: 56399431
         abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
+      - name: ERC20
+        details:
+           - filter:
+              event_name: Transfer
+              indexed_1:
+                - 0xDb46d1Dc155634FbC732f92E853b10B288AD5a1d
+             network: polygon
+             startBlock: 56399431
+        abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/erc20-abi.json
       - name: LensHub
         details:
           - address: '0xDb46d1Dc155634FbC732f92E853b10B288AD5a1d'

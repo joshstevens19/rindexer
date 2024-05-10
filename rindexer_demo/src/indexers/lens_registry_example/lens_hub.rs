@@ -1,3 +1,4 @@
+
 use crate::rindexer::lens_registry_example::events::lens_hub::{
     no_extensions, ActedEvent, ActionModuleWhitelistedEvent, BaseInitializedEvent, BlockedEvent,
     CollectNFTDeployedEvent, CollectNFTTransferredEvent, CollectedEvent, CollectedLegacyEvent,
@@ -228,61 +229,15 @@ async fn delegated_executors_config_changed_handler(registry: &mut EventCallback
                     DelegatedExecutorsConfigChangedEvent::new(
                         Arc::new(|results, context| {
                             Box::pin(async move {
-                                // println!("DelegatedExecutorsConfigChanged event: {:?}", results);
+                                println!("DelegatedExecutorsConfigChanged event: {:?}", results);
                                 for result in results {
-                                    println!("DelegatedExecutorsConfigChanged result: {:?}", result);
-                                    // context
-                                    //     .database
-                                    //     .execute("\
-                                    //         INSERT INTO lens_registry_example.delegated_executors_config_changed (\
-                                    //             contract_address,\
-                                    //             \"delegator_profile_id\",\
-                                    //             \"config_number\",\
-                                    //             \"delegated_executors\",\
-                                    //             \"approvals\",\
-                                    //             \"timestamp\",\
-                                    //             \"tx_hash\",\
-                                    //             \"block_number\",\
-                                    //             \"block_hash\")\
-                                    //         VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-                                    //     &[&EthereumSqlTypeWrapper::Address(&result.tx_information.address),
-                                    //               &EthereumSqlTypeWrapper::U256(&result.event_data.delegator_profile_id),
-                                    //               &EthereumSqlTypeWrapper::U256(&result.event_data.config_number),
-                                    //               &EthereumSqlTypeWrapper::VecAddress(&result.event_data.delegated_executors),
-                                    //               &EthereumSqlTypeWrapper::VecBool(&result.event_data.approvals),
-                                    //               &EthereumSqlTypeWrapper::U256(&result.event_data.timestamp),
-                                    //               &EthereumSqlTypeWrapper::H256(&result.tx_information.transaction_hash.unwrap()),
-                                    //               &EthereumSqlTypeWrapper::U64(&result.tx_information.block_number.unwrap()),
-                                    //               &EthereumSqlTypeWrapper::H256(&result.tx_information.block_hash.unwrap())])
-                                    //     .await.unwrap();
-
-                                    context
-                                        .database
-                                        .execute("\
-                                            INSERT INTO lens_registry_example.delegated_executors_config_changed (\
-                                                contract_address,\
-                                                \"delegator_profile_id\",\
-                                                \"config_number\",\
-                                                \"approvals\",\
-                                                \"delegated_executors\",\
-                                                \"timestamp\",\
-                                                \"tx_hash\",\
-                                                \"block_number\",\
-                                                \"block_hash\")\
-                                            VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-                                        &[&EthereumSqlTypeWrapper::Address(&result.tx_information.address),
-                                                  &EthereumSqlTypeWrapper::U256(&result.event_data.delegator_profile_id),
-                                                  &EthereumSqlTypeWrapper::U256(&result.event_data.config_number),
-                                                  &EthereumSqlTypeWrapper::VecBool(&result.event_data.approvals),
-                                                  &EthereumSqlTypeWrapper::VecAddress(&result.event_data.delegated_executors),
-                                                  &EthereumSqlTypeWrapper::U256(&result.event_data.timestamp),
-                                                  &EthereumSqlTypeWrapper::H256(&result.tx_information.transaction_hash.unwrap()),
-                                                  &EthereumSqlTypeWrapper::U64(&result.tx_information.block_number.unwrap()),
-                                                  &EthereumSqlTypeWrapper::H256(&result.tx_information.block_hash.unwrap())])
-                                        .await.unwrap();
-
-                                        }
-                                })
+                    context
+                        .database
+                        .execute("INSERT INTO lens_registry_example.delegated_executors_config_changed (contract_address, \"delegator_profile_id\", \"config_number\", \"delegated_executors\", \"approvals\", \"timestamp\", \"tx_hash\", \"block_number\", \"block_hash\") VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                        &[&EthereumSqlTypeWrapper::Address(&result.tx_information.address),&EthereumSqlTypeWrapper::U256(&result.event_data.delegator_profile_id),&EthereumSqlTypeWrapper::U256(&result.event_data.config_number),&EthereumSqlTypeWrapper::VecAddress(&result.event_data.delegated_executors),&EthereumSqlTypeWrapper::VecBool(&result.event_data.approvals),&EthereumSqlTypeWrapper::U256(&result.event_data.timestamp),&EthereumSqlTypeWrapper::H256(&result.tx_information.transaction_hash.unwrap()),&EthereumSqlTypeWrapper::U64(&result.tx_information.block_number.unwrap()),&EthereumSqlTypeWrapper::H256(&result.tx_information.block_hash.unwrap())])
+                        .await.unwrap();
+                }
+        })
                         }),
                         no_extensions(),
                         NewEventOptions::default(),
@@ -650,7 +605,7 @@ async fn quote_created_handler(registry: &mut EventCallbackRegistry) {
                         &[&EthereumSqlTypeWrapper::Address(&result.tx_information.address),&EthereumSqlTypeWrapper::U256(&result.event_data.quote_params.profile_id),&EthereumSqlTypeWrapper::String(&result.event_data.quote_params.content_uri),&EthereumSqlTypeWrapper::U256(&result.event_data.quote_params.pointed_profile_id),&EthereumSqlTypeWrapper::U256(&result.event_data.quote_params.pointed_pub_id),&EthereumSqlTypeWrapper::VecU256(&result.event_data.quote_params.referrer_profile_ids),&EthereumSqlTypeWrapper::VecU256(&result.event_data.quote_params.referrer_pub_ids),&EthereumSqlTypeWrapper::Bytes(&result.event_data.quote_params.reference_module_data),&EthereumSqlTypeWrapper::VecAddress(&result.event_data.quote_params.action_modules),&EthereumSqlTypeWrapper::VecBytes(&result.event_data.quote_params.action_modules_init_datas),&EthereumSqlTypeWrapper::Address(&result.event_data.quote_params.reference_module),&EthereumSqlTypeWrapper::Bytes(&result.event_data.quote_params.reference_module_init_data),&EthereumSqlTypeWrapper::U256(&result.event_data.pub_id),&EthereumSqlTypeWrapper::Bytes(&result.event_data.reference_module_return_data),&EthereumSqlTypeWrapper::VecBytes(&result.event_data.action_modules_init_return_datas),&EthereumSqlTypeWrapper::Bytes(&result.event_data.reference_module_init_return_data),&EthereumSqlTypeWrapper::Address(&result.event_data.transaction_executor),&EthereumSqlTypeWrapper::U256(&result.event_data.timestamp),&EthereumSqlTypeWrapper::H256(&result.tx_information.transaction_hash.unwrap()),&EthereumSqlTypeWrapper::U64(&result.tx_information.block_number.unwrap()),&EthereumSqlTypeWrapper::H256(&result.tx_information.block_hash.unwrap())])
                         .await.unwrap();
                 }
-          })
+        })
                         }),
                         no_extensions(),
                         NewEventOptions::default(),

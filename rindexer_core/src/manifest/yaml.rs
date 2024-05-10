@@ -5,6 +5,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
+use crate::generator::event_callback_registry::{AddressOrFilter, FilterDetails};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -36,7 +37,11 @@ pub struct Indexer {
 pub struct ContractDetails {
     pub network: String,
 
-    pub address: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    address: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filter: Option<FilterDetails>,
 
     #[serde(rename = "startBlock", skip_serializing_if = "Option::is_none")]
     pub start_block: Option<u64>,
@@ -46,6 +51,50 @@ pub struct ContractDetails {
 
     #[serde(rename = "pollingEvery", skip_serializing_if = "Option::is_none")]
     pub polling_every: Option<u64>,
+}
+
+impl ContractDetails {
+    pub fn address_or_filter(&self) -> AddressOrFilter {
+        if let Some(address) = &self.address {
+            AddressOrFilter::Address(address.clone())
+        } else {
+            AddressOrFilter::Filter(self.filter.clone().unwrap())
+        }
+    }
+
+    pub fn new_with_address(
+        network: String,
+        address: String,
+        start_block: Option<u64>,
+        end_block: Option<u64>,
+        polling_every: Option<u64>,
+    ) -> Self {
+        Self {
+            network,
+            address: Some(address),
+            filter: None,
+            start_block,
+            end_block,
+            polling_every,
+        }
+    }
+
+    pub fn new_with_filter(
+        network: String,
+        filter: FilterDetails,
+        start_block: Option<u64>,
+        end_block: Option<u64>,
+        polling_every: Option<u64>,
+    ) -> Self {
+        Self {
+            network,
+            address: None,
+            filter: Some(filter),
+            start_block,
+            end_block,
+            polling_every,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -112,6 +161,8 @@ pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, Box<dyn Error>> {
     //     substitute_env_variables(&contents)?;
 
     file.read_to_string(&mut contents)?;
+    
+    println!("{:?}", contents);
 
     let manifest: Manifest = serde_yaml::from_str(&contents)?;
     Ok(manifest)

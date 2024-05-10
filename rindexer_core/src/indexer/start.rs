@@ -8,7 +8,7 @@ use tokio::sync::Semaphore;
 use tokio_stream::StreamExt;
 
 use crate::generator::event_callback_registry::{
-    EventCallbackRegistry, EventResult, NetworkContract,
+    AddressOrFilter, EventCallbackRegistry, EventResult, NetworkContract,
 };
 use crate::indexer::fetch_logs::fetch_logs_stream;
 
@@ -131,7 +131,7 @@ async fn process_event_sequentially(
         );
         let filter = build_filter(
             event_processing_config.topic_id,
-            &event_processing_config.network_contract.address,
+            &event_processing_config.network_contract.address_or_filter,
             current_block,
             next_block,
         );
@@ -165,7 +165,7 @@ async fn process_event_concurrently(
 
         let filter = build_filter(
             event_processing_config.topic_id,
-            &event_processing_config.network_contract.address,
+            &event_processing_config.network_contract.address_or_filter,
             current_block,
             next_block,
         );
@@ -266,13 +266,21 @@ async fn process_logs(
 
 fn build_filter(
     topic_id: &'static str,
-    address: &str,
+    address_or_filter: &AddressOrFilter,
     current_block: u64,
     next_block: u64,
 ) -> Filter {
-    Filter::new()
-        .address(address.parse::<Address>().unwrap())
-        .topic0(topic_id.parse::<H256>().unwrap())
-        .from_block(U64::from(current_block))
-        .to_block(U64::from(next_block))
+    match address_or_filter {
+        AddressOrFilter::Address(address) => Filter::new()
+            .address(address.parse::<Address>().unwrap())
+            .topic0(topic_id.parse::<H256>().unwrap())
+            .from_block(U64::from(current_block))
+            .to_block(U64::from(next_block)),
+        AddressOrFilter::Filter(filter) => filter.extend_filter_indexed(
+            Filter::new()
+                .topic0(topic_id.parse::<H256>().unwrap())
+                .from_block(U64::from(current_block))
+                .to_block(U64::from(next_block)),
+        ),
+    }
 }

@@ -10,9 +10,7 @@ checklist v1.0:
 
 - csv autogenerate code
 - event filter to sync all events without contracts and by indexed arguments also
-- internal tables in postgres like last seen blocks etc 
-- add ability to config distance from blocks
-- handle other providers block ranges in start indexing
+- internal tables in postgres like last seen blocks etc
 - finish command line https://ponder.sh/docs/api-reference/create-ponder
 - look into logging for better dev ex seeing what's happening with internal logs with files for traces
 - look into load balancing of RPCs
@@ -20,15 +18,16 @@ checklist v1.0:
 - look into dependency mappings to allow you to index based on trees structure
 - investigate graphql API exposing
 - look into https://diesel.rs/ for mapping schemas etc
+- investigate indexing contracts that are deployed within an event onchain 
 - investigate handle reorgs process
-- look into deployments to make it easy to do
+  - add ability to config distance from blocks
+- handle other providers block ranges in start indexing
 - docs
+- look into deployments to make it easy to do
 
 future features:
-- mongodb support, mysql support, sql server support
+- other db support
 - POC with shadow events using foundry as you index
-- graphql API / rest API
-- rindexer schema designer
 
 // cargo new node --lib
 

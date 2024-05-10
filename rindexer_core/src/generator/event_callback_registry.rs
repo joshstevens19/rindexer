@@ -1,21 +1,93 @@
+use std::str::FromStr;
 use std::{any::Any, sync::Arc};
 
 use futures::future::BoxFuture;
 
+use crate::helpers::{parse_hex, u256_to_hex};
 use ethers::addressbook::Address;
-use ethers::prelude::{RetryClient, U256, U64};
+use ethers::prelude::{Filter, RetryClient};
 use ethers::{
     providers::{Http, Provider},
-    types::{Bytes, Log, H256},
+    types::{Bytes, Log, H256, U256, U64},
 };
+use serde::{Deserialize, Serialize};
 
 type Decoder = Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync>;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FilterDetails {
+    pub event_name: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indexed_1: Option<Vec<String>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indexed_2: Option<Vec<String>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indexed_3: Option<Vec<String>>,
+}
+
+fn parse_special_or_hex(input: &str) -> H256 {
+    match input.to_lowercase().as_str() {
+        "true" => H256::from_low_u64_be(1),
+        "false" => H256::from_low_u64_be(0),
+        _ => {
+            if let Ok(num) = input.parse::<u64>() {
+                H256::from_low_u64_be(num)
+            } else if let Ok(num) = U256::from_dec_str(input) {
+                H256::from_str(&u256_to_hex(num)).unwrap()
+            } else {
+                parse_hex(input)
+            }
+        }
+    }
+}
+
+impl FilterDetails {
+    pub fn extend_filter_indexed(&self, mut filter: Filter) -> Filter {
+        if let Some(indexed_1) = &self.indexed_1 {
+            filter = filter.topic1(
+                indexed_1
+                    .iter()
+                    .map(|i| parse_special_or_hex(i))
+                    .collect::<Vec<_>>(),
+            );
+        }
+
+        if let Some(indexed_2) = &self.indexed_2 {
+            filter = filter.topic2(
+                indexed_2
+                    .iter()
+                    .map(|i| parse_special_or_hex(i))
+                    .collect::<Vec<_>>(),
+            );
+        }
+
+        if let Some(indexed_3) = &self.indexed_3 {
+            filter = filter.topic3(
+                indexed_3
+                    .iter()
+                    .map(|i| parse_special_or_hex(i))
+                    .collect::<Vec<_>>(),
+            );
+        }
+
+        filter
+    }
+}
+
+#[derive(Clone)]
+pub enum AddressOrFilter {
+    Address(String),
+    Filter(FilterDetails),
+}
 
 #[derive(Clone)]
 pub struct NetworkContract {
     pub network: String,
 
-    pub address: String,
+    pub address_or_filter: AddressOrFilter,
 
     pub provider: &'static Arc<Provider<RetryClient<Http>>>,
 

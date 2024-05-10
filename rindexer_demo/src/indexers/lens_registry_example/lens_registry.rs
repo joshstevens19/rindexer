@@ -1,3 +1,4 @@
+
 use crate::rindexer::lens_registry_example::events::lens_registry::{
     no_extensions, HandleLinkedEvent, HandleUnlinkedEvent, LensRegistryEventType, NewEventOptions,
     NonceUpdatedEvent,
@@ -14,12 +15,12 @@ async fn handle_linked_handler(registry: &mut EventCallbackRegistry) {
                             Box::pin(async move {
                                 println!("HandleLinked event: {:?}", results);
                                 for result in results {
-                            context
-                                .database
-                                .execute("INSERT INTO lens_registry_example.handle_linked (contract_address, \"handle_id\", \"handle_collection\", \"token_id\", \"token_collection\", \"transaction_executor\", \"timestamp\", \"tx_hash\", \"block_number\", \"block_hash\") VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
-                                &[&EthereumSqlTypeWrapper::Address(&result.tx_information.address),&EthereumSqlTypeWrapper::U256(&result.event_data.handle.id),&EthereumSqlTypeWrapper::Address(&result.event_data.handle.collection),&EthereumSqlTypeWrapper::U256(&result.event_data.token.id),&EthereumSqlTypeWrapper::Address(&result.event_data.token.collection),&EthereumSqlTypeWrapper::Address(&result.event_data.transaction_executor),&EthereumSqlTypeWrapper::U256(&result.event_data.timestamp),&EthereumSqlTypeWrapper::H256(&result.tx_information.transaction_hash.unwrap()),&EthereumSqlTypeWrapper::U64(&result.tx_information.block_number.unwrap()),&EthereumSqlTypeWrapper::H256(&result.tx_information.block_hash.unwrap())])
-                                .await.unwrap();
-                        }
+                    context
+                        .database
+                        .execute("INSERT INTO lens_registry_example.handle_linked (contract_address, \"handle_id\", \"handle_collection\", \"token_id\", \"token_collection\", \"transaction_executor\", \"timestamp\", \"tx_hash\", \"block_number\", \"block_hash\") VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                        &[&EthereumSqlTypeWrapper::Address(&result.tx_information.address),&EthereumSqlTypeWrapper::U256(&result.event_data.handle.id),&EthereumSqlTypeWrapper::Address(&result.event_data.handle.collection),&EthereumSqlTypeWrapper::U256(&result.event_data.token.id),&EthereumSqlTypeWrapper::Address(&result.event_data.token.collection),&EthereumSqlTypeWrapper::Address(&result.event_data.transaction_executor),&EthereumSqlTypeWrapper::U256(&result.event_data.timestamp),&EthereumSqlTypeWrapper::H256(&result.tx_information.transaction_hash.unwrap()),&EthereumSqlTypeWrapper::U64(&result.tx_information.block_number.unwrap()),&EthereumSqlTypeWrapper::H256(&result.tx_information.block_hash.unwrap())])
+                        .await.unwrap();
+                }
         })
                         }),
                         no_extensions(),
