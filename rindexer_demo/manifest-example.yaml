@@ -4,27 +4,27 @@ repository: https://github.com/joshstevens19/rindexer
 indexers:
   - name: LensRegistryExample
     contracts:
-      - name: LensRegistry
-        details:
-          - address: 0xD4F2F33680FCCb36748FA9831851643781608844
-            network: polygon
-            startBlock: 56399431
-        abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
+#      - name: LensRegistry
+#        details:
+#          - address: 0xD4F2F33680FCCb36748FA9831851643781608844
+#            network: polygon
+#            startBlock: 56399431
+#        abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
       - name: ERC20
         details:
            - filter:
               event_name: Transfer
               indexed_1:
-                - 0xDb46d1Dc155634FbC732f92E853b10B288AD5a1d
+                - 0x4A1a2197f307222cD67A1762D9A352F64558d9Be
              network: polygon
              startBlock: 56399431
         abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/erc20-abi.json
-      - name: LensHub
-        details:
-          - address: '0xDb46d1Dc155634FbC732f92E853b10B288AD5a1d'
-            network: polygon
-            startBlock: 56399431
-        abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-hub-events-abi.json
+#      - name: LensHub
+#        details:
+#          - address: '0xDb46d1Dc155634FbC732f92E853b10B288AD5a1d'
+#            network: polygon
+#            startBlock: 56399431
+#        abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-hub-events-abi.json
 networks:
   - name: polygon
     chainId: 137

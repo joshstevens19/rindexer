@@ -10,6 +10,8 @@ use ethers::{
     providers::{Http, Provider},
     types::{Bytes, Log, H256, U256, U64},
 };
+use ethers::types::BigEndianHash;
+use ethers::utils::keccak256;
 use serde::{Deserialize, Serialize};
 
 type Decoder = Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync>;
@@ -28,17 +30,18 @@ pub struct FilterDetails {
     pub indexed_3: Option<Vec<String>>,
 }
 
-fn parse_special_or_hex(input: &str) -> H256 {
+fn parse_topic(input: &str) -> H256 {
     match input.to_lowercase().as_str() {
         "true" => H256::from_low_u64_be(1),
         "false" => H256::from_low_u64_be(0),
         _ => {
-            if let Ok(num) = input.parse::<u64>() {
-                H256::from_low_u64_be(num)
-            } else if let Ok(num) = U256::from_dec_str(input) {
-                H256::from_str(&u256_to_hex(num)).unwrap()
-            } else {
-                parse_hex(input)
+            if let Ok(address) = Address::from_str(input) {
+                H256::from(address)
+            }
+            else if let Ok(num) = U256::from_dec_str(input) {
+                H256::from_uint(&num)
+            }  else {
+                H256::from(keccak256(input))
             }
         }
     }
@@ -50,7 +53,7 @@ impl FilterDetails {
             filter = filter.topic1(
                 indexed_1
                     .iter()
-                    .map(|i| parse_special_or_hex(i))
+                    .map(|i| parse_topic(i))
                     .collect::<Vec<_>>(),
             );
         }
@@ -59,7 +62,7 @@ impl FilterDetails {
             filter = filter.topic2(
                 indexed_2
                     .iter()
-                    .map(|i| parse_special_or_hex(i))
+                    .map(|i| parse_topic(i))
                     .collect::<Vec<_>>(),
             );
         }
@@ -68,7 +71,7 @@ impl FilterDetails {
             filter = filter.topic3(
                 indexed_3
                     .iter()
-                    .map(|i| parse_special_or_hex(i))
+                    .map(|i| parse_topic(i))
                     .collect::<Vec<_>>(),
             );
         }
@@ -81,6 +84,12 @@ impl FilterDetails {
 pub enum AddressOrFilter {
     Address(String),
     Filter(FilterDetails),
+}
+
+impl AddressOrFilter {
+    pub fn is_filter(&self) -> bool {
+        matches!(self, AddressOrFilter::Filter(_))
+    }
 }
 
 #[derive(Clone)]

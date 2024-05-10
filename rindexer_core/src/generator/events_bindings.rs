@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::error::Error;
 use std::fs;
-use ethers::abi::ParamType::Address;
 
 use crate::helpers::camel_to_snake;
 use crate::manifest::yaml::{Contract, ContractDetails, Databases};
@@ -25,6 +24,13 @@ pub struct ABIItem {
 
     #[serde(rename = "type", default)]
     type_: String,
+}
+
+pub fn read_abi_file(file_path: &str) -> Result<Vec<ABIItem>, Box<dyn Error>> {
+    let abi_str = fs::read_to_string(file_path)?;
+    println!("abi_str {:?}", abi_str);
+    let abi_json: Vec<ABIItem> = serde_json::from_str(&abi_str)?;
+    Ok(abi_json)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,13 +111,8 @@ pub fn abigen_contract_file_name(contract: &Contract) -> String {
 }
 
 pub fn extract_event_names_and_signatures_from_abi(
-    abi_path: &str,
+    abi_json: &Vec<ABIItem>,
 ) -> Result<Vec<EventInfo>, Box<dyn Error>> {
-    let abi_str = fs::read_to_string(abi_path)?;
-    println!("abi_str {:?}", abi_str);
-    let abi_json: Vec<ABIItem> = serde_json::from_str(&abi_str)?;
-    println!("abi_json {:?}", abi_json);
-
     let result = abi_json
         .iter()
         .filter_map(|item| {
@@ -449,10 +450,11 @@ fn build_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &st
         r#"fn contract(&self, network: &str) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> {{"#,
         abi_gen_name = abi_gen_name
     ));
-    
+
     // Handling each contract detail with an `if` or `else if`
     for (index, contract_detail) in contracts_details.iter().enumerate() {
-        let address = if let AddressOrFilter::Address(address) = contract_detail.address_or_filter() {
+        let address = if let AddressOrFilter::Address(address) = contract_detail.address_or_filter()
+        {
             address
         } else {
             "0x0000000000000000000000000000000000000000".to_string()
@@ -732,19 +734,49 @@ pub fn generate_abi_name_properties(
         .collect()
 }
 
+fn get_abi_items(contract: &Contract, is_filter: bool) -> Result<Vec<ABIItem>, Box<dyn Error>> {
+    let mut abi_items = read_abi_file(&contract.abi)?;
+    if is_filter {
+        let filter_event_names: Vec<String> = contract
+            .details
+            .iter()
+            .filter_map(|detail| {
+                if let AddressOrFilter::Filter(filter) = &detail.address_or_filter() {
+                    Some(filter.event_name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        abi_items = abi_items
+            .iter()
+            .filter(|item| item.type_ == "event" && filter_event_names.contains(&item.name))
+            .cloned()
+            .collect();
+    }
+
+    Ok(abi_items)
+}
+
 pub fn generate_event_bindings(
     contract: &Contract,
+    is_filter: bool,
     databases: &Option<Databases>,
 ) -> Result<String, Box<dyn Error>> {
-    let event_names = extract_event_names_and_signatures_from_abi(&contract.abi)?;
+    let abi_items = get_abi_items(contract, is_filter)?;
+    let event_names = extract_event_names_and_signatures_from_abi(&abi_items)?;
+
     generate_event_bindings_code(contract, databases, event_names)
 }
 
 pub fn generate_event_handlers(
     indexer_name: &str,
+    is_filter: bool,
     contract: &Contract,
 ) -> Result<String, Box<dyn Error>> {
-    let event_names = extract_event_names_and_signatures_from_abi(&contract.abi)?;
+    let abi_items = get_abi_items(contract, is_filter)?;
+    let event_names = extract_event_names_and_signatures_from_abi(&abi_items)?;
 
     let mut imports = String::new();
     imports.push_str(
