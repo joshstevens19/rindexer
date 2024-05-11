@@ -182,13 +182,31 @@ pub fn generate_columns_names_only(inputs: &[ABIInput]) -> Vec<String> {
     .collect()
 }
 
-pub fn generate_event_table_sql(abi_inputs: &[EventInfo], schema_name: &str) -> String {
+fn generate_event_table_sql(abi_inputs: &[EventInfo], schema_name: &str) -> String {
     let mut queries = String::new();
 
     for event_info in abi_inputs {
         let query = format!(
             "CREATE TABLE IF NOT EXISTS {}.{} (rindexer_id SERIAL PRIMARY KEY, contract_address CHAR(66), {}, \"tx_hash\" CHAR(66), \"block_number\" BIGINT, \"block_hash\" CHAR(66))",
             schema_name, camel_to_snake(&event_info.name), generate_columns_with_data_types(&event_info.inputs).join(", ")
+        );
+
+        queries.push_str(&query);
+        queries.push(';');
+        queries.push('\n');
+    }
+
+    queries
+}
+
+fn generate_internal_event_table_sql(abi_inputs: &[EventInfo], schema_name: &str) -> String {
+    let mut queries = String::new();
+
+    for event_info in abi_inputs {
+        let query = format!(
+            r#"CREATE TABLE IF NOT EXISTS rindexer_internal.{}_{} ("network" TEXT PRIMARY KEY, "last_seen_block" BIGINT)"#,
+            schema_name,
+            camel_to_snake(&event_info.name)
         );
 
         queries.push_str(&query);
@@ -209,11 +227,18 @@ pub fn create_tables_for_indexer_sql(indexer: &Indexer) -> String {
         &schema_name
     ));
 
+    // also create internal table lookups
+    sql.push_str("CREATE SCHEMA IF NOT EXISTS rindexer_internal;\n");
+
     for contract in &indexer.contracts {
         let abi_items = read_abi_file(&contract.abi).unwrap();
         let event_names = extract_event_names_and_signatures_from_abi(&abi_items).unwrap();
 
         sql.push_str(&generate_event_table_sql(&event_names, &schema_name));
+        sql.push_str(&generate_internal_event_table_sql(
+            &event_names,
+            &schema_name,
+        ));
     }
 
     sql
