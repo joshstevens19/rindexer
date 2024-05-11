@@ -12,8 +12,6 @@ checklist v1.0:
 - internal tables in postgres like last seen blocks etc
 - finish command line https://ponder.sh/docs/api-reference/create-ponder
 - look into load balancing of RPCs
-- look into internal caching to make things faster
-- look into dependency mappings to allow you to index based on trees structure
 - investigate graphql API exposing
 - look into https://diesel.rs/ for mapping schemas etc
 - investigate indexing contracts that are deployed within an event onchain 
@@ -25,6 +23,8 @@ checklist v1.0:
 
 future features:
 - other db support
+- look into internal caching to make things faster
+- look into dependency mappings to allow you to index based on trees structure
 - POC with shadow events using foundry as you index
 
 // cargo new node --lib

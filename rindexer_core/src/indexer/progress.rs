@@ -6,11 +6,11 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ethers::middleware::Middleware;
+use num_format::{Locale, ToFormattedString};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io;
 use std::io::Stdout;
 use std::sync::Arc;
-use num_format::{Locale, ToFormattedString};
 use tokio::sync::Mutex;
 use tui::style::{Color, Style};
 use tui::widgets::{Cell, Row, Table};
@@ -231,7 +231,7 @@ fn draw_ui(
                 "Status",
                 "Progress",
             ])
-                .style(Style::default().fg(Color::Yellow)),
+            .style(Style::default().fg(Color::Yellow)),
         )
         .block(
             Block::default()
@@ -249,7 +249,6 @@ fn draw_ui(
 
     f.render_widget(table, table_chunks[0]);
 }
-
 
 fn calculate_events_hash(events: &[IndexingEventProgress]) -> u64 {
     let mut hasher = DefaultHasher::new();
