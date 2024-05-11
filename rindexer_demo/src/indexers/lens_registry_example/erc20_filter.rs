@@ -11,7 +11,7 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
                     TransferEvent::new(
                         Arc::new(|results, context| {
                             Box::pin(async move {
-                                println!("Transfer event: {:?}", results);
+                                // println!("Transfer event: {:?}", results);
                                 for result in results {
                     context
                         .database

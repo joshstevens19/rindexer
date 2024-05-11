@@ -4,13 +4,17 @@ use ethers::{
 };
 use std::error::Error;
 use std::sync::Arc;
-use tokio::sync::Semaphore;
+use tokio::sync::{Mutex, Semaphore};
 use tokio_stream::StreamExt;
 
 use crate::generator::event_callback_registry::{
     AddressOrFilter, EventCallbackRegistry, EventResult, NetworkContract,
 };
 use crate::indexer::fetch_logs::fetch_logs_stream;
+use crate::indexer::progress::{
+    monitor_state_and_update_ui, setup_terminal, IndexingEventProgress,
+    IndexingEventProgressStatus, IndexingEventsProgressState,
+};
 
 pub struct ConcurrentSettings {
     /// The max amount of concurrency you want to do side by side for indexing, the higher, the faster
@@ -60,14 +64,28 @@ struct EventProcessingConfig {
     max_block_range: u64,
     semaphore: Arc<Semaphore>,
     registry: Arc<EventCallbackRegistry>,
+    progress: Arc<Mutex<IndexingEventsProgressState>>,
     execute_event_logs_in_order: bool,
     live_indexing: bool,
 }
+
+// #[derive(Clone, Debug)]
+// pub struct IndexingEventProgress {
+//     pub name: String,
+//     pub last_synced_block: u64,
+//     pub syncing_to_block: u64,
+//     pub network: String,
+//     pub live_indexing: bool,
+//     pub status: IndexingEventProgressStatus,
+//     pub progress: f64,
+// }
 
 pub async fn start_indexing(
     registry: Arc<EventCallbackRegistry>,
     settings: StartIndexingSettings,
 ) -> Result<(), BoxedError> {
+    let event_progress_state = IndexingEventsProgressState::monitor(registry.events.clone()).await;
+
     let max_block_range = 20000000000;
     let semaphore = Arc::new(Semaphore::new(
         settings
@@ -82,14 +100,14 @@ pub async fn start_indexing(
     for event in registry.events.clone() {
         for contract in event.contract.details.clone() {
             let latest_block = contract.provider.get_block_number().await?.as_u64();
-            let live_indexing = contract.end_block.is_some();
+            let live_indexing = contract.end_block.is_none();
             let start_block = contract.start_block.unwrap_or(latest_block);
             let end_block = std::cmp::min(contract.end_block.unwrap_or(latest_block), latest_block);
 
-            println!(
-                "Starting event: {} from block: {} to block: {}",
-                event.topic_id, start_block, end_block
-            );
+            // println!(
+            //     "Starting event: {} from block: {} to block: {}",
+            //     event.topic_id, start_block, end_block
+            // );
 
             let event_processing_config = EventProcessingConfig {
                 topic_id: event.topic_id,
@@ -99,6 +117,7 @@ pub async fn start_indexing(
                 max_block_range,
                 semaphore: semaphore.clone(),
                 registry: registry.clone(),
+                progress: event_progress_state.clone(),
                 live_indexing,
                 execute_event_logs_in_order: settings.execute_event_logs_in_order,
             };
@@ -143,6 +162,7 @@ async fn process_event_sequentially(
             event_processing_config.network_contract.clone(),
             filter,
             event_processing_config.registry.clone(),
+            event_processing_config.progress.clone(),
             event_processing_config.execute_event_logs_in_order,
             event_processing_config.live_indexing,
         )
@@ -179,13 +199,15 @@ async fn process_event_concurrently(
             .await
             .unwrap();
         let handle = tokio::spawn({
-            let network_contract_clone = event_processing_config.network_contract.clone();
+            let network_contract = event_processing_config.network_contract.clone();
+            let progress = event_processing_config.progress.clone();
             async move {
                 let result = process_logs(
                     event_processing_config.topic_id,
-                    network_contract_clone.clone(),
+                    network_contract.clone(),
                     filter,
                     registry_copy,
+                    progress,
                     event_processing_config.execute_event_logs_in_order,
                     event_processing_config.live_indexing,
                 )
@@ -210,6 +232,7 @@ async fn process_logs(
     network_contract: Arc<NetworkContract>,
     filter: Filter,
     registry: Arc<EventCallbackRegistry>,
+    progress: Arc<Mutex<IndexingEventsProgressState>>,
     execute_events_logs_in_order: bool,
     live_indexing: bool,
 ) -> Result<(), BoxedError> {
@@ -218,15 +241,27 @@ async fn process_logs(
 
     if execute_events_logs_in_order {
         // Process logs in the exact order they are fetched
-        while let Some(log_result) = logs_stream.next().await {
-            match log_result {
-                Ok(logs) => {
-                    let fn_data = logs
+        while let Some(result) = logs_stream.next().await {
+            match result {
+                Ok(result) => {
+                    let fn_data = result
+                        .logs
                         .iter()
                         .map(|log| EventResult::new(network_contract.clone(), log))
                         .collect::<Vec<_>>();
 
-                    registry.trigger_event(topic_id, fn_data).await;
+                    if !fn_data.is_empty() {
+                        registry.trigger_event(topic_id, fn_data).await;
+                    }
+
+                    let progress_clone = progress.clone();
+                    let network_clone = network_contract.clone();
+                    tokio::spawn(async move {
+                        progress_clone
+                            .lock()
+                            .await
+                            .update_last_synced_block(&network_clone.id, result.to_block.as_u64());
+                    });
                 }
                 Err(e) => {
                     eprintln!("Error fetching logs: {:?}", e);
@@ -236,11 +271,11 @@ async fn process_logs(
         }
     } else {
         let mut handles = Vec::new();
-        while let Some(log_result) = logs_stream.next().await {
-            match log_result {
-                Ok(logs) => {
-                    for log in logs {
-                        let fn_data = EventResult::new(network_contract.clone(), &log);
+        while let Some(result) = logs_stream.next().await {
+            match result {
+                Ok(result) => {
+                    for log in &result.logs {
+                        let fn_data = EventResult::new(network_contract.clone(), log);
                         let registry_clone = registry.clone();
 
                         let handle = tokio::spawn(async move {
@@ -248,6 +283,15 @@ async fn process_logs(
                         });
                         handles.push(handle);
                     }
+
+                    let progress_clone = progress.clone();
+                    let network_clone = network_contract.clone();
+                    tokio::spawn(async move {
+                        progress_clone
+                            .lock()
+                            .await
+                            .update_last_synced_block(&network_clone.id, result.to_block.as_u64());
+                    });
                 }
                 Err(e) => {
                     eprintln!("Error fetching logs: {:?}", e);

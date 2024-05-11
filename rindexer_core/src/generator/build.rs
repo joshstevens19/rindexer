@@ -54,7 +54,7 @@ fn identify_filter(contract: &mut Contract) -> bool {
         .filter(|details| details.address_or_filter().is_filter())
         .count();
 
-    if filter_count != contract.details.len() {
+    if filter_count > 0 && filter_count != contract.details.len() {
         panic!("Cannot mix and match address and filter for the same contract definition.");
     }
 

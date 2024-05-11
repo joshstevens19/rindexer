@@ -1,4 +1,6 @@
 use ethers::types::{H256, U256};
+use rand::distributions::Alphanumeric;
+use rand::Rng;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -116,6 +118,15 @@ pub fn parse_hex(input: &str) -> H256 {
     H256::from_str(&formatted).unwrap_or_else(|err| {
         panic!("Failed to parse H256 from input '{}': {:?}", input, err);
     })
+}
+
+pub fn generate_random_id(len: usize) -> String {
+    let random_string: String = rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(len)
+        .map(char::from)
+        .collect();
+    random_string
 }
 
 #[cfg(test)]

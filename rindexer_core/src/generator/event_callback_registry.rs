@@ -78,6 +78,8 @@ impl AddressOrFilter {
 
 #[derive(Clone)]
 pub struct NetworkContract {
+    pub id: String,
+
     pub network: String,
 
     pub address_or_filter: AddressOrFilter,
@@ -156,6 +158,7 @@ impl EventResult {
 
 pub struct EventInformation {
     pub topic_id: &'static str,
+    pub event_name: &'static str,
     pub contract: ContractInformation,
     pub callback: Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, ()> + Send + Sync>,
 }
@@ -164,6 +167,7 @@ impl Clone for EventInformation {
     fn clone(&self) -> Self {
         EventInformation {
             topic_id: self.topic_id,
+            event_name: self.event_name,
             contract: self.contract.clone(),
             callback: Arc::clone(&self.callback),
         }
