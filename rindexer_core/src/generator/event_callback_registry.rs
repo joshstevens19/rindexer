@@ -6,12 +6,12 @@ use futures::future::BoxFuture;
 use crate::helpers::{parse_hex, u256_to_hex};
 use ethers::addressbook::Address;
 use ethers::prelude::{Filter, RetryClient};
+use ethers::types::BigEndianHash;
+use ethers::utils::keccak256;
 use ethers::{
     providers::{Http, Provider},
     types::{Bytes, Log, H256, U256, U64},
 };
-use ethers::types::BigEndianHash;
-use ethers::utils::keccak256;
 use serde::{Deserialize, Serialize};
 
 type Decoder = Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync>;
@@ -37,10 +37,9 @@ fn parse_topic(input: &str) -> H256 {
         _ => {
             if let Ok(address) = Address::from_str(input) {
                 H256::from(address)
-            }
-            else if let Ok(num) = U256::from_dec_str(input) {
+            } else if let Ok(num) = U256::from_dec_str(input) {
                 H256::from_uint(&num)
-            }  else {
+            } else {
                 H256::from(keccak256(input))
             }
         }
@@ -50,30 +49,15 @@ fn parse_topic(input: &str) -> H256 {
 impl FilterDetails {
     pub fn extend_filter_indexed(&self, mut filter: Filter) -> Filter {
         if let Some(indexed_1) = &self.indexed_1 {
-            filter = filter.topic1(
-                indexed_1
-                    .iter()
-                    .map(|i| parse_topic(i))
-                    .collect::<Vec<_>>(),
-            );
+            filter = filter.topic1(indexed_1.iter().map(|i| parse_topic(i)).collect::<Vec<_>>());
         }
 
         if let Some(indexed_2) = &self.indexed_2 {
-            filter = filter.topic2(
-                indexed_2
-                    .iter()
-                    .map(|i| parse_topic(i))
-                    .collect::<Vec<_>>(),
-            );
+            filter = filter.topic2(indexed_2.iter().map(|i| parse_topic(i)).collect::<Vec<_>>());
         }
 
         if let Some(indexed_3) = &self.indexed_3 {
-            filter = filter.topic3(
-                indexed_3
-                    .iter()
-                    .map(|i| parse_topic(i))
-                    .collect::<Vec<_>>(),
-            );
+            filter = filter.topic3(indexed_3.iter().map(|i| parse_topic(i)).collect::<Vec<_>>());
         }
 
         filter
