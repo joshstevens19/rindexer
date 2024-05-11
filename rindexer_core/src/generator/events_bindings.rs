@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::error::Error;
 use std::fs;
 
-use crate::helpers::camel_to_snake;
+use crate::helpers::{camel_to_snake, generate_random_id};
 use crate::manifest::yaml::{Contract, ContractDetails, Databases};
 
 use super::networks_bindings::network_provider_fn_name_by_name;
@@ -183,6 +183,19 @@ fn generate_topic_ids_match_arms_code(event_type_name: &str, event_info: &[Event
             format!(
                 "{}::{}(_) => \"0x{}\",",
                 event_type_name, info.name, topic_id
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn generate_event_names_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> String {
+    event_info
+        .iter()
+        .map(|info| {
+            format!(
+                "{}::{}(_) => \"{}\",",
+                event_type_name, info.name, info.name
             )
         })
         .collect::<Vec<_>>()
@@ -509,6 +522,7 @@ fn generate_event_bindings_code(
             use rindexer_core::{{
                 async_trait,
                 AsyncCsvAppender,
+                generate_random_id,
                 FutureExt,
                 generator::event_callback_registry::{{EventCallbackRegistry, EventInformation, ContractInformation, NetworkContract, EventResult, TxInformation, FilterDetails}},
                 manifest::yaml::{{Contract, ContractDetails}},
@@ -563,6 +577,12 @@ fn generate_event_bindings_code(
                     }}
                 }}
 
+                pub fn event_name(&self) -> &'static str {{
+                    match self {{
+                        {event_names_match_arms}
+                    }}
+                }}
+
                 {contract_type_fn}
 
                 {build_get_provider_fn}
@@ -579,6 +599,7 @@ fn generate_event_bindings_code(
                 
                 pub fn register(self, registry: &mut EventCallbackRegistry) {{
                     let topic_id = self.topic_id();
+                    let event_name = self.event_name();
                     let contract_information = self.contract_information();
                     let contract = ContractInformation {{
                         name: contract_information.name,
@@ -586,6 +607,7 @@ fn generate_event_bindings_code(
                             .details
                             .iter()
                             .map(|c| NetworkContract {{
+                                id: generate_random_id(10),
                                 network: c.network.clone(),
                                 provider: self.get_provider(&c.network),
                                 decoder: self.decoder(&c.network),
@@ -604,6 +626,7 @@ fn generate_event_bindings_code(
                 
                    registry.register_event({{
                         EventInformation {{
+                            event_name,
                             topic_id,
                             contract,
                             callback,
@@ -630,6 +653,8 @@ fn generate_event_bindings_code(
         event_callback_structs = generate_event_callback_structs_code(&event_info, clients),
         event_enums = generate_event_enums_code(&event_info),
         topic_ids_match_arms = generate_topic_ids_match_arms_code(&event_type_name, &event_info),
+        event_names_match_arms =
+            generate_event_names_match_arms_code(&event_type_name, &event_info),
         contract_type_fn = generate_contract_type_fn_code(contract),
         build_get_provider_fn =
             build_get_provider_fn(contract.details.iter().map(|c| c.network.clone()).collect()),

@@ -4,12 +4,12 @@ repository: https://github.com/joshstevens19/rindexer
 indexers:
   - name: LensRegistryExample
     contracts:
-#      - name: LensRegistry
-#        details:
-#          - address: 0xD4F2F33680FCCb36748FA9831851643781608844
-#            network: polygon
-#            startBlock: 56399431
-#        abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
+      - name: LensRegistry
+        details:
+          - address: 0xD4F2F33680FCCb36748FA9831851643781608844
+            network: polygon
+            startBlock: 56399431
+        abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
       - name: ERC20
         details:
            - filter:

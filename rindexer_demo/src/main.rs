@@ -6,6 +6,7 @@ mod rindexer;
 //use crate::indexers::lens_registry_example::lens_hub::lens_hub_handlers;
 //use crate::indexers::lens_registry_example::lens_registry::lens_registry_handlers;
 use crate::indexers::lens_registry_example::erc20_filter::erc20_filter_handlers;
+use crate::indexers::lens_registry_example::lens_registry::lens_registry_handlers;
 use rindexer_core::generator::build::generate_indexers_handlers_code;
 use rindexer_core::manifest::yaml::read_manifest;
 use rindexer_core::{
@@ -37,7 +38,7 @@ async fn main() {
         client.batch_execute(&sql).await.unwrap();
     }
 
-    //lens_registry_handlers(&mut registry).await;
+    lens_registry_handlers(&mut registry).await;
     // lens_hub_handlers(&mut registry).await;
     erc20_filter_handlers(&mut registry).await;
 

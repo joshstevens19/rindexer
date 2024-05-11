@@ -24,10 +24,10 @@ fn retry_with_block_range(error: &JsonRpcError) -> Option<RetryWithBlockRangeRes
         .unwrap();
     if let Some(captures) = re.captures(error_message) {
         let start_block = captures.get(1).unwrap().as_str();
-        println!("start_block: {:?}", start_block);
+        // println!("start_block: {:?}", start_block);
 
         let end_block = captures.get(2).unwrap().as_str();
-        println!("end_block: {:?}", end_block);
+        // println!("end_block: {:?}", end_block);
 
         // let range = end_block.as_number().unwrap() - start_block.as_number().unwrap();
         // println!("range: {:?}", range);
@@ -51,11 +51,11 @@ pub fn fetch_logs<M: Middleware + Clone + Send + 'static>(
         provider: Arc<M>,
         filter: Filter,
     ) -> Result<Vec<Log>, Box<dyn Error>> {
-        println!("Fetching logs for filter: {:?}", filter);
+        //println!("Fetching logs for filter: {:?}", filter);
         let logs_result = provider.get_logs(&filter).await;
         match logs_result {
             Ok(logs) => {
-                println!("Fetched logs: {:?}", logs.len());
+                //println!("Fetched logs: {:?}", logs.len());
                 Ok(logs)
             }
             Err(err) => {
@@ -83,12 +83,19 @@ pub fn fetch_logs<M: Middleware + Clone + Send + 'static>(
     Box::pin(inner_fetch_logs(provider, filter))
 }
 
+pub struct FetchLogsStream {
+    pub logs: Vec<Log>,
+    pub from_block: U64,
+    pub to_block: U64,
+}
+
 pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
     provider: Arc<M>,
     initial_filter: Filter,
     live_indexing: bool,
-) -> impl tokio_stream::Stream<Item = Result<Vec<Log>, Box<<M as Middleware>::Error>>> + Send + Unpin
-{
+) -> impl tokio_stream::Stream<Item = Result<FetchLogsStream, Box<<M as Middleware>::Error>>>
+       + Send
+       + Unpin {
     let (tx, rx) = mpsc::unbounded_channel();
 
     tokio::spawn(async move {
@@ -101,30 +108,48 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
             if from_block > to_block {
                 current_filter = current_filter.from_block(to_block);
             }
-            println!("Fetching logs for filter: {:?}", current_filter);
+            // println!("Fetching logs for filter: {:?}", current_filter);
             match provider.get_logs(&current_filter).await {
                 Ok(logs) => {
-                    println!(
-                        "Fetched logs: {} - filter: {:?}",
-                        logs.len(),
-                        current_filter
-                    );
+                    // println!(
+                    //     "Fetched logs: {} - filter: {:?}",
+                    //     logs.len(),
+                    //     current_filter
+                    // );
                     if logs.is_empty() {
+                        if tx
+                            .send(Ok(FetchLogsStream {
+                                logs: vec![],
+                                from_block,
+                                to_block,
+                            }))
+                            .is_err()
+                        {
+                            println!("Failed to send logs to stream consumer!");
+                            break;
+                        }
                         if live_indexing {
-                            println!("Waiting for more logs..");
+                            // println!("Waiting for more logs..");
                             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                             let current_block = provider.get_block_number().await.unwrap();
-                            println!("Current block: {:?}", current_block);
+                            // println!("Current block: {:?}", current_block);
                             current_filter = current_filter
                                 .from_block(current_block)
                                 .to_block(current_block);
                             continue;
                         }
-                        println!("All logs fetched!");
+                        // println!("All logs fetched!");
                         break;
                     }
 
-                    if tx.send(Ok(logs.clone())).is_err() {
+                    if tx
+                        .send(Ok(FetchLogsStream {
+                            logs: logs.clone(),
+                            from_block,
+                            to_block,
+                        }))
+                        .is_err()
+                    {
                         println!("Failed to send logs to stream consumer!");
                         break;
                     }
@@ -135,11 +160,11 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
                         current_filter = current_filter
                             .from_block(next_block)
                             .to_block(snapshot_to_block);
-                        println!("Updated filter: {:?}", current_filter);
+                        // println!("Updated filter: {:?}", current_filter);
                     }
                 }
                 Err(err) => {
-                    println!("Failed to fetch logs: {:?}", err);
+                    // println!("Failed to fetch logs: {:?}", err);
                     let json_rpc_error = err.as_error_response();
                     if let Some(json_rpc_error) = json_rpc_error {
                         let retry_result = retry_with_block_range(json_rpc_error);
@@ -147,17 +172,17 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
                             current_filter = current_filter
                                 .from_block(retry_result.from)
                                 .to_block(retry_result.to);
-                            println!("Retrying with block range: {:?}", current_filter);
+                            // println!("Retrying with block range: {:?}", current_filter);
                             continue;
                         }
                     }
 
                     if live_indexing {
-                        println!("Error fetching logs: retry in 500ms {:?}", err);
+                        // println!("Error fetching logs: retry in 500ms {:?}", err);
                         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                         continue;
                     }
-                    eprintln!("Error fetching logs: exiting... {:?}", err);
+                    // eprintln!("Error fetching logs: exiting... {:?}", err);
                     let _ = tx.send(Err(Box::new(err)));
                     break;
                 }
