@@ -129,7 +129,7 @@ async fn process_event_sequentially(
             current_block + event_processing_config.max_block_range,
             event_processing_config.end_block,
         );
-        
+
         let filter = build_filter(
             event_processing_config.topic_id,
             &event_processing_config.network_contract.address_or_filter,
@@ -170,7 +170,7 @@ async fn process_event_concurrently(
             current_block,
             next_block,
         );
-        
+
         let registry_copy = event_processing_config.registry.clone();
         let permit = event_processing_config
             .semaphore

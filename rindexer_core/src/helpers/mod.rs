@@ -1,10 +1,10 @@
-use ethers::types::{U256, H256};
+use ethers::types::{H256, U256};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
-use std::{error::Error, fs::File};
 use std::str::FromStr;
+use std::{error::Error, fs::File};
 
 pub fn camel_to_snake(s: &str) -> String {
     let mut snake_case = String::new();
@@ -104,7 +104,10 @@ pub fn parse_hex(input: &str) -> H256 {
 
     // Ensure the input has the correct length of 64 hex characters.
     if normalized_input.len() != 64 {
-        panic!("Failed to parse H256 from input '{}': Invalid input length", input);
+        panic!(
+            "Failed to parse H256 from input '{}': Invalid input length",
+            input
+        );
     }
 
     // Add "0x" prefix and parse the input string.
@@ -132,10 +135,22 @@ mod tests {
     #[test]
     fn test_parse_hex_valid() {
         let test_cases = [
-            ("0x4a1a2197f307222cd67a1762d9a352f64558d9be", "0x4a1a2197f307222cd67a1762d9a352f64558d9be000000000000000000000000"),
-            ("4a1a2197f307222cd67a1762d9a352f64558d9be", "0x4a1a2197f307222cd67a1762d9a352f64558d9be000000000000000000000000"),
-            ("0X4A1A2197F307222CD67A1762D9A352F64558D9BE", "0x4a1a2197f307222cd67a1762d9a352f64558d9be000000000000000000000000"),
-            ("4A1A2197F307222CD67A1762D9A352F64558D9BE", "0x4a1a2197f307222cd67a1762d9a352f64558d9be000000000000000000000000"),
+            (
+                "0x4a1a2197f307222cd67a1762d9a352f64558d9be",
+                "0x4a1a2197f307222cd67a1762d9a352f64558d9be000000000000000000000000",
+            ),
+            (
+                "4a1a2197f307222cd67a1762d9a352f64558d9be",
+                "0x4a1a2197f307222cd67a1762d9a352f64558d9be000000000000000000000000",
+            ),
+            (
+                "0X4A1A2197F307222CD67A1762D9A352F64558D9BE",
+                "0x4a1a2197f307222cd67a1762d9a352f64558d9be000000000000000000000000",
+            ),
+            (
+                "4A1A2197F307222CD67A1762D9A352F64558D9BE",
+                "0x4a1a2197f307222cd67a1762d9a352f64558d9be000000000000000000000000",
+            ),
         ];
 
         for (input, expected) in test_cases {
@@ -146,11 +161,7 @@ mod tests {
 
     #[test]
     fn test_parse_hex_invalid_length() {
-        let invalid_cases = [
-            "0x12345",
-            "0x4A1a2197f3",
-            "123456789",
-        ];
+        let invalid_cases = ["0x12345", "0x4A1a2197f3", "123456789"];
 
         for input in &invalid_cases {
             let result = std::panic::catch_unwind(|| parse_hex(input));
