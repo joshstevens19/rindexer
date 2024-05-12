@@ -3,7 +3,6 @@ use std::{any::Any, sync::Arc};
 
 use futures::future::BoxFuture;
 
-use crate::helpers::{parse_hex, u256_to_hex};
 use ethers::addressbook::Address;
 use ethers::prelude::{Filter, RetryClient};
 use ethers::types::BigEndianHash;
