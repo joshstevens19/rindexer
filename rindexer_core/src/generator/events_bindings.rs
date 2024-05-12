@@ -279,7 +279,7 @@ fn generate_contract_type_fn_code(contract: &Contract) -> String {
                         ContractDetails::new_with_address(
                             "{network}".to_string(),
                             "{address}".to_string(),
-                            Some({start_block}),
+                            {start_block},
                             {end_block},
                             Some({polling_every}),
                         ),
@@ -316,7 +316,7 @@ fn generate_contract_type_fn_code(contract: &Contract) -> String {
                                 indexed_2: {indexed_2},
                                 indexed_3: {indexed_3},
                             }},
-                            Some({start_block}.into()),
+                            {start_block},
                             {end_block},
                             Some({polling_every}),
                         ),
