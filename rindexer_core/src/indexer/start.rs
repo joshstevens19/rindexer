@@ -64,8 +64,8 @@ struct EventProcessingConfig {
     topic_id: &'static str,
     event_name: &'static str,
     network_contract: Arc<NetworkContract>,
-    start_block: u64,
-    end_block: u64,
+    start_block: U64,
+    end_block: U64,
     max_block_range: u64,
     semaphore: Arc<Semaphore>,
     registry: Arc<EventCallbackRegistry>,
@@ -96,7 +96,7 @@ pub async fn start_indexing(
 
     for event in registry.events.clone() {
         for contract in event.contract.details.clone() {
-            let latest_block = contract.provider.get_block_number().await?.as_u64();
+            let latest_block = contract.provider.get_block_number().await?;
             let live_indexing = contract.end_block.is_none();
             let last_known_start_block = get_last_synced_block_number(
                 database.clone(),
@@ -106,13 +106,12 @@ pub async fn start_indexing(
             )
             .await;
 
-            let start_block2 = last_known_start_block
-                .unwrap_or(contract.start_block.unwrap_or(latest_block).into());
-            println!(
-                "Starting event: {} from block: {} to block: {}",
-                event.topic_id, start_block2, latest_block
-            );
-            let start_block = contract.start_block.unwrap_or(latest_block);
+            let start_block =
+                last_known_start_block.unwrap_or(contract.start_block.unwrap_or(latest_block));
+            // println!(
+            //     "Starting event: {} from block: {} to block: {}",
+            //     event.topic_id, start_block2, latest_block
+            // );
             let end_block = std::cmp::min(contract.end_block.unwrap_or(latest_block), latest_block);
 
             // println!(
@@ -155,9 +154,11 @@ pub async fn start_indexing(
 async fn process_event_sequentially(
     event_processing_config: EventProcessingConfig,
 ) -> Result<(), BoxedError> {
-    for current_block in (event_processing_config.start_block..event_processing_config.end_block)
+    for _current_block in (event_processing_config.start_block.as_u64()
+        ..event_processing_config.end_block.as_u64())
         .step_by(event_processing_config.max_block_range as usize)
     {
+        let current_block = U64::from(_current_block);
         let next_block = std::cmp::min(
             current_block + event_processing_config.max_block_range,
             event_processing_config.end_block,
@@ -193,9 +194,11 @@ async fn process_event_concurrently(
     event_processing_config: EventProcessingConfig,
 ) -> Result<(), BoxedError> {
     let mut handles = Vec::new();
-    for current_block in (event_processing_config.start_block..event_processing_config.end_block)
+    for _current_block in (event_processing_config.start_block.as_u64()
+        ..event_processing_config.end_block.as_u64())
         .step_by(event_processing_config.max_block_range as usize)
     {
+        let current_block = U64::from(_current_block);
         let next_block = std::cmp::min(
             current_block + event_processing_config.max_block_range,
             event_processing_config.end_block,
@@ -348,7 +351,7 @@ async fn get_last_synced_block_number(
     match row {
         Ok(row) => {
             let result: Decimal = row.get("last_synced_block");
-            Some(U64::from_str(&result.to_string()).unwrap())
+            Some(U64::from_dec_str(&result.to_string()).unwrap())
         }
         Err(e) => {
             eprintln!("Error fetching last synced block: {:?}", e);
@@ -369,7 +372,7 @@ fn update_progress_and_db(
         progress
             .lock()
             .await
-            .update_last_synced_block(&network_contract.id, to_block.as_u64());
+            .update_last_synced_block(&network_contract.id, to_block);
 
         database
             .execute(
@@ -391,20 +394,20 @@ fn update_progress_and_db(
 fn build_filter(
     topic_id: &'static str,
     address_or_filter: &AddressOrFilter,
-    current_block: u64,
-    next_block: u64,
+    current_block: U64,
+    next_block: U64,
 ) -> Filter {
     match address_or_filter {
         AddressOrFilter::Address(address) => Filter::new()
             .address(address.parse::<Address>().unwrap())
             .topic0(topic_id.parse::<H256>().unwrap())
-            .from_block(U64::from(current_block))
-            .to_block(U64::from(next_block)),
+            .from_block(current_block)
+            .to_block(next_block),
         AddressOrFilter::Filter(filter) => filter.extend_filter_indexed(
             Filter::new()
                 .topic0(topic_id.parse::<H256>().unwrap())
-                .from_block(U64::from(current_block))
-                .to_block(U64::from(next_block)),
+                .from_block(current_block)
+                .to_block(next_block),
         ),
     }
 }

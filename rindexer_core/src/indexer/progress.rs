@@ -6,6 +6,7 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ethers::middleware::Middleware;
+use ethers::types::U64;
 use num_format::{Locale, ToFormattedString};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io;
@@ -45,8 +46,8 @@ pub struct IndexingEventProgress {
     pub id: String,
     pub contract_name: String,
     pub event_name: String,
-    pub last_synced_block: u64,
-    pub syncing_to_block: u64,
+    pub last_synced_block: U64,
+    pub syncing_to_block: U64,
     pub network: String,
     pub live_indexing: bool,
     pub status: IndexingEventProgressStatus,
@@ -72,8 +73,8 @@ impl IndexingEventProgress {
         id: String,
         contract_name: String,
         event_name: String,
-        last_synced_block: u64,
-        syncing_to_block: u64,
+        last_synced_block: U64,
+        syncing_to_block: U64,
         network: String,
         live_indexing: bool,
     ) -> Self {
@@ -102,17 +103,12 @@ impl IndexingEventsProgressState {
         let mut events = Vec::new();
         for event_information in event_information {
             for network_contract in event_information.contract.details {
-                let latest_block = network_contract
-                    .provider
-                    .get_block_number()
-                    .await
-                    .unwrap()
-                    .as_u64();
+                let latest_block = network_contract.provider.get_block_number().await.unwrap();
                 events.push(IndexingEventProgress::running(
                     network_contract.id,
                     event_information.contract.name.to_string(),
                     event_information.event_name.to_string(),
-                    network_contract.start_block.unwrap_or(0),
+                    network_contract.start_block.unwrap_or(U64::zero()),
                     network_contract.end_block.unwrap_or(latest_block),
                     network_contract.network.clone(),
                     network_contract.end_block.is_none(),
@@ -127,7 +123,7 @@ impl IndexingEventsProgressState {
         state
     }
 
-    pub fn update_last_synced_block(&mut self, id: &str, new_last_synced_block: u64) {
+    pub fn update_last_synced_block(&mut self, id: &str, new_last_synced_block: U64) {
         for event in self.events.iter_mut() {
             if event.id == id {
                 if event.progress != 1.0 {
@@ -143,7 +139,8 @@ impl IndexingEventsProgressState {
                                 blocks_synced
                             };
 
-                        event.progress += (effective_blocks_synced as f64) / (total_blocks as f64);
+                        event.progress += (effective_blocks_synced.as_u64() as f64)
+                            / (total_blocks.as_u64() as f64);
                         event.progress = event.progress.clamp(0.0, 1.0);
                     }
 
@@ -213,7 +210,9 @@ fn draw_ui(
             Row::new(vec![
                 Cell::from(event.contract_name.clone()),
                 Cell::from(event.event_name.clone()),
-                Cell::from(event.last_synced_block.to_formatted_string(&Locale::en)),
+                Cell::from(
+                    event.last_synced_block.to_string(), // .to_formatted_string(&Locale::en),
+                ),
                 Cell::from(event.network.clone()),
                 Cell::from(event.status.as_str().to_string()),
                 Cell::from(format!("{:.2}%", event.progress * 100.0)),
