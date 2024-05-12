@@ -9,7 +9,6 @@ eth_getLogs - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60add
 checklist v1.0:
 
 - csv autogenerate code
-- internal tables in postgres like last seen blocks etc
 - finish command line https://ponder.sh/docs/api-reference/create-ponder
 - look into load balancing of RPCs
 - investigate graphql API exposing
@@ -20,6 +19,9 @@ checklist v1.0:
 - handle other providers block ranges in start indexing
 - docs
 - look into deployments to make it easy to do
+
+bugs:
+- start + end dates are reading wrong from manifest.yamlu
 
 future features:
 - other db support
