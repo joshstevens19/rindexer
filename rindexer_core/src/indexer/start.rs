@@ -3,9 +3,12 @@ use ethers::{
     providers::Middleware,
     types::{Address, Filter, H256, U64},
 };
+use rust_decimal::Decimal;
 use std::error::Error;
+use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::{Mutex, Semaphore};
+use tokio_postgres::types::Type;
 use tokio_stream::StreamExt;
 
 use crate::generator::event_callback_registry::{
@@ -13,7 +16,7 @@ use crate::generator::event_callback_registry::{
 };
 use crate::helpers::camel_to_snake;
 use crate::indexer::fetch_logs::{fetch_logs_stream, FetchLogsStream};
-use crate::indexer::progress::{IndexingEventsProgressState};
+use crate::indexer::progress::IndexingEventsProgressState;
 use crate::{EthereumSqlTypeWrapper, PostgresClient};
 
 pub struct ConcurrentSettings {
@@ -95,6 +98,20 @@ pub async fn start_indexing(
         for contract in event.contract.details.clone() {
             let latest_block = contract.provider.get_block_number().await?.as_u64();
             let live_indexing = contract.end_block.is_none();
+            let last_known_start_block = get_last_synced_block_number(
+                database.clone(),
+                event.indexer_name,
+                event.event_name,
+                &contract.network,
+            )
+            .await;
+
+            let start_block2 = last_known_start_block
+                .unwrap_or(contract.start_block.unwrap_or(latest_block).into());
+            println!(
+                "Starting event: {} from block: {} to block: {}",
+                event.topic_id, start_block2, latest_block
+            );
             let start_block = contract.start_block.unwrap_or(latest_block);
             let end_block = std::cmp::min(contract.end_block.unwrap_or(latest_block), latest_block);
 
@@ -311,6 +328,31 @@ async fn handle_logs_result(
         Err(e) => {
             eprintln!("Error fetching logs: {:?}", e);
             Err(e)
+        }
+    }
+}
+
+async fn get_last_synced_block_number(
+    database: Arc<PostgresClient>,
+    indexer_name: &'static str,
+    event_name: &'static str,
+    network: &str,
+) -> Option<U64> {
+    let query = format!(
+        "SELECT last_synced_block FROM rindexer_internal.{}_{} WHERE network = $1",
+        camel_to_snake(indexer_name),
+        camel_to_snake(event_name)
+    );
+
+    let row = database.query_one(&query, &[&network]).await;
+    match row {
+        Ok(row) => {
+            let result: Decimal = row.get("last_synced_block");
+            Some(U64::from_str(&result.to_string()).unwrap())
+        }
+        Err(e) => {
+            eprintln!("Error fetching last synced block: {:?}", e);
+            None
         }
     }
 }
