@@ -199,19 +199,34 @@ fn generate_event_table_sql(abi_inputs: &[EventInfo], schema_name: &str) -> Stri
     queries
 }
 
-fn generate_internal_event_table_sql(abi_inputs: &[EventInfo], schema_name: &str) -> String {
+fn generate_internal_event_table_sql(
+    abi_inputs: &[EventInfo],
+    schema_name: &str,
+    networks: Vec<String>,
+) -> String {
     let mut queries = String::new();
 
     for event_info in abi_inputs {
         let query = format!(
-            r#"CREATE TABLE IF NOT EXISTS rindexer_internal.{}_{} ("network" TEXT PRIMARY KEY, "last_seen_block" BIGINT)"#,
+            r#"CREATE TABLE IF NOT EXISTS rindexer_internal.{}_{} ("network" TEXT PRIMARY KEY, "last_synced_block" BIGINT);"#,
             schema_name,
             camel_to_snake(&event_info.name)
         );
 
         queries.push_str(&query);
-        queries.push(';');
         queries.push('\n');
+
+        for network in &networks {
+            let query = format!(
+                r#"INSERT INTO rindexer_internal.{}_{} ("network", "last_synced_block") VALUES ('{}', 0) ON CONFLICT ("network") DO NOTHING;"#,
+                schema_name,
+                camel_to_snake(&event_info.name),
+                network
+            );
+
+            queries.push_str(&query);
+            queries.push('\n');
+        }
     }
 
     queries
@@ -238,6 +253,7 @@ pub fn create_tables_for_indexer_sql(indexer: &Indexer) -> String {
         sql.push_str(&generate_internal_event_table_sql(
             &event_names,
             &schema_name,
+            contract.details.iter().map(|d| d.network.clone()).collect(),
         ));
     }
 

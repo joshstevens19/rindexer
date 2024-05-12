@@ -79,7 +79,7 @@ fn write_indexer_events(
         };
 
         let is_filter = identify_filter(&mut contract);
-        let events_code = generate_event_bindings(&contract, is_filter, databases)?;
+        let events_code = generate_event_bindings(&indexer.name, &contract, is_filter, databases)?;
 
         write_file(
             &generate_file_location(
