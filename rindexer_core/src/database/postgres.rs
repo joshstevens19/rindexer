@@ -10,6 +10,7 @@ use crate::generator::{
 use crate::helpers::camel_to_snake;
 use crate::manifest::yaml::Indexer;
 use bytes::BytesMut;
+use rust_decimal::Decimal;
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type};
 use tokio_postgres::{Client, Error, NoTls, Row, Statement, Transaction};
 
@@ -145,7 +146,7 @@ pub fn solidity_type_to_db_type(abi_type: &str) -> String {
         "address" => "CHAR(42)".to_string(),
         "bool" => "BOOLEAN".to_string(),
         "int256" | "uint256" => "VARCHAR(78)".to_string(),
-        "int64" | "uint64" | "int128" | "uint128" => "BIGINT".to_string(),
+        "int64" | "uint64" | "int128" | "uint128" => "NUMERIC".to_string(),
         "int32" | "uint32" => "INTEGER".to_string(),
         "string" => "TEXT".to_string(),
         t if t.starts_with("bytes") => "BYTEA".to_string(),
@@ -187,7 +188,7 @@ fn generate_event_table_sql(abi_inputs: &[EventInfo], schema_name: &str) -> Stri
 
     for event_info in abi_inputs {
         let query = format!(
-            "CREATE TABLE IF NOT EXISTS {}.{} (rindexer_id SERIAL PRIMARY KEY, contract_address CHAR(66), {}, \"tx_hash\" CHAR(66), \"block_number\" BIGINT, \"block_hash\" CHAR(66))",
+            "CREATE TABLE IF NOT EXISTS {}.{} (rindexer_id SERIAL PRIMARY KEY, contract_address CHAR(66), {}, \"tx_hash\" CHAR(66), \"block_number\" NUMERIC, \"block_hash\" CHAR(66))",
             schema_name, camel_to_snake(&event_info.name), generate_columns_with_data_types(&event_info.inputs).join(", ")
         );
 
@@ -208,7 +209,7 @@ fn generate_internal_event_table_sql(
 
     for event_info in abi_inputs {
         let query = format!(
-            r#"CREATE TABLE IF NOT EXISTS rindexer_internal.{}_{} ("network" TEXT PRIMARY KEY, "last_synced_block" BIGINT);"#,
+            r#"CREATE TABLE IF NOT EXISTS rindexer_internal.{}_{} ("network" TEXT PRIMARY KEY, "last_synced_block" NUMERIC);"#,
             schema_name,
             camel_to_snake(&event_info.name)
         );
@@ -342,11 +343,13 @@ impl<'a> ToSql for EthereumSqlTypeWrapper<'a> {
         match self {
             EthereumSqlTypeWrapper::U64(value) => {
                 let value = value.to_string();
-                out.extend_from_slice(value.as_bytes());
-                Ok(IsNull::No)
+                Decimal::to_sql(&value.parse::<Decimal>().unwrap(), _ty, out)
             }
             EthereumSqlTypeWrapper::VecU64(values) => {
-                let results: Vec<String> = values.iter().map(|s| s.to_string()).collect();
+                let results: Vec<Decimal> = values
+                    .iter()
+                    .map(|s| s.to_string().parse::<Decimal>().unwrap())
+                    .collect();
                 if results.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
