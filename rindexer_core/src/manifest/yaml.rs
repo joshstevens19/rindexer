@@ -1,3 +1,4 @@
+use ethers::types::U64;
 use regex::Regex;
 use std::env;
 use std::error::Error;
@@ -6,7 +7,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use crate::generator::event_callback_registry::{AddressOrFilter, FilterDetails};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Manifest {
@@ -44,10 +45,10 @@ pub struct ContractDetails {
     filter: Option<FilterDetails>,
 
     #[serde(rename = "startBlock", skip_serializing_if = "Option::is_none")]
-    pub start_block: Option<u64>,
+    pub start_block: Option<U64>,
 
     #[serde(rename = "endBlock", skip_serializing_if = "Option::is_none")]
-    pub end_block: Option<u64>,
+    pub end_block: Option<U64>,
 
     #[serde(rename = "pollingEvery", skip_serializing_if = "Option::is_none")]
     pub polling_every: Option<u64>,
@@ -65,8 +66,8 @@ impl ContractDetails {
     pub fn new_with_address(
         network: String,
         address: String,
-        start_block: Option<u64>,
-        end_block: Option<u64>,
+        start_block: Option<U64>,
+        end_block: Option<U64>,
         polling_every: Option<u64>,
     ) -> Self {
         Self {
@@ -82,8 +83,8 @@ impl ContractDetails {
     pub fn new_with_filter(
         network: String,
         filter: FilterDetails,
-        start_block: Option<u64>,
-        end_block: Option<u64>,
+        start_block: Option<U64>,
+        end_block: Option<U64>,
         polling_every: Option<u64>,
     ) -> Self {
         Self {
@@ -168,9 +169,10 @@ pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, Box<dyn Error>> {
 
     file.read_to_string(&mut contents)?;
 
-    println!("{:?}", contents);
+    println!("before manifest {:?}", contents);
 
     let manifest: Manifest = serde_yaml::from_str(&contents)?;
+    println!("after manifest {:?}", manifest);
     Ok(manifest)
 }
 

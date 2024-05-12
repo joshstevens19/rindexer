@@ -3,6 +3,7 @@ use crate::database::postgres::{
     solidity_type_to_ethereum_sql_type,
 };
 use crate::generator::event_callback_registry::AddressOrFilter;
+use ethers::types::U64;
 use ethers::utils::keccak256;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -279,16 +280,22 @@ fn generate_contract_type_fn_code(contract: &Contract) -> String {
                             "{network}".to_string(),
                             "{address}".to_string(),
                             Some({start_block}),
-                            Some({end_block}),
+                            {end_block},
                             Some({polling_every}),
                         ),
                     "#,
                     network = contract.network,
                     address = address,
-                    // TODO! FIX
-                    start_block = contract.start_block.unwrap(),
-                    // TODO! FIX
-                    end_block = contract.end_block.unwrap_or(99424866),
+                    start_block = if let Some(start_block) = contract.start_block {
+                        format!("Some({}.into())", start_block.as_u64())
+                    } else {
+                        "None".to_string()
+                    },
+                    end_block = if let Some(end_block) = contract.end_block {
+                        format!("Some({}.into())", end_block.as_u64())
+                    } else {
+                        "None".to_string()
+                    },
                     // TODO! FIX
                     polling_every = contract.polling_every.unwrap_or(1000)
                 );
@@ -309,8 +316,8 @@ fn generate_contract_type_fn_code(contract: &Contract) -> String {
                                 indexed_2: {indexed_2},
                                 indexed_3: {indexed_3},
                             }},
-                            Some({start_block}),
-                            Some({end_block}),
+                            Some({start_block}.into()),
+                            {end_block},
                             Some({polling_every}),
                         ),
                     "#,
@@ -319,10 +326,16 @@ fn generate_contract_type_fn_code(contract: &Contract) -> String {
                     indexed_1 = indexed_1,
                     indexed_2 = indexed_2,
                     indexed_3 = indexed_3,
-                    // TODO! FIX
-                    start_block = contract.start_block.unwrap(),
-                    // TODO! FIX
-                    end_block = contract.end_block.unwrap_or(99424866),
+                    start_block = if let Some(start_block) = contract.start_block {
+                        format!("Some({}.into())", start_block.as_u64())
+                    } else {
+                        "None".to_string()
+                    },
+                    end_block = if let Some(end_block) = contract.end_block {
+                        format!("Some({}.into())", end_block.as_u64())
+                    } else {
+                        "None".to_string()
+                    },
                     // TODO! FIX
                     polling_every = contract.polling_every.unwrap_or(1000)
                 );

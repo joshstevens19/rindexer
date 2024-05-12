@@ -87,9 +87,9 @@ pub struct NetworkContract {
 
     pub decoder: Decoder,
 
-    pub start_block: Option<u64>,
+    pub start_block: Option<U64>,
 
-    pub end_block: Option<u64>,
+    pub end_block: Option<U64>,
 
     pub polling_every: Option<u64>,
 }
