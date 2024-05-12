@@ -505,6 +505,7 @@ fn build_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &st
 }
 
 fn generate_event_bindings_code(
+    indexer_name: &str,
     contract: &Contract,
     clients: &Option<Databases>,
     event_info: Vec<EventInfo>,
@@ -626,6 +627,7 @@ fn generate_event_bindings_code(
                 
                    registry.register_event({{
                         EventInformation {{
+                            indexer_name: "{indexer_name}",
                             event_name,
                             topic_id,
                             contract,
@@ -785,6 +787,7 @@ fn get_abi_items(contract: &Contract, is_filter: bool) -> Result<Vec<ABIItem>, B
 }
 
 pub fn generate_event_bindings(
+    indexer_name: &str,
     contract: &Contract,
     is_filter: bool,
     databases: &Option<Databases>,
@@ -792,7 +795,7 @@ pub fn generate_event_bindings(
     let abi_items = get_abi_items(contract, is_filter)?;
     let event_names = extract_event_names_and_signatures_from_abi(&abi_items)?;
 
-    generate_event_bindings_code(contract, databases, event_names)
+    generate_event_bindings_code(indexer_name, contract, databases, event_names)
 }
 
 pub fn generate_event_handlers(

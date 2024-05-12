@@ -157,6 +157,7 @@ impl EventResult {
 }
 
 pub struct EventInformation {
+    pub indexer_name: &'static str,
     pub topic_id: &'static str,
     pub event_name: &'static str,
     pub contract: ContractInformation,
@@ -166,6 +167,7 @@ pub struct EventInformation {
 impl Clone for EventInformation {
     fn clone(&self) -> Self {
         EventInformation {
+            indexer_name: self.indexer_name,
             topic_id: self.topic_id,
             event_name: self.event_name,
             contract: self.contract.clone(),
