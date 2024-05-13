@@ -16,6 +16,15 @@ use serde::{Deserialize, Serialize};
 type Decoder = Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync>;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FactoryDetails {
+    pub for_contract_name: String,
+
+    pub event_name: String,
+
+    pub parameter_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FilterDetails {
     pub event_name: String,
 
