@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
-use crate::generator::event_callback_registry::{AddressOrFilter, FilterDetails};
+use crate::generator::event_callback_registry::{AddressOrFilter, FactoryDetails, FilterDetails};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -44,6 +44,9 @@ pub struct ContractDetails {
     #[serde(skip_serializing_if = "Option::is_none")]
     filter: Option<FilterDetails>,
 
+    // #[serde(skip_serializing_if = "Option::is_none")]
+    // factory: Option<FactoryDetails>,
+
     #[serde(rename = "startBlock", skip_serializing_if = "Option::is_none")]
     pub start_block: Option<U64>,
 
@@ -74,6 +77,7 @@ impl ContractDetails {
             network,
             address: Some(address),
             filter: None,
+            // factory: None,
             start_block,
             end_block,
             polling_every,
@@ -91,6 +95,7 @@ impl ContractDetails {
             network,
             address: None,
             filter: Some(filter),
+            // factory: None,
             start_block,
             end_block,
             polling_every,
