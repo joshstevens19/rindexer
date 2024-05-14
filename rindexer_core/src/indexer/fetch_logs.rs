@@ -89,14 +89,24 @@ pub struct FetchLogsStream {
     pub to_block: U64,
 }
 
+pub struct LiveIndexingDetails {
+    pub indexing_distance_from_head: U64,
+}
+
 pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
     provider: Arc<M>,
     initial_filter: Filter,
-    live_indexing: bool,
+    live_indexing_details: Option<LiveIndexingDetails>,
 ) -> impl tokio_stream::Stream<Item = Result<FetchLogsStream, Box<<M as Middleware>::Error>>>
        + Send
        + Unpin {
     let (tx, rx) = mpsc::unbounded_channel();
+    let live_indexing = live_indexing_details.is_some();
+    let reorg_safe_distance = live_indexing_details
+        .unwrap_or(LiveIndexingDetails {
+            indexing_distance_from_head: U64::from(0),
+        })
+        .indexing_distance_from_head;
 
     tokio::spawn(async move {
         let snapshot_to_block = initial_filter.clone().get_to_block().unwrap();
@@ -130,14 +140,23 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
                         }
                         if live_indexing {
                             // println!("Waiting for more logs..");
-                            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                            let current_block = provider.get_block_number().await.unwrap();
-                            // println!("Current block: {:?}", current_block);
-                            current_filter = current_filter
-                                .from_block(current_block)
-                                .to_block(current_block);
-                            continue;
+                            // switch these around!
+                            current_filter = current_filter.from_block(to_block);
+                            loop {
+                                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                                let latest_block = provider.get_block_number().await.unwrap();
+                                let safe_block_number = latest_block - reorg_safe_distance;
+
+                                // println!("Current block: {:?}", current_block);
+                                if safe_block_number > to_block {
+                                    current_filter = current_filter.to_block(safe_block_number);
+                                    break;
+                                }
+
+                                // println!("Waiting for block number to reach a safe distance. Current safe block: {:?}", safe_block_number);
+                            }
                         }
+                        break;
                         // println!("All logs fetched!");
                         break;
                     }

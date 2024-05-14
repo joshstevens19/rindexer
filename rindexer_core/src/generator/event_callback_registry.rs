@@ -114,6 +114,7 @@ pub struct ContractInformation {
     pub name: String,
     pub details: Vec<NetworkContract>,
     pub abi: String,
+    pub reorg_safe_distance: bool,
 }
 
 #[derive(Debug)]

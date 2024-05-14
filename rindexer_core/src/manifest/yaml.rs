@@ -46,7 +46,6 @@ pub struct ContractDetails {
 
     // #[serde(skip_serializing_if = "Option::is_none")]
     // factory: Option<FactoryDetails>,
-
     #[serde(rename = "startBlock", skip_serializing_if = "Option::is_none")]
     pub start_block: Option<U64>,
 
@@ -103,11 +102,18 @@ impl ContractDetails {
     }
 }
 
+fn default_reorg_safe_distance() -> bool {
+    false
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Contract {
     pub name: String,
     pub details: Vec<ContractDetails>,
     pub abi: String,
+
+    #[serde(default = "default_reorg_safe_distance")]
+    pub reorg_safe_distance: bool,
 }
 
 impl Contract {
