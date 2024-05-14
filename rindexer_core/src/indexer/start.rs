@@ -15,8 +15,9 @@ use crate::generator::event_callback_registry::{
     AddressOrFilter, EventCallbackRegistry, EventResult, NetworkContract,
 };
 use crate::helpers::camel_to_snake;
-use crate::indexer::fetch_logs::{fetch_logs_stream, FetchLogsStream};
+use crate::indexer::fetch_logs::{fetch_logs_stream, FetchLogsStream, LiveIndexingDetails};
 use crate::indexer::progress::IndexingEventsProgressState;
+use crate::indexer::reorg::reorg_safe_distance_for_chain;
 use crate::{EthereumSqlTypeWrapper, PostgresClient};
 
 pub struct ConcurrentSettings {
@@ -73,6 +74,7 @@ struct EventProcessingConfig {
     database: Arc<PostgresClient>,
     execute_event_logs_in_order: bool,
     live_indexing: bool,
+    indexing_distance_from_head: U64,
 }
 
 pub async fn start_indexing(
@@ -112,7 +114,20 @@ pub async fn start_indexing(
             //     "Starting event: {} from block: {} to block: {}",
             //     event.topic_id, start_block2, latest_block
             // );
-            let end_block = std::cmp::min(contract.end_block.unwrap_or(latest_block), latest_block);
+
+            // handle reorg block
+            let mut indexing_distance_from_head = U64::zero();
+            let mut end_block =
+                std::cmp::min(contract.end_block.unwrap_or(latest_block), latest_block);
+            if event.contract.reorg_safe_distance {
+                let chain_id = contract.provider.get_chainid().await?;
+                let reorg_safe_distance = reorg_safe_distance_for_chain(&chain_id);
+                let safe_block_number = latest_block - reorg_safe_distance;
+                if end_block > safe_block_number {
+                    end_block = safe_block_number
+                }
+                indexing_distance_from_head = reorg_safe_distance;
+            }
 
             // println!(
             //     "Starting event: {} from block: {} to block: {}",
@@ -133,6 +148,7 @@ pub async fn start_indexing(
                 database: database.clone(),
                 live_indexing,
                 execute_event_logs_in_order: settings.execute_event_logs_in_order,
+                indexing_distance_from_head,
             };
 
             if settings.execute_in_event_order {
@@ -183,6 +199,7 @@ async fn process_event_sequentially(
             database: event_processing_config.database.clone(),
             execute_events_logs_in_order: event_processing_config.execute_event_logs_in_order,
             live_indexing: event_processing_config.live_indexing,
+            indexing_distance_from_head: event_processing_config.indexing_distance_from_head,
         })
         .await?;
         drop(permit);
@@ -235,6 +252,8 @@ async fn process_event_concurrently(
                     execute_events_logs_in_order: event_processing_config
                         .execute_event_logs_in_order,
                     live_indexing: event_processing_config.live_indexing,
+                    indexing_distance_from_head: event_processing_config
+                        .indexing_distance_from_head,
                 })
                 .await;
                 drop(permit);
@@ -264,11 +283,22 @@ pub struct ProcessLogsParams {
     database: Arc<PostgresClient>,
     execute_events_logs_in_order: bool,
     live_indexing: bool,
+    indexing_distance_from_head: U64,
 }
 
 async fn process_logs(params: ProcessLogsParams) -> Result<(), BoxedError> {
     let provider = Arc::new(params.network_contract.provider.clone());
-    let mut logs_stream = fetch_logs_stream(provider, params.filter, params.live_indexing);
+    let mut logs_stream = fetch_logs_stream(
+        provider,
+        params.filter,
+        if params.live_indexing {
+            Some(LiveIndexingDetails {
+                indexing_distance_from_head: params.indexing_distance_from_head,
+            })
+        } else {
+            None
+        },
+    );
 
     while let Some(result) = logs_stream.next().await {
         handle_logs_result(

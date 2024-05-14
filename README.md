@@ -8,11 +8,9 @@ eth_getLogs - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60add
 
 checklist v1.0:
 
-- investigate indexing contracts that are deployed within an event onchain
 - csv autogenerate code
-- investigate handle reorgs process
-  - add ability to config distance from blocks
 - handle other providers block ranges in start indexing
+- investigate indexing contracts that are deployed within an event onchain
 - investigate graphql/REST API exposing
 - finish command line https://ponder.sh/docs/api-reference/create-ponder
 - create documentation
@@ -22,6 +20,7 @@ bugs:
 - start + end dates are reading wrong from manifest.yaml as U64 takes numbers as hex
 
 future features:
+- investigate handle advanced top of head reorgs process
 - cron registering for networks to fire
 - multiple ABIs merged into one
 - look into https://diesel.rs/ for mapping schemas etc

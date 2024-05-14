@@ -351,12 +351,14 @@ fn generate_contract_type_fn_code(contract: &Contract) -> String {
                     name: "{name}".to_string(),
                     details: {details},
                     abi: "{abi}".to_string(),
+                    reorg_safe_distance: {reorg_safe_distance},
                 }}
             }}
             "#,
         name = contract.name,
         details = details,
-        abi = contract.abi
+        abi = contract.abi,
+        reorg_safe_distance = contract.reorg_safe_distance
     )
 }
 
@@ -632,6 +634,7 @@ fn generate_event_bindings_code(
                             }})
                             .collect(),
                         abi: contract_information.abi,
+                        reorg_safe_distance: contract_information.reorg_safe_distance,
                     }};
                     
                     let callback: Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, ()> + Send + Sync> = match self {{
