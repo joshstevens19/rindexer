@@ -10,6 +10,7 @@ indexers:
             network: polygon
             startBlock: 56399431
         abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
+        reorg_safe_distance: false
       - name: LensHub
         details:
           - address: 0xDb46d1Dc155634FbC732f92E853b10B288AD5a1d
