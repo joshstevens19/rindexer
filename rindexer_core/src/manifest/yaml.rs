@@ -106,6 +106,10 @@ fn default_reorg_safe_distance() -> bool {
     false
 }
 
+fn default_generate_csv() -> bool {
+    false
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Contract {
     pub name: String,
@@ -114,6 +118,9 @@ pub struct Contract {
 
     #[serde(default = "default_reorg_safe_distance")]
     pub reorg_safe_distance: bool,
+
+    #[serde(default = "default_generate_csv")]
+    pub generate_csv: bool,
 }
 
 impl Contract {
