@@ -148,6 +148,8 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
                                 let safe_block_number = latest_block - reorg_safe_distance;
 
                                 // println!("Current block: {:?}", current_block);
+                                // println!("Safe block number: {:?}", safe_block_number);
+                                // println!("To block: {:?}", to_block);
                                 if safe_block_number > to_block {
                                     current_filter = current_filter.to_block(safe_block_number);
                                     break;
@@ -155,10 +157,11 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
 
                                 // println!("Waiting for block number to reach a safe distance. Current safe block: {:?}", safe_block_number);
                             }
+                            continue;
+                        } else {
+                            break;
                         }
-                        break;
                         // println!("All logs fetched!");
-                        break;
                     }
 
                     if tx
