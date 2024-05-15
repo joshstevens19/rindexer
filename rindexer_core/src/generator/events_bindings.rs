@@ -5,10 +5,12 @@ use crate::database::postgres::{
 use crate::generator::event_callback_registry::AddressOrFilter;
 use ethers::types::U64;
 use ethers::utils::keccak256;
+use num_format::Locale::cs;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::error::Error;
 use std::fs;
+use std::iter::Map;
 
 use crate::helpers::{camel_to_snake, generate_random_id};
 use crate::manifest::yaml::{Contract, ContractDetails, Databases};
@@ -85,10 +87,11 @@ fn format_param_type(input: &ABIInput) -> String {
 }
 
 fn compute_topic_id(event_signature: &str) -> String {
-    keccak256(event_signature)
-        .iter()
-        .map(|byte| format!("{:02x}", byte))
-        .collect()
+    Map::collect(
+        keccak256(event_signature)
+            .iter()
+            .map(|byte| format!("{:02x}", byte)),
+    )
 }
 
 fn format_event_signature(item: &ABIItem) -> String {
@@ -112,7 +115,7 @@ pub fn abigen_contract_file_name(contract: &Contract) -> String {
 }
 
 pub fn extract_event_names_and_signatures_from_abi(
-    abi_json: &Vec<ABIItem>,
+    abi_json: &[ABIItem],
 ) -> Result<Vec<EventInfo>, Box<dyn Error>> {
     let result = abi_json
         .iter()
@@ -352,25 +355,63 @@ fn generate_contract_type_fn_code(contract: &Contract) -> String {
                     details: {details},
                     abi: "{abi}".to_string(),
                     reorg_safe_distance: {reorg_safe_distance},
+                    generate_csv: {generate_csv}
                 }}
             }}
             "#,
         name = contract.name,
         details = details,
         abi = contract.abi,
-        reorg_safe_distance = contract.reorg_safe_distance
+        reorg_safe_distance = contract.reorg_safe_distance,
+        generate_csv = contract.generate_csv
+    )
+}
+
+fn generate_csv_instance(contract_name: &str, event_info: &EventInfo) -> String {
+    let csv_file_name = format!("{}-{}.csv", contract_name, event_info.name).to_lowercase();
+    let csv_folder = format!("rindexer/csv_results/{}", contract_name);
+    fs::create_dir_all(&csv_folder).unwrap();
+
+    let csv_path = format!("{}/{}", csv_folder, csv_file_name);
+
+    let mut headers: Vec<String> = generate_abi_name_properties(
+        &event_info.inputs,
+        &GenerateAbiPropertiesType::CsvHeaderNames,
+        None,
+    )
+    .iter()
+    .map(|m| m.value.clone())
+    .collect();
+
+    // add contract address to the start of the CSV
+    headers.insert(0, r#""contract_address""#.to_string());
+    headers.push(r#""tx_hash""#.to_string());
+    headers.push(r#""block_number""#.to_string());
+    headers.push(r#""block_hash""#.to_string());
+
+    format!(
+        r#"
+        let csv = AsyncCsvAppender::new("{csv_path}".to_string());
+        if options.enabled_csv && !Path::new("{csv_path}").exists() {{
+            csv.append_header(vec![{headers}.into()])
+                .await
+                .unwrap();
+        }}
+    "#,
+        csv_path = csv_path,
+        headers = headers.join(".into(), ")
     )
 }
 
 fn generate_event_callback_structs_code(
     event_info: &[EventInfo],
+    contract_name: &str,
     databases: &Option<Databases>,
 ) -> String {
     let databases_enabled = databases.is_some();
     event_info
         .iter()
         .map(|info| {
-            let csv_file_name = format!("{}-{}.csv", &info.struct_result, &info.signature).to_lowercase();
             format!(
                 r#"
                     type {name}EventCallbackType<TExtensions> = Arc<dyn Fn(&Vec<{struct_result}>, Arc<EventContext<TExtensions>>) -> BoxFuture<'_, ()> + Send + Sync>;
@@ -386,18 +427,13 @@ fn generate_event_callback_structs_code(
                             extensions: TExtensions,
                             options: NewEventOptions,
                         ) -> Self {{
-                            // let mut csv = None;
-                            // if options.enabled_csv {{
-                            //     let csv_appender = Arc::new(AsyncCsvAppender::new("events.csv".to_string()));
-                            //     csv_appender.ap
-                            //     csv = Some(Arc::new(AsyncCsvAppender::new("events.csv".to_string())));
-                            // }}
+                            {csv_generator}
 
                             Self {{
                                 callback,
                                 context: Arc::new(EventContext {{
                                     {database}
-                                    csv: Arc::new(AsyncCsvAppender::new("{csv_file_name}".to_string())),
+                                    csv: Arc::new(csv),
                                     extensions: Arc::new(extensions),
                                 }}),
                             }}
@@ -432,7 +468,7 @@ fn generate_event_callback_structs_code(
                 struct_result = info.struct_result,
                 struct_data = info.struct_data,
                 database = if databases_enabled { "database: Arc::new(PostgresClient::new().await.unwrap())," } else { "" },
-                csv_file_name = csv_file_name
+                csv_generator = generate_csv_instance(contract_name, info)
             )
         })
         .collect::<Vec<_>>()
@@ -532,6 +568,7 @@ fn generate_event_bindings_code(
 
             use std::future::Future;
             use std::pin::Pin;
+            use std::path::Path;
 
             use ethers::{{providers::{{Http, Provider, RetryClient}}, abi::Address, types::{{Bytes, H256}}}};
             
@@ -668,7 +705,8 @@ fn generate_event_bindings_code(
         } else {
             ""
         },
-        event_callback_structs = generate_event_callback_structs_code(&event_info, clients),
+        event_callback_structs =
+            generate_event_callback_structs_code(&event_info, &contract.name, clients),
         event_enums = generate_event_enums_code(&event_info),
         topic_ids_match_arms = generate_topic_ids_match_arms_code(&event_type_name, &event_info),
         event_names_match_arms =
@@ -691,6 +729,7 @@ fn generate_event_bindings_code(
 pub enum GenerateAbiPropertiesType {
     PostgresWithDataTypes,
     PostgresColumnsNamesOnly,
+    CsvHeaderNames,
     Object,
 }
 
@@ -745,7 +784,8 @@ pub fn generate_abi_name_properties(
 
                         vec![GenerateAbiNamePropertiesResult::new(value, &input.type_)]
                     }
-                    GenerateAbiPropertiesType::PostgresColumnsNamesOnly => {
+                    GenerateAbiPropertiesType::PostgresColumnsNamesOnly
+                    | GenerateAbiPropertiesType::CsvHeaderNames => {
                         let value = format!(
                             "\"{}{}\"",
                             if prefix.is_some() {
@@ -857,6 +897,10 @@ pub fn generate_event_handlers(
             handler_name = event.name,
         ));
 
+        let abi_name_properties =
+            generate_abi_name_properties(&event.inputs, &GenerateAbiPropertiesType::Object, None);
+
+        // START POSTGRES
         let columns = generate_columns_names_only(&event.inputs);
 
         let insert_sql = format!(
@@ -869,22 +913,19 @@ pub fn generate_event_handlers(
             generate_injected_param(4 + columns.len())
         );
 
-        let postgres_params =
-            generate_abi_name_properties(&event.inputs, &GenerateAbiPropertiesType::Object, None);
-
         let mut params_sql = String::new();
         params_sql.push_str("&[&EthereumSqlTypeWrapper::Address(&result.tx_information.address),");
-        for postgres_param in postgres_params {
-            if postgres_param.ethereum_sql_type_wrapper.is_some() {
+
+        let mut csv_data = String::new();
+        csv_data.push_str(r#"format!("{:?}", result.tx_information.address),"#);
+        for item in abi_name_properties {
+            if item.ethereum_sql_type_wrapper.is_some() {
                 params_sql.push_str(&format!(
                     "&{}(&result.event_data.{}{}),",
-                    postgres_param.ethereum_sql_type_wrapper.unwrap(),
-                    postgres_param.value,
-                    if postgres_param.abi_type.contains("bytes") {
-                        let static_bytes = postgres_param
-                            .abi_type
-                            .replace("bytes", "")
-                            .replace("[]", "");
+                    item.ethereum_sql_type_wrapper.unwrap(),
+                    item.value,
+                    if item.abi_type.contains("bytes") {
+                        let static_bytes = item.abi_type.replace("bytes", "").replace("[]", "");
                         if !static_bytes.is_empty() {
                             ".into()"
                         } else {
@@ -894,8 +935,15 @@ pub fn generate_event_handlers(
                         ""
                     }
                 ));
+                if item.abi_type == "address" {
+                    let key = format!("result.event_data.{},", item.value);
+                    csv_data.push_str(&format!(r#"format!("{{:?}}", {}),"#, key));
+                } else {
+                    csv_data.push_str(&format!("result.event_data.{}.to_string(),", item.value));
+                }
             } else {
-                params_sql.push_str(&format!("&result.event_data.{},", postgres_param.value))
+                params_sql.push_str(&format!("&result.event_data.{},", item.value));
+                csv_data.push_str(&format!("result.event_data.{}.to_string(),", item.value));
             }
         }
 
@@ -909,17 +957,20 @@ pub fn generate_event_handlers(
             .push_str("&EthereumSqlTypeWrapper::H256(&result.tx_information.block_hash.unwrap())");
         params_sql.push(']');
 
+        csv_data.push_str(r#"format!("{:?}", result.tx_information.transaction_hash.unwrap()),"#);
+        csv_data.push_str(r#"result.tx_information.block_number.unwrap().to_string(),"#);
+        csv_data.push_str(r#"result.tx_information.block_hash.unwrap().to_string()"#);
+
         let postgres = format!(
-            r#"for result in results {{
-                    context
-                        .database
-                        .execute("{insert_sql}",
-                        {params_sql})
-                        .await.unwrap();
-                }}
-        "#,
+            r#"context.database.execute("{insert_sql}",{params_sql}).await.unwrap();"#,
             insert_sql = insert_sql.replace("\"", "\\\""),
             params_sql = params_sql
+        );
+
+        // START CSV
+        let csv_write = format!(
+            r#"context.csv.append(vec![{csv_data}]).await.unwrap();"#,
+            csv_data = csv_data
         );
 
         let handler = format!(
@@ -930,10 +981,14 @@ pub fn generate_event_handlers(
                         Arc::new(|results, context| {{
                             Box::pin(async move {{
                                 println!("{handler_name} event: {{:?}}", results);
-                                {postgres}}})
+                                for result in results {{
+                                    {csv_write}
+                                    {postgres}
+                                }}
+                           }})
                         }}),
                         no_extensions(),
-                        NewEventOptions::default(),
+                        {event_options},
                     )
                     .await,
                 )
@@ -943,7 +998,13 @@ pub fn generate_event_handlers(
             handler_fn_name = camel_to_snake(&event.name),
             handler_name = event.name,
             event_type_name = event_type_name,
-            postgres = postgres
+            postgres = postgres,
+            csv_write = csv_write,
+            event_options = if contract.generate_csv {
+                "NewEventOptions { enabled_csv: true }"
+            } else {
+                "NewEventOptions::default()"
+            }
         );
 
         handlers.push_str(&handler);

@@ -18,4 +18,5 @@ Cargo.lock
 *.pdb
 rindexer_core/src/generator/rindexer/*
 rindexer_demo/src/rindexer/*
+rindexer_demo/rindexer/*
 rindexer_cli/rindexer.yaml
