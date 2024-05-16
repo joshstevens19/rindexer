@@ -6,8 +6,8 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
-use crate::generator::event_callback_registry::{AddressOrFilter, FactoryDetails, FilterDetails};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use crate::generator::event_callback_registry::{AddressOrFilter, FilterDetails};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Manifest {

@@ -3,7 +3,7 @@ use colored::Colorize;
 use regex::Regex;
 use rindexer_core::generator::build::generate_rindexer_code;
 use rindexer_core::manifest::yaml::{
-    read_manifest, write_manifest, Contract, ContractDetails, Databases, Global, Indexer, Manifest,
+    read_manifest, write_manifest, Databases, Global, Manifest,
     Network, PostgresClient,
 };
 use rindexer_core::provider::get_chain_id;
@@ -11,7 +11,7 @@ use rindexer_core::write_file;
 use std::io::Write;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::{env, fs, io};
+use std::{fs, io};
 
 /// Main structure for the CLI application
 #[derive(Parser, Debug)]

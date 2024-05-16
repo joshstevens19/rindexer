@@ -7,7 +7,6 @@ use crossterm::{
 };
 use ethers::middleware::Middleware;
 use ethers::types::U64;
-use num_format::{Locale, ToFormattedString};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io;
 use std::io::Stdout;

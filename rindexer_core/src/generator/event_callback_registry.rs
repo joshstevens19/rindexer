@@ -190,6 +190,12 @@ pub struct EventCallbackRegistry {
     pub events: Vec<EventInformation>,
 }
 
+impl Default for EventCallbackRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EventCallbackRegistry {
     pub fn new() -> Self {
         EventCallbackRegistry { events: Vec::new() }
