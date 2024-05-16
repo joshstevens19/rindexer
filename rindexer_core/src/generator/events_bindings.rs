@@ -3,16 +3,14 @@ use crate::database::postgres::{
     solidity_type_to_ethereum_sql_type,
 };
 use crate::generator::event_callback_registry::AddressOrFilter;
-use ethers::types::U64;
 use ethers::utils::keccak256;
-use num_format::Locale::cs;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::error::Error;
 use std::fs;
 use std::iter::Map;
 
-use crate::helpers::{camel_to_snake, generate_random_id};
+use crate::helpers::{camel_to_snake};
 use crate::manifest::yaml::{Contract, ContractDetails, Databases};
 
 use super::networks_bindings::network_provider_fn_name_by_name;
@@ -963,7 +961,7 @@ pub fn generate_event_handlers(
 
         let postgres = format!(
             r#"context.database.execute("{insert_sql}",{params_sql}).await.unwrap();"#,
-            insert_sql = insert_sql.replace("\"", "\\\""),
+            insert_sql = insert_sql.replace('"', "\\\""),
             params_sql = params_sql
         );
 

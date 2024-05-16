@@ -5,10 +5,8 @@ use ethers::{
 };
 use rust_decimal::Decimal;
 use std::error::Error;
-use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::{Mutex, Semaphore};
-use tokio_postgres::types::Type;
 use tokio_stream::StreamExt;
 
 use crate::generator::event_callback_registry::{

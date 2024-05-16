@@ -45,21 +45,6 @@ async fn main() {
     let _ = start_indexing(registry.complete(), StartIndexingSettings::default()).await;
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_generate() {
-        generate();
-    }
-
-    #[test]
-    fn test_code_generate() {
-        generate_code_test();
-    }
-}
-
 fn generate() {
     generate_rindexer_code(
         &PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/manifest-example.yaml")
@@ -76,4 +61,19 @@ fn generate_code_test() {
         "/Users/joshstevens/code/rindexer/rindexer_demo/src",
     )
     .unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_generate() {
+        generate();
+    }
+
+    #[test]
+    fn test_code_generate() {
+        generate_code_test();
+    }
 }

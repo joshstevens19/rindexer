@@ -43,7 +43,7 @@ fn retry_with_block_range(
     // infura, thirdweb, zksync
     let re =
         Regex::new(r"Try with this block range \[0x([0-9a-fA-F]+),\s*0x([0-9a-fA-F]+)\]").unwrap();
-    if let Some(captures) = re.captures(&error_message) {
+    if let Some(captures) = re.captures(error_message) {
         let start_block = captures.get(1).unwrap().as_str();
         let end_block = captures.get(2).unwrap().as_str();
         return Some(RetryWithBlockRangeResult {
@@ -54,7 +54,7 @@ fn retry_with_block_range(
 
     // ankr
     let re = Regex::new("block range is too wide").unwrap();
-    if re.is_match(&error_message) && error.code == -32600 {
+    if re.is_match(error_message) && error.code == -32600 {
         return Some(RetryWithBlockRangeResult {
             from: BlockNumber::from(from_block),
             to: BlockNumber::from(from_block + 3000),
@@ -63,7 +63,7 @@ fn retry_with_block_range(
 
     // quicknode, 1rpc, zkevm, blast
     let re = Regex::new(r"limited to a ([\d,.]+)").unwrap();
-    if let Some(captures) = re.captures(&error_message) {
+    if let Some(captures) = re.captures(error_message) {
         let range_str = captures[1].replace(&['.', ','][..], "");
         let range = U64::from_dec_str(&range_str).unwrap();
         return Some(RetryWithBlockRangeResult {
@@ -74,7 +74,7 @@ fn retry_with_block_range(
 
     // blockpi
     let re = Regex::new(r"limited to ([\d,.]+) block").unwrap();
-    if let Some(captures) = re.captures(&error_message) {
+    if let Some(captures) = re.captures(error_message) {
         let range_str = captures[1].replace(&['.', ','][..], "");
         let range = U64::from_dec_str(&range_str).unwrap();
         return Some(RetryWithBlockRangeResult {
@@ -85,7 +85,7 @@ fn retry_with_block_range(
 
     // base
     let re = Regex::new("block range too large").unwrap();
-    if re.is_match(&error_message) {
+    if re.is_match(error_message) {
         return Some(RetryWithBlockRangeResult {
             from: BlockNumber::from(from_block),
             to: BlockNumber::from(from_block + 2000),
