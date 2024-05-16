@@ -8,7 +8,6 @@ eth_getLogs - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60add
 
 checklist v1.0:
 
-- handle other providers block ranges in start indexing
 - investigate indexing contracts that are deployed within an event onchain
 - investigate graphql/REST API exposing
 - finish command line https://ponder.sh/docs/api-reference/create-ponder

@@ -2,9 +2,6 @@ use ethers::middleware::{Middleware, MiddlewareError};
 use ethers::prelude::{Filter, JsonRpcError, Log};
 use ethers::types::{BlockNumber, U64};
 use regex::Regex;
-use std::error::Error;
-use std::future::Future;
-use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -13,13 +10,18 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 struct RetryWithBlockRangeResult {
     from: BlockNumber,
     to: BlockNumber,
-    range: u64,
 }
 
-fn retry_with_block_range(error: &JsonRpcError) -> Option<RetryWithBlockRangeResult> {
+// credit to https://github.com/ponder-sh/ponder/blob/main/packages/utils/src/getLogsRetryHelper.ts for
+// the investigation on the error message
+fn retry_with_block_range(
+    error: &JsonRpcError,
+    from_block: U64,
+    to_block: U64,
+) -> Option<RetryWithBlockRangeResult> {
     let error_message = &error.message;
 
-    // alchemy - https://github.com/ponder-sh/ponder/blob/main/packages/utils/src/getLogsRetryHelper.ts
+    // alchemy
     let re = Regex::new(r"this block range should work: \[(0x[0-9a-fA-F]+),\s*(0x[0-9a-fA-F]+)]")
         .unwrap();
     if let Some(captures) = re.captures(error_message) {
@@ -35,52 +37,71 @@ fn retry_with_block_range(error: &JsonRpcError) -> Option<RetryWithBlockRangeRes
         return Some(RetryWithBlockRangeResult {
             from: BlockNumber::from_str(start_block).unwrap(),
             to: BlockNumber::from_str(end_block).unwrap(),
-            range: 10u64,
         });
     }
 
-    None
-}
-
-// TODO! can be removed if no use for it as we stream info across
-pub fn fetch_logs<M: Middleware + Clone + Send + 'static>(
-    provider: Arc<M>,
-    filter: Filter,
-) -> Pin<Box<dyn Future<Output = Result<Vec<Log>, Box<dyn Error>>> + Send>> {
-    async fn inner_fetch_logs<M: Middleware + Clone + Send + 'static>(
-        provider: Arc<M>,
-        filter: Filter,
-    ) -> Result<Vec<Log>, Box<dyn Error>> {
-        //println!("Fetching logs for filter: {:?}", filter);
-        let logs_result = provider.get_logs(&filter).await;
-        match logs_result {
-            Ok(logs) => {
-                //println!("Fetched logs: {:?}", logs.len());
-                Ok(logs)
-            }
-            Err(err) => {
-                println!("Failed to fetch logs: {:?}", err);
-                let json_rpc_error = err.as_error_response();
-                if let Some(json_rpc_error) = json_rpc_error {
-                    let retry_result = retry_with_block_range(json_rpc_error);
-                    if let Some(retry_result) = retry_result {
-                        let filter = filter
-                            .from_block(retry_result.from)
-                            .to_block(retry_result.to);
-                        println!("Retrying with block range: {}", retry_result.range);
-                        let future = Box::pin(inner_fetch_logs(provider.clone(), filter));
-                        future.await
-                    } else {
-                        Err(Box::new(err))
-                    }
-                } else {
-                    Err(Box::new(err))
-                }
-            }
-        }
+    // infura, thirdweb, zksync
+    let re =
+        Regex::new(r"Try with this block range \[0x([0-9a-fA-F]+),\s*0x([0-9a-fA-F]+)\]").unwrap();
+    if let Some(captures) = re.captures(&error_message) {
+        let start_block = captures.get(1).unwrap().as_str();
+        let end_block = captures.get(2).unwrap().as_str();
+        return Some(RetryWithBlockRangeResult {
+            from: BlockNumber::from_str(start_block).unwrap(),
+            to: BlockNumber::from_str(end_block).unwrap(),
+        });
     }
 
-    Box::pin(inner_fetch_logs(provider, filter))
+    // ankr
+    let re = Regex::new("block range is too wide").unwrap();
+    if re.is_match(&error_message) && error.code == -32600 {
+        return Some(RetryWithBlockRangeResult {
+            from: BlockNumber::from(from_block),
+            to: BlockNumber::from(from_block + 3000),
+        });
+    }
+
+    // quicknode, 1rpc, zkevm, blast
+    let re = Regex::new(r"limited to a ([\d,.]+)").unwrap();
+    if let Some(captures) = re.captures(&error_message) {
+        let range_str = captures[1].replace(&['.', ','][..], "");
+        let range = U64::from_dec_str(&range_str).unwrap();
+        return Some(RetryWithBlockRangeResult {
+            from: BlockNumber::from(from_block),
+            to: BlockNumber::from(from_block + range),
+        });
+    }
+
+    // blockpi
+    let re = Regex::new(r"limited to ([\d,.]+) block").unwrap();
+    if let Some(captures) = re.captures(&error_message) {
+        let range_str = captures[1].replace(&['.', ','][..], "");
+        let range = U64::from_dec_str(&range_str).unwrap();
+        return Some(RetryWithBlockRangeResult {
+            from: BlockNumber::from(from_block),
+            to: BlockNumber::from(from_block + range),
+        });
+    }
+
+    // base
+    let re = Regex::new("block range too large").unwrap();
+    if re.is_match(&error_message) {
+        return Some(RetryWithBlockRangeResult {
+            from: BlockNumber::from(from_block),
+            to: BlockNumber::from(from_block + 2000),
+        });
+    }
+
+    if to_block > from_block {
+        let fallback_range = (to_block - from_block) / 2;
+        return Some(RetryWithBlockRangeResult {
+            from: BlockNumber::from(from_block),
+            to: BlockNumber::from(from_block + fallback_range),
+        });
+    }
+
+    // TODO! work out here if we should panic ??
+    None
 }
 
 pub struct FetchLogsStream {
@@ -189,7 +210,8 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
                     // println!("Failed to fetch logs: {:?}", err);
                     let json_rpc_error = err.as_error_response();
                     if let Some(json_rpc_error) = json_rpc_error {
-                        let retry_result = retry_with_block_range(json_rpc_error);
+                        let retry_result =
+                            retry_with_block_range(json_rpc_error, from_block, to_block);
                         if let Some(retry_result) = retry_result {
                             current_filter = current_filter
                                 .from_block(retry_result.from)
