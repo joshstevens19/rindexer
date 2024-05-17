@@ -6,7 +6,9 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
-use crate::generator::event_callback_registry::{AddressOrFilter, FilterDetails};
+use crate::generator::event_callback_registry::{
+    FactoryDetails, FilterDetails, IndexingContractSetup,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -44,8 +46,9 @@ pub struct ContractDetails {
     #[serde(skip_serializing_if = "Option::is_none")]
     filter: Option<FilterDetails>,
 
-    // #[serde(skip_serializing_if = "Option::is_none")]
-    // factory: Option<FactoryDetails>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    factory: Option<FactoryDetails>,
+
     #[serde(rename = "startBlock", skip_serializing_if = "Option::is_none")]
     pub start_block: Option<U64>,
 
@@ -57,11 +60,23 @@ pub struct ContractDetails {
 }
 
 impl ContractDetails {
-    pub fn address_or_filter(&self) -> AddressOrFilter {
+    pub fn indexing_contract_setup(&self) -> IndexingContractSetup {
         if let Some(address) = &self.address {
-            AddressOrFilter::Address(address.clone())
+            IndexingContractSetup::Address(address.clone())
+        } else if let Some(factory) = &self.factory {
+            IndexingContractSetup::Factory(factory.clone())
         } else {
-            AddressOrFilter::Filter(self.filter.clone().unwrap())
+            IndexingContractSetup::Filter(self.filter.clone().unwrap())
+        }
+    }
+
+    pub fn address(&self) -> Option<&str> {
+        if let Some(address) = &self.address {
+            Some(address)
+        } else if let Some(factory) = &self.factory {
+            Some(&factory.address)
+        } else {
+            None
         }
     }
 
@@ -76,7 +91,7 @@ impl ContractDetails {
             network,
             address: Some(address),
             filter: None,
-            // factory: None,
+            factory: None,
             start_block,
             end_block,
             polling_every,
@@ -94,7 +109,25 @@ impl ContractDetails {
             network,
             address: None,
             filter: Some(filter),
-            // factory: None,
+            factory: None,
+            start_block,
+            end_block,
+            polling_every,
+        }
+    }
+
+    pub fn new_with_factory(
+        network: String,
+        factory: FactoryDetails,
+        start_block: Option<U64>,
+        end_block: Option<U64>,
+        polling_every: Option<u64>,
+    ) -> Self {
+        Self {
+            network,
+            address: None,
+            filter: None,
+            factory: Some(factory),
             start_block,
             end_block,
             polling_every,

@@ -17,11 +17,15 @@ type Decoder = Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FactoryDetails {
-    pub for_contract_name: String,
+    pub address: String,
 
+    #[serde(rename = "eventName")]
     pub event_name: String,
 
+    #[serde(rename = "parameterName")]
     pub parameter_name: String,
+
+    pub abi: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -73,14 +77,15 @@ impl FilterDetails {
 }
 
 #[derive(Clone)]
-pub enum AddressOrFilter {
+pub enum IndexingContractSetup {
     Address(String),
     Filter(FilterDetails),
+    Factory(FactoryDetails),
 }
 
-impl AddressOrFilter {
+impl IndexingContractSetup {
     pub fn is_filter(&self) -> bool {
-        matches!(self, AddressOrFilter::Filter(_))
+        matches!(self, IndexingContractSetup::Filter(_))
     }
 }
 
@@ -90,7 +95,7 @@ pub struct NetworkContract {
 
     pub network: String,
 
-    pub address_or_filter: AddressOrFilter,
+    pub indexing_contract_setup: IndexingContractSetup,
 
     pub provider: &'static Arc<Provider<RetryClient<Http>>>,
 

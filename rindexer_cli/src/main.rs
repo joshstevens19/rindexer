@@ -3,8 +3,7 @@ use colored::Colorize;
 use regex::Regex;
 use rindexer_core::generator::build::generate_rindexer_code;
 use rindexer_core::manifest::yaml::{
-    read_manifest, write_manifest, Databases, Global, Manifest,
-    Network, PostgresClient,
+    read_manifest, write_manifest, Databases, Global, Manifest, Network, PostgresClient,
 };
 use rindexer_core::provider::get_chain_id;
 use rindexer_core::write_file;

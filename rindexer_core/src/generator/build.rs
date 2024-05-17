@@ -51,7 +51,7 @@ fn identify_filter(contract: &mut Contract) -> bool {
     let filter_count = contract
         .details
         .iter()
-        .filter(|details| details.address_or_filter().is_filter())
+        .filter(|details| details.indexing_contract_setup().is_filter())
         .count();
 
     if filter_count > 0 && filter_count != contract.details.len() {

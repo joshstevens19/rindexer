@@ -2,7 +2,7 @@ use crate::database::postgres::{
     generate_columns_names_only, generate_injected_param, solidity_type_to_db_type,
     solidity_type_to_ethereum_sql_type,
 };
-use crate::generator::event_callback_registry::AddressOrFilter;
+use crate::generator::event_callback_registry::IndexingContractSetup;
 use ethers::utils::keccak256;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -10,7 +10,7 @@ use std::error::Error;
 use std::fs;
 use std::iter::Map;
 
-use crate::helpers::{camel_to_snake};
+use crate::helpers::camel_to_snake;
 use crate::manifest::yaml::{Contract, ContractDetails, Databases};
 
 use super::networks_bindings::network_provider_fn_name_by_name;
@@ -273,8 +273,8 @@ fn generate_contract_type_fn_code(contract: &Contract) -> String {
     let mut details = String::new();
     details.push_str("vec![");
     for contract in contract.details.iter() {
-        match contract.address_or_filter() {
-            AddressOrFilter::Address(address) => {
+        match contract.indexing_contract_setup() {
+            IndexingContractSetup::Address(address) => {
                 let item = format!(
                     r#"
                         ContractDetails::new_with_address(
@@ -302,7 +302,7 @@ fn generate_contract_type_fn_code(contract: &Contract) -> String {
                 );
                 details.push_str(&item);
             }
-            AddressOrFilter::Filter(filter_details) => {
+            IndexingContractSetup::Filter(filter_details) => {
                 let indexed_1 = generate_indexed_vec_string(&filter_details.indexed_1);
                 let indexed_2 = generate_indexed_vec_string(&filter_details.indexed_2);
                 let indexed_3 = generate_indexed_vec_string(&filter_details.indexed_3);
@@ -327,6 +327,42 @@ fn generate_contract_type_fn_code(contract: &Contract) -> String {
                     indexed_1 = indexed_1,
                     indexed_2 = indexed_2,
                     indexed_3 = indexed_3,
+                    start_block = if let Some(start_block) = contract.start_block {
+                        format!("Some({}.into())", start_block.as_u64())
+                    } else {
+                        "None".to_string()
+                    },
+                    end_block = if let Some(end_block) = contract.end_block {
+                        format!("Some({}.into())", end_block.as_u64())
+                    } else {
+                        "None".to_string()
+                    },
+                    // TODO! FIX
+                    polling_every = contract.polling_every.unwrap_or(1000)
+                );
+                details.push_str(&item);
+            }
+            IndexingContractSetup::Factory(factory_details) => {
+                let item = format!(
+                    r#"
+                        ContractDetails::new_with_factory(
+                            "{network}".to_string(),
+                            FactoryDetails {{
+                                address: "{address}".to_string(),
+                                event_name: "{event_name}".to_string(),
+                                parameter_name: "{parameter_name}".to_string(),
+                                abi: "{factory_abi}".to_string(),
+                            }},
+                            {start_block},
+                            {end_block},
+                            Some({polling_every}),
+                        ),
+                    "#,
+                    network = contract.network,
+                    event_name = factory_details.event_name,
+                    address = factory_details.address,
+                    parameter_name = factory_details.parameter_name,
+                    factory_abi = factory_details.abi,
                     start_block = if let Some(start_block) = contract.start_block {
                         format!("Some({}.into())", start_block.as_u64())
                     } else {
@@ -515,7 +551,8 @@ fn build_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &st
 
     // Handling each contract detail with an `if` or `else if`
     for (index, contract_detail) in contracts_details.iter().enumerate() {
-        let address = if let AddressOrFilter::Address(address) = contract_detail.address_or_filter()
+        let address = if let IndexingContractSetup::Address(address) =
+            contract_detail.indexing_contract_setup()
         {
             address
         } else {
@@ -575,7 +612,7 @@ fn generate_event_bindings_code(
                 AsyncCsvAppender,
                 generate_random_id,
                 FutureExt,
-                generator::event_callback_registry::{{EventCallbackRegistry, EventInformation, ContractInformation, NetworkContract, EventResult, TxInformation, FilterDetails}},
+                generator::event_callback_registry::{{EventCallbackRegistry, EventInformation, ContractInformation, NetworkContract, EventResult, TxInformation, FilterDetails, FactoryDetails}},
                 manifest::yaml::{{Contract, ContractDetails}},
                 {client_import}
             }};
@@ -822,7 +859,7 @@ fn get_abi_items(contract: &Contract, is_filter: bool) -> Result<Vec<ABIItem>, B
             .details
             .iter()
             .filter_map(|detail| {
-                if let AddressOrFilter::Filter(filter) = &detail.address_or_filter() {
+                if let IndexingContractSetup::Filter(filter) = &detail.indexing_contract_setup() {
                     Some(filter.event_name.clone())
                 } else {
                     None
