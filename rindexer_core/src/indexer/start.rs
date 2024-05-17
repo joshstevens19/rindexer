@@ -10,7 +10,7 @@ use tokio::sync::{Mutex, Semaphore};
 use tokio_stream::StreamExt;
 
 use crate::generator::event_callback_registry::{
-    AddressOrFilter, EventCallbackRegistry, EventResult, NetworkContract,
+    EventCallbackRegistry, EventResult, IndexingContractSetup, NetworkContract,
 };
 use crate::helpers::camel_to_snake;
 use crate::indexer::fetch_logs::{fetch_logs_stream, FetchLogsStream, LiveIndexingDetails};
@@ -180,7 +180,9 @@ async fn process_event_sequentially(
 
         let filter = build_filter(
             event_processing_config.topic_id,
-            &event_processing_config.network_contract.address_or_filter,
+            &event_processing_config
+                .network_contract
+                .indexing_contract_setup,
             current_block,
             next_block,
         );
@@ -221,7 +223,9 @@ async fn process_event_concurrently(
 
         let filter = build_filter(
             event_processing_config.topic_id,
-            &event_processing_config.network_contract.address_or_filter,
+            &event_processing_config
+                .network_contract
+                .indexing_contract_setup,
             current_block,
             next_block,
         );
@@ -421,21 +425,26 @@ fn update_progress_and_db(
 
 fn build_filter(
     topic_id: &'static str,
-    address_or_filter: &AddressOrFilter,
+    indexing_contract_setup: &IndexingContractSetup,
     current_block: U64,
     next_block: U64,
 ) -> Filter {
-    match address_or_filter {
-        AddressOrFilter::Address(address) => Filter::new()
+    match indexing_contract_setup {
+        IndexingContractSetup::Address(address) => Filter::new()
             .address(address.parse::<Address>().unwrap())
             .topic0(topic_id.parse::<H256>().unwrap())
             .from_block(current_block)
             .to_block(next_block),
-        AddressOrFilter::Filter(filter) => filter.extend_filter_indexed(
+        IndexingContractSetup::Filter(filter) => filter.extend_filter_indexed(
             Filter::new()
                 .topic0(topic_id.parse::<H256>().unwrap())
                 .from_block(current_block)
                 .to_block(next_block),
         ),
+        IndexingContractSetup::Factory(factory) => Filter::new()
+            .address(factory.address.parse::<Address>().unwrap())
+            .topic0(topic_id.parse::<H256>().unwrap())
+            .from_block(current_block)
+            .to_block(next_block),
     }
 }

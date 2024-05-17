@@ -1,4 +1,4 @@
-use crate::generator::event_callback_registry::AddressOrFilter;
+use crate::generator::event_callback_registry::IndexingContractSetup;
 use crate::manifest::yaml::ContractDetails;
 use crate::{
     helpers::camel_to_snake,
@@ -13,8 +13,9 @@ fn generate_contract_code(
     abi_location: &str,
     network: &Network,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    match contract_details.address_or_filter() {
-        AddressOrFilter::Address(address) => {
+    let address = contract_details.address();
+    match address {
+        Some(address) => {
             let code = format!(
                 r#"
             abigen!({contract_name}, "{contract_path}");
@@ -36,7 +37,7 @@ fn generate_contract_code(
 
             Ok(code)
         }
-        AddressOrFilter::Filter(_) => Ok("".to_string()),
+        None => Ok("".to_string()),
     }
 }
 
