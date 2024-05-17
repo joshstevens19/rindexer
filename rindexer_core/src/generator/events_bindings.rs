@@ -8,25 +8,32 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::error::Error;
 use std::fs;
-use std::iter::Map;
 
 use crate::helpers::camel_to_snake;
 use crate::manifest::yaml::{Contract, ContractDetails, Databases};
 
 use super::networks_bindings::network_provider_fn_name_by_name;
 
+/// Struct representing an ABI item.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ABIItem {
     #[serde(default)]
     inputs: Vec<ABIInput>,
-
     #[serde(default)]
     name: String,
-
     #[serde(rename = "type", default)]
     type_: String,
 }
 
+/// Reads an ABI file and parses its content into a vector of `ABIItem`.
+///
+/// # Arguments
+///
+/// * `file_path` - The path to the ABI file.
+///
+/// # Returns
+///
+/// A `Result` containing a vector of `ABIItem` on success or an error.
 pub fn read_abi_file(file_path: &str) -> Result<Vec<ABIItem>, Box<dyn Error>> {
     let abi_str = fs::read_to_string(file_path)?;
     println!("abi_str {:?}", abi_str);
@@ -34,18 +41,17 @@ pub fn read_abi_file(file_path: &str) -> Result<Vec<ABIItem>, Box<dyn Error>> {
     Ok(abi_json)
 }
 
+/// Struct representing an ABI input.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ABIInput {
     pub indexed: Option<bool>,
-
     pub name: String,
-
     #[serde(rename = "type")]
     pub type_: String,
-
     pub components: Option<Vec<ABIInput>>,
 }
 
+/// Struct representing information about an event.
 #[derive(Debug)]
 pub struct EventInfo {
     pub name: String,
@@ -56,6 +62,16 @@ pub struct EventInfo {
 }
 
 impl EventInfo {
+    /// Creates a new `EventInfo`.
+    ///
+    /// # Arguments
+    ///
+    /// * `item` - The ABI item.
+    /// * `signature` - The event signature.
+    ///
+    /// # Returns
+    ///
+    /// A new `EventInfo`.
     pub fn new(item: &ABIItem, signature: String) -> Self {
         EventInfo {
             name: item.name.clone(),
@@ -67,6 +83,15 @@ impl EventInfo {
     }
 }
 
+/// Formats the parameter type for an ABI input.
+///
+/// # Arguments
+///
+/// * `input` - The ABI input.
+///
+/// # Returns
+///
+/// A formatted string representing the parameter type.
 fn format_param_type(input: &ABIInput) -> String {
     match input.type_.as_str() {
         "tuple" => {
@@ -84,34 +109,89 @@ fn format_param_type(input: &ABIInput) -> String {
     }
 }
 
+/// Computes the topic ID for an event signature.
+///
+/// # Arguments
+///
+/// * `event_signature` - The event signature.
+///
+/// # Returns
+///
+/// A string representing the topic ID.
 fn compute_topic_id(event_signature: &str) -> String {
-    Map::collect(
-        keccak256(event_signature)
-            .iter()
-            .map(|byte| format!("{:02x}", byte)),
-    )
+    keccak256(event_signature)
+        .iter()
+        .map(|byte| format!("{:02x}", byte))
+        .collect::<String>()
 }
 
+/// Formats the event signature.
+///
+/// # Arguments
+///
+/// * `item` - The ABI item.
+///
+/// # Returns
+///
+/// A formatted string representing the event signature.
 fn format_event_signature(item: &ABIItem) -> String {
-    item.inputs
+    let params = item
+        .inputs
         .iter()
         .map(format_param_type)
         .collect::<Vec<_>>()
-        .join(",")
+        .join(",");
+    format!("{}({})", item.name, params)
 }
 
+/// Generates the contract name for ABI generation.
+///
+/// # Arguments
+///
+/// * `contract` - The contract.
+///
+/// # Returns
+///
+/// A string representing the contract name for ABI generation.
 pub fn abigen_contract_name(contract: &Contract) -> String {
     format!("Rindexer{}Gen", contract.name)
 }
 
+/// Generates the module name for the contract.
+///
+/// # Arguments
+///
+/// * `contract` - The contract.
+///
+/// # Returns
+///
+/// A string representing the module name for the contract.
 fn abigen_contract_mod_name(contract: &Contract) -> String {
     camel_to_snake(&abigen_contract_name(contract))
 }
 
+/// Generates the file name for the contract ABI.
+///
+/// # Arguments
+///
+/// * `contract` - The contract.
+///
+/// # Returns
+///
+/// A string representing the file name for the contract ABI.
 pub fn abigen_contract_file_name(contract: &Contract) -> String {
     format!("{}_abi_gen", camel_to_snake(&contract.name))
 }
 
+/// Extracts event names and signatures from an ABI JSON.
+///
+/// # Arguments
+///
+/// * `abi_json` - The ABI JSON.
+///
+/// # Returns
+///
+/// A `Result` containing a vector of `EventInfo` on success or an error.
 pub fn extract_event_names_and_signatures_from_abi(
     abi_json: &[ABIItem],
 ) -> Result<Vec<EventInfo>, Box<dyn Error>> {
@@ -120,7 +200,6 @@ pub fn extract_event_names_and_signatures_from_abi(
         .filter_map(|item| {
             if item.type_ == "event" {
                 let signature = format_event_signature(item);
-
                 Some(EventInfo::new(item, signature))
             } else {
                 None
@@ -131,6 +210,15 @@ pub fn extract_event_names_and_signatures_from_abi(
     Ok(result)
 }
 
+/// Generates Rust structs for the events in a contract.
+///
+/// # Arguments
+///
+/// * `contract` - The contract.
+///
+/// # Returns
+///
+/// A `Result` containing a string with the generated structs on success or an error.
 fn generate_structs(contract: &Contract) -> Result<String, Box<dyn Error>> {
     let abi_str = fs::read_to_string(&contract.abi)?;
     let abi_json: Value = serde_json::from_str(&abi_str)?;
@@ -151,7 +239,7 @@ fn generate_structs(contract: &Contract) -> Result<String, Box<dyn Error>> {
                     pub struct {struct_result} {{
                         pub event_data: {struct_data},
                         pub tx_information: TxInformation
-                      }}
+                    }}
                 "#,
                 struct_result = struct_result,
                 struct_data = struct_data,
@@ -164,6 +252,15 @@ fn generate_structs(contract: &Contract) -> Result<String, Box<dyn Error>> {
     Ok(structs)
 }
 
+/// Generates Rust enum variants for the events.
+///
+/// # Arguments
+///
+/// * `event_info` - The event information.
+///
+/// # Returns
+///
+/// A string with the generated enum variants.
 fn generate_event_enums_code(event_info: &[EventInfo]) -> String {
     event_info
         .iter()
@@ -172,10 +269,29 @@ fn generate_event_enums_code(event_info: &[EventInfo]) -> String {
         .join("\n")
 }
 
+/// Generates the event type name.
+///
+/// # Arguments
+///
+/// * `name` - The name of the event.
+///
+/// # Returns
+///
+/// A string representing the event type name.
 fn generate_event_type_name(name: &str) -> String {
     format!("{}EventType", name)
 }
 
+/// Generates match arms for topic IDs.
+///
+/// # Arguments
+///
+/// * `event_type_name` - The event type name.
+/// * `event_info` - The event information.
+///
+/// # Returns
+///
+/// A string with the generated match arms.
 fn generate_topic_ids_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> String {
     event_info
         .iter()
@@ -191,6 +307,16 @@ fn generate_topic_ids_match_arms_code(event_type_name: &str, event_info: &[Event
         .join("\n")
 }
 
+/// Generates match arms for event names.
+///
+/// # Arguments
+///
+/// * `event_type_name` - The event type name.
+/// * `event_info` - The event information.
+///
+/// # Returns
+///
+/// A string with the generated match arms.
 fn generate_event_names_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> String {
     event_info
         .iter()
@@ -204,6 +330,16 @@ fn generate_event_names_match_arms_code(event_type_name: &str, event_info: &[Eve
         .join("\n")
 }
 
+/// Generates match arms for event registration.
+///
+/// # Arguments
+///
+/// * `event_type_name` - The event type name.
+/// * `event_info` - The event information.
+///
+/// # Returns
+///
+/// A string with the generated match arms.
 fn generate_register_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> String {
     event_info
         .iter()
@@ -225,15 +361,20 @@ fn generate_register_match_arms_code(event_type_name: &str, event_info: &[EventI
         .join("\n")
 }
 
+/// Generates match arms for event decoders.
+///
+/// # Arguments
+///
+/// * `event_type_name` - The event type name.
+/// * `event_info` - The event information.
+///
+/// # Returns
+///
+/// A string with the generated match arms.
 fn generate_decoder_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> String {
     event_info
         .iter()
         .map(|info| {
-            format!(
-                "{}::{}(event) => Arc::new(move |data| event.call(data)),",
-                event_type_name, info.name
-            );
-
             format!(
                 r#"
                     {event_type_name}::{event_info_name}(_) => {{
@@ -253,6 +394,15 @@ fn generate_decoder_match_arms_code(event_type_name: &str, event_info: &[EventIn
         .join("\n")
 }
 
+/// Generates a string representation of an optional vector of strings.
+///
+/// # Arguments
+///
+/// * `indexed` - The optional vector of strings.
+///
+/// # Returns
+///
+/// A string representation of the vector.
 fn generate_indexed_vec_string(indexed: &Option<Vec<String>>) -> String {
     match indexed {
         Some(values) => {
@@ -269,130 +419,124 @@ fn generate_indexed_vec_string(indexed: &Option<Vec<String>>) -> String {
     }
 }
 
+/// Generates a function that returns a `Contract` struct with details populated from the provided `Contract` instance.
+///
+/// This function constructs a Rust function as a string, which when called, will return a `Contract`
+/// with all the necessary details filled in. It handles different types of contract setups
+/// (`Address`, `Filter`, `Factory`) and properly formats optional start and end block values.
+///
+/// # Arguments
+///
+/// * `contract` - The `Contract` instance from which to generate the function.
+///
+/// # Returns
+///
+/// A `String` containing the generated Rust function code.
 fn generate_contract_type_fn_code(contract: &Contract) -> String {
     let mut details = String::new();
     details.push_str("vec![");
-    for contract in contract.details.iter() {
-        match contract.indexing_contract_setup() {
-            IndexingContractSetup::Address(address) => {
-                let item = format!(
-                    r#"
-                        ContractDetails::new_with_address(
-                            "{network}".to_string(),
-                            "{address}".to_string(),
-                            {start_block},
-                            {end_block},
-                            Some({polling_every}),
-                        ),
-                    "#,
-                    network = contract.network,
-                    address = address,
-                    start_block = if let Some(start_block) = contract.start_block {
-                        format!("Some({}.into())", start_block.as_u64())
-                    } else {
-                        "None".to_string()
-                    },
-                    end_block = if let Some(end_block) = contract.end_block {
-                        format!("Some({}.into())", end_block.as_u64())
-                    } else {
-                        "None".to_string()
-                    },
-                    // TODO! FIX
-                    polling_every = contract.polling_every.unwrap_or(1000)
-                );
-                details.push_str(&item);
-            }
-            IndexingContractSetup::Filter(filter_details) => {
-                let indexed_1 = generate_indexed_vec_string(&filter_details.indexed_1);
-                let indexed_2 = generate_indexed_vec_string(&filter_details.indexed_2);
-                let indexed_3 = generate_indexed_vec_string(&filter_details.indexed_3);
 
-                let item = format!(
+    for detail in &contract.details {
+        let start_block = match detail.start_block {
+            Some(start_block) => format!("Some({}.into())", start_block.as_u64()),
+            None => "None".to_string(),
+        };
+        let end_block = match detail.end_block {
+            Some(end_block) => format!("Some({}.into())", end_block.as_u64()),
+            None => "None".to_string(),
+        };
+        let polling_every = detail.polling_every.unwrap_or(1000);
+
+        let item = match detail.indexing_contract_setup() {
+            IndexingContractSetup::Address(address) => format!(
+                r#"
+                ContractDetails::new_with_address(
+                    "{network}".to_string(),
+                    "{address}".to_string(),
+                    {start_block},
+                    {end_block},
+                    Some({polling_every}),
+                ),
+                "#,
+                network = detail.network,
+                address = address,
+                start_block = start_block,
+                end_block = end_block,
+                polling_every = polling_every
+            ),
+            IndexingContractSetup::Filter(filter) => {
+                let indexed_1 = generate_indexed_vec_string(&filter.indexed_1);
+                let indexed_2 = generate_indexed_vec_string(&filter.indexed_2);
+                let indexed_3 = generate_indexed_vec_string(&filter.indexed_3);
+
+                format!(
                     r#"
-                        ContractDetails::new_with_filter(
-                            "{network}".to_string(),
-                            FilterDetails {{
-                                event_name: "{event_name}".to_string(),
-                                indexed_1: {indexed_1},
-                                indexed_2: {indexed_2},
-                                indexed_3: {indexed_3},
-                            }},
-                            {start_block},
-                            {end_block},
-                            Some({polling_every}),
-                        ),
+                    ContractDetails::new_with_filter(
+                        "{network}".to_string(),
+                        FilterDetails {{
+                            event_name: "{event_name}".to_string(),
+                            indexed_1: {indexed_1},
+                            indexed_2: {indexed_2},
+                            indexed_3: {indexed_3},
+                        }},
+                        {start_block},
+                        {end_block},
+                        Some({polling_every}),
+                    ),
                     "#,
-                    network = contract.network,
-                    event_name = filter_details.event_name,
+                    network = detail.network,
+                    event_name = filter.event_name,
                     indexed_1 = indexed_1,
                     indexed_2 = indexed_2,
                     indexed_3 = indexed_3,
-                    start_block = if let Some(start_block) = contract.start_block {
-                        format!("Some({}.into())", start_block.as_u64())
-                    } else {
-                        "None".to_string()
-                    },
-                    end_block = if let Some(end_block) = contract.end_block {
-                        format!("Some({}.into())", end_block.as_u64())
-                    } else {
-                        "None".to_string()
-                    },
-                    // TODO! FIX
-                    polling_every = contract.polling_every.unwrap_or(1000)
-                );
-                details.push_str(&item);
+                    start_block = start_block,
+                    end_block = end_block,
+                    polling_every = polling_every
+                )
             }
-            IndexingContractSetup::Factory(factory_details) => {
-                let item = format!(
-                    r#"
-                        ContractDetails::new_with_factory(
-                            "{network}".to_string(),
-                            FactoryDetails {{
-                                address: "{address}".to_string(),
-                                event_name: "{event_name}".to_string(),
-                                parameter_name: "{parameter_name}".to_string(),
-                                abi: "{factory_abi}".to_string(),
-                            }},
-                            {start_block},
-                            {end_block},
-                            Some({polling_every}),
-                        ),
-                    "#,
-                    network = contract.network,
-                    event_name = factory_details.event_name,
-                    address = factory_details.address,
-                    parameter_name = factory_details.parameter_name,
-                    factory_abi = factory_details.abi,
-                    start_block = if let Some(start_block) = contract.start_block {
-                        format!("Some({}.into())", start_block.as_u64())
-                    } else {
-                        "None".to_string()
-                    },
-                    end_block = if let Some(end_block) = contract.end_block {
-                        format!("Some({}.into())", end_block.as_u64())
-                    } else {
-                        "None".to_string()
-                    },
-                    // TODO! FIX
-                    polling_every = contract.polling_every.unwrap_or(1000)
-                );
-                details.push_str(&item);
-            }
+            IndexingContractSetup::Factory(factory) => format!(
+                r#"
+                ContractDetails::new_with_factory(
+                    "{network}".to_string(),
+                    FactoryDetails {{
+                        address: "{address}".to_string(),
+                        event_name: "{event_name}".to_string(),
+                        parameter_name: "{parameter_name}".to_string(),
+                        abi: "{abi}".to_string(),
+                    }},
+                    {start_block},
+                    {end_block},
+                    Some({polling_every}),
+                ),
+                "#,
+                network = detail.network,
+                address = factory.address,
+                event_name = factory.event_name,
+                parameter_name = factory.parameter_name,
+                abi = factory.abi,
+                start_block = start_block,
+                end_block = end_block,
+                polling_every = polling_every
+            ),
         };
+
+        details.push_str(&item);
     }
+
     details.push(']');
+
     format!(
         r#"
-            fn contract_information(&self) -> Contract {{
-                Contract {{
-                    name: "{name}".to_string(),
-                    details: {details},
-                    abi: "{abi}".to_string(),
-                    reorg_safe_distance: {reorg_safe_distance},
-                    generate_csv: {generate_csv}
-                }}
+        fn contract_information(&self) -> Contract {{
+            Contract {{
+                name: "{name}".to_string(),
+                details: {details},
+                abi: "{abi}".to_string(),
+                reorg_safe_distance: {reorg_safe_distance},
+                generate_csv: {generate_csv},
             }}
-            "#,
+        }}
+        "#,
         name = contract.name,
         details = details,
         abi = contract.abi,
@@ -401,10 +545,27 @@ fn generate_contract_type_fn_code(contract: &Contract) -> String {
     )
 }
 
+/// Generates a CSV instance for logging event data.
+///
+/// This function creates a directory and CSV file for storing event data. It constructs the file path,
+/// initializes the CSV headers, and generates Rust code for creating an `AsyncCsvAppender` instance.
+///
+/// # Arguments
+///
+/// * `contract_name` - The name of the contract.
+/// * `event_info` - The event information.
+///
+/// # Returns
+///
+/// A `String` containing the generated Rust code for the CSV instance.
 fn generate_csv_instance(contract_name: &str, event_info: &EventInfo) -> String {
     let csv_file_name = format!("{}-{}.csv", contract_name, event_info.name).to_lowercase();
     let csv_folder = format!("rindexer/csv_results/{}", contract_name);
-    fs::create_dir_all(&csv_folder).unwrap();
+
+    // Create directory if it does not exist.
+    if let Err(e) = fs::create_dir_all(&csv_folder) {
+        panic!("Failed to create directory '{}': {}", csv_folder, e);
+    }
 
     let csv_path = format!("{}/{}", csv_folder, csv_file_name);
 
@@ -417,7 +578,7 @@ fn generate_csv_instance(contract_name: &str, event_info: &EventInfo) -> String 
     .map(|m| m.value.clone())
     .collect();
 
-    // add contract address to the start of the CSV
+    // Add additional headers.
     headers.insert(0, r#""contract_address""#.to_string());
     headers.push(r#""tx_hash""#.to_string());
     headers.push(r#""block_number""#.to_string());
@@ -437,71 +598,90 @@ fn generate_csv_instance(contract_name: &str, event_info: &EventInfo) -> String 
     )
 }
 
+/// Generates the Rust code for event callback structs.
+///
+/// This function constructs the Rust code for event callback structs, handling the creation of contexts,
+/// initializing CSV generation, and managing optional database connections.
+///
+/// # Arguments
+///
+/// * `event_info` - A slice of `EventInfo` containing details about the events.
+/// * `contract_name` - The name of the contract.
+/// * `databases` - An optional reference to `Databases` configuration.
+///
+/// # Returns
+///
+/// A `String` containing the generated Rust code for the event callback structs.
 fn generate_event_callback_structs_code(
     event_info: &[EventInfo],
     contract_name: &str,
     databases: &Option<Databases>,
 ) -> String {
     let databases_enabled = databases.is_some();
+
     event_info
         .iter()
         .map(|info| {
             format!(
                 r#"
-                    type {name}EventCallbackType<TExtensions> = Arc<dyn Fn(&Vec<{struct_result}>, Arc<EventContext<TExtensions>>) -> BoxFuture<'_, ()> + Send + Sync>;
+                type {name}EventCallbackType<TExtensions> = Arc<dyn Fn(&Vec<{struct_result}>, Arc<EventContext<TExtensions>>) -> BoxFuture<'_, ()> + Send + Sync>;
 
-                    pub struct {name}Event<TExtensions> where TExtensions: Send + Sync {{
+                pub struct {name}Event<TExtensions> where TExtensions: Send + Sync {{
+                    callback: {name}EventCallbackType<TExtensions>,
+                    context: Arc<EventContext<TExtensions>>,
+                }}
+
+                impl<TExtensions> {name}Event<TExtensions> where TExtensions: Send + Sync {{
+                    pub async fn new(
                         callback: {name}EventCallbackType<TExtensions>,
-                        context: Arc<EventContext<TExtensions>>,
-                    }}
+                        extensions: TExtensions,
+                        options: NewEventOptions,
+                    ) -> Self {{
+                        {csv_generator}
 
-                    impl<TExtensions> {name}Event<TExtensions> where TExtensions: Send + Sync {{
-                        pub async fn new(
-                            callback: {name}EventCallbackType<TExtensions>,
-                            extensions: TExtensions,
-                            options: NewEventOptions,
-                        ) -> Self {{
-                            {csv_generator}
-
-                            Self {{
-                                callback,
-                                context: Arc::new(EventContext {{
-                                    {database}
-                                    csv: Arc::new(csv),
-                                    extensions: Arc::new(extensions),
-                                }}),
-                            }}
+                        Self {{
+                            callback,
+                            context: Arc::new(EventContext {{
+                                {database}
+                                csv: Arc::new(csv),
+                                extensions: Arc::new(extensions),
+                            }}),
                         }}
                     }}
+                }}
 
-                    #[async_trait]
-                    impl<TExtensions> EventCallback for {name}Event<TExtensions> where TExtensions: Send + Sync {{
-                        async fn call(&self, events: Vec<EventResult>) {{
-                            let events_len = events.len();
+                #[async_trait]
+                impl<TExtensions> EventCallback for {name}Event<TExtensions> where TExtensions: Send + Sync {{
+                    async fn call(&self, events: Vec<EventResult>) {{
+                        let events_len = events.len();
 
-                            let result: Vec<{struct_result}> = events.into_iter()
-                                .filter_map(|item| {{
-                                    item.decoded_data.downcast::<{struct_data}>()
-                                        .ok()
-                                        .map(|arc| {struct_result} {{
-                                            event_data: (*arc).clone(),
-                                            tx_information: item.tx_information
-                                        }})
-                                }})
-                                .collect();
+                        let result: Vec<{struct_result}> = events.into_iter()
+                            .filter_map(|item| {{
+                                item.decoded_data.downcast::<{struct_data}>()
+                                    .ok()
+                                    .map(|arc| {struct_result} {{
+                                        event_data: (*arc).clone(),
+                                        tx_information: item.tx_information
+                                    }})
+                            }})
+                            .collect();
 
-                            if result.len() == events_len {{
-                                (self.callback)(&result, self.context.clone()).await;
-                            }} else {{
-                                println!("{name}Event: Unexpected data type - expected: {struct_data}")
-                            }}
+                        if result.len() == events_len {{
+                            (self.callback)(&result, self.context.clone()).await;
+                        }} else {{
+                            println!("{name}Event: Unexpected data type - expected: {struct_data}")
                         }}
                     }}
+                }}
                 "#,
                 name = info.name,
                 struct_result = info.struct_result,
                 struct_data = info.struct_data,
-                database = if databases_enabled { "database: Arc::new(PostgresClient::new().await.unwrap())," } else { "" },
+                database = if databases_enabled {
+                    "database: Arc::new(PostgresClient::new().await.unwrap()),"
+                } else {
+                    ""
+                },
                 csv_generator = generate_csv_instance(contract_name, info)
             )
         })
@@ -509,6 +689,18 @@ fn generate_event_callback_structs_code(
         .join("\n")
 }
 
+/// Generates the Rust code for a function that returns a provider for a given network.
+///
+/// This function constructs a Rust function that returns a provider instance based on the specified network.
+/// It handles multiple network names and generates the appropriate conditional branches.
+///
+/// # Arguments
+///
+/// * `networks` - A vector of network names.
+///
+/// # Returns
+///
+/// A `String` containing the generated Rust code for the provider function.
 fn build_get_provider_fn(networks: Vec<String>) -> String {
     let mut function = String::new();
     function.push_str(
@@ -542,6 +734,19 @@ fn build_get_provider_fn(networks: Vec<String>) -> String {
     function
 }
 
+/// Generates the Rust code for a function that returns a contract instance for a given network.
+///
+/// This function constructs a Rust function that returns a contract instance based on the specified network.
+/// It handles multiple contract details and generates the appropriate conditional branches.
+///
+/// # Arguments
+///
+/// * `contracts_details` - A vector of references to `ContractDetails`.
+/// * `abi_gen_name` - The name of the ABI generation struct.
+///
+/// # Returns
+///
+/// A `String` containing the generated Rust code for the contract function.
 fn build_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &str) -> String {
     let mut function = String::new();
     function.push_str(&format!(
@@ -567,11 +772,11 @@ fn build_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &st
 
         function.push_str(&format!(
             r#"network == "{network}" {{
-                    let address: Address = "{address}"
-                        .parse()
-                        .unwrap();
-                    {abi_gen_name}::new(address, Arc::new(self.get_provider(network).clone()))
-                }}"#,
+                let address: Address = "{address}"
+                    .parse()
+                    .unwrap();
+                {abi_gen_name}::new(address, Arc::new(self.get_provider(network).clone()))
+            }}"#,
             network = contract_detail.network,
             address = address,
             abi_gen_name = abi_gen_name
@@ -581,15 +786,31 @@ fn build_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &st
     // Add a fallback else statement to handle unsupported networks
     function.push_str(
         r#"
-            else {
-                panic!("Network not supported");
-            }
-        }"#,
+        else {
+            panic!("Network not supported");
+        }
+    }"#,
     );
 
     function
 }
 
+/// Generates the Rust code for event bindings.
+///
+/// This function constructs Rust code for event bindings, including the event callback structs, context,
+/// provider function, and contract-related functions. It handles the initialization of CSV, databases,
+/// and the setup of event callbacks.
+///
+/// # Arguments
+///
+/// * `indexer_name` - The name of the indexer.
+/// * `contract` - The contract information.
+/// * `clients` - An optional reference to `Databases`.
+/// * `event_info` - A vector of `EventInfo` containing details about the events.
+///
+/// # Returns
+///
+/// A `Result<String, Box<dyn Error>>` containing the generated Rust code for the event bindings.
 fn generate_event_bindings_code(
     indexer_name: &str,
     contract: &Contract,
@@ -599,131 +820,125 @@ fn generate_event_bindings_code(
     let event_type_name = generate_event_type_name(&contract.name);
     let code = format!(
         r#"
-            use std::{{any::Any, sync::Arc}};
+        use std::{{any::Any, sync::Arc}};
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::path::Path;
+        use ethers::{{providers::{{Http, Provider, RetryClient}}, abi::Address, types::{{Bytes, H256}}}};
+        use rindexer_core::{{
+            async_trait,
+            AsyncCsvAppender,
+            generate_random_id,
+            FutureExt,
+            generator::event_callback_registry::{{EventCallbackRegistry, EventInformation, ContractInformation, NetworkContract, EventResult, TxInformation, FilterDetails, FactoryDetails}},
+            manifest::yaml::{{Contract, ContractDetails}},
+            {client_import}
+        }};
+        use super::{abigen_file_name}::{abigen_mod_name}::{{self, {abigen_name}}};
 
-            use std::future::Future;
-            use std::pin::Pin;
-            use std::path::Path;
+        {structs}
 
-            use ethers::{{providers::{{Http, Provider, RetryClient}}, abi::Address, types::{{Bytes, H256}}}};
-            
-            use rindexer_core::{{
-                async_trait,
-                AsyncCsvAppender,
-                generate_random_id,
-                FutureExt,
-                generator::event_callback_registry::{{EventCallbackRegistry, EventInformation, ContractInformation, NetworkContract, EventResult, TxInformation, FilterDetails, FactoryDetails}},
-                manifest::yaml::{{Contract, ContractDetails}},
-                {client_import}
-            }};
+        type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-            use super::{abigen_file_name}::{abigen_mod_name}::{{self, {abigen_name}}};
+        #[async_trait]
+        trait EventCallback {{
+            async fn call(&self, events: Vec<EventResult>);
+        }}
 
-            {structs}
+        pub struct EventContext<TExtensions> where TExtensions: Send + Sync {{
+            {event_context_database}
+            pub csv: Arc<AsyncCsvAppender>,
+            pub extensions: Arc<TExtensions>,
+        }}
 
-            type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+        // TODO: NEED TO SPEC OUT OPTIONS
+        pub struct NewEventOptions {{
+            pub enabled_csv: bool,
+        }}
 
-            #[async_trait]
-            trait EventCallback {{
-                async fn call(&self, events: Vec<EventResult>);
+        impl NewEventOptions {{
+            pub fn default() -> Self {{
+                Self {{ enabled_csv: false }}
             }}
+        }}
 
-            pub struct EventContext<TExtensions> where TExtensions: Send + Sync {{
-                {event_context_database}
-                pub csv: Arc<AsyncCsvAppender>,
-                pub extensions: Arc<TExtensions>,
-            }}
+        // didn't want to use option or none made harder DX
+        // so a blank struct makes interface nice
+        pub struct NoExtensions {{}}
+        pub fn no_extensions() -> NoExtensions {{
+            NoExtensions {{}}
+        }}
 
-            // TODO: NEED TO SPEC OUT OPTIONS
-            pub struct NewEventOptions {{
-                pub enabled_csv: bool,
-            }}
+        {event_callback_structs}
 
-            impl NewEventOptions {{
-                pub fn default() -> Self {{
-                    Self {{ enabled_csv: false }}
+        pub enum {event_type_name}<TExtensions> where TExtensions: 'static + Send + Sync {{
+            {event_enums}
+        }}
+
+        impl<TExtensions> {event_type_name}<TExtensions> where TExtensions: 'static + Send + Sync {{
+            pub fn topic_id(&self) -> &'static str {{
+                match self {{
+                    {topic_ids_match_arms}
                 }}
             }}
 
-            // didn't want to use option or none made harder DX
-            // so a blank struct makes interface nice
-            pub struct NoExtensions {{}}
-            pub fn no_extensions() -> NoExtensions {{
-                NoExtensions {{}}
-            }}
-
-            {event_callback_structs}
-
-            pub enum {event_type_name}<TExtensions> where TExtensions: 'static + Send + Sync {{
-                {event_enums}
-            }}
-
-            impl<TExtensions> {event_type_name}<TExtensions> where TExtensions: 'static + Send + Sync {{
-                pub fn topic_id(&self) -> &'static str {{
-                    match self {{
-                        {topic_ids_match_arms}
-                    }}
-                }}
-
-                pub fn event_name(&self) -> &'static str {{
-                    match self {{
-                        {event_names_match_arms}
-                    }}
-                }}
-
-                {contract_type_fn}
-
-                {build_get_provider_fn}
-
-                {build_contract_fn}
-
-                fn decoder(&self, network: &str) -> Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync> {{
-                    let contract = self.contract(network);
-
-                    match self {{
-                        {decoder_match_arms}
-                    }}
-                }}
-                
-                pub fn register(self, registry: &mut EventCallbackRegistry) {{
-                    let topic_id = self.topic_id();
-                    let event_name = self.event_name();
-                    let contract_information = self.contract_information();
-                    let contract = ContractInformation {{
-                        name: contract_information.name,
-                        details: contract_information
-                            .details
-                            .iter()
-                            .map(|c| NetworkContract {{
-                                id: generate_random_id(10),
-                                network: c.network.clone(),
-                                provider: self.get_provider(&c.network),
-                                decoder: self.decoder(&c.network),
-                                address_or_filter: c.address_or_filter(),
-                                start_block: c.start_block,
-                                end_block: c.end_block,
-                                polling_every: c.polling_every,
-                            }})
-                            .collect(),
-                        abi: contract_information.abi,
-                        reorg_safe_distance: contract_information.reorg_safe_distance,
-                    }};
-                    
-                    let callback: Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, ()> + Send + Sync> = match self {{
-                        {register_match_arms}
-                    }};
-                
-                   registry.register_event({{
-                        EventInformation {{
-                            indexer_name: "{indexer_name}",
-                            event_name,
-                            topic_id,
-                            contract,
-                            callback,
-                        }}
-                    }});
+            pub fn event_name(&self) -> &'static str {{
+                match self {{
+                    {event_names_match_arms}
                 }}
             }}
+
+            {contract_type_fn}
+
+            {build_get_provider_fn}
+
+            {build_contract_fn}
+
+            fn decoder(&self, network: &str) -> Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync> {{
+                let contract = self.contract(network);
+
+                match self {{
+                    {decoder_match_arms}
+                }}
+            }}
+
+            pub fn register(self, registry: &mut EventCallbackRegistry) {{
+                let topic_id = self.topic_id();
+                let event_name = self.event_name();
+                let contract_information = self.contract_information();
+                let contract = ContractInformation {{
+                    name: contract_information.name,
+                    details: contract_information
+                        .details
+                        .iter()
+                        .map(|c| NetworkContract {{
+                            id: generate_random_id(10),
+                            network: c.network.clone(),
+                            provider: self.get_provider(&c.network),
+                            decoder: self.decoder(&c.network),
+                            indexing_contract_setup: c.indexing_contract_setup(),
+                            start_block: c.start_block,
+                            end_block: c.end_block,
+                            polling_every: c.polling_every,
+                        }})
+                        .collect(),
+                    abi: contract_information.abi,
+                    reorg_safe_distance: contract_information.reorg_safe_distance,
+                }};
+
+                let callback: Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, ()> + Send + Sync> = match self {{
+                    {register_match_arms}
+                }};
+
+               registry.register_event(EventInformation {{
+                    indexer_name: "{indexer_name}",
+                    event_name,
+                    topic_id,
+                    contract,
+                    callback,
+                }});
+            }}
+        }}
         "#,
         client_import = if clients.is_some() {
             "PostgresClient,"
@@ -760,6 +975,7 @@ fn generate_event_bindings_code(
     Ok(code)
 }
 
+/// Enumeration to specify the type of ABI properties to generate.
 #[derive(PartialEq)]
 pub enum GenerateAbiPropertiesType {
     PostgresWithDataTypes,
@@ -768,6 +984,7 @@ pub enum GenerateAbiPropertiesType {
     Object,
 }
 
+/// Represents the result of generating ABI name properties.
 #[derive(Debug)]
 pub struct GenerateAbiNamePropertiesResult {
     pub value: String,
@@ -776,6 +993,7 @@ pub struct GenerateAbiNamePropertiesResult {
 }
 
 impl GenerateAbiNamePropertiesResult {
+    /// Creates a new instance of `GenerateAbiNamePropertiesResult`.
     pub fn new(value: String, abi_type: &str) -> Self {
         Self {
             value,
@@ -785,11 +1003,23 @@ impl GenerateAbiNamePropertiesResult {
     }
 }
 
+/// Generates ABI name properties based on the inputs and specified properties type.
+///
+/// # Arguments
+///
+/// * `inputs` - A slice of `ABIInput` containing ABI inputs.
+/// * `properties_type` - The type of ABI properties to generate.
+/// * `prefix` - An optional prefix for the property names.
+///
+/// # Returns
+///
+/// A vector of `GenerateAbiNamePropertiesResult` containing the generated ABI name properties.
 pub fn generate_abi_name_properties(
     inputs: &[ABIInput],
     properties_type: &GenerateAbiPropertiesType,
     prefix: Option<&str>,
 ) -> Vec<GenerateAbiNamePropertiesResult> {
+    /// Generates a formatted name based on the input name.
     fn generate_name_format(name: &str) -> String {
         camel_to_snake(name)
     }
@@ -808,11 +1038,7 @@ pub fn generate_abi_name_properties(
                     GenerateAbiPropertiesType::PostgresWithDataTypes => {
                         let value = format!(
                             "\"{}{}\" {}",
-                            if prefix.is_some() {
-                                format!("{}_", prefix.as_ref().unwrap())
-                            } else {
-                                "".to_string()
-                            },
+                            prefix.map_or_else(|| "".to_string(), |p| format!("{}_", p)),
                             generate_name_format(&input.name),
                             solidity_type_to_db_type(&input.type_)
                         );
@@ -823,11 +1049,7 @@ pub fn generate_abi_name_properties(
                     | GenerateAbiPropertiesType::CsvHeaderNames => {
                         let value = format!(
                             "\"{}{}\"",
-                            if prefix.is_some() {
-                                format!("{}_", prefix.as_ref().unwrap())
-                            } else {
-                                "".to_string()
-                            },
+                            prefix.map_or_else(|| "".to_string(), |p| format!("{}_", p)),
                             generate_name_format(&input.name),
                         );
 
@@ -836,11 +1058,7 @@ pub fn generate_abi_name_properties(
                     GenerateAbiPropertiesType::Object => {
                         let value = format!(
                             "{}{}",
-                            if prefix.is_some() {
-                                format!("{}.", prefix.as_ref().unwrap())
-                            } else {
-                                "".to_string()
-                            },
+                            prefix.map_or_else(|| "".to_string(), |p| format!("{}.", p)),
                             generate_name_format(&input.name),
                         );
 
@@ -852,6 +1070,16 @@ pub fn generate_abi_name_properties(
         .collect()
 }
 
+/// Retrieves ABI items from the contract.
+///
+/// # Arguments
+///
+/// * `contract` - The contract information.
+/// * `is_filter` - A boolean indicating whether the ABI items are for filtering.
+///
+/// # Returns
+///
+/// A vector of `ABIItem` containing the ABI items.
 fn get_abi_items(contract: &Contract, is_filter: bool) -> Result<Vec<ABIItem>, Box<dyn Error>> {
     let mut abi_items = read_abi_file(&contract.abi)?;
     if is_filter {
@@ -877,6 +1105,18 @@ fn get_abi_items(contract: &Contract, is_filter: bool) -> Result<Vec<ABIItem>, B
     Ok(abi_items)
 }
 
+/// Generates event bindings for the specified contract.
+///
+/// # Arguments
+///
+/// * `indexer_name` - The name of the indexer.
+/// * `contract` - The contract information.
+/// * `is_filter` - A boolean indicating whether the ABI items are for filtering.
+/// * `databases` - An optional `Databases` instance.
+///
+/// # Returns
+///
+/// A `Result` containing the generated code as a string or an error.
 pub fn generate_event_bindings(
     indexer_name: &str,
     contract: &Contract,
@@ -889,6 +1129,17 @@ pub fn generate_event_bindings(
     generate_event_bindings_code(indexer_name, contract, databases, event_names)
 }
 
+/// Generates event handlers for the specified contract.
+///
+/// # Arguments
+///
+/// * `indexer_name` - The name of the indexer.
+/// * `is_filter` - A boolean indicating whether the ABI items are for filtering.
+/// * `contract` - The contract information.
+///
+/// # Returns
+///
+/// A `Result` containing the generated code as a string or an error.
 pub fn generate_event_handlers(
     indexer_name: &str,
     is_filter: bool,
@@ -935,16 +1186,14 @@ pub fn generate_event_handlers(
         let abi_name_properties =
             generate_abi_name_properties(&event.inputs, &GenerateAbiPropertiesType::Object, None);
 
-        // START POSTGRES
+        // POSTGRES SECTION
         let columns = generate_columns_names_only(&event.inputs);
 
         let insert_sql = format!(
-            // NOTE IF YOU CHANGE PARAMETERS BELOW MAIN ONES CHANGE THE COUNT 4 ON generate_injected_param
             "INSERT INTO {}.{} (contract_address, {}, \"tx_hash\", \"block_number\", \"block_hash\") {}",
             camel_to_snake(indexer_name),
             camel_to_snake(&event.name),
             &columns.join(", "),
-            // NOTE IF YOU CHANGE PARAMETERS ABOVE MAIN ONES CHANGE THE COUNT 4 HERE
             generate_injected_param(4 + columns.len())
         );
 
@@ -1002,7 +1251,7 @@ pub fn generate_event_handlers(
             params_sql = params_sql
         );
 
-        // START CSV
+        // CSV SECTION
         let csv_write = format!(
             r#"context.csv.append(vec![{csv_data}]).await.unwrap();"#,
             csv_data = csv_data

@@ -1,35 +1,58 @@
-use std::path::PathBuf;
-use std::{error::Error, path::Path};
-
 use ethers::contract::Abigen;
-
-use crate::helpers::create_mod_file;
-use crate::manifest::yaml::{Contract, Global};
-use crate::{
-    helpers::{camel_to_snake, write_file},
-    manifest::yaml::{read_manifest, Indexer, Network},
+use std::{
+    error::Error,
+    path::{Path, PathBuf},
 };
+
+use crate::helpers::{camel_to_snake, create_mod_file, write_file};
+use crate::manifest::yaml::{read_manifest, Contract, Global, Indexer, Network};
 
 use super::events_bindings::{
-    abigen_contract_file_name, abigen_contract_name, generate_event_handlers,
+    abigen_contract_file_name, abigen_contract_name, generate_event_bindings,
+    generate_event_handlers,
 };
-use super::{
-    context_bindings::generate_context_code, events_bindings::generate_event_bindings,
-    networks_bindings::generate_networks_code,
-};
+use super::{context_bindings::generate_context_code, networks_bindings::generate_networks_code};
 
+/// Generates the file location path for a given output directory and location.
+///
+/// # Arguments
+///
+/// * `output` - The output directory.
+/// * `location` - The location within the output directory.
+///
+/// # Returns
+///
+/// A `String` representing the full path to the file.
 fn generate_file_location(output: &str, location: &str) -> String {
     format!("{}/{}.rs", output, location)
 }
 
-fn write_networks(output: &str, networks: &Vec<Network>) -> Result<(), Box<dyn Error>> {
+/// Writes the networks configuration to a file.
+///
+/// # Arguments
+///
+/// * `output` - The output directory.
+/// * `networks` - A reference to a vector of `Network` configurations.
+///
+/// # Returns
+///
+/// A `Result` indicating success or failure.
+fn write_networks(output: &str, networks: &[Network]) -> Result<(), Box<dyn Error>> {
     let networks_code = generate_networks_code(networks)?;
-
-    write_file(&generate_file_location(output, "networks"), &networks_code)?;
-
-    Ok(())
+    write_file(&generate_file_location(output, "networks"), &networks_code)
 }
 
+/// Writes the global configuration to a file if it exists.
+///
+/// # Arguments
+///
+/// * `output` - The output directory.
+/// * `global` - An optional reference to a `Global` configuration.
+/// * `networks` - A reference to a slice of `Network` configurations.
+///
+/// # Returns
+///
+/// A `Result` indicating success or failure.
 fn write_global(
     output: &str,
     global: &Option<Global>,
@@ -42,12 +65,19 @@ fn write_global(
             &context_code,
         )?;
     }
-
     Ok(())
 }
 
+/// Identifies if the contract uses a filter and updates its name if necessary.
+///
+/// # Arguments
+///
+/// * `contract` - A mutable reference to a `Contract`.
+///
+/// # Returns
+///
+/// A `bool` indicating whether the contract uses a filter.
 fn identify_filter(contract: &mut Contract) -> bool {
-    // TODO look into how we can mix and match
     let filter_count = contract
         .details
         .iter()
@@ -58,44 +88,44 @@ fn identify_filter(contract: &mut Contract) -> bool {
         panic!("Cannot mix and match address and filter for the same contract definition.");
     }
 
-    let is_filter = filter_count > 0;
-    if is_filter {
+    if filter_count > 0 {
         contract.override_name(format!("{}Filter", contract.name));
+        true
+    } else {
+        false
     }
-
-    is_filter
 }
 
+/// Writes event bindings and ABI generation for the given indexer and its contracts.
+///
+/// # Arguments
+///
+/// * `output` - The output directory.
+/// * `indexer` - A reference to an `Indexer`.
+/// * `global` - An optional reference to a `Global` configuration.
+///
+/// # Returns
+///
+/// A `Result` indicating success or failure.
 fn write_indexer_events(
     output: &str,
     indexer: Indexer,
     global: &Option<Global>,
 ) -> Result<(), Box<dyn Error>> {
     for mut contract in indexer.contracts {
-        let databases = if let Some(global) = global {
-            &global.databases
-        } else {
-            &None
-        };
-
+        let databases = global.as_ref().map_or(&None, |g| &g.databases);
         let is_filter = identify_filter(&mut contract);
         let events_code = generate_event_bindings(&indexer.name, &contract, is_filter, databases)?;
 
-        write_file(
-            &generate_file_location(
-                output,
-                &format!(
-                    "{}/events/{}",
-                    camel_to_snake(&indexer.name),
-                    camel_to_snake(&contract.name)
-                ),
-            ),
-            &events_code,
-        )?;
+        let event_path = format!(
+            "{}/events/{}",
+            camel_to_snake(&indexer.name),
+            camel_to_snake(&contract.name)
+        );
+        write_file(&generate_file_location(output, &event_path), &events_code)?;
 
-        // write ABI gen
+        // Write ABI gen
         let abi_gen = Abigen::new(abigen_contract_name(&contract), &contract.abi)?.generate()?;
-
         write_file(
             &generate_file_location(
                 output,
@@ -108,10 +138,19 @@ fn write_indexer_events(
             &abi_gen.to_string(),
         )?;
     }
-
     Ok(())
 }
 
+/// Generates code for the rindexer based on the manifest file.
+///
+/// # Arguments
+///
+/// * `manifest_location` - A reference to the path of the manifest file.
+/// * `output` - The output directory.
+///
+/// # Returns
+///
+/// A `Result` indicating success or failure.
 pub fn generate_rindexer_code(
     manifest_location: &PathBuf,
     output: &str,
@@ -130,6 +169,16 @@ pub fn generate_rindexer_code(
     Ok(())
 }
 
+/// Generates code for indexer handlers based on the manifest file.
+///
+/// # Arguments
+///
+/// * `manifest_location` - A reference to the path of the manifest file.
+/// * `output` - The output directory.
+///
+/// # Returns
+///
+/// A `Result` indicating success or failure.
 pub fn generate_indexers_handlers_code(
     manifest_location: &PathBuf,
     output: &str,
@@ -139,18 +188,13 @@ pub fn generate_indexers_handlers_code(
     for indexer in manifest.indexers {
         for mut contract in indexer.contracts {
             let is_filter = identify_filter(&mut contract);
-            let result = generate_event_handlers(&indexer.name, is_filter, &contract).unwrap();
-            write_file(
-                &generate_file_location(
-                    output,
-                    &format!(
-                        "indexers/{}/{}",
-                        camel_to_snake(&indexer.name),
-                        camel_to_snake(&contract.name)
-                    ),
-                ),
-                &result,
-            )?;
+            let result = generate_event_handlers(&indexer.name, is_filter, &contract)?;
+            let handler_path = format!(
+                "indexers/{}/{}",
+                camel_to_snake(&indexer.name),
+                camel_to_snake(&contract.name)
+            );
+            write_file(&generate_file_location(output, &handler_path), &result)?;
         }
     }
 
