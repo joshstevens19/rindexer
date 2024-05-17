@@ -21,6 +21,7 @@ use tui::{
     Frame, Terminal,
 };
 
+/// Enum representing the progress status of an indexing event.
 #[derive(Clone, Debug, Hash)]
 pub enum IndexingEventProgressStatus {
     Syncing,
@@ -30,6 +31,7 @@ pub enum IndexingEventProgressStatus {
 }
 
 impl IndexingEventProgressStatus {
+    /// Returns the string representation of the progress status.
     fn as_str(&self) -> &str {
         match self {
             Self::Syncing => "Syncing",
@@ -40,6 +42,7 @@ impl IndexingEventProgressStatus {
     }
 }
 
+/// Struct representing the progress of an indexing event.
 #[derive(Clone, Debug)]
 pub struct IndexingEventProgress {
     pub id: String,
@@ -68,6 +71,7 @@ impl Hash for IndexingEventProgress {
 }
 
 impl IndexingEventProgress {
+    /// Creates a new `IndexingEventProgress` with a status of `Syncing`.
     fn running(
         id: String,
         contract_name: String,
@@ -91,22 +95,32 @@ impl IndexingEventProgress {
     }
 }
 
+/// Struct representing the state of indexing events progress.
 pub struct IndexingEventsProgressState {
     pub events: Vec<IndexingEventProgress>,
 }
 
 impl IndexingEventsProgressState {
+    /// Monitors the progress of indexing events and updates the state.
+    ///
+    /// # Arguments
+    ///
+    /// * `event_information` - A vector of `EventInformation`.
+    ///
+    /// # Returns
+    ///
+    /// An `Arc<Mutex<IndexingEventsProgressState>>` representing the shared state.
     pub async fn monitor(
         event_information: Vec<EventInformation>,
     ) -> Arc<Mutex<IndexingEventsProgressState>> {
         let mut events = Vec::new();
-        for event_information in event_information {
-            for network_contract in event_information.contract.details {
+        for event_info in event_information {
+            for network_contract in event_info.contract.details {
                 let latest_block = network_contract.provider.get_block_number().await.unwrap();
                 events.push(IndexingEventProgress::running(
                     network_contract.id,
-                    event_information.contract.name.to_string(),
-                    event_information.event_name.to_string(),
+                    event_info.contract.name.clone(),
+                    event_info.event_name.to_string(),
                     network_contract.start_block.unwrap_or(U64::zero()),
                     network_contract.end_block.unwrap_or(latest_block),
                     network_contract.network.clone(),
@@ -116,14 +130,18 @@ impl IndexingEventsProgressState {
         }
 
         let state = Arc::new(Mutex::new(Self { events }));
-
         tokio::spawn(monitor_state_and_update_ui(state.clone()));
-
         state
     }
 
+    /// Updates the last synced block for a given event.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The ID of the event.
+    /// * `new_last_synced_block` - The new last synced block number.
     pub fn update_last_synced_block(&mut self, id: &str, new_last_synced_block: U64) {
-        for event in self.events.iter_mut() {
+        for event in &mut self.events {
             if event.id == id {
                 if event.progress != 1.0 {
                     if event.syncing_to_block > event.last_synced_block {
@@ -145,22 +163,26 @@ impl IndexingEventsProgressState {
 
                     if new_last_synced_block >= event.syncing_to_block {
                         event.progress = 1.0;
-                        if event.live_indexing {
-                            event.status = IndexingEventProgressStatus::Live;
+                        event.status = if event.live_indexing {
+                            IndexingEventProgressStatus::Live
                         } else {
-                            event.status = IndexingEventProgressStatus::Completed;
-                        }
+                            IndexingEventProgressStatus::Completed
+                        };
                     }
                 }
 
                 event.last_synced_block = new_last_synced_block;
-
                 break;
             }
         }
     }
 }
 
+/// Sets up the terminal for TUI (Text User Interface) mode.
+///
+/// # Returns
+///
+/// A `Result` indicating success or failure.
 pub fn setup_terminal() -> Result<(), io::Error> {
     let mut stdout = io::stdout();
     enable_raw_mode()?;
@@ -168,6 +190,11 @@ pub fn setup_terminal() -> Result<(), io::Error> {
     Ok(())
 }
 
+/// Tears down the terminal from TUI mode.
+///
+/// # Returns
+///
+/// A `Result` indicating success or failure.
 pub fn teardown_terminal() -> Result<(), io::Error> {
     let mut stdout = io::stdout();
     execute!(stdout, LeaveAlternateScreen)?;
@@ -175,6 +202,11 @@ pub fn teardown_terminal() -> Result<(), io::Error> {
     Ok(())
 }
 
+/// Listens for the exit command (q key) to quit the application.
+///
+/// # Returns
+///
+/// A `Result` indicating success or failure.
 async fn listen_for_exit_command() -> Result<(), std::io::Error> {
     loop {
         if event::poll(std::time::Duration::from_millis(500))? {
@@ -187,19 +219,25 @@ async fn listen_for_exit_command() -> Result<(), std::io::Error> {
     }
 }
 
+/// Draws the UI for the TUI application.
+///
+/// # Arguments
+///
+/// * `f` - The frame to draw on.
+/// * `events` - A slice of `IndexingEventProgress` representing the events.
+/// * `scroll` - The current scroll position.
 fn draw_ui(
     f: &mut Frame<CrosstermBackend<Stdout>>,
     events: &[IndexingEventProgress],
     scroll: usize,
 ) {
     let size = f.size();
-    // Use the entire width for the table now that gauges are removed.
     let table_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0)]) // Use full height available
+        .constraints([Constraint::Min(0)])
         .split(size);
 
-    let visible_items = std::cmp::min(events.len(), size.height as usize / 3); // Adjusted for 3 lines per item.
+    let visible_items = std::cmp::min(events.len(), size.height as usize / 3);
 
     let table_rows: Vec<Row> = events
         .iter()
@@ -209,9 +247,7 @@ fn draw_ui(
             Row::new(vec![
                 Cell::from(event.contract_name.clone()),
                 Cell::from(event.event_name.clone()),
-                Cell::from(
-                    event.last_synced_block.to_string(), // .to_formatted_string(&Locale::en),
-                ),
+                Cell::from(event.last_synced_block.to_string()),
                 Cell::from(event.network.clone()),
                 Cell::from(event.status.as_str().to_string()),
                 Cell::from(format!("{:.2}%", event.progress * 100.0)),
@@ -248,6 +284,15 @@ fn draw_ui(
     f.render_widget(table, table_chunks[0]);
 }
 
+/// Calculates a hash for a list of `IndexingEventProgress` for change detection.
+///
+/// # Arguments
+///
+/// * `events` - A slice of `IndexingEventProgress`.
+///
+/// # Returns
+///
+/// A `u64` hash representing the current state of the events.
 fn calculate_events_hash(events: &[IndexingEventProgress]) -> u64 {
     let mut hasher = DefaultHasher::new();
     for event in events {
@@ -256,6 +301,11 @@ fn calculate_events_hash(events: &[IndexingEventProgress]) -> u64 {
     hasher.finish()
 }
 
+/// Monitors the state of indexing events and updates the TUI.
+///
+/// # Arguments
+///
+/// * `state` - An `Arc<Mutex<IndexingEventsProgressState>>` representing the shared state.
 pub async fn monitor_state_and_update_ui(state: Arc<Mutex<IndexingEventsProgressState>>) {
     let stdout = io::stdout();
     let backend = CrosstermBackend::new(stdout);
@@ -271,34 +321,29 @@ pub async fn monitor_state_and_update_ui(state: Arc<Mutex<IndexingEventsProgress
     });
 
     let mut scroll: usize = 0;
-
-    if let Ok(true) = event::poll(std::time::Duration::from_millis(100)) {
-        if let Ok(event::Event::Key(key)) = event::read() {
-            match key.code {
-                KeyCode::Down => scroll = scroll.saturating_add(1),
-                KeyCode::Up => scroll = scroll.saturating_sub(1),
-                _ => {}
-            }
-        }
-    }
-
     let mut last_seen_hash = 0;
 
     loop {
+        if event::poll(std::time::Duration::from_millis(100)).unwrap() {
+            if let event::Event::Key(key) = event::read().unwrap() {
+                match key.code {
+                    KeyCode::Down => scroll = scroll.saturating_add(1),
+                    KeyCode::Up => scroll = scroll.saturating_sub(1),
+                    _ => {}
+                }
+            }
+        }
+
         let state_lock = state.lock().await;
         let current_hash = calculate_events_hash(&state_lock.events);
-        if last_seen_hash == current_hash {
-            drop(state_lock);
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            continue;
+        if last_seen_hash != current_hash {
+            terminal
+                .draw(|f| {
+                    draw_ui(f, &state_lock.events, scroll);
+                })
+                .unwrap();
+            last_seen_hash = current_hash;
         }
-        terminal
-            .draw(|f| {
-                draw_ui(f, &state_lock.events, scroll);
-            })
-            .unwrap();
-
-        last_seen_hash = current_hash;
         drop(state_lock);
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }

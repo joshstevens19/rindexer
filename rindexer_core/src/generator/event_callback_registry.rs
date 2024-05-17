@@ -1,8 +1,3 @@
-use std::str::FromStr;
-use std::{any::Any, sync::Arc};
-
-use futures::future::BoxFuture;
-
 use ethers::addressbook::Address;
 use ethers::prelude::{Filter, RetryClient};
 use ethers::types::BigEndianHash;
@@ -11,10 +6,14 @@ use ethers::{
     providers::{Http, Provider},
     types::{Bytes, Log, H256, U256, U64},
 };
+use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
+use std::{any::Any, sync::Arc};
 
 type Decoder = Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync>;
 
+/// Details about a factory contract, including its address, event name, parameter name, and ABI.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FactoryDetails {
     pub address: String,
@@ -28,6 +27,7 @@ pub struct FactoryDetails {
     pub abi: String,
 }
 
+/// Details about a filter, including the event name and optionally indexed parameters.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FilterDetails {
     pub event_name: String,
@@ -42,6 +42,15 @@ pub struct FilterDetails {
     pub indexed_3: Option<Vec<String>>,
 }
 
+/// Parses a topic string into an `H256` hash.
+///
+/// # Arguments
+///
+/// * `input` - The input string to parse.
+///
+/// # Returns
+///
+/// An `H256` hash parsed from the input string.
 fn parse_topic(input: &str) -> H256 {
     match input.to_lowercase().as_str() {
         "true" => H256::from_low_u64_be(1),
@@ -59,19 +68,25 @@ fn parse_topic(input: &str) -> H256 {
 }
 
 impl FilterDetails {
+    /// Extends a filter with indexed parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `filter` - The filter to extend.
+    ///
+    /// # Returns
+    ///
+    /// The extended filter.
     pub fn extend_filter_indexed(&self, mut filter: Filter) -> Filter {
         if let Some(indexed_1) = &self.indexed_1 {
             filter = filter.topic1(indexed_1.iter().map(|i| parse_topic(i)).collect::<Vec<_>>());
         }
-
         if let Some(indexed_2) = &self.indexed_2 {
             filter = filter.topic2(indexed_2.iter().map(|i| parse_topic(i)).collect::<Vec<_>>());
         }
-
         if let Some(indexed_3) = &self.indexed_3 {
             filter = filter.topic3(indexed_3.iter().map(|i| parse_topic(i)).collect::<Vec<_>>());
         }
-
         filter
     }
 }
@@ -84,36 +99,45 @@ pub enum IndexingContractSetup {
 }
 
 impl IndexingContractSetup {
+    /// Checks if the contract setup is a filter.
+    ///
+    /// # Returns
+    ///
+    /// `true` if it is a filter, `false` otherwise.
     pub fn is_filter(&self) -> bool {
         matches!(self, IndexingContractSetup::Filter(_))
     }
 }
 
+/// Represents a contract on a specific network with its setup and associated provider.
 #[derive(Clone)]
 pub struct NetworkContract {
     pub id: String,
-
     pub network: String,
-
     pub indexing_contract_setup: IndexingContractSetup,
-
     pub provider: &'static Arc<Provider<RetryClient<Http>>>,
-
     pub decoder: Decoder,
-
     pub start_block: Option<U64>,
-
     pub end_block: Option<U64>,
-
     pub polling_every: Option<u64>,
 }
 
 impl NetworkContract {
+    /// Decodes a log using the contract's decoder.
+    ///
+    /// # Arguments
+    ///
+    /// * `log` - The log to decode.
+    ///
+    /// # Returns
+    ///
+    /// The decoded log as an `Arc<dyn Any + Send + Sync>`.
     pub fn decode_log(&self, log: Log) -> Arc<dyn Any + Send + Sync> {
         (self.decoder)(log.topics, log.data)
     }
 }
 
+/// Information about a contract, including its name, details, ABI, and reorganization safety status.
 #[derive(Clone)]
 pub struct ContractInformation {
     pub name: String,
@@ -122,35 +146,38 @@ pub struct ContractInformation {
     pub reorg_safe_distance: bool,
 }
 
+/// Transaction-related information for an event.
 #[derive(Debug)]
 pub struct TxInformation {
     pub network: String,
-
     pub address: Address,
-
     pub block_hash: Option<H256>,
-
     pub block_number: Option<U64>,
-
     pub transaction_hash: Option<H256>,
-
     pub transaction_index: Option<U64>,
-
     pub log_index: Option<U256>,
-
     pub transaction_log_index: Option<U256>,
-
     pub log_type: Option<String>,
-
     pub removed: Option<bool>,
 }
 
+/// Result of an event, including decoded data and transaction information.
 pub struct EventResult {
     pub decoded_data: Arc<dyn Any + Send + Sync>,
     pub tx_information: TxInformation,
 }
 
 impl EventResult {
+    /// Creates a new `EventResult` from a network contract and log.
+    ///
+    /// # Arguments
+    ///
+    /// * `network_contract` - The network contract associated with the event.
+    /// * `log` - The log to process.
+    ///
+    /// # Returns
+    ///
+    /// A new `EventResult`.
     pub fn new(network_contract: Arc<NetworkContract>, log: &Log) -> Self {
         Self {
             decoded_data: network_contract.decode_log(log.clone()),
@@ -170,6 +197,7 @@ impl EventResult {
     }
 }
 
+/// Information about an event, including its indexer, topic ID, event name, contract, and callback.
 pub struct EventInformation {
     pub indexer_name: &'static str,
     pub topic_id: &'static str,
@@ -190,6 +218,7 @@ impl Clone for EventInformation {
     }
 }
 
+/// Registry for event callbacks.
 #[derive(Clone)]
 pub struct EventCallbackRegistry {
     pub events: Vec<EventInformation>,
@@ -202,18 +231,43 @@ impl Default for EventCallbackRegistry {
 }
 
 impl EventCallbackRegistry {
+    /// Creates a new `EventCallbackRegistry`.
+    ///
+    /// # Returns
+    ///
+    /// A new `EventCallbackRegistry`.
     pub fn new() -> Self {
         EventCallbackRegistry { events: Vec::new() }
     }
 
+    /// Finds an event by its topic ID.
+    ///
+    /// # Arguments
+    ///
+    /// * `topic_id` - The topic ID of the event.
+    ///
+    /// # Returns
+    ///
+    /// An optional reference to the `EventInformation` if found.
     pub fn find_event(&self, topic_id: &'static str) -> Option<&EventInformation> {
         self.events.iter().find(|e| e.topic_id == topic_id)
     }
 
+    /// Registers a new event.
+    ///
+    /// # Arguments
+    ///
+    /// * `event` - The event to register.
     pub fn register_event(&mut self, event: EventInformation) {
         self.events.push(event);
     }
 
+    /// Triggers an event asynchronously.
+    ///
+    /// # Arguments
+    ///
+    /// * `topic_id` - The topic ID of the event.
+    /// * `data` - The event result data.
     pub async fn trigger_event(&self, topic_id: &'static str, data: Vec<EventResult>) {
         if let Some(callback) = self.find_event(topic_id).map(|e| &e.callback) {
             callback(data).await;
@@ -225,6 +279,11 @@ impl EventCallbackRegistry {
         }
     }
 
+    /// Completes the registry and returns an `Arc` reference to it.
+    ///
+    /// # Returns
+    ///
+    /// An `Arc<Self>` reference to the registry.
     pub fn complete(&self) -> Arc<Self> {
         Arc::new(self.clone())
     }

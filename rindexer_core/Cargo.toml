@@ -26,3 +26,4 @@ tui = "0.19.0"
 rand = "0.8.5"
 num-format = "0.4.4"
 rust_decimal = { version = "1.35.0", features = ["db-tokio-postgres"] }
+tempfile = "3.9.0"

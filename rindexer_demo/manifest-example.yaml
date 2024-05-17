@@ -12,12 +12,12 @@ indexers:
         abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
         reorg_safe_distance: false
         generate_csv: true
-      - name: LensHub
-        details:
-          - address: 0xDb46d1Dc155634FbC732f92E853b10B288AD5a1d
-            network: polygon
-            startBlock: 56399431
-        abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-hub-events-abi.json
+#      - name: LensHub
+#        details:
+#          - address: 0xDb46d1Dc155634FbC732f92E853b10B288AD5a1dß
+#            network: polygon
+#            startBlock: 56399431
+#        abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-hub-events-abi.json
 #      - name: CollectNfts
 #        details:
 #          - factory:

@@ -201,8 +201,16 @@ pub struct Global {
     pub databases: Option<Databases>,
 }
 
+/// Substitutes environment variables in a string with their values.
+///
+/// # Arguments
+///
+/// * `contents` - The string containing environment variables to substitute.
+///
+/// # Returns
+///
+/// A `Result` containing the string with substituted environment variables or an error message.
 fn substitute_env_variables(contents: &str) -> Result<String, String> {
-    // safe unwrap here, because the regex is hardcoded
     let re = Regex::new(r"\$\{([^}]+)}").unwrap();
     let result = re.replace_all(contents, |caps: &regex::Captures| {
         let var_name = &caps[1];
@@ -211,22 +219,37 @@ fn substitute_env_variables(contents: &str) -> Result<String, String> {
     Ok(result.to_string())
 }
 
+/// Reads a manifest file and returns a `Manifest` struct.
+///
+/// # Arguments
+///
+/// * `file_path` - A reference to the path of the manifest file.
+///
+/// # Returns
+///
+/// A `Result` containing the `Manifest` struct or an error.
 pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, Box<dyn Error>> {
     let mut file = File::open(file_path)?;
     let mut contents = String::new();
     // rewrite the env variables
     // let mut substituted_contents =
     //     substitute_env_variables(&contents)?;
-
     file.read_to_string(&mut contents)?;
 
-    println!("before manifest {:?}", contents);
-
     let manifest: Manifest = serde_yaml::from_str(&contents)?;
-    println!("after manifest {:?}", manifest);
     Ok(manifest)
 }
 
+/// Writes a `Manifest` struct to a YAML file.
+///
+/// # Arguments
+///
+/// * `data` - A reference to the `Manifest` struct to write.
+/// * `file_path` - A reference to the path of the output file.
+///
+/// # Returns
+///
+/// A `Result` indicating success or failure.
 pub fn write_manifest(data: &Manifest, file_path: &PathBuf) -> Result<(), Box<dyn Error>> {
     let yaml_string = serde_yaml::to_string(data)?;
 
@@ -237,12 +260,112 @@ pub fn write_manifest(data: &Manifest, file_path: &PathBuf) -> Result<(), Box<dy
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use super::*;
+    use std::env;
+    use std::fs;
+    use tempfile::TempDir;
 
     #[test]
-    fn read_works() {
-        let manifest = super::read_manifest(&PathBuf::from("/Users/joshstevens/code/rindexer/rindexer_core/external-examples/manifest-example.yaml")).unwrap();
+    fn test_substitute_env_variables() {
+        env::set_var("TEST_ENV_VAR", "test_value");
+        let input = "Value: ${TEST_ENV_VAR}";
+        let result = substitute_env_variables(input).unwrap();
+        assert_eq!(result, "Value: test_value");
+    }
 
-        println!("{:?}", manifest);
+    #[test]
+    fn test_read_manifest() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("manifest.yaml");
+        let content = r#"
+        name: "Test Manifest"
+        indexers: []
+        networks: []
+        "#;
+        fs::write(&file_path, content).unwrap();
+
+        let manifest = read_manifest(&file_path).unwrap();
+        assert_eq!(manifest.name, "Test Manifest");
+    }
+
+    #[test]
+    fn test_write_manifest() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("manifest.yaml");
+
+        let manifest = Manifest {
+            name: "Test Manifest".to_string(),
+            description: None,
+            repository: None,
+            indexers: vec![],
+            networks: vec![],
+            global: None,
+        };
+
+        write_manifest(&manifest, &file_path).unwrap();
+
+        let written_content = fs::read_to_string(&file_path).unwrap();
+        assert!(written_content.contains("name: \"Test Manifest\""));
+    }
+
+    #[test]
+    fn test_contract_details_address() {
+        let contract_details = ContractDetails {
+            network: "testnet".to_string(),
+            address: Some("0x123".to_string()),
+            filter: None,
+            factory: None,
+            start_block: None,
+            end_block: None,
+            polling_every: None,
+        };
+
+        assert_eq!(contract_details.address(), Some("0x123"));
+
+        let factory_details = FactoryDetails {
+            address: "0xabc".to_string(),
+            event_name: "TestEvent".to_string(),
+            parameter_name: "param".to_string(),
+            abi: "[]".to_string(),
+        };
+
+        let contract_details = ContractDetails {
+            network: "testnet".to_string(),
+            address: None,
+            filter: None,
+            factory: Some(factory_details),
+            start_block: None,
+            end_block: None,
+            polling_every: None,
+        };
+
+        assert_eq!(contract_details.address(), Some("0xabc"));
+    }
+
+    #[test]
+    fn test_contract_details_indexing_contract_setup() {
+        let filter_details = FilterDetails {
+            event_name: "TestEvent".to_string(),
+            indexed_1: None,
+            indexed_2: None,
+            indexed_3: None,
+        };
+
+        let contract_details = ContractDetails {
+            network: "testnet".to_string(),
+            address: None,
+            filter: Some(filter_details.clone()),
+            factory: None,
+            start_block: None,
+            end_block: None,
+            polling_every: None,
+        };
+
+        match contract_details.indexing_contract_setup() {
+            IndexingContractSetup::Filter(filter) => {
+                assert_eq!(filter.event_name, "TestEvent");
+            }
+            _ => panic!("Expected filter setup"),
+        }
     }
 }

@@ -18,36 +18,28 @@ use crate::indexer::progress::IndexingEventsProgressState;
 use crate::indexer::reorg::reorg_safe_distance_for_chain;
 use crate::{EthereumSqlTypeWrapper, PostgresClient};
 
+/// Settings for controlling concurrent processing of events.
 pub struct ConcurrentSettings {
-    /// The max amount of concurrency you want to do side by side for indexing, the higher, the faster
-    /// note it will depend on your RPC client - this is based per event
     max_concurrency: usize,
 }
 
-impl ConcurrentSettings {
-    #[allow(clippy::should_implement_trait)]
-    pub fn default() -> Self {
+impl Default for ConcurrentSettings {
+    fn default() -> Self {
         Self {
             max_concurrency: 100,
         }
     }
 }
 
+/// Settings for starting the indexing process.
 pub struct StartIndexingSettings {
     concurrent: Option<ConcurrentSettings>,
-    /// If events rely on other event data you can set this to true,
-    /// and then it does it in the order its registered
-    /// default is false as it opts for the fastest processes
     execute_in_event_order: bool,
-    /// If event logs you are indexing care about order you can set this to true,
-    /// and then it will process it in the order the logs come in
-    /// default is false as it opts for the fastest process
     execute_event_logs_in_order: bool,
 }
 
-impl StartIndexingSettings {
-    #[allow(clippy::should_implement_trait)]
-    pub fn default() -> Self {
+impl Default for StartIndexingSettings {
+    fn default() -> Self {
         Self {
             concurrent: Some(ConcurrentSettings::default()),
             execute_in_event_order: false,
@@ -75,15 +67,24 @@ struct EventProcessingConfig {
     indexing_distance_from_head: U64,
 }
 
+/// Starts the indexing process based on the provided settings and registry.
+///
+/// # Arguments
+///
+/// * `registry` - The event callback registry.
+/// * `settings` - The settings for starting the indexing process.
+///
+/// # Returns
+///
+/// A `Result` indicating success or failure.
 pub async fn start_indexing(
     registry: Arc<EventCallbackRegistry>,
     settings: StartIndexingSettings,
 ) -> Result<(), BoxedError> {
     let database = Arc::new(PostgresClient::new().await.unwrap());
-
     let event_progress_state = IndexingEventsProgressState::monitor(registry.events.clone()).await;
 
-    let max_block_range = 20000000000;
+    let max_block_range = 20_000_000_000;
     let semaphore = Arc::new(Semaphore::new(
         settings
             .concurrent
@@ -108,29 +109,19 @@ pub async fn start_indexing(
 
             let start_block =
                 last_known_start_block.unwrap_or(contract.start_block.unwrap_or(latest_block));
-            // println!(
-            //     "Starting event: {} from block: {} to block: {}",
-            //     event.topic_id, start_block2, latest_block
-            // );
-
-            // handle reorg block
             let mut indexing_distance_from_head = U64::zero();
             let mut end_block =
                 std::cmp::min(contract.end_block.unwrap_or(latest_block), latest_block);
+
             if event.contract.reorg_safe_distance {
                 let chain_id = contract.provider.get_chainid().await?;
                 let reorg_safe_distance = reorg_safe_distance_for_chain(&chain_id);
                 let safe_block_number = latest_block - reorg_safe_distance;
                 if end_block > safe_block_number {
-                    end_block = safe_block_number
+                    end_block = safe_block_number;
                 }
                 indexing_distance_from_head = reorg_safe_distance;
             }
-
-            // println!(
-            //     "Starting event: {} from block: {} to block: {}",
-            //     event.topic_id, start_block, end_block
-            // );
 
             let event_processing_config = EventProcessingConfig {
                 indexer_name: event.indexer_name,
@@ -165,6 +156,15 @@ pub async fn start_indexing(
     Ok(())
 }
 
+/// Processes events sequentially.
+///
+/// # Arguments
+///
+/// * `event_processing_config` - The configuration for event processing.
+///
+/// # Returns
+///
+/// A `Result` indicating success or failure.
 async fn process_event_sequentially(
     event_processing_config: EventProcessingConfig,
 ) -> Result<(), BoxedError> {
@@ -207,6 +207,15 @@ async fn process_event_sequentially(
     Ok(())
 }
 
+/// Processes events concurrently.
+///
+/// # Arguments
+///
+/// * `event_processing_config` - The configuration for event processing.
+///
+/// # Returns
+///
+/// A `Result` indicating success or failure.
 async fn process_event_concurrently(
     event_processing_config: EventProcessingConfig,
 ) -> Result<(), BoxedError> {
@@ -265,7 +274,6 @@ async fn process_event_concurrently(
         handles.push(handle);
     }
 
-    // Await all spawned handles within the event
     for handle in handles {
         handle.await?;
     }
@@ -273,6 +281,7 @@ async fn process_event_concurrently(
     Ok(())
 }
 
+/// Parameters for processing logs.
 #[derive(Clone)]
 pub struct ProcessLogsParams {
     indexer_name: &'static str,
@@ -288,6 +297,15 @@ pub struct ProcessLogsParams {
     indexing_distance_from_head: U64,
 }
 
+/// Processes logs based on the given parameters.
+///
+/// # Arguments
+///
+/// * `params` - The parameters for processing logs.
+///
+/// # Returns
+///
+/// A `Result` indicating success or failure.
 async fn process_logs(params: ProcessLogsParams) -> Result<(), BoxedError> {
     let provider = Arc::new(params.network_contract.provider.clone());
     let mut logs_stream = fetch_logs_stream(
@@ -321,6 +339,23 @@ async fn process_logs(params: ProcessLogsParams) -> Result<(), BoxedError> {
     Ok(())
 }
 
+/// Handles the result of fetching logs.
+///
+/// # Arguments
+///
+/// * `indexer_name` - The name of the indexer.
+/// * `event_name` - The name of the event.
+/// * `topic_id` - The ID of the topic.
+/// * `execute_events_logs_in_order` - Whether to execute logs in order.
+/// * `progress` - The progress state.
+/// * `network_contract` - The network contract.
+/// * `database` - The database client.
+/// * `registry` - The event callback registry.
+/// * `result` - The result of fetching logs.
+///
+/// # Returns
+///
+/// A `Result` indicating success or failure.
 #[allow(clippy::too_many_arguments)]
 async fn handle_logs_result(
     indexer_name: &'static str,
@@ -368,6 +403,18 @@ async fn handle_logs_result(
     }
 }
 
+/// Retrieves the last synced block number from the database.
+///
+/// # Arguments
+///
+/// * `database` - The database client.
+/// * `indexer_name` - The name of the indexer.
+/// * `event_name` - The name of the event.
+/// * `network` - The network.
+///
+/// # Returns
+///
+/// An `Option` containing the last synced block number, if available.
 async fn get_last_synced_block_number(
     database: Arc<PostgresClient>,
     indexer_name: &'static str,
@@ -393,6 +440,16 @@ async fn get_last_synced_block_number(
     }
 }
 
+/// Updates the progress and the database with the new block number.
+///
+/// # Arguments
+///
+/// * `indexer_name` - The name of the indexer.
+/// * `event_name` - The name of the event.
+/// * `progress` - The progress state.
+/// * `network_contract` - The network contract.
+/// * `database` - The database client.
+/// * `to_block` - The block number to update to.
 fn update_progress_and_db(
     indexer_name: &'static str,
     event_name: &'static str,
@@ -424,6 +481,18 @@ fn update_progress_and_db(
     });
 }
 
+/// Builds a filter for fetching logs.
+///
+/// # Arguments
+///
+/// * `topic_id` - The ID of the topic.
+/// * `indexing_contract_setup` - The setup of the indexing contract.
+/// * `current_block` - The current block number.
+/// * `next_block` - The next block number.
+///
+/// # Returns
+///
+/// A `Filter` for fetching logs.
 fn build_filter(
     topic_id: &'static str,
     indexing_contract_setup: &IndexingContractSetup,

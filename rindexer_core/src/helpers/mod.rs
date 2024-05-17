@@ -8,6 +8,15 @@ use std::process::Command;
 use std::str::FromStr;
 use std::{error::Error, fs::File};
 
+/// Converts a CamelCase string to snake_case.
+///
+/// # Arguments
+///
+/// * `s` - The CamelCase string to convert.
+///
+/// # Returns
+///
+/// A `String` representing the snake_case version of the input string.
 pub fn camel_to_snake(s: &str) -> String {
     let mut snake_case = String::new();
     let mut previous_was_uppercase = false;
@@ -32,6 +41,11 @@ pub fn camel_to_snake(s: &str) -> String {
     snake_case
 }
 
+/// Formats a Rust source file using `rustfmt`.
+///
+/// # Arguments
+///
+/// * `file_path` - The path to the Rust source file.
 fn format_file(file_path: &str) {
     Command::new("rustfmt")
         .arg(file_path)
@@ -39,6 +53,16 @@ fn format_file(file_path: &str) {
         .expect("Failed to execute rustfmt.");
 }
 
+/// Writes contents to a file, creating directories as needed, and formats the file.
+///
+/// # Arguments
+///
+/// * `path` - The path to the file.
+/// * `contents` - The contents to write to the file.
+///
+/// # Returns
+///
+/// A `Result` indicating success or failure.
 pub fn write_file(path: &str, contents: &str) -> Result<(), Box<dyn Error>> {
     let path = Path::new(path);
     if let Some(dir) = path.parent() {
@@ -51,6 +75,15 @@ pub fn write_file(path: &str, contents: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Creates a `mod.rs` file for a given directory, including submodules for all Rust files and directories.
+///
+/// # Arguments
+///
+/// * `path` - The path to the directory.
+///
+/// # Returns
+///
+/// A `Result` indicating success or failure.
 pub fn create_mod_file(path: &Path) -> Result<(), Box<dyn Error>> {
     let entries = fs::read_dir(path)?;
 
@@ -92,10 +125,32 @@ pub fn create_mod_file(path: &Path) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Converts a `U256` value to a hexadecimal string.
+///
+/// # Arguments
+///
+/// * `value` - The `U256` value to convert.
+///
+/// # Returns
+///
+/// A `String` representing the hexadecimal representation of the value.
 pub fn u256_to_hex(value: U256) -> String {
     format!("0x{:x}", value)
 }
 
+/// Parses a hexadecimal string into an `H256` value.
+///
+/// # Arguments
+///
+/// * `input` - The hexadecimal string to parse.
+///
+/// # Returns
+///
+/// An `H256` value parsed from the input string.
+///
+/// # Panics
+///
+/// Panics if the input string is not a valid hexadecimal string of length 64.
 pub fn parse_hex(input: &str) -> H256 {
     // Normalize the input by removing the '0x' prefix if it exists.
     let normalized_input = if input.starts_with("0x") {
@@ -120,13 +175,21 @@ pub fn parse_hex(input: &str) -> H256 {
     })
 }
 
+/// Generates a random alphanumeric string of the given length.
+///
+/// # Arguments
+///
+/// * `len` - The length of the random string to generate.
+///
+/// # Returns
+///
+/// A `String` containing the generated random alphanumeric string.
 pub fn generate_random_id(len: usize) -> String {
-    let random_string: String = rand::thread_rng()
+    rand::thread_rng()
         .sample_iter(&Alphanumeric)
         .take(len)
         .map(char::from)
-        .collect();
-    random_string
+        .collect()
 }
 
 #[cfg(test)]
