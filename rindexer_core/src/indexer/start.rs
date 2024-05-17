@@ -292,6 +292,7 @@ async fn process_logs(params: ProcessLogsParams) -> Result<(), BoxedError> {
     let provider = Arc::new(params.network_contract.provider.clone());
     let mut logs_stream = fetch_logs_stream(
         provider,
+        params.topic_id.parse::<H256>().unwrap(),
         params.filter,
         if params.live_indexing {
             Some(LiveIndexingDetails {

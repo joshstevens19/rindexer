@@ -7,7 +7,6 @@ networks - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60adde36
 eth_getLogs - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60adde361736deeb3b2c/packages/core/src/sync-historical/service.ts#L946
 
 checklist v1.0:
-- add blooms into checks for logs
 - investigate graphql/REST API exposing
 - finish command line https://ponder.sh/docs/api-reference/create-ponder
 - create documentation

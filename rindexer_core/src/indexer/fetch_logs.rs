@@ -1,11 +1,12 @@
 use ethers::middleware::{Middleware, MiddlewareError};
 use ethers::prelude::{Filter, JsonRpcError, Log};
-use ethers::types::{BlockNumber, U64};
+use ethers::types::{BlockNumber, Bloom, FilteredParams, ValueOrArray, H256, U64, Address};
 use regex::Regex;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
+use ValueOrArray::Value;
 
 struct RetryWithBlockRangeResult {
     from: BlockNumber,
@@ -114,8 +115,42 @@ pub struct LiveIndexingDetails {
     pub indexing_distance_from_head: U64,
 }
 
+/// Checks if a contract address is present in the logs bloom filter.
+///
+/// This function takes a contract address and a logs bloom filter and checks if the contract
+/// address is present in the logs bloom filter. It uses the `FilteredParams::address_filter`
+/// method to create an address filter and then checks if the filter matches the logs bloom.
+///
+/// # Arguments
+///
+/// * `contract_address` - The contract address to check.
+/// * `logs_bloom` - The logs bloom filter to match against.
+fn contract_in_bloom(contract_address: Address, logs_bloom: Bloom) -> bool {
+    // TODO create a issue on reth about this
+    let address_filter =
+        FilteredParams::address_filter(&Some(Value(contract_address)));
+    FilteredParams::matches_address(logs_bloom, &address_filter)
+}
+
+/// Checks if a topic ID is present in the logs bloom filter.
+///
+/// This function takes a topic ID and a logs bloom filter and checks if the topic ID is present
+/// in the logs bloom filter. It uses the `FilteredParams::topics_filter` method to create a
+/// topics filter and then checks if the filter matches the logs bloom.
+///
+/// # Arguments
+///
+/// * `topic_id` - The topic ID to check.
+/// * `logs_bloom` - The logs bloom filter to match against.
+fn topic_in_bloom(topic_id: H256, logs_bloom: Bloom) -> bool {
+    let topic_filter =
+        FilteredParams::topics_filter(&Some(vec![Value(Some(topic_id))]));
+    FilteredParams::matches_topics(logs_bloom, &topic_filter)
+}
+
 pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
     provider: Arc<M>,
+    topic_id: H256,
     initial_filter: Filter,
     live_indexing_details: Option<LiveIndexingDetails>,
 ) -> impl tokio_stream::Stream<Item = Result<FetchLogsStream, Box<<M as Middleware>::Error>>>
@@ -123,6 +158,7 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
        + Unpin {
     let (tx, rx) = mpsc::unbounded_channel();
     let live_indexing = live_indexing_details.is_some();
+    let contract_address = initial_filter.address.clone();
     let reorg_safe_distance = live_indexing_details
         .unwrap_or(LiveIndexingDetails {
             indexing_distance_from_head: U64::from(0),
@@ -161,21 +197,44 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
                         }
                         if live_indexing {
                             // println!("Waiting for more logs..");
-                            // switch these around!
-                            current_filter = current_filter.from_block(to_block);
+                            // always +1 onto the next one
+                            current_filter = current_filter.from_block(to_block + 1);
                             loop {
                                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                                let latest_block = provider.get_block_number().await.unwrap();
-                                let safe_block_number = latest_block - reorg_safe_distance;
+                                let latest_block =
+                                    provider.get_block(BlockNumber::Latest).await.unwrap();
+                                match latest_block {
+                                    Some(latest_block) => {
+                                        let safe_block_number =
+                                            latest_block.number.unwrap() - reorg_safe_distance;
 
-                                // println!("Current block: {:?}", current_block);
-                                // println!("Safe block number: {:?}", safe_block_number);
-                                // println!("To block: {:?}", to_block);
-                                if safe_block_number > to_block {
-                                    current_filter = current_filter.to_block(safe_block_number);
-                                    break;
+                                        // check blooms
+                                        if safe_block_number == to_block {
+                                            match &contract_address {
+                                                Some(Value(contract_address)) if !contract_in_bloom(*contract_address, latest_block.logs_bloom.unwrap()) => {
+                                                    continue;
+                                                }
+                                                _ => {}
+                                            }
+                                            if !topic_in_bloom(topic_id, latest_block.logs_bloom.unwrap()) {
+                                                continue;
+                                            }
+                                            break;
+                                        }
+
+                                        // println!("Current block: {:?}", current_block);
+                                        // println!("Safe block number: {:?}", safe_block_number);
+                                        // println!("To block: {:?}", to_block);
+                                        if safe_block_number >= to_block {
+                                            current_filter =
+                                                current_filter.to_block(safe_block_number);
+                                            break;
+                                        }
+                                    }
+                                    None => {
+                                        continue;
+                                    }
                                 }
-
                                 // println!("Waiting for block number to reach a safe distance. Current safe block: {:?}", safe_block_number);
                             }
                             continue;
