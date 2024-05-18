@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::error::Error;
 use std::fs;
+use std::iter::Map;
 
 use crate::helpers::camel_to_snake;
 use crate::manifest::yaml::{Contract, ContractDetails, Databases};
@@ -36,7 +37,6 @@ pub struct ABIItem {
 /// A `Result` containing a vector of `ABIItem` on success or an error.
 pub fn read_abi_file(file_path: &str) -> Result<Vec<ABIItem>, Box<dyn Error>> {
     let abi_str = fs::read_to_string(file_path)?;
-    println!("abi_str {:?}", abi_str);
     let abi_json: Vec<ABIItem> = serde_json::from_str(&abi_str)?;
     Ok(abi_json)
 }
@@ -119,10 +119,11 @@ fn format_param_type(input: &ABIInput) -> String {
 ///
 /// A string representing the topic ID.
 fn compute_topic_id(event_signature: &str) -> String {
-    keccak256(event_signature)
-        .iter()
-        .map(|byte| format!("{:02x}", byte))
-        .collect::<String>()
+    Map::collect(
+        keccak256(event_signature)
+            .iter()
+            .map(|byte| format!("{:02x}", byte)),
+    )
 }
 
 /// Formats the event signature.
@@ -135,13 +136,11 @@ fn compute_topic_id(event_signature: &str) -> String {
 ///
 /// A formatted string representing the event signature.
 fn format_event_signature(item: &ABIItem) -> String {
-    let params = item
-        .inputs
+    item.inputs
         .iter()
         .map(format_param_type)
         .collect::<Vec<_>>()
-        .join(",");
-    format!("{}({})", item.name, params)
+        .join(",")
 }
 
 /// Generates the contract name for ABI generation.
@@ -669,7 +668,7 @@ fn generate_event_callback_structs_code(
                         if result.len() == events_len {{
                             (self.callback)(&result, self.context.clone()).await;
                         }} else {{
-                            println!("{name}Event: Unexpected data type - expected: {struct_data}")
+                            panic!("{name}Event: Unexpected data type - expected: {struct_data}")
                         }}
                     }}
                 }}
@@ -1222,6 +1221,16 @@ pub fn generate_event_handlers(
                 if item.abi_type == "address" {
                     let key = format!("result.event_data.{},", item.value);
                     csv_data.push_str(&format!(r#"format!("{{:?}}", {}),"#, key));
+                } else if item.abi_type.contains("bytes") {
+                    csv_data.push_str(&format!(
+                        r#"result.event_data.{}.iter().map(|byte| format!("{{:02x}}", byte)).collect::<Vec<_>>().join(""),"#,
+                        item.value
+                    ));
+                } else if item.abi_type.contains("[]") {
+                    csv_data.push_str(&format!(
+                        r#"result.event_data.{}.iter().map(ToString::to_string).collect::<Vec<_>>().join(","),"#,
+                        item.value
+                    ));
                 } else {
                     csv_data.push_str(&format!("result.event_data.{}.to_string(),", item.value));
                 }
@@ -1264,7 +1273,6 @@ pub fn generate_event_handlers(
                     {handler_name}Event::new(
                         Arc::new(|results, context| {{
                             Box::pin(async move {{
-                                println!("{handler_name} event: {{:?}}", results);
                                 for result in results {{
                                     {csv_write}
                                     {postgres}

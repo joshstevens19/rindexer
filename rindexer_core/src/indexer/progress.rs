@@ -130,7 +130,7 @@ impl IndexingEventsProgressState {
         }
 
         let state = Arc::new(Mutex::new(Self { events }));
-        tokio::spawn(monitor_state_and_update_ui(state.clone()));
+        // tokio::spawn(monitor_state_and_update_ui(state.clone()));
         state
     }
 

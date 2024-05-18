@@ -107,8 +107,9 @@ pub async fn start_indexing(
             )
             .await;
 
-            let start_block =
-                last_known_start_block.unwrap_or(contract.start_block.unwrap_or(latest_block));
+            //             let start_block =
+            // ˚                last_known_start_block.unwrap_or(contract.start_block.unwrap_or(latest_block));
+            let start_block = U64::from("0x035b0fa7");
             let mut indexing_distance_from_head = U64::zero();
             let mut end_block =
                 std::cmp::min(contract.end_block.unwrap_or(latest_block), latest_block);
@@ -219,6 +220,10 @@ async fn process_event_sequentially(
 async fn process_event_concurrently(
     event_processing_config: EventProcessingConfig,
 ) -> Result<(), BoxedError> {
+    println!(
+        "Processing event concurrently {}",
+        event_processing_config.event_name
+    );
     let mut handles = Vec::new();
     for _current_block in (event_processing_config.start_block.as_u64()
         ..event_processing_config.end_block.as_u64())
@@ -267,6 +272,11 @@ async fn process_event_concurrently(
                         .indexing_distance_from_head,
                 })
                 .await;
+
+                println!(
+                    "Finished processing event concurrently {}",
+                    event_processing_config.event_name
+                );
                 drop(permit);
                 result
             }
@@ -375,6 +385,12 @@ async fn handle_logs_result(
                 .iter()
                 .map(|log| EventResult::new(network_contract.clone(), log))
                 .collect::<Vec<_>>();
+
+            println!(
+                "Processing logs {} - length {}",
+                event_name,
+                result.logs.len()
+            );
 
             if !fn_data.is_empty() {
                 if execute_events_logs_in_order {

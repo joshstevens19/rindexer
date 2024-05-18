@@ -14,10 +14,11 @@ indexers:
         generate_csv: true
 #      - name: LensHub
 #        details:
-#          - address: 0xDb46d1Dc155634FbC732f92E853b10B288AD5a1dß
+#          - address: 0xDb46d1Dc155634FbC732f92E853b10B288AD5a1d
 #            network: polygon
 #            startBlock: 56399431
 #        abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-hub-events-abi.json
+#        generate_csv: true
 #      - name: CollectNfts
 #        details:
 #          - factory:
@@ -37,6 +38,7 @@ indexers:
             network: polygon
             startBlock: 56399431
         abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/erc20-abi.json
+        generate_csv: true
 networks:
   - name: polygon
     chainId: 137
