@@ -6,6 +6,7 @@ mod rindexer;
 //use crate::indexers::lens_registry_example::lens_hub::lens_hub_handlers;
 //use crate::indexers::lens_registry_example::lens_registry::lens_registry_handlers;
 use crate::indexers::lens_registry_example::erc20_filter::erc20_filter_handlers;
+use crate::indexers::lens_registry_example::lens_hub::lens_hub_handlers;
 use crate::indexers::lens_registry_example::lens_registry::lens_registry_handlers;
 use rindexer_core::generator::build::generate_indexers_handlers_code;
 use rindexer_core::manifest::yaml::read_manifest;
@@ -17,7 +18,6 @@ use rindexer_core::{
 };
 use std::path::PathBuf;
 use std::str::FromStr;
-//use crate::indexers::lens_registry_example::lens_registry::lens_registry_handlers;
 
 #[tokio::main]
 async fn main() {
@@ -39,8 +39,8 @@ async fn main() {
     }
 
     lens_registry_handlers(&mut registry).await;
-    // lens_hub_handlers(&mut registry).await;
-    erc20_filter_handlers(&mut registry).await;
+    //lens_hub_handlers(&mut registry).await;
+    //erc20_filter_handlers(&mut registry).await;
 
     let _ = start_indexing(registry.complete(), StartIndexingSettings::default()).await;
 }
