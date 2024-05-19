@@ -9,6 +9,6 @@ mod networks_bindings;
 
 // Re-export items from events_bindings for external use
 pub use events_bindings::{
-    extract_event_names_and_signatures_from_abi, generate_abi_name_properties, read_abi_file,
+    extract_event_names_and_signatures_from_abi, generate_abi_name_properties, read_abi_items,
     ABIInput, EventInfo, GenerateAbiPropertiesType,
 };

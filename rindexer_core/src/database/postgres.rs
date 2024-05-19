@@ -11,7 +11,7 @@ use tokio_postgres::{Client, Error as PgError, NoTls, Row, Statement, Transactio
 
 // Internal modules
 use crate::generator::{
-    extract_event_names_and_signatures_from_abi, generate_abi_name_properties, read_abi_file,
+    extract_event_names_and_signatures_from_abi, generate_abi_name_properties, read_abi_items,
     ABIInput, EventInfo, GenerateAbiPropertiesType,
 };
 use crate::helpers::camel_to_snake;
@@ -381,7 +381,7 @@ pub fn create_tables_for_indexer_sql(indexer: &Indexer) -> String {
     );
 
     for contract in &indexer.contracts {
-        if let Ok(abi_items) = read_abi_file(&contract.abi) {
+        if let Ok(abi_items) = read_abi_items(contract) {
             if let Ok(event_names) = extract_event_names_and_signatures_from_abi(&abi_items) {
                 let networks: Vec<String> =
                     contract.details.iter().map(|d| d.network.clone()).collect();
