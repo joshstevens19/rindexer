@@ -10,6 +10,8 @@ indexers:
             network: polygon
             startBlock: 56399431
         abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
+        include_events:
+          - HandleLinked
         reorg_safe_distance: false
         generate_csv: true
 #      - name: LensHub

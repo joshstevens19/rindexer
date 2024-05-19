@@ -26,19 +26,43 @@ pub struct ABIItem {
     type_: String,
 }
 
-/// Reads an ABI file and parses its content into a vector of `ABIItem`.
+/// Reads and filters ABI items from the contract's ABI file.
+///
+/// This function reads the ABI JSON string from the file specified in the `contract.abi` path,
+/// deserializes it into a vector of `ABIItem`, and filters the items based on the `include_events`
+/// option in the contract. If `include_events` is `Some`, only the events listed in `include_events`
+/// will be included along with all non-event items. If `include_events` is `None`, all items will
+/// be included.
 ///
 /// # Arguments
 ///
-/// * `file_path` - The path to the ABI file.
+/// * `contract` - A reference to a `Contract` struct containing the ABI file path and an optional
+///                list of event names to include.
 ///
 /// # Returns
 ///
-/// A `Result` containing a vector of `ABIItem` on success or an error.
-pub fn read_abi_file(file_path: &str) -> Result<Vec<ABIItem>, Box<dyn Error>> {
-    let abi_str = fs::read_to_string(file_path)?;
-    let abi_json: Vec<ABIItem> = serde_json::from_str(&abi_str)?;
-    Ok(abi_json)
+/// A `Result` containing a vector of `ABIItem` if successful, or a boxed `dyn Error` if an error occurs.
+///
+/// # Errors
+///
+/// This function will return an error if the ABI file cannot be read or if the JSON deserialization fails.
+pub fn read_abi_items(contract: &Contract) -> Result<Vec<ABIItem>, Box<dyn Error>> {
+    // Read the ABI JSON string from the file
+    let abi_str = fs::read_to_string(&contract.abi)?;
+    // Deserialize the JSON string to a vector of ABI items
+    let abi_items: Vec<ABIItem> = serde_json::from_str(&abi_str)?;
+
+    // Filter the ABI items
+    let filtered_abi_items = match &contract.include_events {
+        Some(events) => abi_items
+            .into_iter()
+            .filter(|item| item.type_ != "event" || events.contains(&item.name))
+            .collect(),
+        None => abi_items,
+    };
+
+    // Return the filtered ABI items
+    Ok(filtered_abi_items)
 }
 
 /// Struct representing an ABI input.
@@ -531,6 +555,7 @@ fn generate_contract_type_fn_code(contract: &Contract) -> String {
                 name: "{name}".to_string(),
                 details: {details},
                 abi: "{abi}".to_string(),
+                include_events: {include_events},
                 reorg_safe_distance: {reorg_safe_distance},
                 generate_csv: {generate_csv},
             }}
@@ -539,6 +564,21 @@ fn generate_contract_type_fn_code(contract: &Contract) -> String {
         name = contract.name,
         details = details,
         abi = contract.abi,
+        include_events = if contract.include_events.is_some() {
+            format!(
+                "Some(vec![{}])",
+                contract
+                    .include_events
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .map(|s| format!("\"{}\".to_string()", s))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        } else {
+            "None".to_string()
+        },
         reorg_safe_distance = contract.reorg_safe_distance,
         generate_csv = contract.generate_csv
     )
@@ -1080,7 +1120,7 @@ pub fn generate_abi_name_properties(
 ///
 /// A vector of `ABIItem` containing the ABI items.
 fn get_abi_items(contract: &Contract, is_filter: bool) -> Result<Vec<ABIItem>, Box<dyn Error>> {
-    let mut abi_items = read_abi_file(&contract.abi)?;
+    let mut abi_items = read_abi_items(contract)?;
     if is_filter {
         let filter_event_names: Vec<String> = contract
             .details
