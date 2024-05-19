@@ -2,6 +2,7 @@
 use bytes::BytesMut;
 use dotenv::dotenv;
 use ethers::types::{Address, Bytes, H128, H160, H256, H512, U128, U256, U512, U64};
+use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use rust_decimal::Decimal;
 use std::{env, str};
 use thiserror::Error;
@@ -15,6 +16,11 @@ use crate::generator::{
 };
 use crate::helpers::camel_to_snake;
 use crate::manifest::yaml::Indexer;
+
+pub fn database_user() -> Result<String, env::VarError> {
+    dotenv().ok();
+    env::var("DATABASE_USER")
+}
 
 /// Constructs a PostgresSQL connection string using environment variables.
 ///
@@ -36,8 +42,35 @@ fn connection_string() -> Result<String, env::VarError> {
     dotenv().ok();
     Ok(format!(
         "postgresql://{}:{}@{}:{}/{}",
-        env::var("DATABASE_USER")?,
+        database_user()?,
         env::var("DATABASE_PASSWORD")?,
+        env::var("DATABASE_HOST")?,
+        env::var("DATABASE_PORT")?,
+        env::var("DATABASE_NAME")?
+    ))
+}
+/// Constructs a PostgreSQL connection string from environment variables,
+/// encoding the password to be URL-safe.
+///
+/// The following environment variables are expected:
+/// - `DATABASE_USER`: The database username.
+/// - `DATABASE_PASSWORD`: The database user's password.
+/// - `DATABASE_HOST`: The database host (e.g., `localhost`).
+/// - `DATABASE_PORT`: The database port (e.g., `5432`).
+/// - `DATABASE_NAME`: The name of the database.
+///
+/// # Returns
+///
+/// Returns a `Result` containing the PostgreSQL connection string if successful,
+/// or an `env::VarError` if any of the required environment variables are not set.
+pub fn connection_string_as_url() -> Result<String, env::VarError> {
+    dotenv().ok();
+    let password =
+        utf8_percent_encode(&env::var("DATABASE_PASSWORD")?, NON_ALPHANUMERIC).to_string();
+    Ok(format!(
+        "postgresql://{}:{}@{}:{}/{}",
+        database_user()?,
+        password,
         env::var("DATABASE_HOST")?,
         env::var("DATABASE_PORT")?,
         env::var("DATABASE_NAME")?
@@ -320,6 +353,11 @@ fn generate_internal_event_table_sql(
     }).collect::<Vec<_>>().join("\n")
 }
 
+/// Generates the schema name for the given indexer.
+pub fn indexer_schema_name(indexer: &Indexer) -> String {
+    camel_to_snake(&indexer.name)
+}
+
 /// Generates SQL queries to create tables and schemas for the given indexer.
 ///
 /// This function constructs SQL queries to create the necessary schemas and tables based on the provided indexer configuration.
@@ -332,7 +370,7 @@ fn generate_internal_event_table_sql(
 ///
 /// A `String` containing the SQL queries to create the schemas and tables.
 pub fn create_tables_for_indexer_sql(indexer: &Indexer) -> String {
-    let schema_name = camel_to_snake(&indexer.name);
+    let schema_name = indexer_schema_name(indexer);
 
     let mut sql = format!(
         r#"

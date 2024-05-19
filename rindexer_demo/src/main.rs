@@ -14,10 +14,12 @@ use rindexer_core::{
     create_tables_for_indexer_sql,
     generator::{build::generate_rindexer_code, event_callback_registry::EventCallbackRegistry},
     indexer::start::{start_indexing, StartIndexingSettings},
-    PostgresClient,
+    start_graphql_server, PostgresClient,
 };
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::thread;
+use std::time::Duration;
 
 #[tokio::main]
 async fn main() {
@@ -32,8 +34,8 @@ async fn main() {
 
     let client = PostgresClient::new().await.unwrap();
 
-    for indexer in manifest.indexers {
-        let sql = create_tables_for_indexer_sql(&indexer);
+    for indexer in &manifest.indexers {
+        let sql = create_tables_for_indexer_sql(indexer);
         println!("{}", sql);
         client.batch_execute(&sql).await.unwrap();
     }
@@ -42,7 +44,10 @@ async fn main() {
     //lens_hub_handlers(&mut registry).await;
     //erc20_filter_handlers(&mut registry).await;
 
-    let _ = start_indexing(registry.complete(), StartIndexingSettings::default()).await;
+    let result = start_graphql_server(&manifest.indexers, Default::default()).unwrap();
+    thread::sleep(Duration::from_secs(5));
+
+    // let _ = start_indexing(registry.complete(), StartIndexingSettings::default()).await;
 }
 
 fn generate() {

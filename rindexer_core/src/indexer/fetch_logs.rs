@@ -131,7 +131,8 @@ pub struct LiveIndexingDetails {
 ///
 /// `true` if the contract address is in the bloom filter, otherwise `false`.
 fn contract_in_bloom(contract_address: Address, logs_bloom: Bloom) -> bool {
-    let address_filter = FilteredParams::address_filter(&Some(ValueOrArray::Value(contract_address)));
+    let address_filter =
+        FilteredParams::address_filter(&Some(ValueOrArray::Value(contract_address)));
     FilteredParams::matches_address(logs_bloom, &address_filter)
 }
 
@@ -146,7 +147,8 @@ fn contract_in_bloom(contract_address: Address, logs_bloom: Bloom) -> bool {
 ///
 /// `true` if the topic ID is in the bloom filter, otherwise `false`.
 fn topic_in_bloom(topic_id: H256, logs_bloom: Bloom) -> bool {
-    let topic_filter = FilteredParams::topics_filter(&Some(vec![ValueOrArray::Value(Some(topic_id))]));
+    let topic_filter =
+        FilteredParams::topics_filter(&Some(vec![ValueOrArray::Value(Some(topic_id))]));
     FilteredParams::matches_topics(logs_bloom, &topic_filter)
 }
 
@@ -168,13 +170,13 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
     initial_filter: Filter,
     live_indexing_details: Option<LiveIndexingDetails>,
 ) -> impl tokio_stream::Stream<Item = Result<FetchLogsStream, Box<<M as Middleware>::Error>>>
-+ Send
-+ Unpin {
+       + Send
+       + Unpin {
     let (tx, rx) = mpsc::unbounded_channel();
     let live_indexing = live_indexing_details.is_some();
     let contract_address = initial_filter.address.clone();
-    let reorg_safe_distance = live_indexing_details
-        .map_or(U64::from(0), |details| details.indexing_distance_from_head);
+    let reorg_safe_distance =
+        live_indexing_details.map_or(U64::from(0), |details| details.indexing_distance_from_head);
 
     tokio::spawn(async move {
         let snapshot_to_block = initial_filter.get_to_block().unwrap();
@@ -188,7 +190,8 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
                 &topic_id,
                 current_filter.clone(),
                 snapshot_to_block,
-            ).await;
+            )
+            .await;
 
             if let Some(new_filter) = result {
                 current_filter = new_filter;
@@ -206,7 +209,8 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
                 &topic_id,
                 reorg_safe_distance,
                 current_filter,
-            ).await;
+            )
+            .await;
         }
     });
 
@@ -255,20 +259,27 @@ async fn process_historic_logs<M: Middleware + Clone + Send + 'static>(
                 to_block
             );
 
-            if tx.send(Ok(FetchLogsStream {
-                logs: logs.clone(),
-                from_block,
-                to_block,
-            }))
-                .is_err() {
+            if tx
+                .send(Ok(FetchLogsStream {
+                    logs: logs.clone(),
+                    from_block,
+                    to_block,
+                }))
+                .is_err()
+            {
                 println!("Failed to send logs to stream consumer!");
                 return None;
             }
 
             if logs.is_empty() {
                 let new_from_block = to_block + 1;
-                let new_filter = current_filter.from_block(new_from_block).to_block(snapshot_to_block);
-                println!("new_from_block {:?} snapshot_to_block {:?}", new_from_block, snapshot_to_block);
+                let new_filter = current_filter
+                    .from_block(new_from_block)
+                    .to_block(snapshot_to_block);
+                println!(
+                    "new_from_block {:?} snapshot_to_block {:?}",
+                    new_from_block, snapshot_to_block
+                );
                 return if new_from_block > snapshot_to_block {
                     None
                 } else {
@@ -279,7 +290,11 @@ async fn process_historic_logs<M: Middleware + Clone + Send + 'static>(
             if let Some(last_log) = logs.last() {
                 let next_block = last_log.block_number.unwrap() + U64::from(1);
                 println!("next_block {:?}", next_block);
-                return Some(current_filter.from_block(next_block).to_block(snapshot_to_block));
+                return Some(
+                    current_filter
+                        .from_block(next_block)
+                        .to_block(snapshot_to_block),
+                );
             }
         }
         Err(err) => {
@@ -341,13 +356,18 @@ async fn live_indexing_mode<M: Middleware + Clone + Send + 'static>(
             let from_block = current_filter.get_from_block().unwrap();
             // check reorg distance and skip if not safe
             if from_block > safe_block_number {
-                println!("safe_block_number is not safe range yet {:?} > {:?}", from_block, safe_block_number);
+                println!(
+                    "safe_block_number is not safe range yet {:?} > {:?}",
+                    from_block, safe_block_number
+                );
                 continue;
             }
 
             let to_block = safe_block_number;
 
-            if from_block == to_block && !is_relevant_block(contract_address, topic_id, &latest_block) {
+            if from_block == to_block
+                && !is_relevant_block(contract_address, topic_id, &latest_block)
+            {
                 println!("Skipping block {} as it's not relevant", from_block);
                 current_filter = current_filter.from_block(to_block + 1);
                 last_seen_block = to_block;
@@ -355,7 +375,7 @@ async fn live_indexing_mode<M: Middleware + Clone + Send + 'static>(
             }
 
             current_filter = current_filter.to_block(to_block);
-            
+
             println!("Processing live filter: {:?}", current_filter);
 
             match provider.get_logs(&current_filter).await {
@@ -370,12 +390,14 @@ async fn live_indexing_mode<M: Middleware + Clone + Send + 'static>(
 
                     last_seen_block = to_block;
 
-                    if tx.send(Ok(FetchLogsStream {
-                        logs: logs.clone(),
-                        from_block,
-                        to_block,
-                    }))
-                        .is_err() {
+                    if tx
+                        .send(Ok(FetchLogsStream {
+                            logs: logs.clone(),
+                            from_block,
+                            to_block,
+                        }))
+                        .is_err()
+                    {
                         println!("Failed to send logs to stream consumer!");
                         break;
                     }
@@ -383,10 +405,14 @@ async fn live_indexing_mode<M: Middleware + Clone + Send + 'static>(
                     if logs.is_empty() {
                         current_filter = current_filter.from_block(to_block + 1);
                     } else if let Some(last_log) = logs.last() {
-                        current_filter = current_filter.from_block(last_log.block_number.unwrap() + U64::from(1));
+                        current_filter = current_filter
+                            .from_block(last_log.block_number.unwrap() + U64::from(1));
                     }
 
-                    println!("current_filter from_block {:?}", current_filter.get_from_block().unwrap());
+                    println!(
+                        "current_filter from_block {:?}",
+                        current_filter.get_from_block().unwrap()
+                    );
                 }
                 Err(err) => {
                     println!("Error fetching logs: {}", err);
@@ -422,7 +448,10 @@ fn is_relevant_block(
                 }
             }
             ValueOrArray::Array(addresses) => {
-                if addresses.iter().all(|addr| !contract_in_bloom(*addr, latest_block.logs_bloom.unwrap())) {
+                if addresses
+                    .iter()
+                    .all(|addr| !contract_in_bloom(*addr, latest_block.logs_bloom.unwrap()))
+                {
                     return false;
                 }
             }
@@ -435,6 +464,3 @@ fn is_relevant_block(
 
     true
 }
-
-
-

@@ -68,7 +68,7 @@ async fn nonce_updated_handler(registry: &mut EventCallbackRegistry) {
 pub async fn lens_registry_handlers(registry: &mut EventCallbackRegistry) {
     handle_linked_handler(registry).await;
 
-    //handle_unlinked_handler(registry).await;
+    handle_unlinked_handler(registry).await;
 
-    //nonce_updated_handler(registry).await;
+    nonce_updated_handler(registry).await;
 }
