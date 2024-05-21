@@ -165,7 +165,7 @@ pub fn generate_rindexer_code(
         write_indexer_events(output, indexer, &manifest.global)?;
     }
 
-    create_mod_file(Path::new(output))?;
+    create_mod_file(Path::new(output), true)?;
 
     Ok(())
 }
@@ -200,7 +200,7 @@ pub fn generate_indexers_handlers_code(
         }
     }
 
-    create_mod_file(Path::new(output))?;
+    create_mod_file(Path::new(output), false)?;
 
     Ok(())
 }
