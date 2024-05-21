@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::helpers::{camel_to_snake, create_mod_file, write_file};
-use crate::manifest::yaml::{read_manifest, Contract, Global, Indexer, Network};
+use crate::manifest::yaml::{read_manifest, Contract, Global, Indexer, Network, Storage};
 
 use super::events_bindings::{
     abigen_contract_file_name, abigen_contract_name, generate_event_bindings,
@@ -53,18 +53,13 @@ fn write_networks(output: &str, networks: &[Network]) -> Result<(), Box<dyn Erro
 /// # Returns
 ///
 /// A `Result` indicating success or failure.
-fn write_global(
-    output: &str,
-    global: &Option<Global>,
-    networks: &[Network],
-) -> Result<(), Box<dyn Error>> {
-    if let Some(global) = global {
-        let context_code = generate_context_code(&global.contracts, networks)?;
-        write_file(
-            &generate_file_location(output, "global_contracts"),
-            &context_code,
-        )?;
-    }
+fn write_global(output: &str, global: &Global, networks: &[Network]) -> Result<(), Box<dyn Error>> {
+    let context_code = generate_context_code(&global.contracts, networks)?;
+    write_file(
+        &generate_file_location(output, "global_contracts"),
+        &context_code,
+    )?;
+
     Ok(())
 }
 
@@ -110,12 +105,11 @@ fn identify_filter(contract: &mut Contract) -> bool {
 fn write_indexer_events(
     output: &str,
     indexer: Indexer,
-    global: &Option<Global>,
+    storage: &Storage,
 ) -> Result<(), Box<dyn Error>> {
     for mut contract in indexer.contracts {
-        let databases = global.as_ref().map_or(&None, |g| &g.databases);
         let is_filter = identify_filter(&mut contract);
-        let events_code = generate_event_bindings(&indexer.name, &contract, is_filter, databases)?;
+        let events_code = generate_event_bindings(&indexer.name, &contract, is_filter, storage)?;
 
         let event_path = format!(
             "{}/events/{}",
@@ -162,7 +156,7 @@ pub fn generate_rindexer_code(
     write_global(output, &manifest.global, &manifest.networks)?;
 
     for indexer in manifest.indexers {
-        write_indexer_events(output, indexer, &manifest.global)?;
+        write_indexer_events(output, indexer, &manifest.storage)?;
     }
 
     create_mod_file(Path::new(output), true)?;
@@ -190,7 +184,8 @@ pub fn generate_indexers_handlers_code(
     for indexer in manifest.indexers {
         for mut contract in indexer.contracts {
             let is_filter = identify_filter(&mut contract);
-            let result = generate_event_handlers(&indexer.name, is_filter, &contract)?;
+            let result =
+                generate_event_handlers(&indexer.name, is_filter, &contract, &manifest.storage)?;
             let handler_path = format!(
                 "indexers/{}/{}",
                 camel_to_snake(&indexer.name),

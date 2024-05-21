@@ -11,6 +11,14 @@ use crate::generator::event_callback_registry::{
 };
 use serde::{Deserialize, Serialize};
 
+fn default_global() -> Global {
+    Global::default()
+}
+
+fn default_storage() -> Storage {
+    Storage::default()
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Manifest {
     pub name: String,
@@ -25,8 +33,11 @@ pub struct Manifest {
 
     pub networks: Vec<Network>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub global: Option<Global>,
+    #[serde(default = "default_global")]
+    pub global: Global,
+
+    #[serde(default = "default_storage")]
+    pub storage: Storage,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -191,17 +202,45 @@ pub struct PostgresClient {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Databases {
+pub struct CsvDetails {
+    pub path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Storage {
     pub postgres: Option<PostgresClient>,
+    pub csv: Option<CsvDetails>,
+}
+
+impl Default for Storage {
+    fn default() -> Self {
+        Self {
+            postgres: None,
+            csv: None,
+        }
+    }
+}
+
+impl Storage {
+    pub fn postgres_enabled(&self) -> bool {
+        self.postgres.is_some()
+    }
+
+    pub fn csv_enabled(&self) -> bool {
+        self.csv.is_some()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Global {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contracts: Option<Vec<Contract>>,
+}
 
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub databases: Option<Databases>,
+impl Default for Global {
+    fn default() -> Self {
+        Self { contracts: None }
+    }
 }
 
 /// Substitutes environment variables in a string with their values.
@@ -302,7 +341,8 @@ mod tests {
             repository: None,
             indexers: vec![],
             networks: vec![],
-            global: None,
+            global: Global::default(),
+            storage: Storage::default(),
         };
 
         write_manifest(&manifest, &file_path).unwrap();

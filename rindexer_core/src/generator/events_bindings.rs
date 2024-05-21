@@ -11,7 +11,7 @@ use std::fs;
 use std::iter::Map;
 
 use crate::helpers::camel_to_snake;
-use crate::manifest::yaml::{Contract, ContractDetails, Databases};
+use crate::manifest::yaml::{Contract, ContractDetails, CsvDetails, Storage};
 
 use super::networks_bindings::network_provider_fn_name_by_name;
 
@@ -593,13 +593,31 @@ fn generate_contract_type_fn_code(contract: &Contract) -> String {
 ///
 /// * `contract_name` - The name of the contract.
 /// * `event_info` - The event information.
+/// * `csv` - The csv configuration.
 ///
 /// # Returns
 ///
 /// A `String` containing the generated Rust code for the CSV instance.
-fn generate_csv_instance(contract_name: &str, event_info: &EventInfo) -> String {
-    let csv_file_name = format!("{}-{}.csv", contract_name, event_info.name).to_lowercase();
-    let csv_folder = format!("rindexer/csv_results/{}", contract_name);
+fn generate_csv_instance(
+    contract: &Contract,
+    event_info: &EventInfo,
+    csv: &Option<CsvDetails>,
+) -> String {
+    if !contract.generate_csv {
+        let path = if csv.is_some() {
+            &csv.as_ref().unwrap().path
+        } else {
+            "./generated_csv"
+        };
+
+        return format!(
+            r#"let csv = AsyncCsvAppender::new("{csv_path}".to_string());"#,
+            csv_path = path,
+        );
+    }
+
+    let csv_file_name = format!("{}-{}.csv", contract.name, event_info.name).to_lowercase();
+    let csv_folder = format!("{}/{}", csv.as_ref().unwrap().path, contract.name);
 
     // Create directory if it does not exist.
     if let Err(e) = fs::create_dir_all(&csv_folder) {
@@ -626,7 +644,7 @@ fn generate_csv_instance(contract_name: &str, event_info: &EventInfo) -> String 
     format!(
         r#"
         let csv = AsyncCsvAppender::new("{csv_path}".to_string());
-        if options.enabled_csv && !Path::new("{csv_path}").exists() {{
+        if !Path::new("{csv_path}").exists() {{
             csv.append_header(vec![{headers}.into()])
                 .await
                 .unwrap();
@@ -640,23 +658,23 @@ fn generate_csv_instance(contract_name: &str, event_info: &EventInfo) -> String 
 /// Generates the Rust code for event callback structs.
 ///
 /// This function constructs the Rust code for event callback structs, handling the creation of contexts,
-/// initializing CSV generation, and managing optional database connections.
+/// initializing CSV generation, and managing storage configuration.
 ///
 /// # Arguments
 ///
 /// * `event_info` - A slice of `EventInfo` containing details about the events.
 /// * `contract_name` - The name of the contract.
-/// * `databases` - An optional reference to `Databases` configuration.
+/// * `storage` - The `storage` configuration.
 ///
 /// # Returns
 ///
 /// A `String` containing the generated Rust code for the event callback structs.
 fn generate_event_callback_structs_code(
     event_info: &[EventInfo],
-    contract_name: &str,
-    databases: &Option<Databases>,
+    contract: &Contract,
+    storage: &Storage,
 ) -> String {
-    let databases_enabled = databases.is_some();
+    let databases_enabled = storage.postgres_enabled();
 
     event_info
         .iter()
@@ -674,7 +692,6 @@ fn generate_event_callback_structs_code(
                     pub async fn new(
                         callback: {name}EventCallbackType<TExtensions>,
                         extensions: TExtensions,
-                        options: NewEventOptions,
                     ) -> Self {{
                         {csv_generator}
 
@@ -721,7 +738,7 @@ fn generate_event_callback_structs_code(
                 } else {
                     ""
                 },
-                csv_generator = generate_csv_instance(contract_name, info)
+                csv_generator = generate_csv_instance(&contract, info, &storage.csv)
             )
         })
         .collect::<Vec<_>>()
@@ -837,14 +854,14 @@ fn build_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &st
 /// Generates the Rust code for event bindings.
 ///
 /// This function constructs Rust code for event bindings, including the event callback structs, context,
-/// provider function, and contract-related functions. It handles the initialization of CSV, databases,
+/// provider function, and contract-related functions. It handles the initialization of CSV, storage setup,
 /// and the setup of event callbacks.
 ///
 /// # Arguments
 ///
 /// * `indexer_name` - The name of the indexer.
 /// * `contract` - The contract information.
-/// * `clients` - An optional reference to `Databases`.
+/// * `storage` - An `storage` configuration.
 /// * `event_info` - A vector of `EventInfo` containing details about the events.
 ///
 /// # Returns
@@ -853,7 +870,7 @@ fn build_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &st
 fn generate_event_bindings_code(
     indexer_name: &str,
     contract: &Contract,
-    clients: &Option<Databases>,
+    storage: &Storage,
     event_info: Vec<EventInfo>,
 ) -> Result<String, Box<dyn Error>> {
     let event_type_name = generate_event_type_name(&contract.name);
@@ -893,17 +910,6 @@ fn generate_event_bindings_code(
             {event_context_database}
             pub csv: Arc<AsyncCsvAppender>,
             pub extensions: Arc<TExtensions>,
-        }}
-
-        // TODO: NEED TO SPEC OUT OPTIONS
-        pub struct NewEventOptions {{
-            pub enabled_csv: bool,
-        }}
-
-        impl NewEventOptions {{
-            pub fn default() -> Self {{
-                Self {{ enabled_csv: false }}
-            }}
         }}
 
         // didn't want to use option or none made harder DX
@@ -984,7 +990,7 @@ fn generate_event_bindings_code(
             }}
         }}
         "#,
-        client_import = if clients.is_some() {
+        client_import = if storage.postgres_enabled() {
             "PostgresClient,"
         } else {
             ""
@@ -994,13 +1000,13 @@ fn generate_event_bindings_code(
         abigen_name = abigen_contract_name(contract),
         structs = generate_structs(contract)?,
         event_type_name = &event_type_name,
-        event_context_database = if clients.is_some() {
+        event_context_database = if storage.postgres_enabled() {
             "pub database: Arc<PostgresClient>,"
         } else {
             ""
         },
         event_callback_structs =
-            generate_event_callback_structs_code(&event_info, &contract.name, clients),
+            generate_event_callback_structs_code(&event_info, &contract, storage),
         event_enums = generate_event_enums_code(&event_info),
         topic_ids_match_arms = generate_topic_ids_match_arms_code(&event_type_name, &event_info),
         event_names_match_arms =
@@ -1156,7 +1162,7 @@ fn get_abi_items(contract: &Contract, is_filter: bool) -> Result<Vec<ABIItem>, B
 /// * `indexer_name` - The name of the indexer.
 /// * `contract` - The contract information.
 /// * `is_filter` - A boolean indicating whether the ABI items are for filtering.
-/// * `databases` - An optional `Databases` instance.
+/// * `storage` - The storage configuration.
 ///
 /// # Returns
 ///
@@ -1165,12 +1171,12 @@ pub fn generate_event_bindings(
     indexer_name: &str,
     contract: &Contract,
     is_filter: bool,
-    databases: &Option<Databases>,
+    storage: &Storage,
 ) -> Result<String, Box<dyn Error>> {
     let abi_items = get_abi_items(contract, is_filter)?;
     let event_names = extract_event_names_and_signatures_from_abi(&abi_items)?;
 
-    generate_event_bindings_code(indexer_name, contract, databases, event_names)
+    generate_event_bindings_code(indexer_name, contract, storage, event_names)
 }
 
 /// Generates event handlers for the specified contract.
@@ -1180,6 +1186,7 @@ pub fn generate_event_bindings(
 /// * `indexer_name` - The name of the indexer.
 /// * `is_filter` - A boolean indicating whether the ABI items are for filtering.
 /// * `contract` - The contract information.
+/// * `storage` - The storage configuration.
 ///
 /// # Returns
 ///
@@ -1188,6 +1195,7 @@ pub fn generate_event_handlers(
     indexer_name: &str,
     is_filter: bool,
     contract: &Contract,
+    storage: &Storage,
 ) -> Result<String, Box<dyn Error>> {
     let abi_items = get_abi_items(contract, is_filter)?;
     let event_names = extract_event_names_and_signatures_from_abi(&abi_items)?;
@@ -1203,7 +1211,7 @@ pub fn generate_event_handlers(
     );
     imports.push_str("use std::sync::Arc;\n");
     imports.push_str(&format!(
-        r#"use super::super::super::typings::{indexer_name_formatted}::events::{handler_registry_name}::{{no_extensions, NewEventOptions, {event_type_name}"#,
+        r#"use super::super::super::typings::{indexer_name_formatted}::events::{handler_registry_name}::{{no_extensions, {event_type_name}"#,
         indexer_name_formatted = camel_to_snake(indexer_name),
         handler_registry_name = camel_to_snake(&contract.name),
         event_type_name = generate_event_type_name(&contract.name)
@@ -1217,8 +1225,6 @@ pub fn generate_event_handlers(
         handler_registry_fn_name = camel_to_snake(&contract.name),
     ));
 
-    let mut code = String::new();
-
     for event in event_names {
         let event_type_name = generate_event_type_name(&contract.name);
 
@@ -1230,39 +1236,68 @@ pub fn generate_event_handlers(
         let abi_name_properties =
             generate_abi_name_properties(&event.inputs, &GenerateAbiPropertiesType::Object, None);
 
-        // POSTGRES SECTION
-        let columns = generate_columns_names_only(&event.inputs);
+        let mut csv_write = String::new();
+        let mut postgres_write = String::new();
 
-        let insert_sql = format!(
-            "INSERT INTO {}.{} (contract_address, {}, \"tx_hash\", \"block_number\", \"block_hash\") {}",
-            camel_to_snake(indexer_name),
-            camel_to_snake(&event.name),
-            &columns.join(", "),
-            generate_injected_param(4 + columns.len())
-        );
+        if storage.postgres_enabled() {
+            let columns = generate_columns_names_only(&event.inputs);
+            let insert_sql = format!(
+                "INSERT INTO {}.{} (contract_address, {}, \"tx_hash\", \"block_number\", \"block_hash\") {}",
+                camel_to_snake(indexer_name),
+                camel_to_snake(&event.name),
+                &columns.join(", "),
+                generate_injected_param(4 + columns.len())
+            );
 
-        let mut params_sql = String::new();
-        params_sql.push_str("&[&EthereumSqlTypeWrapper::Address(&result.tx_information.address),");
+            let mut params_sql = String::new();
+            params_sql
+                .push_str("&[&EthereumSqlTypeWrapper::Address(&result.tx_information.address),");
 
-        let mut csv_data = String::new();
-        csv_data.push_str(r#"format!("{:?}", result.tx_information.address),"#);
-        for item in abi_name_properties {
-            if item.ethereum_sql_type_wrapper.is_some() {
-                params_sql.push_str(&format!(
-                    "&{}(&result.event_data.{}{}),",
-                    item.ethereum_sql_type_wrapper.unwrap(),
-                    item.value,
-                    if item.abi_type.contains("bytes") {
-                        let static_bytes = item.abi_type.replace("bytes", "").replace("[]", "");
-                        if !static_bytes.is_empty() {
-                            ".into()"
+            for item in &abi_name_properties {
+                if let Some(wrapper) = &item.ethereum_sql_type_wrapper {
+                    params_sql.push_str(&format!(
+                        "&{}(&result.event_data.{}{}),",
+                        wrapper,
+                        item.value,
+                        if item.abi_type.contains("bytes") {
+                            let static_bytes = item.abi_type.replace("bytes", "").replace("[]", "");
+                            if !static_bytes.is_empty() {
+                                ".into()"
+                            } else {
+                                ""
+                            }
                         } else {
                             ""
                         }
-                    } else {
-                        ""
-                    }
-                ));
+                    ));
+                } else {
+                    params_sql.push_str(&format!("&result.event_data.{},", item.value));
+                }
+            }
+
+            params_sql.push_str(
+                "&EthereumSqlTypeWrapper::H256(&result.tx_information.transaction_hash.unwrap()),",
+            );
+            params_sql.push_str(
+                "&EthereumSqlTypeWrapper::U64(&result.tx_information.block_number.unwrap()),",
+            );
+            params_sql.push_str(
+                "&EthereumSqlTypeWrapper::H256(&result.tx_information.block_hash.unwrap())",
+            );
+            params_sql.push(']');
+
+            postgres_write = format!(
+                r#"context.database.execute("{insert_sql}",{params_sql}).await.unwrap();"#,
+                insert_sql = insert_sql.replace('"', "\\\""),
+                params_sql = params_sql
+            );
+        }
+
+        if storage.csv_enabled() {
+            let mut csv_data = String::new();
+            csv_data.push_str(r#"format!("{:?}", result.tx_information.address),"#);
+
+            for item in &abi_name_properties {
                 if item.abi_type == "address" {
                     let key = format!("result.event_data.{},", item.value);
                     csv_data.push_str(&format!(r#"format!("{{:?}}", {}),"#, key));
@@ -1279,37 +1314,18 @@ pub fn generate_event_handlers(
                 } else {
                     csv_data.push_str(&format!("result.event_data.{}.to_string(),", item.value));
                 }
-            } else {
-                params_sql.push_str(&format!("&result.event_data.{},", item.value));
-                csv_data.push_str(&format!("result.event_data.{}.to_string(),", item.value));
             }
+
+            csv_data
+                .push_str(r#"format!("{:?}", result.tx_information.transaction_hash.unwrap()),"#);
+            csv_data.push_str(r#"result.tx_information.block_number.unwrap().to_string(),"#);
+            csv_data.push_str(r#"result.tx_information.block_hash.unwrap().to_string()"#);
+
+            csv_write = format!(
+                r#"context.csv.append(vec![{csv_data}]).await.unwrap();"#,
+                csv_data = csv_data
+            );
         }
-
-        params_sql.push_str(
-            "&EthereumSqlTypeWrapper::H256(&result.tx_information.transaction_hash.unwrap()),",
-        );
-        params_sql.push_str(
-            "&EthereumSqlTypeWrapper::U64(&result.tx_information.block_number.unwrap()),",
-        );
-        params_sql
-            .push_str("&EthereumSqlTypeWrapper::H256(&result.tx_information.block_hash.unwrap())");
-        params_sql.push(']');
-
-        csv_data.push_str(r#"format!("{:?}", result.tx_information.transaction_hash.unwrap()),"#);
-        csv_data.push_str(r#"result.tx_information.block_number.unwrap().to_string(),"#);
-        csv_data.push_str(r#"result.tx_information.block_hash.unwrap().to_string()"#);
-
-        let postgres = format!(
-            r#"context.database.execute("{insert_sql}",{params_sql}).await.unwrap();"#,
-            insert_sql = insert_sql.replace('"', "\\\""),
-            params_sql = params_sql
-        );
-
-        // CSV SECTION
-        let csv_write = format!(
-            r#"context.csv.append(vec![{csv_data}]).await.unwrap();"#,
-            csv_data = csv_data
-        );
 
         let handler = format!(
             r#"
@@ -1320,12 +1336,11 @@ pub fn generate_event_handlers(
                             Box::pin(async move {{
                                 for result in results {{
                                     {csv_write}
-                                    {postgres}
+                                    {postgres_write}
                                 }}
                            }})
                         }}),
-                        no_extensions(),
-                        {event_options},
+                        no_extensions()
                     )
                     .await,
                 )
@@ -1335,13 +1350,8 @@ pub fn generate_event_handlers(
             handler_fn_name = camel_to_snake(&event.name),
             handler_name = event.name,
             event_type_name = event_type_name,
-            postgres = postgres,
             csv_write = csv_write,
-            event_options = if contract.generate_csv {
-                "NewEventOptions { enabled_csv: true }"
-            } else {
-                "NewEventOptions::default()"
-            }
+            postgres_write = postgres_write,
         );
 
         handlers.push_str(&handler);
@@ -1358,6 +1368,7 @@ pub fn generate_event_handlers(
 
     registry_fn.push('}');
 
+    let mut code = String::new();
     code.push_str(&imports);
     code.push_str(&handlers);
     code.push_str(&registry_fn);
