@@ -11,7 +11,6 @@ checklist v1.0:
   - npx postgraphile -c postgres://rindexer_user:U3uaAFmEbv9dnxjKOo9SbUFwc9wMU5ADBHW%2BHUT%2F7%2BDpQaDeUYV%2F@localhost:5440/postgres --host 0.0.0.0 --port 5005 --watch --schema public,lens_registry_example --default-role rindexer_user --enhance-graphiql --cors --disable-default-mutations
 - finish command line https://ponder.sh/docs/api-reference/create-ponder
 - rindexer should not be git ignored by default
-- /// THIS IS A GENERATED FILE DO NOT MODIFY MANUALLY on rindexer stuff
 - schema = indexer_name + contract_name then tables = event names
 - create documentation
 - look into deployments to make it easy to do
