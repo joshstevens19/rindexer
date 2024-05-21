@@ -3,7 +3,7 @@ use colored::Colorize;
 use regex::Regex;
 use rindexer_core::generator::build::generate_rindexer_code;
 use rindexer_core::manifest::yaml::{
-    read_manifest, write_manifest, Databases, Global, Manifest, Network, PostgresClient,
+    read_manifest, write_manifest, Global, Manifest, Network, PostgresClient, Storage,
 };
 use rindexer_core::provider::get_chain_id;
 use rindexer_core::write_file;
@@ -243,49 +243,49 @@ fn handle_init_command(details: &InitDetails) {
     let repository = prompt_for_optional_input::<String>("Repository", None);
     let database = prompt_for_input("Enable Postgres? (yes/no)", None, &None);
 
-    let manifest = Manifest {
-        name: project_name.clone(),
-        description: project_description,
-        repository,
-        networks: vec![Network {
-            name: "INSERT HERE".to_string(),
-            chain_id: 404,
-            url: "INSERT HERE".to_string(),
-            max_block_range: None,
-            max_concurrency: None,
-        }],
-        // indexers: vec![Indexer {
-        //     name: "INSERT HERE".to_string(),
-        //     contracts: vec![Contract {
-        //         name: "INSERT HERE".to_string(),
-        //         details: vec![ContractDetails {
-        //             network: "INSERT HERE".to_string(),
-        //             address: "INSERT HERE".to_string(),
-        //             start_block: None,
-        //             end_block: None,
-        //             polling_every: None,
-        //         }],
-        //         abi: "INSERT HERE".to_string(),
-        //     }],
-        // }],
-        indexers: vec![],
-        global: if database == "yes" {
-            Some(Global {
-                contracts: None,
-                databases: Some(Databases {
-                    postgres: Some(PostgresClient {
-                        name: "${DATABASE_NAME}".to_string(),
-                        user: "${DATABASE_USER}".to_string(),
-                        password: "${DATABASE_PASSWORD}".to_string(),
-                        host: "${DATABASE_HOST}".to_string(),
-                        port: "${DATABASE_PORT}".to_string(),
-                    }),
-                }),
-            })
-        } else {
-            None
-        },
-    };
+    // let manifest = Manifest {
+    //     name: project_name.clone(),
+    //     description: project_description,
+    //     repository,
+    //     networks: vec![Network {
+    //         name: "INSERT HERE".to_string(),
+    //         chain_id: 404,
+    //         url: "INSERT HERE".to_string(),
+    //         max_block_range: None,
+    //         max_concurrency: None,
+    //     }],
+    //     // indexers: vec![Indexer {
+    //     //     name: "INSERT HERE".to_string(),
+    //     //     contracts: vec![Contract {
+    //     //         name: "INSERT HERE".to_string(),
+    //     //         details: vec![ContractDetails {
+    //     //             network: "INSERT HERE".to_string(),
+    //     //             address: "INSERT HERE".to_string(),
+    //     //             start_block: None,
+    //     //             end_block: None,
+    //     //             polling_every: None,
+    //     //         }],
+    //     //         abi: "INSERT HERE".to_string(),
+    //     //     }],
+    //     // }],
+    //     indexers: vec![],
+    //     global: if database == "yes" {
+    //         Some(Global {
+    //             contracts: None,
+    //             databases: Some(Storage {
+    //                 postgres: Some(PostgresClient {
+    //                     name: "${DATABASE_NAME}".to_string(),
+    //                     user: "${DATABASE_USER}".to_string(),
+    //                     password: "${DATABASE_PASSWORD}".to_string(),
+    //                     host: "${DATABASE_HOST}".to_string(),
+    //                     port: "${DATABASE_PORT}".to_string(),
+    //                 }),
+    //             }),
+    //         })
+    //     } else {
+    //         None
+    //     },
+    // };
 
     let rindexer_yaml_path = path.join(YAML_NAME);
     let rindexer_abis_folder = path.join("ABIs");
@@ -300,7 +300,7 @@ fn handle_init_command(details: &InitDetails) {
         return;
     }
 
-    write_rindexer_yaml(&manifest, &rindexer_yaml_path);
+    // write_rindexer_yaml(&manifest, &rindexer_yaml_path);
 
     print_success_message(
         "Project initialized successfully. Add a network next - rindexer add-network",

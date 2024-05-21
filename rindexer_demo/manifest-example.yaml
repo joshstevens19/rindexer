@@ -59,13 +59,6 @@ global:
         - address: '0x2E645469f354BB4F5c8a05B3b30A929361cf77eC'
           network: polygon
       abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
-  databases:
-    postgres:
-      name: ${DATABASE_NAME}
-      user: ${DATABASE_USER}
-      password: ${DATABASE_PASSWORD}
-      host: ${DATABASE_HOST}
-      port: ${DATABASE_PORT}
 storage:
   postgres:
     name: ${DATABASE_NAME}
