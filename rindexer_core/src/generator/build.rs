@@ -146,15 +146,16 @@ fn write_indexer_events(
 /// # Arguments
 ///
 /// * `manifest_location` - A reference to the path of the manifest file.
-/// * `output` - The output directory.
+/// * `output_override` - The output directory override.
 ///
 /// # Returns
 ///
 /// A `Result` indicating success or failure.
 pub fn generate_rindexer_code(
     manifest_location: &PathBuf,
-    output: &str,
+    output_override: Option<&str>,
 ) -> Result<(), Box<dyn Error>> {
+    let output = output_override.unwrap_or("./src/rindexer/typings");
     let manifest = read_manifest(manifest_location)?;
 
     write_networks(output, &manifest.networks)?;
@@ -174,15 +175,16 @@ pub fn generate_rindexer_code(
 /// # Arguments
 ///
 /// * `manifest_location` - A reference to the path of the manifest file.
-/// * `output` - The output directory.
+/// * `output_override` - The output directory override.
 ///
 /// # Returns
 ///
 /// A `Result` indicating success or failure.
 pub fn generate_indexers_handlers_code(
     manifest_location: &PathBuf,
-    output: &str,
+    output_override: Option<&str>,
 ) -> Result<(), Box<dyn Error>> {
+    let output = output_override.unwrap_or("./src/rindexer");
     let manifest = read_manifest(manifest_location)?;
 
     for indexer in manifest.indexers {

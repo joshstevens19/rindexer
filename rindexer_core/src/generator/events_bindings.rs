@@ -755,7 +755,7 @@ fn build_get_provider_fn(networks: Vec<String>) -> String {
         function.push_str(&format!(
             r#"
             if network == "{network}" {{
-                return crate::rindexer::networks::{network_provider_fn_name}();
+                return super::super::super::networks::{network_provider_fn_name}();
             }}"#,
             network = network,
             network_provider_fn_name = network_provider_fn_name_by_name(network)
@@ -1198,7 +1198,7 @@ pub fn generate_event_handlers(
     );
     imports.push_str("use std::sync::Arc;\n");
     imports.push_str(&format!(
-        r#"use crate::rindexer::{indexer_name_formatted}::events::{handler_registry_name}::{{no_extensions, NewEventOptions, {event_type_name}"#,
+        r#"use super::super::super::typings::{indexer_name_formatted}::events::{handler_registry_name}::{{no_extensions, NewEventOptions, {event_type_name}"#,
         indexer_name_formatted = camel_to_snake(indexer_name),
         handler_registry_name = camel_to_snake(&contract.name),
         event_type_name = generate_event_type_name(&contract.name)

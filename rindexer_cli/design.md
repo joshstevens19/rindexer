@@ -18,6 +18,56 @@ Options:
       --contract-name           Name of the contract (default: Contract)
       --chain-id <chainId>      The chain id
 
+# NEW VISION
+
+rindexer new 
+1. Project name 
+2. Project description:
+3. Repository (can be blank):
+4. Do you want an example indexing manifest? yes / no
+5. what data-layers to enable? postgres/csv/none? <list> (none = console)
+6. if postgres > docker support out the box? yes / no
+7. postgres only (generated env file..)
+- this creates a manifest file with ethereum 
+- git init happens automatically and git commit -m 'setup rindexer'
+- give information about what to do next which is run indexer, regenerate typings and start graphql
+
+rindexer dev (this one uses fast build but slower to index)
+- dev would run docker-compose up for you if you have postgres enabled
+rindexer start (this one uses slower build but faster to index) 
+--type=graphql/indexer/both --hostname=0.0.0.0 --port=5000 --indexers=<list>
+rindexer start indexer
+rindexer start graphql --hostname=localhost --port=5001
+rindexer start full --hostname=localhost --port=5001
+rindexer start full
+
+rindexer start
+1. do you want to start: indexer or graphql or both ?
+2. graphql hostname: 0.0.0.0 (default)
+3. graphql port: 5000 (default)
+4. SKIP IF ONLY 1 INDEXER: which indexers to start? <list> (default: all)
+5. **warning note if your indexer is not running your graphql will be empty or have the old data**
+
+rindexer codegen typings / indexers / both
+1. what do you want to regenerate? typings or handlers or both? (skip if above)
+2. git diff on indexers folder to see what has changed
+3. if changed ask them "we see you got changes in the indexers folder, do you want to override them?" yes / no
+
+rindexer download-abi --path <path>
+console.log('rindexer only supports downloading ABIs from <list>. If you want to add ABI from a network not supported please add it to the ABIs folder manually')
+1. Network: <list> (polygon,base,bsc)
+2. Contract address: <insert>
+- download to ABIs folder
+
+https://api.etherscan.io/api?module=contract&action=getabi&address=0x1111111254EEB25477B68fb85Ed929f73A960582 
+(1 request per 5 seconds)
+
+rindexer prune (based on storage config in manifest.yaml)
+1. Are you sure you wish to prune the database (it can not be reverted)? yes / no
+2. Are you sure you wish to prune the csv files (it can not be reverted)? yes / no
+
+# END OF NEW VISION
+
 rindexer ls
 
 rindexer generate-typings
