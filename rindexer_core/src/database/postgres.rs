@@ -15,7 +15,7 @@ use crate::generator::{
     ABIInput, EventInfo, GenerateAbiPropertiesType,
 };
 use crate::helpers::camel_to_snake;
-use crate::manifest::yaml::Indexer;
+use crate::manifest::yaml::{Contract, Indexer};
 
 pub fn database_user() -> Result<String, env::VarError> {
     dotenv().ok();
@@ -354,8 +354,12 @@ fn generate_internal_event_table_sql(
 }
 
 /// Generates the schema name for the given indexer.
-pub fn indexer_schema_name(indexer: &Indexer) -> String {
-    camel_to_snake(&indexer.name)
+pub fn indexer_contract_schema_name(indexer_name: &str, contract_name: &str) -> String {
+    format!(
+        "{}_{}",
+        camel_to_snake(indexer_name),
+        camel_to_snake(contract_name)
+    )
 }
 
 /// Generates SQL queries to create tables and schemas for the given indexer.
@@ -370,19 +374,14 @@ pub fn indexer_schema_name(indexer: &Indexer) -> String {
 ///
 /// A `String` containing the SQL queries to create the schemas and tables.
 pub fn create_tables_for_indexer_sql(indexer: &Indexer) -> String {
-    let schema_name = indexer_schema_name(indexer);
-
-    let mut sql = format!(
-        r#"
-        CREATE SCHEMA IF NOT EXISTS {};
-        CREATE SCHEMA IF NOT EXISTS rindexer_internal;
-        "#,
-        schema_name
-    );
+    let mut sql = "CREATE SCHEMA IF NOT EXISTS rindexer_internal;".to_string();
 
     for contract in &indexer.contracts {
         if let Ok(abi_items) = read_abi_items(contract) {
             if let Ok(event_names) = extract_event_names_and_signatures_from_abi(&abi_items) {
+                let schema_name = indexer_contract_schema_name(&indexer.name, &contract.name);
+                sql.push_str(format!("CREATE SCHEMA IF NOT EXISTS {};", schema_name).as_str());
+
                 let networks: Vec<String> =
                     contract.details.iter().map(|d| d.network.clone()).collect();
                 sql.push_str(&generate_event_table_sql(&event_names, &schema_name));

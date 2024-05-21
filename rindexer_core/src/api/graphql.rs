@@ -1,4 +1,6 @@
-use crate::database::postgres::{connection_string_as_url, database_user, indexer_schema_name};
+use crate::database::postgres::{
+    connection_string_as_url, database_user, indexer_contract_schema_name,
+};
 use crate::manifest::yaml::Indexer;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -44,7 +46,15 @@ pub fn start_graphql_server(
     indexers: &[Indexer],
     settings: GraphQLServerSettings,
 ) -> Result<GraphQLServer, String> {
-    let schemas = indexers.iter().map(indexer_schema_name).collect::<Vec<_>>();
+    let schemas: Vec<String> = indexers
+        .iter()
+        .flat_map(|indexer| {
+            indexer
+                .contracts
+                .iter()
+                .map(move |contract| indexer_contract_schema_name(&indexer.name, &contract.name))
+        })
+        .collect();
 
     let connection_string = connection_string_as_url().map_err(|e| e.to_string())?;
     let database_user = database_user().map_err(|e| e.to_string())?;
