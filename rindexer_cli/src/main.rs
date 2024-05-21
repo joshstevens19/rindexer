@@ -227,7 +227,7 @@ fn generate_rindexer_rust_project(path: PathBuf, rindexer_yaml_path: &PathBuf) {
     .unwrap();
 
     let rindexer_path = path.join("src").join("rindexer");
-    generate_rindexer_code(rindexer_yaml_path, rindexer_path.to_str().unwrap()).unwrap();
+    generate_rindexer_code(rindexer_yaml_path, None).unwrap();
 }
 
 fn handle_init_command(details: &InitDetails) {
