@@ -1,20 +1,20 @@
 use clap::{Parser, Subcommand};
 use colored::Colorize;
-use ethers::types::U64;
+use ethers::types::{Chain, U64};
+use ethers_etherscan::Client;
 use regex::Regex;
-use rindexer_core::generator::build::{generate, generate_rindexer_typings};
+use rindexer_core::generator::build::generate;
 use rindexer_core::manifest::yaml::{
     read_manifest, write_manifest, Contract, ContractDetails, CsvDetails, Global, Indexer,
     Manifest, Network, PostgresClient, Storage,
 };
-use rindexer_core::provider::get_chain_id;
 use rindexer_core::write_file;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::{fs, io};
+use std::error::Error;
 
-/// Main structure for the CLI application
 #[derive(Parser, Debug)]
 #[clap(name = "rindexer", about, version, author = "Your Name")]
 struct CLI {
@@ -23,60 +23,13 @@ struct CLI {
 }
 
 #[derive(Parser, Debug)]
-struct NetworkDetails {
-    /// Name of the network
-    #[clap(short, long)]
-    name: Option<String>,
-
-    /// RPC URL of the network
-    #[clap(short, long)]
-    rpc_url: Option<String>,
-
-    /// Maximum block range (optional)
-    #[clap(short = 'm', long)]
-    max_block_range: Option<u64>,
-
-    /// Maximum concurrency (optional)
-    #[clap(short = 'c', long)]
-    max_concurrency: Option<u32>,
-}
-
-/// Indexer details for adding an indexer
-#[derive(Parser, Debug)]
-struct IndexerDetails {
-    #[clap(long)]
-    name: Option<String>,
-
-    #[clap(long)]
-    network: Option<String>,
-
-    #[clap(long)]
-    contract_address: Option<String>,
-
-    #[clap(long)]
-    contract_name: Option<String>,
-
-    #[clap(long)]
-    start_block: Option<u64>,
-
-    #[clap(long)]
-    end_block: Option<u64>,
-
-    #[clap(long)]
-    abi_location: Option<String>,
-}
-
-#[derive(Parser, Debug)]
 struct NewDetails {
-    /// Name of the network
     #[clap(short, long)]
     name: Option<String>,
 
-    /// Name of the network
     #[clap(short, long)]
     project_description: Option<String>,
 
-    /// RPC URL of the network
     #[clap(short, long)]
     repository: Option<String>,
 
@@ -88,13 +41,11 @@ struct NewDetails {
 #[derive(Subcommand, Debug)]
 enum Commands {
     /// Initializes a new project
-    New {
-        #[clap(flatten)]
-        details: NewDetails,
-    },
-    #[clap(name = "generate")]
-    /// Generate the project from the rindexer.yaml
-    Generate,
+    New,
+    #[clap(name = "dev")]
+    Dev,
+    #[clap(name = "start")]
+    Start,
     /// Removes a contract from an indexer
     RemoveContract {
         #[clap(name = "indexer_name")]
@@ -102,6 +53,8 @@ enum Commands {
         #[clap(name = "contract_name")]
         contract_name: String,
     },
+    #[clap(name = "download_abi")]
+    DownloadAbi,
 }
 
 const VALID_URL: &str = r"^(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})(:[0-9]+)?(\/[\w \.-]*)*\/?(\\?[\w=&.+-]*)?(#[\w.-]*)?$";
@@ -124,9 +77,9 @@ fn rindexer_yaml_does_not_exist() -> bool {
     !rindexer_yaml_exists()
 }
 
-fn validate_rindexer_yaml_does_not_exist() {
+fn validate_rindexer_yaml_exist() {
     if rindexer_yaml_does_not_exist() {
-        print_error_message("rindexer.yaml does not exist in the current directory. Please use rindexer init to create a new project.");
+        print_error_message("rindexer.yaml does not exist in the current directory. Please use rindexer new to create a new project.");
         std::process::exit(1);
     }
 }
@@ -188,10 +141,10 @@ fn generate_rindexer_rust_project(path: PathBuf, rindexer_yaml_path: &PathBuf) {
     generate(rindexer_yaml_path).unwrap();
 }
 
-fn handle_new_command(details: &NewDetails) {
+fn handle_new_command() {
     print_success_message("Initializing new rindexer project...");
 
-    let project_name = prompt_for_input("Project Name", None, &details.name);
+    let project_name = prompt_for_input("Project Name", None, None);
     let path = PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo_cli").unwrap();
     if path.exists() {
         print_error_message("Directory already exists. Please choose a different project name.");
@@ -319,16 +272,57 @@ fn handle_new_command(details: &NewDetails) {
     );
 }
 
+async fn handle_download_abi_command() {
+    validate_rindexer_yaml_exist();
+
+    // TODO! fix this
+    let path = PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo_cli").unwrap();
+    let rindexer_abis_folder = path.join("abis");
+
+    if let Err(err) = fs::create_dir_all(&rindexer_abis_folder) {
+        print_error_message(&format!("Failed to create directory: {}", err));
+        return;
+    }
+
+    let network = prompt_for_input_list("Enter Network", &["ethereum", "polygon", "base", "bsc"], None);
+    let contract_address = prompt_for_input("Enter Contract Address", None, None);
+    
+    let client = Client::builder().chain(Chain::Mainnet).unwrap().build().unwrap();
+
+    let address = contract_address.parse().unwrap();
+
+    loop {
+        let metadata = client.contract_source_code(address).await.unwrap();
+
+        if metadata.items.is_empty() {
+            print_error_message(&format!("No contract found on network {} with address {}.", network, contract_address));
+            break;
+        }
+
+        let item = &metadata.items[0];
+        if item.proxy == 1 && item.implementation.is_some() {
+            println!("This contract is a proxy contract. Loading the implementation contract...");
+            continue;
+        }
+
+        let abi_path = rindexer_abis_folder.join(format!("{}.abi.json", item.contract_name));
+        write_file(abi_path.to_str().unwrap(), &item.abi).unwrap();
+        print_success_message(&format!(
+            "Downloaded ABI for: {}",
+            item.contract_name
+        ));
+
+        break;
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let cli = CLI::parse();
 
-    let path = PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo_cli").unwrap();
-    let rindexer_yaml_path = path.join(YAML_NAME);
-
     match &cli.command {
-        Commands::New { details } => handle_new_command(details),
-        Commands::Generate => generate_rindexer_rust_project(path, &rindexer_yaml_path),
+        Commands::New => handle_new_command(),
+        Commands::DownloadAbi => handle_download_abi_command().await,
         Commands::RemoveContract {
             indexer_name,
             contract_name,
@@ -336,17 +330,18 @@ async fn main() {
             "Removing contract: {} from indexer: {}",
             contract_name, indexer_name
         ),
+        _ => {}
     }
 }
 
 fn prompt_for_input(
     field_name: &str,
     pattern: Option<&str>,
-    current_value: &Option<String>,
+    current_value: Option<&str>,
 ) -> String {
     let regex = pattern.map(|p| Regex::new(p).unwrap());
     match current_value {
-        Some(value) => value.clone(),
+        Some(value) => value.to_string(),
         None => loop {
             print!("{} {}: ", "Please enter the".green(), field_name.yellow());
             io::stdout().flush().unwrap(); // Ensure the prompt is displayed before blocking on input
