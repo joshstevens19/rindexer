@@ -1,14 +1,16 @@
 use clap::{Parser, Subcommand};
 use colored::Colorize;
+use ethers::types::U64;
 use regex::Regex;
-use rindexer_core::generator::build::generate_rindexer_code;
+use rindexer_core::generator::build::{generate, generate_rindexer_typings};
 use rindexer_core::manifest::yaml::{
-    read_manifest, write_manifest, Global, Manifest, Network, PostgresClient, Storage,
+    read_manifest, write_manifest, Contract, ContractDetails, CsvDetails, Global, Indexer,
+    Manifest, Network, PostgresClient, Storage,
 };
 use rindexer_core::provider::get_chain_id;
 use rindexer_core::write_file;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::{fs, io};
 
@@ -39,17 +41,6 @@ struct NetworkDetails {
     max_concurrency: Option<u32>,
 }
 
-/// Subcategories for the `ls` command
-#[derive(Subcommand, Debug)]
-enum ListCategory {
-    /// List all indexers
-    Indexers,
-    /// List all networks
-    Networks,
-    /// List global settings
-    Global,
-}
-
 /// Indexer details for adding an indexer
 #[derive(Parser, Debug)]
 struct IndexerDetails {
@@ -76,7 +67,7 @@ struct IndexerDetails {
 }
 
 #[derive(Parser, Debug)]
-struct InitDetails {
+struct NewDetails {
     /// Name of the network
     #[clap(short, long)]
     name: Option<String>,
@@ -96,46 +87,14 @@ struct InitDetails {
 /// Define the subcommands for the CLI
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Lists all indexers
-    Ls {
-        #[clap(subcommand)]
-        category: ListCategory,
-    },
     /// Initializes a new project
-    Init {
+    New {
         #[clap(flatten)]
-        details: InitDetails,
+        details: NewDetails,
     },
     #[clap(name = "generate")]
     /// Generate the project from the rindexer.yaml
     Generate,
-    /// Adds a new network
-    #[clap(name = "network-add")]
-    AddNetwork {
-        #[clap(flatten)]
-        details: NetworkDetails,
-    },
-    #[clap(name = "network-remove")]
-    /// Removes an existing network
-    RemoveNetwork {
-        #[clap(name = "network")]
-        network_name: String,
-    },
-    /// Adds a new indexer
-    AddIndexer {
-        #[clap(flatten)]
-        details: IndexerDetails,
-    },
-    /// Removes an existing indexer
-    RemoveIndexer {
-        #[clap(name = "indexer_name")]
-        indexer_name: String,
-    },
-    /// Adds a contract to an indexer
-    AddContract {
-        #[clap(name = "indexer_name")]
-        indexer_name: String,
-    },
     /// Removes a contract from an indexer
     RemoveContract {
         #[clap(name = "indexer_name")]
@@ -226,11 +185,10 @@ fn generate_rindexer_rust_project(path: PathBuf, rindexer_yaml_path: &PathBuf) {
     )
     .unwrap();
 
-    let rindexer_path = path.join("src").join("rindexer");
-    generate_rindexer_code(rindexer_yaml_path, None).unwrap();
+    generate(rindexer_yaml_path).unwrap();
 }
 
-fn handle_init_command(details: &InitDetails) {
+fn handle_new_command(details: &NewDetails) {
     print_success_message("Initializing new rindexer project...");
 
     let project_name = prompt_for_input("Project Name", None, &details.name);
@@ -239,136 +197,127 @@ fn handle_init_command(details: &InitDetails) {
         print_error_message("Directory already exists. Please choose a different project name.");
         return;
     }
-    let project_description = prompt_for_optional_input::<String>("Project description", None);
+    let project_description = prompt_for_optional_input::<String>("Project Description", None);
     let repository = prompt_for_optional_input::<String>("Repository", None);
-    let database = prompt_for_input("Enable Postgres? (yes/no)", None, &None);
+    let storage_choice = prompt_for_input_list(
+        "What Storages To Enable?",
+        &["postgres", "csv", "both", "none"],
+        None,
+    );
+    let mut postgres_docker_enable = false;
+    if storage_choice == "postgres" || storage_choice == "both" {
+        let postgres_docker =
+            prompt_for_input_list("Postgres Docker Support Out The Box?", &["yes", "no"], None);
+        postgres_docker_enable = postgres_docker == "yes";
+    }
 
-    // let manifest = Manifest {
-    //     name: project_name.clone(),
-    //     description: project_description,
-    //     repository,
-    //     networks: vec![Network {
-    //         name: "INSERT HERE".to_string(),
-    //         chain_id: 404,
-    //         url: "INSERT HERE".to_string(),
-    //         max_block_range: None,
-    //         max_concurrency: None,
-    //     }],
-    //     // indexers: vec![Indexer {
-    //     //     name: "INSERT HERE".to_string(),
-    //     //     contracts: vec![Contract {
-    //     //         name: "INSERT HERE".to_string(),
-    //     //         details: vec![ContractDetails {
-    //     //             network: "INSERT HERE".to_string(),
-    //     //             address: "INSERT HERE".to_string(),
-    //     //             start_block: None,
-    //     //             end_block: None,
-    //     //             polling_every: None,
-    //     //         }],
-    //     //         abi: "INSERT HERE".to_string(),
-    //     //     }],
-    //     // }],
-    //     indexers: vec![],
-    //     global: if database == "yes" {
-    //         Some(Global {
-    //             contracts: None,
-    //             databases: Some(Storage {
-    //                 postgres: Some(PostgresClient {
-    //                     name: "${DATABASE_NAME}".to_string(),
-    //                     user: "${DATABASE_USER}".to_string(),
-    //                     password: "${DATABASE_PASSWORD}".to_string(),
-    //                     host: "${DATABASE_HOST}".to_string(),
-    //                     port: "${DATABASE_PORT}".to_string(),
-    //                 }),
-    //             }),
-    //         })
-    //     } else {
-    //         None
-    //     },
-    // };
+    let postgres_enabled = storage_choice == "postgres" || storage_choice == "both";
+    let csv_enabled = storage_choice == "csv" || storage_choice == "both";
 
     let rindexer_yaml_path = path.join(YAML_NAME);
-    let rindexer_abis_folder = path.join("ABIs");
+    let rindexer_abis_folder = path.join("abis");
 
-    if let Err(err) = fs::create_dir_all(path) {
+    // Create the project directory
+    if let Err(err) = fs::create_dir_all(&path) {
         print_error_message(&format!("Failed to create directory: {}", err));
         return;
     }
 
-    if let Err(err) = fs::create_dir_all(rindexer_abis_folder) {
+    // Create the ABIs directory
+    if let Err(err) = fs::create_dir_all(&rindexer_abis_folder) {
         print_error_message(&format!("Failed to create directory: {}", err));
         return;
     }
 
-    // write_rindexer_yaml(&manifest, &rindexer_yaml_path);
+    let abi_example_path = write_example_abi(&rindexer_abis_folder);
+
+    let manifest = Manifest {
+        name: project_name.clone(),
+        description: project_description,
+        repository,
+        networks: vec![Network {
+            name: "ethereum".to_string(),
+            chain_id: 1,
+            url: "https://eth.rpc.blxrbdn.com".to_string(),
+            max_block_range: None,
+            max_concurrency: None,
+        }],
+        indexers: vec![Indexer {
+            name: "MyFirstIndexerExample".to_string(),
+            contracts: vec![Contract {
+                name: "RocketPoolETH".to_string(),
+                details: vec![ContractDetails::new_with_address(
+                    "ethereum".to_string(),
+                    "0xae78736cd615f374d3085123a210448e74fc6393".to_string(),
+                    Some(U64::from(18900000)),
+                    Some(U64::from(19000000)),
+                    None,
+                )],
+                abi: abi_example_path.to_str().unwrap().to_string(),
+                include_events: Some(vec!["Transfer".to_string()]),
+                generate_csv: csv_enabled,
+                reorg_safe_distance: false,
+            }],
+        }],
+        global: Global { contracts: None },
+        storage: Storage {
+            postgres: if postgres_enabled {
+                Some(PostgresClient {
+                    name: "${DATABASE_NAME}".to_string(),
+                    user: "${DATABASE_USER}".to_string(),
+                    password: "${DATABASE_PASSWORD}".to_string(),
+                    host: "${DATABASE_HOST}".to_string(),
+                    port: "${DATABASE_PORT}".to_string(),
+                })
+            } else {
+                None
+            },
+            csv: if postgres_enabled {
+                Some(CsvDetails {
+                    path: "./generated_csv".to_string(),
+                })
+            } else {
+                None
+            },
+        },
+    };
+
+    // Write the rindexer.yaml file
+    write_rindexer_yaml(&manifest, &rindexer_yaml_path);
+
+    // Write .env if required
+    if postgres_enabled {
+        if postgres_docker_enable {
+            let env = r#"
+                DATABASE_NAME=postgres
+                DATABASE_USER=rindexer_user
+                DATABASE_PASSWORD=U3uaAFmEbv9dnxjKOo9SbUFwc9wMU5ADBHW+HUT/7+DpQaDeUYV/
+                DATABASE_HOST=localhost
+                DATABASE_PORT=5440
+            "#;
+
+            write_file(path.join(".env").to_str().unwrap(), env).unwrap();
+
+            write_docker_compose(&path);
+        } else {
+            let env = r#"
+                    DATABASE_NAME=INSERT_HERE
+                    DATABASE_USER=INSERT_HERE
+                    DATABASE_PASSWORD=INSERT_HERE
+                    DATABASE_HOST=INSERT_HERE
+                    DATABASE_PORT=INSERT_HERE
+                "#;
+
+            write_file(path.join(".env").to_str().unwrap(), env).unwrap();
+        }
+    }
+
+    generate_rindexer_rust_project(path, &rindexer_yaml_path);
 
     print_success_message(
-        "Project initialized successfully. Add a network next - rindexer add-network",
+        "rindexer project created.\n - run rindexer codegen both to generate the code\n - run rindexer dev to start rindexer\n - run rindexer download-abi to download new ABIs",
     );
 }
-
-fn render_network(network: &Network, include_end_space: bool) {
-    println!("Network Name: {}", network.name);
-    println!("Chain Id: {}", network.chain_id);
-    println!("RPC URL: {}", network.url);
-    println!("Max Block Range: {}", network.max_block_range.unwrap_or(0));
-    println!("Max Concurrency: {}", network.max_concurrency.unwrap_or(0));
-    if include_end_space {
-        println!(" ");
-    }
-}
-
-fn handle_ls_networks_command(rindexer_yaml_path: &PathBuf) {
-    let manifest = read_rindexer_yaml(rindexer_yaml_path);
-
-    println!("All Networks:");
-    println!(" ");
-    for network in manifest.networks {
-        render_network(&network, true);
-    }
-}
-
-async fn handle_add_network_command(rindexer_yaml_path: &PathBuf, details: &NetworkDetails) {
-    validate_rindexer_yaml_does_not_exist();
-
-    // TODO validate that network name does not already exist
-    let network_name = prompt_for_input("Network name", None, &details.name);
-    let rpc_url = prompt_for_input("RPC URL", Some(VALID_URL), &details.rpc_url);
-
-    let chain_id = get_chain_id(rpc_url.as_str()).await;
-    match chain_id {
-        Ok(chain_id) => {
-            let max_block_range = prompt_for_optional_input::<u64>("Max block range", None);
-            let max_concurrency = prompt_for_optional_input::<u32>("Max concurrency:", None);
-
-            let mut manifest = read_rindexer_yaml(rindexer_yaml_path);
-
-            manifest.networks.push(Network {
-                name: network_name,
-                chain_id: chain_id
-                    .to_string()
-                    .parse()
-                    .expect("Failed to parse chain ID"),
-                url: rpc_url,
-                max_block_range,
-                max_concurrency,
-            });
-
-            write_rindexer_yaml(&manifest, rindexer_yaml_path);
-            print_success_message("Network added successfully");
-        }
-        Err(_) => {
-            print_error_message("Failed to fetch chain ID from the provided RPC URL.");
-        }
-    }
-}
-
-// async fn handle_add_new_index(rindexer_yaml_path: &PathBuf, details: IndexerDetails) {
-//     validate_rindexer_yaml_does_not_exist();
-//
-//     let indexer_name = prompt_for_input("Indexer name", None, &details.name);
-//     let network_name = prompt_for_input("Network name", None, &details.network);
-// }
 
 #[tokio::main]
 async fn main() {
@@ -378,22 +327,8 @@ async fn main() {
     let rindexer_yaml_path = path.join(YAML_NAME);
 
     match &cli.command {
-        Commands::Init { details } => handle_init_command(details),
+        Commands::New { details } => handle_new_command(details),
         Commands::Generate => generate_rindexer_rust_project(path, &rindexer_yaml_path),
-        Commands::Ls { category } => match category {
-            ListCategory::Indexers => println!("Listing indexers..."),
-            ListCategory::Networks => handle_ls_networks_command(&rindexer_yaml_path),
-            ListCategory::Global => println!("Listing global settings..."),
-        },
-        Commands::AddNetwork { details } => {
-            handle_add_network_command(&rindexer_yaml_path, details).await
-        }
-        Commands::RemoveNetwork { network_name } => println!("Removing network: {}", network_name),
-        Commands::AddIndexer { details } => println!("Adding indexer"),
-        Commands::RemoveIndexer { indexer_name } => println!("Removing indexer: {}", indexer_name),
-        Commands::AddContract { indexer_name } => {
-            println!("Adding contract to indexer: {}", indexer_name)
-        }
         Commands::RemoveContract {
             indexer_name,
             contract_name,
@@ -440,10 +375,7 @@ fn prompt_for_input(
     }
 }
 
-fn prompt_for_optional_input<T: std::str::FromStr>(
-    prompt: &str,
-    pattern: Option<&str>,
-) -> Option<T> {
+fn prompt_for_optional_input<T: FromStr>(prompt: &str, pattern: Option<&str>) -> Option<T> {
     let regex = pattern.map(|p| Regex::new(p).unwrap());
     loop {
         print!("{} (skip by pressing Enter): ", prompt.blue());
@@ -482,4 +414,83 @@ fn prompt_for_optional_input<T: std::str::FromStr>(
             }
         }
     }
+}
+
+fn prompt_for_input_list(
+    field_name: &str,
+    options: &[&str],
+    current_value: Option<&str>,
+) -> String {
+    let options_str = options.join(", ");
+
+    if let Some(value) = current_value {
+        return value.to_string();
+    }
+
+    loop {
+        print!(
+            "{} [{}]: ",
+            format!("Please enter the {}", field_name).green(),
+            options_str.yellow()
+        );
+        io::stdout().flush().unwrap(); // Ensure the prompt is displayed before blocking on input
+
+        let mut input = String::new();
+        io::stdin()
+            .read_line(&mut input)
+            .expect("Failed to read line");
+        let trimmed = input.trim().to_lowercase();
+
+        if options.contains(&trimmed.as_str()) {
+            return trimmed;
+        } else {
+            println!(
+                "{}",
+                format!(
+                    "Invalid option. Please choose one of the following: {}",
+                    options_str
+                )
+                .red()
+            );
+        }
+    }
+}
+
+fn write_example_abi(rindexer_abis_folder: &Path) -> PathBuf {
+    let abi = r#"[{"inputs":[{"internalType":"contract RocketStorageInterface","name":"_rocketStorageAddress","type":"address"}],"stateMutability":"nonpayable","type":"constructor"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"owner","type":"address"},{"indexed":true,"internalType":"address","name":"spender","type":"address"},{"indexed":false,"internalType":"uint256","name":"value","type":"uint256"}],"name":"Approval","type":"event"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"from","type":"address"},{"indexed":false,"internalType":"uint256","name":"amount","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"time","type":"uint256"}],"name":"EtherDeposited","type":"event"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"from","type":"address"},{"indexed":false,"internalType":"uint256","name":"amount","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"ethAmount","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"time","type":"uint256"}],"name":"TokensBurned","type":"event"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"to","type":"address"},{"indexed":false,"internalType":"uint256","name":"amount","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"ethAmount","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"time","type":"uint256"}],"name":"TokensMinted","type":"event"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"from","type":"address"},{"indexed":true,"internalType":"address","name":"to","type":"address"},{"indexed":false,"internalType":"uint256","name":"value","type":"uint256"}],"name":"Transfer","type":"event"},{"inputs":[{"internalType":"address","name":"owner","type":"address"},{"internalType":"address","name":"spender","type":"address"}],"name":"allowance","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"address","name":"spender","type":"address"},{"internalType":"uint256","name":"amount","type":"uint256"}],"name":"approve","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"address","name":"account","type":"address"}],"name":"balanceOf","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"uint256","name":"_rethAmount","type":"uint256"}],"name":"burn","outputs":[],"stateMutability":"nonpayable","type":"function"},{"inputs":[],"name":"decimals","outputs":[{"internalType":"uint8","name":"","type":"uint8"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"address","name":"spender","type":"address"},{"internalType":"uint256","name":"subtractedValue","type":"uint256"}],"name":"decreaseAllowance","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"nonpayable","type":"function"},{"inputs":[],"name":"depositExcess","outputs":[],"stateMutability":"payable","type":"function"},{"inputs":[],"name":"depositExcessCollateral","outputs":[],"stateMutability":"nonpayable","type":"function"},{"inputs":[],"name":"getCollateralRate","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"uint256","name":"_rethAmount","type":"uint256"}],"name":"getEthValue","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"getExchangeRate","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"uint256","name":"_ethAmount","type":"uint256"}],"name":"getRethValue","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"getTotalCollateral","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"address","name":"spender","type":"address"},{"internalType":"uint256","name":"addedValue","type":"uint256"}],"name":"increaseAllowance","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"uint256","name":"_ethAmount","type":"uint256"},{"internalType":"address","name":"_to","type":"address"}],"name":"mint","outputs":[],"stateMutability":"nonpayable","type":"function"},{"inputs":[],"name":"name","outputs":[{"internalType":"string","name":"","type":"string"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"symbol","outputs":[{"internalType":"string","name":"","type":"string"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"totalSupply","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"address","name":"recipient","type":"address"},{"internalType":"uint256","name":"amount","type":"uint256"}],"name":"transfer","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"address","name":"sender","type":"address"},{"internalType":"address","name":"recipient","type":"address"},{"internalType":"uint256","name":"amount","type":"uint256"}],"name":"transferFrom","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"nonpayable","type":"function"},{"inputs":[],"name":"version","outputs":[{"internalType":"uint8","name":"","type":"uint8"}],"stateMutability":"view","type":"function"},{"stateMutability":"payable","type":"receive"}]"#;
+
+    let path = rindexer_abis_folder.join("RocketTokenRETH.abi.json");
+
+    write_file(path.to_str().unwrap(), abi).unwrap();
+
+    path
+}
+
+fn write_docker_compose(path: &Path) {
+    let yml = r#"
+    version: '3.8'
+    volumes:
+      postgres_data:
+        driver: local
+    
+    services:
+      postgresql:
+        image: postgres:16
+        shm_size: 1g
+        restart: always
+        volumes:
+          - postgres_data:/var/lib/postgresql/data
+        ports:
+          - 5440:5432
+        env_file:
+          - ./.env
+        healthcheck:
+          test:
+            ['CMD-SHELL', 'pg_isready -U $${DATABASE_USER} -d $${DATABASE_NAME} -q']
+          interval: 5s
+          timeout: 10s
+          retries: 10
+    "#;
+
+    write_file(path.join("docker-compose.yml").to_str().unwrap(), yml).unwrap();
 }

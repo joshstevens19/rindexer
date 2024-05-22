@@ -8,11 +8,11 @@ mod rindexer;
 // use crate::indexers::lens_registry_example::erc20_filter::erc20_filter_handlers;
 // use crate::indexers::lens_registry_example::lens_hub::lens_hub_handlers;
 // use crate::indexers::lens_registry_example::lens_registry::lens_registry_handlers;
-use rindexer_core::generator::build::generate_indexers_handlers_code;
+use rindexer_core::generator::build::generate_rindexer_handlers;
 use rindexer_core::manifest::yaml::read_manifest;
 use rindexer_core::{
     create_tables_for_indexer_sql,
-    generator::{build::generate_rindexer_code, event_callback_registry::EventCallbackRegistry},
+    generator::{build::generate_rindexer_typings, event_callback_registry::EventCallbackRegistry},
     indexer::start::{start_indexing, StartIndexingSettings},
     start_graphql_server, PostgresClient,
 };
@@ -51,19 +51,17 @@ async fn main() {
 }
 
 fn generate() {
-    generate_rindexer_code(
+    generate_rindexer_typings(
         &PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/manifest-example.yaml")
             .unwrap(),
-        None,
     )
     .unwrap();
 }
 
 fn generate_code_test() {
-    generate_indexers_handlers_code(
+    generate_rindexer_handlers(
         &PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/manifest-example.yaml")
             .unwrap(),
-        None,
     )
     .unwrap();
 }

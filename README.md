@@ -12,6 +12,7 @@ checklist v1.0:
   - npx postgraphile -c postgres://rindexer_user:U3uaAFmEbv9dnxjKOo9SbUFwc9wMU5ADBHW%2BHUT%2F7%2BDpQaDeUYV%2F@localhost:5440/postgres --host 0.0.0.0 --port 5005 --watch --schema public,lens_registry_example --default-role rindexer_user --enhance-graphiql --cors --disable-default-mutations
 - create documentation
 - look into deployments to make it easy to do
+- look into setting your own schema for the database using diesel
 
 nice to have:
 

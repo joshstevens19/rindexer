@@ -135,31 +135,32 @@ fn write_indexer_events(
     Ok(())
 }
 
-/// Generates code for the rindexer based on the manifest file.
+/// Generates typings for the rindexer based on the manifest file.
 ///
 /// # Arguments
 ///
 /// * `manifest_location` - A reference to the path of the manifest file.
-/// * `output_override` - The output directory override.
 ///
 /// # Returns
 ///
 /// A `Result` indicating success or failure.
-pub fn generate_rindexer_code(
-    manifest_location: &PathBuf,
-    output_override: Option<&str>,
-) -> Result<(), Box<dyn Error>> {
-    let output = output_override.unwrap_or("./src/rindexer/typings");
+pub fn generate_rindexer_typings(manifest_location: &PathBuf) -> Result<(), Box<dyn Error>> {
+    let output = manifest_location
+        .parent()
+        .unwrap()
+        .join("./src/rindexer/typings");
     let manifest = read_manifest(manifest_location)?;
 
-    write_networks(output, &manifest.networks)?;
-    write_global(output, &manifest.global, &manifest.networks)?;
+    let output_path = output.to_str().unwrap();
+
+    write_networks(output_path, &manifest.networks)?;
+    write_global(output_path, &manifest.global, &manifest.networks)?;
 
     for indexer in manifest.indexers {
-        write_indexer_events(output, indexer, &manifest.storage)?;
+        write_indexer_events(output_path, indexer, &manifest.storage)?;
     }
 
-    create_mod_file(Path::new(output), true)?;
+    create_mod_file(output.as_path(), true)?;
 
     Ok(())
 }
@@ -169,16 +170,12 @@ pub fn generate_rindexer_code(
 /// # Arguments
 ///
 /// * `manifest_location` - A reference to the path of the manifest file.
-/// * `output_override` - The output directory override.
 ///
 /// # Returns
 ///
 /// A `Result` indicating success or failure.
-pub fn generate_indexers_handlers_code(
-    manifest_location: &PathBuf,
-    output_override: Option<&str>,
-) -> Result<(), Box<dyn Error>> {
-    let output = output_override.unwrap_or("./src/rindexer");
+pub fn generate_rindexer_handlers(manifest_location: &PathBuf) -> Result<(), Box<dyn Error>> {
+    let output = manifest_location.parent().unwrap().join("./src/rindexer");
     let manifest = read_manifest(manifest_location)?;
 
     for indexer in manifest.indexers {
@@ -191,11 +188,30 @@ pub fn generate_indexers_handlers_code(
                 camel_to_snake(&indexer.name),
                 camel_to_snake(&contract.name)
             );
-            write_file(&generate_file_location(output, &handler_path), &result)?;
+            write_file(
+                &generate_file_location(output.to_str().unwrap(), &handler_path),
+                &result,
+            )?;
         }
     }
 
-    create_mod_file(Path::new(output), false)?;
+    create_mod_file(output.as_path(), false)?;
+
+    Ok(())
+}
+
+/// Generates all the rindexer project typings and handlers
+///
+/// # Arguments
+///
+/// * `manifest_location` - A reference to the path of the manifest file.
+///
+/// # Returns
+///
+/// A `Result` indicating success or failure.
+pub fn generate(manifest_location: &PathBuf) -> Result<(), Box<dyn Error>> {
+    generate_rindexer_typings(manifest_location)?;
+    generate_rindexer_handlers(manifest_location)?;
 
     Ok(())
 }

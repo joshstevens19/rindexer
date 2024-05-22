@@ -1,4 +1,3 @@
-
 use super::super::super::typings::lens_registry_example::events::lens_registry::{
     no_extensions, HandleLinkedEvent, LensRegistryEventType,
 };
