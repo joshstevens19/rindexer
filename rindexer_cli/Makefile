@@ -1,5 +1,5 @@
-init:
-	cargo run -- init
+new:
+	cargo run -- new
 generate:
 	cargo run -- generate
 ls_networks:

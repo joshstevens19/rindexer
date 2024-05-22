@@ -24,10 +24,9 @@ rindexer new
 1. Project name 
 2. Project description:
 3. Repository (can be blank):
-4. Do you want an example indexing manifest? yes / no
-5. what data-layers to enable? postgres/csv/none? <list> (none = console)
-6. if postgres > docker support out the box? yes / no
-7. postgres only (generated env file..)
+4. what storages to enable? postgres/csv/none? <list> (none = console)
+5. if postgres > docker support out the box? yes / no
+6. postgres only (generated env file..)
 - this creates a manifest file with ethereum 
 - git init happens automatically and git commit -m 'setup rindexer'
 - give information about what to do next which is run indexer, regenerate typings and start graphql
