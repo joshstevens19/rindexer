@@ -2,13 +2,11 @@ use std::env;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use crate::rindexer::indexers::all_handlers::register_all_handlers;
+use self::rindexer::indexers::all_handlers::register_all_handlers;
 use rindexer_core::{
-    generator::build::{generate_rindexer_handlers, generate_rindexer_typings},
     start_rindexer, GraphQLServerDetails, IndexingDetails, StartDetails,
 };
 
-// mod indexers;
 mod rindexer;
 
 #[tokio::main]
@@ -48,14 +46,14 @@ async fn main() {
 }
 
 fn generate() {
-    generate_rindexer_typings(
+    rindexer_core::generator::build::generate_rindexer_typings(
         &PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap(),
     )
     .unwrap();
 }
 
 fn generate_code_test() {
-    generate_rindexer_handlers(
+    rindexer_core::generator::build::generate_rindexer_handlers(
         &PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap(),
     )
     .unwrap();
