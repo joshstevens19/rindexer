@@ -3,7 +3,9 @@ use colored::Colorize;
 use ethers::types::{Chain, U64};
 use ethers_etherscan::Client;
 use regex::Regex;
-use rindexer_core::generator::build::generate;
+use rindexer_core::generator::build::{
+    generate, generate_rindexer_handlers, generate_rindexer_typings,
+};
 use rindexer_core::manifest::yaml::{
     read_manifest, write_manifest, Contract, ContractDetails, CsvDetails, Global, Indexer,
     Manifest, Network, PostgresClient, Storage,
@@ -13,7 +15,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::{fs, io};
-use std::error::Error;
 
 #[derive(Parser, Debug)]
 #[clap(name = "rindexer", about, version, author = "Your Name")]
@@ -37,6 +38,30 @@ struct NewDetails {
     database: Option<bool>,
 }
 
+#[derive(Subcommand, Debug)]
+enum CodegenSubcommands {
+    Typings,
+    Indexer,
+    All,
+}
+
+#[derive(Subcommand, Debug)]
+enum StartSubcommands {
+    Indexer,
+    GraphQL {
+        #[clap(short, long)]
+        hostname: Option<String>,
+        #[clap(short, long)]
+        port: Option<String>,
+    },
+    All {
+        #[clap(short, long)]
+        hostname: Option<String>,
+        #[clap(short, long)]
+        port: Option<String>,
+    },
+}
+
 /// Define the subcommands for the CLI
 #[derive(Subcommand, Debug)]
 enum Commands {
@@ -45,7 +70,10 @@ enum Commands {
     #[clap(name = "dev")]
     Dev,
     #[clap(name = "start")]
-    Start,
+    Start {
+        #[clap(subcommand)]
+        subcommand: StartSubcommands,
+    },
     /// Removes a contract from an indexer
     RemoveContract {
         #[clap(name = "indexer_name")]
@@ -55,6 +83,11 @@ enum Commands {
     },
     #[clap(name = "download_abi")]
     DownloadAbi,
+    #[clap(name = "codegen")]
+    Codegen {
+        #[clap(subcommand)]
+        subcommand: CodegenSubcommands,
+    },
 }
 
 const VALID_URL: &str = r"^(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})(:[0-9]+)?(\/[\w \.-]*)*\/?(\\?[\w=&.+-]*)?(#[\w.-]*)?$";
@@ -284,10 +317,18 @@ async fn handle_download_abi_command() {
         return;
     }
 
-    let network = prompt_for_input_list("Enter Network", &["ethereum", "polygon", "base", "bsc"], None);
+    let network = prompt_for_input_list(
+        "Enter Network",
+        &["ethereum", "polygon", "base", "bsc"],
+        None,
+    );
     let contract_address = prompt_for_input("Enter Contract Address", None, None);
-    
-    let client = Client::builder().chain(Chain::Mainnet).unwrap().build().unwrap();
+
+    let client = Client::builder()
+        .chain(Chain::Mainnet)
+        .unwrap()
+        .build()
+        .unwrap();
 
     let address = contract_address.parse().unwrap();
 
@@ -295,7 +336,10 @@ async fn handle_download_abi_command() {
         let metadata = client.contract_source_code(address).await.unwrap();
 
         if metadata.items.is_empty() {
-            print_error_message(&format!("No contract found on network {} with address {}.", network, contract_address));
+            print_error_message(&format!(
+                "No contract found on network {} with address {}.",
+                network, contract_address
+            ));
             break;
         }
 
@@ -307,14 +351,75 @@ async fn handle_download_abi_command() {
 
         let abi_path = rindexer_abis_folder.join(format!("{}.abi.json", item.contract_name));
         write_file(abi_path.to_str().unwrap(), &item.abi).unwrap();
-        print_success_message(&format!(
-            "Downloaded ABI for: {}",
-            item.contract_name
-        ));
+        print_success_message(&format!("Downloaded ABI for: {}", item.contract_name));
 
         break;
     }
 }
+
+fn handle_codegen_command(subcommand: &CodegenSubcommands) {
+    validate_rindexer_yaml_exist();
+
+    let path = PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo_cli").unwrap();
+    let rindexer_yaml_path = path.join(YAML_NAME);
+
+    match subcommand {
+        CodegenSubcommands::Typings => {
+            generate_rindexer_typings(&rindexer_yaml_path).unwrap();
+            print_success_message("Generated rindexer typings.");
+        }
+        CodegenSubcommands::Indexer => {
+            generate_rindexer_handlers(&rindexer_yaml_path).unwrap();
+            print_success_message("Generated rindexer indexer handlers.");
+        }
+        CodegenSubcommands::All => {
+            generate(&rindexer_yaml_path).unwrap();
+            print_success_message("Generated rindexer typings and indexer handlers");
+        }
+    }
+}
+
+// async fn start_indexer() {
+//     validate_rindexer_yaml_exist();
+//
+//     // TODO! fix this
+//     let path = PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo_cli").unwrap();
+//     let rindexer_yaml_path = path.join(YAML_NAME);
+//
+//     let manifest = read_rindexer_yaml(&rindexer_yaml_path);
+//
+//     let client = PostgresClient::new().await.unwrap();
+//
+//     for indexer in &manifest.indexers {
+//         let sql = create_tables_for_indexer_sql(indexer);
+//         println!("{}", sql);
+//         client.batch_execute(&sql).await.unwrap();
+//     }
+//
+//     let result = start_graphql_server(&manifest.indexers, Default::default()).unwrap();
+//     thread::sleep(Duration::from_secs(5000000000000000000));
+// }
+//
+// async fn start_graphql() {
+//     validate_rindexer_yaml_exist();
+//
+//     // TODO! fix this
+//     let path = PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo_cli").unwrap();
+//     let rindexer_yaml_path = path.join(YAML_NAME);
+//
+//     let manifest = read_rindexer_yaml(&rindexer_yaml_path);
+//
+//     let client = PostgresClient::new().await.unwrap();
+//
+//     for indexer in &manifest.indexers {
+//         let sql = create_tables_for_indexer_sql(indexer);
+//         println!("{}", sql);
+//         client.batch_execute(&sql).await.unwrap();
+//     }
+//
+//     let result = start_graphql_server(&manifest.indexers, Default::default()).unwrap();
+//     thread::sleep(Duration::from_secs(5000000000000000000));
+// }
 
 #[tokio::main]
 async fn main() {
@@ -323,6 +428,12 @@ async fn main() {
     match &cli.command {
         Commands::New => handle_new_command(),
         Commands::DownloadAbi => handle_download_abi_command().await,
+        Commands::Codegen { subcommand } => handle_codegen_command(subcommand),
+        Commands::Start { subcommand } => match subcommand {
+            StartSubcommands::Indexer => {}
+            StartSubcommands::GraphQL { hostname, port } => {}
+            StartSubcommands::All { hostname, port } => {}
+        },
         Commands::RemoveContract {
             indexer_name,
             contract_name,
@@ -344,7 +455,7 @@ fn prompt_for_input(
         Some(value) => value.to_string(),
         None => loop {
             print!("{} {}: ", "Please enter the".green(), field_name.yellow());
-            io::stdout().flush().unwrap(); // Ensure the prompt is displayed before blocking on input
+            io::stdout().flush().unwrap();
 
             let mut input = String::new();
             io::stdin()
@@ -374,7 +485,7 @@ fn prompt_for_optional_input<T: FromStr>(prompt: &str, pattern: Option<&str>) ->
     let regex = pattern.map(|p| Regex::new(p).unwrap());
     loop {
         print!("{} (skip by pressing Enter): ", prompt.blue());
-        io::stdout().flush().unwrap(); // Ensure the prompt is displayed before blocking on input
+        io::stdout().flush().unwrap();
 
         let mut input = String::new();
         io::stdin()
@@ -428,7 +539,7 @@ fn prompt_for_input_list(
             format!("Please enter the {}", field_name).green(),
             options_str.yellow()
         );
-        io::stdout().flush().unwrap(); // Ensure the prompt is displayed before blocking on input
+        io::stdout().flush().unwrap();
 
         let mut input = String::new();
         io::stdin()
