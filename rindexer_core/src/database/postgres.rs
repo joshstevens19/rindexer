@@ -1,24 +1,25 @@
+use std::{env, str};
+
 // External crates
 use bytes::BytesMut;
 use dotenv::dotenv;
 use ethers::types::{Address, Bytes, H128, H160, H256, H512, U128, U256, U512, U64};
-use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use rust_decimal::Decimal;
-use std::{env, str};
 use thiserror::Error;
-use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type};
 use tokio_postgres::{Client, Error as PgError, NoTls, Row, Statement, Transaction};
+use tokio_postgres::types::{IsNull, to_sql_checked, ToSql, Type};
 
+use crate::generator::{
+    ABIInput, EventInfo, extract_event_names_and_signatures_from_abi,
+    generate_abi_name_properties, GenerateAbiPropertiesType, read_abi_items,
+};
 // Internal modules
 use crate::generator::build::{
-    contract_name_to_filter_name, identify_and_modify_filter, is_filter,
-};
-use crate::generator::{
-    extract_event_names_and_signatures_from_abi, generate_abi_name_properties, read_abi_items,
-    ABIInput, EventInfo, GenerateAbiPropertiesType,
+    contract_name_to_filter_name, is_filter,
 };
 use crate::helpers::camel_to_snake;
-use crate::manifest::yaml::{Contract, Indexer};
+use crate::manifest::yaml::Indexer;
 
 pub fn database_user() -> Result<String, env::VarError> {
     dotenv().ok();
@@ -131,7 +132,7 @@ impl PostgresClient {
     pub async fn execute<T>(
         &self,
         query: &T,
-        params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
+        params: &[&(dyn ToSql + Sync)],
     ) -> Result<u64, tokio_postgres::Error>
     where
         T: ?Sized + tokio_postgres::ToStatement,
@@ -164,7 +165,7 @@ impl PostgresClient {
     pub async fn query<T>(
         &self,
         query: &T,
-        params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
+        params: &[&(dyn ToSql + Sync)],
     ) -> Result<Vec<Row>, tokio_postgres::Error>
     where
         T: ?Sized + tokio_postgres::ToStatement,
@@ -176,7 +177,7 @@ impl PostgresClient {
     pub async fn query_one<T>(
         &self,
         query: &T,
-        params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
+        params: &[&(dyn ToSql + Sync)],
     ) -> Result<Row, tokio_postgres::Error>
     where
         T: ?Sized + tokio_postgres::ToStatement,
@@ -188,7 +189,7 @@ impl PostgresClient {
     pub async fn query_one_or_none<T>(
         &self,
         query: &T,
-        params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
+        params: &[&(dyn ToSql + Sync)],
     ) -> Result<Option<Row>, tokio_postgres::Error>
     where
         T: ?Sized + tokio_postgres::ToStatement,

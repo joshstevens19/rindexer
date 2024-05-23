@@ -157,13 +157,53 @@ fn generate_rindexer_rust_project(path: PathBuf, rindexer_yaml_path: &PathBuf) {
     }
 
     let main_code = r#"
+            use std::env;
+            use std::path::PathBuf;
+            use std::str::FromStr;
+
+            use self::rindexer::indexers::all_handlers::register_all_handlers;
+            use rindexer_core::{
+                start_rindexer, GraphQLServerDetails, IndexingDetails, StartDetails,
+            };
+
             mod rindexer;
 
             #[tokio::main]
-            async fn main() {{
-                println!("Hello, world!");
-            }}
-        "#;
+            async fn main() {
+                let args: Vec<String> = env::args().collect();
+
+                let mut enable_graphql = false;
+                let mut enable_indexer = false;
+
+                for arg in args.iter() {
+                    match arg.as_str() {
+                        "--graphql" => enable_graphql = true,
+                        "--indexer" => enable_indexer = true,
+                        _ => {}
+                    }
+                }
+
+                let _ = start_rindexer(StartDetails {
+                    manifest_path: env::current_dir().unwrap().join("rindexer.yaml"),
+                    indexing_details: if enable_indexer {
+                        Some(IndexingDetails {
+                            registry: register_all_handlers().await,
+                            settings: Default::default(),
+                        })
+                    } else {
+                        None
+                    },
+                    graphql_server: if enable_graphql {
+                        Some(GraphQLServerDetails {
+                            settings: Default::default(),
+                        })
+                    } else {
+                        None
+                    },
+                })
+                .await;
+            }
+          "#;
 
     write_file(
         path.join("src").join("main.rs").to_str().unwrap(),

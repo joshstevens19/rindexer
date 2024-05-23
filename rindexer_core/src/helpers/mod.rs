@@ -71,7 +71,7 @@ pub fn write_file(path: &str, contents: &str) -> Result<(), Box<dyn Error>> {
 
     let mut file = File::create(path)?;
     file.write_all(contents.as_bytes())?;
-    format_file(path.to_str().unwrap());
+    //format_file(path.to_str().unwrap());
     Ok(())
 }
 
