@@ -1,6 +1,6 @@
 use crate::database::postgres::{
-    generate_columns_names_only, generate_injected_param, solidity_type_to_db_type,
-    solidity_type_to_ethereum_sql_type,
+    generate_columns_names_only, generate_injected_param, indexer_contract_schema_name,
+    solidity_type_to_db_type, solidity_type_to_ethereum_sql_type,
 };
 use crate::generator::event_callback_registry::IndexingContractSetup;
 use ethers::utils::keccak256;
@@ -1241,9 +1241,10 @@ pub fn generate_event_handlers(
 
         if storage.postgres_enabled() {
             let columns = generate_columns_names_only(&event.inputs);
+            let schema_name = indexer_contract_schema_name(indexer_name, &contract.name);
             let insert_sql = format!(
                 "INSERT INTO {}.{} (contract_address, {}, \"tx_hash\", \"block_number\", \"block_hash\") {}",
-                camel_to_snake(indexer_name),
+                schema_name,
                 camel_to_snake(&event.name),
                 &columns.join(", "),
                 generate_injected_param(4 + columns.len())
