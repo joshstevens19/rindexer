@@ -52,6 +52,7 @@ type BoxedError = Box<dyn Error + Send + Sync>;
 
 struct EventProcessingConfig {
     indexer_name: &'static str,
+    contract_name: String,
     topic_id: &'static str,
     event_name: &'static str,
     network_contract: Arc<NetworkContract>,
@@ -126,6 +127,7 @@ pub async fn start_indexing(
 
             let event_processing_config = EventProcessingConfig {
                 indexer_name: event.indexer_name,
+                contract_name: event.contract.name.clone(),
                 topic_id: event.topic_id,
                 event_name: event.event_name,
                 network_contract: Arc::new(contract),
@@ -191,6 +193,7 @@ async fn process_event_sequentially(
         let permit = semaphore_client.acquire_owned().await.unwrap();
         process_logs(ProcessLogsParams {
             indexer_name: event_processing_config.indexer_name,
+            contract_name: event_processing_config.contract_name.clone(),
             topic_id: event_processing_config.topic_id,
             event_name: event_processing_config.event_name,
             network_contract: event_processing_config.network_contract.clone(),
@@ -255,9 +258,11 @@ async fn process_event_concurrently(
             let network_contract = event_processing_config.network_contract.clone();
             let progress = event_processing_config.progress.clone();
             let database = event_processing_config.database.clone();
+            let contract_name = event_processing_config.contract_name.clone();
             async move {
                 let result = process_logs(ProcessLogsParams {
                     indexer_name: event_processing_config.indexer_name,
+                    contract_name,
                     topic_id: event_processing_config.topic_id,
                     event_name: event_processing_config.event_name,
                     network_contract: network_contract.clone(),
@@ -295,6 +300,7 @@ async fn process_event_concurrently(
 #[derive(Clone)]
 pub struct ProcessLogsParams {
     indexer_name: &'static str,
+    contract_name: String,
     topic_id: &'static str,
     event_name: &'static str,
     network_contract: Arc<NetworkContract>,
@@ -334,6 +340,7 @@ async fn process_logs(params: ProcessLogsParams) -> Result<(), BoxedError> {
     while let Some(result) = logs_stream.next().await {
         handle_logs_result(
             params.indexer_name,
+            params.contract_name.clone(),
             params.event_name,
             params.topic_id,
             params.execute_events_logs_in_order,
@@ -369,6 +376,7 @@ async fn process_logs(params: ProcessLogsParams) -> Result<(), BoxedError> {
 #[allow(clippy::too_many_arguments)]
 async fn handle_logs_result(
     indexer_name: &'static str,
+    contract_name: String,
     event_name: &'static str,
     topic_id: &'static str,
     execute_events_logs_in_order: bool,
@@ -403,6 +411,7 @@ async fn handle_logs_result(
             }
             update_progress_and_db(
                 indexer_name,
+                contract_name,
                 event_name,
                 progress,
                 network_contract,
@@ -468,6 +477,7 @@ async fn get_last_synced_block_number(
 /// * `to_block` - The block number to update to.
 fn update_progress_and_db(
     indexer_name: &'static str,
+    contract_name: String,
     event_name: &'static str,
     progress: Arc<Mutex<IndexingEventsProgressState>>,
     network_contract: Arc<NetworkContract>,
@@ -483,8 +493,9 @@ fn update_progress_and_db(
         database
             .execute(
                 &format!(
-                    "UPDATE rindexer_internal.{}_{} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block",
+                    "UPDATE rindexer_internal.{}_{}_{} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block",
                     camel_to_snake(indexer_name),
+                    camel_to_snake(&contract_name),
                     camel_to_snake(event_name)
                 ),
                 &[

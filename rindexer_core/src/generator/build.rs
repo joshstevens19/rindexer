@@ -1,8 +1,6 @@
+use std::{error::Error, path::PathBuf};
+
 use ethers::contract::Abigen;
-use std::{
-    error::Error,
-    path::{Path, PathBuf},
-};
 
 use crate::helpers::{camel_to_snake, create_mod_file, write_file};
 use crate::manifest::yaml::{read_manifest, Contract, Global, Indexer, Network, Storage};
@@ -63,16 +61,16 @@ fn write_global(output: &str, global: &Global, networks: &[Network]) -> Result<(
     Ok(())
 }
 
-/// Identifies if the contract uses a filter and updates its name if necessary.
+/// Identifies if the contract uses a filter
 ///
 /// # Arguments
 ///
-/// * `contract` - A mutable reference to a `Contract`.
+/// * `contract` - A reference to a `Contract`.
 ///
 /// # Returns
 ///
 /// A `bool` indicating whether the contract uses a filter.
-fn identify_filter(contract: &mut Contract) -> bool {
+pub fn is_filter(contract: &Contract) -> bool {
     let filter_count = contract
         .details
         .iter()
@@ -84,7 +82,29 @@ fn identify_filter(contract: &mut Contract) -> bool {
     }
 
     if filter_count > 0 {
-        contract.override_name(format!("{}Filter", contract.name));
+        true
+    } else {
+        false
+    }
+}
+
+/// Converts a contract name to a filter name.
+pub fn contract_name_to_filter_name(contract_name: &str) -> String {
+    format!("{}Filter", contract_name)
+}
+
+/// Identifies if the contract uses a filter and updates its name if necessary.
+///
+/// # Arguments
+///
+/// * `contract` - A mutable reference to a `Contract`.
+///
+/// # Returns
+///
+/// A `bool` indicating whether the contract uses a filter.
+pub fn identify_and_modify_filter(contract: &mut Contract) -> bool {
+    if is_filter(contract) {
+        contract.override_name(contract_name_to_filter_name(&contract.name));
         true
     } else {
         false
@@ -108,7 +128,7 @@ fn write_indexer_events(
     storage: &Storage,
 ) -> Result<(), Box<dyn Error>> {
     for mut contract in indexer.contracts {
-        let is_filter = identify_filter(&mut contract);
+        let is_filter = identify_and_modify_filter(&mut contract);
         let events_code = generate_event_bindings(&indexer.name, &contract, is_filter, storage)?;
 
         let event_path = format!(
@@ -178,22 +198,46 @@ pub fn generate_rindexer_handlers(manifest_location: &PathBuf) -> Result<(), Box
     let output = manifest_location.parent().unwrap().join("./src/rindexer");
     let manifest = read_manifest(manifest_location)?;
 
+    let mut all_indexers = String::new();
+    all_indexers.push_str(
+        r#"
+        use rindexer_core::generator::event_callback_registry::EventCallbackRegistry;
+        
+        pub async fn register_all_handlers() -> EventCallbackRegistry {
+             let mut registry = EventCallbackRegistry::new();
+        "#,
+    );
+
     for indexer in manifest.indexers {
         for mut contract in indexer.contracts {
-            let is_filter = identify_filter(&mut contract);
-            let result =
-                generate_event_handlers(&indexer.name, is_filter, &contract, &manifest.storage)?;
-            let handler_path = format!(
-                "indexers/{}/{}",
-                camel_to_snake(&indexer.name),
-                camel_to_snake(&contract.name)
+            let is_filter = identify_and_modify_filter(&mut contract);
+
+            let indexer_name = camel_to_snake(&indexer.name);
+            let contract_name = camel_to_snake(&contract.name);
+            let handler_fn_name = format!("{}_handlers", contract_name);
+
+            all_indexers.insert_str(
+                0,
+                &format!(r#"use super::{indexer_name}::{contract_name}::{handler_fn_name};"#,),
             );
+
+            all_indexers.push_str(&format!(r#"{handler_fn_name}(&mut registry).await;"#));
+
+            let handler_path = format!("indexers/{}/{}", indexer_name, contract_name);
+
             write_file(
                 &generate_file_location(output.to_str().unwrap(), &handler_path),
-                &result,
+                &generate_event_handlers(&indexer.name, is_filter, &contract, &manifest.storage)?,
             )?;
         }
     }
+
+    all_indexers.push_str("registry");
+    all_indexers.push('}');
+    write_file(
+        &generate_file_location(output.to_str().unwrap(), "indexers/all_handlers"),
+        &all_indexers,
+    )?;
 
     create_mod_file(output.as_path(), false)?;
 

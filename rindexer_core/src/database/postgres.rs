@@ -10,6 +10,9 @@ use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type};
 use tokio_postgres::{Client, Error as PgError, NoTls, Row, Statement, Transaction};
 
 // Internal modules
+use crate::generator::build::{
+    contract_name_to_filter_name, identify_and_modify_filter, is_filter,
+};
 use crate::generator::{
     extract_event_names_and_signatures_from_abi, generate_abi_name_properties, read_abi_items,
     ABIInput, EventInfo, GenerateAbiPropertiesType,
@@ -377,9 +380,14 @@ pub fn create_tables_for_indexer_sql(indexer: &Indexer) -> String {
     let mut sql = "CREATE SCHEMA IF NOT EXISTS rindexer_internal;".to_string();
 
     for contract in &indexer.contracts {
+        let contract_name = if is_filter(contract) {
+            contract_name_to_filter_name(&contract.name)
+        } else {
+            contract.name.clone()
+        };
         if let Ok(abi_items) = read_abi_items(contract) {
             if let Ok(event_names) = extract_event_names_and_signatures_from_abi(&abi_items) {
-                let schema_name = indexer_contract_schema_name(&indexer.name, &contract.name);
+                let schema_name = indexer_contract_schema_name(&indexer.name, &contract_name);
                 sql.push_str(format!("CREATE SCHEMA IF NOT EXISTS {};", schema_name).as_str());
 
                 let networks: Vec<String> =

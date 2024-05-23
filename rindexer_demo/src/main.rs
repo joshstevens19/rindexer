@@ -1,67 +1,62 @@
+use std::env;
+use std::path::PathBuf;
+use std::str::FromStr;
+
+use crate::rindexer::indexers::all_handlers::register_all_handlers;
+use rindexer_core::{
+    generator::build::{generate_rindexer_handlers, generate_rindexer_typings},
+    start_rindexer, GraphQLServerDetails, IndexingDetails, StartDetails,
+};
+
 // mod indexers;
 mod rindexer;
 
-// use crate::indexers::lens_registry_example::lens_hub::lens_hub_handlers;
-//use crate::indexers::lens_registry_example::lens_registry::lens_registry_handlers;
-//use crate::indexers::lens_registry_example::lens_hub::lens_hub_handlers;
-//use crate::indexers::lens_registry_example::lens_registry::lens_registry_handlers;
-// use crate::indexers::lens_registry_example::erc20_filter::erc20_filter_handlers;
-// use crate::indexers::lens_registry_example::lens_hub::lens_hub_handlers;
-// use crate::indexers::lens_registry_example::lens_registry::lens_registry_handlers;
-use rindexer_core::generator::build::generate_rindexer_handlers;
-use rindexer_core::manifest::yaml::read_manifest;
-use rindexer_core::{
-    create_tables_for_indexer_sql,
-    generator::{build::generate_rindexer_typings, event_callback_registry::EventCallbackRegistry},
-    indexer::start::{start_indexing, StartIndexingSettings},
-    start_graphql_server, PostgresClient,
-};
-use std::path::PathBuf;
-use std::str::FromStr;
-use std::thread;
-use std::time::Duration;
-
 #[tokio::main]
 async fn main() {
-    // generate();
-    let mut registry = EventCallbackRegistry::new();
+    let args: Vec<String> = env::args().collect();
 
-    let manifest = read_manifest(
-        &PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/manifest-example.yaml")
-            .unwrap(),
-    )
-    .unwrap();
+    let mut enable_graphql = false;
+    let mut enable_indexer = false;
 
-    let client = PostgresClient::new().await.unwrap();
-
-    for indexer in &manifest.indexers {
-        let sql = create_tables_for_indexer_sql(indexer);
-        println!("{}", sql);
-        client.batch_execute(&sql).await.unwrap();
+    for arg in args.iter() {
+        match arg.as_str() {
+            "--graphql" => enable_graphql = true,
+            "--indexer" => enable_indexer = true,
+            _ => {}
+        }
     }
 
-    // lens_registry_handlers(&mut registry).await;
-    //lens_hub_handlers(&mut registry).await;
-    //erc20_filter_handlers(&mut registry).await;
-
-    let result = start_graphql_server(&manifest.indexers, Default::default()).unwrap();
-    thread::sleep(Duration::from_secs(5000000000000000000));
-
-    // let _ = start_indexing(registry.complete(), StartIndexingSettings::default()).await;
+    let _ = start_rindexer(StartDetails {
+        manifest_path: env::current_dir().unwrap().join("rindexer.yaml"),
+        indexing_details: if enable_indexer {
+            Some(IndexingDetails {
+                registry: register_all_handlers().await,
+                settings: Default::default(),
+            })
+        } else {
+            None
+        },
+        graphql_server: if enable_graphql {
+            Some(GraphQLServerDetails {
+                settings: Default::default(),
+            })
+        } else {
+            None
+        },
+    })
+    .await;
 }
 
 fn generate() {
     generate_rindexer_typings(
-        &PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/manifest-example.yaml")
-            .unwrap(),
+        &PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap(),
     )
     .unwrap();
 }
 
 fn generate_code_test() {
     generate_rindexer_handlers(
-        &PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/manifest-example.yaml")
-            .unwrap(),
+        &PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap(),
     )
     .unwrap();
 }
