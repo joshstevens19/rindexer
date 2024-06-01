@@ -3,9 +3,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use self::rindexer::indexers::all_handlers::register_all_handlers;
-use rindexer_core::{
-    start_rindexer, GraphQLServerDetails, IndexingDetails, StartDetails,
-};
+use rindexer_core::{start_rindexer, GraphQLServerDetails, IndexingDetails, StartDetails};
 
 mod rindexer;
 

@@ -9,6 +9,7 @@ use serde_json::Value;
 use std::error::Error;
 use std::fs;
 use std::iter::Map;
+use std::path::{Path, PathBuf};
 
 use crate::helpers::camel_to_snake;
 use crate::manifest::yaml::{Contract, ContractDetails, CsvDetails, Storage};
@@ -591,6 +592,7 @@ fn generate_contract_type_fn_code(contract: &Contract) -> String {
 ///
 /// # Arguments
 ///
+/// * `project_path` - The project path.
 /// * `contract_name` - The name of the contract.
 /// * `event_info` - The event information.
 /// * `csv` - The csv configuration.
@@ -599,6 +601,7 @@ fn generate_contract_type_fn_code(contract: &Contract) -> String {
 ///
 /// A `String` containing the generated Rust code for the CSV instance.
 fn generate_csv_instance(
+    project_path: &Path,
     contract: &Contract,
     event_info: &EventInfo,
     csv: &Option<CsvDetails>,
@@ -617,14 +620,15 @@ fn generate_csv_instance(
     }
 
     let csv_file_name = format!("{}-{}.csv", contract.name, event_info.name).to_lowercase();
-    let csv_folder = format!("{}/{}", csv.as_ref().unwrap().path, contract.name);
-
+    let csv_folder = project_path.join(format!("{}/{}", csv.as_ref().unwrap().path, contract.name));
+    
     // Create directory if it does not exist.
     if let Err(e) = fs::create_dir_all(&csv_folder) {
-        panic!("Failed to create directory '{}': {}", csv_folder, e);
+        panic!("Failed to create directory '{}': {}", csv_folder.to_str().unwrap(), e);
     }
 
-    let csv_path = format!("{}/{}", csv_folder, csv_file_name);
+    let csv_path = format!("{}/{}", csv_folder.display(), csv_file_name);
+    println!("CSV path: {}", csv_path);
 
     let mut headers: Vec<String> = generate_abi_name_properties(
         &event_info.inputs,
@@ -662,6 +666,7 @@ fn generate_csv_instance(
 ///
 /// # Arguments
 ///
+/// * `project_path` - The project path.
 /// * `event_info` - A slice of `EventInfo` containing details about the events.
 /// * `contract_name` - The name of the contract.
 /// * `storage` - The `storage` configuration.
@@ -670,6 +675,7 @@ fn generate_csv_instance(
 ///
 /// A `String` containing the generated Rust code for the event callback structs.
 fn generate_event_callback_structs_code(
+    project_path: &Path,
     event_info: &[EventInfo],
     contract: &Contract,
     storage: &Storage,
@@ -738,7 +744,7 @@ fn generate_event_callback_structs_code(
                 } else {
                     ""
                 },
-                csv_generator = generate_csv_instance(&contract, info, &storage.csv)
+                csv_generator = generate_csv_instance(&project_path, &contract, info, &storage.csv)
             )
         })
         .collect::<Vec<_>>()
@@ -859,6 +865,7 @@ fn build_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &st
 ///
 /// # Arguments
 ///
+/// * `project_path` - The project path.
 /// * `indexer_name` - The name of the indexer.
 /// * `contract` - The contract information.
 /// * `storage` - An `storage` configuration.
@@ -868,6 +875,7 @@ fn build_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &st
 ///
 /// A `Result<String, Box<dyn Error>>` containing the generated Rust code for the event bindings.
 fn generate_event_bindings_code(
+    project_path: &Path,
     indexer_name: &str,
     contract: &Contract,
     storage: &Storage,
@@ -1006,7 +1014,7 @@ fn generate_event_bindings_code(
             ""
         },
         event_callback_structs =
-            generate_event_callback_structs_code(&event_info, &contract, storage),
+            generate_event_callback_structs_code(project_path, &event_info, contract, storage),
         event_enums = generate_event_enums_code(&event_info),
         topic_ids_match_arms = generate_topic_ids_match_arms_code(&event_type_name, &event_info),
         event_names_match_arms =
@@ -1159,6 +1167,7 @@ fn get_abi_items(contract: &Contract, is_filter: bool) -> Result<Vec<ABIItem>, B
 ///
 /// # Arguments
 ///
+/// * `project_path` - The project path.
 /// * `indexer_name` - The name of the indexer.
 /// * `contract` - The contract information.
 /// * `is_filter` - A boolean indicating whether the ABI items are for filtering.
@@ -1168,6 +1177,7 @@ fn get_abi_items(contract: &Contract, is_filter: bool) -> Result<Vec<ABIItem>, B
 ///
 /// A `Result` containing the generated code as a string or an error.
 pub fn generate_event_bindings(
+    project_path: &Path,
     indexer_name: &str,
     contract: &Contract,
     is_filter: bool,
@@ -1176,7 +1186,7 @@ pub fn generate_event_bindings(
     let abi_items = get_abi_items(contract, is_filter)?;
     let event_names = extract_event_names_and_signatures_from_abi(&abi_items)?;
 
-    generate_event_bindings_code(indexer_name, contract, storage, event_names)
+    generate_event_bindings_code(project_path, indexer_name, contract, storage, event_names)
 }
 
 /// Generates event handlers for the specified contract.

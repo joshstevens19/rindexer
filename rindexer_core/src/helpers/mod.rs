@@ -46,11 +46,31 @@ pub fn camel_to_snake(s: &str) -> String {
 /// # Arguments
 ///
 /// * `file_path` - The path to the Rust source file.
-fn format_file(file_path: &str) {
+pub fn format_file(file_path: &str) {
     Command::new("rustfmt")
         .arg(file_path)
         .status()
         .expect("Failed to execute rustfmt.");
+}
+
+/// Formats all Rust source files in the given folder using `cargo fmt`.
+///
+/// # Arguments
+///
+/// * `project_path` - The path to the folder containing the Rust project.
+pub fn format_all_files_for_project<P: AsRef<Path>>(project_path: P) {
+    let manifest_path = project_path.as_ref().join("Cargo.toml");
+
+    let status = Command::new("cargo")
+        .arg("fmt")
+        .arg("--manifest-path")
+        .arg(manifest_path)
+        .status()
+        .expect("Failed to execute cargo fmt.");
+
+    if !status.success() {
+        panic!("cargo fmt failed with status: {:?}", status);
+    }
 }
 
 /// Writes contents to a file, creating directories as needed, and formats the file.
