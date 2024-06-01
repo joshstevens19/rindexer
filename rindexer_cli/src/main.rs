@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::{fs, io};
 
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Parser, Debug)]
 #[clap(name = "rindexer", about, version, author = "Your Name")]
 struct CLI {
@@ -133,19 +134,20 @@ fn generate_rindexer_rust_project(path: PathBuf, rindexer_yaml_path: &PathBuf) {
         return;
     }
 
+    // TODO! max rindexer_core to github
     let cargo = format!(
         r#"
-            [package]
-            name = "{project_name}"
-            version = "0.1.0"
-            edition = "2021"
+[package]
+name = "{project_name}"
+version = "0.1.0"
+edition = "2021"
 
-            [dependencies]
-            rindexer_core = {{ path = "../rindexer_core" }}
-            tokio = {{ version = "1", features = ["full"] }}
-            ethers = {{ version = "2.0", features = ["rustls", "openssl"] }}
-            serde = {{ version = "1.0.194", features = ["derive"] }}
-        "#,
+[dependencies]
+rindexer_core = {{ path = "../../rindexer_core" }}
+tokio = {{ version = "1", features = ["full"] }}
+ethers = {{ version = "2.0", features = ["rustls", "openssl"] }}
+serde = {{ version = "1.0.194", features = ["derive"] }}
+"#,
         project_name = manifest.name,
     );
 
@@ -179,7 +181,11 @@ fn generate_rindexer_rust_project(path: PathBuf, rindexer_yaml_path: &PathBuf) {
                     match arg.as_str() {
                         "--graphql" => enable_graphql = true,
                         "--indexer" => enable_indexer = true,
-                        _ => {}
+                        _ => {
+                            // default run both
+                            enable_graphql = true;
+                            enable_indexer = true;
+                        }
                     }
                 }
 
@@ -214,12 +220,11 @@ fn generate_rindexer_rust_project(path: PathBuf, rindexer_yaml_path: &PathBuf) {
     generate(rindexer_yaml_path).unwrap();
 }
 
-fn handle_new_command() {
+fn handle_new_command(project_path: PathBuf) {
     print_success_message("Initializing new rindexer project...");
 
     let project_name = prompt_for_input("Project Name", None, None);
-    let path = PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo_cli").unwrap();
-    if path.exists() {
+    if project_path.exists() {
         print_error_message("Directory already exists. Please choose a different project name.");
         return;
     }
@@ -240,11 +245,11 @@ fn handle_new_command() {
     let postgres_enabled = storage_choice == "postgres" || storage_choice == "both";
     let csv_enabled = storage_choice == "csv" || storage_choice == "both";
 
-    let rindexer_yaml_path = path.join(YAML_NAME);
-    let rindexer_abis_folder = path.join("abis");
+    let rindexer_yaml_path = project_path.join(YAML_NAME);
+    let rindexer_abis_folder = project_path.join("abis");
 
     // Create the project directory
-    if let Err(err) = fs::create_dir_all(&path) {
+    if let Err(err) = fs::create_dir_all(&project_path) {
         print_error_message(&format!("Failed to create directory: {}", err));
         return;
     }
@@ -298,7 +303,7 @@ fn handle_new_command() {
             } else {
                 None
             },
-            csv: if postgres_enabled {
+            csv: if csv_enabled {
                 Some(CsvDetails {
                     path: "./generated_csv".to_string(),
                 })
@@ -315,42 +320,40 @@ fn handle_new_command() {
     if postgres_enabled {
         if postgres_docker_enable {
             let env = r#"
-                DATABASE_NAME=postgres
-                DATABASE_USER=rindexer_user
-                DATABASE_PASSWORD=U3uaAFmEbv9dnxjKOo9SbUFwc9wMU5ADBHW+HUT/7+DpQaDeUYV/
-                DATABASE_HOST=localhost
-                DATABASE_PORT=5440
-            "#;
+DATABASE_NAME=postgres
+DATABASE_USER=rindexer_user
+DATABASE_PASSWORD=U3uaAFmEbv9dnxjKOo9SbUFwc9wMU5ADBHW+HUT/7+DpQaDeUYV/
+DATABASE_HOST=localhost
+DATABASE_PORT=5440
+"#;
 
-            write_file(path.join(".env").to_str().unwrap(), env).unwrap();
+            write_file(project_path.join(".env").to_str().unwrap(), env).unwrap();
 
-            write_docker_compose(&path);
+            write_docker_compose(&project_path);
         } else {
             let env = r#"
-                    DATABASE_NAME=INSERT_HERE
-                    DATABASE_USER=INSERT_HERE
-                    DATABASE_PASSWORD=INSERT_HERE
-                    DATABASE_HOST=INSERT_HERE
-                    DATABASE_PORT=INSERT_HERE
-                "#;
+DATABASE_NAME=INSERT_HERE
+DATABASE_USER=INSERT_HERE
+DATABASE_PASSWORD=INSERT_HERE
+DATABASE_HOST=INSERT_HERE
+DATABASE_PORT=INSERT_HERE
+"#;
 
-            write_file(path.join(".env").to_str().unwrap(), env).unwrap();
+            write_file(project_path.join(".env").to_str().unwrap(), env).unwrap();
         }
     }
 
-    generate_rindexer_rust_project(path, &rindexer_yaml_path);
+    generate_rindexer_rust_project(project_path, &rindexer_yaml_path);
 
     print_success_message(
         "rindexer project created.\n - run rindexer codegen both to generate the code\n - run rindexer dev to start rindexer\n - run rindexer download-abi to download new ABIs",
     );
 }
 
-async fn handle_download_abi_command() {
+async fn handle_download_abi_command(project_path: PathBuf) {
     validate_rindexer_yaml_exist();
 
-    // TODO! fix this
-    let path = PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo_cli").unwrap();
-    let rindexer_abis_folder = path.join("abis");
+    let rindexer_abis_folder = project_path.join("abis");
 
     if let Err(err) = fs::create_dir_all(&rindexer_abis_folder) {
         print_error_message(&format!("Failed to create directory: {}", err));
@@ -397,11 +400,10 @@ async fn handle_download_abi_command() {
     }
 }
 
-fn handle_codegen_command(subcommand: &CodegenSubcommands) {
+fn handle_codegen_command(project_path: PathBuf, subcommand: &CodegenSubcommands) {
     validate_rindexer_yaml_exist();
 
-    let path = PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo_cli").unwrap();
-    let rindexer_yaml_path = path.join(YAML_NAME);
+    let rindexer_yaml_path = project_path.join(YAML_NAME);
 
     match subcommand {
         CodegenSubcommands::Typings => {
@@ -465,10 +467,14 @@ fn handle_codegen_command(subcommand: &CodegenSubcommands) {
 async fn main() {
     let cli = CLI::parse();
 
+    // TODO: sort this to inherit the path from execution
+    let path =
+        PathBuf::from_str("/Users/joshstevens/code/rindexer/examples/rindexer_demo_cli").unwrap();
+
     match &cli.command {
-        Commands::New => handle_new_command(),
-        Commands::DownloadAbi => handle_download_abi_command().await,
-        Commands::Codegen { subcommand } => handle_codegen_command(subcommand),
+        Commands::New => handle_new_command(path),
+        Commands::DownloadAbi => handle_download_abi_command(path).await,
+        Commands::Codegen { subcommand } => handle_codegen_command(path, subcommand),
         Commands::Start { subcommand } => match subcommand {
             StartSubcommands::Indexer => {}
             StartSubcommands::GraphQL { hostname, port } => {}
@@ -613,30 +619,29 @@ fn write_example_abi(rindexer_abis_folder: &Path) -> PathBuf {
 }
 
 fn write_docker_compose(path: &Path) {
-    let yml = r#"
-    version: '3.8'
+    let yml = r#"version: '3.8'
+volumes:
+  postgres_data:
+    driver: local
+
+services:
+  postgresql:
+    image: postgres:16
+    shm_size: 1g
+    restart: always
     volumes:
-      postgres_data:
-        driver: local
-    
-    services:
-      postgresql:
-        image: postgres:16
-        shm_size: 1g
-        restart: always
-        volumes:
-          - postgres_data:/var/lib/postgresql/data
-        ports:
-          - 5440:5432
-        env_file:
-          - ./.env
-        healthcheck:
-          test:
-            ['CMD-SHELL', 'pg_isready -U $${DATABASE_USER} -d $${DATABASE_NAME} -q']
-          interval: 5s
-          timeout: 10s
-          retries: 10
-    "#;
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - 5440:5432
+    env_file:
+      - ./.env
+    healthcheck:
+      test:
+        ['CMD-SHELL', 'pg_isready -U $${DATABASE_USER} -d $${DATABASE_NAME} -q']
+      interval: 5s
+      timeout: 10s
+      retries: 10
+ "#;
 
     write_file(path.join("docker-compose.yml").to_str().unwrap(), yml).unwrap();
 }

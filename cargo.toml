@@ -4,3 +4,6 @@ members = [
     "rindexer_cli",
     "rindexer_demo"
 ]
+exclude = [
+    "examples/rindexer_demo_cli",
+]

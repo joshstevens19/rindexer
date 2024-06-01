@@ -1,3 +1,4 @@
+
 use super::super::super::typings::lens_registry_example::events::erc20_filter::{
     no_extensions, ERC20FilterEventType, TransferEvent,
 };

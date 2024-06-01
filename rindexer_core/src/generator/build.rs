@@ -1,8 +1,9 @@
+use std::path::Path;
 use std::{error::Error, path::PathBuf};
 
 use ethers::contract::Abigen;
 
-use crate::helpers::{camel_to_snake, create_mod_file, write_file};
+use crate::helpers::{camel_to_snake, create_mod_file, format_all_files_for_project, write_file};
 use crate::manifest::yaml::{read_manifest, Contract, Global, Indexer, Network, Storage};
 
 use super::events_bindings::{
@@ -81,11 +82,7 @@ pub fn is_filter(contract: &Contract) -> bool {
         panic!("Cannot mix and match address and filter for the same contract definition.");
     }
 
-    if filter_count > 0 {
-        true
-    } else {
-        false
-    }
+    filter_count > 0
 }
 
 /// Converts a contract name to a filter name.
@@ -115,6 +112,7 @@ pub fn identify_and_modify_filter(contract: &mut Contract) -> bool {
 ///
 /// # Arguments
 ///
+/// * `project_path` - A reference to the project path.
 /// * `output` - The output directory.
 /// * `indexer` - A reference to an `Indexer`.
 /// * `global` - An optional reference to a `Global` configuration.
@@ -123,13 +121,15 @@ pub fn identify_and_modify_filter(contract: &mut Contract) -> bool {
 ///
 /// A `Result` indicating success or failure.
 fn write_indexer_events(
+    project_path: &Path,
     output: &str,
     indexer: Indexer,
     storage: &Storage,
 ) -> Result<(), Box<dyn Error>> {
     for mut contract in indexer.contracts {
         let is_filter = identify_and_modify_filter(&mut contract);
-        let events_code = generate_event_bindings(&indexer.name, &contract, is_filter, storage)?;
+        let events_code =
+            generate_event_bindings(project_path, &indexer.name, &contract, is_filter, storage)?;
 
         let event_path = format!(
             "{}/events/{}",
@@ -165,10 +165,8 @@ fn write_indexer_events(
 ///
 /// A `Result` indicating success or failure.
 pub fn generate_rindexer_typings(manifest_location: &PathBuf) -> Result<(), Box<dyn Error>> {
-    let output = manifest_location
-        .parent()
-        .unwrap()
-        .join("./src/rindexer/typings");
+    let project_path = manifest_location.parent().unwrap();
+    let output = project_path.join("./src/rindexer/typings");
     let manifest = read_manifest(manifest_location)?;
 
     let output_path = output.to_str().unwrap();
@@ -177,7 +175,7 @@ pub fn generate_rindexer_typings(manifest_location: &PathBuf) -> Result<(), Box<
     write_global(output_path, &manifest.global, &manifest.networks)?;
 
     for indexer in manifest.indexers {
-        write_indexer_events(output_path, indexer, &manifest.storage)?;
+        write_indexer_events(project_path, output_path, indexer, &manifest.storage)?;
     }
 
     create_mod_file(output.as_path(), true)?;
@@ -256,6 +254,8 @@ pub fn generate_rindexer_handlers(manifest_location: &PathBuf) -> Result<(), Box
 pub fn generate(manifest_location: &PathBuf) -> Result<(), Box<dyn Error>> {
     generate_rindexer_typings(manifest_location)?;
     generate_rindexer_handlers(manifest_location)?;
+
+    format_all_files_for_project(manifest_location.parent().unwrap());
 
     Ok(())
 }
