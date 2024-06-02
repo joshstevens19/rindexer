@@ -1,10 +1,14 @@
 new:
 	cargo run -- new
 start:
-	cargo run -- start
+	cargo run -- start all
 dev:
-	cargo run -- ls dev
+	cargo run -- dev
 codegen:
-	cargo run -- ls codegen
+	cargo run -- codegen all
+codegen_typings:
+	cargo run -- codegen typings
+codegen_indexer:
+	cargo run -- codegen indexer
 download_abi:
 	cargo run -- download_abi

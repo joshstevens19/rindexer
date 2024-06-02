@@ -8,11 +8,12 @@ use rindexer_core::generator::build::{
 };
 use rindexer_core::manifest::yaml::{
     read_manifest, write_manifest, Contract, ContractDetails, CsvDetails, Global, Indexer,
-    Manifest, Network, PostgresClient, Storage,
+    Manifest, Network, PostgresConnectionDetails, Storage,
 };
-use rindexer_core::write_file;
+use rindexer_core::{write_file, PostgresClient};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::str::FromStr;
 use std::{fs, io};
 
@@ -49,15 +50,11 @@ enum CodegenSubcommands {
 #[derive(Subcommand, Debug)]
 enum StartSubcommands {
     Indexer,
-    GraphQL {
-        #[clap(short, long)]
-        hostname: Option<String>,
+    Graphql {
         #[clap(short, long)]
         port: Option<String>,
     },
     All {
-        #[clap(short, long)]
-        hostname: Option<String>,
         #[clap(short, long)]
         port: Option<String>,
     },
@@ -74,13 +71,6 @@ enum Commands {
     Start {
         #[clap(subcommand)]
         subcommand: StartSubcommands,
-    },
-    /// Removes a contract from an indexer
-    RemoveContract {
-        #[clap(name = "indexer_name")]
-        indexer_name: String,
-        #[clap(name = "contract_name")]
-        contract_name: String,
     },
     #[clap(name = "download_abi")]
     DownloadAbi,
@@ -165,7 +155,7 @@ serde = {{ version = "1.0.194", features = ["derive"] }}
 
             use self::rindexer::indexers::all_handlers::register_all_handlers;
             use rindexer_core::{
-                start_rindexer, GraphQLServerDetails, IndexingDetails, StartDetails,
+                start_rindexer, GraphQLServerDetails, GraphQLServerSettings, IndexingDetails, StartDetails,
             };
 
             mod rindexer;
@@ -176,11 +166,25 @@ serde = {{ version = "1.0.194", features = ["derive"] }}
 
                 let mut enable_graphql = false;
                 let mut enable_indexer = false;
+                
+                let mut port: Option<usize> = None;
 
                 for arg in args.iter() {
                     match arg.as_str() {
                         "--graphql" => enable_graphql = true,
                         "--indexer" => enable_indexer = true,
+                        _ if arg.starts_with("--port=") || arg.starts_with("--p") => {
+                            if let Some(value) = arg.split('=').nth(1) {
+                                let overridden_port = value.parse::<usize>();
+                                match overridden_port {
+                                    Ok(overridden_port) => port = Some(overridden_port),
+                                    Err(_) => {
+                                        println!("Invalid port number");
+                                        return;
+                                    }
+                                }
+                            }
+                        },
                         _ => {
                             // default run both
                             enable_graphql = true;
@@ -201,7 +205,11 @@ serde = {{ version = "1.0.194", features = ["derive"] }}
                     },
                     graphql_server: if enable_graphql {
                         Some(GraphQLServerDetails {
-                            settings: Default::default(),
+                            settings: if port.is_some() {
+                                GraphQLServerSettings::port(port.unwrap())
+                            } else {
+                                Default::default()
+                            },
                         })
                     } else {
                         None
@@ -293,7 +301,7 @@ fn handle_new_command(project_path: PathBuf) {
         global: Global { contracts: None },
         storage: Storage {
             postgres: if postgres_enabled {
-                Some(PostgresClient {
+                Some(PostgresConnectionDetails {
                     name: "${DATABASE_NAME}".to_string(),
                     user: "${DATABASE_USER}".to_string(),
                     password: "${DATABASE_PASSWORD}".to_string(),
@@ -421,6 +429,37 @@ fn handle_codegen_command(project_path: PathBuf, subcommand: &CodegenSubcommands
     }
 }
 
+async fn start(project_path: PathBuf, command: &StartSubcommands) {
+    validate_rindexer_yaml_exist();
+
+    let manifest = read_rindexer_yaml(&project_path.join(YAML_NAME));
+    if manifest.storage.postgres_enabled() {
+        let client = PostgresClient::new().await;
+        if client.is_err() {
+            print_error_message("Failed to connect to the postgres database.\nMake sure the database is running and the connection details are correct in the .env file and yaml file.\nIf you are trying to run locally do not forget to run docker-compose up before you run the indexer.");
+            return;
+        }
+    }
+
+    match command {
+        StartSubcommands::Indexer => {}
+        StartSubcommands::Graphql { .. } => {}
+        StartSubcommands::All { port } => {
+            let manifest_path = project_path.join("Cargo.toml");
+            let status = Command::new("cargo")
+                .arg("run")
+                .arg("--manifest-path")
+                .arg(manifest_path)
+                .status()
+                .expect("Failed to execute cargo run.");
+
+            if !status.success() {
+                panic!("cargo run failed with status: {:?}", status);
+            }
+        }
+    }
+}
+
 // async fn start_indexer() {
 //     validate_rindexer_yaml_exist();
 //
@@ -475,19 +514,8 @@ async fn main() {
         Commands::New => handle_new_command(path),
         Commands::DownloadAbi => handle_download_abi_command(path).await,
         Commands::Codegen { subcommand } => handle_codegen_command(path, subcommand),
-        Commands::Start { subcommand } => match subcommand {
-            StartSubcommands::Indexer => {}
-            StartSubcommands::GraphQL { hostname, port } => {}
-            StartSubcommands::All { hostname, port } => {}
-        },
-        Commands::RemoveContract {
-            indexer_name,
-            contract_name,
-        } => println!(
-            "Removing contract: {} from indexer: {}",
-            contract_name, indexer_name
-        ),
-        _ => {}
+        Commands::Start { subcommand } => start(path, subcommand).await,
+        _ => panic!("Command not implemented"),
     }
 }
 

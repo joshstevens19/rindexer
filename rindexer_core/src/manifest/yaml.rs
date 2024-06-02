@@ -193,7 +193,7 @@ pub struct Network {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct PostgresClient {
+pub struct PostgresConnectionDetails {
     pub name: String,
     pub user: String,
     pub password: String,
@@ -208,7 +208,7 @@ pub struct CsvDetails {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Storage {
-    pub postgres: Option<PostgresClient>,
+    pub postgres: Option<PostgresConnectionDetails>,
     pub csv: Option<CsvDetails>,
 }
 
