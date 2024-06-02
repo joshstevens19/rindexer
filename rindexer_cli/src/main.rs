@@ -441,22 +441,27 @@ async fn start(project_path: PathBuf, command: &StartSubcommands) {
         }
     }
 
-    match command {
-        StartSubcommands::Indexer => {}
-        StartSubcommands::Graphql { .. } => {}
-        StartSubcommands::All { port } => {
-            let manifest_path = project_path.join("Cargo.toml");
-            let status = Command::new("cargo")
-                .arg("run")
-                .arg("--manifest-path")
-                .arg(manifest_path)
-                .status()
-                .expect("Failed to execute cargo run.");
+    let manifest_path = project_path.join("Cargo.toml");
+    let status = Command::new("cargo")
+        .arg("run")
+        .arg("--manifest-path")
+        .arg(manifest_path)
+        .arg(match command {
+            StartSubcommands::Indexer => "-- --indexer".to_string(),
+            StartSubcommands::Graphql { port } => match port {
+                Some(port) => format!("-- --graphql --port={}", port),
+                None => "-- --graphql".to_string(),
+            },
+            StartSubcommands::All { port } => match port {
+                Some(port) => format!("-- --port={}", port),
+                None => "".to_string(),
+            },
+        })
+        .status()
+        .expect("Failed to execute cargo run.");
 
-            if !status.success() {
-                panic!("cargo run failed with status: {:?}", status);
-            }
-        }
+    if !status.success() {
+        panic!("cargo run failed with status: {:?}", status);
     }
 }
 
