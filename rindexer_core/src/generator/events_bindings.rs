@@ -621,14 +621,17 @@ fn generate_csv_instance(
 
     let csv_file_name = format!("{}-{}.csv", contract.name, event_info.name).to_lowercase();
     let csv_folder = project_path.join(format!("{}/{}", csv.as_ref().unwrap().path, contract.name));
-    
+
     // Create directory if it does not exist.
     if let Err(e) = fs::create_dir_all(&csv_folder) {
-        panic!("Failed to create directory '{}': {}", csv_folder.to_str().unwrap(), e);
+        panic!(
+            "Failed to create directory '{}': {}",
+            csv_folder.to_str().unwrap(),
+            e
+        );
     }
 
     let csv_path = format!("{}/{}", csv_folder.display(), csv_file_name);
-    println!("CSV path: {}", csv_path);
 
     let mut headers: Vec<String> = generate_abi_name_properties(
         &event_info.inputs,

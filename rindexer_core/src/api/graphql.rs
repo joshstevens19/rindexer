@@ -6,16 +6,29 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+pub struct GraphQLServerDetails {
+    pub settings: GraphQLServerSettings,
+}
+
 pub struct GraphQLServerSettings {
     port: Option<usize>,
     watch: Option<bool>,
+}
+
+impl GraphQLServerSettings {
+    pub fn port(port: usize) -> Self {
+        Self {
+            port: Some(port),
+            watch: Some(false),
+        }
+    }
 }
 
 impl Default for GraphQLServerSettings {
     fn default() -> Self {
         Self {
             port: Some(5005),
-            watch: Some(true),
+            watch: Some(false),
         }
     }
 }

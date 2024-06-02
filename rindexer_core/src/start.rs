@@ -3,20 +3,16 @@ use std::path::PathBuf;
 
 use tokio::signal;
 
-use crate::api::{start_graphql_server, GraphQLServerSettings};
+use crate::api::start_graphql_server;
 use crate::database::postgres::create_tables_for_indexer_sql;
 use crate::generator::event_callback_registry::EventCallbackRegistry;
 use crate::indexer::start::{start_indexing, StartIndexingSettings};
 use crate::manifest::yaml::read_manifest;
-use crate::PostgresClient;
+use crate::{GraphQLServerDetails, PostgresClient};
 
 pub struct IndexingDetails {
     pub registry: EventCallbackRegistry,
     pub settings: StartIndexingSettings,
-}
-
-pub struct GraphQLServerDetails {
-    pub settings: GraphQLServerSettings,
 }
 
 pub struct StartDetails {

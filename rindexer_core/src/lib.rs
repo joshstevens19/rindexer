@@ -12,10 +12,11 @@ pub use simple_file_formatters::csv::AsyncCsvAppender;
 mod helpers;
 pub use helpers::{generate_random_id, write_file};
 mod api;
+pub use api::{GraphQLServerDetails, GraphQLServerSettings};
 
 pub mod provider;
 mod start;
-pub use start::{start_rindexer, GraphQLServerDetails, IndexingDetails, StartDetails};
+pub use start::{start_rindexer, IndexingDetails, StartDetails};
 
 // export 3rd party dependencies
 pub use async_trait::async_trait;

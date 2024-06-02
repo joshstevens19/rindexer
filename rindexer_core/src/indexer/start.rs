@@ -32,6 +32,7 @@ impl Default for ConcurrentSettings {
 }
 
 /// Settings for starting the indexing process.
+/// TODO! ADD TO YAML FILE
 pub struct StartIndexingSettings {
     concurrent: Option<ConcurrentSettings>,
     execute_in_event_order: bool,
