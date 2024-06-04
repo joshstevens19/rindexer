@@ -3,6 +3,7 @@ use crate::database::postgres::{
     solidity_type_to_db_type, solidity_type_to_ethereum_sql_type,
 };
 use crate::generator::event_callback_registry::IndexingContractSetup;
+use ethers::abi::{Event, EventParam, ParamType};
 use ethers::utils::keccak256;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -105,6 +106,11 @@ impl EventInfo {
             struct_result: format!("{}Result", item.name),
             struct_data: format!("{}Data", item.name),
         }
+    }
+
+    pub fn topic_id(&self) -> String {
+        let event_signature = format!("{}({})", self.name, self.signature);
+        compute_topic_id(&event_signature)
     }
 }
 
@@ -320,11 +326,11 @@ fn generate_topic_ids_match_arms_code(event_type_name: &str, event_info: &[Event
     event_info
         .iter()
         .map(|info| {
-            let event_signature = format!("{}({})", info.name, info.signature);
-            let topic_id = compute_topic_id(&event_signature);
             format!(
                 "{}::{}(_) => \"0x{}\",",
-                event_type_name, info.name, topic_id
+                event_type_name,
+                info.name,
+                info.topic_id()
             )
         })
         .collect::<Vec<_>>()
@@ -768,9 +774,8 @@ fn generate_event_callback_structs_code(
 /// A `String` containing the generated Rust code for the provider function.
 fn build_get_provider_fn(networks: Vec<String>) -> String {
     let mut function = String::new();
-    function.push_str(
-        "fn get_provider(&self, network: &str) -> &'static Arc<Provider<RetryClient<Http>>> {\n",
-    );
+    function
+        .push_str("fn get_provider(&self, network: &str) -> Arc<Provider<RetryClient<Http>>> {\n");
 
     // Iterate through the networks and generate conditional branches
     for (index, network) in networks.iter().enumerate() {
@@ -992,9 +997,9 @@ fn generate_event_bindings_code(
                 }};
 
                registry.register_event(EventInformation {{
-                    indexer_name: "{indexer_name}",
-                    event_name,
-                    topic_id,
+                    indexer_name: "{indexer_name}".to_string(),
+                    event_name: event_name.to_string(),
+                    topic_id: topic_id.to_string(),
                     contract,
                     callback,
                 }});
@@ -1141,7 +1146,7 @@ pub fn generate_abi_name_properties(
 /// # Returns
 ///
 /// A vector of `ABIItem` containing the ABI items.
-fn get_abi_items(contract: &Contract, is_filter: bool) -> Result<Vec<ABIItem>, Box<dyn Error>> {
+pub fn get_abi_items(contract: &Contract, is_filter: bool) -> Result<Vec<ABIItem>, Box<dyn Error>> {
     let mut abi_items = read_abi_items(contract)?;
     if is_filter {
         let filter_event_names: Vec<String> = contract

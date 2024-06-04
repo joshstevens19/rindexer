@@ -8,9 +8,12 @@ use rindexer_core::generator::build::{
 };
 use rindexer_core::manifest::yaml::{
     read_manifest, write_manifest, Contract, ContractDetails, CsvDetails, Global, Indexer,
-    Manifest, Network, PostgresConnectionDetails, Storage,
+    Manifest, Network, PostgresConnectionDetails, ProjectType, Storage,
 };
-use rindexer_core::{write_file, PostgresClient};
+use rindexer_core::{
+    start_rindexer_no_code, write_file, GraphQLServerDetails, GraphQLServerSettings,
+    PostgresClient, StartNoCodeDetails,
+};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -231,6 +234,12 @@ serde = {{ version = "1.0.194", features = ["derive"] }}
 fn handle_new_command(project_path: PathBuf) {
     print_success_message("Initializing new rindexer project...");
 
+    let rindexer_type = prompt_for_input_list(
+        "indexer type you wish to create:\n- No code: best choice when starting, no extra code required\n- Project: customise advanced indexer as you see by writing rust code\n",
+        &["no-code","project"],
+        None,
+    );
+
     let project_name = prompt_for_input("Project Name", None, None);
     if project_path.exists() {
         print_error_message("Directory already exists. Please choose a different project name.");
@@ -270,10 +279,17 @@ fn handle_new_command(project_path: PathBuf) {
 
     let abi_example_path = write_example_abi(&rindexer_abis_folder);
 
+    let project_type = if rindexer_type == "no-code" {
+        ProjectType::NoCode
+    } else {
+        ProjectType::Rust
+    };
+
     let manifest = Manifest {
         name: project_name.clone(),
         description: project_description,
         repository,
+        project_type: project_type.clone(),
         networks: vec![Network {
             name: "ethereum".to_string(),
             chain_id: 1,
@@ -351,11 +367,16 @@ DATABASE_PORT=INSERT_HERE
         }
     }
 
-    generate_rindexer_rust_project(project_path, &rindexer_yaml_path);
-
-    print_success_message(
-        "rindexer project created.\n - run rindexer codegen both to generate the code\n - run rindexer dev to start rindexer\n - run rindexer download-abi to download new ABIs",
-    );
+    if project_type == ProjectType::Rust {
+        generate_rindexer_rust_project(project_path, &rindexer_yaml_path);
+        print_success_message(
+            "rindexer project created created with a starter manifest.\n- run rindexer codegen both to regenerate the code\n- run rindexer dev to start rindexer\n - run rindexer download-abi to download new ABIs",
+        );
+    } else {
+        print_success_message(
+            "rindexer no-code project created with a starter manifest.\n- run rindexer start to start rindexer\n- run rindexer download-abi to download new ABIs",
+        );
+    }
 }
 
 async fn handle_download_abi_command(project_path: PathBuf) {
@@ -441,71 +462,75 @@ async fn start(project_path: PathBuf, command: &StartSubcommands) {
         }
     }
 
-    let manifest_path = project_path.join("Cargo.toml");
-    let status = Command::new("cargo")
-        .arg("run")
-        .arg("--manifest-path")
-        .arg(manifest_path)
-        .arg(match command {
-            StartSubcommands::Indexer => "-- --indexer".to_string(),
-            StartSubcommands::Graphql { port } => match port {
-                Some(port) => format!("-- --graphql --port={}", port),
-                None => "-- --graphql".to_string(),
-            },
-            StartSubcommands::All { port } => match port {
-                Some(port) => format!("-- --port={}", port),
-                None => "".to_string(),
-            },
-        })
-        .status()
-        .expect("Failed to execute cargo run.");
+    match manifest.project_type {
+        ProjectType::Rust => {
+            let project_cargo_manifest_path = project_path.join("Cargo.toml");
+            let status = Command::new("cargo")
+                .arg("run")
+                .arg("--manifest-path")
+                .arg(project_cargo_manifest_path)
+                .arg(match command {
+                    StartSubcommands::Indexer => "-- --indexer".to_string(),
+                    StartSubcommands::Graphql { port } => match port {
+                        Some(port) => format!("-- --graphql --port={}", port),
+                        None => "-- --graphql".to_string(),
+                    },
+                    StartSubcommands::All { port } => match port {
+                        Some(port) => format!("-- --port={}", port),
+                        None => "".to_string(),
+                    },
+                })
+                .status()
+                .expect("Failed to execute cargo run.");
 
-    if !status.success() {
-        panic!("cargo run failed with status: {:?}", status);
+            if !status.success() {
+                panic!("cargo run failed with status: {:?}", status);
+            }
+        }
+        ProjectType::NoCode => match command {
+            StartSubcommands::Indexer => {
+                let details = StartNoCodeDetails {
+                    manifest_path: project_path.join(YAML_NAME),
+                    indexing_settings: None,
+                    graphql_server: None,
+                };
+
+                start_rindexer_no_code(details).await.unwrap();
+            }
+            StartSubcommands::Graphql { port } => {
+                let details = StartNoCodeDetails {
+                    manifest_path: project_path.join(YAML_NAME),
+                    indexing_settings: None,
+                    graphql_server: Some(GraphQLServerDetails {
+                        settings: match port {
+                            Some(port) => GraphQLServerSettings::port(port.parse().unwrap()),
+                            None => Default::default(),
+                        },
+                    }),
+                };
+
+                start_rindexer_no_code(details).await.unwrap();
+            }
+            StartSubcommands::All { port } => {
+                let details = StartNoCodeDetails {
+                    manifest_path: project_path.join(YAML_NAME),
+                    indexing_settings: None,
+                    graphql_server: Some(GraphQLServerDetails {
+                        settings: match port {
+                            Some(port) => GraphQLServerSettings::port(port.parse().unwrap()),
+                            None => Default::default(),
+                        },
+                    }),
+                };
+    
+                // TODO fix
+                let _ = start_rindexer_no_code(details).await.map_err(|e| {
+                    print_error_message(&format!("Error starting the server: {}", e));
+                });
+            }
+        },
     }
 }
-
-// async fn start_indexer() {
-//     validate_rindexer_yaml_exist();
-//
-//     // TODO! fix this
-//     let path = PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo_cli").unwrap();
-//     let rindexer_yaml_path = path.join(YAML_NAME);
-//
-//     let manifest = read_rindexer_yaml(&rindexer_yaml_path);
-//
-//     let client = PostgresClient::new().await.unwrap();
-//
-//     for indexer in &manifest.indexers {
-//         let sql = create_tables_for_indexer_sql(indexer);
-//         println!("{}", sql);
-//         client.batch_execute(&sql).await.unwrap();
-//     }
-//
-//     let result = start_graphql_server(&manifest.indexers, Default::default()).unwrap();
-//     thread::sleep(Duration::from_secs(5000000000000000000));
-// }
-//
-// async fn start_graphql() {
-//     validate_rindexer_yaml_exist();
-//
-//     // TODO! fix this
-//     let path = PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo_cli").unwrap();
-//     let rindexer_yaml_path = path.join(YAML_NAME);
-//
-//     let manifest = read_rindexer_yaml(&rindexer_yaml_path);
-//
-//     let client = PostgresClient::new().await.unwrap();
-//
-//     for indexer in &manifest.indexers {
-//         let sql = create_tables_for_indexer_sql(indexer);
-//         println!("{}", sql);
-//         client.batch_execute(&sql).await.unwrap();
-//     }
-//
-//     let result = start_graphql_server(&manifest.indexers, Default::default()).unwrap();
-//     thread::sleep(Duration::from_secs(5000000000000000000));
-// }
 
 #[tokio::main]
 async fn main() {

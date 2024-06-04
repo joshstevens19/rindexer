@@ -81,21 +81,11 @@ where
         callback: TransferEventCallbackType<TExtensions>,
         extensions: TExtensions,
     ) -> Self {
-        let csv = AsyncCsvAppender::new(
-            "./generated_csv/ERC20Filter/erc20filter-transfer.csv".to_string(),
-        );
-        if !Path::new("./generated_csv/ERC20Filter/erc20filter-transfer.csv").exists() {
-            csv.append_header(vec![
-                "contract_address".into(),
-                "from".into(),
-                "to".into(),
-                "value".into(),
-                "tx_hash".into(),
-                "block_number".into(),
-                "block_hash".into(),
-            ])
-            .await
-            .unwrap();
+        let csv = AsyncCsvAppender::new("/Users/joshstevens/code/rindexer/rindexer_demo/./generated_csv/ERC20Filter/erc20filter-transfer.csv".to_string());
+        if !Path::new("/Users/joshstevens/code/rindexer/rindexer_demo/./generated_csv/ERC20Filter/erc20filter-transfer.csv").exists() {
+            csv.append_header(vec!["contract_address".into(), "from".into(), "to".into(), "value".into(), "tx_hash".into(), "block_number".into(), "block_hash".into()])
+                .await
+                .unwrap();
         }
 
         Self {
@@ -187,7 +177,7 @@ where
         }
     }
 
-    fn get_provider(&self, network: &str) -> &'static Arc<Provider<RetryClient<Http>>> {
+    fn get_provider(&self, network: &str) -> Arc<Provider<RetryClient<Http>>> {
         if network == "polygon" {
             return super::super::super::networks::get_polygon_provider();
         } else {
@@ -258,9 +248,9 @@ where
             };
 
         registry.register_event(EventInformation {
-            indexer_name: "LensRegistryExample",
-            event_name,
-            topic_id,
+            indexer_name: "LensRegistryExample".to_string(),
+            event_name: event_name.to_string(),
+            topic_id: topic_id.to_string(),
             contract,
             callback,
         });

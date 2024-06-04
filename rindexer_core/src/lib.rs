@@ -16,7 +16,9 @@ pub use api::{GraphQLServerDetails, GraphQLServerSettings};
 
 pub mod provider;
 mod start;
-pub use start::{start_rindexer, IndexingDetails, StartDetails};
+pub use start::{
+    start_rindexer, start_rindexer_no_code, IndexingDetails, StartDetails, StartNoCodeDetails,
+};
 
 // export 3rd party dependencies
 pub use async_trait::async_trait;

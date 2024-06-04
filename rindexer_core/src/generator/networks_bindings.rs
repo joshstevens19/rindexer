@@ -95,8 +95,8 @@ fn generate_network_lazy_provider_code(
 fn generate_network_provider_code(network: &Network) -> Result<String, Box<dyn std::error::Error>> {
     let code = format!(
         r#"
-            pub fn {fn_name}() -> &'static Arc<Provider<RetryClient<Http>>> {{
-                &{provider_lazy_name}
+            pub fn {fn_name}() -> Arc<Provider<RetryClient<Http>>> {{
+                {provider_lazy_name}.clone()
             }}
         "#,
         fn_name = network_provider_fn_name(network),

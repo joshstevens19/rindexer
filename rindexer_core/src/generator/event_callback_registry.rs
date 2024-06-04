@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::{any::Any, sync::Arc};
 
-type Decoder = Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync>;
+pub type Decoder = Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync>;
 
 /// Details about a factory contract, including its address, event name, parameter name, and ABI.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -115,7 +115,7 @@ pub struct NetworkContract {
     pub id: String,
     pub network: String,
     pub indexing_contract_setup: IndexingContractSetup,
-    pub provider: &'static Arc<Provider<RetryClient<Http>>>,
+    pub provider: Arc<Provider<RetryClient<Http>>>,
     pub decoder: Decoder,
     pub start_block: Option<U64>,
     pub end_block: Option<U64>,
@@ -162,6 +162,7 @@ pub struct TxInformation {
 }
 
 /// Result of an event, including decoded data and transaction information.
+#[derive(Debug)]
 pub struct EventResult {
     pub decoded_data: Arc<dyn Any + Send + Sync>,
     pub tx_information: TxInformation,
@@ -199,9 +200,9 @@ impl EventResult {
 
 /// Information about an event, including its indexer, topic ID, event name, contract, and callback.
 pub struct EventInformation {
-    pub indexer_name: &'static str,
-    pub topic_id: &'static str,
-    pub event_name: &'static str,
+    pub indexer_name: String,
+    pub topic_id: String,
+    pub event_name: String,
     pub contract: ContractInformation,
     pub callback: Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, ()> + Send + Sync>,
 }
@@ -209,9 +210,9 @@ pub struct EventInformation {
 impl Clone for EventInformation {
     fn clone(&self) -> Self {
         EventInformation {
-            indexer_name: self.indexer_name,
-            topic_id: self.topic_id,
-            event_name: self.event_name,
+            indexer_name: self.indexer_name.clone(),
+            topic_id: self.topic_id.clone(),
+            event_name: self.event_name.clone(),
             contract: self.contract.clone(),
             callback: Arc::clone(&self.callback),
         }
@@ -249,7 +250,7 @@ impl EventCallbackRegistry {
     /// # Returns
     ///
     /// An optional reference to the `EventInformation` if found.
-    pub fn find_event(&self, topic_id: &'static str) -> Option<&EventInformation> {
+    pub fn find_event(&self, topic_id: &str) -> Option<&EventInformation> {
         self.events.iter().find(|e| e.topic_id == topic_id)
     }
 
@@ -268,7 +269,7 @@ impl EventCallbackRegistry {
     ///
     /// * `topic_id` - The topic ID of the event.
     /// * `data` - The event result data.
-    pub async fn trigger_event(&self, topic_id: &'static str, data: Vec<EventResult>) {
+    pub async fn trigger_event(&self, topic_id: &str, data: Vec<EventResult>) {
         if let Some(callback) = self.find_event(topic_id).map(|e| &e.callback) {
             callback(data).await;
         } else {
