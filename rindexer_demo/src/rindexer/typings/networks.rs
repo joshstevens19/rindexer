@@ -17,10 +17,10 @@ lazy_static! {
     )
     .expect("Error creating provider");
 }
-pub fn get_polygon_provider() -> &'static Arc<Provider<RetryClient<Http>>> {
-    &POLYGON_PROVIDER
+pub fn get_polygon_provider() -> Arc<Provider<RetryClient<Http>>> {
+    POLYGON_PROVIDER.clone()
 }
 
-pub fn get_base_provider() -> &'static Arc<Provider<RetryClient<Http>>> {
-    &BASE_PROVIDER
+pub fn get_base_provider() -> Arc<Provider<RetryClient<Http>>> {
+    BASE_PROVIDER.clone()
 }

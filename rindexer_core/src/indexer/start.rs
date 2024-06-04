@@ -16,6 +16,7 @@ use crate::helpers::camel_to_snake;
 use crate::indexer::fetch_logs::{fetch_logs_stream, FetchLogsStream, LiveIndexingDetails};
 use crate::indexer::progress::IndexingEventsProgressState;
 use crate::indexer::reorg::reorg_safe_distance_for_chain;
+use crate::manifest::yaml::Manifest;
 use crate::{EthereumSqlTypeWrapper, PostgresClient};
 
 /// Settings for controlling concurrent processing of events.
@@ -52,10 +53,10 @@ impl Default for StartIndexingSettings {
 type BoxedError = Box<dyn Error + Send + Sync>;
 
 struct EventProcessingConfig {
-    indexer_name: &'static str,
+    indexer_name: String,
     contract_name: String,
-    topic_id: &'static str,
-    event_name: &'static str,
+    topic_id: String,
+    event_name: String,
     network_contract: Arc<NetworkContract>,
     start_block: U64,
     end_block: U64,
@@ -63,7 +64,7 @@ struct EventProcessingConfig {
     semaphore: Arc<Semaphore>,
     registry: Arc<EventCallbackRegistry>,
     progress: Arc<Mutex<IndexingEventsProgressState>>,
-    database: Arc<PostgresClient>,
+    database: Option<Arc<PostgresClient>>,
     execute_event_logs_in_order: bool,
     live_indexing: bool,
     indexing_distance_from_head: U64,
@@ -80,10 +81,15 @@ struct EventProcessingConfig {
 ///
 /// A `Result` indicating success or failure.
 pub async fn start_indexing(
+    manifest: &Manifest,
     registry: Arc<EventCallbackRegistry>,
     settings: StartIndexingSettings,
 ) -> Result<(), BoxedError> {
-    let database = Arc::new(PostgresClient::new().await.unwrap());
+    let database = if manifest.storage.postgres_enabled() {
+        Some(Arc::new(PostgresClient::new().await.unwrap()))
+    } else {
+        None
+    };
     let event_progress_state = IndexingEventsProgressState::monitor(registry.events.clone()).await;
 
     let max_block_range = 20_000_000_000;
@@ -103,15 +109,14 @@ pub async fn start_indexing(
             let live_indexing = contract.end_block.is_none();
             let last_known_start_block = get_last_synced_block_number(
                 database.clone(),
-                event.indexer_name,
-                event.event_name,
+                &event.indexer_name,
+                &event.event_name,
                 &contract.network,
             )
             .await;
 
-            //             let start_block =
-            // ˚                last_known_start_block.unwrap_or(contract.start_block.unwrap_or(latest_block));
-            let start_block = U64::from("0x035b0fa7");
+            let start_block = last_known_start_block.unwrap_or(contract.start_block.unwrap_or(latest_block));
+            // let start_block = U64::from("0x035b0fa7");
             let mut indexing_distance_from_head = U64::zero();
             let mut end_block =
                 std::cmp::min(contract.end_block.unwrap_or(latest_block), latest_block);
@@ -127,10 +132,10 @@ pub async fn start_indexing(
             }
 
             let event_processing_config = EventProcessingConfig {
-                indexer_name: event.indexer_name,
+                indexer_name: event.indexer_name.clone(),
                 contract_name: event.contract.name.clone(),
-                topic_id: event.topic_id,
-                event_name: event.event_name,
+                topic_id: event.topic_id.clone(),
+                event_name: event.event_name.clone(),
                 network_contract: Arc::new(contract),
                 start_block,
                 end_block,
@@ -143,7 +148,7 @@ pub async fn start_indexing(
                 execute_event_logs_in_order: settings.execute_event_logs_in_order,
                 indexing_distance_from_head,
             };
-
+            
             if settings.execute_in_event_order {
                 process_event_sequentially(event_processing_config).await?;
             } else {
@@ -183,7 +188,7 @@ async fn process_event_sequentially(
         );
 
         let filter = build_filter(
-            event_processing_config.topic_id,
+            &event_processing_config.topic_id,
             &event_processing_config
                 .network_contract
                 .indexing_contract_setup,
@@ -193,10 +198,10 @@ async fn process_event_sequentially(
         let semaphore_client = event_processing_config.semaphore.clone();
         let permit = semaphore_client.acquire_owned().await.unwrap();
         process_logs(ProcessLogsParams {
-            indexer_name: event_processing_config.indexer_name,
+            indexer_name: event_processing_config.indexer_name.clone(),
             contract_name: event_processing_config.contract_name.clone(),
-            topic_id: event_processing_config.topic_id,
-            event_name: event_processing_config.event_name,
+            topic_id: event_processing_config.topic_id.clone(),
+            event_name: event_processing_config.event_name.clone(),
             network_contract: event_processing_config.network_contract.clone(),
             filter,
             registry: event_processing_config.registry.clone(),
@@ -229,6 +234,9 @@ async fn process_event_concurrently(
         event_processing_config.event_name
     );
     let mut handles = Vec::new();
+    println!(
+        "Processing event start_block {}",
+        event_processing_config.start_block.as_u64());
     for _current_block in (event_processing_config.start_block.as_u64()
         ..event_processing_config.end_block.as_u64())
         .step_by(event_processing_config.max_block_range as usize)
@@ -240,7 +248,7 @@ async fn process_event_concurrently(
         );
 
         let filter = build_filter(
-            event_processing_config.topic_id,
+            &event_processing_config.topic_id,
             &event_processing_config
                 .network_contract
                 .indexing_contract_setup,
@@ -255,43 +263,46 @@ async fn process_event_concurrently(
             .acquire_owned()
             .await
             .unwrap();
-        let handle = tokio::spawn({
-            let network_contract = event_processing_config.network_contract.clone();
-            let progress = event_processing_config.progress.clone();
-            let database = event_processing_config.database.clone();
-            let contract_name = event_processing_config.contract_name.clone();
-            async move {
-                let result = process_logs(ProcessLogsParams {
-                    indexer_name: event_processing_config.indexer_name,
-                    contract_name,
-                    topic_id: event_processing_config.topic_id,
-                    event_name: event_processing_config.event_name,
-                    network_contract: network_contract.clone(),
-                    filter,
-                    registry: registry_copy,
-                    progress,
-                    database,
-                    execute_events_logs_in_order: event_processing_config
-                        .execute_event_logs_in_order,
-                    live_indexing: event_processing_config.live_indexing,
-                    indexing_distance_from_head: event_processing_config
-                        .indexing_distance_from_head,
-                })
-                .await;
 
-                println!(
-                    "Finished processing event concurrently {}",
-                    event_processing_config.event_name
-                );
-                drop(permit);
-                result
-            }
+        // Clone the necessary fields
+        let network_contract = event_processing_config.network_contract.clone();
+        let progress = event_processing_config.progress.clone();
+        let database = event_processing_config.database.clone();
+        let indexer_name = event_processing_config.indexer_name.clone();
+        let contract_name = event_processing_config.contract_name.clone();
+        let topic_id = event_processing_config.topic_id.clone();
+        let event_name = event_processing_config.event_name.clone();
+        let execute_events_logs_in_order = event_processing_config.execute_event_logs_in_order;
+        let live_indexing = event_processing_config.live_indexing;
+        let indexing_distance_from_head = event_processing_config.indexing_distance_from_head;
+
+        let handle = tokio::spawn(async move {
+            let result = process_logs(ProcessLogsParams {
+                indexer_name,
+                contract_name,
+                topic_id,
+                event_name,
+                network_contract: network_contract.clone(),
+                filter,
+                registry: registry_copy,
+                progress,
+                database,
+                execute_events_logs_in_order,
+                live_indexing,
+                indexing_distance_from_head,
+            })
+            .await;
+
+            drop(permit);
+            result
         });
         handles.push(handle);
     }
+    
+    println!("Waiting for all handles to complete length {}", handles.len());
 
     for handle in handles {
-        handle.await?;
+        handle.await?.unwrap();
     }
 
     Ok(())
@@ -300,15 +311,15 @@ async fn process_event_concurrently(
 /// Parameters for processing logs.
 #[derive(Clone)]
 pub struct ProcessLogsParams {
-    indexer_name: &'static str,
+    indexer_name: String,
     contract_name: String,
-    topic_id: &'static str,
-    event_name: &'static str,
+    topic_id: String,
+    event_name: String,
     network_contract: Arc<NetworkContract>,
     filter: Filter,
     registry: Arc<EventCallbackRegistry>,
     progress: Arc<Mutex<IndexingEventsProgressState>>,
-    database: Arc<PostgresClient>,
+    database: Option<Arc<PostgresClient>>,
     execute_events_logs_in_order: bool,
     live_indexing: bool,
     indexing_distance_from_head: U64,
@@ -340,10 +351,10 @@ async fn process_logs(params: ProcessLogsParams) -> Result<(), BoxedError> {
 
     while let Some(result) = logs_stream.next().await {
         handle_logs_result(
-            params.indexer_name,
+            params.indexer_name.clone(),
             params.contract_name.clone(),
-            params.event_name,
-            params.topic_id,
+            params.event_name.clone(),
+            params.topic_id.clone(),
             params.execute_events_logs_in_order,
             params.progress.clone(),
             params.network_contract.clone(),
@@ -376,14 +387,14 @@ async fn process_logs(params: ProcessLogsParams) -> Result<(), BoxedError> {
 /// A `Result` indicating success or failure.
 #[allow(clippy::too_many_arguments)]
 async fn handle_logs_result(
-    indexer_name: &'static str,
+    indexer_name: String,
     contract_name: String,
-    event_name: &'static str,
-    topic_id: &'static str,
+    event_name: String,
+    topic_id: String,
     execute_events_logs_in_order: bool,
     progress: Arc<Mutex<IndexingEventsProgressState>>,
     network_contract: Arc<NetworkContract>,
-    database: Arc<PostgresClient>,
+    database: Option<Arc<PostgresClient>>,
     registry: Arc<EventCallbackRegistry>,
     result: Result<FetchLogsStream, Box<ProviderError>>,
 ) -> Result<(), BoxedError> {
@@ -403,17 +414,17 @@ async fn handle_logs_result(
 
             if !fn_data.is_empty() {
                 if execute_events_logs_in_order {
-                    registry.trigger_event(topic_id, fn_data).await;
+                    registry.trigger_event(&topic_id, fn_data).await;
                 } else {
                     tokio::spawn(async move {
-                        registry.trigger_event(topic_id, fn_data).await;
+                        registry.trigger_event(&topic_id, fn_data).await;
                     });
                 }
             }
-            update_progress_and_db(
-                indexer_name,
+            update_progress_and_last_synced(
+                indexer_name.clone(),
                 contract_name,
-                event_name,
+                event_name.clone(),
                 progress,
                 network_contract,
                 database,
@@ -442,31 +453,36 @@ async fn handle_logs_result(
 ///
 /// An `Option` containing the last synced block number, if available.
 async fn get_last_synced_block_number(
-    database: Arc<PostgresClient>,
-    indexer_name: &'static str,
-    event_name: &'static str,
+    database: Option<Arc<PostgresClient>>,
+    indexer_name: &str,
+    event_name: &str,
     network: &str,
 ) -> Option<U64> {
-    let query = format!(
-        "SELECT last_synced_block FROM rindexer_internal.{}_{} WHERE network = $1",
-        camel_to_snake(indexer_name),
-        camel_to_snake(event_name)
-    );
+    match database {
+        Some(database) => {
+            let query = format!(
+                "SELECT last_synced_block FROM rindexer_internal.{}_{} WHERE network = $1",
+                camel_to_snake(indexer_name),
+                camel_to_snake(event_name)
+            );
 
-    let row = database.query_one(&query, &[&network]).await;
-    match row {
-        Ok(row) => {
-            let result: Decimal = row.get("last_synced_block");
-            Some(U64::from_dec_str(&result.to_string()).unwrap())
+            let row = database.query_one(&query, &[&network]).await;
+            match row {
+                Ok(row) => {
+                    let result: Decimal = row.get("last_synced_block");
+                    Some(U64::from_dec_str(&result.to_string()).unwrap())
+                }
+                Err(e) => {
+                    eprintln!("Error fetching last synced block: {:?}", e);
+                    None
+                }
+            }
         }
-        Err(e) => {
-            eprintln!("Error fetching last synced block: {:?}", e);
-            None
-        }
+        None => None,
     }
 }
 
-/// Updates the progress and the database with the new block number.
+/// Updates the progress and the last synced block number.
 ///
 /// # Arguments
 ///
@@ -476,13 +492,13 @@ async fn get_last_synced_block_number(
 /// * `network_contract` - The network contract.
 /// * `database` - The database client.
 /// * `to_block` - The block number to update to.
-fn update_progress_and_db(
-    indexer_name: &'static str,
+fn update_progress_and_last_synced(
+    indexer_name: String,
     contract_name: String,
-    event_name: &'static str,
+    event_name: String,
     progress: Arc<Mutex<IndexingEventsProgressState>>,
     network_contract: Arc<NetworkContract>,
-    database: Arc<PostgresClient>,
+    database: Option<Arc<PostgresClient>>,
     to_block: U64,
 ) {
     tokio::spawn(async move {
@@ -491,21 +507,23 @@ fn update_progress_and_db(
             .await
             .update_last_synced_block(&network_contract.id, to_block);
 
-        database
-            .execute(
-                &format!(
-                    "UPDATE rindexer_internal.{}_{}_{} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block",
-                    camel_to_snake(indexer_name),
-                    camel_to_snake(&contract_name),
-                    camel_to_snake(event_name)
-                ),
-                &[
-                    &EthereumSqlTypeWrapper::U64(&to_block),
-                    &network_contract.network,
-                ],
-            )
-            .await
-            .unwrap();
+        if let Some(database) = database {
+            database
+                .execute(
+                    &format!(
+                        "UPDATE rindexer_internal.{}_{}_{} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block",
+                        camel_to_snake(&indexer_name),
+                        camel_to_snake(&contract_name),
+                        camel_to_snake(&event_name)
+                    ),
+                    &[
+                        &EthereumSqlTypeWrapper::U64(&to_block),
+                        &network_contract.network,
+                    ],
+                )
+                .await
+                .unwrap();
+        }
     });
 }
 
@@ -522,7 +540,7 @@ fn update_progress_and_db(
 ///
 /// A `Filter` for fetching logs.
 fn build_filter(
-    topic_id: &'static str,
+    topic_id: &str,
     indexing_contract_setup: &IndexingContractSetup,
     current_block: U64,
     next_block: U64,

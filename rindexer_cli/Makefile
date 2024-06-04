@@ -2,6 +2,8 @@ new:
 	cargo run -- new
 start:
 	cargo run -- start all
+start_indexer:
+	cargo run -- start indexer
 dev:
 	cargo run -- dev
 codegen:

@@ -140,6 +140,7 @@ fn write_indexer_events(
 
         // Write ABI gen
         let abi_gen = Abigen::new(abigen_contract_name(&contract), &contract.abi)?.generate()?;
+
         write_file(
             &generate_file_location(
                 output,

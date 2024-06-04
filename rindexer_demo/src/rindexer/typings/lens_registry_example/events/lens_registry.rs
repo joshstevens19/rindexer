@@ -91,24 +91,11 @@ where
         callback: HandleLinkedEventCallbackType<TExtensions>,
         extensions: TExtensions,
     ) -> Self {
-        let csv = AsyncCsvAppender::new(
-            "./generated_csv/LensRegistry/lensregistry-handlelinked.csv".to_string(),
-        );
-        if !Path::new("./generated_csv/LensRegistry/lensregistry-handlelinked.csv").exists() {
-            csv.append_header(vec![
-                "contract_address".into(),
-                "handle_id".into(),
-                "handle_collection".into(),
-                "token_id".into(),
-                "token_collection".into(),
-                "transaction_executor".into(),
-                "timestamp".into(),
-                "tx_hash".into(),
-                "block_number".into(),
-                "block_hash".into(),
-            ])
-            .await
-            .unwrap();
+        let csv = AsyncCsvAppender::new("/Users/joshstevens/code/rindexer/rindexer_demo/./generated_csv/LensRegistry/lensregistry-handlelinked.csv".to_string());
+        if !Path::new("/Users/joshstevens/code/rindexer/rindexer_demo/./generated_csv/LensRegistry/lensregistry-handlelinked.csv").exists() {
+            csv.append_header(vec!["contract_address".into(), "handle_id".into(), "handle_collection".into(), "token_id".into(), "token_collection".into(), "transaction_executor".into(), "timestamp".into(), "tx_hash".into(), "block_number".into(), "block_hash".into()])
+                .await
+                .unwrap();
         }
 
         Self {
@@ -195,7 +182,7 @@ where
         }
     }
 
-    fn get_provider(&self, network: &str) -> &'static Arc<Provider<RetryClient<Http>>> {
+    fn get_provider(&self, network: &str) -> Arc<Provider<RetryClient<Http>>> {
         if network == "polygon" {
             return super::super::super::networks::get_polygon_provider();
         } else {
@@ -268,9 +255,9 @@ where
             };
 
         registry.register_event(EventInformation {
-            indexer_name: "LensRegistryExample",
-            event_name,
-            topic_id,
+            indexer_name: "LensRegistryExample".to_string(),
+            event_name: event_name.to_string(),
+            topic_id: topic_id.to_string(),
             contract,
             callback,
         });

@@ -10,6 +10,7 @@ use crate::generator::event_callback_registry::{
     FactoryDetails, FilterDetails, IndexingContractSetup,
 };
 use serde::{Deserialize, Serialize};
+use serde_yaml::Value;
 
 fn default_global() -> Global {
     Global::default()
@@ -17,6 +18,42 @@ fn default_global() -> Global {
 
 fn default_storage() -> Storage {
     Storage::default()
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
+#[serde(untagged)]
+pub enum ProjectType {
+    Rust,
+    NoCode,
+}
+
+fn deserialize_project_type<'de, D>(deserializer: D) -> Result<ProjectType, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value: Value = Deserialize::deserialize(deserializer)?;
+    match value {
+        Value::String(s) => match s.as_str() {
+            "rust" => Ok(ProjectType::Rust),
+            "no-code" => Ok(ProjectType::NoCode),
+            _ => Err(serde::de::Error::custom(format!(
+                "Unknown project type: {}",
+                s
+            ))),
+        },
+        _ => Err(serde::de::Error::custom("Invalid project type format")),
+    }
+}
+
+fn serialize_project_type<S>(value: &ProjectType, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let string_value = match value {
+        ProjectType::Rust => "rust",
+        ProjectType::NoCode => "no-code",
+    };
+    serializer.serialize_str(string_value)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -28,6 +65,10 @@ pub struct Manifest {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repository: Option<String>,
+
+    #[serde(deserialize_with = "deserialize_project_type")]
+    #[serde(serialize_with = "serialize_project_type")]
+    pub project_type: ProjectType,
 
     pub indexers: Vec<Indexer>,
 
@@ -339,6 +380,7 @@ mod tests {
             name: "Test Manifest".to_string(),
             description: None,
             repository: None,
+            project_type: ProjectType::Rust,
             indexers: vec![],
             networks: vec![],
             global: Global::default(),

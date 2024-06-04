@@ -1,6 +1,7 @@
 name: rindexer-demo
 description: This is an example manifest file for the rindexer project.
-repository: https://github.com/joshstevens19/rindexer
+repository: https://github.com/joshstevens19/rindexer#
+project_type: rust
 indexers:
   - name: LensRegistryExample
     contracts:
