@@ -1,23 +1,20 @@
-use async_std::prelude::StreamExt;
-use ethers::abi::{Abi, Contract as EthersContract, RawLog, Token};
-use ethers::prelude::Http;
-use ethers::providers::{Provider, RetryClient};
-use ethers::types::{Address, Bytes, Log, H256, U64};
-use futures::future::BoxFuture;
-use futures::stream::{FuturesOrdered, FuturesUnordered};
-use serde_json::Value;
 use std::error::Error;
-use std::fmt::format;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
+use async_std::prelude::StreamExt;
+use ethers::abi::{Abi, Contract as EthersContract, RawLog};
+use ethers::prelude::Http;
+use ethers::providers::{Provider, RetryClient};
+use ethers::types::{Bytes, H256};
+use futures::future::BoxFuture;
+use futures::stream::FuturesUnordered;
 use tokio::signal;
 use tokio_postgres::types::ToSql;
 
 use crate::api::start_graphql_server;
-use crate::database::postgres;
 use crate::database::postgres::{
     create_tables_for_indexer_sql, generated_insert_query_for_event,
     map_log_token_to_ethereum_wrapper,
@@ -25,7 +22,7 @@ use crate::database::postgres::{
 use crate::generator::build::identify_and_modify_filter;
 use crate::generator::event_callback_registry::{
     ContractInformation, Decoder, EventCallbackRegistry, EventInformation, EventResult,
-    NetworkContract, TxInformation,
+    NetworkContract,
 };
 use crate::generator::{
     create_csv_file_for_event, csv_headers_for_event, extract_event_names_and_signatures_from_abi,
@@ -94,7 +91,7 @@ pub async fn start_rindexer_no_code(details: StartNoCodeDetails) -> Result<(), B
     let network_providers = create_network_providers(&manifest);
 
     let events = process_indexers(
-        details.manifest_path.as_path(),
+        details.manifest_path.parent().unwrap(),
         &mut manifest,
         postgres,
         &network_providers,
@@ -253,26 +250,23 @@ async fn process_indexers(
                                     .map_err(|err| format!("Error parsing log: {}", err))
                                     .unwrap();
 
+                                let address = &result.tx_information.address;
+                                let transaction_hash =
+                                    result.tx_information.transaction_hash.as_ref().unwrap();
+                                let block_number =
+                                    result.tx_information.block_number.as_ref().unwrap();
+                                let block_hash = result.tx_information.block_hash.as_ref().unwrap();
+
                                 if let Some(postgres) = &postgres {
                                     if let Some(event_table_sql) = &*postgres_event_table_sql {
                                         let event_parameters: Vec<EthereumSqlTypeWrapper> = log
                                             .params
                                             .iter()
                                             .filter_map(|param| {
+                                                // TODO! handle all param types
                                                 map_log_token_to_ethereum_wrapper(&param.value)
                                             })
                                             .collect();
-
-                                        let address = &result.tx_information.address;
-                                        let transaction_hash = result
-                                            .tx_information
-                                            .transaction_hash
-                                            .as_ref()
-                                            .unwrap();
-                                        let block_number =
-                                            result.tx_information.block_number.as_ref().unwrap();
-                                        let block_hash =
-                                            result.tx_information.block_hash.as_ref().unwrap();
 
                                         let contract_address =
                                             [EthereumSqlTypeWrapper::Address(address)];
@@ -302,11 +296,26 @@ async fn process_indexers(
                                     }
                                 }
 
-                                // Log or CSV operations can also be included here if needed
+                                if let Some(csv) = &csv_clone {
+                                    let mut csv_data: Vec<String> = vec![];
+                                    csv_data.push(format!("{:?}", address));
+
+                                    // TODO! handle all param types
+                                    for param in &log.params {
+                                        csv_data.push(format!("{:?}", param.value.to_string()));
+                                    }
+
+                                    csv_data.push(format!("{:?}", transaction_hash));
+                                    csv_data.push(format!("{:?}", block_number));
+                                    csv_data.push(format!("{:?}", block_hash));
+
+                                    csv.append(csv_data).await.unwrap();
+                                }
                             });
                         }
 
-                        while let Some(_) = futures.next().await {}
+                        // run all the futures
+                        while futures.next().await.is_some() {}
 
                         let duration = start.elapsed(); // Calculate elapsed time
                         println!("Elapsed time: {:?}", duration);
