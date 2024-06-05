@@ -522,7 +522,7 @@ async fn start(project_path: PathBuf, command: &StartSubcommands) {
                         },
                     }),
                 };
-    
+
                 // TODO fix
                 let _ = start_rindexer_no_code(details).await.map_err(|e| {
                     print_error_message(&format!("Error starting the server: {}", e));
