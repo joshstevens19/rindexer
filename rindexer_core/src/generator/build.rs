@@ -4,7 +4,7 @@ use std::{error::Error, path::PathBuf};
 use ethers::contract::Abigen;
 
 use crate::helpers::{camel_to_snake, create_mod_file, format_all_files_for_project, write_file};
-use crate::manifest::yaml::{read_manifest, Contract, Global, Indexer, Network, Storage};
+use crate::manifest::yaml::{read_manifest, Contract, Global, Indexer, Network, Storage, Manifest};
 
 use super::events_bindings::{
     abigen_contract_file_name, abigen_contract_name, generate_event_bindings,
@@ -165,10 +165,9 @@ fn write_indexer_events(
 /// # Returns
 ///
 /// A `Result` indicating success or failure.
-pub fn generate_rindexer_typings(manifest_location: &PathBuf) -> Result<(), Box<dyn Error>> {
+pub fn generate_rindexer_typings(manifest: Manifest, manifest_location: &PathBuf) -> Result<(), Box<dyn Error>> {
     let project_path = manifest_location.parent().unwrap();
     let output = project_path.join("./src/rindexer/typings");
-    let manifest = read_manifest(manifest_location)?;
 
     let output_path = output.to_str().unwrap();
 
@@ -193,9 +192,8 @@ pub fn generate_rindexer_typings(manifest_location: &PathBuf) -> Result<(), Box<
 /// # Returns
 ///
 /// A `Result` indicating success or failure.
-pub fn generate_rindexer_handlers(manifest_location: &PathBuf) -> Result<(), Box<dyn Error>> {
+pub fn generate_rindexer_handlers(manifest: Manifest, manifest_location: &PathBuf) -> Result<(), Box<dyn Error>> {
     let output = manifest_location.parent().unwrap().join("./src/rindexer");
-    let manifest = read_manifest(manifest_location)?;
 
     let mut all_indexers = String::new();
     all_indexers.push_str(
@@ -253,8 +251,10 @@ pub fn generate_rindexer_handlers(manifest_location: &PathBuf) -> Result<(), Box
 ///
 /// A `Result` indicating success or failure.
 pub fn generate(manifest_location: &PathBuf) -> Result<(), Box<dyn Error>> {
-    generate_rindexer_typings(manifest_location)?;
-    generate_rindexer_handlers(manifest_location)?;
+    let manifest = read_manifest(manifest_location)?;
+    
+    generate_rindexer_typings(manifest.clone(), manifest_location)?;
+    generate_rindexer_handlers(manifest.clone(), manifest_location)?;
 
     format_all_files_for_project(manifest_location.parent().unwrap());
 
