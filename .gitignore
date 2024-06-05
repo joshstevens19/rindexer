@@ -16,6 +16,8 @@ Cargo.lock
 
 # MSVC Windows builds of rustc generate these, which store debugging information
 *.pdb
+
+# App ignores
 rindexer_cli/rindexer.yaml
 rindexer_cli/.env
 examples/*
