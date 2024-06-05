@@ -1,14 +1,17 @@
+use bb8::{Pool, RunError};
+use bb8_postgres::PostgresConnectionManager;
 use std::{env, str};
 
 // External crates
 use bytes::BytesMut;
 use dotenv::dotenv;
+use ethers::abi::Token;
 use ethers::types::{Address, Bytes, H128, H160, H256, H512, U128, U256, U512, U64};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use rust_decimal::Decimal;
 use thiserror::Error;
-use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type};
-use tokio_postgres::{Client, Error as PgError, NoTls, Row, Statement, Transaction};
+use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type as PgType};
+use tokio_postgres::{Error as PgError, NoTls, Row, Statement, Transaction as PgTransaction};
 
 use crate::generator::{
     extract_event_names_and_signatures_from_abi, generate_abi_name_properties, read_abi_items,
@@ -80,7 +83,7 @@ pub fn connection_string_as_url() -> Result<String, env::VarError> {
 }
 
 pub struct PostgresClient {
-    db: Client,
+    pool: Pool<PostgresConnectionManager<NoTls>>,
 }
 
 #[derive(Error, Debug)]
@@ -88,87 +91,114 @@ pub enum PostgresConnectionError {
     #[error("The database connection string is wrong please check your environment: {0}")]
     DatabaseConnectionConfigWrong(env::VarError),
 
-    #[error("Can not connect to the database: {0}")]
-    CanNotConnectToDb(tokio_postgres::Error),
+    #[error("Connection pool error: {0}")]
+    ConnectionPoolError(tokio_postgres::Error),
+}
+
+#[derive(Error, Debug)]
+pub enum PostgresError {
+    #[error("PgError {0}")]
+    PgError(PgError),
+
+    #[error("Connection pool error: {0}")]
+    ConnectionPoolError(RunError<tokio_postgres::Error>),
+}
+
+pub struct PostgresTransaction {
+    pub transaction: PgTransaction<'static>,
 }
 
 impl PostgresClient {
-    /// Creates a new `PostgresClient` instance and establishes a connection to the Postgres database.
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Result` containing the `PostgresClient` instance if the connection is successful, or an `Error` if an error occurs.
     pub async fn new() -> Result<Self, PostgresConnectionError> {
-        let (db, connection) = tokio_postgres::connect(
-            &connection_string().map_err(PostgresConnectionError::DatabaseConnectionConfigWrong)?,
+        let manager = PostgresConnectionManager::new_from_stringlike(
+            connection_string().map_err(PostgresConnectionError::DatabaseConnectionConfigWrong)?,
             NoTls,
         )
-        .await
-        .map_err(PostgresConnectionError::CanNotConnectToDb)?;
-        tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
-            }
-        });
-        Ok(Self { db })
+        .unwrap();
+        let pool = Pool::builder()
+            .build(manager)
+            .await
+            .map_err(PostgresConnectionError::ConnectionPoolError)?;
+        Ok(Self { pool })
     }
 
-    pub async fn batch_execute(&self, sql: &str) -> Result<(), tokio_postgres::Error> {
-        self.db.batch_execute(sql).await
+    pub async fn batch_execute(&self, sql: &str) -> Result<(), PostgresError> {
+        let conn = self
+            .pool
+            .get()
+            .await
+            .map_err(PostgresError::ConnectionPoolError)?;
+        conn.batch_execute(sql)
+            .await
+            .map_err(PostgresError::PgError)
     }
 
-    /// Executes a SQL query on the PostgreSQL database.
-    ///
-    /// # Arguments
-    ///
-    /// * `query` - The SQL query to execute.
-    /// * `params` - The parameters to bind to the query.
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Result` containing the number of rows affected by the query, or an `Error` if an error occurs.
     pub async fn execute<T>(
         &self,
         query: &T,
         params: &[&(dyn ToSql + Sync)],
-    ) -> Result<u64, tokio_postgres::Error>
+    ) -> Result<u64, PostgresError>
     where
         T: ?Sized + tokio_postgres::ToStatement,
     {
-        self.db.execute(query, params).await
+        let conn = self
+            .pool
+            .get()
+            .await
+            .map_err(PostgresError::ConnectionPoolError)?;
+        conn.execute(query, params)
+            .await
+            .map_err(PostgresError::PgError)
     }
 
     pub async fn prepare(
         &self,
         query: &str,
-        parameter_types: &[Type],
-    ) -> Result<Statement, PgError> {
-        self.db.prepare_typed(query, parameter_types).await
+        parameter_types: &[PgType],
+    ) -> Result<Statement, PostgresError> {
+        let conn = self
+            .pool
+            .get()
+            .await
+            .map_err(PostgresError::ConnectionPoolError)?;
+        conn.prepare_typed(query, parameter_types)
+            .await
+            .map_err(PostgresError::PgError)
     }
 
-    pub async fn transaction(&mut self) -> Result<Transaction, tokio_postgres::Error> {
-        self.db.transaction().await
+    pub async fn transaction(&self) -> Result<PostgresTransaction, PostgresError> {
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(PostgresError::ConnectionPoolError)?;
+        let transaction = conn.transaction().await.map_err(PostgresError::PgError)?;
+
+        // Wrap the transaction in a static lifetime
+        let boxed_transaction: Box<PgTransaction<'static>> =
+            unsafe { std::mem::transmute(Box::new(transaction)) };
+        Ok(PostgresTransaction {
+            transaction: *boxed_transaction,
+        })
     }
 
-    /// Reads rows from the database based on the given query and parameters.
-    ///
-    /// # Arguments
-    ///
-    /// * `query` - The query to execute. It must implement `tokio_postgres::ToStatement`.
-    /// * `params` - The parameters to bind to the query. Each parameter must implement `tokio_postgres::types::ToSql + Sync`.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing a vector of `Row` on success, or an `Error` if the query execution fails.
     pub async fn query<T>(
         &self,
         query: &T,
         params: &[&(dyn ToSql + Sync)],
-    ) -> Result<Vec<Row>, tokio_postgres::Error>
+    ) -> Result<Vec<Row>, PostgresError>
     where
         T: ?Sized + tokio_postgres::ToStatement,
     {
-        let rows = self.db.query(query, params).await?;
+        let conn = self
+            .pool
+            .get()
+            .await
+            .map_err(PostgresError::ConnectionPoolError)?;
+        let rows = conn
+            .query(query, params)
+            .await
+            .map_err(PostgresError::PgError)?;
         Ok(rows)
     }
 
@@ -176,24 +206,70 @@ impl PostgresClient {
         &self,
         query: &T,
         params: &[&(dyn ToSql + Sync)],
-    ) -> Result<Row, tokio_postgres::Error>
+    ) -> Result<Row, PostgresError>
     where
         T: ?Sized + tokio_postgres::ToStatement,
     {
-        let rows = self.db.query_one(query, params).await?;
-        Ok(rows)
+        let conn = self
+            .pool
+            .get()
+            .await
+            .map_err(PostgresError::ConnectionPoolError)?;
+        let row = conn
+            .query_one(query, params)
+            .await
+            .map_err(PostgresError::PgError)?;
+        Ok(row)
     }
 
     pub async fn query_one_or_none<T>(
         &self,
         query: &T,
         params: &[&(dyn ToSql + Sync)],
-    ) -> Result<Option<Row>, tokio_postgres::Error>
+    ) -> Result<Option<Row>, PostgresError>
     where
         T: ?Sized + tokio_postgres::ToStatement,
     {
-        let rows = self.db.query_opt(query, params).await?;
-        Ok(rows)
+        let conn = self
+            .pool
+            .get()
+            .await
+            .map_err(PostgresError::ConnectionPoolError)?;
+        let row = conn
+            .query_opt(query, params)
+            .await
+            .map_err(PostgresError::PgError)?;
+        Ok(row)
+    }
+
+    pub async fn batch_insert<T>(
+        &self,
+        query: &T,
+        params_list: Vec<Vec<Box<dyn ToSql + Send + Sync>>>,
+    ) -> Result<(), PostgresError>
+    where
+        T: ?Sized + tokio_postgres::ToStatement,
+    {
+        let mut conn = self
+            .pool
+            .get()
+            .await
+            .map_err(PostgresError::ConnectionPoolError)?;
+        let transaction = conn.transaction().await.map_err(PostgresError::PgError)?;
+
+        for params in params_list {
+            let params_refs: Vec<&(dyn ToSql + Sync)> = params
+                .iter()
+                .map(|param| param.as_ref() as &(dyn ToSql + Sync))
+                .collect();
+            transaction
+                .execute(query, &params_refs)
+                .await
+                .map_err(PostgresError::PgError)?;
+        }
+
+        transaction.commit().await.map_err(PostgresError::PgError)?;
+        Ok(())
     }
 }
 
@@ -424,6 +500,22 @@ pub fn generate_injected_param(count: usize) -> String {
     format!("VALUES({})", params)
 }
 
+pub fn generated_insert_query_for_event(
+    event_info: &EventInfo,
+    indexer_name: &str,
+    contract_name: &str,
+) -> String {
+    let columns = generate_columns_names_only(&event_info.inputs);
+    let schema_name = indexer_contract_schema_name(indexer_name, contract_name);
+    format!(
+        "INSERT INTO {}.{} (contract_address, {}, \"tx_hash\", \"block_number\", \"block_hash\") {}",
+        schema_name,
+        camel_to_snake(&event_info.name),
+        &columns.join(", "),
+        generate_injected_param(4 + columns.len())
+    )
+}
+
 #[derive(Debug)]
 pub enum EthereumSqlTypeWrapper<'a> {
     U64(&'a U64),
@@ -458,6 +550,43 @@ pub enum EthereumSqlTypeWrapper<'a> {
     VecBytes(&'a Vec<Bytes>),
 }
 
+impl<'a> EthereumSqlTypeWrapper<'a> {
+    pub fn raw_name(&self) -> &'static str {
+        match self {
+            EthereumSqlTypeWrapper::U64(_) => "U64",
+            EthereumSqlTypeWrapper::VecU64(_) => "VecU64",
+            EthereumSqlTypeWrapper::U128(_) => "U128",
+            EthereumSqlTypeWrapper::VecU128(_) => "VecU128",
+            EthereumSqlTypeWrapper::U256(_) => "U256",
+            EthereumSqlTypeWrapper::VecU256(_) => "VecU256",
+            EthereumSqlTypeWrapper::U512(_) => "U512",
+            EthereumSqlTypeWrapper::VecU512(_) => "VecU512",
+            EthereumSqlTypeWrapper::H128(_) => "H128",
+            EthereumSqlTypeWrapper::VecH128(_) => "VecH128",
+            EthereumSqlTypeWrapper::H160(_) => "H160",
+            EthereumSqlTypeWrapper::VecH160(_) => "VecH160",
+            EthereumSqlTypeWrapper::H256(_) => "H256",
+            EthereumSqlTypeWrapper::VecH256(_) => "VecH256",
+            EthereumSqlTypeWrapper::H512(_) => "H512",
+            EthereumSqlTypeWrapper::VecH512(_) => "VecH512",
+            EthereumSqlTypeWrapper::Address(_) => "Address",
+            EthereumSqlTypeWrapper::VecAddress(_) => "VecAddress",
+            EthereumSqlTypeWrapper::Bool(_) => "Bool",
+            EthereumSqlTypeWrapper::VecBool(_) => "VecBool",
+            EthereumSqlTypeWrapper::U32(_) => "U32",
+            EthereumSqlTypeWrapper::VecU32(_) => "VecU32",
+            EthereumSqlTypeWrapper::U16(_) => "U16",
+            EthereumSqlTypeWrapper::VecU16(_) => "VecU16",
+            EthereumSqlTypeWrapper::U8(_) => "U8",
+            EthereumSqlTypeWrapper::VecU8(_) => "VecU8",
+            EthereumSqlTypeWrapper::String(_) => "String",
+            EthereumSqlTypeWrapper::VecString(_) => "VecString",
+            EthereumSqlTypeWrapper::Bytes(_) => "Bytes",
+            EthereumSqlTypeWrapper::VecBytes(_) => "VecBytes",
+        }
+    }
+}
+
 /// Converts a Solidity ABI type to a corresponding Ethereum SQL type wrapper.
 ///
 /// This function maps various Solidity types to their appropriate Ethereum SQL type wrappers.
@@ -468,34 +597,92 @@ pub enum EthereumSqlTypeWrapper<'a> {
 ///
 /// # Returns
 ///
-/// An `Option<String>` containing the corresponding Ethereum SQL type wrapper if the type is supported, or `None` if the type is unsupported.
+/// An `Option<EthereumSqlTypeWrapper>` containing the corresponding Ethereum SQL type wrapper if the type is supported, or `None` if the type is unsupported.
 ///
-pub fn solidity_type_to_ethereum_sql_type(abi_type: &str) -> Option<String> {
-    let type_wrapper = match abi_type {
-        "string" => "String",
-        "string[]" => "VecString",
-        "address" => "Address",
-        "address[]" => "VecAddress",
-        "bool" => "Bool",
-        "bool[]" => "VecBool",
-        "int256" | "uint256" => "U256",
-        "int256[]" | "uint256[]" => "VecU256",
-        "int128" | "uint128" => "U128",
-        "int128[]" | "uint128[]" => "VecU128",
-        "int64" | "uint64" => "U64",
-        "int64[]" | "uint64[]" => "VecU64",
-        "int32" | "uint32" => "U32",
-        "int32[]" | "uint32[]" => "VecU32",
-        "int16" | "uint16" => "U16",
-        "int16[]" | "uint16[]" => "VecU16",
-        "int8" | "uint8" => "U8",
-        "int8[]" | "uint8[]" => "VecU8",
-        t if t.starts_with("bytes") && t.contains("[]") => "VecBytes",
-        t if t.starts_with("bytes") => "Bytes",
-        _ => return None,
-    };
+pub fn solidity_type_to_ethereum_sql_type_wrapper<'a>(
+    abi_type: &str,
+) -> Option<EthereumSqlTypeWrapper<'a>> {
+    static U64_DEFAULT: U64 = U64::zero();
+    static VEC_U64_DEFAULT: Vec<U64> = Vec::new();
+    static U128_DEFAULT: U128 = U128::zero();
+    static VEC_U128_DEFAULT: Vec<U128> = Vec::new();
+    static U256_DEFAULT: U256 = U256::zero();
+    static VEC_U256_DEFAULT: Vec<U256> = Vec::new();
+    // NOT USED HERE
+    // static U512_DEFAULT: U512 = U512::zero();
+    // static VEC_U512_DEFAULT: Vec<U512> = Vec::new();
+    // static H128_DEFAULT: H128 = H128::zero();
+    // static VEC_H128_DEFAULT: Vec<H128> = Vec::new();
+    // static H160_DEFAULT: H160 = H160::zero();
+    // static VEC_H160_DEFAULT: Vec<H160> = Vec::new();
+    // static H256_DEFAULT: H256 = H256::zero();
+    // static VEC_H256_DEFAULT: Vec<H256> = Vec::new();
+    // static H512_DEFAULT: H512 = H512::zero();
+    // static VEC_H512_DEFAULT: Vec<H512> = Vec::new();
+    static ADDRESS_DEFAULT: Address = Address::zero();
+    static VEC_ADDRESS_DEFAULT: Vec<Address> = Vec::new();
+    static BOOL_DEFAULT: bool = false;
+    static VEC_BOOL_DEFAULT: Vec<bool> = Vec::new();
+    static U32_DEFAULT: u32 = 0;
+    static VEC_U32_DEFAULT: Vec<u32> = Vec::new();
+    static U16_DEFAULT: u16 = 0;
+    static VEC_U16_DEFAULT: Vec<u16> = Vec::new();
+    static U8_DEFAULT: u8 = 0;
+    static VEC_U8_DEFAULT: Vec<u8> = Vec::new();
+    static STRING_DEFAULT: String = String::new();
+    static VEC_STRING_DEFAULT: Vec<String> = Vec::new();
+    static BYTES_DEFAULT: Bytes = Bytes::new();
+    static VEC_BYTES_DEFAULT: Vec<Bytes> = Vec::new();
 
-    Some(format!("EthereumSqlTypeWrapper::{}", type_wrapper))
+    match abi_type {
+        "string" => Some(EthereumSqlTypeWrapper::String(&STRING_DEFAULT)),
+        "string[]" => Some(EthereumSqlTypeWrapper::VecString(&VEC_STRING_DEFAULT)),
+        "address" => Some(EthereumSqlTypeWrapper::Address(&ADDRESS_DEFAULT)),
+        "address[]" => Some(EthereumSqlTypeWrapper::VecAddress(&VEC_ADDRESS_DEFAULT)),
+        "bool" => Some(EthereumSqlTypeWrapper::Bool(&BOOL_DEFAULT)),
+        "bool[]" => Some(EthereumSqlTypeWrapper::VecBool(&VEC_BOOL_DEFAULT)),
+        "int256" | "uint256" => Some(EthereumSqlTypeWrapper::U256(&U256_DEFAULT)),
+        "int256[]" | "uint256[]" => Some(EthereumSqlTypeWrapper::VecU256(&VEC_U256_DEFAULT)),
+        "int128" | "uint128" => Some(EthereumSqlTypeWrapper::U128(&U128_DEFAULT)),
+        "int128[]" | "uint128[]" => Some(EthereumSqlTypeWrapper::VecU128(&VEC_U128_DEFAULT)),
+        "int64" | "uint64" => Some(EthereumSqlTypeWrapper::U64(&U64_DEFAULT)),
+        "int64[]" | "uint64[]" => Some(EthereumSqlTypeWrapper::VecU64(&VEC_U64_DEFAULT)),
+        "int32" | "uint32" => Some(EthereumSqlTypeWrapper::U32(&U32_DEFAULT)),
+        "int32[]" | "uint32[]" => Some(EthereumSqlTypeWrapper::VecU32(&VEC_U32_DEFAULT)),
+        "int16" | "uint16" => Some(EthereumSqlTypeWrapper::U16(&U16_DEFAULT)),
+        "int16[]" | "uint16[]" => Some(EthereumSqlTypeWrapper::VecU16(&VEC_U16_DEFAULT)),
+        "int8" | "uint8" => Some(EthereumSqlTypeWrapper::U8(&U8_DEFAULT)),
+        "int8[]" | "uint8[]" => Some(EthereumSqlTypeWrapper::VecU8(&VEC_U8_DEFAULT)),
+        t if t.starts_with("bytes") && t.contains("[]") => {
+            Some(EthereumSqlTypeWrapper::VecBytes(&VEC_BYTES_DEFAULT))
+        }
+        t if t.starts_with("bytes") => Some(EthereumSqlTypeWrapper::Bytes(&BYTES_DEFAULT)),
+        _ => None,
+    }
+}
+
+pub fn map_log_token_to_ethereum_wrapper(token: &Token) -> Option<EthereumSqlTypeWrapper> {
+    match &token {
+        Token::Address(address) => Some(EthereumSqlTypeWrapper::Address(address)),
+        Token::Int(uint) | Token::Uint(uint) => Some(EthereumSqlTypeWrapper::U256(uint)),
+        Token::Bool(b) => Some(EthereumSqlTypeWrapper::Bool(b)),
+        Token::String(s) => Some(EthereumSqlTypeWrapper::String(s)),
+        // TODO! HANDLE THE MORE ADVANCED STRUCT SYSTEMS
+        // Token::FixedBytes(bytes) | Token::Bytes(bytes) => Some(EthereumSqlTypeWrapper::Bytes(bytes.into())),
+        // Token::FixedArray(tokens) | Token::Array(tokens) => {
+        //     let mut wrappers = Vec::new();
+        //     for token in tokens {
+        //         if let Some(wrapper) = map_log_token_to_ethereum_wrapper(token) {
+        //             wrappers.push(wrapper);
+        //         }
+        //     }
+        //     Some(EthereumSqlTypeWrapper::VecAddress(wrappers.iter().map(|w| match w {
+        //         EthereumSqlTypeWrapper::Address(address) => address,
+        //         _ => unreachable!(),
+        //     }).collect()))
+        // }
+        _ => panic!("Unsupported token type"),
+    }
 }
 
 impl<'a> From<&'a Address> for EthereumSqlTypeWrapper<'a> {
@@ -507,7 +694,7 @@ impl<'a> From<&'a Address> for EthereumSqlTypeWrapper<'a> {
 impl<'a> ToSql for EthereumSqlTypeWrapper<'a> {
     fn to_sql(
         &self,
-        _ty: &Type,
+        _ty: &PgType,
         out: &mut BytesMut,
     ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
         match self {
@@ -700,7 +887,7 @@ impl<'a> ToSql for EthereumSqlTypeWrapper<'a> {
         }
     }
 
-    fn accepts(_ty: &Type) -> bool {
+    fn accepts(_ty: &PgType) -> bool {
         true // We accept all types
     }
 

@@ -1,8 +1,10 @@
 use crate::database::postgres::{
-    generate_columns_names_only, generate_injected_param, indexer_contract_schema_name,
-    solidity_type_to_db_type, solidity_type_to_ethereum_sql_type,
+    generate_columns_names_only, generate_injected_param, generated_insert_query_for_event,
+    indexer_contract_schema_name, solidity_type_to_db_type,
+    solidity_type_to_ethereum_sql_type_wrapper,
 };
 use crate::generator::event_callback_registry::IndexingContractSetup;
+use crate::EthereumSqlTypeWrapper;
 use ethers::abi::{Event, EventParam, ParamType};
 use ethers::utils::keccak256;
 use serde::{Deserialize, Serialize};
@@ -591,6 +593,46 @@ fn generate_contract_type_fn_code(contract: &Contract) -> String {
     )
 }
 
+pub fn create_csv_file_for_event(
+    project_path: &Path,
+    contract: &Contract,
+    event_info: &EventInfo,
+    csv: &Option<CsvDetails>,
+) -> String {
+    let csv_file_name = format!("{}-{}.csv", contract.name, event_info.name).to_lowercase();
+    let csv_folder = project_path.join(format!("{}/{}", csv.as_ref().unwrap().path, contract.name));
+
+    // Create directory if it does not exist.
+    if let Err(e) = fs::create_dir_all(&csv_folder) {
+        panic!(
+            "Failed to create directory '{}': {}",
+            csv_folder.to_str().unwrap(),
+            e
+        );
+    }
+
+    format!("{}/{}", csv_folder.display(), csv_file_name)
+}
+
+pub fn csv_headers_for_event(event_info: &EventInfo) -> Vec<String> {
+    let mut headers: Vec<String> = generate_abi_name_properties(
+        &event_info.inputs,
+        &GenerateAbiPropertiesType::CsvHeaderNames,
+        None,
+    )
+    .iter()
+    .map(|m| m.value.clone())
+    .collect();
+
+    // Add additional headers.
+    headers.insert(0, r#""contract_address""#.to_string());
+    headers.push(r#""tx_hash""#.to_string());
+    headers.push(r#""block_number""#.to_string());
+    headers.push(r#""block_hash""#.to_string());
+
+    headers
+}
+
 /// Generates a CSV instance for logging event data.
 ///
 /// This function creates a directory and CSV file for storing event data. It constructs the file path,
@@ -625,34 +667,8 @@ fn generate_csv_instance(
         );
     }
 
-    let csv_file_name = format!("{}-{}.csv", contract.name, event_info.name).to_lowercase();
-    let csv_folder = project_path.join(format!("{}/{}", csv.as_ref().unwrap().path, contract.name));
-
-    // Create directory if it does not exist.
-    if let Err(e) = fs::create_dir_all(&csv_folder) {
-        panic!(
-            "Failed to create directory '{}': {}",
-            csv_folder.to_str().unwrap(),
-            e
-        );
-    }
-
-    let csv_path = format!("{}/{}", csv_folder.display(), csv_file_name);
-
-    let mut headers: Vec<String> = generate_abi_name_properties(
-        &event_info.inputs,
-        &GenerateAbiPropertiesType::CsvHeaderNames,
-        None,
-    )
-    .iter()
-    .map(|m| m.value.clone())
-    .collect();
-
-    // Add additional headers.
-    headers.insert(0, r#""contract_address""#.to_string());
-    headers.push(r#""tx_hash""#.to_string());
-    headers.push(r#""block_number""#.to_string());
-    headers.push(r#""block_hash""#.to_string());
+    let csv_path = create_csv_file_for_event(project_path, contract, event_info, csv);
+    let headers: Vec<String> = csv_headers_for_event(event_info);
 
     format!(
         r#"
@@ -753,7 +769,7 @@ fn generate_event_callback_structs_code(
                 } else {
                     ""
                 },
-                csv_generator = generate_csv_instance(&project_path, &contract, info, &storage.csv)
+                csv_generator = generate_csv_instance(project_path, contract, info, &storage.csv)
             )
         })
         .collect::<Vec<_>>()
@@ -1052,19 +1068,20 @@ pub enum GenerateAbiPropertiesType {
 
 /// Represents the result of generating ABI name properties.
 #[derive(Debug)]
-pub struct GenerateAbiNamePropertiesResult {
+pub struct GenerateAbiNamePropertiesResult<'a> {
     pub value: String,
     pub abi_type: String,
-    pub ethereum_sql_type_wrapper: Option<String>,
+    pub abi_name: String,
+    pub ethereum_sql_type_wrapper: Option<EthereumSqlTypeWrapper<'a>>,
 }
 
-impl GenerateAbiNamePropertiesResult {
-    /// Creates a new instance of `GenerateAbiNamePropertiesResult`.
-    pub fn new(value: String, abi_type: &str) -> Self {
+impl<'a> GenerateAbiNamePropertiesResult<'a> {
+    pub fn new(value: String, name: &str, abi_type: &str) -> Self {
         Self {
             value,
-            ethereum_sql_type_wrapper: solidity_type_to_ethereum_sql_type(abi_type),
+            ethereum_sql_type_wrapper: solidity_type_to_ethereum_sql_type_wrapper(abi_type),
             abi_type: abi_type.to_string(),
+            abi_name: name.to_string(),
         }
     }
 }
@@ -1080,16 +1097,11 @@ impl GenerateAbiNamePropertiesResult {
 /// # Returns
 ///
 /// A vector of `GenerateAbiNamePropertiesResult` containing the generated ABI name properties.
-pub fn generate_abi_name_properties(
+pub fn generate_abi_name_properties<'a>(
     inputs: &[ABIInput],
     properties_type: &GenerateAbiPropertiesType,
     prefix: Option<&str>,
-) -> Vec<GenerateAbiNamePropertiesResult> {
-    /// Generates a formatted name based on the input name.
-    fn generate_name_format(name: &str) -> String {
-        camel_to_snake(name)
-    }
-
+) -> Vec<GenerateAbiNamePropertiesResult<'a>> {
     inputs
         .iter()
         .flat_map(|input| {
@@ -1097,7 +1109,7 @@ pub fn generate_abi_name_properties(
                 generate_abi_name_properties(
                     components,
                     properties_type,
-                    Some(&generate_name_format(&input.name)),
+                    Some(&camel_to_snake(&input.name)),
                 )
             } else {
                 match properties_type {
@@ -1105,30 +1117,42 @@ pub fn generate_abi_name_properties(
                         let value = format!(
                             "\"{}{}\" {}",
                             prefix.map_or_else(|| "".to_string(), |p| format!("{}_", p)),
-                            generate_name_format(&input.name),
+                            camel_to_snake(&input.name),
                             solidity_type_to_db_type(&input.type_)
                         );
 
-                        vec![GenerateAbiNamePropertiesResult::new(value, &input.type_)]
+                        vec![GenerateAbiNamePropertiesResult::new(
+                            value,
+                            &input.type_,
+                            &input.name,
+                        )]
                     }
                     GenerateAbiPropertiesType::PostgresColumnsNamesOnly
                     | GenerateAbiPropertiesType::CsvHeaderNames => {
                         let value = format!(
                             "\"{}{}\"",
                             prefix.map_or_else(|| "".to_string(), |p| format!("{}_", p)),
-                            generate_name_format(&input.name),
+                            camel_to_snake(&input.name),
                         );
 
-                        vec![GenerateAbiNamePropertiesResult::new(value, &input.type_)]
+                        vec![GenerateAbiNamePropertiesResult::new(
+                            value,
+                            &input.type_,
+                            &input.name,
+                        )]
                     }
                     GenerateAbiPropertiesType::Object => {
                         let value = format!(
                             "{}{}",
                             prefix.map_or_else(|| "".to_string(), |p| format!("{}.", p)),
-                            generate_name_format(&input.name),
+                            camel_to_snake(&input.name),
                         );
 
-                        vec![GenerateAbiNamePropertiesResult::new(value, &input.type_)]
+                        vec![GenerateAbiNamePropertiesResult::new(
+                            value,
+                            &input.type_,
+                            &input.name,
+                        )]
                     }
                 }
             }
@@ -1258,15 +1282,7 @@ pub fn generate_event_handlers(
         let mut postgres_write = String::new();
 
         if storage.postgres_enabled() {
-            let columns = generate_columns_names_only(&event.inputs);
-            let schema_name = indexer_contract_schema_name(indexer_name, &contract.name);
-            let insert_sql = format!(
-                "INSERT INTO {}.{} (contract_address, {}, \"tx_hash\", \"block_number\", \"block_hash\") {}",
-                schema_name,
-                camel_to_snake(&event.name),
-                &columns.join(", "),
-                generate_injected_param(4 + columns.len())
-            );
+            let insert_sql = generated_insert_query_for_event(&event, indexer_name, &contract.name);
 
             let mut params_sql = String::new();
             params_sql
@@ -1275,8 +1291,8 @@ pub fn generate_event_handlers(
             for item in &abi_name_properties {
                 if let Some(wrapper) = &item.ethereum_sql_type_wrapper {
                     params_sql.push_str(&format!(
-                        "&{}(&result.event_data.{}{}),",
-                        wrapper,
+                        "&EthereumSqlTypeWrapper::{}(&result.event_data.{}{}),",
+                        wrapper.raw_name(),
                         item.value,
                         if item.abi_type.contains("bytes") {
                             let static_bytes = item.abi_type.replace("bytes", "").replace("[]", "");

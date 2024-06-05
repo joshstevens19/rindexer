@@ -16,3 +16,16 @@ clap = { version = "4.4.11", features = ["derive"] }
 regex = "1.5.4"
 colored = "2.0"
 tokio = "1.35.1"
+
+# build
+jemallocator = { version = "0.5.0", optional = true }
+jemalloc-ctl = { version = "0.5.0", optional = true }
+
+#[profile.production]
+#inherits = "release"
+#lto = "fat"
+#codegen-units = 1
+#incremental = false
+
+[features]
+jemalloc = ["dep:jemallocator", "dep:jemalloc-ctl"]

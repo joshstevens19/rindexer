@@ -1,27 +1,43 @@
-use ethers::abi::{Abi, Contract as EthersContract, RawLog};
+use async_std::prelude::StreamExt;
+use ethers::abi::{Abi, Contract as EthersContract, RawLog, Token};
 use ethers::prelude::Http;
 use ethers::providers::{Provider, RetryClient};
-use ethers::types::{Bytes, H256};
+use ethers::types::{Address, Bytes, Log, H256, U64};
 use futures::future::BoxFuture;
+use futures::stream::{FuturesOrdered, FuturesUnordered};
+use serde_json::Value;
 use std::error::Error;
+use std::fmt::format;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use tokio::signal;
+use tokio_postgres::types::ToSql;
 
 use crate::api::start_graphql_server;
-use crate::database::postgres::create_tables_for_indexer_sql;
+use crate::database::postgres;
+use crate::database::postgres::{
+    create_tables_for_indexer_sql, generated_insert_query_for_event,
+    map_log_token_to_ethereum_wrapper,
+};
 use crate::generator::build::identify_and_modify_filter;
 use crate::generator::event_callback_registry::{
     ContractInformation, Decoder, EventCallbackRegistry, EventInformation, EventResult,
-    NetworkContract,
+    NetworkContract, TxInformation,
 };
-use crate::generator::{extract_event_names_and_signatures_from_abi, get_abi_items};
+use crate::generator::{
+    create_csv_file_for_event, csv_headers_for_event, extract_event_names_and_signatures_from_abi,
+    get_abi_items,
+};
 use crate::indexer::start::{start_indexing, StartIndexingSettings};
 use crate::manifest::yaml::{read_manifest, Contract, Manifest};
 use crate::provider::create_retry_client;
-use crate::{generate_random_id, FutureExt, GraphQLServerDetails, PostgresClient};
+use crate::{
+    generate_random_id, AsyncCsvAppender, EthereumSqlTypeWrapper, FutureExt, GraphQLServerDetails,
+    PostgresClient,
+};
 
 pub struct IndexingDetails {
     pub registry: EventCallbackRegistry,
@@ -69,14 +85,21 @@ pub struct StartNoCodeDetails {
 
 pub async fn start_rindexer_no_code(details: StartNoCodeDetails) -> Result<(), Box<dyn Error>> {
     let mut manifest = read_manifest(&details.manifest_path)?;
-    
+
+    let mut postgres: Option<Arc<PostgresClient>> = None;
     if manifest.storage.postgres_enabled() {
-        setup_postgres(&manifest).await?;
+        postgres = Some(Arc::new(setup_postgres(&manifest).await?));
     }
 
     let network_providers = create_network_providers(&manifest);
 
-    let events = process_indexers(&mut manifest, &network_providers).await?;
+    let events = process_indexers(
+        details.manifest_path.as_path(),
+        &mut manifest,
+        postgres,
+        &network_providers,
+    )
+    .await?;
     let registry = EventCallbackRegistry { events };
 
     start_rindexer(StartDetails {
@@ -90,7 +113,7 @@ pub async fn start_rindexer_no_code(details: StartNoCodeDetails) -> Result<(), B
     .await
 }
 
-async fn setup_postgres(manifest: &Manifest) -> Result<(), Box<dyn Error>> {
+async fn setup_postgres(manifest: &Manifest) -> Result<PostgresClient, Box<dyn Error>> {
     let client = PostgresClient::new().await?;
 
     for indexer in &manifest.indexers {
@@ -99,7 +122,7 @@ async fn setup_postgres(manifest: &Manifest) -> Result<(), Box<dyn Error>> {
         client.batch_execute(&sql).await?;
     }
 
-    Ok(())
+    Ok(client)
 }
 
 fn create_network_providers(
@@ -118,7 +141,9 @@ fn create_network_providers(
 }
 
 async fn process_indexers(
+    project_path: &Path,
     manifest: &mut Manifest,
+    postgres: Option<Arc<PostgresClient>>,
     network_providers: &[(String, Arc<Provider<RetryClient<Http>>>)],
 ) -> Result<Vec<EventInformation>, Box<dyn Error>> {
     let mut events: Vec<EventInformation> = vec![];
@@ -153,34 +178,143 @@ async fn process_indexers(
 
                 let event = results.first().expect("Event not found").clone();
 
-                let decoder: Decoder = Arc::new(move |topics: Vec<H256>, data: Bytes| {
-                    Arc::new(
-                        event
-                            .parse_log(RawLog {
-                                topics,
-                                data: data.to_vec(),
-                            })
-                            .map(|log| {
-                                log.params
-                                    .into_iter()
-                                    .map(|param| param.value)
-                                    .collect::<Vec<_>>()
-                            })
-                            .map_err(|err| format!("Error parsing log: {}", err)),
-                    )
+                let decoder: Decoder = Arc::new(move |_topics: Vec<H256>, _data: Bytes| {
+                    // TODO empty decoder for now to avoid decoder being an option - come back to look at it
+                    Arc::new(String::new())
                 });
 
                 let contract_information =
                     create_contract_information(contract, network_providers, decoder);
 
+                // 1. generate CSV header if required
+                let mut csv: Option<Arc<AsyncCsvAppender>> = None;
+                if contract.generate_csv && manifest.storage.csv_enabled() {
+                    let headers: Vec<String> = csv_headers_for_event(&event_info);
+                    let csv_path = create_csv_file_for_event(
+                        project_path,
+                        contract,
+                        &event_info,
+                        &manifest.storage.csv,
+                    );
+                    let csv_appender = AsyncCsvAppender::new(csv_path.clone());
+                    if !Path::new(&csv_path).exists() {
+                        csv_appender.append_header(headers).await.unwrap();
+                    }
+
+                    csv = Some(Arc::new(csv_appender));
+                }
+
+                // 2. generate the SQL insert if required
+                let postgres_event_table_sql: Arc<Option<String>> = if postgres.is_some() {
+                    Arc::new(Some(generated_insert_query_for_event(
+                        &event_info,
+                        &indexer.name,
+                        &contract.name,
+                    )))
+                } else {
+                    Arc::new(None)
+                };
+
                 let name = event_info.name.clone();
+                let event_outer = event.clone();
+                let postgres_outer = postgres.clone();
+
                 let callback: Arc<
                     dyn Fn(Vec<EventResult>) -> BoxFuture<'static, ()> + Send + Sync,
-                > = Arc::new(move |result| {
-                    println!("Event name: {:?} - results {:?}", name, result);
+                > = Arc::new(move |results| {
+                    let start = Instant::now();
                     let name_clone = name.clone();
+                    let event_clone = event_outer.clone();
+                    let csv_clone = csv.clone();
+                    let postgres = postgres_outer.clone();
+                    let postgres_event_table_sql = postgres_event_table_sql.clone();
+
                     async move {
-                        println!("Event name: {:?} - results {:?}", name_clone, result);
+                        let length = results.len();
+                        let mut hit = 0;
+                        let mut futures = FuturesUnordered::new();
+
+                        for result in results {
+                            let name_clone = name_clone.clone();
+                            let event_clone = event_clone.clone();
+                            let csv_clone = csv_clone.clone();
+                            let postgres = postgres.clone();
+                            let postgres_event_table_sql = postgres_event_table_sql.clone();
+
+                            hit += 1;
+
+                            futures.push(async move {
+                                // println!("Index count: {}", hit);
+                                let log = event_clone
+                                    .parse_log(RawLog {
+                                        topics: result.log.topics,
+                                        data: result.log.data.to_vec(),
+                                    })
+                                    .map_err(|err| format!("Error parsing log: {}", err))
+                                    .unwrap();
+
+                                if let Some(postgres) = &postgres {
+                                    if let Some(event_table_sql) = &*postgres_event_table_sql {
+                                        let event_parameters: Vec<EthereumSqlTypeWrapper> = log
+                                            .params
+                                            .iter()
+                                            .filter_map(|param| {
+                                                map_log_token_to_ethereum_wrapper(&param.value)
+                                            })
+                                            .collect();
+
+                                        let address = &result.tx_information.address;
+                                        let transaction_hash = result
+                                            .tx_information
+                                            .transaction_hash
+                                            .as_ref()
+                                            .unwrap();
+                                        let block_number =
+                                            result.tx_information.block_number.as_ref().unwrap();
+                                        let block_hash =
+                                            result.tx_information.block_hash.as_ref().unwrap();
+
+                                        let contract_address =
+                                            [EthereumSqlTypeWrapper::Address(address)];
+                                        let end_global_parameters = [
+                                            EthereumSqlTypeWrapper::H256(transaction_hash),
+                                            EthereumSqlTypeWrapper::U64(block_number),
+                                            EthereumSqlTypeWrapper::H256(block_hash),
+                                        ];
+
+                                        let all_params: Vec<&EthereumSqlTypeWrapper> =
+                                            contract_address
+                                                .iter()
+                                                .chain(event_parameters.iter())
+                                                .chain(end_global_parameters.iter())
+                                                .collect();
+
+                                        let params: Vec<&(dyn ToSql + Sync)> = all_params
+                                            .iter()
+                                            .map(|&param| param as &(dyn ToSql + Sync))
+                                            .collect();
+
+                                        let db_result =
+                                            postgres.execute(event_table_sql, &params).await;
+                                        if let Err(e) = db_result {
+                                            println!("Error inserting into database: {}", e);
+                                        }
+                                    }
+                                }
+
+                                // Log or CSV operations can also be included here if needed
+                            });
+                        }
+
+                        while let Some(_) = futures.next().await {}
+
+                        let duration = start.elapsed(); // Calculate elapsed time
+                        println!("Elapsed time: {:?}", duration);
+
+                        println!(
+                            "MY LOG - Event name: {:?} - results length {} - hit length {}",
+                            name_clone, length, hit
+                        );
                     }
                     .boxed()
                 });

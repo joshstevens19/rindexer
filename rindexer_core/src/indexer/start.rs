@@ -115,7 +115,8 @@ pub async fn start_indexing(
             )
             .await;
 
-            let start_block = last_known_start_block.unwrap_or(contract.start_block.unwrap_or(latest_block));
+            let start_block =
+                last_known_start_block.unwrap_or(contract.start_block.unwrap_or(latest_block));
             // let start_block = U64::from("0x035b0fa7");
             let mut indexing_distance_from_head = U64::zero();
             let mut end_block =
@@ -148,7 +149,7 @@ pub async fn start_indexing(
                 execute_event_logs_in_order: settings.execute_event_logs_in_order,
                 indexing_distance_from_head,
             };
-            
+
             if settings.execute_in_event_order {
                 process_event_sequentially(event_processing_config).await?;
             } else {
@@ -236,7 +237,8 @@ async fn process_event_concurrently(
     let mut handles = Vec::new();
     println!(
         "Processing event start_block {}",
-        event_processing_config.start_block.as_u64());
+        event_processing_config.start_block.as_u64()
+    );
     for _current_block in (event_processing_config.start_block.as_u64()
         ..event_processing_config.end_block.as_u64())
         .step_by(event_processing_config.max_block_range as usize)
@@ -298,8 +300,11 @@ async fn process_event_concurrently(
         });
         handles.push(handle);
     }
-    
-    println!("Waiting for all handles to complete length {}", handles.len());
+
+    println!(
+        "Waiting for all handles to complete length {}",
+        handles.len()
+    );
 
     for handle in handles {
         handle.await?.unwrap();

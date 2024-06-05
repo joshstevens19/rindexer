@@ -1,3 +1,4 @@
+use async_std::task::sleep;
 use ethers::middleware::{Middleware, MiddlewareError};
 use ethers::prelude::{Block, Filter, JsonRpcError, Log};
 use ethers::types::{Address, BlockNumber, Bloom, FilteredParams, ValueOrArray, H256, U64};
@@ -192,6 +193,9 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
                 snapshot_to_block,
             )
             .await;
+
+            println!("Sleeping for forever");
+            sleep(tokio::time::Duration::from_millis(200000000000)).await;
 
             if let Some(new_filter) = result {
                 current_filter = new_filter;

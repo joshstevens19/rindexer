@@ -2,6 +2,8 @@ new:
 	cargo run -- new
 start:
 	cargo run -- start all
+start_prod:
+	RUSTFLAGS='-C target-cpu=native' cargo run --profile production --features jemalloc -- start all
 start_indexer:
 	cargo run -- start indexer
 dev:

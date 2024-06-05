@@ -147,7 +147,7 @@ pub struct ContractInformation {
 }
 
 /// Transaction-related information for an event.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TxInformation {
     pub network: String,
     pub address: Address,
@@ -164,6 +164,7 @@ pub struct TxInformation {
 /// Result of an event, including decoded data and transaction information.
 #[derive(Debug)]
 pub struct EventResult {
+    pub log: Log,
     pub decoded_data: Arc<dyn Any + Send + Sync>,
     pub tx_information: TxInformation,
 }
@@ -181,6 +182,7 @@ impl EventResult {
     /// A new `EventResult`.
     pub fn new(network_contract: Arc<NetworkContract>, log: &Log) -> Self {
         Self {
+            log: log.clone(),
             decoded_data: network_contract.decode_log(log.clone()),
             tx_information: TxInformation {
                 network: network_contract.network.to_string(),
