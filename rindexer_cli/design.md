@@ -31,15 +31,6 @@ rindexer new
 - git init happens automatically and git commit -m 'setup rindexer'
 - give information about what to do next which is run indexer, regenerate typings and start graphql
 
-rindexer dev (this one uses fast build but slower to index)
-- dev would run docker-compose up for you if you have postgres enabled
-rindexer start (this one uses slower build but faster to index) 
---type=graphql/indexer/both --hostname=0.0.0.0 --port=5000 --indexers=<list>
-rindexer start indexer
-rindexer start graphql --hostname=localhost --port=5001
-rindexer start full --hostname=localhost --port=5001
-rindexer start full
-
 rindexer start
 1. do you want to start: indexer or graphql or both ?
 2. graphql hostname: 0.0.0.0 (default)

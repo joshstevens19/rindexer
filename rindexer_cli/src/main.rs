@@ -43,45 +43,101 @@ struct NewDetails {
     database: Option<bool>,
 }
 
-#[derive(Subcommand, Debug)]
-enum CodegenSubcommands {
-    Typings,
-    Indexer,
-    All,
-}
-
-#[derive(Subcommand, Debug)]
-enum StartSubcommands {
-    Indexer,
-    Graphql {
-        #[clap(short, long)]
-        port: Option<String>,
-    },
-    All {
-        #[clap(short, long)]
-        port: Option<String>,
-    },
-}
-
-/// Define the subcommands for the CLI
-#[derive(Subcommand, Debug)]
+#[derive(Parser, Debug)]
+#[clap(author = "Josh Stevens", version = "1.0", about = "Blazing fast EVM indexing tool built in rust", long_about = None)]
 enum Commands {
-    /// Initializes a new project
+    /// Creates a new rust rindexer project or a rindexer no-code project
+    ///
+    /// This command initialises a new workspace project with rindexer 
+    /// with everything populated to start using rindexer.
+    ///
+    /// Example:
+    /// `rindexer new`
     New,
-    #[clap(name = "dev")]
-    Dev,
+
+    /// Start various services like indexers, GraphQL APIs or both together
     #[clap(name = "start")]
     Start {
         #[clap(subcommand)]
         subcommand: StartSubcommands,
     },
+
+    /// Downloads ABIs from etherscan to build up your rindexer.yaml mappings.
+    ///
+    /// This command helps in fetching ABI files necessary for indexing.
+    /// It will add them to the abis folder any mappings required will need
+    /// to be done in your rindexer.yaml file manually.
+    ///
+    /// Example:
+    /// `rindexer download_abi`
     #[clap(name = "download_abi")]
     DownloadAbi,
+
+    /// Generates rust code based on rindexer.yaml - if you are using no-code projects
+    /// you will not need to use this.
     #[clap(name = "codegen")]
     Codegen {
         #[clap(subcommand)]
         subcommand: CodegenSubcommands,
     },
+}
+
+#[derive(Subcommand, Debug)]
+enum StartSubcommands {
+    /// Starts the indexing service based on the rindexer.yaml file.
+    ///
+    /// Starts an indexer based on the rindexer.yaml file.
+    ///
+    /// Example:
+    /// `rindexer start indexer`
+    Indexer,
+
+    /// Starts the GraphQL server based on the rindexer.yaml file.
+    ///
+    /// Optionally specify a port to override the default.
+    ///
+    /// Example:
+    /// `rindexer start graphql --port 4000`
+    Graphql {
+        #[clap(short, long, help = "Specify the port number for the GraphQL server")]
+        port: Option<String>,
+    },
+
+    /// Starts the indexers and the GraphQL together based on the rindexer.yaml file.
+    ///
+    /// You can specify a port which will be used by all services that require one.
+    ///
+    /// Example:
+    /// `rindexer start all --port 3000`
+    All {
+        #[clap(short, long, help = "Specify the port number for all services")]
+        port: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum CodegenSubcommands {
+    /// Generates the rindexer rust typings based on the rindexer.yaml file.
+    ///
+    /// This should not be edited manually and always generated.
+    ///
+    /// Example:
+    /// `rindexer codegen typings`
+    Typings,
+
+    /// Generates the rindexer rust indexers handlers based on the rindexer.yaml file.
+    ///
+    /// You can use these as the foundations to build your advanced indexers.
+    ///
+    /// Example:
+    /// `rindexer codegen indexer`
+    Indexer,
+
+    /// Generates both typings and indexers handlers based on the rindexer.yaml file.
+    ///
+    /// Example:
+    /// `rindexer codegen all`
+    All,
 }
 
 const VALID_URL: &str = r"^(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})(:[0-9]+)?(\/[\w \.-]*)*\/?(\\?[\w=&.+-]*)?(#[\w.-]*)?$";
@@ -434,13 +490,19 @@ fn handle_codegen_command(project_path: PathBuf, subcommand: &CodegenSubcommands
 
     let rindexer_yaml_path = project_path.join(YAML_NAME);
 
+    let manifest = read_manifest(&rindexer_yaml_path).unwrap();
+    if manifest.project_type == ProjectType::NoCode {
+        print_error_message("This command is not supported for no-code projects, please migrate to a project to use this.");
+        return;
+    }
+
     match subcommand {
         CodegenSubcommands::Typings => {
-            generate_rindexer_typings(&rindexer_yaml_path).unwrap();
+            generate_rindexer_typings(manifest.clone(), &rindexer_yaml_path).unwrap();
             print_success_message("Generated rindexer typings.");
         }
         CodegenSubcommands::Indexer => {
-            generate_rindexer_handlers(&rindexer_yaml_path).unwrap();
+            generate_rindexer_handlers(manifest.clone(), &rindexer_yaml_path).unwrap();
             print_success_message("Generated rindexer indexer handlers.");
         }
         CodegenSubcommands::All => {
@@ -457,7 +519,7 @@ async fn start(project_path: PathBuf, command: &StartSubcommands) {
     if manifest.storage.postgres_enabled() {
         let client = PostgresClient::new().await;
         if client.is_err() {
-            print_error_message("Failed to connect to the postgres database.\nMake sure the database is running and the connection details are correct in the .env file and yaml file.\nIf you are trying to run locally do not forget to run docker-compose up before you run the indexer.");
+            print_error_message("Failed to connect to the postgres database.\nMake sure the database is running and the connection details are correct in the .env file and yaml file.\nIf you are running locally and using docker do not forget to run docker-compose up before you run the indexer.");
             return;
         }
     }

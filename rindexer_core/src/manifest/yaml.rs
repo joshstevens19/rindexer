@@ -56,7 +56,7 @@ where
     serializer.serialize_str(string_value)
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Manifest {
     pub name: String,
 
@@ -81,7 +81,7 @@ pub struct Manifest {
     pub storage: Storage,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Indexer {
     pub name: String,
 
@@ -217,7 +217,7 @@ impl Contract {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Network {
     pub name: String,
 
@@ -233,7 +233,7 @@ pub struct Network {
     pub max_concurrency: Option<u32>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PostgresConnectionDetails {
     pub name: String,
     pub user: String,
@@ -242,12 +242,12 @@ pub struct PostgresConnectionDetails {
     pub port: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CsvDetails {
     pub path: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Storage {
     pub postgres: Option<PostgresConnectionDetails>,
     pub csv: Option<CsvDetails>,
@@ -272,7 +272,7 @@ impl Storage {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Global {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contracts: Option<Vec<Contract>>,
