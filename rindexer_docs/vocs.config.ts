@@ -12,47 +12,55 @@ export default defineConfig({
       ],
     },
     {
-      text: 'Using rindexer',
+      text: 'Start Building...',
       items: [
         {
-          text: 'Getting started',
+          text: 'Project Types',
+          link: '/docs/start-building/project-types',
           items: [
-            {
-              text: 'No-code vs rust project',
-              link: '/docs/server/api/introduction',
-            },
-            {
-              text: 'No-code',
-              link: '/docs/server/api/introduction',
-            },
-            {
-              text: 'Rust project',
-              link: '/docs/server/api/introduction',
-            }
+            { text: 'No-code', link: '/docs/start-building/project-types#no-code-project' },
+            { text: 'Rust', link: '/docs/start-building/project-types#rust-project' }
+          ],
+        },
+        {
+          text: 'Create New Project',
+          link: '/docs/server/api/introduction',
+        },
+        {
+          text: 'YAML Config',
+          link: '/docs/what-is-rrelayerr',
+          items: [
+            { text: 'Top-level fields', link: '/docs/what-is-rrelayerr' },
+            { text: 'Indexers', link: '/docs/what-is-rrelayerr' },
+            { text: 'Networks', link: '/docs/what-is-rrelayerr' },
+            { text: 'Global', link: '/docs/what-is-rrelayerr' },
+            { text: 'Storage', link: '/docs/what-is-rrelayerr' },
+          ],
+        },
+        {
+          text: 'Download ABI',
+          link: '/docs/server/api/introduction',
+        },
+        {
+          text: 'Running',
+          link: '/docs/server/api/introduction',
+          items: [
+            { text: 'Indexer', link: '/docs/what-is-rrelayerr' },
+            { text: 'GraphQL', link: '/docs/what-is-rrelayerr' },
+            { text: 'All', link: '/docs/what-is-rrelayerr' },
+          ],
+        },
+        {
+          text: 'Codegen',
+          link: '/docs/server/api/introduction',
+          items: [
+            { text: 'Typings', link: '/docs/what-is-rrelayerr' },
+            { text: 'Indexer', link: '/docs/what-is-rrelayerr' },
+            { text: 'All', link: '/docs/what-is-rrelayerr' },
           ],
         },
       ],
     },
-    {
-      text: 'YAML Config',
-      link: '/docs/what-is-rrelayerr',
-      items: [
-        { text: 'Top-level fields', link: '/docs/what-is-rrelayerr' },
-        { text: 'Indexers', link: '/docs/what-is-rrelayerr' },
-        { text: 'Networks', link: '/docs/what-is-rrelayerr' },
-        { text: 'Global', link: '/docs/what-is-rrelayerr' },
-        { text: 'Storage', link: '/docs/what-is-rrelayerr' },
-      ],
-    },
-    {
-      text: 'Running',
-      items: [
-        { text: 'Indexer', link: '/docs/what-is-rrelayerr' },
-        { text: 'GraphQL', link: '/docs/what-is-rrelayerr' },
-        { text: 'All', link: '/docs/what-is-rrelayerr' },
-      ],
-    },
-    { text: 'Download ABIs', link: '/docs/what-is-rrelayerr' },
     {
       text: 'Accessing Data',
       items: [
