@@ -24,11 +24,11 @@ export default defineConfig({
         },
         {
           text: 'Create New Project',
-          link: '/docs/server/api/introduction',
+          link: '/docs/start-building/create-new-project',
         },
         {
           text: 'YAML Config',
-          link: '/docs/what-is-rrelayerr',
+          link: '/docs/start-building/yaml-config',
           items: [
             { text: 'Top-level fields', link: '/docs/what-is-rrelayerr' },
             { text: 'Indexers', link: '/docs/what-is-rrelayerr' },

@@ -1,0 +1,96 @@
+# Create New Project
+
+## 1. Initialise a new project
+
+To start a new project with rindexer, you can use the `new` command. This command will guide you through the process
+of creating a new project, allowing you to choose between a no-code project and a Rust project.
+
+If any of the steps are unclear, you can find more information in the [New Project Appendix](#new-project-appendix).
+
+```bash
+rindexer new
+```
+
+Once completed a new boilerplate project will be created in the current directory. You can navigate to the project directory and start building your project.
+The boilerplate project is configured to index rETH transfer and approval events from ethereum mainnet between a specific block range.
+
+## 2. Add Environment Variables
+
+:::info
+- SKIP IF POSTGRES WAS NOT ENABLED
+- SKIP IF POSTGRES DOCKER SUPPORT WAS ENABLED
+:::
+
+Only required if postgres storage was enabled but docker support was marked as no in the project creation step.
+For ease of running locally we suggest you enable docker support on the rindexer project.
+
+If you have picked postgres storage but NOT picked docker support out the box you have to fill in the `.env`
+file with the correct database information.
+
+```bash
+DATABASE_NAME=FILL_IN
+DATABASE_USER=FILL_IN
+DATABASE_PASSWORD=FILL_IN
+DATABASE_HOST=FILL_IN
+DATABASE_PORT=FILL_IN
+```
+
+## 3. Start the project
+
+To start the project you can run the following command:
+
+:::info
+graphql can only run if you have postgres storage enabled
+:::
+
+:::code-group
+
+```bash [graphql and indexer]
+rindexer start all
+```
+
+```bash [indexer only]
+rindexer start indexer
+```
+
+```bash [graphql only]
+rindexer start graphql
+```
+
+:::
+
+:::warning
+The boilerplate template uses a free node which has very limited rate limits, you can change the node URL in the
+`.env` file to a node you control or have access to.
+:::
+
+## 4. Query the GraphQL API
+
+:::info
+graphql can only run if you have postgres storage enabled
+:::
+
+TODO: Add instructions on how to query the GraphQL API.
+
+## New Project Appendix
+
+If you are not sure what to select this section will explain each step in more detail.
+
+### What Type Of Project?
+
+If unsure what project type to select, you can read more about each project type here:
+
+- [No-code Project](/docs/start-building/project-types#no-code-project)
+- [Rust Project](/docs/start-building/project-types#rust-project)
+
+### What Storages To Enable?
+
+- Postgres - This will use a postgres database to store the data.
+- Csv - This will store the data in a csv file on the machine.
+- Both - This will store the data in both a postgres database and a csv file.
+- None - This will not store the data anywhere.
+
+### Postgres Docker
+
+- Yes - This will use docker to spin up a postgres database for you.
+- No - This will not use docker and you will need to provide a postgres database information in the `.env` file.
