@@ -1,0 +1,45 @@
+# Why rindexer?
+
+## Why do we need rindexer in general?
+
+Indexing data on EVM chains is crucial for developers creating dApps.
+Building the necessary indexing infrastructure, however, presents significant challenges.
+It is complex, time-consuming, and can divert focus from developing innovative dApp features.
+As applications become more complex with more advanced features, the need for robust, easily extendable indexing solutions grows.
+Although decentralized options like TheGraph exist, they often lack speed and are not as developer friendly as you need.
+Diverse indexing options, such as rindexer, are vital for building high-quality applications efficiently.
+
+## The Problems
+
+Traditional indexing solutions come with steep learning curves and require substantial initial development to meet dApps
+specific needs. This requirement can delay overall application development and add complexity, especially when integrating
+with different blockchain environments. Additionally, many tools do not offer the flexibility needed to quickly adapt to
+changing project requirements or updates in blockchain technology.
+
+Effective indexing tools should be easy to use, requiring no-code for basic data reporting or basic indexing needs, while also
+being highly customizable for more advanced requirements. We are building more and more advanced applications that require
+more advanced indexing tools, and rindexer is designed to meet these needs as well.
+
+The use of Rust in blockchain tools like Foundry has demonstrated significant performance improvements on existing toolsets, which rindexer also leverages.
+
+## Developer Experience
+
+rindexer significantly enhances the developer experience by simplifying the setup and management of indexing tasks.
+Its straightforward YAML-based configuration allows anyone to begin indexing events without writing any code,
+enabling them to concentrate more on their application's logic or profiling the data itself.
+For those seeking to build more advanced indexing rindexer provides out the box support to abstract away the complexity of the blockchain.
+
+## Stability
+
+In blockchain applications, stability is critical as data integrity and availability directly affect user trust and usability.
+rindexers design utilizes Rust’s safety features and concurrency capabilities, ensuring fast, reliable,
+and secure indexing operations, safeguarded against data races and system crashes.
+
+## Performance
+
+Rust was chosen for developing rindexer due to its unmatched performance and efficiency. Its capacity for handling intensive
+computation and its memory safety—without needing a garbage collector allows rindexer to manage high-throughput data with minimal
+latency. This makes rindexer a very fast indexing solution, essential for applications that require real-time
+data analysis and for developers who value speed and efficiency.
+
+"Speed is everything in software."

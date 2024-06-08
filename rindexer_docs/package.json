@@ -1,0 +1,17 @@
+{
+  "name": "rindexer_docs",
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vocs dev",
+    "build": "vocs build",
+    "preview": "vocs preview"
+  },
+  "dependencies": {
+    "@types/react": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "typescript": "latest",
+    "vocs": "latest"
+  }
+}
