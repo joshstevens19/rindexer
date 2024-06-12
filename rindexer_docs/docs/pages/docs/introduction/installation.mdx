@@ -16,10 +16,11 @@ curl -L https://rindexer.io/install | bash
 curl -L https://rindexer.io/install | bash
 ```
 
-```bash [windows]
-TODO
-```
+:::
 
+:::warning
+If you’re on Windows, you will need to install and use Git BASH or WSL, as your terminal,
+since rindexer installation does not support Powershell or Cmd.
 :::
 
 Once installed you can run the following command to check the installation was successful:
@@ -28,10 +29,34 @@ Once installed you can run the following command to check the installation was s
 rindexer --help
 ```
 
+```bash
+Blazing fast EVM indexing tool built in rust
+
+Usage: rindexer [COMMAND]
+
+Commands:
+  new           Creates a new rust rindexer project or a rindexer no-code project
+  start         Start various services like indexers, GraphQL APIs or both together
+  download_abi  Downloads ABIs from etherscan to build up your rindexer.yaml mappings
+  codegen       Generates rust code based on rindexer.yaml - if you are using no-code projects you will not need to use this
+  help          Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version
+```
+
+
 To upgrade to the latest version of rindexer you can run the following command:
 
 ```bash
-rindexer upgrade
+rindexerup
+```
+
+To uninstall rindexer you can run the following command:
+
+```bash
+rindexerdown
 ```
 
 ## Docker

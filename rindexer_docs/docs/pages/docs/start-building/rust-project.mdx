@@ -1,0 +1,458 @@
+# Rust Project
+
+As explained in the [rust](/docs/start-building/project-types/rust-project) project type,
+the Rust project is a project that is meant to be changed and extended. The template gives you a starting point,
+and you may choose to run the indexer differently, use your own custom logic, do http requests, do on chain lookups
+or anything else you can think of. rindexer is also a framework that can be used to build your own custom indexer
+and not just a no-code indexer.
+
+## Typings
+
+When creating a new rust project with rindexer it will create you a typings folder, this has pretty advanced
+typings for all your contracts, events and network information. This is generated from the ABIs you provide in the YAML configuration file.
+This folder is not meant to be manually edited and should always be generated using codegen.
+
+You can regenerate the typings folder by running the following command:
+
+:::info
+note if you change the ABIs in the YAML file you will need to regenerate the typings. Also if you do regenerate this
+most likely your indexer files will need to be updated to match the new typings, you can manually migrate them or
+generate them again using the below if you do not have any custom logic.
+:::
+
+```bash
+rindexer codegen typings
+```
+
+## Indexers
+
+When creating a new rust project with rindexer it will create you a indexers folder, this is where you will write
+your custom logic for the indexer. This is where you will do all your indexing logic, you can do anything you want
+in here, you can do http requests, on chain lookups, custom logic, custom DBs, anything you can think of. rindexer gives you
+the foundations and also baked in extendability. Rust enforces a strong type system, all logs will be streamed to you
+just focus on the logic you want.
+
+By default if you turn storage postgres on in the YAML configuration file it will also create you postgres tables,
+also write SQL for you to use and expose you a postgres client. This is a great starting point for you to build on.
+The tables creation can be skipped by using the TODO!!!!!!!!!!.
+If you also enable the CSV storage it will also generate code in the handler to write to that CSV files.
+
+You can regenerate the indexers folder by running the following command:
+
+```bash
+rindexer codegen indexers
+```
+
+### Understanding an indexer handler
+
+To help understand the interfaces and ways rindexer handlers can be extended we will look at an example.
+
+Take this YAML file - All transfer events on Ethereum from the ERC20 contract between block 18600000 and 18718056 will be indexed.
+
+```yaml
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chainId: 1
+    url: https://mainnet.infura.io/v3/your-infura-key
+storage:
+  postgres:
+    name: ${DATABASE_NAME}
+    user: ${DATABASE_USER}
+    password: ${DATABASE_PASSWORD}
+    host: ${DATABASE_HOST}
+    port: ${DATABASE_PORT}
+  csv:
+    path: ./generated_csv
+indexers:
+- name: MyFirstIndexerExample
+  contracts:
+  - name: ERC20
+    details:
+    - network: ethereum
+      filter:
+        event_name: Transfer
+      startBlock: 18600000
+      endBlock: 18718056
+    abi: ./abis/ERC20.abi.json
+```
+
+This would generate you a `erc20_filter.rs` file in the indexers folder, this file will have a handler function,
+note that the name of the file is the contract name with `_filter` appended to it. If you are using multiple
+events pointing to a contract the file it will generate will have all the handlers in a single file.
+
+```rs
+use super::super::super::typings::lens_registry_example::events::erc20_filter::{
+    no_extensions, ERC20FilterEventType, TransferEvent,
+};
+use rindexer_core::{
+    generator::event_callback_registry::EventCallbackRegistry, EthereumSqlTypeWrapper,
+};
+use std::sync::Arc;
+
+async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+    ERC20FilterEventType::Transfer(
+        TransferEvent::new(
+            // results = &Vec<TransferResult>
+            // context = Arc<EventContext<NoExtensions>>
+            Arc::new(|results, context| {
+                Box::pin(async move {
+                    for result in results {
+                        context.csv.append(vec![format!("{:?}", result.tx_information.address),format!("{:?}", result.event_data.from,),format!("{:?}", result.event_data.to,),result.event_data.value.to_string(),format!("{:?}", result.tx_information.transaction_hash.unwrap()),result.tx_information.block_number.unwrap().to_string(),result.tx_information.block_hash.unwrap().to_string()]).await.unwrap();
+                        context.database.execute("INSERT INTO lens_registry_example_erc20_filter.transfer (contract_address, \"from\", \"to\", \"value\", \"tx_hash\", \"block_number\", \"block_hash\") VALUES($1, $2, $3, $4, $5, $6, $7)",&[&EthereumSqlTypeWrapper::Address(&result.tx_information.address),&EthereumSqlTypeWrapper::Address(&result.event_data.from),&EthereumSqlTypeWrapper::Address(&result.event_data.to),&EthereumSqlTypeWrapper::U256(&result.event_data.value),&EthereumSqlTypeWrapper::H256(&result.tx_information.transaction_hash.unwrap()),&EthereumSqlTypeWrapper::U64(&result.tx_information.block_number.unwrap()),&EthereumSqlTypeWrapper::H256(&result.tx_information.block_hash.unwrap())]).await.unwrap();
+                    }
+               })
+            }),
+            no_extensions()
+        )
+        .await,
+    )
+    .register(registry);
+}
+
+pub async fn erc20_filter_handlers(registry: &mut EventCallbackRegistry) {
+    transfer_handler(registry).await;
+}
+```
+
+### Why an Arc?
+
+```rs
+async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+    ERC20FilterEventType::Transfer(
+        TransferEvent::new(
+            Arc::new(|results, context| { // [!code focus]
+                Box::pin(async move {
+                    for result in results {
+                        context.csv.append(vec![format!("{:?}", result.tx_information.address),format!("{:?}", result.event_data.from,),format!("{:?}", result.event_data.to,),result.event_data.value.to_string(),format!("{:?}", result.tx_information.transaction_hash.unwrap()),result.tx_information.block_number.unwrap().to_string(),result.tx_information.block_hash.unwrap().to_string()]).await.unwrap();
+                        context.database.execute("INSERT INTO lens_registry_example_erc20_filter.transfer (contract_address, \"from\", \"to\", \"value\", \"tx_hash\", \"block_number\", \"block_hash\") VALUES($1, $2, $3, $4, $5, $6, $7)",&[&EthereumSqlTypeWrapper::Address(&result.tx_information.address),&EthereumSqlTypeWrapper::Address(&result.event_data.from),&EthereumSqlTypeWrapper::Address(&result.event_data.to),&EthereumSqlTypeWrapper::U256(&result.event_data.value),&EthereumSqlTypeWrapper::H256(&result.tx_information.transaction_hash.unwrap()),&EthereumSqlTypeWrapper::U64(&result.tx_information.block_number.unwrap()),&EthereumSqlTypeWrapper::H256(&result.tx_information.block_hash.unwrap())]).await.unwrap();
+                    }
+               })
+            }),
+            no_extensions()
+        )
+        .await,
+    )
+    .register(registry);
+}
+```
+
+The `Arc` is a reference counted smart pointer, this is so you can share the context across multiple threads.
+
+### Why an Box::pin
+
+```rs
+async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+    ERC20FilterEventType::Transfer(
+        TransferEvent::new(
+            Arc::new(|results, context| {
+                Box::pin(async move { // [!code focus]
+                    for result in results {
+                        context.csv.append(vec![format!("{:?}", result.tx_information.address),format!("{:?}", result.event_data.from,),format!("{:?}", result.event_data.to,),result.event_data.value.to_string(),format!("{:?}", result.tx_information.transaction_hash.unwrap()),result.tx_information.block_number.unwrap().to_string(),result.tx_information.block_hash.unwrap().to_string()]).await.unwrap();
+                        context.database.execute("INSERT INTO lens_registry_example_erc20_filter.transfer (contract_address, \"from\", \"to\", \"value\", \"tx_hash\", \"block_number\", \"block_hash\") VALUES($1, $2, $3, $4, $5, $6, $7)",&[&EthereumSqlTypeWrapper::Address(&result.tx_information.address),&EthereumSqlTypeWrapper::Address(&result.event_data.from),&EthereumSqlTypeWrapper::Address(&result.event_data.to),&EthereumSqlTypeWrapper::U256(&result.event_data.value),&EthereumSqlTypeWrapper::H256(&result.tx_information.transaction_hash.unwrap()),&EthereumSqlTypeWrapper::U64(&result.tx_information.block_number.unwrap()),&EthereumSqlTypeWrapper::H256(&result.tx_information.block_hash.unwrap())]).await.unwrap();
+                    }
+               })
+            }),
+            no_extensions()
+        )
+        .await,
+    )
+    .register(registry);
+}
+```
+
+`Box::pin` in Rust pins a future to the heap, ensuring it remains at a fixed memory location. 
+This is essential for using `async/await` safely, as it guarantees that the future's internal references stay 
+valid across suspensions, allowing reliable asynchronous execution.
+
+### results
+
+```rs
+// results = &Vec<TransferResult> // [!code focus]
+Arc::new(|results, context| { // [!code focus]
+    Box::pin(async move {
+        for result in results {
+            ...
+        }
+   })
+}),
+```
+
+Everything is typed so the `event_data` struct will be typed to the decoded event you wish to index, it will be wrapped in
+a struct which exposes you the `event_data` and the `tx_information`
+
+lets look into what this looks like
+
+```rs
+#[derive(Debug)]
+pub struct TransferResult {
+    pub event_data: TransferData,
+    pub tx_information: TxInformation,
+}
+```
+
+The `event_data` will be pointing to the ABI type generated using `ethers`
+
+```rs
+#[derive(
+    Clone,
+    ::ethers::contract::EthEvent,
+    ::ethers::contract::EthDisplay,
+    Default,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+)]
+#[ethevent(name = "Transfer", abi = "Transfer(address,address,uint256)")]
+pub struct TransferFilter {
+    #[ethevent(indexed)]
+    pub from: ::ethers::core::types::Address,
+    #[ethevent(indexed)]
+    pub to: ::ethers::core::types::Address,
+    pub value: ::ethers::core::types::U256,
+}
+```
+
+The `tx_information` will be the transaction related information for the event
+
+```rs
+#[derive(Debug, Clone)]
+pub struct TxInformation {
+    pub network: String,
+    pub address: Address,
+    pub block_hash: Option<H256>,
+    pub block_number: Option<U64>,
+    pub transaction_hash: Option<H256>,
+    pub transaction_index: Option<U64>,
+    pub log_index: Option<U256>,
+    pub transaction_log_index: Option<U256>,
+    pub log_type: Option<String>,
+    pub removed: Option<bool>,
+}
+```
+
+As you see the `network` is always passed in the `tx_information` struct, this is so you can index multiple networks
+within the same handler if you wish.
+
+### context
+
+```rs
+// context = Arc<EventContext<NoExtensions>> // [!code focus]
+Arc::new(|results, context| { // [!code focus]
+    Box::pin(async move {
+        for result in results {
+            ...
+        }
+   })
+}),
+```
+
+The `context` is a struct that is passed to the handler which has thread safe functionality exposed for ease of use
+within the handler.
+
+```rs
+pub struct EventContext<TExtensions>
+where
+    TExtensions: Send + Sync,
+{
+    pub database: Arc<PostgresClient>,
+    pub csv: Arc<AsyncCsvAppender>,
+    pub extensions: Arc<TExtensions>,
+}
+```
+
+Note here that if you have postgres storage off in the YAML configuration file the `database` will not be present in
+this struct and you will not be able to use it. The same goes for the `csv` if you have csv storage off in the YAML.
+
+You can also pass in your own custom thread safe extensions to the context if you wish, this is a way to pass in custom logic.
+For example say you wanted to use a different database or call something from outside the indexer.
+
+```rs
+struct PassIn {  // [!code focus]
+    extend: bool,  // [!code focus]
+}  // [!code focus]
+
+async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+    ERC20FilterEventType::Transfer(
+        TransferEvent::new(
+            Arc::new(|results: context:Arc<EventContext<PassIn>>| {  // [!code focus]
+                Box::pin(async move {
+                    for result in results {
+                        // my context.extensions now has the extend bool  // [!code focus]
+                        println!("Is extend: {:?}", context.extensions.extend); // [!code focus]
+                    }
+               })
+            }),
+            PassIn { extend: false }  // [!code focus]
+        )
+        .await,
+    )
+    .register(registry);
+}
+```
+
+### postgres
+
+By default if you set the postgres storage on in the YAML configuration file it will generate you a postgres connected client. This
+uses the `tokio-postgres` library. This is a great starting point for you to build on. It uses connection pools by default.
+
+```rs
+async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+    ERC20FilterEventType::Transfer(
+        TransferEvent::new(
+            Arc::new(|results: context| { 
+                Box::pin(async move {
+                    // database client here // [!code focus]
+                    // context.database  // [!code focus]
+               })
+            }),
+            no_extensions()
+        )
+        .await,
+    )
+    .register(registry);
+}
+```
+
+You can query data from the database and write data to the database, here are the postgres methods exposed.
+
+- `context.database.new` - This is for creating a new client.
+- `context.database.batch_execute` - This is for executing multiple queries at once.
+- `context.database.execute` - This is for executing a single query.
+- `context.database.prepare` - This is for preparing a query to be executed multiple times.
+- `context.database.transaction` - This is for starting a transaction.
+- `context.database.query` - This is for querying data from the database.
+- `context.database.query_one` - This is for querying a single row from the database.
+- `context.database.query_one_or_none` - This is for querying a single row from the database or returning None if no rows are found.#
+- `context.database.batch_insert` - This is for inserting multiple rows into the database.
+
+### EthereumSqlTypeWrapper
+
+Ethereum types are not 1 to 1 with postgres types, so rindexer has a wrapper to help you with this. This is a enum
+called EthereumSqlTypeWrapper which has all the types you need to pass into the postgres execute function.
+
+```rs
+#[derive(Debug)]
+pub enum EthereumSqlTypeWrapper<'a> {
+    U64(&'a U64),
+    VecU64(&'a Vec<U64>),
+    U128(&'a U128),
+    VecU128(&'a Vec<U128>),
+    U256(&'a U256),
+    VecU256(&'a Vec<U256>),
+    U512(&'a U512),
+    VecU512(Vec<U512>),
+    H128(&'a H128),
+    VecH128(&'a Vec<H128>),
+    H160(&'a H160),
+    VecH160(&'a Vec<H160>),
+    H256(&'a H256),
+    VecH256(&'a Vec<H256>),
+    H512(&'a H512),
+    VecH512(&'a Vec<H512>),
+    Address(&'a Address),
+    VecAddress(&'a Vec<Address>),
+    Bool(&'a bool),
+    VecBool(&'a Vec<bool>),
+    U32(&'a u32),
+    VecU32(&'a Vec<u32>),
+    U16(&'a u16),
+    VecU16(&'a Vec<u16>),
+    U8(&'a u8),
+    VecU8(&'a Vec<u8>),
+    String(&'a String),
+    VecString(&'a Vec<String>),
+    Bytes(&'a Bytes),
+    VecBytes(&'a Vec<Bytes>),
+}
+
+
+// to use it you just pass the value in the enum
+// example
+EthereumSqlTypeWrapper::Address(&result.tx_information.address)
+```
+
+### csv
+
+By default if you set the csv storage on in the YAML configuration file it will generate you a csv appender. This
+will create headers for you automatically inline with the ABI event data. If you wish to have custom headers you can
+turn this off on the CSV storage in the YAML configuration file (TODO!!).
+
+methods:
+
+- `context.csv.append_header` - This is for appending a header to the csv file.
+- `context.csv.append` - This is for appending a row to the csv file.
+
+```rs
+async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+    ERC20FilterEventType::Transfer(
+        TransferEvent::new(
+            Arc::new(|results: context| { 
+                Box::pin(async move {
+                    // csv client here // [!code focus]
+                    // context.csv  // [!code focus]
+               })
+            }),
+            no_extensions()
+        )
+        .await,
+    )
+    .register(registry);
+}
+```
+
+
+### register
+
+```rs
+async fn transfer_handler(registry: &mut EventCallbackRegistry) { // [!code focus]
+    ERC20FilterEventType::Transfer(
+        TransferEvent::new(
+            Arc::new(|results, context| {
+                Box::pin(async move { 
+                    for result in results {
+                        context.csv.append(vec![format!("{:?}", result.tx_information.address),format!("{:?}", result.event_data.from,),format!("{:?}", result.event_data.to,),result.event_data.value.to_string(),format!("{:?}", result.tx_information.transaction_hash.unwrap()),result.tx_information.block_number.unwrap().to_string(),result.tx_information.block_hash.unwrap().to_string()]).await.unwrap();
+                        context.database.execute("INSERT INTO lens_registry_example_erc20_filter.transfer (contract_address, \"from\", \"to\", \"value\", \"tx_hash\", \"block_number\", \"block_hash\") VALUES($1, $2, $3, $4, $5, $6, $7)",&[&EthereumSqlTypeWrapper::Address(&result.tx_information.address),&EthereumSqlTypeWrapper::Address(&result.event_data.from),&EthereumSqlTypeWrapper::Address(&result.event_data.to),&EthereumSqlTypeWrapper::U256(&result.event_data.value),&EthereumSqlTypeWrapper::H256(&result.tx_information.transaction_hash.unwrap()),&EthereumSqlTypeWrapper::U64(&result.tx_information.block_number.unwrap()),&EthereumSqlTypeWrapper::H256(&result.tx_information.block_hash.unwrap())]).await.unwrap();
+                    }
+               })
+            }),
+            no_extensions()
+        )
+        .await,
+    )
+    .register(registry); // [!code focus]
+}
+```
+
+rindexer needs to know which handlers are required to be indexed so you need to register them with the `EventCallbackRegistry`.
+
+This passing of `&mut EventCallbackRegistry` is taken care of you by the rindexer framework, you just need to call the `register` function.
+
+The `main.rs` called the `register_all_handlers` function which registered all the handlers, this code is 
+all generated for you and you do not need to worry about it.
+
+```rs
+use super::lens_registry_example::erc20_filter::erc20_filter_handlers;
+use super::lens_registry_example::lens_registry::lens_registry_handlers;
+use rindexer_core::generator::event_callback_registry::EventCallbackRegistry;
+
+pub async fn register_all_handlers() -> EventCallbackRegistry {
+    let mut registry = EventCallbackRegistry::new();
+    erc20_filter_handlers(&mut registry).await;
+    registry
+}
+```
+
+## Regenerating both
+
+You can regenerate both the typings and indexers by running the following command:
+
+```bash
+rindexer codegen all
+```
+
+## main.rs

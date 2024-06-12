@@ -70,15 +70,15 @@ pub struct Manifest {
     #[serde(serialize_with = "serialize_project_type")]
     pub project_type: ProjectType,
 
-    pub indexers: Vec<Indexer>,
-
     pub networks: Vec<Network>,
-
-    #[serde(default = "default_global")]
-    pub global: Global,
 
     #[serde(default = "default_storage")]
     pub storage: Storage,
+
+    pub indexers: Vec<Indexer>,
+
+    #[serde(default = "default_global")]
+    pub global: Global,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

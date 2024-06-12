@@ -292,11 +292,11 @@ fn handle_new_command(project_path: PathBuf) {
 
     let rindexer_type = prompt_for_input_list(
         "indexer type you wish to create:\n- No code: best choice when starting, no extra code required\n- Project: customise advanced indexer as you see by writing rust code\n",
-        &["no-code","project"],
+        &["no-code".to_string(),"project".to_string()],
         None,
     );
 
-    let project_name = prompt_for_input("Project Name", None, None);
+    let project_name = prompt_for_input("Project Name", None, None, None);
     if project_path.exists() {
         print_error_message("Directory already exists. Please choose a different project name.");
         return;
@@ -305,13 +305,13 @@ fn handle_new_command(project_path: PathBuf) {
     let repository = prompt_for_optional_input::<String>("Repository", None);
     let storage_choice = prompt_for_input_list(
         "What Storages To Enable?",
-        &["postgres", "csv", "both", "none"],
+        &["postgres".to_string(), "csv".to_string(), "both".to_string(), "none".to_string()],
         None,
     );
     let mut postgres_docker_enable = false;
     if storage_choice == "postgres" || storage_choice == "both" {
         let postgres_docker =
-            prompt_for_input_list("Postgres Docker Support Out The Box?", &["yes", "no"], None);
+            prompt_for_input_list("Postgres Docker Support Out The Box?", &["yes".to_string(), "no".to_string()], None);
         postgres_docker_enable = postgres_docker == "yes";
     }
 
@@ -444,16 +444,24 @@ async fn handle_download_abi_command(project_path: PathBuf) {
         print_error_message(&format!("Failed to create directory: {}", err));
         return;
     }
-
-    let network = prompt_for_input_list(
-        "Enter Network",
-        &["ethereum", "polygon", "base", "bsc"],
+    
+    let network = prompt_for_input(
+        "Enter Network Chain Id",
+        Some(r"^\d+$"),
+        Some("Invalid network chain id. Please enter a valid chain id."),
         None,
     );
-    let contract_address = prompt_for_input("Enter Contract Address", None, None);
+    let network = U64::from_dec_str(&network).map_err(|_| {
+        print_error_message("Invalid network chain id. Please enter a valid chain id.");
+    }).unwrap();
+    
+    let network = Chain::try_from(network).map_err(|_| {
+        print_error_message("Chain id is not supported by etherscan API.");
+    }).unwrap();
+    let contract_address = prompt_for_input("Enter Contract Address", None, None, None);
 
     let client = Client::builder()
-        .chain(Chain::Mainnet)
+        .chain(network)
         .unwrap()
         .build()
         .unwrap();
@@ -614,6 +622,7 @@ async fn main() {
 fn prompt_for_input(
     field_name: &str,
     pattern: Option<&str>,
+    pattern_failure_message: Option<&str>,
     current_value: Option<&str>,
 ) -> String {
     let regex = pattern.map(|p| Regex::new(p).unwrap());
@@ -633,9 +642,10 @@ fn prompt_for_input(
                 if regex.is_match(trimmed) {
                     return trimmed.to_string();
                 } else {
+                    let message = pattern_failure_message.unwrap_or("Invalid input according to regex. Please try again.");
                     println!(
                         "{}",
-                        "Invalid input according to regex. Please try again.".red()
+                        message.red()
                     );
                 }
             } else if !trimmed.is_empty() {
@@ -690,7 +700,7 @@ fn prompt_for_optional_input<T: FromStr>(prompt: &str, pattern: Option<&str>) ->
 
 fn prompt_for_input_list(
     field_name: &str,
-    options: &[&str],
+    options: &[String],
     current_value: Option<&str>,
 ) -> String {
     let options_str = options.join(", ");
@@ -713,7 +723,7 @@ fn prompt_for_input_list(
             .expect("Failed to read line");
         let trimmed = input.trim().to_lowercase();
 
-        if options.contains(&trimmed.as_str()) {
+        if options.contains(&trimmed) {
             return trimmed;
         } else {
             println!(

@@ -57,7 +57,7 @@ global:
   contracts:
     - name: InjectedGlobal
       details:
-        - address: '0x2E645469f354BB4F5c8a05B3b30A929361cf77eC'
+        - address: 0x2E645469f354BB4F5c8a05B3b30A929361cf77eC
           network: polygon
       abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
 storage:

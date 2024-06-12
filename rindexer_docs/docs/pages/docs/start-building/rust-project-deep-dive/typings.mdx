@@ -1,0 +1,17 @@
+# Typings
+
+When creating a new rust project with rindexer it will create you a typings folder, this has pretty advanced
+typings for all your contracts, events and network information. This is generated from the ABIs you provide in the YAML configuration file.
+This folder is not meant to be manually edited and should always be generated using codegen.
+
+You can regenerate the typings folder by running the following command:
+
+:::info
+note if you change the ABIs in the YAML file you will need to regenerate the typings. Also if you do regenerate this
+most likely your indexer files will need to be updated to match the new typings, you can manually migrate them or
+generate them again using the below if you do not have any custom logic.
+:::
+
+```bash
+rindexer codegen typings
+```

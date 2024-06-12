@@ -4,7 +4,7 @@ use std::{error::Error, path::PathBuf};
 use ethers::contract::Abigen;
 
 use crate::helpers::{camel_to_snake, create_mod_file, format_all_files_for_project, write_file};
-use crate::manifest::yaml::{read_manifest, Contract, Global, Indexer, Network, Storage, Manifest};
+use crate::manifest::yaml::{read_manifest, Contract, Global, Indexer, Manifest, Network, Storage};
 
 use super::events_bindings::{
     abigen_contract_file_name, abigen_contract_name, generate_event_bindings,
@@ -165,7 +165,10 @@ fn write_indexer_events(
 /// # Returns
 ///
 /// A `Result` indicating success or failure.
-pub fn generate_rindexer_typings(manifest: Manifest, manifest_location: &PathBuf) -> Result<(), Box<dyn Error>> {
+pub fn generate_rindexer_typings(
+    manifest: Manifest,
+    manifest_location: &PathBuf,
+) -> Result<(), Box<dyn Error>> {
     let project_path = manifest_location.parent().unwrap();
     let output = project_path.join("./src/rindexer/typings");
 
@@ -192,7 +195,10 @@ pub fn generate_rindexer_typings(manifest: Manifest, manifest_location: &PathBuf
 /// # Returns
 ///
 /// A `Result` indicating success or failure.
-pub fn generate_rindexer_handlers(manifest: Manifest, manifest_location: &PathBuf) -> Result<(), Box<dyn Error>> {
+pub fn generate_rindexer_handlers(
+    manifest: Manifest,
+    manifest_location: &PathBuf,
+) -> Result<(), Box<dyn Error>> {
     let output = manifest_location.parent().unwrap().join("./src/rindexer");
 
     let mut all_indexers = String::new();
@@ -252,7 +258,7 @@ pub fn generate_rindexer_handlers(manifest: Manifest, manifest_location: &PathBu
 /// A `Result` indicating success or failure.
 pub fn generate(manifest_location: &PathBuf) -> Result<(), Box<dyn Error>> {
     let manifest = read_manifest(manifest_location)?;
-    
+
     generate_rindexer_typings(manifest.clone(), manifest_location)?;
     generate_rindexer_handlers(manifest.clone(), manifest_location)?;
 

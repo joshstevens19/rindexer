@@ -1,0 +1,127 @@
+# Overview of the YAML Configuration File
+
+The YAML configuration file is the heart of your rindexer project. It defines the project's name,
+description, repository, and the indexers that will be used to index the data.
+This file is used to set up the project and configure the indexing tasks that will be performed.
+
+**YAML is case-sensitive, so make sure to use the correct case when defining the fields in the configuration file.**
+
+:::info
+YAML files can be used to store sensitive information, you can use environment variables to store this information.
+The syntax for this in the YAML is `${ENV_VARIABLE_NAME}`.
+:::
+
+## YAML structure
+
+- [Top level fields](/docs/start-building/yaml-config/top-level-fields) - The top-level fields of the YAML configuration file.
+- [Networks](/docs/start-building/yaml-config/contracts) - The networks to listen for events on are defined in the YAML configuration file.
+- [Indexers](/docs/start-building/yaml-config/indexers) - The indexers of the project are defined in the YAML configuration file.
+- [Global](/docs/start-building/yaml-config/events) - The global events to listen for are defined in the YAML configuration file.
+- [Storage](/docs/start-building/yaml-config/events) - The storage configuration is defined in the YAML configuration file.
+
+## Example YAML no-code configuration file
+
+### For Contract Address
+
+Filter events for a specific address.
+
+```yaml
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chainId: 1
+    url: https://mainnet.infura.io/v3/your-infura-key
+storage:
+  postgres:
+    name: ${DATABASE_NAME}
+    user: ${DATABASE_USER}
+    password: ${DATABASE_PASSWORD}
+    host: ${DATABASE_HOST}
+    port: ${DATABASE_PORT}
+  csv:
+    path: ./generated_csv
+indexers:
+- name: MyFirstIndexerExample
+  contracts:
+  - name: RocketPoolETH
+    details:
+    - network: ethereum
+      address: 0xae78736cd615f374d3085123a210448e74fc6393
+      startBlock: 18600000
+      endBlock: 18718056
+    abi: ./abis/RocketTokenRETH.abi.json
+    include_events:
+    - Transfer
+    - Approval
+```
+
+### Filter for an event across all contracts
+
+```yaml
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chainId: 1
+    url: https://mainnet.infura.io/v3/your-infura-key
+storage:
+  postgres:
+    name: ${DATABASE_NAME}
+    user: ${DATABASE_USER}
+    password: ${DATABASE_PASSWORD}
+    host: ${DATABASE_HOST}
+    port: ${DATABASE_PORT}
+  csv:
+    path: ./generated_csv
+indexers:
+- name: MyFirstIndexerExample
+  contracts:
+  - name: TransferEvents
+    details:
+    - network: ethereum
+      filter:
+        event_name: Transfer
+      startBlock: 18600000
+      endBlock: 18718056
+    abi: ./abis/ERC20.abi.json
+```
+
+### Filter for an event across all contracts against indexed values
+
+```yaml
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chainId: 1
+    url: https://mainnet.infura.io/v3/your-infura-key
+storage:
+  postgres:
+    name: ${DATABASE_NAME}
+    user: ${DATABASE_USER}
+    password: ${DATABASE_PASSWORD}
+    host: ${DATABASE_HOST}
+    port: ${DATABASE_PORT}
+  csv:
+    path: ./generated_csv
+indexers:
+- name: MyFirstIndexerExample
+  contracts:
+  - name: TransferEventForAddress
+    details:
+    - network: ethereum
+      filter:
+        event_name: Transfer
+        indexed_1:
+          - 0x4A1a2197f307222cD67A1762D9A352F64558d9Be
+      startBlock: 18600000
+      endBlock: 18718056
+    abi: ./abis/ERC20.abi.json
+```
