@@ -29,7 +29,7 @@ use crate::generator::{
     get_abi_items,
 };
 use crate::indexer::start::{start_indexing, StartIndexingSettings};
-use crate::manifest::yaml::{read_manifest, Contract, Manifest};
+use crate::manifest::yaml::{read_manifest, Contract, Manifest, ProjectType};
 use crate::provider::create_retry_client;
 use crate::{
     generate_random_id, AsyncCsvAppender, EthereumSqlTypeWrapper, FutureExt, GraphQLServerDetails,
@@ -113,10 +113,15 @@ pub async fn start_rindexer_no_code(details: StartNoCodeDetails) -> Result<(), B
 async fn setup_postgres(manifest: &Manifest) -> Result<PostgresClient, Box<dyn Error>> {
     let client = PostgresClient::new().await?;
 
-    for indexer in &manifest.indexers {
-        let sql = create_tables_for_indexer_sql(indexer);
-        println!("{}", sql);
-        client.batch_execute(&sql).await?;
+    // No-code will ignore this as it must have tables if postgres used
+    if !manifest.storage.postgres_disable_create_tables()
+        || manifest.project_type == ProjectType::NoCode
+    {
+        for indexer in &manifest.indexers {
+            let sql = create_tables_for_indexer_sql(indexer);
+            println!("{}", sql);
+            client.batch_execute(&sql).await?;
+        }
     }
 
     Ok(client)

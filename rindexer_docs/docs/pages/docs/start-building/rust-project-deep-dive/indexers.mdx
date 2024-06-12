@@ -8,7 +8,10 @@ just focus on the logic you want.
 
 By default if you turn storage postgres on in the YAML configuration file it will also create you postgres tables,
 also write SQL for you to use and expose you a postgres client. This is a great starting point for you to build on.
-The tables creation can be skipped by using the TODO!!!!!!!!!!.
+
+The tables creation can be skipped by using the [disable_create_tables](docs/start-building/yaml-config/storage#disable_create_tables) 
+in the YAML configuration file.
+
 If you also enable the CSV storage it will also generate code in the handler to write to that CSV files.
 
 You can regenerate the indexers folder by running the following command:
@@ -22,6 +25,8 @@ rindexer codegen indexers
 To help understand the interfaces and ways rindexer handlers can be extended we will look at an example.
 
 Take this YAML file - All transfer events on Ethereum from the ERC20 contract between block 18600000 and 18718056 will be indexed.
+
+CSV and Postgres are both enabled in the YAML configuration file.
 
 ```yaml
 name: rETHIndexer
@@ -76,7 +81,7 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
                 Box::pin(async move {
                     for result in results {
                         context.csv.append(vec![format!("{:?}", result.tx_information.address),format!("{:?}", result.event_data.from,),format!("{:?}", result.event_data.to,),result.event_data.value.to_string(),format!("{:?}", result.tx_information.transaction_hash.unwrap()),result.tx_information.block_number.unwrap().to_string(),result.tx_information.block_hash.unwrap().to_string()]).await.unwrap();
-                        context.database.execute("INSERT INTO lens_registry_example_erc20_filter.transfer (contract_address, \"from\", \"to\", \"value\", \"tx_hash\", \"block_number\", \"block_hash\") VALUES($1, $2, $3, $4, $5, $6, $7)",&[&EthereumSqlTypeWrapper::Address(&result.tx_information.address),&EthereumSqlTypeWrapper::Address(&result.event_data.from),&EthereumSqlTypeWrapper::Address(&result.event_data.to),&EthereumSqlTypeWrapper::U256(&result.event_data.value),&EthereumSqlTypeWrapper::H256(&result.tx_information.transaction_hash.unwrap()),&EthereumSqlTypeWrapper::U64(&result.tx_information.block_number.unwrap()),&EthereumSqlTypeWrapper::H256(&result.tx_information.block_hash.unwrap())]).await.unwrap();
+                        context.database.execute("INSERT INTO my_first_indexer_example_erc20_filter.transfer (contract_address, \"from\", \"to\", \"value\", \"tx_hash\", \"block_number\", \"block_hash\") VALUES($1, $2, $3, $4, $5, $6, $7)",&[&EthereumSqlTypeWrapper::Address(&result.tx_information.address),&EthereumSqlTypeWrapper::Address(&result.event_data.from),&EthereumSqlTypeWrapper::Address(&result.event_data.to),&EthereumSqlTypeWrapper::U256(&result.event_data.value),&EthereumSqlTypeWrapper::H256(&result.tx_information.transaction_hash.unwrap()),&EthereumSqlTypeWrapper::U64(&result.tx_information.block_number.unwrap()),&EthereumSqlTypeWrapper::H256(&result.tx_information.block_hash.unwrap())]).await.unwrap();
                     }
                })
             }),
@@ -90,6 +95,43 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
 pub async fn erc20_filter_handlers(registry: &mut EventCallbackRegistry) {
     transfer_handler(registry).await;
 }
+```
+
+## Disable CSV Create Headers
+
+The tables creation can be skipped by using the [disable_create_tables](docs/start-building/yaml-config/storage#disable_create_tables) 
+in the YAML configuration file.
+
+```yaml
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chainId: 1
+    url: https://mainnet.infura.io/v3/your-infura-key
+storage:
+  postgres:
+    name: ${DATABASE_NAME}
+    user: ${DATABASE_USER}
+    password: ${DATABASE_PASSWORD}
+    host: ${DATABASE_HOST}
+    port: ${DATABASE_PORT}
+    disable_create_tables: true // [!code focus]
+  csv:
+    path: ./generated_csv
+indexers:
+- name: MyFirstIndexerExample
+  contracts:
+  - name: ERC20
+    details:
+    - network: ethereum
+      filter:
+        event_name: Transfer
+      startBlock: 18600000
+      endBlock: 18718056
+    abi: ./abis/ERC20.abi.json
 ```
 
 ## Why an Arc?
@@ -292,6 +334,43 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
 }
 ```
 
+### Disable Postgres Create Tables
+
+The tables creation can be skipped by using the [disable_create_tables](docs/start-building/yaml-config/storage#disable_create_tables) 
+in the YAML configuration file.
+
+```yaml
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chainId: 1
+    url: https://mainnet.infura.io/v3/your-infura-key
+storage:
+  postgres:
+    name: ${DATABASE_NAME}
+    user: ${DATABASE_USER}
+    password: ${DATABASE_PASSWORD}
+    host: ${DATABASE_HOST}
+    port: ${DATABASE_PORT}
+    disable_create_tables: true // [!code focus]
+  csv:
+    path: ./generated_csv
+indexers:
+- name: MyFirstIndexerExample
+  contracts:
+  - name: ERC20
+    details:
+    - network: ethereum
+      filter:
+        event_name: Transfer
+      startBlock: 18600000
+      endBlock: 18718056
+    abi: ./abis/ERC20.abi.json
+```
+
 You can query data from the database and write data to the database, here are the postgres methods exposed.
 
 - `context.database.new` - This is for creating a new client.
@@ -368,7 +447,7 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
             Arc::new(|results: context| {
                 Box::pin(async move {
                     // csv client here // [!code focus]
-                    // context.csv  // [!code focus]
+                    context.csv  // [!code focus]
                })
             }),
             no_extensions()
@@ -379,6 +458,37 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
 }
 ```
 
+### Disable CSV Create Headers
+
+The CSV header creation can be skipped by using the [disable_create_headers](docs/start-building/yaml-config/storage#disable_create_headers) 
+in the YAML configuration file.
+
+```yaml
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chainId: 1
+    url: https://mainnet.infura.io/v3/your-infura-key
+storage:
+  csv:
+    path: ./generated_csv
+    disable_create_headers: true // [!code focus]
+indexers:
+- name: MyFirstIndexerExample
+  contracts:
+  - name: ERC20
+    details:
+    - network: ethereum
+      filter:
+        event_name: Transfer
+      startBlock: 18600000
+      endBlock: 18718056
+    abi: ./abis/ERC20.abi.json
+```
+
 ## register
 
 ```rs
@@ -387,10 +497,7 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) { // [!code focu
         TransferEvent::new(
             Arc::new(|results, context| {
                 Box::pin(async move {
-                    for result in results {
-                        context.csv.append(vec![format!("{:?}", result.tx_information.address),format!("{:?}", result.event_data.from,),format!("{:?}", result.event_data.to,),result.event_data.value.to_string(),format!("{:?}", result.tx_information.transaction_hash.unwrap()),result.tx_information.block_number.unwrap().to_string(),result.tx_information.block_hash.unwrap().to_string()]).await.unwrap();
-                        context.database.execute("INSERT INTO lens_registry_example_erc20_filter.transfer (contract_address, \"from\", \"to\", \"value\", \"tx_hash\", \"block_number\", \"block_hash\") VALUES($1, $2, $3, $4, $5, $6, $7)",&[&EthereumSqlTypeWrapper::Address(&result.tx_information.address),&EthereumSqlTypeWrapper::Address(&result.event_data.from),&EthereumSqlTypeWrapper::Address(&result.event_data.to),&EthereumSqlTypeWrapper::U256(&result.event_data.value),&EthereumSqlTypeWrapper::H256(&result.tx_information.transaction_hash.unwrap()),&EthereumSqlTypeWrapper::U64(&result.tx_information.block_number.unwrap()),&EthereumSqlTypeWrapper::H256(&result.tx_information.block_hash.unwrap())]).await.unwrap();
-                    }
+                    ...
                })
             }),
             no_extensions()
