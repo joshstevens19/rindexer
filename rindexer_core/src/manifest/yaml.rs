@@ -233,6 +233,10 @@ pub struct Network {
     pub max_concurrency: Option<u32>,
 }
 
+fn default_disable_create_tables() -> bool {
+    false
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PostgresConnectionDetails {
     pub name: String,
@@ -240,11 +244,19 @@ pub struct PostgresConnectionDetails {
     pub password: String,
     pub host: String,
     pub port: String,
+    #[serde(default = "default_disable_create_tables")]
+    pub disable_create_tables: bool,
+}
+
+fn default_disable_create_headers() -> bool {
+    false
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CsvDetails {
     pub path: String,
+    #[serde(default = "default_disable_create_headers")]
+    pub disable_create_headers: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -267,8 +279,30 @@ impl Storage {
         self.postgres.is_some()
     }
 
+    pub fn postgres_disable_create_tables(&self) -> bool {
+        let enabled = self.postgres_enabled();
+        if !enabled {
+            return true;
+        }
+
+        self.postgres
+            .as_ref()
+            .map_or(false, |details| details.disable_create_tables)
+    }
+
     pub fn csv_enabled(&self) -> bool {
         self.csv.is_some()
+    }
+
+    pub fn csv_disable_create_headers(&self) -> bool {
+        let enabled = self.csv_enabled();
+        if !enabled {
+            return true;
+        }
+
+        self.csv
+            .as_ref()
+            .map_or(false, |details| details.disable_create_headers)
     }
 }
 

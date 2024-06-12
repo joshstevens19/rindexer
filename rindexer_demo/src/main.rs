@@ -1,6 +1,4 @@
 use std::env;
-use std::path::PathBuf;
-use std::str::FromStr;
 
 use self::rindexer::indexers::all_handlers::register_all_handlers;
 use rindexer_core::{
@@ -63,31 +61,31 @@ async fn main() {
     .await;
 }
 
-fn generate() {
-    rindexer_core::generator::build::generate_rindexer_typings(
-        &PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap(),
-    )
-    .unwrap();
-}
-
-fn generate_code_test() {
-    rindexer_core::generator::build::generate_rindexer_handlers(
-        &PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap(),
-    )
-    .unwrap();
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_generate() {
-        generate();
-    }
-
-    #[test]
-    fn test_code_generate() {
-        generate_code_test();
-    }
-}
+// fn generate() {
+//     rindexer_core::generator::build::generate_rindexer_typings(
+//         &PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap(),
+//     )
+//     .unwrap();
+// }
+// 
+// fn generate_code_test() {
+//     rindexer_core::generator::build::generate_rindexer_handlers(
+//         &PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap(),
+//     )
+//     .unwrap();
+// }
+// 
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+// 
+//     #[test]
+//     fn test_generate() {
+//         generate();
+//     }
+// 
+//     #[test]
+//     fn test_code_generate() {
+//         generate_code_test();
+//     }
+// }

@@ -115,6 +115,35 @@ storage:
     port: ${DATABASE_PORT} // [!code focus]
 ```
 
+### disable_create_tables
+
+:::info
+This is only relevant for the rust projects as no-code if postgres is enabled will have to create the tables.
+:::
+
+If you do not wish for rindexer to create the database tables for you automatically you can set this to true.
+By default if will create the tables for you. When this is disabled it will not write the sql in the handlers for you either.
+This field is optional and can be ignored if you do not need it.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chainId: 1
+  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
+storage:
+  postgres:
+    name: ${DATABASE_NAME}
+    user: ${DATABASE_USER}
+    password: ${DATABASE_PASSWORD}
+    host: ${DATABASE_HOST}
+    port: ${DATABASE_PORT}
+    disable_create_tables: true // [!code focus]
+```
+
 ## csv
 
 If you wish to store the data in a CSV files you can enable the csv storage.
@@ -139,6 +168,31 @@ networks:
 storage:
   csv:
     path: ./generated_csv // [!code focus]
+```
+
+### disable_create_headers
+
+:::info
+This is only relevant for the rust projects as no-code if csv is enabled it will have to csv headers for you.
+:::
+
+If you do not wish for rindexer to create csv headers for you automatically you can set this to true.
+By default if will create the csv headers for you. When this is disabled it will not write the csv code in the handlers for you either.
+This field is optional and can be ignored if you do not need it.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chainId: 1
+  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
+storage:
+  csv:
+    path: ./generated_csv
+    disable_create_headers: true // [!code focus]
 ```
 
 ## Multiple Storage Providers

@@ -48,7 +48,7 @@ struct NewDetails {
 enum Commands {
     /// Creates a new rust rindexer project or a rindexer no-code project
     ///
-    /// This command initialises a new workspace project with rindexer 
+    /// This command initialises a new workspace project with rindexer
     /// with everything populated to start using rindexer.
     ///
     /// Example:
@@ -305,13 +305,21 @@ fn handle_new_command(project_path: PathBuf) {
     let repository = prompt_for_optional_input::<String>("Repository", None);
     let storage_choice = prompt_for_input_list(
         "What Storages To Enable?",
-        &["postgres".to_string(), "csv".to_string(), "both".to_string(), "none".to_string()],
+        &[
+            "postgres".to_string(),
+            "csv".to_string(),
+            "both".to_string(),
+            "none".to_string(),
+        ],
         None,
     );
     let mut postgres_docker_enable = false;
     if storage_choice == "postgres" || storage_choice == "both" {
-        let postgres_docker =
-            prompt_for_input_list("Postgres Docker Support Out The Box?", &["yes".to_string(), "no".to_string()], None);
+        let postgres_docker = prompt_for_input_list(
+            "Postgres Docker Support Out The Box?",
+            &["yes".to_string(), "no".to_string()],
+            None,
+        );
         postgres_docker_enable = postgres_docker == "yes";
     }
 
@@ -379,6 +387,7 @@ fn handle_new_command(project_path: PathBuf) {
                     password: "${DATABASE_PASSWORD}".to_string(),
                     host: "${DATABASE_HOST}".to_string(),
                     port: "${DATABASE_PORT}".to_string(),
+                    disable_create_tables: false,
                 })
             } else {
                 None
@@ -386,6 +395,7 @@ fn handle_new_command(project_path: PathBuf) {
             csv: if csv_enabled {
                 Some(CsvDetails {
                     path: "./generated_csv".to_string(),
+                    disable_create_headers: false,
                 })
             } else {
                 None
@@ -444,27 +454,27 @@ async fn handle_download_abi_command(project_path: PathBuf) {
         print_error_message(&format!("Failed to create directory: {}", err));
         return;
     }
-    
+
     let network = prompt_for_input(
         "Enter Network Chain Id",
         Some(r"^\d+$"),
         Some("Invalid network chain id. Please enter a valid chain id."),
         None,
     );
-    let network = U64::from_dec_str(&network).map_err(|_| {
-        print_error_message("Invalid network chain id. Please enter a valid chain id.");
-    }).unwrap();
-    
-    let network = Chain::try_from(network).map_err(|_| {
-        print_error_message("Chain id is not supported by etherscan API.");
-    }).unwrap();
+    let network = U64::from_dec_str(&network)
+        .map_err(|_| {
+            print_error_message("Invalid network chain id. Please enter a valid chain id.");
+        })
+        .unwrap();
+
+    let network = Chain::try_from(network)
+        .map_err(|_| {
+            print_error_message("Chain id is not supported by etherscan API.");
+        })
+        .unwrap();
     let contract_address = prompt_for_input("Enter Contract Address", None, None, None);
 
-    let client = Client::builder()
-        .chain(network)
-        .unwrap()
-        .build()
-        .unwrap();
+    let client = Client::builder().chain(network).unwrap().build().unwrap();
 
     let address = contract_address.parse().unwrap();
 
@@ -642,11 +652,9 @@ fn prompt_for_input(
                 if regex.is_match(trimmed) {
                     return trimmed.to_string();
                 } else {
-                    let message = pattern_failure_message.unwrap_or("Invalid input according to regex. Please try again.");
-                    println!(
-                        "{}",
-                        message.red()
-                    );
+                    let message = pattern_failure_message
+                        .unwrap_or("Invalid input according to regex. Please try again.");
+                    println!("{}", message.red());
                 }
             } else if !trimmed.is_empty() {
                 return trimmed.to_string();

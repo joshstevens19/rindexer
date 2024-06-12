@@ -15,7 +15,7 @@ use std::iter::Map;
 use std::path::{Path, PathBuf};
 
 use crate::helpers::camel_to_snake;
-use crate::manifest::yaml::{Contract, ContractDetails, CsvDetails, Storage};
+use crate::manifest::yaml::{Contract, ContractDetails, CsvDetails, ProjectType, Storage};
 
 use super::networks_bindings::network_provider_fn_name_by_name;
 
@@ -1281,7 +1281,8 @@ pub fn generate_event_handlers(
         let mut csv_write = String::new();
         let mut postgres_write = String::new();
 
-        if storage.postgres_enabled() {
+        // this checks storage enabled as well
+        if !storage.postgres_disable_create_tables() {
             let insert_sql = generated_insert_query_for_event(&event, indexer_name, &contract.name);
 
             let mut params_sql = String::new();
@@ -1328,7 +1329,8 @@ pub fn generate_event_handlers(
             );
         }
 
-        if storage.csv_enabled() {
+        // this checks storage enabled as well
+        if !storage.csv_disable_create_headers() {
             let mut csv_data = String::new();
             csv_data.push_str(r#"format!("{:?}", result.tx_information.address),"#);
 
