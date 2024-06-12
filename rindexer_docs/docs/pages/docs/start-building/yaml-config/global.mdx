@@ -1,0 +1,238 @@
+# global
+
+:::info
+If you are building a no-code project you can skip this section. This is for rust projects only.
+:::
+
+Global YAML config allows you to define contracts which then can be used in the indexers.
+This is useful if you for example need to do a view function lookup at indexing time.
+
+## contracts
+
+The contracts section of the global YAML config allows you to define contracts which can be used in the indexers.
+You can define many contracts in a single YAML file.
+
+### name
+
+The name of the contract, it should be unique to the YAML file.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+networks:
+- name: ethereum
+  chainId: 1
+  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
+storage:
+  postgres:
+    name: ${DATABASE_NAME}
+    user: ${DATABASE_USER}
+    password: ${DATABASE_PASSWORD}
+    host: ${DATABASE_HOST}
+    port: ${DATABASE_PORT}
+  csv:
+    path: ./generated_csv
+indexers:
+- name: MyFirstIndexerExample
+  contracts:
+    - name: RocketPoolETH
+      details:
+      - network: ethereum
+       address: 0xae78736cd615f374d3085123a210448e74fc6393
+       startBlock: 18600000
+       endBlock: 18718056
+      abi: ./abis/RocketTokenRETH.abi.json
+      include_events:
+      - Transfer
+      - Approval
+      reorg_safe_distance: true
+      generate_csv: true
+global: // [!code focus]
+  contracts: // [!code focus]
+    - name: InjectedGlobal // [!code focus]
+```
+
+### details
+
+The details of the contract.
+
+#### address
+
+The address of the contract.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+networks:
+- name: ethereum
+  chainId: 1
+  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
+storage:
+  postgres:
+    name: ${DATABASE_NAME}
+    user: ${DATABASE_USER}
+    password: ${DATABASE_PASSWORD}
+    host: ${DATABASE_HOST}
+    port: ${DATABASE_PORT}
+  csv:
+    path: ./generated_csv
+indexers:
+- name: MyFirstIndexerExample
+  contracts:
+    - name: RocketPoolETH
+      details:
+      - network: ethereum
+       address: 0xae78736cd615f374d3085123a210448e74fc6393
+       startBlock: 18600000
+       endBlock: 18718056
+      abi: ./abis/RocketTokenRETH.abi.json
+      include_events:
+      - Transfer
+      - Approval
+      reorg_safe_distance: true
+      generate_csv: true
+global:
+  contracts:
+    - name: InjectedGlobal
+      details: // [!code focus]
+        - address: 0x2E645469f354BB4F5c8a05B3b30A929361cf77eC // [!code focus]
+```
+
+#### network
+
+The network the contract is on, this should match the network name in the networks section of the YAML file.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+networks:
+- name: ethereum
+  chainId: 1
+  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
+storage:
+  postgres:
+    name: ${DATABASE_NAME}
+    user: ${DATABASE_USER}
+    password: ${DATABASE_PASSWORD}
+    host: ${DATABASE_HOST}
+    port: ${DATABASE_PORT}
+  csv:
+    path: ./generated_csv
+indexers:
+- name: MyFirstIndexerExample
+  contracts:
+    - name: RocketPoolETH
+      details:
+      - network: ethereum
+       address: 0xae78736cd615f374d3085123a210448e74fc6393
+       startBlock: 18600000
+       endBlock: 18718056
+      abi: ./abis/RocketTokenRETH.abi.json
+      include_events:
+      - Transfer
+      - Approval
+      reorg_safe_distance: true
+      generate_csv: true
+global:
+  contracts:
+    - name: InjectedGlobal
+      details:
+        - address: 0x2E645469f354BB4F5c8a05B3b30A929361cf77eC
+          network: ethereum // [!code focus]
+```
+
+### abi
+
+The path to the ABI file for the contract. It can be a relative or full path.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+networks:
+- name: ethereum
+  chainId: 1
+  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
+storage:
+  postgres:
+    name: ${DATABASE_NAME}
+    user: ${DATABASE_USER}
+    password: ${DATABASE_PASSWORD}
+    host: ${DATABASE_HOST}
+    port: ${DATABASE_PORT}
+  csv:
+    path: ./generated_csv
+indexers:
+- name: MyFirstIndexerExample
+  contracts:
+    - name: RocketPoolETH
+      details:
+      - network: ethereum
+       address: 0xae78736cd615f374d3085123a210448e74fc6393
+       startBlock: 18600000
+       endBlock: 18718056
+      abi: ./abis/RocketTokenRETH.abi.json
+      include_events:
+      - Transfer
+      - Approval
+      reorg_safe_distance: true
+      generate_csv: true
+global:
+  contracts:
+    - name: InjectedGlobal
+      details:
+        - address: 0x2E645469f354BB4F5c8a05B3b30A929361cf77eC
+          network: ethereum
+      abi: ./abis/lens-registry-events-abi.json // [!code focus]
+```
+
+## Multiple Contracts
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+networks: // [!code focus]
+- name: ethereum // [!code focus]
+  chainId: 1 // [!code focus]
+  rpcUrl: https://mainnet.infura.io/v3/your-infura-key // [!code focus]
+- name: base // [!code focus]
+  chainId: 8453 // [!code focus]
+  rpcUrl: https://mainnet.base.org // [!code focus]
+storage:
+  postgres:
+    name: ${DATABASE_NAME}
+    user: ${DATABASE_USER}
+    password: ${DATABASE_PASSWORD}
+    host: ${DATABASE_HOST}
+    port: ${DATABASE_PORT}
+  csv:
+    path: ./generated_csv
+indexers:
+- name: MyFirstIndexerExample
+  contracts:
+    - name: RocketPoolETH
+      details:
+      - network: ethereum
+       address: 0xae78736cd615f374d3085123a210448e74fc6393
+       startBlock: 18600000
+       endBlock: 18718056
+      abi: ./abis/RocketTokenRETH.abi.json
+      include_events:
+      - Transfer
+      - Approval
+      reorg_safe_distance: true
+      generate_csv: true
+global: // [!code focus]
+  contracts: // [!code focus]
+    - name: InjectedGlobal // [!code focus]
+      details: // [!code focus]
+        - address: 0x2E645469f354BB4F5c8a05B3b30A929361cf77eC // [!code focus]
+          network: ethereum // [!code focus]
+        - address: 0x1C312392f354BB4F5c8a05B3b30A929361cf66cG // [!code focus]
+          network: base // [!code focus]
+      abi: ./abis/lens-registry-events-abi.json // [!code focus]
+```

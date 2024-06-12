@@ -1,0 +1,34 @@
+# Running
+
+## No-code Project
+
+You can run the no-code project really easily with the CLI toolset.
+
+:::info
+graphql API can only be ran when you have a postgres storage setup in your YAML.
+:::
+
+:::code-group
+
+```bash [indexer and graphql]
+rindexer start all
+```
+
+```bash [indexer]
+rindexer start indexer
+```
+
+```bash [graphql]
+rindexer start graphql
+```
+
+:::
+
+You can change the GraphQL port by doing --port [number] in both all and graphql commands above.
+
+## Rust Project
+
+You can run the rust project the same way as the no-code project, note though the rust projects are meant to be
+changed and extended so what the template gives you is just a starting point. You may choice to run the indexer
+differently and compile it to production standards. Once you do that you can start using cargo builds and runs which
+we will not cover here.

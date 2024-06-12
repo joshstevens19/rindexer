@@ -1,0 +1,70 @@
+# networks
+
+Networks YAML config describes the networks you wish to enable.
+
+:::info
+You can have multiple networks in a single YAML file.
+:::
+
+## Fields
+
+### name
+
+The name of the network it should be unique to the YAML so you can not have 2 networks with the same name in the same
+YAML file.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum // [!code focus]
+```
+
+### chainId
+
+The chainId of the network.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chainId: 1 // [!code focus]
+```
+
+### rpcUrl
+
+The rpcUrl for the network.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chainId: 1
+  rpcUrl: https://mainnet.infura.io/v3/your-infura-key // [!code focus]
+```
+
+## Multiple Networks
+
+You can have as many networks as you want in the YAML file.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks: // [!code focus]
+- name: ethereum // [!code focus]
+  chainId: 1 // [!code focus]
+  rpcUrl: https://mainnet.infura.io/v3/your-infura-key // [!code focus]
+- name: base // [!code focus]
+  chainId: 8453 // [!code focus]
+  rpcUrl: https://mainnet.base.org // [!code focus]
+```

@@ -1,0 +1,166 @@
+# storage
+
+Storage YAML config describes the storage providers you wish to enable.
+
+:::info
+YAML files can be used to store sensitive information, you can use environment variables to store this information.
+The syntax for this in the YAML is `${ENV_VARIABLE_NAME}`.
+:::
+
+## postgres
+
+If you wish to store the data in a postgres database you can enable the postgres storage.
+
+:::info
+This is optional if you do not wish to store the data in a postgres database you can leave this section out of your YAML.
+:::
+
+### name
+
+The database name.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chainId: 1
+  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
+storage:
+  postgres:
+    name: ${DATABASE_NAME} // [!code focus]
+```
+
+### user
+
+The database user.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chainId: 1
+  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
+storage:
+  postgres:
+    name: ${DATABASE_NAME}
+    user: ${DATABASE_USER} // [!code focus]
+```
+
+### password
+
+The database password.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chainId: 1
+  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
+storage:
+  postgres:
+    name: ${DATABASE_NAME}
+    user: ${DATABASE_USER}
+    password: ${DATABASE_PASSWORD} // [!code focus]
+```
+
+### host
+
+The database host.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chainId: 1
+  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
+storage:
+  postgres:
+    name: ${DATABASE_NAME}
+    user: ${DATABASE_USER}
+    password: ${DATABASE_PASSWORD}
+    host: ${DATABASE_HOST} // [!code focus]
+```
+
+### port
+
+The database port.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chainId: 1
+  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
+storage:
+  postgres:
+    name: ${DATABASE_NAME}
+    user: ${DATABASE_USER}
+    password: ${DATABASE_PASSWORD}
+    host: ${DATABASE_HOST}
+    port: ${DATABASE_PORT} // [!code focus]
+```
+
+## csv
+
+If you wish to store the data in a CSV files you can enable the csv storage.
+
+:::info
+This is optional if you do not wish to store the data in a CSV files you can leave this section out of your YAML.
+:::
+
+### path
+
+The path to store the CSV files, it should be a directory path, if it does not exist it will be created.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chainId: 1
+  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
+storage:
+  csv:
+    path: ./generated_csv // [!code focus]
+```
+
+## Multiple Storage Providers
+
+You can have multiple storage providers in the YAML file.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chainId: 1
+  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
+storage:
+  postgres:
+    name: ${DATABASE_NAME}
+    user: ${DATABASE_USER}
+    password: ${DATABASE_PASSWORD}
+    host: ${DATABASE_HOST}
+    port: ${DATABASE_PORT}
+  csv:
+    path: ./generated_csv // [!code focus]
+```

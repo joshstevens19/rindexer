@@ -18,8 +18,8 @@ export default defineConfig({
           text: 'Project Types',
           link: '/docs/start-building/project-types',
           items: [
-            { text: 'No-code', link: '/docs/start-building/project-types#no-code-project' },
-            { text: 'Rust', link: '/docs/start-building/project-types#rust-project' }
+            { text: 'No-code', link: '/docs/start-building/project-types/no-code-project' },
+            { text: 'Rust', link: '/docs/start-building/project-types/rust-project' }
           ],
         },
         {
@@ -30,35 +30,39 @@ export default defineConfig({
           text: 'YAML Config',
           link: '/docs/start-building/yaml-config',
           items: [
-            { text: 'Top-level fields', link: '/docs/what-is-rrelayerr' },
-            { text: 'Indexers', link: '/docs/what-is-rrelayerr' },
-            { text: 'Networks', link: '/docs/what-is-rrelayerr' },
-            { text: 'Global', link: '/docs/what-is-rrelayerr' },
-            { text: 'Storage', link: '/docs/what-is-rrelayerr' },
+            { text: 'Top-level fields', link: '/docs/start-building/yaml-config/top-level-fields' },
+            { text: 'Networks', link: '/docs/start-building/yaml-config/networks' },
+            { text: 'Storage', link: '/docs/start-building/yaml-config/storage' },
+            { text: 'Indexers', link: '/docs/start-building/yaml-config/indexers' },
+            { text: 'Global', link: '/docs/start-building/yaml-config/global' },
           ],
         },
         {
           text: 'Download ABI',
-          link: '/docs/server/api/introduction',
+          link: '/docs/start-building/download-abi',
         },
         {
           text: 'Running',
-          link: '/docs/server/api/introduction',
-          items: [
-            { text: 'Indexer', link: '/docs/what-is-rrelayerr' },
-            { text: 'GraphQL', link: '/docs/what-is-rrelayerr' },
-            { text: 'All', link: '/docs/what-is-rrelayerr' },
-          ],
+          link: '/docs/start-building/running',
         },
         {
-          text: 'Codegen',
-          link: '/docs/server/api/introduction',
+          text: 'Rust Project Deep Dive',
+          link: '/docs/start-building/rust-project-deep-dive',
           items: [
-            { text: 'Typings', link: '/docs/what-is-rrelayerr' },
-            { text: 'Indexer', link: '/docs/what-is-rrelayerr' },
-            { text: 'All', link: '/docs/what-is-rrelayerr' },
+            { text: 'Typings', link: '/docs/start-building/rust-project-deep-dive/typings' },
+            { text: 'Indexers', link: '/docs/start-building/rust-project-deep-dive/indexers' },
+            { text: 'All', link: '/docs/start-building/rust-project-deep-dive/all' },
           ],
         },
+        // {
+        //   text: 'Codegen',
+        //   link: '/docs/server/api/introduction',
+        //   items: [
+        //     { text: 'Typings', link: '/docs/what-is-rrelayerr' },
+        //     { text: 'Indexer', link: '/docs/what-is-rrelayerr' },
+        //     { text: 'All', link: '/docs/what-is-rrelayerr' },
+        //   ],
+        // },
       ],
     },
     {
