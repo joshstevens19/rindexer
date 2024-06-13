@@ -2,7 +2,6 @@ use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
 
 use async_std::prelude::StreamExt;
 use colored::Colorize;
@@ -15,8 +14,7 @@ use futures::stream::FuturesUnordered;
 use tokio::signal;
 use tokio_postgres::types::ToSql;
 use tracing::level_filters::LevelFilter;
-use tracing::{debug, error, info, Level};
-use tracing_subscriber::FmtSubscriber;
+use tracing::{debug, error, info};
 
 use crate::api::start_graphql_server;
 use crate::database::postgres::{

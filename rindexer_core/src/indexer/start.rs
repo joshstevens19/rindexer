@@ -4,7 +4,6 @@ use ethers::{
     types::{Address, Filter, H256, U64},
 };
 use log::error;
-use rust_decimal::Decimal;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;

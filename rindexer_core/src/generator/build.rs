@@ -167,7 +167,7 @@ fn write_indexer_events(
 /// A `Result` indicating success or failure.
 pub fn generate_rindexer_typings(
     manifest: Manifest,
-    manifest_location: &PathBuf,
+    manifest_location: &Path,
 ) -> Result<(), Box<dyn Error>> {
     let project_path = manifest_location.parent().unwrap();
     let output = project_path.join("./src/rindexer/typings");
@@ -197,7 +197,7 @@ pub fn generate_rindexer_typings(
 /// A `Result` indicating success or failure.
 pub fn generate_rindexer_handlers(
     manifest: Manifest,
-    manifest_location: &PathBuf,
+    manifest_location: &Path,
 ) -> Result<(), Box<dyn Error>> {
     let output = manifest_location.parent().unwrap().join("./src/rindexer");
 

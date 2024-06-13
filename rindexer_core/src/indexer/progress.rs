@@ -8,11 +8,11 @@ use crossterm::{
 };
 use ethers::middleware::Middleware;
 use ethers::types::U64;
+use log::warn;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io;
 use std::io::Stdout;
 use std::sync::Arc;
-use log::{error, warn};
 use tokio::sync::Mutex;
 use tui::style::{Color, Style};
 use tui::widgets::{Cell, Row, Table};

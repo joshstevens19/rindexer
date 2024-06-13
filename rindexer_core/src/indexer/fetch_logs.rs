@@ -1,5 +1,4 @@
 use crate::indexer::progress::IndexingEventProgressStatus;
-use async_std::task::sleep;
 use ethers::middleware::{Middleware, MiddlewareError};
 use ethers::prelude::{Block, Filter, JsonRpcError, Log};
 use ethers::types::{Address, BlockNumber, Bloom, FilteredParams, ValueOrArray, H256, U64};
