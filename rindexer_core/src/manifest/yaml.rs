@@ -259,19 +259,10 @@ pub struct CsvDetails {
     pub disable_create_headers: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct Storage {
     pub postgres: Option<PostgresConnectionDetails>,
     pub csv: Option<CsvDetails>,
-}
-
-impl Default for Storage {
-    fn default() -> Self {
-        Self {
-            postgres: None,
-            csv: None,
-        }
-    }
 }
 
 impl Storage {
@@ -306,16 +297,10 @@ impl Storage {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct Global {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contracts: Option<Vec<Contract>>,
-}
-
-impl Default for Global {
-    fn default() -> Self {
-        Self { contracts: None }
-    }
 }
 
 /// Substitutes environment variables in a string with their values.

@@ -625,7 +625,6 @@ async fn main() {
         Commands::DownloadAbi => handle_download_abi_command(path).await,
         Commands::Codegen { subcommand } => handle_codegen_command(path, subcommand),
         Commands::Start { subcommand } => start(path, subcommand).await,
-        _ => panic!("Command not implemented"),
     }
 }
 

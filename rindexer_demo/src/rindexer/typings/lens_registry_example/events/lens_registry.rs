@@ -184,7 +184,7 @@ where
 
     fn get_provider(&self, network: &str) -> Arc<Provider<RetryClient<Http>>> {
         if network == "polygon" {
-            return super::super::super::networks::get_polygon_provider();
+            super::super::super::networks::get_polygon_provider()
         } else {
             panic!("Network not supported")
         }

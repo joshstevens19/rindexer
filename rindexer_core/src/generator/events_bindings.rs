@@ -1,21 +1,19 @@
 use crate::database::postgres::{
-    generate_columns_names_only, generate_injected_param, generated_insert_query_for_event,
-    indexer_contract_schema_name, solidity_type_to_db_type,
+    generated_insert_query_for_event, solidity_type_to_db_type,
     solidity_type_to_ethereum_sql_type_wrapper,
 };
 use crate::generator::event_callback_registry::IndexingContractSetup;
 use crate::EthereumSqlTypeWrapper;
-use ethers::abi::{Event, EventParam, ParamType};
 use ethers::utils::keccak256;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::error::Error;
 use std::fs;
 use std::iter::Map;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::helpers::camel_to_snake;
-use crate::manifest::yaml::{Contract, ContractDetails, CsvDetails, ProjectType, Storage};
+use crate::manifest::yaml::{Contract, ContractDetails, CsvDetails, Storage};
 
 use super::networks_bindings::network_provider_fn_name_by_name;
 
@@ -802,7 +800,7 @@ fn build_get_provider_fn(networks: Vec<String>) -> String {
         function.push_str(&format!(
             r#"
             if network == "{network}" {{
-                return super::super::super::networks::{network_provider_fn_name}();
+                super::super::super::networks::{network_provider_fn_name}()
             }}"#,
             network = network,
             network_provider_fn_name = network_provider_fn_name_by_name(network)
