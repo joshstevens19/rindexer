@@ -5,6 +5,7 @@ use crate::manifest::yaml::Indexer;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use tracing::{error, info};
 
 pub struct GraphQLServerDetails {
     pub settings: GraphQLServerSettings,
@@ -41,7 +42,7 @@ pub struct GraphQLServer {
 impl Drop for GraphQLServer {
     fn drop(&mut self) {
         kill_process_tree(self.pid).expect("Failed to kill child process");
-        println!("GraphQL server process killed");
+        error!("GraphQL server process killed");
     }
 }
 
@@ -59,6 +60,8 @@ pub fn start_graphql_server(
     indexers: &[Indexer],
     settings: GraphQLServerSettings,
 ) -> Result<GraphQLServer, String> {
+    info!("Starting GraphQL server");
+
     let schemas: Vec<String> = indexers
         .iter()
         .flat_map(|indexer| {
@@ -101,7 +104,7 @@ pub fn start_graphql_server(
 
     ctrlc::set_handler(move || {
         kill_process_tree(pid).expect("Failed to kill child process");
-        println!("GraphQL server process killed");
+        info!("GraphQL server process killed");
     })
     .expect("Error setting Ctrl-C handler");
 
@@ -115,7 +118,7 @@ pub fn start_graphql_server(
             .expect("Failed to wait on child process");
 
         if status.success() {
-            println!("🚀 GraphQL API ready at http://0.0.0.0:{}/", port_clone);
+            info!("🚀 GraphQL API ready at http://0.0.0.0:{}/", port_clone);
         } else {
             panic!("Could not start up API");
         }

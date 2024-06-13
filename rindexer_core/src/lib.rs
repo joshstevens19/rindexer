@@ -14,8 +14,11 @@ pub use helpers::{generate_random_id, write_file};
 mod api;
 pub use api::{GraphQLServerDetails, GraphQLServerSettings};
 
+mod logger;
 pub mod provider;
 mod start;
+pub use logger::setup_logger;
+
 pub use start::{
     start_rindexer, start_rindexer_no_code, IndexingDetails, StartDetails, StartNoCodeDetails,
 };

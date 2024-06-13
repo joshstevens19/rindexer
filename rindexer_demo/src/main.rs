@@ -67,23 +67,23 @@ async fn main() {
 //     )
 //     .unwrap();
 // }
-// 
+//
 // fn generate_code_test() {
 //     rindexer_core::generator::build::generate_rindexer_handlers(
 //         &PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap(),
 //     )
 //     .unwrap();
 // }
-// 
+//
 // #[cfg(test)]
 // mod tests {
 //     use super::*;
-// 
+//
 //     #[test]
 //     fn test_generate() {
 //         generate();
 //     }
-// 
+//
 //     #[test]
 //     fn test_code_generate() {
 //         generate_code_test();

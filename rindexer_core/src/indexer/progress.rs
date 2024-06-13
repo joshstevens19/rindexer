@@ -1,5 +1,6 @@
 use crate::generator::event_callback_registry::EventInformation;
 use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::style::{StyledContent, Stylize};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use crossterm::{
     event, execute,
@@ -11,6 +12,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io;
 use std::io::Stdout;
 use std::sync::Arc;
+use log::{error, warn};
 use tokio::sync::Mutex;
 use tui::style::{Color, Style};
 use tui::widgets::{Cell, Row, Table};
@@ -34,11 +36,15 @@ impl IndexingEventProgressStatus {
     /// Returns the string representation of the progress status.
     fn as_str(&self) -> &str {
         match self {
-            Self::Syncing => "Syncing",
-            Self::Live => "Live",
-            Self::Completed => "Completed",
-            Self::Failed => "Failed",
+            Self::Syncing => "SYNCING",
+            Self::Live => "LIVE",
+            Self::Completed => "COMPLETED",
+            Self::Failed => "FAILED",
         }
+    }
+
+    pub fn log(&self) -> StyledContent<&str> {
+        self.as_str().green()
     }
 }
 
@@ -316,7 +322,7 @@ pub async fn monitor_state_and_update_ui(state: Arc<Mutex<IndexingEventsProgress
     tokio::spawn(async {
         listen_for_exit_command().await.unwrap();
         teardown_terminal().unwrap();
-        println!("Exiting rindexer...");
+        warn!("Exiting rindexer...");
         std::process::exit(0);
     });
 

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use async_std::prelude::StreamExt;
+use colored::Colorize;
 use ethers::abi::{Abi, Contract as EthersContract, RawLog};
 use ethers::prelude::Http;
 use ethers::providers::{Provider, RetryClient};
@@ -13,6 +14,9 @@ use futures::future::BoxFuture;
 use futures::stream::FuturesUnordered;
 use tokio::signal;
 use tokio_postgres::types::ToSql;
+use tracing::level_filters::LevelFilter;
+use tracing::{debug, error, info, Level};
+use tracing_subscriber::FmtSubscriber;
 
 use crate::api::start_graphql_server;
 use crate::database::postgres::{
@@ -32,8 +36,8 @@ use crate::indexer::start::{start_indexing, StartIndexingSettings};
 use crate::manifest::yaml::{read_manifest, Contract, Manifest, ProjectType};
 use crate::provider::create_retry_client;
 use crate::{
-    generate_random_id, AsyncCsvAppender, EthereumSqlTypeWrapper, FutureExt, GraphQLServerDetails,
-    PostgresClient,
+    generate_random_id, setup_logger, AsyncCsvAppender, EthereumSqlTypeWrapper, FutureExt,
+    GraphQLServerDetails, PostgresClient,
 };
 
 pub struct IndexingDetails {
@@ -50,6 +54,12 @@ pub struct StartDetails {
 pub async fn start_rindexer(details: StartDetails) -> Result<(), Box<dyn Error>> {
     let manifest = read_manifest(&details.manifest_path)?;
 
+    if manifest.project_type != ProjectType::NoCode {
+        // TODO! add info to the manifest
+        setup_logger(LevelFilter::INFO);
+        info!("Starting rindexer rust project");
+    }
+
     if let Some(graphql_server) = details.graphql_server {
         let _ = start_graphql_server(&manifest.indexers, graphql_server.settings)?;
         if details.indexing_details.is_none() {
@@ -59,7 +69,8 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), Box<dyn Error>>
     }
 
     if let Some(indexing_details) = details.indexing_details {
-        if manifest.storage.postgres_enabled() {
+        // setup postgres is already called in no-code startup
+        if manifest.project_type != ProjectType::NoCode && manifest.storage.postgres_enabled() {
             setup_postgres(&manifest).await?;
         }
 
@@ -82,6 +93,10 @@ pub struct StartNoCodeDetails {
 
 pub async fn start_rindexer_no_code(details: StartNoCodeDetails) -> Result<(), Box<dyn Error>> {
     let mut manifest = read_manifest(&details.manifest_path)?;
+    // TODO! add info to the manifest
+    setup_logger(LevelFilter::INFO);
+
+    info!("Starting rindexer no code");
 
     let mut postgres: Option<Arc<PostgresClient>> = None;
     if manifest.storage.postgres_enabled() {
@@ -89,6 +104,14 @@ pub async fn start_rindexer_no_code(details: StartNoCodeDetails) -> Result<(), B
     }
 
     let network_providers = create_network_providers(&manifest);
+    info!(
+        "Networks enabled: {}",
+        network_providers
+            .iter()
+            .map(|(name, _)| name.as_str()) // Assuming `name` is a String and you need &str
+            .collect::<Vec<&str>>()
+            .join(", ")
+    );
 
     let events = process_indexers(
         details.manifest_path.parent().unwrap(),
@@ -98,6 +121,15 @@ pub async fn start_rindexer_no_code(details: StartNoCodeDetails) -> Result<(), B
     )
     .await?;
     let registry = EventCallbackRegistry { events };
+    info!(
+        "Events registered to index: {}",
+        registry
+            .events
+            .iter()
+            .map(|event| event.info_log_name())
+            .collect::<Vec<String>>()
+            .join(", ")
+    );
 
     start_rindexer(StartDetails {
         manifest_path: details.manifest_path,
@@ -111,16 +143,20 @@ pub async fn start_rindexer_no_code(details: StartNoCodeDetails) -> Result<(), B
 }
 
 async fn setup_postgres(manifest: &Manifest) -> Result<PostgresClient, Box<dyn Error>> {
+    info!("Setting up postgres");
     let client = PostgresClient::new().await?;
 
     // No-code will ignore this as it must have tables if postgres used
     if !manifest.storage.postgres_disable_create_tables()
         || manifest.project_type == ProjectType::NoCode
     {
+        info!("Creating tables for all indexers");
         for indexer in &manifest.indexers {
+            info!("Creating tables for indexer: {}", indexer.name);
             let sql = create_tables_for_indexer_sql(indexer);
-            println!("{}", sql);
+            debug!("{}", sql);
             client.batch_execute(&sql).await?;
+            info!("Created tables for indexer: {}", indexer.name);
         }
     }
 
@@ -151,14 +187,6 @@ async fn process_indexers(
     let mut events: Vec<EventInformation> = vec![];
 
     for indexer in &mut manifest.indexers {
-        if manifest.storage.postgres_enabled() {
-            let client = PostgresClient::new().await?;
-
-            let sql = create_tables_for_indexer_sql(indexer);
-            println!("{}", sql);
-            client.batch_execute(&sql).await?;
-        }
-
         for contract in &mut indexer.contracts {
             let abi_str = fs::read_to_string(&contract.abi)?;
             let abi: Abi = serde_json::from_str(&abi_str).expect("Failed to parse ABI");
@@ -218,35 +246,50 @@ async fn process_indexers(
                 };
 
                 let name = event_info.name.clone();
+                let indexer_name = indexer.name.clone();
+                let contract_name = contract.name.clone();
                 let event_outer = event.clone();
                 let postgres_outer = postgres.clone();
 
                 let callback: Arc<
                     dyn Fn(Vec<EventResult>) -> BoxFuture<'static, ()> + Send + Sync,
                 > = Arc::new(move |results| {
-                    let start = Instant::now();
                     let name_clone = name.clone();
+                    let indexer_name = indexer_name.clone();
+                    let contract_name = contract_name.clone();
                     let event_clone = event_outer.clone();
                     let csv_clone = csv.clone();
                     let postgres = postgres_outer.clone();
                     let postgres_event_table_sql = postgres_event_table_sql.clone();
 
                     async move {
-                        let length = results.len();
-                        let mut hit = 0;
+                        let event_length = results.len();
+                        let from_block = if match &results.first() {
+                            Some(result) => result.tx_information.block_number.is_some(),
+                            None => false,
+                        } {
+                            results.first().unwrap().tx_information.block_number
+                        } else {
+                            None
+                        };
+                        let to_block = if match &results.last() {
+                            Some(result) => result.tx_information.block_number.is_some(),
+                            None => false,
+                        } {
+                            results.last().unwrap().tx_information.block_number
+                        } else {
+                            None
+                        };
+
                         let mut futures = FuturesUnordered::new();
 
                         for result in results {
-                            let name_clone = name_clone.clone();
                             let event_clone = event_clone.clone();
                             let csv_clone = csv_clone.clone();
                             let postgres = postgres.clone();
                             let postgres_event_table_sql = postgres_event_table_sql.clone();
 
-                            hit += 1;
-
                             futures.push(async move {
-                                // println!("Index count: {}", hit);
                                 let log = event_clone
                                     .parse_log(RawLog {
                                         topics: result.log.topics,
@@ -296,7 +339,7 @@ async fn process_indexers(
                                         let db_result =
                                             postgres.execute(event_table_sql, &params).await;
                                         if let Err(e) = db_result {
-                                            println!("Error inserting into database: {}", e);
+                                            error!("Error inserting into database: {}", e);
                                         }
                                     }
                                 }
@@ -322,12 +365,18 @@ async fn process_indexers(
                         // run all the futures
                         while futures.next().await.is_some() {}
 
-                        let duration = start.elapsed(); // Calculate elapsed time
-                        println!("Elapsed time: {:?}", duration);
-
-                        println!(
-                            "MY LOG - Event name: {:?} - results length {} - hit length {}",
-                            name_clone, length, hit
+                        info!(
+                            "{} {}: {} - {} - {} events {}",
+                            indexer_name,
+                            contract_name,
+                            name_clone,
+                            "INDEXED".green(),
+                            event_length,
+                            if from_block.is_some() && to_block.is_some() {
+                                format!("- blocks: {} - {}", from_block.unwrap(), to_block.unwrap())
+                            } else {
+                                String::new()
+                            }
                         );
                     }
                     .boxed()

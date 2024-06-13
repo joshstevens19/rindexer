@@ -31,3 +31,8 @@ rust_decimal = { version = "1.35.0", features = ["db-tokio-postgres"] }
 tempfile = "3.9.0"
 ctrlc = "3.4.4"
 percent-encoding = "2.3.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "time"] }
+chrono = "0.4.38"
+log = "0.4.20"
+colored = "2.0"

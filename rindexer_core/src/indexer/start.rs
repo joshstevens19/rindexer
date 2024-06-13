@@ -3,14 +3,17 @@ use ethers::{
     providers::Middleware,
     types::{Address, Filter, H256, U64},
 };
+use log::error;
 use rust_decimal::Decimal;
 use std::error::Error;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{Mutex, Semaphore};
 use tokio_stream::StreamExt;
+use tracing::{debug, info};
 
 use crate::generator::event_callback_registry::{
-    EventCallbackRegistry, EventResult, IndexingContractSetup, NetworkContract,
+    EventCallbackRegistry, EventInformation, EventResult, IndexingContractSetup, NetworkContract,
 };
 use crate::helpers::camel_to_snake;
 use crate::indexer::fetch_logs::{fetch_logs_stream, FetchLogsStream, LiveIndexingDetails};
@@ -55,6 +58,7 @@ type BoxedError = Box<dyn Error + Send + Sync>;
 struct EventProcessingConfig {
     indexer_name: String,
     contract_name: String,
+    info_log_name: String,
     topic_id: String,
     event_name: String,
     network_contract: Arc<NetworkContract>,
@@ -104,12 +108,21 @@ pub async fn start_indexing(
     let mut handles = Vec::new();
 
     for event in registry.events.clone() {
+        fn event_info(event: &EventInformation, message: &str) {
+            info!("{} - {}", event.info_log_name(), message);
+        }
+
         for contract in event.contract.details.clone() {
+            event_info(
+                &event,
+                &format!("Processing event on network {}", contract.network),
+            );
             let latest_block = contract.provider.get_block_number().await?;
             let live_indexing = contract.end_block.is_none();
             let last_known_start_block = get_last_synced_block_number(
                 database.clone(),
                 &event.indexer_name,
+                &event.contract.name,
                 &event.event_name,
                 &contract.network,
             )
@@ -132,9 +145,22 @@ pub async fn start_indexing(
                 indexing_distance_from_head = reorg_safe_distance;
             }
 
+            if live_indexing {
+                event_info(
+                    &event,
+                    &format!("Start block: {} and then will live index", start_block),
+                );
+            } else {
+                event_info(
+                    &event,
+                    &format!("Start block: {}, End Block: {}", start_block, end_block),
+                );
+            }
+
             let event_processing_config = EventProcessingConfig {
                 indexer_name: event.indexer_name.clone(),
                 contract_name: event.contract.name.clone(),
+                info_log_name: event.info_log_name(),
                 topic_id: event.topic_id.clone(),
                 event_name: event.event_name.clone(),
                 network_contract: Arc::new(contract),
@@ -163,6 +189,8 @@ pub async fn start_indexing(
         handle.await??;
     }
 
+    tokio::time::sleep(Duration::from_secs(1000)).await;
+
     Ok(())
 }
 
@@ -178,6 +206,10 @@ pub async fn start_indexing(
 async fn process_event_sequentially(
     event_processing_config: EventProcessingConfig,
 ) -> Result<(), BoxedError> {
+    info!(
+        "{} - Processing event sequentially",
+        event_processing_config.info_log_name
+    );
     for _current_block in (event_processing_config.start_block.as_u64()
         ..event_processing_config.end_block.as_u64())
         .step_by(event_processing_config.max_block_range as usize)
@@ -201,6 +233,7 @@ async fn process_event_sequentially(
         process_logs(ProcessLogsParams {
             indexer_name: event_processing_config.indexer_name.clone(),
             contract_name: event_processing_config.contract_name.clone(),
+            info_log_name: event_processing_config.info_log_name.clone(),
             topic_id: event_processing_config.topic_id.clone(),
             event_name: event_processing_config.event_name.clone(),
             network_contract: event_processing_config.network_contract.clone(),
@@ -230,15 +263,12 @@ async fn process_event_sequentially(
 async fn process_event_concurrently(
     event_processing_config: EventProcessingConfig,
 ) -> Result<(), BoxedError> {
-    println!(
-        "Processing event concurrently {}",
-        event_processing_config.event_name
+    info!(
+        "{} - Processing event concurrently",
+        event_processing_config.info_log_name
     );
+
     let mut handles = Vec::new();
-    println!(
-        "Processing event start_block {}",
-        event_processing_config.start_block.as_u64()
-    );
     for _current_block in (event_processing_config.start_block.as_u64()
         ..event_processing_config.end_block.as_u64())
         .step_by(event_processing_config.max_block_range as usize)
@@ -272,6 +302,7 @@ async fn process_event_concurrently(
         let database = event_processing_config.database.clone();
         let indexer_name = event_processing_config.indexer_name.clone();
         let contract_name = event_processing_config.contract_name.clone();
+        let info_log_name = event_processing_config.info_log_name.clone();
         let topic_id = event_processing_config.topic_id.clone();
         let event_name = event_processing_config.event_name.clone();
         let execute_events_logs_in_order = event_processing_config.execute_event_logs_in_order;
@@ -279,9 +310,14 @@ async fn process_event_concurrently(
         let indexing_distance_from_head = event_processing_config.indexing_distance_from_head;
 
         let handle = tokio::spawn(async move {
+            info!(
+                "{} - Processing logs between {} and {}",
+                info_log_name, current_block, next_block
+            );
             let result = process_logs(ProcessLogsParams {
                 indexer_name,
                 contract_name,
+                info_log_name,
                 topic_id,
                 event_name,
                 network_contract: network_contract.clone(),
@@ -301,11 +337,6 @@ async fn process_event_concurrently(
         handles.push(handle);
     }
 
-    println!(
-        "Waiting for all handles to complete length {}",
-        handles.len()
-    );
-
     for handle in handles {
         handle.await?.unwrap();
     }
@@ -318,6 +349,7 @@ async fn process_event_concurrently(
 pub struct ProcessLogsParams {
     indexer_name: String,
     contract_name: String,
+    info_log_name: String,
     topic_id: String,
     event_name: String,
     network_contract: Arc<NetworkContract>,
@@ -345,6 +377,7 @@ async fn process_logs(params: ProcessLogsParams) -> Result<(), BoxedError> {
         provider,
         params.topic_id.parse::<H256>().unwrap(),
         params.filter,
+        params.info_log_name,
         if params.live_indexing {
             Some(LiveIndexingDetails {
                 indexing_distance_from_head: params.indexing_distance_from_head,
@@ -411,7 +444,7 @@ async fn handle_logs_result(
                 .map(|log| EventResult::new(network_contract.clone(), log))
                 .collect::<Vec<_>>();
 
-            println!(
+            debug!(
                 "Processing logs {} - length {}",
                 event_name,
                 result.logs.len()
@@ -439,7 +472,7 @@ async fn handle_logs_result(
             Ok(())
         }
         Err(e) => {
-            eprintln!("Error fetching logs: {:?}", e);
+            error!("Error fetching logs: {:?}", e);
             Err(e)
         }
     }
@@ -451,6 +484,7 @@ async fn handle_logs_result(
 ///
 /// * `database` - The database client.
 /// * `indexer_name` - The name of the indexer.
+/// * `contract_name` - The name of the contract.
 /// * `event_name` - The name of the event.
 /// * `network` - The network.
 ///
@@ -460,25 +494,29 @@ async fn handle_logs_result(
 async fn get_last_synced_block_number(
     database: Option<Arc<PostgresClient>>,
     indexer_name: &str,
+    contract_name: &str,
     event_name: &str,
     network: &str,
 ) -> Option<U64> {
     match database {
         Some(database) => {
             let query = format!(
-                "SELECT last_synced_block FROM rindexer_internal.{}_{} WHERE network = $1",
+                "SELECT last_synced_block FROM rindexer_internal.{}_{}_{} WHERE network = $1",
                 camel_to_snake(indexer_name),
+                camel_to_snake(contract_name),
                 camel_to_snake(event_name)
             );
 
             let row = database.query_one(&query, &[&network]).await;
             match row {
                 Ok(row) => {
-                    let result: Decimal = row.get("last_synced_block");
-                    Some(U64::from_dec_str(&result.to_string()).unwrap())
+                    // TODO! UNCOMMENT
+                    // let result: Decimal = row.get("last_synced_block");
+                    // Some(U64::from_dec_str(&result.to_string()).unwrap())
+                    None
                 }
                 Err(e) => {
-                    eprintln!("Error fetching last synced block: {:?}", e);
+                    error!("Error fetching last synced block: {:?}", e);
                     None
                 }
             }

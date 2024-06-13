@@ -1,12 +1,15 @@
+use crate::indexer::progress::IndexingEventProgressStatus;
 use async_std::task::sleep;
 use ethers::middleware::{Middleware, MiddlewareError};
 use ethers::prelude::{Block, Filter, JsonRpcError, Log};
 use ethers::types::{Address, BlockNumber, Bloom, FilteredParams, ValueOrArray, H256, U64};
+use log::error;
 use regex::Regex;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
+use tracing::{debug, info};
 
 /// Struct to hold the result of retrying with a new block range.
 #[derive(Debug)]
@@ -169,6 +172,7 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
     provider: Arc<M>,
     topic_id: H256,
     initial_filter: Filter,
+    info_log_name: String,
     live_indexing_details: Option<LiveIndexingDetails>,
 ) -> impl tokio_stream::Stream<Item = Result<FetchLogsStream, Box<<M as Middleware>::Error>>>
        + Send
@@ -191,11 +195,9 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
                 &topic_id,
                 current_filter.clone(),
                 snapshot_to_block,
+                &info_log_name,
             )
             .await;
-
-            println!("Sleeping for forever");
-            sleep(tokio::time::Duration::from_millis(200000000000)).await;
 
             if let Some(new_filter) = result {
                 current_filter = new_filter;
@@ -213,6 +215,7 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
                 &topic_id,
                 reorg_safe_distance,
                 current_filter,
+                &info_log_name,
             )
             .await;
         }
@@ -241,23 +244,52 @@ async fn process_historic_logs<M: Middleware + Clone + Send + 'static>(
     topic_id: &H256,
     current_filter: Filter,
     snapshot_to_block: U64,
+    info_log_name: &str,
 ) -> Option<Filter> {
     let from_block = current_filter.get_from_block().unwrap();
     let to_block = current_filter.get_to_block().unwrap_or(snapshot_to_block);
-    println!("from_block {:?} to_block {:?}", from_block, to_block);
+    info!(
+        "{} - {} - Process historic events - blocks: {} - {}",
+        info_log_name,
+        IndexingEventProgressStatus::Syncing.log(),
+        from_block,
+        to_block
+    );
 
     if from_block > to_block {
-        println!("from_block {:?} > to_block {:?}", from_block, to_block);
+        debug!(
+            "{} - {} - from_block {:?} > to_block {:?}",
+            info_log_name,
+            IndexingEventProgressStatus::Syncing.log(),
+            from_block,
+            to_block
+        );
         return Some(current_filter.from_block(to_block));
     }
 
-    println!("Processing filter: {:?}", current_filter);
+    debug!(
+        "{} - {} - Processing filter: {:?}",
+        info_log_name,
+        IndexingEventProgressStatus::Syncing.log(),
+        current_filter
+    );
 
     match provider.get_logs(&current_filter).await {
         Ok(logs) => {
-            println!(
-                "topic_id {}, Logs: {} from {} to {}",
+            debug!(
+                "{} - {} - topic_id {}, Logs: {} from {} to {}",
+                info_log_name,
+                IndexingEventProgressStatus::Syncing.log(),
                 topic_id,
+                logs.len(),
+                from_block,
+                to_block
+            );
+
+            info!(
+                "{} - {} - Fetched {} event logs - blocks: {} - {}",
+                info_log_name,
+                IndexingEventProgressStatus::Syncing.log(),
                 logs.len(),
                 from_block,
                 to_block
@@ -271,7 +303,11 @@ async fn process_historic_logs<M: Middleware + Clone + Send + 'static>(
                 }))
                 .is_err()
             {
-                println!("Failed to send logs to stream consumer!");
+                error!(
+                    "{} - {} - Failed to send logs to stream consumer!",
+                    IndexingEventProgressStatus::Syncing.log(),
+                    info_log_name
+                );
                 return None;
             }
 
@@ -280,9 +316,12 @@ async fn process_historic_logs<M: Middleware + Clone + Send + 'static>(
                 let new_filter = current_filter
                     .from_block(new_from_block)
                     .to_block(snapshot_to_block);
-                println!(
-                    "new_from_block {:?} snapshot_to_block {:?}",
-                    new_from_block, snapshot_to_block
+                debug!(
+                    "{} - {} - new_from_block {:?} snapshot_to_block {:?}",
+                    info_log_name,
+                    IndexingEventProgressStatus::Syncing.log(),
+                    new_from_block,
+                    snapshot_to_block
                 );
                 return if new_from_block > snapshot_to_block {
                     None
@@ -293,7 +332,12 @@ async fn process_historic_logs<M: Middleware + Clone + Send + 'static>(
 
             if let Some(last_log) = logs.last() {
                 let next_block = last_log.block_number.unwrap() + U64::from(1);
-                println!("next_block {:?}", next_block);
+                debug!(
+                    "{} - {} - next_block {:?}",
+                    info_log_name,
+                    IndexingEventProgressStatus::Syncing.log(),
+                    next_block
+                );
                 return Some(
                     current_filter
                         .from_block(next_block)
@@ -302,13 +346,16 @@ async fn process_historic_logs<M: Middleware + Clone + Send + 'static>(
             }
         }
         Err(err) => {
-            println!("Error fetching logs: {}", err);
-
             if let Some(json_rpc_error) = err.as_error_response() {
                 if let Some(retry_result) =
                     retry_with_block_range(json_rpc_error, from_block, to_block)
                 {
-                    println!("Retrying with block range: {:?}", retry_result);
+                    debug!(
+                        "{} - {} - Retrying with block range: {:?}",
+                        info_log_name,
+                        IndexingEventProgressStatus::Syncing.log(),
+                        retry_result
+                    );
                     return Some(
                         current_filter
                             .from_block(retry_result.from)
@@ -316,6 +363,13 @@ async fn process_historic_logs<M: Middleware + Clone + Send + 'static>(
                     );
                 }
             }
+
+            error!(
+                "{} - {} - Error fetching logs: {}",
+                info_log_name,
+                IndexingEventProgressStatus::Syncing.log(),
+                err
+            );
 
             let _ = tx.send(Err(Box::new(err)));
             return None;
@@ -343,6 +397,7 @@ async fn live_indexing_mode<M: Middleware + Clone + Send + 'static>(
     topic_id: &H256,
     reorg_safe_distance: U64,
     mut current_filter: Filter,
+    info_log_name: &str,
 ) {
     let mut last_seen_block = U64::from(0);
     loop {
@@ -350,19 +405,31 @@ async fn live_indexing_mode<M: Middleware + Clone + Send + 'static>(
 
         if let Some(latest_block) = provider.get_block(BlockNumber::Latest).await.unwrap() {
             if last_seen_block == latest_block.number.unwrap() {
-                println!("No new blocks to process...");
+                info!(
+                    "{} - {} - No new blocks to process...",
+                    info_log_name,
+                    IndexingEventProgressStatus::Live.log()
+                );
                 continue;
             }
-            println!("Latest block: {:?}", latest_block.number.unwrap());
-            println!("Last seen block: {:?}", last_seen_block);
+            info!(
+                "{} - {} - New block seen {} - Last seen block {}",
+                info_log_name,
+                IndexingEventProgressStatus::Live.log(),
+                latest_block.number.unwrap(),
+                last_seen_block
+            );
             let safe_block_number = latest_block.number.unwrap() - reorg_safe_distance;
 
             let from_block = current_filter.get_from_block().unwrap();
             // check reorg distance and skip if not safe
             if from_block > safe_block_number {
-                println!(
-                    "safe_block_number is not safe range yet {:?} > {:?}",
-                    from_block, safe_block_number
+                info!(
+                    "{} - {} - not in safe reorg block range yet block: {} >  range: {}",
+                    info_log_name,
+                    IndexingEventProgressStatus::Live.log(),
+                    from_block,
+                    safe_block_number
                 );
                 continue;
             }
@@ -372,7 +439,18 @@ async fn live_indexing_mode<M: Middleware + Clone + Send + 'static>(
             if from_block == to_block
                 && !is_relevant_block(contract_address, topic_id, &latest_block)
             {
-                println!("Skipping block {} as it's not relevant", from_block);
+                debug!(
+                    "{} - {} - Skipping block {} as it's not relevant",
+                    info_log_name,
+                    IndexingEventProgressStatus::Live.log(),
+                    from_block
+                );
+                info!(
+                    "{} - {} - No events found block {}",
+                    info_log_name,
+                    IndexingEventProgressStatus::Live.log(),
+                    from_block
+                );
                 current_filter = current_filter.from_block(to_block + 1);
                 last_seen_block = to_block;
                 continue;
@@ -380,13 +458,29 @@ async fn live_indexing_mode<M: Middleware + Clone + Send + 'static>(
 
             current_filter = current_filter.to_block(to_block);
 
-            println!("Processing live filter: {:?}", current_filter);
+            debug!(
+                "{} - {} - Processing live filter: {:?}",
+                info_log_name,
+                IndexingEventProgressStatus::Live.log(),
+                current_filter
+            );
 
             match provider.get_logs(&current_filter).await {
                 Ok(logs) => {
-                    println!(
-                        "Live topic_id {}, Logs: {} from {} to {}",
+                    debug!(
+                        "{} - {} - Live topic_id {}, Logs: {} from {} to {}",
+                        info_log_name,
+                        IndexingEventProgressStatus::Live.log(),
                         topic_id,
+                        logs.len(),
+                        from_block,
+                        to_block
+                    );
+
+                    info!(
+                        "{} - {} - Fetched {} event logs - blocks: {} - {}",
+                        info_log_name,
+                        IndexingEventProgressStatus::Live.log(),
                         logs.len(),
                         from_block,
                         to_block
@@ -402,7 +496,11 @@ async fn live_indexing_mode<M: Middleware + Clone + Send + 'static>(
                         }))
                         .is_err()
                     {
-                        println!("Failed to send logs to stream consumer!");
+                        error!(
+                            "{} - {} - Failed to send logs to stream consumer!",
+                            info_log_name,
+                            IndexingEventProgressStatus::Live.log()
+                        );
                         break;
                     }
 
@@ -412,14 +510,14 @@ async fn live_indexing_mode<M: Middleware + Clone + Send + 'static>(
                         current_filter = current_filter
                             .from_block(last_log.block_number.unwrap() + U64::from(1));
                     }
-
-                    println!(
-                        "current_filter from_block {:?}",
-                        current_filter.get_from_block().unwrap()
-                    );
                 }
                 Err(err) => {
-                    println!("Error fetching logs: {}", err);
+                    error!(
+                        "{} - {} - Error fetching logs: {}",
+                        info_log_name,
+                        IndexingEventProgressStatus::Live.log(),
+                        err
+                    );
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                 }
             }
