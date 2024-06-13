@@ -7,9 +7,11 @@ use ethers::{
     types::{Bytes, Log, H256, U256, U64},
 };
 use futures::future::BoxFuture;
+use log::info;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::{any::Any, sync::Arc};
+use tracing::error;
 
 pub type Decoder = Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync>;
 
@@ -209,6 +211,15 @@ pub struct EventInformation {
     pub callback: Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, ()> + Send + Sync>,
 }
 
+impl EventInformation {
+    pub fn info_log_name(&self) -> String {
+        format!(
+            "{} {}: {}",
+            self.indexer_name, self.contract.name, self.event_name
+        )
+    }
+}
+
 impl Clone for EventInformation {
     fn clone(&self) -> Self {
         EventInformation {
@@ -272,10 +283,15 @@ impl EventCallbackRegistry {
     /// * `topic_id` - The topic ID of the event.
     /// * `data` - The event result data.
     pub async fn trigger_event(&self, topic_id: &str, data: Vec<EventResult>) {
-        if let Some(callback) = self.find_event(topic_id).map(|e| &e.callback) {
-            callback(data).await;
+        if let Some(event_information) = self.find_event(topic_id) {
+            info!(
+                "{} - Pushed {} events",
+                data.len(),
+                event_information.info_log_name()
+            );
+            (event_information.callback)(data).await;
         } else {
-            println!(
+            error!(
                 "EventCallbackRegistry: No event found for topic_id: {}",
                 topic_id
             );

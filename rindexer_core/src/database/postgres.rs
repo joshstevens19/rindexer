@@ -12,6 +12,7 @@ use rust_decimal::Decimal;
 use thiserror::Error;
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type as PgType};
 use tokio_postgres::{Error as PgError, NoTls, Row, Statement, Transaction as PgTransaction};
+use tracing::info;
 
 use crate::generator::{
     extract_event_names_and_signatures_from_abi, generate_abi_name_properties, read_abi_items,
@@ -370,8 +371,10 @@ fn generate_event_table_sql(abi_inputs: &[EventInfo], schema_name: &str) -> Stri
     abi_inputs
         .iter()
         .map(|event_info| {
+            let table_name = format!("{}.{}", schema_name, camel_to_snake(&event_info.name));
+            info!("Creating table: {}", table_name);
             format!(
-                "CREATE TABLE IF NOT EXISTS {}.{} (\
+                "CREATE TABLE IF NOT EXISTS {} (\
                 rindexer_id SERIAL PRIMARY KEY, \
                 contract_address CHAR(66), \
                 {}, \
@@ -379,8 +382,7 @@ fn generate_event_table_sql(abi_inputs: &[EventInfo], schema_name: &str) -> Stri
                 block_number NUMERIC, \
                 block_hash CHAR(66)\
             );",
-                schema_name,
-                camel_to_snake(&event_info.name),
+                table_name,
                 generate_columns_with_data_types(&event_info.inputs).join(", ")
             )
         })
@@ -464,6 +466,7 @@ pub fn create_tables_for_indexer_sql(indexer: &Indexer) -> String {
             if let Ok(event_names) = extract_event_names_and_signatures_from_abi(&abi_items) {
                 let schema_name = indexer_contract_schema_name(&indexer.name, &contract_name);
                 sql.push_str(format!("CREATE SCHEMA IF NOT EXISTS {};", schema_name).as_str());
+                info!("Creating schema if not exists: {}", schema_name);
 
                 let networks: Vec<String> =
                     contract.details.iter().map(|d| d.network.clone()).collect();

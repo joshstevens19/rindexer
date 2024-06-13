@@ -8,7 +8,6 @@ eth_getLogs - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60add
 
 checklist v1.0:
 - complete command line
-- add logging to the indexer
 - fix error handling throughout the indexer
 - fix TODOs
 - investigate graphql/REST API exposing
