@@ -382,11 +382,7 @@ fn handle_new_command(project_path: PathBuf) {
         storage: Storage {
             postgres: if postgres_enabled {
                 Some(PostgresConnectionDetails {
-                    name: "${DATABASE_NAME}".to_string(),
-                    user: "${DATABASE_USER}".to_string(),
-                    password: "${DATABASE_PASSWORD}".to_string(),
-                    host: "${DATABASE_HOST}".to_string(),
-                    port: "${DATABASE_PORT}".to_string(),
+                    database_url: "${DATABASE_URL}".to_string(),
                     disable_create_tables: false,
                 })
             } else {
@@ -409,25 +405,13 @@ fn handle_new_command(project_path: PathBuf) {
     // Write .env if required
     if postgres_enabled {
         if postgres_docker_enable {
-            let env = r#"
-DATABASE_NAME=postgres
-DATABASE_USER=rindexer_user
-DATABASE_PASSWORD=U3uaAFmEbv9dnxjKOo9SbUFwc9wMU5ADBHW+HUT/7+DpQaDeUYV/
-DATABASE_HOST=localhost
-DATABASE_PORT=5440
-"#;
+            let env = r#"DATABASE_URL=postgresql://postgres:U3uaAFmEbv9dnxjKOo9SbUFwc9wMU5ADBHW+HUT/7+DpQaDeUYV/@localhost:5440/postgres"#;
 
             write_file(project_path.join(".env").to_str().unwrap(), env).unwrap();
 
             write_docker_compose(&project_path);
         } else {
-            let env = r#"
-DATABASE_NAME=INSERT_HERE
-DATABASE_USER=INSERT_HERE
-DATABASE_PASSWORD=INSERT_HERE
-DATABASE_HOST=INSERT_HERE
-DATABASE_PORT=INSERT_HERE
-"#;
+            let env = r#"DATABASE_URL=INSERT_HERE"#;
 
             write_file(project_path.join(".env").to_str().unwrap(), env).unwrap();
         }
@@ -603,7 +587,6 @@ async fn start(project_path: PathBuf, command: &StartSubcommands) {
                     }),
                 };
 
-                // TODO fix
                 let _ = start_rindexer_no_code(details).await.map_err(|e| {
                     print_error_message(&format!("Error starting the server: {}", e));
                 });

@@ -39,11 +39,7 @@ networks:
     url: https://mainnet.infura.io/v3/your-infura-key
 storage:
   postgres:
-    name: ${DATABASE_NAME}
-    user: ${DATABASE_USER}
-    password: ${DATABASE_PASSWORD}
-    host: ${DATABASE_HOST}
-    port: ${DATABASE_PORT}
+    database_url: ${DATABASE_URL}
   csv:
     path: ./generated_csv
 indexers:
@@ -113,11 +109,7 @@ networks:
     url: https://mainnet.infura.io/v3/your-infura-key
 storage:
   postgres:
-    name: ${DATABASE_NAME}
-    user: ${DATABASE_USER}
-    password: ${DATABASE_PASSWORD}
-    host: ${DATABASE_HOST}
-    port: ${DATABASE_PORT}
+    database_url: ${DATABASE_URL}
     disable_create_tables: true // [!code focus]
   csv:
     path: ./generated_csv
@@ -350,11 +342,7 @@ networks:
     url: https://mainnet.infura.io/v3/your-infura-key
 storage:
   postgres:
-    name: ${DATABASE_NAME}
-    user: ${DATABASE_USER}
-    password: ${DATABASE_PASSWORD}
-    host: ${DATABASE_HOST}
-    port: ${DATABASE_PORT}
+    database_url: ${DATABASE_URL}
     disable_create_tables: true // [!code focus]
   csv:
     path: ./generated_csv

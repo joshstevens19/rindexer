@@ -15,27 +15,9 @@ If you wish to store the data in a postgres database you can enable the postgres
 This is optional if you do not wish to store the data in a postgres database you can leave this section out of your YAML.
 :::
 
-### name
+### database_url
 
-The database name.
-
-```yaml [rindexer.yaml]
-name: rETHIndexer
-description: My first rindexer project
-repository: https://github.com/joshstevens19/rindexer
-project_type: no-code
-networks:
-- name: ethereum
-  chainId: 1
-  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
-storage:
-  postgres:
-    name: ${DATABASE_NAME} // [!code focus]
-```
-
-### user
-
-The database user.
+The database url to connect to the database, this is the postgres connection string.
 
 ```yaml [rindexer.yaml]
 name: rETHIndexer
@@ -48,71 +30,7 @@ networks:
   rpcUrl: https://mainnet.infura.io/v3/your-infura-key
 storage:
   postgres:
-    name: ${DATABASE_NAME}
-    user: ${DATABASE_USER} // [!code focus]
-```
-
-### password
-
-The database password.
-
-```yaml [rindexer.yaml]
-name: rETHIndexer
-description: My first rindexer project
-repository: https://github.com/joshstevens19/rindexer
-project_type: no-code
-networks:
-- name: ethereum
-  chainId: 1
-  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
-storage:
-  postgres:
-    name: ${DATABASE_NAME}
-    user: ${DATABASE_USER}
-    password: ${DATABASE_PASSWORD} // [!code focus]
-```
-
-### host
-
-The database host.
-
-```yaml [rindexer.yaml]
-name: rETHIndexer
-description: My first rindexer project
-repository: https://github.com/joshstevens19/rindexer
-project_type: no-code
-networks:
-- name: ethereum
-  chainId: 1
-  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
-storage:
-  postgres:
-    name: ${DATABASE_NAME}
-    user: ${DATABASE_USER}
-    password: ${DATABASE_PASSWORD}
-    host: ${DATABASE_HOST} // [!code focus]
-```
-
-### port
-
-The database port.
-
-```yaml [rindexer.yaml]
-name: rETHIndexer
-description: My first rindexer project
-repository: https://github.com/joshstevens19/rindexer
-project_type: no-code
-networks:
-- name: ethereum
-  chainId: 1
-  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
-storage:
-  postgres:
-    name: ${DATABASE_NAME}
-    user: ${DATABASE_USER}
-    password: ${DATABASE_PASSWORD}
-    host: ${DATABASE_HOST}
-    port: ${DATABASE_PORT} // [!code focus]
+    database_url: ${DATABASE_URL} // [!code focus]
 ```
 
 ### disable_create_tables
@@ -136,11 +54,7 @@ networks:
   rpcUrl: https://mainnet.infura.io/v3/your-infura-key
 storage:
   postgres:
-    name: ${DATABASE_NAME}
-    user: ${DATABASE_USER}
-    password: ${DATABASE_PASSWORD}
-    host: ${DATABASE_HOST}
-    port: ${DATABASE_PORT}
+    database_url: ${DATABASE_URL}
     disable_create_tables: true // [!code focus]
 ```
 
@@ -210,11 +124,7 @@ networks:
   rpcUrl: https://mainnet.infura.io/v3/your-infura-key
 storage:
   postgres:
-    name: ${DATABASE_NAME}
-    user: ${DATABASE_USER}
-    password: ${DATABASE_PASSWORD}
-    host: ${DATABASE_HOST}
-    port: ${DATABASE_PORT}
+    database_url: ${DATABASE_URL}
   csv:
     path: ./generated_csv // [!code focus]
 ```

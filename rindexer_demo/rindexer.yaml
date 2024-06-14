@@ -62,10 +62,6 @@ global:
       abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
 storage:
   postgres:
-    name: ${DATABASE_NAME}
-    user: ${DATABASE_USER}
-    password: ${DATABASE_PASSWORD}
-    host: ${DATABASE_HOST}
-    port: ${DATABASE_PORT}
+    database_url: ${DATABASE_URL}
   csv:
     path: ./generated_csv
