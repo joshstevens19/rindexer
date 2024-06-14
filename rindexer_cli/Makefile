@@ -15,4 +15,6 @@ codegen_typings:
 codegen_indexer:
 	cargo run -- codegen indexer
 download_abi:
-	cargo run -- download_abi
+	cargo run -- download_abi --path /Users/joshstevens/code/rindexer/examples/rindexer_demo_cli
+delete:
+	cargo run -- delete --path /Users/joshstevens/code/rindexer/examples/rindexer_demo_cli
