@@ -81,6 +81,12 @@ export default defineConfig({
       ],
     },
     {
+      text: 'References',
+      items: [
+        { text: 'CLI ', link: '/docs/what-is-rrelayerr' },
+      ],
+    },
+    {
       text: 'Advanced',
       items: [
         { text: 'Building Own DB Schema ', link: '/docs/what-is-rrelayerr' },
