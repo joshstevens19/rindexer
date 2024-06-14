@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use crate::generator::event_callback_registry::{
     FactoryDetails, FilterDetails, IndexingContractSetup,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_yaml::Value;
 
 fn default_global() -> Global {
@@ -54,6 +54,20 @@ where
         ProjectType::NoCode => "no-code",
     };
     serializer.serialize_str(string_value)
+}
+
+// Custom deserialization function that parses a string as a decimal U64
+fn deserialize_u64_from_string<'de, D>(deserializer: D) -> Result<Option<U64>, D::Error>
+    where
+        D: Deserializer<'de>,
+{
+    let s: Option<String> = Option::deserialize(deserializer)?;
+    match s {
+        Some(string) => U64::from_dec_str(&string)
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+        None => Ok(None),
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -101,10 +115,10 @@ pub struct ContractDetails {
     #[serde(skip_serializing_if = "Option::is_none")]
     factory: Option<FactoryDetails>,
 
-    #[serde(rename = "startBlock", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "startBlock", deserialize_with = "deserialize_u64_from_string", skip_serializing_if = "Option::is_none")]
     pub start_block: Option<U64>,
 
-    #[serde(rename = "endBlock", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "endBlock", deserialize_with = "deserialize_u64_from_string", skip_serializing_if = "Option::is_none")]
     pub end_block: Option<U64>,
 
     #[serde(rename = "pollingEvery", skip_serializing_if = "Option::is_none")]
