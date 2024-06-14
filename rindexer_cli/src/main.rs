@@ -54,13 +54,18 @@ enum Commands {
     ///
     /// Example:
     /// `rindexer new`
-    New,
-
+    New {
+        #[clap(long, short)]
+        path: Option<String>,
+    },
     /// Start various services like indexers, GraphQL APIs or both together
     #[clap(name = "start")]
     Start {
         #[clap(subcommand)]
         subcommand: StartSubcommands,
+
+        #[clap(long, short)]
+        path: Option<String>,
     },
 
     /// Downloads ABIs from etherscan to build up your rindexer.yaml mappings.
@@ -72,7 +77,10 @@ enum Commands {
     /// Example:
     /// `rindexer download_abi`
     #[clap(name = "download_abi")]
-    DownloadAbi,
+    DownloadAbi {
+        #[clap(long, short)]
+        path: Option<String>,
+    },
 
     /// Generates rust code based on rindexer.yaml - if you are using no-code projects
     /// you will not need to use this.
@@ -80,6 +88,9 @@ enum Commands {
     Codegen {
         #[clap(subcommand)]
         subcommand: CodegenSubcommands,
+
+        #[clap(long, short)]
+        path: Option<String>,
     },
 }
 
@@ -502,14 +513,51 @@ async fn main() {
     let cli = CLI::parse();
 
     // TODO: sort this to inherit the path from execution
-    let path =
+    let path2 =
         PathBuf::from_str("/Users/joshstevens/code/rindexer/examples/rindexer_demo_cli").unwrap();
 
     match &cli.command {
-        Commands::New => handle_new_command(path),
-        Commands::DownloadAbi => handle_download_abi_command(path).await,
-        Commands::Codegen { subcommand } => handle_codegen_command(path, subcommand),
-        Commands::Start { subcommand } => start(path, subcommand).await,
+        Commands::New { path } => handle_new_command(
+            resolve_path(path)
+                .map_err(|e| print_error_message(&e))
+                .unwrap(),
+        ),
+        Commands::DownloadAbi { path } => {
+            handle_download_abi_command(
+                resolve_path(path)
+                    .map_err(|e| print_error_message(&e))
+                    .unwrap(),
+            )
+            .await
+        }
+        Commands::Codegen { subcommand, path } => handle_codegen_command(
+            resolve_path(path)
+                .map_err(|e| print_error_message(&e))
+                .unwrap(),
+            subcommand,
+        ),
+        Commands::Start { subcommand, path } => {
+            start(
+                resolve_path(path)
+                    .map_err(|e| print_error_message(&e))
+                    .unwrap(),
+                subcommand,
+            )
+            .await
+        }
+    }
+}
+
+fn resolve_path(override_path: &Option<String>) -> Result<PathBuf, String> {
+    match override_path {
+        Some(path) => {
+            let path = PathBuf::from_str(path).map_err(|_| "Invalid path provided.".to_string())?;
+            Ok(path)
+        }
+        None => {
+            Ok(std::env::current_dir()
+                .map_err(|_| "Failed to get current directory.".to_string())?)
+        }
     }
 }
 
