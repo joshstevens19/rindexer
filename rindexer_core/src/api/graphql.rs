@@ -1,5 +1,5 @@
 use crate::database::postgres::{
-    connection_string_as_url, database_user, indexer_contract_schema_name,
+    connection_string, indexer_contract_schema_name,
 };
 use crate::manifest::yaml::Indexer;
 use std::process::{Child, Command, Stdio};
@@ -72,8 +72,7 @@ pub fn start_graphql_server(
         })
         .collect();
 
-    let connection_string = connection_string_as_url().map_err(|e| e.to_string())?;
-    let database_user = database_user().map_err(|e| e.to_string())?;
+    let connection_string = connection_string().map_err(|e| e.to_string())?;
     let port = settings.port.unwrap_or(5005).to_string();
 
     let child = Command::new("npx")
@@ -87,8 +86,8 @@ pub fn start_graphql_server(
         .arg("--watch")
         .arg("--schema")
         .arg(schemas.join(","))
-        .arg("--default-role")
-        .arg(database_user)
+        // .arg("--default-role")
+        // .arg(database_user)
         .arg("--enhance-graphiql")
         .arg("--cors")
         .arg("--disable-default-mutations")

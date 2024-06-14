@@ -58,8 +58,8 @@ where
 
 // Custom deserialization function that parses a string as a decimal U64
 fn deserialize_u64_from_string<'de, D>(deserializer: D) -> Result<Option<U64>, D::Error>
-    where
-        D: Deserializer<'de>,
+where
+    D: Deserializer<'de>,
 {
     let s: Option<String> = Option::deserialize(deserializer)?;
     match s {
@@ -115,10 +115,18 @@ pub struct ContractDetails {
     #[serde(skip_serializing_if = "Option::is_none")]
     factory: Option<FactoryDetails>,
 
-    #[serde(rename = "startBlock", deserialize_with = "deserialize_u64_from_string", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "startBlock",
+        deserialize_with = "deserialize_u64_from_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub start_block: Option<U64>,
 
-    #[serde(rename = "endBlock", deserialize_with = "deserialize_u64_from_string", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "endBlock",
+        deserialize_with = "deserialize_u64_from_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub end_block: Option<U64>,
 
     #[serde(rename = "pollingEvery", skip_serializing_if = "Option::is_none")]
@@ -253,11 +261,7 @@ fn default_disable_create_tables() -> bool {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PostgresConnectionDetails {
-    pub name: String,
-    pub user: String,
-    pub password: String,
-    pub host: String,
-    pub port: String,
+    pub database_url: String,
     #[serde(default = "default_disable_create_tables")]
     pub disable_create_tables: bool,
 }

@@ -23,65 +23,44 @@ use crate::generator::build::{contract_name_to_filter_name, is_filter};
 use crate::helpers::camel_to_snake;
 use crate::manifest::yaml::Indexer;
 
-pub fn database_user() -> Result<String, env::VarError> {
-    dotenv().ok();
-    env::var("DATABASE_USER")
-}
+// pub fn database_user() -> Result<String, env::VarError> {
+//     dotenv().ok();
+//     env::var("DATABASE_USER")
+// }
 
 /// Constructs a PostgresSQL connection string using environment variables.
 ///
 /// This function reads database connection details from environment variables
 /// and constructs a connection string in the format required by PostgresSQL.
 ///
-/// # Environment Variables
-///
-/// - `DATABASE_USER`: The username for the database.
-/// - `DATABASE_PASSWORD`: The password for the database user.
-/// - `DATABASE_HOST`: The hostname or IP address of the database server.
-/// - `DATABASE_PORT`: The port number on which the database server is listening.
-/// - `DATABASE_NAME`: The name of the database to connect to.
-///
 /// # Returns
 ///
 /// A `Result` containing the connection string on success, or an `env::VarError` on failure.
-fn connection_string() -> Result<String, env::VarError> {
+pub fn connection_string() -> Result<String, env::VarError> {
     dotenv().ok();
-    Ok(format!(
-        "postgresql://{}:{}@{}:{}/{}",
-        database_user()?,
-        env::var("DATABASE_PASSWORD")?,
-        env::var("DATABASE_HOST")?,
-        env::var("DATABASE_PORT")?,
-        env::var("DATABASE_NAME")?
-    ))
+    let connection = env::var("DATABASE_URL")?;
+    Ok(connection)
 }
 /// Constructs a PostgreSQL connection string from environment variables,
 /// encoding the password to be URL-safe.
-///
-/// The following environment variables are expected:
-/// - `DATABASE_USER`: The database username.
-/// - `DATABASE_PASSWORD`: The database user's password.
-/// - `DATABASE_HOST`: The database host (e.g., `localhost`).
-/// - `DATABASE_PORT`: The database port (e.g., `5432`).
-/// - `DATABASE_NAME`: The name of the database.
 ///
 /// # Returns
 ///
 /// Returns a `Result` containing the PostgreSQL connection string if successful,
 /// or an `env::VarError` if any of the required environment variables are not set.
-pub fn connection_string_as_url() -> Result<String, env::VarError> {
-    dotenv().ok();
-    let password =
-        utf8_percent_encode(&env::var("DATABASE_PASSWORD")?, NON_ALPHANUMERIC).to_string();
-    Ok(format!(
-        "postgresql://{}:{}@{}:{}/{}",
-        database_user()?,
-        password,
-        env::var("DATABASE_HOST")?,
-        env::var("DATABASE_PORT")?,
-        env::var("DATABASE_NAME")?
-    ))
-}
+// pub fn connection_string_as_url() -> Result<String, env::VarError> {
+//     dotenv().ok();
+//     let password =
+//         utf8_percent_encode(&env::var("DATABASE_PASSWORD")?, NON_ALPHANUMERIC).to_string();
+//     Ok(format!(
+//         "postgresql://{}:{}@{}:{}/{}",
+//         database_user()?,
+//         password,
+//         env::var("DATABASE_HOST")?,
+//         env::var("DATABASE_PORT")?,
+//         env::var("DATABASE_NAME")?
+//     ))
+// }
 
 pub struct PostgresClient {
     pool: Pool<PostgresConnectionManager<NoTls>>,

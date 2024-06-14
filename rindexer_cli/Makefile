@@ -6,6 +6,8 @@ start_prod:
 	RUSTFLAGS='-C target-cpu=native' cargo run --profile production --features jemalloc -- start all
 start_indexer:
 	cargo run -- start indexer
+start_graphql:
+	cargo run -- start graphql
 codegen:
 	cargo run -- codegen all
 codegen_typings:
