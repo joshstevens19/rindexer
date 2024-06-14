@@ -12,6 +12,8 @@ use crate::generator::event_callback_registry::{
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_yaml::Value;
 
+pub const YAML_CONFIG_NAME: &str = "rindexer.yaml";
+
 fn default_global() -> Global {
     Global::default()
 }

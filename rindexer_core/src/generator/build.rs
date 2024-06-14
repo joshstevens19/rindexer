@@ -1,10 +1,12 @@
 use std::path::Path;
-use std::{error::Error, path::PathBuf};
+use std::{error::Error, fs, path::PathBuf};
 
 use ethers::contract::Abigen;
 
 use crate::helpers::{camel_to_snake, create_mod_file, format_all_files_for_project, write_file};
-use crate::manifest::yaml::{read_manifest, Contract, Global, Indexer, Manifest, Network, Storage};
+use crate::manifest::yaml::{
+    read_manifest, Contract, Global, Indexer, Manifest, Network, Storage, YAML_CONFIG_NAME,
+};
 
 use super::events_bindings::{
     abigen_contract_file_name, abigen_contract_name, generate_event_bindings,
@@ -265,4 +267,111 @@ pub fn generate(manifest_location: &PathBuf) -> Result<(), Box<dyn Error>> {
     format_all_files_for_project(manifest_location.parent().unwrap());
 
     Ok(())
+}
+
+pub fn generate_rust_project(project_path: &Path) -> Result<(), Box<dyn Error>> {
+    let manifest_location = project_path.join(YAML_CONFIG_NAME);
+    let manifest = read_manifest(&project_path.join(&manifest_location))?;
+
+    fs::create_dir_all(project_path.join("abis"))?;
+
+    // TODO! max rindexer_core to github
+    let cargo = format!(
+        r#"
+[package]
+name = "{project_name}"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rindexer_core = {{ path = "../../rindexer_core" }}
+tokio = {{ version = "1", features = ["full"] }}
+ethers = {{ version = "2.0", features = ["rustls", "openssl"] }}
+serde = {{ version = "1.0.194", features = ["derive"] }}
+"#,
+        project_name = manifest.name,
+    );
+
+    write_file(project_path.join("Cargo.toml").to_str().unwrap(), &cargo).unwrap();
+
+    fs::create_dir_all(project_path.join("src"))?;
+
+    let main_code = r#"
+            use std::env;
+            use std::path::PathBuf;
+            use std::str::FromStr;
+
+            use self::rindexer::indexers::all_handlers::register_all_handlers;
+            use rindexer_core::{
+                start_rindexer, GraphQLServerDetails, GraphQLServerSettings, IndexingDetails, StartDetails,
+            };
+
+            mod rindexer;
+
+            #[tokio::main]
+            async fn main() {
+                let args: Vec<String> = env::args().collect();
+
+                let mut enable_graphql = false;
+                let mut enable_indexer = false;
+                
+                let mut port: Option<usize> = None;
+
+                for arg in args.iter() {
+                    match arg.as_str() {
+                        "--graphql" => enable_graphql = true,
+                        "--indexer" => enable_indexer = true,
+                        _ if arg.starts_with("--port=") || arg.starts_with("--p") => {
+                            if let Some(value) = arg.split('=').nth(1) {
+                                let overridden_port = value.parse::<usize>();
+                                match overridden_port {
+                                    Ok(overridden_port) => port = Some(overridden_port),
+                                    Err(_) => {
+                                        println!("Invalid port number");
+                                        return;
+                                    }
+                                }
+                            }
+                        },
+                        _ => {
+                            // default run both
+                            enable_graphql = true;
+                            enable_indexer = true;
+                        }
+                    }
+                }
+
+                let _ = start_rindexer(StartDetails {
+                    manifest_path: env::current_dir().unwrap().join("rindexer.yaml"),
+                    indexing_details: if enable_indexer {
+                        Some(IndexingDetails {
+                            registry: register_all_handlers().await,
+                            settings: Default::default(),
+                        })
+                    } else {
+                        None
+                    },
+                    graphql_server: if enable_graphql {
+                        Some(GraphQLServerDetails {
+                            settings: if port.is_some() {
+                                GraphQLServerSettings::port(port.unwrap())
+                            } else {
+                                Default::default()
+                            },
+                        })
+                    } else {
+                        None
+                    },
+                })
+                .await;
+            }
+          "#;
+
+    write_file(
+        project_path.join("src").join("main.rs").to_str().unwrap(),
+        main_code,
+    )
+    .unwrap();
+
+    generate(&manifest_location)
 }

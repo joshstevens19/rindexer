@@ -1,6 +1,4 @@
-use crate::database::postgres::{
-    connection_string, indexer_contract_schema_name,
-};
+use crate::database::postgres::{connection_string, indexer_contract_schema_name};
 use crate::manifest::yaml::Indexer;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
