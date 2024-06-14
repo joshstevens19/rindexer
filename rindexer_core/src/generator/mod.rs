@@ -6,6 +6,8 @@ pub mod event_callback_registry;
 mod context_bindings;
 mod events_bindings;
 mod networks_bindings;
+mod docker;
+pub use docker::generate_docker_file;
 
 // Re-export items from events_bindings for external use
 pub use events_bindings::{
