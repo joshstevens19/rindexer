@@ -511,11 +511,7 @@ async fn start(project_path: PathBuf, command: &StartSubcommands) {
 #[tokio::main]
 async fn main() {
     let cli = CLI::parse();
-
-    // TODO: sort this to inherit the path from execution
-    let path2 =
-        PathBuf::from_str("/Users/joshstevens/code/rindexer/examples/rindexer_demo_cli").unwrap();
-
+    
     match &cli.command {
         Commands::New { path } => handle_new_command(
             resolve_path(path)
