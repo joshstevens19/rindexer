@@ -17,6 +17,7 @@ struct RetryWithBlockRangeResult {
     to: BlockNumber,
 }
 
+// TODO https://github.com/ponder-sh/ponder/blob/889096a3ef5f54a0c5a06df82b0da9cf9a113996/packages/utils/src/getLogsRetryHelper.ts#L34 - handle the rest
 /// Attempts to retry with a new block range based on the error message.
 ///
 /// This function parses the error message to extract a suggested block range for retrying the request.
