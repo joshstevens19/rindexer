@@ -31,7 +31,7 @@ use crate::manifest::yaml::{read_manifest, Contract, Manifest};
 use crate::provider::create_retry_client;
 use crate::{
     generate_random_id, setup_logger, setup_postgres, AsyncCsvAppender, EthereumSqlTypeWrapper,
-    FutureExt, GraphQLServerDetails, IndexingDetails, PostgresClient, StartDetails,
+    FutureExt, IndexingDetails, PostgresClient, StartDetails,
     StartNoCodeDetails,
 };
 
