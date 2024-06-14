@@ -129,7 +129,6 @@ pub async fn start_indexing(
 
             let start_block =
                 last_known_start_block.unwrap_or(contract.start_block.unwrap_or(latest_block));
-            // let start_block = U64::from("0x035b0fa7");
             let mut indexing_distance_from_head = U64::zero();
             let mut end_block =
                 std::cmp::min(contract.end_block.unwrap_or(latest_block), latest_block);

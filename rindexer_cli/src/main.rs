@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
 use std::{fs, io};
+use rindexer_core::generator::generate_docker_file;
 
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Parser, Debug)]
@@ -739,29 +740,5 @@ fn write_example_abi(rindexer_abis_folder: &Path) -> PathBuf {
 }
 
 fn write_docker_compose(path: &Path) {
-    let yml = r#"version: '3.8'
-volumes:
-  postgres_data:
-    driver: local
-
-services:
-  postgresql:
-    image: postgres:16
-    shm_size: 1g
-    restart: always
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - 5440:5432
-    env_file:
-      - ./.env
-    healthcheck:
-      test:
-        ['CMD-SHELL', 'pg_isready -U $${DATABASE_USER} -d $${DATABASE_NAME} -q']
-      interval: 5s
-      timeout: 10s
-      retries: 10
- "#;
-
-    write_file(path.join("docker-compose.yml").to_str().unwrap(), yml).unwrap();
+    write_file(path.join("docker-compose.yml").to_str().unwrap(), generate_docker_file()).unwrap();
 }

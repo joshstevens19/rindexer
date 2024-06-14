@@ -53,7 +53,6 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), Box<dyn Error>>
     let manifest = read_manifest(&details.manifest_path)?;
 
     if manifest.project_type != ProjectType::NoCode {
-        // TODO! add info to the manifest
         setup_logger(LevelFilter::INFO);
         info!("Starting rindexer rust project");
     }
@@ -91,7 +90,6 @@ pub struct StartNoCodeDetails {
 
 pub async fn start_rindexer_no_code(details: StartNoCodeDetails) -> Result<(), Box<dyn Error>> {
     let mut manifest = read_manifest(&details.manifest_path)?;
-    // TODO! add info to the manifest
     setup_logger(LevelFilter::INFO);
 
     info!("Starting rindexer no code");
