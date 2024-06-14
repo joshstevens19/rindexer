@@ -4,11 +4,12 @@ use ethers::types::{Chain, U64};
 use ethers_etherscan::Client;
 use regex::Regex;
 use rindexer_core::generator::build::{
-    generate, generate_rindexer_handlers, generate_rindexer_typings,
+    generate, generate_rindexer_handlers, generate_rindexer_typings, generate_rust_project,
 };
+use rindexer_core::generator::generate_docker_file;
 use rindexer_core::manifest::yaml::{
     read_manifest, write_manifest, Contract, ContractDetails, CsvDetails, Global, Indexer,
-    Manifest, Network, PostgresConnectionDetails, ProjectType, Storage,
+    Manifest, Network, PostgresConnectionDetails, ProjectType, Storage, YAML_CONFIG_NAME,
 };
 use rindexer_core::{
     start_rindexer_no_code, write_file, GraphQLServerDetails, GraphQLServerSettings,
@@ -19,7 +20,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
 use std::{fs, io};
-use rindexer_core::generator::generate_docker_file;
 
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Parser, Debug)]
@@ -143,8 +143,6 @@ enum CodegenSubcommands {
 
 const VALID_URL: &str = r"^(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})(:[0-9]+)?(\/[\w \.-]*)*\/?(\\?[\w=&.+-]*)?(#[\w.-]*)?$";
 
-const YAML_NAME: &str = "rindexer.yaml";
-
 fn print_error_message(error_message: &str) {
     println!("{}", error_message.red());
 }
@@ -154,7 +152,7 @@ fn print_success_message(success_message: &str) {
 }
 
 fn rindexer_yaml_exists() -> bool {
-    fs::metadata(YAML_NAME).is_ok()
+    fs::metadata(YAML_CONFIG_NAME).is_ok()
 }
 
 fn rindexer_yaml_does_not_exist() -> bool {
@@ -176,116 +174,19 @@ fn write_rindexer_yaml(manifest: &Manifest, rindexer_yaml_path: &PathBuf) {
     write_manifest(manifest, rindexer_yaml_path).unwrap();
 }
 
-fn generate_rindexer_rust_project(path: PathBuf, rindexer_yaml_path: &PathBuf) {
-    let manifest = read_rindexer_yaml(rindexer_yaml_path);
-
-    if let Err(err) = fs::create_dir_all(path.join("abis")) {
-        print_error_message(&format!("Failed to create directory: {}", err));
-        return;
+fn generate_rindexer_rust_project(project_path: &PathBuf) {
+    let generated = generate_rust_project(project_path);
+    match generated {
+        Ok(_) => {
+            print_success_message("Successfully generated rindexer rust project.");
+        }
+        Err(err) => {
+            print_error_message(&format!(
+                "Failed to generate rindexer rust project: {}",
+                err
+            ));
+        }
     }
-
-    // TODO! max rindexer_core to github
-    let cargo = format!(
-        r#"
-[package]
-name = "{project_name}"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-rindexer_core = {{ path = "../../rindexer_core" }}
-tokio = {{ version = "1", features = ["full"] }}
-ethers = {{ version = "2.0", features = ["rustls", "openssl"] }}
-serde = {{ version = "1.0.194", features = ["derive"] }}
-"#,
-        project_name = manifest.name,
-    );
-
-    write_file(path.join("Cargo.toml").to_str().unwrap(), &cargo).unwrap();
-
-    if let Err(err) = fs::create_dir_all(path.join("src")) {
-        print_error_message(&format!("Failed to create directory: {}", err));
-        return;
-    }
-
-    let main_code = r#"
-            use std::env;
-            use std::path::PathBuf;
-            use std::str::FromStr;
-
-            use self::rindexer::indexers::all_handlers::register_all_handlers;
-            use rindexer_core::{
-                start_rindexer, GraphQLServerDetails, GraphQLServerSettings, IndexingDetails, StartDetails,
-            };
-
-            mod rindexer;
-
-            #[tokio::main]
-            async fn main() {
-                let args: Vec<String> = env::args().collect();
-
-                let mut enable_graphql = false;
-                let mut enable_indexer = false;
-                
-                let mut port: Option<usize> = None;
-
-                for arg in args.iter() {
-                    match arg.as_str() {
-                        "--graphql" => enable_graphql = true,
-                        "--indexer" => enable_indexer = true,
-                        _ if arg.starts_with("--port=") || arg.starts_with("--p") => {
-                            if let Some(value) = arg.split('=').nth(1) {
-                                let overridden_port = value.parse::<usize>();
-                                match overridden_port {
-                                    Ok(overridden_port) => port = Some(overridden_port),
-                                    Err(_) => {
-                                        println!("Invalid port number");
-                                        return;
-                                    }
-                                }
-                            }
-                        },
-                        _ => {
-                            // default run both
-                            enable_graphql = true;
-                            enable_indexer = true;
-                        }
-                    }
-                }
-
-                let _ = start_rindexer(StartDetails {
-                    manifest_path: env::current_dir().unwrap().join("rindexer.yaml"),
-                    indexing_details: if enable_indexer {
-                        Some(IndexingDetails {
-                            registry: register_all_handlers().await,
-                            settings: Default::default(),
-                        })
-                    } else {
-                        None
-                    },
-                    graphql_server: if enable_graphql {
-                        Some(GraphQLServerDetails {
-                            settings: if port.is_some() {
-                                GraphQLServerSettings::port(port.unwrap())
-                            } else {
-                                Default::default()
-                            },
-                        })
-                    } else {
-                        None
-                    },
-                })
-                .await;
-            }
-          "#;
-
-    write_file(
-        path.join("src").join("main.rs").to_str().unwrap(),
-        main_code,
-    )
-    .unwrap();
-
-    generate(rindexer_yaml_path).unwrap();
 }
 
 fn handle_new_command(project_path: PathBuf) {
@@ -327,7 +228,7 @@ fn handle_new_command(project_path: PathBuf) {
     let postgres_enabled = storage_choice == "postgres" || storage_choice == "both";
     let csv_enabled = storage_choice == "csv" || storage_choice == "both";
 
-    let rindexer_yaml_path = project_path.join(YAML_NAME);
+    let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
     let rindexer_abis_folder = project_path.join("abis");
 
     // Create the project directory
@@ -419,7 +320,7 @@ fn handle_new_command(project_path: PathBuf) {
     }
 
     if project_type == ProjectType::Rust {
-        generate_rindexer_rust_project(project_path, &rindexer_yaml_path);
+        generate_rindexer_rust_project(&project_path);
         print_success_message(
             "rindexer project created created with a starter manifest.\n- run rindexer codegen both to regenerate the code\n- run rindexer dev to start rindexer\n - run rindexer download-abi to download new ABIs",
         );
@@ -491,7 +392,7 @@ async fn handle_download_abi_command(project_path: PathBuf) {
 fn handle_codegen_command(project_path: PathBuf, subcommand: &CodegenSubcommands) {
     validate_rindexer_yaml_exist();
 
-    let rindexer_yaml_path = project_path.join(YAML_NAME);
+    let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
 
     let manifest = read_manifest(&rindexer_yaml_path).unwrap();
     if manifest.project_type == ProjectType::NoCode {
@@ -518,7 +419,7 @@ fn handle_codegen_command(project_path: PathBuf, subcommand: &CodegenSubcommands
 async fn start(project_path: PathBuf, command: &StartSubcommands) {
     validate_rindexer_yaml_exist();
 
-    let manifest = read_rindexer_yaml(&project_path.join(YAML_NAME));
+    let manifest = read_rindexer_yaml(&project_path.join(YAML_CONFIG_NAME));
     if manifest.storage.postgres_enabled() {
         let client = PostgresClient::new().await;
         if client.is_err() {
@@ -555,7 +456,7 @@ async fn start(project_path: PathBuf, command: &StartSubcommands) {
         ProjectType::NoCode => match command {
             StartSubcommands::Indexer => {
                 let details = StartNoCodeDetails {
-                    manifest_path: project_path.join(YAML_NAME),
+                    manifest_path: project_path.join(YAML_CONFIG_NAME),
                     indexing_settings: None,
                     graphql_server: None,
                 };
@@ -564,7 +465,7 @@ async fn start(project_path: PathBuf, command: &StartSubcommands) {
             }
             StartSubcommands::Graphql { port } => {
                 let details = StartNoCodeDetails {
-                    manifest_path: project_path.join(YAML_NAME),
+                    manifest_path: project_path.join(YAML_CONFIG_NAME),
                     indexing_settings: None,
                     graphql_server: Some(GraphQLServerDetails {
                         settings: match port {
@@ -578,7 +479,7 @@ async fn start(project_path: PathBuf, command: &StartSubcommands) {
             }
             StartSubcommands::All { port } => {
                 let details = StartNoCodeDetails {
-                    manifest_path: project_path.join(YAML_NAME),
+                    manifest_path: project_path.join(YAML_CONFIG_NAME),
                     indexing_settings: None,
                     graphql_server: Some(GraphQLServerDetails {
                         settings: match port {
@@ -740,5 +641,9 @@ fn write_example_abi(rindexer_abis_folder: &Path) -> PathBuf {
 }
 
 fn write_docker_compose(path: &Path) {
-    write_file(path.join("docker-compose.yml").to_str().unwrap(), generate_docker_file()).unwrap();
+    write_file(
+        path.join("docker-compose.yml").to_str().unwrap(),
+        generate_docker_file(),
+    )
+    .unwrap();
 }
