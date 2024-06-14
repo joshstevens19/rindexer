@@ -4,7 +4,7 @@ pub mod indexer;
 pub mod manifest;
 
 mod database;
-pub use database::postgres::{EthereumSqlTypeWrapper, PostgresClient};
+pub use database::postgres::{setup_postgres, EthereumSqlTypeWrapper, PostgresClient};
 
 mod simple_file_formatters;
 pub use simple_file_formatters::csv::AsyncCsvAppender;

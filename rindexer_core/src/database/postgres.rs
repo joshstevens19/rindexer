@@ -1,5 +1,6 @@
 use bb8::{Pool, RunError};
 use bb8_postgres::PostgresConnectionManager;
+use std::error::Error;
 use std::{env, str};
 
 // External crates
@@ -12,7 +13,7 @@ use rust_decimal::Decimal;
 use thiserror::Error;
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type as PgType};
 use tokio_postgres::{Error as PgError, NoTls, Row, Statement, Transaction as PgTransaction};
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::generator::{
     extract_event_names_and_signatures_from_abi, generate_abi_name_properties, read_abi_items,
@@ -21,7 +22,7 @@ use crate::generator::{
 // Internal modules
 use crate::generator::build::{contract_name_to_filter_name, is_filter};
 use crate::helpers::camel_to_snake;
-use crate::manifest::yaml::Indexer;
+use crate::manifest::yaml::{Indexer, Manifest, ProjectType};
 
 // pub fn database_user() -> Result<String, env::VarError> {
 //     dotenv().ok();
@@ -251,6 +252,27 @@ impl PostgresClient {
         transaction.commit().await.map_err(PostgresError::PgError)?;
         Ok(())
     }
+}
+
+pub async fn setup_postgres(manifest: &Manifest) -> Result<PostgresClient, Box<dyn Error>> {
+    info!("Setting up postgres");
+    let client = PostgresClient::new().await?;
+
+    // No-code will ignore this as it must have tables if postgres used
+    if !manifest.storage.postgres_disable_create_tables()
+        || manifest.project_type == ProjectType::NoCode
+    {
+        info!("Creating tables for all indexers");
+        for indexer in &manifest.indexers {
+            info!("Creating tables for indexer: {}", indexer.name);
+            let sql = create_tables_for_indexer_sql(indexer);
+            debug!("{}", sql);
+            client.batch_execute(&sql).await?;
+            info!("Created tables for indexer: {}", indexer.name);
+        }
+    }
+
+    Ok(client)
 }
 
 /// Converts a Solidity ABI type to a corresponding SQL data type.
