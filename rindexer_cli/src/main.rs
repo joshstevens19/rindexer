@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use colored::Colorize;
+use ethers::types::spoof::storage;
 use ethers::types::{Chain, U64};
 use ethers_etherscan::Client;
 use regex::Regex;
@@ -11,15 +12,13 @@ use rindexer_core::manifest::yaml::{
     read_manifest, write_manifest, Contract, ContractDetails, CsvDetails, Global, Indexer,
     Manifest, Network, PostgresConnectionDetails, ProjectType, Storage, YAML_CONFIG_NAME,
 };
-use rindexer_core::{
-    start_rindexer_no_code, write_file, GraphQLServerDetails, GraphQLServerSettings,
-    PostgresClient, StartNoCodeDetails,
-};
+use rindexer_core::{start_rindexer_no_code, write_file, GraphQLServerDetails, GraphQLServerSettings, PostgresClient, StartNoCodeDetails, drop_tables_for_indexer_sql};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
 use std::{fs, io};
+use tokio::fs::remove_dir_all;
 
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Parser, Debug)]
@@ -92,6 +91,16 @@ enum Commands {
         #[clap(long, short)]
         path: Option<String>,
     },
+    /// Delete data from the postgres database or csv files.
+    ///
+    /// This command deletes rindexer project data from the postgres database or csv files.
+    ///
+    /// Example:
+    /// `rindexer delete`
+    Delete {
+        #[clap(long, short)]
+        path: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -156,6 +165,10 @@ const VALID_URL: &str = r"^(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})(:[0-9]+)?
 
 fn print_error_message(error_message: &str) {
     println!("{}", error_message.red());
+}
+
+fn print_warn_message(error_message: &str) {
+    println!("{}", error_message.yellow());
 }
 
 fn print_success_message(success_message: &str) {
@@ -508,10 +521,62 @@ async fn start(project_path: PathBuf, command: &StartSubcommands) {
     }
 }
 
+async fn handle_delete_command(project_path: PathBuf) {
+    print_warn_message(&format!(
+        "This will delete all data in the postgres database and csv files for the project at: {}",
+        project_path.display()
+    ));
+    print_warn_message("This operation can not be reverted. Make sure you know what you are doing.");
+    let manifest = read_rindexer_yaml(&project_path.join(YAML_CONFIG_NAME));
+
+    let postgres_enabled = manifest.storage.postgres_enabled();
+    let csv_enabled = manifest.storage.csv_enabled();
+
+    if !postgres_enabled && !csv_enabled {
+        print_success_message("No storage enabled. Nothing to delete.");
+        return;
+    }
+
+    if postgres_enabled {
+        let postgres_delete = prompt_for_input_list(
+            "Are you sure you wish to delete the database data (it can not be reverted)?",
+            &["yes".to_string(), "no".to_string()],
+            None,
+        );
+
+        if postgres_delete == "yes" {
+            let postgres_client = PostgresClient::new().await.unwrap();
+            let sql = drop_tables_for_indexer_sql(manifest.indexers.first().unwrap());
+            
+            postgres_client.batch_execute(&sql).await.unwrap();
+            
+            print_success_message("\n\nSuccessfully deleted all data from the postgres database.\n\n");
+        }
+    }
+
+    if csv_enabled {
+        let csv_delete = prompt_for_input_list(
+            "Are you sure you wish to delete the csv data (it can not be reverted)?",
+            &["yes".to_string(), "no".to_string()],
+            None,
+        );
+
+        if csv_delete == "yes" {
+            let path = &project_path.join(manifest.storage.csv.unwrap().path);
+            // if no csv exist we will just look like it cleared it
+            if path.exists() {
+                remove_dir_all(&project_path.join(path)).await.unwrap();
+            }
+            
+            print_success_message("\n\nSuccessfully deleted all csv files.\n\n");
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let cli = CLI::parse();
-    
+
     match &cli.command {
         Commands::New { path } => handle_new_command(
             resolve_path(path)
@@ -541,6 +606,11 @@ async fn main() {
             )
             .await
         }
+        Commands::Delete { path } => handle_delete_command(
+            resolve_path(path)
+                .map_err(|e| print_error_message(&e))
+                .unwrap(),
+        ).await,
     }
 }
 

@@ -484,6 +484,22 @@ pub fn create_tables_for_indexer_sql(indexer: &Indexer) -> String {
     sql
 }
 
+pub fn drop_tables_for_indexer_sql(indexer: &Indexer) -> String {
+    let mut sql = "DROP SCHEMA IF EXISTS rindexer_internal CASCADE;".to_string();
+
+    for contract in &indexer.contracts {
+        let contract_name = if is_filter(contract) {
+            contract_name_to_filter_name(&contract.name)
+        } else {
+            contract.name.clone()
+        };
+        let schema_name = indexer_contract_schema_name(&indexer.name, &contract_name);
+        sql.push_str(format!("DROP SCHEMA IF EXISTS {} CASCADE;", schema_name).as_str());
+    }
+
+    sql
+}
+
 /// Generates a SQL VALUES clause with injected parameters.
 ///
 /// This function constructs a VALUES clause for a SQL statement with a specified number of
