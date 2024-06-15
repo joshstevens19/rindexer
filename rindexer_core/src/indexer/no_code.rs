@@ -152,6 +152,9 @@ pub enum ProcessIndexersError {
 
     #[error("{0}")]
     ParamTypeError(ParamTypeError),
+
+    #[error("Event name not found in ABI for contract: {0} - event: {1}")]
+    EventNameNotFoundInAbi(String, String),
 }
 
 pub async fn process_indexers(
@@ -181,14 +184,25 @@ pub async fn process_indexers(
 
             for event_info in event_names {
                 let event_name = event_info.name.clone();
-                let results = &abi_gen
+                let event = &abi_gen
                     .events
                     .iter()
                     .find(|(name, _)| *name == &event_name)
                     .map(|(_, event)| event)
-                    .expect("Event not found");
-
-                let event = results.first().expect("Event not found").clone();
+                    .ok_or_else(|| {
+                        ProcessIndexersError::EventNameNotFoundInAbi(
+                            contract.name.clone(),
+                            event_name.clone(),
+                        )
+                    })?
+                    .first()
+                    .ok_or_else(|| {
+                        ProcessIndexersError::EventNameNotFoundInAbi(
+                            contract.name.clone(),
+                            event_name.clone(),
+                        )
+                    })?
+                    .clone();
 
                 let decoder: Decoder = Arc::new(move |_topics: Vec<H256>, _data: Bytes| {
                     // TODO empty decoder for now to avoid decoder being an option - come back to look at it

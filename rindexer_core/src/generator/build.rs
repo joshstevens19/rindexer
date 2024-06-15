@@ -15,8 +15,7 @@ use crate::manifest::yaml::{
 
 use super::events_bindings::{
     abigen_contract_file_name, abigen_contract_name, generate_event_bindings,
-    generate_event_handlers, GenerateEventBindingsError,
-    GenerateEventHandlersError,
+    generate_event_handlers, GenerateEventBindingsError, GenerateEventHandlersError,
 };
 use super::{context_bindings::generate_context_code, networks_bindings::generate_networks_code};
 
@@ -376,7 +375,7 @@ pub fn generate(manifest_location: &PathBuf) -> Result<(), GenerateError> {
         Some(parent) => {
             format_all_files_for_project(parent);
             Ok(())
-        },
+        }
         None => {
             let manifest_location = manifest_location.to_str();
             match manifest_location {
