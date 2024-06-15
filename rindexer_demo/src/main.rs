@@ -36,29 +36,33 @@ async fn main() {
         }
     }
 
-    let _ = start_rindexer(StartDetails {
-        manifest_path: env::current_dir().unwrap().join("rindexer.yaml"),
-        indexing_details: if enable_indexer {
-            Some(IndexingDetails {
-                registry: register_all_handlers().await,
-                settings: Default::default(),
-            })
-        } else {
-            None
-        },
-        graphql_server: if enable_graphql {
-            Some(GraphQLServerDetails {
-                settings: if port.is_some() {
-                    GraphQLServerSettings::port(port.unwrap())
+    let path = env::current_dir();
+    match path {
+        Ok(path) => {
+            let _ = start_rindexer(StartDetails {
+                manifest_path: path.join("rindexer.yaml"),
+                indexing_details: if enable_indexer {
+                    Some(IndexingDetails {
+                        registry: register_all_handlers().await,
+                        settings: Default::default(),
+                    })
                 } else {
-                    Default::default()
+                    None
+                },
+                graphql_server: if enable_graphql {
+                    Some(GraphQLServerDetails {
+                        settings: port.map_or_else(Default::default, GraphQLServerSettings::port),
+                    })
+                } else {
+                    None
                 },
             })
-        } else {
-            None
-        },
-    })
-    .await;
+            .await;
+        }
+        Err(e) => {
+            println!("Error getting current directory: {:?}", e);
+        }
+    }
 }
 
 // fn generate() {

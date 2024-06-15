@@ -1,6 +1,5 @@
 use bb8::{Pool, RunError};
 use bb8_postgres::PostgresConnectionManager;
-use std::error::Error;
 use std::{env, str};
 
 // External crates
@@ -8,7 +7,6 @@ use bytes::BytesMut;
 use dotenv::dotenv;
 use ethers::abi::Token;
 use ethers::types::{Address, Bytes, H128, H160, H256, H512, U128, U256, U512, U64};
-use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use rust_decimal::Decimal;
 use thiserror::Error;
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type as PgType};
@@ -17,12 +15,13 @@ use tracing::{debug, info};
 
 use crate::generator::{
     extract_event_names_and_signatures_from_abi, generate_abi_name_properties, read_abi_items,
-    ABIInput, EventInfo, GenerateAbiPropertiesType,
+    ABIInput, EventInfo, GenerateAbiPropertiesType, ParamTypeError, ReadAbiError,
 };
 // Internal modules
 use crate::generator::build::{contract_name_to_filter_name, is_filter};
 use crate::helpers::camel_to_snake;
 use crate::manifest::yaml::{Indexer, Manifest, ProjectType};
+use crate::types::code::Code;
 
 // pub fn database_user() -> Result<String, env::VarError> {
 //     dotenv().ok();
@@ -42,12 +41,12 @@ pub fn connection_string() -> Result<String, env::VarError> {
     let connection = env::var("DATABASE_URL")?;
     Ok(connection)
 }
-/// Constructs a PostgreSQL connection string from environment variables,
+/// Constructs a PostgresSQL connection string from environment variables,
 /// encoding the password to be URL-safe.
 ///
 /// # Returns
 ///
-/// Returns a `Result` containing the PostgreSQL connection string if successful,
+/// Returns a `Result` containing the PostgresSQL connection string if successful,
 /// or an `env::VarError` if any of the required environment variables are not set.
 // pub fn connection_string_as_url() -> Result<String, env::VarError> {
 //     dotenv().ok();
@@ -95,7 +94,8 @@ impl PostgresClient {
             connection_string().map_err(PostgresConnectionError::DatabaseConnectionConfigWrong)?,
             NoTls,
         )
-        .unwrap();
+        .map_err(PostgresConnectionError::ConnectionPoolError)?;
+
         let pool = Pool::builder()
             .build(manager)
             .await
@@ -254,9 +254,23 @@ impl PostgresClient {
     }
 }
 
-pub async fn setup_postgres(manifest: &Manifest) -> Result<PostgresClient, Box<dyn Error>> {
+#[derive(Error, Debug)]
+pub enum SetupPostgresError {
+    #[error("{0}")]
+    PostgresConnection(PostgresConnectionError),
+
+    #[error("{0}")]
+    PostgresError(PostgresError),
+
+    #[error("Error creating tables for indexer: {0}")]
+    CreateTables(CreateTablesForIndexerSqlError),
+}
+
+pub async fn setup_postgres(manifest: &Manifest) -> Result<PostgresClient, SetupPostgresError> {
     info!("Setting up postgres");
-    let client = PostgresClient::new().await?;
+    let client = PostgresClient::new()
+        .await
+        .map_err(SetupPostgresError::PostgresConnection)?;
 
     // No-code will ignore this as it must have tables if postgres used
     if !manifest.storage.postgres_disable_create_tables()
@@ -265,9 +279,13 @@ pub async fn setup_postgres(manifest: &Manifest) -> Result<PostgresClient, Box<d
         info!("Creating tables for all indexers");
         for indexer in &manifest.indexers {
             info!("Creating tables for indexer: {}", indexer.name);
-            let sql = create_tables_for_indexer_sql(indexer);
+            let sql =
+                create_tables_for_indexer_sql(indexer).map_err(SetupPostgresError::CreateTables)?;
             debug!("{}", sql);
-            client.batch_execute(&sql).await?;
+            client
+                .batch_execute(sql.as_str())
+                .await
+                .map_err(SetupPostgresError::PostgresError)?;
             info!("Created tables for indexer: {}", indexer.name);
         }
     }
@@ -290,7 +308,6 @@ pub async fn setup_postgres(manifest: &Manifest) -> Result<PostgresClient, Box<d
 ///
 /// # Panics
 ///
-/// The function will panic if it encounters an unsupported Solidity type.
 pub fn solidity_type_to_db_type(abi_type: &str) -> String {
     let is_array = abi_type.ends_with("[]");
     let base_type = abi_type.trim_end_matches("[]");
@@ -304,7 +321,7 @@ pub fn solidity_type_to_db_type(abi_type: &str) -> String {
         "string" => "TEXT",
         t if t.starts_with("bytes") => "BYTEA",
         "uint8" | "uint16" | "int8" | "int16" => "SMALLINT",
-        _ => panic!("Unsupported type {}", abi_type),
+        _ => panic!("Unsupported type: {}", base_type),
     };
 
     // Return the SQL type, appending array brackets if necessary
@@ -443,6 +460,15 @@ pub fn indexer_contract_schema_name(indexer_name: &str, contract_name: &str) -> 
     )
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum CreateTablesForIndexerSqlError {
+    #[error("{0}")]
+    ReadAbiError(ReadAbiError),
+
+    #[error("{0}")]
+    ParamTypeError(ParamTypeError),
+}
+
 /// Generates SQL queries to create tables and schemas for the given indexer.
 ///
 /// This function constructs SQL queries to create the necessary schemas and tables based on the provided indexer configuration.
@@ -451,10 +477,9 @@ pub fn indexer_contract_schema_name(indexer_name: &str, contract_name: &str) -> 
 ///
 /// * `indexer` - A reference to the `Indexer` containing the configuration details.
 ///
-/// # Returns
-///
-/// A `String` containing the SQL queries to create the schemas and tables.
-pub fn create_tables_for_indexer_sql(indexer: &Indexer) -> String {
+pub fn create_tables_for_indexer_sql(
+    indexer: &Indexer,
+) -> Result<Code, CreateTablesForIndexerSqlError> {
     let mut sql = "CREATE SCHEMA IF NOT EXISTS rindexer_internal;".to_string();
 
     for contract in &indexer.contracts {
@@ -463,28 +488,27 @@ pub fn create_tables_for_indexer_sql(indexer: &Indexer) -> String {
         } else {
             contract.name.clone()
         };
-        if let Ok(abi_items) = read_abi_items(contract) {
-            if let Ok(event_names) = extract_event_names_and_signatures_from_abi(&abi_items) {
-                let schema_name = indexer_contract_schema_name(&indexer.name, &contract_name);
-                sql.push_str(format!("CREATE SCHEMA IF NOT EXISTS {};", schema_name).as_str());
-                info!("Creating schema if not exists: {}", schema_name);
+        let abi_items =
+            read_abi_items(contract).map_err(CreateTablesForIndexerSqlError::ReadAbiError)?;
+        let event_names = extract_event_names_and_signatures_from_abi(&abi_items)
+            .map_err(CreateTablesForIndexerSqlError::ParamTypeError)?;
+        let schema_name = indexer_contract_schema_name(&indexer.name, &contract_name);
+        sql.push_str(format!("CREATE SCHEMA IF NOT EXISTS {};", schema_name).as_str());
+        info!("Creating schema if not exists: {}", schema_name);
 
-                let networks: Vec<String> =
-                    contract.details.iter().map(|d| d.network.clone()).collect();
-                sql.push_str(&generate_event_table_sql(&event_names, &schema_name));
-                sql.push_str(&generate_internal_event_table_sql(
-                    &event_names,
-                    &schema_name,
-                    networks,
-                ));
-            }
-        }
+        let networks: Vec<String> = contract.details.iter().map(|d| d.network.clone()).collect();
+        sql.push_str(&generate_event_table_sql(&event_names, &schema_name));
+        sql.push_str(&generate_internal_event_table_sql(
+            &event_names,
+            &schema_name,
+            networks,
+        ));
     }
 
-    sql
+    Ok(Code::new(sql))
 }
 
-pub fn drop_tables_for_indexer_sql(indexer: &Indexer) -> String {
+pub fn drop_tables_for_indexer_sql(indexer: &Indexer) -> Code {
     let mut sql = "DROP SCHEMA IF EXISTS rindexer_internal CASCADE;".to_string();
 
     for contract in &indexer.contracts {
@@ -497,7 +521,7 @@ pub fn drop_tables_for_indexer_sql(indexer: &Indexer) -> String {
         sql.push_str(format!("DROP SCHEMA IF EXISTS {} CASCADE;", schema_name).as_str());
     }
 
-    sql
+    Code::new(sql)
 }
 
 /// Generates a SQL VALUES clause with injected parameters.
@@ -701,7 +725,7 @@ pub fn map_log_token_to_ethereum_wrapper(token: &Token) -> Option<EthereumSqlTyp
         //         _ => unreachable!(),
         //     }).collect()))
         // }
-        _ => panic!("Unsupported token type"),
+        _ => None,
     }
 }
 
@@ -720,17 +744,23 @@ impl<'a> ToSql for EthereumSqlTypeWrapper<'a> {
         match self {
             EthereumSqlTypeWrapper::U64(value) => {
                 let value = value.to_string();
-                Decimal::to_sql(&value.parse::<Decimal>().unwrap(), _ty, out)
+                Decimal::to_sql(&value.parse::<Decimal>()?, _ty, out)
             }
             EthereumSqlTypeWrapper::VecU64(values) => {
-                let results: Vec<Decimal> = values
+                let results: Result<Vec<Decimal>, _> = values
                     .iter()
-                    .map(|s| s.to_string().parse::<Decimal>().unwrap())
+                    .map(|s| s.to_string().parse::<Decimal>())
                     .collect();
-                if results.is_empty() {
-                    Ok(IsNull::Yes)
-                } else {
-                    results.to_sql(_ty, out)
+
+                match results {
+                    Ok(decimals) => {
+                        if decimals.is_empty() {
+                            Ok(IsNull::Yes)
+                        } else {
+                            decimals.to_sql(_ty, out)
+                        }
+                    }
+                    Err(e) => Err(Box::new(e)),
                 }
             }
             EthereumSqlTypeWrapper::U128(value) => {

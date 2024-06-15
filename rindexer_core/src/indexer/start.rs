@@ -4,13 +4,14 @@ use ethers::{
     types::{Address, Filter, H256, U64},
 };
 use log::error;
-use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{AcquireError, Mutex, Semaphore};
+use tokio::task::JoinError;
 use tokio_stream::StreamExt;
 use tracing::{debug, info};
 
+use crate::database::postgres::PostgresConnectionError;
 use crate::generator::event_callback_registry::{
     EventCallbackRegistry, EventInformation, EventResult, IndexingContractSetup, NetworkContract,
 };
@@ -52,8 +53,6 @@ impl Default for StartIndexingSettings {
     }
 }
 
-type BoxedError = Box<dyn Error + Send + Sync>;
-
 struct EventProcessingConfig {
     indexer_name: String,
     contract_name: String,
@@ -73,6 +72,27 @@ struct EventProcessingConfig {
     indexing_distance_from_head: U64,
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum StartIndexingError {
+    #[error("Could not run all index handlers join error: {0}")]
+    CouldNotRunAllIndexHandlersJoin(JoinError),
+
+    #[error("Could not run all index handlers {0}")]
+    CouldNotRunAllIndexHandlers(ProcessEventConcurrentlyError),
+
+    #[error("{0}")]
+    PostgresConnectionError(PostgresConnectionError),
+
+    #[error("Could not get block number from provider: {0}")]
+    GetBlockNumberError(ProviderError),
+
+    #[error("Could not get chain id from provider: {0}")]
+    GetChainIdError(ProviderError),
+
+    #[error("Could not process event sequentially: {0}")]
+    ProcessEventSequentiallyError(ProcessEventSequentiallyError),
+}
+
 /// Starts the indexing process based on the provided settings and registry.
 ///
 /// # Arguments
@@ -87,9 +107,16 @@ pub async fn start_indexing(
     manifest: &Manifest,
     registry: Arc<EventCallbackRegistry>,
     settings: StartIndexingSettings,
-) -> Result<(), BoxedError> {
+) -> Result<(), StartIndexingError> {
     let database = if manifest.storage.postgres_enabled() {
-        Some(Arc::new(PostgresClient::new().await.unwrap()))
+        let postgres = PostgresClient::new().await;
+        match postgres {
+            Ok(postgres) => Some(Arc::new(postgres)),
+            Err(e) => {
+                error!("Error connecting to Postgres: {:?}", e);
+                return Err(StartIndexingError::PostgresConnectionError(e));
+            }
+        }
     } else {
         None
     };
@@ -116,7 +143,11 @@ pub async fn start_indexing(
                 &event,
                 &format!("Processing event on network {}", contract.network),
             );
-            let latest_block = contract.provider.get_block_number().await?;
+            let latest_block = contract
+                .provider
+                .get_block_number()
+                .await
+                .map_err(StartIndexingError::GetBlockNumberError)?;
             let live_indexing = contract.end_block.is_none();
             let last_known_start_block = get_last_synced_block_number(
                 database.clone(),
@@ -134,7 +165,11 @@ pub async fn start_indexing(
                 std::cmp::min(contract.end_block.unwrap_or(latest_block), latest_block);
 
             if event.contract.reorg_safe_distance {
-                let chain_id = contract.provider.get_chainid().await?;
+                let chain_id = contract
+                    .provider
+                    .get_chainid()
+                    .await
+                    .map_err(StartIndexingError::GetChainIdError)?;
                 let reorg_safe_distance = reorg_safe_distance_for_chain(&chain_id);
                 let safe_block_number = latest_block - reorg_safe_distance;
                 if end_block > safe_block_number {
@@ -175,7 +210,9 @@ pub async fn start_indexing(
             };
 
             if settings.execute_in_event_order {
-                process_event_sequentially(event_processing_config).await?;
+                process_event_sequentially(event_processing_config)
+                    .await
+                    .map_err(StartIndexingError::ProcessEventSequentiallyError)?
             } else {
                 let handle = tokio::spawn(process_event_concurrently(event_processing_config));
                 handles.push(handle);
@@ -184,7 +221,10 @@ pub async fn start_indexing(
     }
 
     for handle in handles {
-        handle.await??;
+        handle
+            .await
+            .map_err(StartIndexingError::CouldNotRunAllIndexHandlersJoin)?
+            .map_err(StartIndexingError::CouldNotRunAllIndexHandlers)?;
     }
 
     tokio::time::sleep(Duration::from_secs(1000)).await;
@@ -192,6 +232,17 @@ pub async fn start_indexing(
     Ok(())
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum ProcessEventSequentiallyError {
+    #[error("Could not process logs: {0}")]
+    ProcessLogs(Box<ProviderError>),
+
+    #[error("Could not acquire semaphore: {0}")]
+    AcquireError(AcquireError),
+
+    #[error("Could not build filter: {0}")]
+    BuildFilterError(BuildFilterError),
+}
 /// Processes events sequentially.
 ///
 /// # Arguments
@@ -203,7 +254,7 @@ pub async fn start_indexing(
 /// A `Result` indicating success or failure.
 async fn process_event_sequentially(
     event_processing_config: EventProcessingConfig,
-) -> Result<(), BoxedError> {
+) -> Result<(), ProcessEventSequentiallyError> {
     info!(
         "{} - Processing event sequentially",
         event_processing_config.info_log_name
@@ -225,9 +276,14 @@ async fn process_event_sequentially(
                 .indexing_contract_setup,
             current_block,
             next_block,
-        );
+        )
+        .map_err(ProcessEventSequentiallyError::BuildFilterError)?;
+
         let semaphore_client = event_processing_config.semaphore.clone();
-        let permit = semaphore_client.acquire_owned().await.unwrap();
+        let permit = semaphore_client
+            .acquire_owned()
+            .await
+            .map_err(ProcessEventSequentiallyError::AcquireError)?;
         process_logs(ProcessLogsParams {
             indexer_name: event_processing_config.indexer_name.clone(),
             contract_name: event_processing_config.contract_name.clone(),
@@ -243,10 +299,26 @@ async fn process_event_sequentially(
             live_indexing: event_processing_config.live_indexing,
             indexing_distance_from_head: event_processing_config.indexing_distance_from_head,
         })
-        .await?;
+        .await
+        .map_err(ProcessEventSequentiallyError::ProcessLogs)?;
         drop(permit);
     }
     Ok(())
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum ProcessEventConcurrentlyError {
+    #[error("Could not run all log handlers join error: {0}")]
+    CouldNotRunAllLogHandlersJoin(JoinError),
+
+    #[error("Could not run all log handlers {0}")]
+    CouldNotRunAllLogHandlers(Box<ProviderError>),
+
+    #[error("Could not acquire semaphore: {0}")]
+    AcquireError(AcquireError),
+
+    #[error("Could not build filter: {0}")]
+    BuildFilterError(BuildFilterError),
 }
 
 /// Processes events concurrently.
@@ -260,7 +332,7 @@ async fn process_event_sequentially(
 /// A `Result` indicating success or failure.
 async fn process_event_concurrently(
     event_processing_config: EventProcessingConfig,
-) -> Result<(), BoxedError> {
+) -> Result<(), ProcessEventConcurrentlyError> {
     info!(
         "{} - Processing event concurrently",
         event_processing_config.info_log_name
@@ -284,7 +356,8 @@ async fn process_event_concurrently(
                 .indexing_contract_setup,
             current_block,
             next_block,
-        );
+        )
+        .map_err(ProcessEventConcurrentlyError::BuildFilterError)?;
 
         let registry_copy = event_processing_config.registry.clone();
         let permit = event_processing_config
@@ -292,7 +365,7 @@ async fn process_event_concurrently(
             .clone()
             .acquire_owned()
             .await
-            .unwrap();
+            .map_err(ProcessEventConcurrentlyError::AcquireError)?;
 
         // Clone the necessary fields
         let network_contract = event_processing_config.network_contract.clone();
@@ -336,7 +409,10 @@ async fn process_event_concurrently(
     }
 
     for handle in handles {
-        handle.await?.unwrap();
+        handle
+            .await
+            .map_err(ProcessEventConcurrentlyError::CouldNotRunAllLogHandlersJoin)?
+            .map_err(ProcessEventConcurrentlyError::CouldNotRunAllLogHandlers)?;
     }
 
     Ok(())
@@ -369,11 +445,14 @@ pub struct ProcessLogsParams {
 /// # Returns
 ///
 /// A `Result` indicating success or failure.
-async fn process_logs(params: ProcessLogsParams) -> Result<(), BoxedError> {
+async fn process_logs(params: ProcessLogsParams) -> Result<(), Box<ProviderError>> {
     let provider = Arc::new(params.network_contract.provider.clone());
     let mut logs_stream = fetch_logs_stream(
         provider,
-        params.topic_id.parse::<H256>().unwrap(),
+        params
+            .topic_id
+            .parse::<H256>()
+            .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?,
         params.filter,
         params.info_log_name,
         if params.live_indexing {
@@ -433,7 +512,7 @@ async fn handle_logs_result(
     database: Option<Arc<PostgresClient>>,
     registry: Arc<EventCallbackRegistry>,
     result: Result<FetchLogsStream, Box<ProviderError>>,
-) -> Result<(), BoxedError> {
+) -> Result<(), Box<ProviderError>> {
     match result {
         Ok(result) => {
             let fn_data = result
@@ -549,7 +628,7 @@ fn update_progress_and_last_synced(
             .update_last_synced_block(&network_contract.id, to_block);
 
         if let Some(database) = database {
-            database
+            let result = database
                 .execute(
                     &format!(
                         "UPDATE rindexer_internal.{}_{}_{} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block",
@@ -562,10 +641,22 @@ fn update_progress_and_last_synced(
                         &network_contract.network,
                     ],
                 )
-                .await
-                .unwrap();
+                .await;
+
+            if let Err(e) = result {
+                error!("Error updating last synced block: {:?}", e);
+            }
         }
     });
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum BuildFilterError {
+    #[error("Address is valid format")]
+    AddressInvalidFormat,
+
+    #[error("Topic0 is valid format")]
+    Topic0InvalidFormat,
 }
 
 /// Builds a filter for fetching logs.
@@ -585,23 +676,48 @@ fn build_filter(
     indexing_contract_setup: &IndexingContractSetup,
     current_block: U64,
     next_block: U64,
-) -> Filter {
+) -> Result<Filter, BuildFilterError> {
     match indexing_contract_setup {
-        IndexingContractSetup::Address(address) => Filter::new()
-            .address(address.parse::<Address>().unwrap())
-            .topic0(topic_id.parse::<H256>().unwrap())
-            .from_block(current_block)
-            .to_block(next_block),
-        IndexingContractSetup::Filter(filter) => filter.extend_filter_indexed(
-            Filter::new()
-                .topic0(topic_id.parse::<H256>().unwrap())
+        IndexingContractSetup::Address(address) => {
+            let address = address
+                .parse::<Address>()
+                .map_err(|_| BuildFilterError::AddressInvalidFormat)?;
+            let topic0 = topic_id
+                .parse::<H256>()
+                .map_err(|_| BuildFilterError::Topic0InvalidFormat)?;
+
+            Ok(Filter::new()
+                .address(address)
+                .topic0(topic0)
                 .from_block(current_block)
-                .to_block(next_block),
-        ),
-        IndexingContractSetup::Factory(factory) => Filter::new()
-            .address(factory.address.parse::<Address>().unwrap())
-            .topic0(topic_id.parse::<H256>().unwrap())
-            .from_block(current_block)
-            .to_block(next_block),
+                .to_block(next_block))
+        }
+        IndexingContractSetup::Filter(filter) => {
+            let topic0 = topic_id
+                .parse::<H256>()
+                .map_err(|_| BuildFilterError::Topic0InvalidFormat)?;
+
+            Ok(filter.extend_filter_indexed(
+                Filter::new()
+                    .topic0(topic0)
+                    .from_block(current_block)
+                    .to_block(next_block),
+            ))
+        }
+        IndexingContractSetup::Factory(factory) => {
+            let address = factory
+                .address
+                .parse::<Address>()
+                .map_err(|_| BuildFilterError::AddressInvalidFormat)?;
+            let topic0 = topic_id
+                .parse::<H256>()
+                .map_err(|_| BuildFilterError::Topic0InvalidFormat)?;
+
+            Ok(Filter::new()
+                .address(address)
+                .topic0(topic0)
+                .from_block(current_block)
+                .to_block(next_block))
+        }
     }
 }

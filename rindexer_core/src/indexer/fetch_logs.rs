@@ -38,28 +38,34 @@ fn retry_with_block_range(
 ) -> Option<RetryWithBlockRangeResult> {
     let error_message = &error.message;
 
+    fn compile_regex(pattern: &str) -> Result<Regex, regex::Error> {
+        Regex::new(pattern)
+    }
+
     // Alchemy
-    let re = Regex::new(r"this block range should work: \[(0x[0-9a-fA-F]+),\s*(0x[0-9a-fA-F]+)]")
-        .unwrap();
-    if let Some(captures) = re.captures(error_message) {
-        let start_block = captures.get(1).unwrap().as_str();
-        let end_block = captures.get(2).unwrap().as_str();
-        return Some(RetryWithBlockRangeResult {
-            from: BlockNumber::from_str(start_block).unwrap(),
-            to: BlockNumber::from_str(end_block).unwrap(),
-        });
+    if let Ok(re) =
+        compile_regex(r"this block range should work: \[(0x[0-9a-fA-F]+),\s*(0x[0-9a-fA-F]+)]")
+    {
+        if let Some(captures) = re.captures(error_message) {
+            let start_block = captures.get(1)?.as_str();
+            let end_block = captures.get(2)?.as_str();
+            let from = BlockNumber::from_str(start_block).ok()?;
+            let to = BlockNumber::from_str(end_block).ok()?;
+            return Some(RetryWithBlockRangeResult { from, to });
+        }
     }
 
     // Infura, Thirdweb, zkSync
-    let re =
-        Regex::new(r"Try with this block range \[0x([0-9a-fA-F]+),\s*0x([0-9a-fA-F]+)\]").unwrap();
-    if let Some(captures) = re.captures(error_message) {
-        let start_block = captures.get(1).unwrap().as_str();
-        let end_block = captures.get(2).unwrap().as_str();
-        return Some(RetryWithBlockRangeResult {
-            from: BlockNumber::from_str(start_block).unwrap(),
-            to: BlockNumber::from_str(end_block).unwrap(),
-        });
+    if let Ok(re) =
+        compile_regex(r"Try with this block range \[0x([0-9a-fA-F]+),\s*0x([0-9a-fA-F]+)\]")
+    {
+        if let Some(captures) = re.captures(error_message) {
+            let start_block = captures.get(1)?.as_str();
+            let end_block = captures.get(2)?.as_str();
+            let from = BlockNumber::from_str(start_block).ok()?;
+            let to = BlockNumber::from_str(end_block).ok()?;
+            return Some(RetryWithBlockRangeResult { from, to });
+        }
     }
 
     // Ankr
@@ -71,25 +77,27 @@ fn retry_with_block_range(
     }
 
     // QuickNode, 1RPC, zkEVM, Blast
-    let re = Regex::new(r"limited to a ([\d,.]+)").unwrap();
-    if let Some(captures) = re.captures(error_message) {
-        let range_str = captures[1].replace(&['.', ','][..], "");
-        let range = U64::from_dec_str(&range_str).unwrap();
-        return Some(RetryWithBlockRangeResult {
-            from: BlockNumber::from(from_block),
-            to: BlockNumber::from(from_block + range),
-        });
+    if let Ok(re) = compile_regex(r"limited to a ([\d,.]+)") {
+        if let Some(captures) = re.captures(error_message) {
+            let range_str = captures[1].replace(&['.', ','][..], "");
+            let range = U64::from_dec_str(&range_str).ok()?;
+            return Some(RetryWithBlockRangeResult {
+                from: BlockNumber::from(from_block),
+                to: BlockNumber::from(from_block + range),
+            });
+        }
     }
 
     // BlockPI
-    let re = Regex::new(r"limited to ([\d,.]+) block").unwrap();
-    if let Some(captures) = re.captures(error_message) {
-        let range_str = captures[1].replace(&['.', ','][..], "");
-        let range = U64::from_dec_str(&range_str).unwrap();
-        return Some(RetryWithBlockRangeResult {
-            from: BlockNumber::from(from_block),
-            to: BlockNumber::from(from_block + range),
-        });
+    if let Ok(re) = compile_regex(r"limited to ([\d,.]+) block") {
+        if let Some(captures) = re.captures(error_message) {
+            let range_str = captures[1].replace(&['.', ','][..], "");
+            let range = U64::from_dec_str(&range_str).ok()?;
+            return Some(RetryWithBlockRangeResult {
+                from: BlockNumber::from(from_block),
+                to: BlockNumber::from(from_block + range),
+            });
+        }
     }
 
     // Base
@@ -534,35 +542,37 @@ async fn live_indexing_mode<M: Middleware + Clone + Send + 'static>(
 /// * `topic_id` - The topic ID to check.
 /// * `latest_block` - The latest block containing the logs bloom filter.
 ///
-/// # Returns
-///
-/// `true` if the block contains relevant logs, otherwise `false`.
 fn is_relevant_block(
     contract_address: &Option<ValueOrArray<Address>>,
     topic_id: &H256,
     latest_block: &Block<H256>,
 ) -> bool {
-    if let Some(contract_address) = contract_address {
-        match contract_address {
-            ValueOrArray::Value(address) => {
-                if !contract_in_bloom(*address, latest_block.logs_bloom.unwrap()) {
-                    return false;
+    match latest_block.logs_bloom {
+        None => false,
+        Some(logs_bloom) => {
+            if let Some(contract_address) = contract_address {
+                match contract_address {
+                    ValueOrArray::Value(address) => {
+                        if !contract_in_bloom(*address, logs_bloom) {
+                            return false;
+                        }
+                    }
+                    ValueOrArray::Array(addresses) => {
+                        if addresses
+                            .iter()
+                            .all(|addr| !contract_in_bloom(*addr, logs_bloom))
+                        {
+                            return false;
+                        }
+                    }
                 }
             }
-            ValueOrArray::Array(addresses) => {
-                if addresses
-                    .iter()
-                    .all(|addr| !contract_in_bloom(*addr, latest_block.logs_bloom.unwrap()))
-                {
-                    return false;
-                }
+
+            if !topic_in_bloom(*topic_id, logs_bloom) {
+                return false;
             }
+
+            true
         }
     }
-
-    if !topic_in_bloom(*topic_id, latest_block.logs_bloom.unwrap()) {
-        return false;
-    }
-
-    true
 }

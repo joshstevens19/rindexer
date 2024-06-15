@@ -1,4 +1,5 @@
 use crate::manifest::yaml::ContractDetails;
+use crate::types::code::Code;
 use crate::{
     helpers::camel_to_snake,
     manifest::yaml::{Contract, Network},
@@ -15,15 +16,12 @@ use super::networks_bindings::network_provider_fn_name;
 /// * `abi_location` - The location of the ABI file.
 /// * `network` - The network configuration.
 ///
-/// # Returns
-///
-/// A `Result` containing the generated contract code as a `String`, or an error if something goes wrong.
 fn generate_contract_code(
     contract_name: &str,
     contract_details: &ContractDetails,
     abi_location: &str,
     network: &Network,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Code {
     if let Some(address) = contract_details.address() {
         let code = format!(
             r#"
@@ -43,9 +41,9 @@ fn generate_contract_code(
             network_fn_name = network_provider_fn_name(network),
             contract_path = abi_location
         );
-        Ok(code)
+        Code::new(code)
     } else {
-        Ok(String::new())
+        Code::blank()
     }
 }
 
@@ -56,15 +54,9 @@ fn generate_contract_code(
 /// * `contracts` - A reference to a vector of `Contract` configurations.
 /// * `networks` - A reference to a slice of `Network` configurations.
 ///
-/// # Returns
-///
-/// A `Result` containing the generated contracts code as a `String`, or an error if something goes wrong.
-fn generate_contracts_code(
-    contracts: &[Contract],
-    networks: &[Network],
-) -> Result<String, Box<dyn std::error::Error>> {
+fn generate_contracts_code(contracts: &[Contract], networks: &[Network]) -> Code {
     let network_imports: Vec<String> = networks.iter().map(network_provider_fn_name).collect();
-    let mut output = format!(
+    let mut output = Code::new(format!(
         r#"
         /// THIS IS A GENERATED FILE. DO NOT MODIFY MANUALLY.
         ///
@@ -76,9 +68,9 @@ fn generate_contracts_code(
         use ethers::{{contract::abigen, abi::Address, providers::{{Provider, Http, RetryClient}}}};
         "#,
         network_imports.join(", ")
-    );
+    ));
 
-    let mut code = String::new();
+    let mut code = Code::blank();
 
     for contract in contracts {
         for details in &contract.details {
@@ -88,14 +80,14 @@ fn generate_contracts_code(
                     details,
                     &contract.abi,
                     network,
-                )?);
+                ));
             }
         }
     }
 
     output.push_str(&code);
 
-    Ok(output)
+    output
 }
 
 /// Generates the context code for the given contracts and networks.
@@ -105,16 +97,10 @@ fn generate_contracts_code(
 /// * `contracts` - An optional reference to a vector of `Contract` configurations.
 /// * `networks` - A reference to a slice of `Network` configurations.
 ///
-/// # Returns
-///
-/// A `Result` containing the generated context code as a `String`, or an error if something goes wrong.
-pub fn generate_context_code(
-    contracts: &Option<Vec<Contract>>,
-    networks: &[Network],
-) -> Result<String, Box<dyn std::error::Error>> {
+pub fn generate_context_code(contracts: &Option<Vec<Contract>>, networks: &[Network]) -> Code {
     if let Some(contracts) = contracts {
         generate_contracts_code(contracts, networks)
     } else {
-        Ok(String::new())
+        Code::blank()
     }
 }

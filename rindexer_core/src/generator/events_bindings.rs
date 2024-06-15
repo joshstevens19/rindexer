@@ -7,13 +7,13 @@ use crate::EthereumSqlTypeWrapper;
 use ethers::utils::keccak256;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::error::Error;
 use std::fs;
 use std::iter::Map;
 use std::path::Path;
 
 use crate::helpers::camel_to_snake;
 use crate::manifest::yaml::{Contract, ContractDetails, CsvDetails, Storage};
+use crate::types::code::Code;
 
 use super::networks_bindings::network_provider_fn_name_by_name;
 
@@ -26,6 +26,15 @@ pub struct ABIItem {
     name: String,
     #[serde(rename = "type", default)]
     type_: String,
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum ReadAbiError {
+    #[error("Could not read ABI string: {0}")]
+    CouldNotReadAbiString(std::io::Error),
+
+    #[error("Could not read ABI JSON: {0}")]
+    CouldNotReadAbiJson(serde_json::Error),
 }
 
 /// Reads and filters ABI items from the contract's ABI file.
@@ -41,18 +50,12 @@ pub struct ABIItem {
 /// * `contract` - A reference to a `Contract` struct containing the ABI file path and an optional
 ///                list of event names to include.
 ///
-/// # Returns
-///
-/// A `Result` containing a vector of `ABIItem` if successful, or a boxed `dyn Error` if an error occurs.
-///
-/// # Errors
-///
-/// This function will return an error if the ABI file cannot be read or if the JSON deserialization fails.
-pub fn read_abi_items(contract: &Contract) -> Result<Vec<ABIItem>, Box<dyn Error>> {
+pub fn read_abi_items(contract: &Contract) -> Result<Vec<ABIItem>, ReadAbiError> {
     // Read the ABI JSON string from the file
-    let abi_str = fs::read_to_string(&contract.abi)?;
+    let abi_str = fs::read_to_string(&contract.abi).map_err(ReadAbiError::CouldNotReadAbiString)?;
     // Deserialize the JSON string to a vector of ABI items
-    let abi_items: Vec<ABIItem> = serde_json::from_str(&abi_str)?;
+    let abi_items: Vec<ABIItem> =
+        serde_json::from_str(&abi_str).map_err(ReadAbiError::CouldNotReadAbiJson)?;
 
     // Filter the ABI items
     let filtered_abi_items = match &contract.include_events {
@@ -114,29 +117,27 @@ impl EventInfo {
     }
 }
 
-/// Formats the parameter type for an ABI input.
-///
-/// # Arguments
-///
-/// * `input` - The ABI input.
-///
-/// # Returns
-///
-/// A formatted string representing the parameter type.
-fn format_param_type(input: &ABIInput) -> String {
+#[derive(thiserror::Error, Debug)]
+pub enum ParamTypeError {
+    #[error("tuple type specified but no components found")]
+    MissingComponents,
+}
+
+fn format_param_type(input: &ABIInput) -> Result<String, ParamTypeError> {
     match input.type_.as_str() {
         "tuple" => {
-            let formatted_components = input
+            let components = input
                 .components
                 .as_ref()
-                .unwrap()
+                .ok_or(ParamTypeError::MissingComponents)?;
+            let formatted_components = components
                 .iter()
                 .map(format_param_type)
-                .collect::<Vec<_>>()
+                .collect::<Result<Vec<_>, ParamTypeError>>()?
                 .join(",");
-            format!("({})", formatted_components)
+            Ok(format!("({})", formatted_components))
         }
-        _ => input.type_.to_string(),
+        _ => Ok(input.type_.to_string()),
     }
 }
 
@@ -166,14 +167,14 @@ fn compute_topic_id(event_signature: &str) -> String {
 /// # Returns
 ///
 /// A formatted string representing the event signature.
-fn format_event_signature(item: &ABIItem) -> String {
-    item.inputs
+fn format_event_signature(item: &ABIItem) -> Result<String, ParamTypeError> {
+    let formatted_inputs = item
+        .inputs
         .iter()
         .map(format_param_type)
-        .collect::<Vec<_>>()
-        .join(",")
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(formatted_inputs.join(","))
 }
-
 /// Generates the contract name for ABI generation.
 ///
 /// # Arguments
@@ -213,31 +214,29 @@ pub fn abigen_contract_file_name(contract: &Contract) -> String {
     format!("{}_abi_gen", camel_to_snake(&contract.name))
 }
 
-/// Extracts event names and signatures from an ABI JSON.
-///
-/// # Arguments
-///
-/// * `abi_json` - The ABI JSON.
-///
-/// # Returns
-///
-/// A `Result` containing a vector of `EventInfo` on success or an error.
 pub fn extract_event_names_and_signatures_from_abi(
     abi_json: &[ABIItem],
-) -> Result<Vec<EventInfo>, Box<dyn Error>> {
-    let result = abi_json
-        .iter()
-        .filter_map(|item| {
-            if item.type_ == "event" {
-                let signature = format_event_signature(item);
-                Some(EventInfo::new(item, signature))
-            } else {
-                None
-            }
-        })
-        .collect();
+) -> Result<Vec<EventInfo>, ParamTypeError> {
+    let mut events = Vec::new();
+    for item in abi_json.iter() {
+        if item.type_ == "event" {
+            let signature = format_event_signature(item)?;
+            events.push(EventInfo::new(item, signature));
+        }
+    }
+    Ok(events)
+}
 
-    Ok(result)
+#[derive(thiserror::Error, Debug)]
+pub enum GenerateStructsError {
+    #[error("Could not read ABI string: {0}")]
+    CouldNotReadAbiString(std::io::Error),
+
+    #[error("Could not read ABI JSON: {0}")]
+    CouldNotReadAbiJson(serde_json::Error),
+
+    #[error("Invalid ABI JSON format")]
+    InvalidAbiJsonFormat,
 }
 
 /// Generates Rust structs for the events in a contract.
@@ -246,22 +245,25 @@ pub fn extract_event_names_and_signatures_from_abi(
 ///
 /// * `contract` - The contract.
 ///
-/// # Returns
-///
-/// A `Result` containing a string with the generated structs on success or an error.
-fn generate_structs(contract: &Contract) -> Result<String, Box<dyn Error>> {
-    let abi_str = fs::read_to_string(&contract.abi)?;
-    let abi_json: Value = serde_json::from_str(&abi_str)?;
+fn generate_structs(contract: &Contract) -> Result<Code, GenerateStructsError> {
+    let abi_str =
+        fs::read_to_string(&contract.abi).map_err(GenerateStructsError::CouldNotReadAbiString)?;
+    let abi_json: Value =
+        serde_json::from_str(&abi_str).map_err(GenerateStructsError::CouldNotReadAbiJson)?;
 
-    let mut structs = String::new();
+    let mut structs = Code::blank();
 
-    for item in abi_json.as_array().ok_or("Invalid ABI JSON format")?.iter() {
+    for item in abi_json
+        .as_array()
+        .ok_or(GenerateStructsError::InvalidAbiJsonFormat)?
+        .iter()
+    {
         if item["type"] == "event" {
             let event_name = item["name"].as_str().unwrap_or_default();
             let struct_result = format!("{}Result", event_name);
             let struct_data = format!("{}Data", event_name);
 
-            structs.push_str(&format!(
+            structs.push_str(&Code::new(format!(
                 r#"
                     pub type {struct_data} = {abigen_mod_name}::{event_name}Filter;
 
@@ -275,7 +277,7 @@ fn generate_structs(contract: &Contract) -> Result<String, Box<dyn Error>> {
                 struct_data = struct_data,
                 abigen_mod_name = abigen_contract_mod_name(contract),
                 event_name = event_name
-            ));
+            )));
         }
     }
 
@@ -288,15 +290,14 @@ fn generate_structs(contract: &Contract) -> Result<String, Box<dyn Error>> {
 ///
 /// * `event_info` - The event information.
 ///
-/// # Returns
-///
-/// A string with the generated enum variants.
-fn generate_event_enums_code(event_info: &[EventInfo]) -> String {
-    event_info
-        .iter()
-        .map(|info| format!("{}({}Event<TExtensions>),", info.name, info.name))
-        .collect::<Vec<_>>()
-        .join("\n")
+fn generate_event_enums_code(event_info: &[EventInfo]) -> Code {
+    Code::new(
+        event_info
+            .iter()
+            .map(|info| format!("{}({}Event<TExtensions>),", info.name, info.name))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 /// Generates the event type name.
@@ -305,9 +306,6 @@ fn generate_event_enums_code(event_info: &[EventInfo]) -> String {
 ///
 /// * `name` - The name of the event.
 ///
-/// # Returns
-///
-/// A string representing the event type name.
 fn generate_event_type_name(name: &str) -> String {
     format!("{}EventType", name)
 }
@@ -319,22 +317,21 @@ fn generate_event_type_name(name: &str) -> String {
 /// * `event_type_name` - The event type name.
 /// * `event_info` - The event information.
 ///
-/// # Returns
-///
-/// A string with the generated match arms.
-fn generate_topic_ids_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> String {
-    event_info
-        .iter()
-        .map(|info| {
-            format!(
-                "{}::{}(_) => \"0x{}\",",
-                event_type_name,
-                info.name,
-                info.topic_id()
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+fn generate_topic_ids_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> Code {
+    Code::new(
+        event_info
+            .iter()
+            .map(|info| {
+                format!(
+                    "{}::{}(_) => \"0x{}\",",
+                    event_type_name,
+                    info.name,
+                    info.topic_id()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 /// Generates match arms for event names.
@@ -344,20 +341,19 @@ fn generate_topic_ids_match_arms_code(event_type_name: &str, event_info: &[Event
 /// * `event_type_name` - The event type name.
 /// * `event_info` - The event information.
 ///
-/// # Returns
-///
-/// A string with the generated match arms.
-fn generate_event_names_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> String {
-    event_info
-        .iter()
-        .map(|info| {
-            format!(
-                "{}::{}(_) => \"{}\",",
-                event_type_name, info.name, info.name
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+fn generate_event_names_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> Code {
+    Code::new(
+        event_info
+            .iter()
+            .map(|info| {
+                format!(
+                    "{}::{}(_) => \"{}\",",
+                    event_type_name, info.name, info.name
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 /// Generates match arms for event registration.
@@ -367,15 +363,13 @@ fn generate_event_names_match_arms_code(event_type_name: &str, event_info: &[Eve
 /// * `event_type_name` - The event type name.
 /// * `event_info` - The event information.
 ///
-/// # Returns
-///
-/// A string with the generated match arms.
-fn generate_register_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> String {
-    event_info
-        .iter()
-        .map(|info| {
-            format!(
-                r#"
+fn generate_register_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> Code {
+    Code::new(
+        event_info
+            .iter()
+            .map(|info| {
+                format!(
+                    r#"
                     {}::{}(event) => {{
                         let event = Arc::new(event);
                         Arc::new(move |result| {{
@@ -384,11 +378,12 @@ fn generate_register_match_arms_code(event_type_name: &str, event_info: &[EventI
                         }})
                     }},
                 "#,
-                event_type_name, info.name
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+                    event_type_name, info.name
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 /// Generates match arms for event decoders.
@@ -398,11 +393,8 @@ fn generate_register_match_arms_code(event_type_name: &str, event_info: &[EventI
 /// * `event_type_name` - The event type name.
 /// * `event_info` - The event information.
 ///
-/// # Returns
-///
-/// A string with the generated match arms.
-fn generate_decoder_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> String {
-    event_info
+fn generate_decoder_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> Code {
+    Code::new(event_info
         .iter()
         .map(|info| {
             format!(
@@ -421,7 +413,7 @@ fn generate_decoder_match_arms_code(event_type_name: &str, event_info: &[EventIn
             )
         })
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n"))
 }
 
 /// Generates a string representation of an optional vector of strings.
@@ -433,36 +425,29 @@ fn generate_decoder_match_arms_code(event_type_name: &str, event_info: &[EventIn
 /// # Returns
 ///
 /// A string representation of the vector.
-fn generate_indexed_vec_string(indexed: &Option<Vec<String>>) -> String {
+fn generate_indexed_vec_string(indexed: &Option<Vec<String>>) -> Code {
     match indexed {
-        Some(values) => {
-            format!(
-                "Some(vec![{}])",
-                values
-                    .iter()
-                    .map(|s| format!("\"{}\".to_string()", s))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        }
-        None => "None".to_string(),
+        Some(values) => Code::new(format!(
+            "Some(vec![{}])",
+            values
+                .iter()
+                .map(|s| format!("\"{}\".to_string()", s))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+        None => Code::new("None".to_string()),
     }
 }
 
-/// Generates a function that returns a `Contract` struct with details populated from the provided `Contract` instance.
-///
-/// This function constructs a Rust function as a string, which when called, will return a `Contract`
-/// with all the necessary details filled in. It handles different types of contract setups
-/// (`Address`, `Filter`, `Factory`) and properly formats optional start and end block values.
-///
-/// # Arguments
-///
-/// * `contract` - The `Contract` instance from which to generate the function.
-///
-/// # Returns
-///
-/// A `String` containing the generated Rust function code.
-fn generate_contract_type_fn_code(contract: &Contract) -> String {
+#[derive(thiserror::Error, Debug)]
+pub enum GenerateContractTypeFnError {
+    #[error("include events data is required but was not provided")]
+    MissingIncludeEventsData,
+}
+
+fn generate_contract_type_fn_code(
+    contract: &Contract,
+) -> Result<Code, GenerateContractTypeFnError> {
     let mut details = String::new();
     details.push_str("vec![");
 
@@ -555,61 +540,62 @@ fn generate_contract_type_fn_code(contract: &Contract) -> String {
 
     details.push(']');
 
-    format!(
+    let include_events_code = if let Some(include_events) = &contract.include_events {
+        format!(
+            "Some(vec![{}])",
+            include_events
+                .iter()
+                .map(|s| format!("\"{}\".to_string()", s))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    } else {
+        return Err(GenerateContractTypeFnError::MissingIncludeEventsData);
+    };
+
+    Ok(Code::new(format!(
         r#"
-        fn contract_information(&self) -> Contract {{
+        pub fn contract_information(&self) -> Contract {{
             Contract {{
-                name: "{name}".to_string(),
-                details: {details},
-                abi: "{abi}".to_string(),
-                include_events: {include_events},
-                reorg_safe_distance: {reorg_safe_distance},
-                generate_csv: {generate_csv},
+                name: "{}".to_string(),
+                details: {},
+                abi: "{}".to_string(),
+                include_events: {},
+                reorg_safe_distance: {},
+                generate_csv: {},
             }}
         }}
         "#,
-        name = contract.name,
-        details = details,
-        abi = contract.abi,
-        include_events = if contract.include_events.is_some() {
-            format!(
-                "Some(vec![{}])",
-                contract
-                    .include_events
-                    .as_ref()
-                    .unwrap()
-                    .iter()
-                    .map(|s| format!("\"{}\".to_string()", s))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        } else {
-            "None".to_string()
-        },
-        reorg_safe_distance = contract.reorg_safe_distance,
-        generate_csv = contract.generate_csv
-    )
+        contract.name,
+        details,
+        contract.abi,
+        include_events_code,
+        contract.reorg_safe_distance,
+        contract.generate_csv
+    )))
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum CreateCsvFileForEvent {
+    #[error("Could not create the dir {0}")]
+    CreateDirFailed(std::io::Error),
 }
 
 pub fn create_csv_file_for_event(
     project_path: &Path,
     contract: &Contract,
     event_info: &EventInfo,
-    csv: &Option<CsvDetails>,
-) -> String {
+    csv_path: &str,
+) -> Result<String, CreateCsvFileForEvent> {
     let csv_file_name = format!("{}-{}.csv", contract.name, event_info.name).to_lowercase();
-    let csv_folder = project_path.join(format!("{}/{}", csv.as_ref().unwrap().path, contract.name));
+    let csv_folder = project_path.join(format!("{}/{}", csv_path, contract.name));
 
     // Create directory if it does not exist.
     if let Err(e) = fs::create_dir_all(&csv_folder) {
-        panic!(
-            "Failed to create directory '{}': {}",
-            csv_folder.to_str().unwrap(),
-            e
-        );
+        return Err(CreateCsvFileForEvent::CreateDirFailed(e));
     }
 
-    format!("{}/{}", csv_folder.display(), csv_file_name)
+    Ok(format!("{}/{}", csv_folder.display(), csv_file_name))
 }
 
 pub fn csv_headers_for_event(event_info: &EventInfo) -> Vec<String> {
@@ -631,44 +617,25 @@ pub fn csv_headers_for_event(event_info: &EventInfo) -> Vec<String> {
     headers
 }
 
-/// Generates a CSV instance for logging event data.
-///
-/// This function creates a directory and CSV file for storing event data. It constructs the file path,
-/// initializes the CSV headers, and generates Rust code for creating an `AsyncCsvAppender` instance.
-///
-/// # Arguments
-///
-/// * `project_path` - The project path.
-/// * `contract_name` - The name of the contract.
-/// * `event_info` - The event information.
-/// * `csv` - The csv configuration.
-///
-/// # Returns
-///
-/// A `String` containing the generated Rust code for the CSV instance.
 fn generate_csv_instance(
     project_path: &Path,
     contract: &Contract,
     event_info: &EventInfo,
     csv: &Option<CsvDetails>,
-) -> String {
-    if !contract.generate_csv {
-        let path = if csv.is_some() {
-            &csv.as_ref().unwrap().path
-        } else {
-            "./generated_csv"
-        };
+) -> Result<Code, CreateCsvFileForEvent> {
+    let csv_path = csv.as_ref().map_or("./generated_csv", |c| &c.path);
 
-        return format!(
+    if !contract.generate_csv {
+        return Ok(Code::new(format!(
             r#"let csv = AsyncCsvAppender::new("{csv_path}".to_string());"#,
-            csv_path = path,
-        );
+            csv_path = csv_path,
+        )));
     }
 
-    let csv_path = create_csv_file_for_event(project_path, contract, event_info, csv);
+    let csv_path = create_csv_file_for_event(project_path, contract, event_info, csv_path)?;
     let headers: Vec<String> = csv_headers_for_event(event_info);
 
-    format!(
+    Ok(Code::new(format!(
         r#"
         let csv = AsyncCsvAppender::new("{csv_path}".to_string());
         if !Path::new("{csv_path}").exists() {{
@@ -679,99 +646,95 @@ fn generate_csv_instance(
     "#,
         csv_path = csv_path,
         headers = headers.join(".into(), ")
-    )
+    )))
 }
 
-/// Generates the Rust code for event callback structs.
-///
-/// This function constructs the Rust code for event callback structs, handling the creation of contexts,
-/// initializing CSV generation, and managing storage configuration.
-///
-/// # Arguments
-///
-/// * `project_path` - The project path.
-/// * `event_info` - A slice of `EventInfo` containing details about the events.
-/// * `contract_name` - The name of the contract.
-/// * `storage` - The `storage` configuration.
-///
-/// # Returns
-///
-/// A `String` containing the generated Rust code for the event callback structs.
+#[derive(thiserror::Error, Debug)]
+pub enum GenerateEventCallbackStructsError {
+    #[error("{0}")]
+    CreateCsvFileForEvent(CreateCsvFileForEvent),
+}
+
 fn generate_event_callback_structs_code(
     project_path: &Path,
     event_info: &[EventInfo],
     contract: &Contract,
     storage: &Storage,
-) -> String {
+) -> Result<Code, GenerateEventCallbackStructsError> {
     let databases_enabled = storage.postgres_enabled();
 
-    event_info
-        .iter()
-        .map(|info| {
-            format!(
-                r#"
-                type {name}EventCallbackType<TExtensions> = Arc<dyn Fn(&Vec<{struct_result}>, Arc<EventContext<TExtensions>>) -> BoxFuture<'_, ()> + Send + Sync>;
+    let mut parts = Vec::new();
 
-                pub struct {name}Event<TExtensions> where TExtensions: Send + Sync {{
+    for info in event_info {
+        let csv_generator = generate_csv_instance(project_path, contract, info, &storage.csv)
+            .map_err(GenerateEventCallbackStructsError::CreateCsvFileForEvent)?;
+
+        let part = format!(
+            r#"
+            type {name}EventCallbackType<TExtensions> = Arc<dyn Fn(&Vec<{struct_result}>, Arc<EventContext<TExtensions>>) -> BoxFuture<'_, ()> + Send + Sync>;
+
+            pub struct {name}Event<TExtensions> where TExtensions: Send + Sync {{
+                callback: {name}EventCallbackType<TExtensions>,
+                context: Arc<EventContext<TExtensions>>,
+            }}
+
+            impl<TExtensions> {name}Event<TExtensions> where TExtensions: Send + Sync {{
+                pub async fn new(
                     callback: {name}EventCallbackType<TExtensions>,
-                    context: Arc<EventContext<TExtensions>>,
-                }}
+                    extensions: TExtensions,
+                ) -> Self {{
+                    {csv_generator}
 
-                impl<TExtensions> {name}Event<TExtensions> where TExtensions: Send + Sync {{
-                    pub async fn new(
-                        callback: {name}EventCallbackType<TExtensions>,
-                        extensions: TExtensions,
-                    ) -> Self {{
-                        {csv_generator}
-
-                        Self {{
-                            callback,
-                            context: Arc::new(EventContext {{
-                                {database}
-                                csv: Arc::new(csv),
-                                extensions: Arc::new(extensions),
-                            }}),
-                        }}
+                    Self {{
+                        callback,
+                        context: Arc::new(EventContext {{
+                            {database}
+                            csv: Arc::new(csv),
+                            extensions: Arc::new(extensions),
+                        }}),
                     }}
                 }}
+            }}
 
-                #[async_trait]
-                impl<TExtensions> EventCallback for {name}Event<TExtensions> where TExtensions: Send + Sync {{
-                    async fn call(&self, events: Vec<EventResult>) {{
-                        let events_len = events.len();
+            #[async_trait]
+            impl<TExtensions> EventCallback for {name}Event<TExtensions> where TExtensions: Send + Sync {{
+                async fn call(&self, events: Vec<EventResult>) {{
+                    let events_len = events.len();
 
-                        let result: Vec<{struct_result}> = events.into_iter()
-                            .filter_map(|item| {{
-                                item.decoded_data.downcast::<{struct_data}>()
-                                    .ok()
-                                    .map(|arc| {struct_result} {{
-                                        event_data: (*arc).clone(),
-                                        tx_information: item.tx_information
-                                    }})
-                            }})
-                            .collect();
+                    let result: Vec<{struct_result}> = events.into_iter()
+                        .filter_map(|item| {{
+                            item.decoded_data.downcast::<{struct_data}>()
+                                .ok()
+                                .map(|arc| {struct_result} {{
+                                    event_data: (*arc).clone(),
+                                    tx_information: item.tx_information
+                                }})
+                        }})
+                        .collect();
 
-                        if result.len() == events_len {{
-                            (self.callback)(&result, self.context.clone()).await;
-                        }} else {{
-                            panic!("{name}Event: Unexpected data type - expected: {struct_data}")
-                        }}
+                    if result.len() == events_len {{
+                        (self.callback)(&result, self.context.clone()).await;
+                    }} else {{
+                        panic!("{name}Event: Unexpected data type - expected: {struct_data}")
                     }}
                 }}
-                "#,
-                name = info.name,
-                struct_result = info.struct_result,
-                struct_data = info.struct_data,
-                database = if databases_enabled {
-                    "database: Arc::new(PostgresClient::new().await.unwrap()),"
-                } else {
-                    ""
-                },
-                csv_generator = generate_csv_instance(project_path, contract, info, &storage.csv)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+            }}
+            "#,
+            name = info.name,
+            struct_result = info.struct_result,
+            struct_data = info.struct_data,
+            database = if databases_enabled {
+                "database: Arc::new(PostgresClient::new().await.unwrap()),"
+            } else {
+                ""
+            },
+            csv_generator = csv_generator,
+        );
+
+        parts.push(part);
+    }
+
+    Ok(Code::new(parts.join("\n")))
 }
 
 /// Generates the Rust code for a function that returns a provider for a given network.
@@ -783,10 +746,7 @@ fn generate_event_callback_structs_code(
 ///
 /// * `networks` - A vector of network names.
 ///
-/// # Returns
-///
-/// A `String` containing the generated Rust code for the provider function.
-fn build_get_provider_fn(networks: Vec<String>) -> String {
+fn build_get_provider_fn(networks: Vec<String>) -> Code {
     let mut function = String::new();
     function
         .push_str("fn get_provider(&self, network: &str) -> Arc<Provider<RetryClient<Http>>> {\n");
@@ -815,7 +775,7 @@ fn build_get_provider_fn(networks: Vec<String>) -> String {
     }"#,
     );
 
-    function
+    Code::new(function)
 }
 
 /// Generates the Rust code for a function that returns a contract instance for a given network.
@@ -828,10 +788,7 @@ fn build_get_provider_fn(networks: Vec<String>) -> String {
 /// * `contracts_details` - A vector of references to `ContractDetails`.
 /// * `abi_gen_name` - The name of the ABI generation struct.
 ///
-/// # Returns
-///
-/// A `String` containing the generated Rust code for the contract function.
-fn build_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &str) -> String {
+fn build_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &str) -> Code {
     let mut function = String::new();
     function.push_str(&format!(
         r#"fn contract(&self, network: &str) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> {{"#,
@@ -876,7 +833,25 @@ fn build_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &st
     }"#,
     );
 
-    function
+    Code::new(function)
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum GenerateEventBindingCodeError {
+    #[error("Could not read ABI string: {0}")]
+    CouldNotReadAbiString(std::io::Error),
+
+    #[error("Could not read ABI JSON: {0}")]
+    CouldNotReadAbiJson(serde_json::Error),
+
+    #[error("{0}")]
+    GenerateStructsError(GenerateStructsError),
+
+    #[error("{0}")]
+    GenerateEventCallbackStructsError(GenerateEventCallbackStructsError),
+
+    #[error("{0}")]
+    GenerateContractTypeFnError(GenerateContractTypeFnError),
 }
 
 /// Generates the Rust code for event bindings.
@@ -893,18 +868,15 @@ fn build_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &st
 /// * `storage` - An `storage` configuration.
 /// * `event_info` - A vector of `EventInfo` containing details about the events.
 ///
-/// # Returns
-///
-/// A `Result<String, Box<dyn Error>>` containing the generated Rust code for the event bindings.
 fn generate_event_bindings_code(
     project_path: &Path,
     indexer_name: &str,
     contract: &Contract,
     storage: &Storage,
     event_info: Vec<EventInfo>,
-) -> Result<String, Box<dyn Error>> {
+) -> Result<Code, GenerateEventBindingCodeError> {
     let event_type_name = generate_event_type_name(&contract.name);
-    let code = format!(
+    let code = Code::new(format!(
         r#"
         /// THIS IS A GENERATED FILE. DO NOT MODIFY MANUALLY.
         ///
@@ -1028,7 +1000,8 @@ fn generate_event_bindings_code(
         abigen_mod_name = abigen_contract_mod_name(contract),
         abigen_file_name = abigen_contract_file_name(contract),
         abigen_name = abigen_contract_name(contract),
-        structs = generate_structs(contract)?,
+        structs = generate_structs(contract)
+            .map_err(GenerateEventBindingCodeError::GenerateStructsError)?,
         event_type_name = &event_type_name,
         event_context_database = if storage.postgres_enabled() {
             "pub database: Arc<PostgresClient>,"
@@ -1036,12 +1009,14 @@ fn generate_event_bindings_code(
             ""
         },
         event_callback_structs =
-            generate_event_callback_structs_code(project_path, &event_info, contract, storage),
+            generate_event_callback_structs_code(project_path, &event_info, contract, storage)
+                .map_err(GenerateEventBindingCodeError::GenerateEventCallbackStructsError,)?,
         event_enums = generate_event_enums_code(&event_info),
         topic_ids_match_arms = generate_topic_ids_match_arms_code(&event_type_name, &event_info),
         event_names_match_arms =
             generate_event_names_match_arms_code(&event_type_name, &event_info),
-        contract_type_fn = generate_contract_type_fn_code(contract),
+        contract_type_fn = generate_contract_type_fn_code(contract)
+            .map_err(GenerateEventBindingCodeError::GenerateContractTypeFnError)?,
         build_get_provider_fn =
             build_get_provider_fn(contract.details.iter().map(|c| c.network.clone()).collect()),
         build_contract_fn = build_contract_fn(
@@ -1050,7 +1025,7 @@ fn generate_event_bindings_code(
         ),
         decoder_match_arms = generate_decoder_match_arms_code(&event_type_name, &event_info),
         register_match_arms = generate_register_match_arms_code(&event_type_name, &event_info)
-    );
+    ));
 
     Ok(code)
 }
@@ -1165,10 +1140,7 @@ pub fn generate_abi_name_properties<'a>(
 /// * `contract` - The contract information.
 /// * `is_filter` - A boolean indicating whether the ABI items are for filtering.
 ///
-/// # Returns
-///
-/// A vector of `ABIItem` containing the ABI items.
-pub fn get_abi_items(contract: &Contract, is_filter: bool) -> Result<Vec<ABIItem>, Box<dyn Error>> {
+pub fn get_abi_items(contract: &Contract, is_filter: bool) -> Result<Vec<ABIItem>, ReadAbiError> {
     let mut abi_items = read_abi_items(contract)?;
     if is_filter {
         let filter_event_names: Vec<String> = contract
@@ -1193,6 +1165,18 @@ pub fn get_abi_items(contract: &Contract, is_filter: bool) -> Result<Vec<ABIItem
     Ok(abi_items)
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum GenerateEventBindingsError {
+    #[error("{0}")]
+    ReadAbi(ReadAbiError),
+
+    #[error("{0}")]
+    GenerateEventBindingCode(GenerateEventBindingCodeError),
+
+    #[error("{0}")]
+    ParamType(ParamTypeError),
+}
+
 /// Generates event bindings for the specified contract.
 ///
 /// # Arguments
@@ -1203,20 +1187,29 @@ pub fn get_abi_items(contract: &Contract, is_filter: bool) -> Result<Vec<ABIItem
 /// * `is_filter` - A boolean indicating whether the ABI items are for filtering.
 /// * `storage` - The storage configuration.
 ///
-/// # Returns
-///
-/// A `Result` containing the generated code as a string or an error.
 pub fn generate_event_bindings(
     project_path: &Path,
     indexer_name: &str,
     contract: &Contract,
     is_filter: bool,
     storage: &Storage,
-) -> Result<String, Box<dyn Error>> {
-    let abi_items = get_abi_items(contract, is_filter)?;
-    let event_names = extract_event_names_and_signatures_from_abi(&abi_items)?;
+) -> Result<Code, GenerateEventBindingsError> {
+    let abi_items =
+        get_abi_items(contract, is_filter).map_err(GenerateEventBindingsError::ReadAbi)?;
+    let event_names = extract_event_names_and_signatures_from_abi(&abi_items)
+        .map_err(GenerateEventBindingsError::ParamType)?;
 
     generate_event_bindings_code(project_path, indexer_name, contract, storage, event_names)
+        .map_err(GenerateEventBindingsError::GenerateEventBindingCode)
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum GenerateEventHandlersError {
+    #[error("{0}")]
+    ReadAbiError(ReadAbiError),
+
+    #[error("{0}")]
+    ParamTypeError(ParamTypeError),
 }
 
 /// Generates event handlers for the specified contract.
@@ -1228,17 +1221,16 @@ pub fn generate_event_bindings(
 /// * `contract` - The contract information.
 /// * `storage` - The storage configuration.
 ///
-/// # Returns
-///
-/// A `Result` containing the generated code as a string or an error.
 pub fn generate_event_handlers(
     indexer_name: &str,
     is_filter: bool,
     contract: &Contract,
     storage: &Storage,
-) -> Result<String, Box<dyn Error>> {
-    let abi_items = get_abi_items(contract, is_filter)?;
-    let event_names = extract_event_names_and_signatures_from_abi(&abi_items)?;
+) -> Result<Code, GenerateEventHandlersError> {
+    let abi_items =
+        get_abi_items(contract, is_filter).map_err(GenerateEventHandlersError::ReadAbiError)?;
+    let event_names = extract_event_names_and_signatures_from_abi(&abi_items)
+        .map_err(GenerateEventHandlersError::ParamTypeError)?;
 
     let mut imports = String::new();
     imports.push_str(
@@ -1310,14 +1302,11 @@ pub fn generate_event_handlers(
             }
 
             params_sql.push_str(
-                "&EthereumSqlTypeWrapper::H256(&result.tx_information.transaction_hash.unwrap()),",
+                "&EthereumSqlTypeWrapper::H256(&result.tx_information.transaction_hash),",
             );
-            params_sql.push_str(
-                "&EthereumSqlTypeWrapper::U64(&result.tx_information.block_number.unwrap()),",
-            );
-            params_sql.push_str(
-                "&EthereumSqlTypeWrapper::H256(&result.tx_information.block_hash.unwrap())",
-            );
+            params_sql
+                .push_str("&EthereumSqlTypeWrapper::U64(&result.tx_information.block_number),");
+            params_sql.push_str("&EthereumSqlTypeWrapper::H256(&result.tx_information.block_hash)");
             params_sql.push(']');
 
             postgres_write = format!(
@@ -1351,10 +1340,9 @@ pub fn generate_event_handlers(
                 }
             }
 
-            csv_data
-                .push_str(r#"format!("{:?}", result.tx_information.transaction_hash.unwrap()),"#);
-            csv_data.push_str(r#"result.tx_information.block_number.unwrap().to_string(),"#);
-            csv_data.push_str(r#"result.tx_information.block_hash.unwrap().to_string()"#);
+            csv_data.push_str(r#"format!("{:?}", result.tx_information.transaction_hash),"#);
+            csv_data.push_str(r#"result.tx_information.block_number.to_string(),"#);
+            csv_data.push_str(r#"result.tx_information.block_hash.to_string()"#);
 
             csv_write = format!(
                 r#"context.csv.append(vec![{csv_data}]).await.unwrap();"#,
@@ -1408,5 +1396,5 @@ pub fn generate_event_handlers(
     code.push_str(&handlers);
     code.push_str(&registry_fn);
 
-    Ok(code)
+    Ok(Code::new(code))
 }
