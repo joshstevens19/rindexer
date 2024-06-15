@@ -30,6 +30,9 @@ pub enum StartRindexerError {
     #[error("Could not start graphql error {0}")]
     CouldNotStartGraphqlServer(StartGraphqlServerError),
 
+    #[error("Failed to listen to graphql socket")]
+    FailedToListenToGraphqlSocket,
+
     #[error("Could not setup postgres: {0}")]
     SetupPostgresError(SetupPostgresError),
 
@@ -50,7 +53,9 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
         let _ = start_graphql_server(&manifest.indexers, graphql_server.settings)
             .map_err(StartRindexerError::CouldNotStartGraphqlServer)?;
         if details.indexing_details.is_none() {
-            signal::ctrl_c().await.expect("failed to listen for event");
+            signal::ctrl_c()
+                .await
+                .map_err(|_| StartRindexerError::FailedToListenToGraphqlSocket)?;
             return Ok(());
         }
     }
