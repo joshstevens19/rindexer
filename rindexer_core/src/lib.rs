@@ -4,19 +4,23 @@ pub mod indexer;
 pub mod manifest;
 
 mod database;
-pub use database::postgres::{setup_postgres, EthereumSqlTypeWrapper, PostgresClient, drop_tables_for_indexer_sql};
+pub use database::postgres::{
+    drop_tables_for_indexer_sql, setup_postgres, EthereumSqlTypeWrapper, PostgresClient,
+};
 
 mod simple_file_formatters;
 pub use simple_file_formatters::csv::AsyncCsvAppender;
 
 mod helpers;
-pub use helpers::{generate_random_id, write_file};
+pub use helpers::{generate_random_id, write_file, WriteFileError};
 mod api;
 pub use api::{GraphQLServerDetails, GraphQLServerSettings};
 
 mod logger;
 pub mod provider;
 mod start;
+mod types;
+
 pub use logger::setup_logger;
 
 pub use start::{

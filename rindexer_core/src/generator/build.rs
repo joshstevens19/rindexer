@@ -1,65 +1,63 @@
 use std::path::Path;
-use std::{error::Error, fs, path::PathBuf};
+use std::{fs, path::PathBuf};
 
 use ethers::contract::Abigen;
+use thiserror::Error;
 
-use crate::helpers::{camel_to_snake, create_mod_file, format_all_files_for_project, write_file};
+use crate::helpers::{
+    camel_to_snake, create_mod_file, format_all_files_for_project, write_file, CreateModFileError,
+    WriteFileError,
+};
 use crate::manifest::yaml::{
-    read_manifest, Contract, Global, Indexer, Manifest, Network, Storage, YAML_CONFIG_NAME,
+    read_manifest, Contract, Global, Indexer, Manifest, Network, ReadManifestError, Storage,
+    YAML_CONFIG_NAME,
 };
 
 use super::events_bindings::{
     abigen_contract_file_name, abigen_contract_name, generate_event_bindings,
-    generate_event_handlers,
+    generate_event_handlers, GenerateEventBindingsError,
+    GenerateEventHandlersError,
 };
 use super::{context_bindings::generate_context_code, networks_bindings::generate_networks_code};
 
-/// Generates the file location path for a given output directory and location.
-///
-/// # Arguments
-///
-/// * `output` - The output directory.
-/// * `location` - The location within the output directory.
-///
-/// # Returns
-///
-/// A `String` representing the full path to the file.
-fn generate_file_location(output: &str, location: &str) -> String {
-    format!("{}/{}.rs", output, location)
+fn generate_file_location(output: &Path, location: &str) -> PathBuf {
+    let mut path = PathBuf::from(output);
+    path.push(format!("{}.rs", location));
+    path
 }
 
-/// Writes the networks configuration to a file.
-///
-/// # Arguments
-///
-/// * `output` - The output directory.
-/// * `networks` - A reference to a vector of `Network` configurations.
-///
-/// # Returns
-///
-/// A `Result` indicating success or failure.
-fn write_networks(output: &str, networks: &[Network]) -> Result<(), Box<dyn Error>> {
-    let networks_code = generate_networks_code(networks)?;
-    write_file(&generate_file_location(output, "networks"), &networks_code)
+#[derive(Error, Debug)]
+pub enum WriteNetworksError {
+    #[error("{0}")]
+    CanNotWriteNetworksCode(WriteFileError),
 }
 
-/// Writes the global configuration to a file if it exists.
-///
-/// # Arguments
-///
-/// * `output` - The output directory.
-/// * `global` - An optional reference to a `Global` configuration.
-/// * `networks` - A reference to a slice of `Network` configurations.
-///
-/// # Returns
-///
-/// A `Result` indicating success or failure.
-fn write_global(output: &str, global: &Global, networks: &[Network]) -> Result<(), Box<dyn Error>> {
-    let context_code = generate_context_code(&global.contracts, networks)?;
+fn write_networks(output: &Path, networks: &[Network]) -> Result<(), WriteNetworksError> {
+    let networks_code = generate_networks_code(networks);
+    write_file(
+        &generate_file_location(output, "networks"),
+        networks_code.as_str(),
+    )
+    .map_err(WriteNetworksError::CanNotWriteNetworksCode)
+}
+
+#[derive(Error, Debug)]
+pub enum WriteGlobalError {
+    #[error("{0}")]
+    CanNotWriteGlobalCode(WriteFileError),
+}
+
+fn write_global(
+    output: &Path,
+    global: &Global,
+    networks: &[Network],
+) -> Result<(), WriteGlobalError> {
+    let context_code = generate_context_code(&global.contracts, networks);
     write_file(
         &generate_file_location(output, "global_contracts"),
-        &context_code,
-    )?;
+        context_code.as_str(),
+    )
+    .map_err(WriteGlobalError::CanNotWriteGlobalCode)?;
 
     Ok(())
 }
@@ -81,6 +79,7 @@ pub fn is_filter(contract: &Contract) -> bool {
         .count();
 
     if filter_count > 0 && filter_count != contract.details.len() {
+        // panic as this should never happen as validation has already happened
         panic!("Cannot mix and match address and filter for the same contract definition.");
     }
 
@@ -110,38 +109,54 @@ pub fn identify_and_modify_filter(contract: &mut Contract) -> bool {
     }
 }
 
-/// Writes event bindings and ABI generation for the given indexer and its contracts.
-///
-/// # Arguments
-///
-/// * `project_path` - A reference to the project path.
-/// * `output` - The output directory.
-/// * `indexer` - A reference to an `Indexer`.
-/// * `global` - An optional reference to a `Global` configuration.
-///
-/// # Returns
-///
-/// A `Result` indicating success or failure.
+#[derive(thiserror::Error, Debug)]
+pub enum WriteIndexerEvents {
+    #[error("Could not write events code: {0}")]
+    CouldNotWriteEventsCode(WriteFileError),
+
+    #[error("Could not read ABI JSON: {0}")]
+    CouldNotReadAbiJson(serde_json::Error),
+
+    #[error("Could not generate Abigen instance")]
+    CouldNotCreateAbigenInstance,
+
+    #[error("Could not generate ABI")]
+    CouldNotGenerateAbi,
+
+    #[error("Could not write abigen code: {0}")]
+    CouldNotWriteAbigenCodeCode(WriteFileError),
+
+    #[error("{0}")]
+    GenerateEventBindingCodeError(GenerateEventBindingsError),
+}
+
 fn write_indexer_events(
     project_path: &Path,
-    output: &str,
+    output: &Path,
     indexer: Indexer,
     storage: &Storage,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), WriteIndexerEvents> {
     for mut contract in indexer.contracts {
         let is_filter = identify_and_modify_filter(&mut contract);
         let events_code =
-            generate_event_bindings(project_path, &indexer.name, &contract, is_filter, storage)?;
+            generate_event_bindings(project_path, &indexer.name, &contract, is_filter, storage)
+                .map_err(WriteIndexerEvents::GenerateEventBindingCodeError)?;
 
         let event_path = format!(
             "{}/events/{}",
             camel_to_snake(&indexer.name),
             camel_to_snake(&contract.name)
         );
-        write_file(&generate_file_location(output, &event_path), &events_code)?;
+        write_file(
+            &generate_file_location(output, &event_path),
+            events_code.as_str(),
+        )
+        .map_err(WriteIndexerEvents::CouldNotWriteEventsCode)?;
 
-        // Write ABI gen
-        let abi_gen = Abigen::new(abigen_contract_name(&contract), &contract.abi)?.generate()?;
+        let abi_gen = Abigen::new(abigen_contract_name(&contract), &contract.abi)
+            .map_err(|_| WriteIndexerEvents::CouldNotCreateAbigenInstance)?
+            .generate()
+            .map_err(|_| WriteIndexerEvents::CouldNotGenerateAbi)?;
 
         write_file(
             &generate_file_location(
@@ -153,9 +168,31 @@ fn write_indexer_events(
                 ),
             ),
             &abi_gen.to_string(),
-        )?;
+        )
+        .map_err(WriteIndexerEvents::CouldNotWriteAbigenCodeCode)?;
     }
     Ok(())
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum GenerateRindexerTypingsError {
+    #[error("Manifest location does not have a parent - {0}")]
+    ManifestLocationDoesNotHaveAParent(String),
+
+    #[error("Manifest location can not be resolved")]
+    ManifestLocationCanNotBeResolved(),
+
+    #[error("{0}")]
+    WriteNetworksError(WriteNetworksError),
+
+    #[error("{0}")]
+    WriteGlobalError(WriteGlobalError),
+
+    #[error("{0}")]
+    WriteIndexerEventsError(WriteIndexerEvents),
+
+    #[error("{0}")]
+    CreateModFileError(CreateModFileError),
 }
 
 /// Generates typings for the rindexer based on the manifest file.
@@ -164,28 +201,66 @@ fn write_indexer_events(
 ///
 /// * `manifest_location` - A reference to the path of the manifest file.
 ///
-/// # Returns
-///
-/// A `Result` indicating success or failure.
 pub fn generate_rindexer_typings(
     manifest: Manifest,
     manifest_location: &Path,
-) -> Result<(), Box<dyn Error>> {
-    let project_path = manifest_location.parent().unwrap();
-    let output = project_path.join("./src/rindexer/typings");
+) -> Result<(), GenerateRindexerTypingsError> {
+    let project_path = manifest_location.parent();
+    match project_path {
+        Some(project_path) => {
+            let output = project_path.join("./src/rindexer/typings");
 
-    let output_path = output.to_str().unwrap();
+            write_networks(&output, &manifest.networks)
+                .map_err(GenerateRindexerTypingsError::WriteNetworksError)?;
+            write_global(&output, &manifest.global, &manifest.networks)
+                .map_err(GenerateRindexerTypingsError::WriteGlobalError)?;
 
-    write_networks(output_path, &manifest.networks)?;
-    write_global(output_path, &manifest.global, &manifest.networks)?;
+            for indexer in manifest.indexers {
+                write_indexer_events(project_path, &output, indexer, &manifest.storage)
+                    .map_err(GenerateRindexerTypingsError::WriteIndexerEventsError)?;
+            }
 
-    for indexer in manifest.indexers {
-        write_indexer_events(project_path, output_path, indexer, &manifest.storage)?;
+            create_mod_file(output.as_path(), true)
+                .map_err(GenerateRindexerTypingsError::CreateModFileError)?;
+
+            Ok(())
+        }
+        None => {
+            let manifest_location = manifest_location.to_str();
+            match manifest_location {
+                Some(manifest_location) => Err(
+                    GenerateRindexerTypingsError::ManifestLocationDoesNotHaveAParent(
+                        manifest_location.to_string(),
+                    ),
+                ),
+                None => Err(GenerateRindexerTypingsError::ManifestLocationCanNotBeResolved()),
+            }
+        }
     }
+}
 
-    create_mod_file(output.as_path(), true)?;
+#[derive(thiserror::Error, Debug)]
+pub enum GenerateRindexerHandlersError {
+    #[error("Manifest location does not have a parent")]
+    ManifestLocationDoesNotHaveAParent,
 
-    Ok(())
+    #[error("Could not read ABI string: {0}")]
+    CouldNotReadAbiString(std::io::Error),
+
+    #[error("Could not read ABI JSON: {0}")]
+    CouldNotReadAbiJson(serde_json::Error),
+
+    #[error("{0}")]
+    GenerateEventBindingCodeError(GenerateEventHandlersError),
+
+    #[error("Could not write event handler code: {0}")]
+    CouldNotWriteEventHandlerCode(WriteFileError),
+
+    #[error("Could not write event handlers code: {0}")]
+    CouldNotWriteEventHandlersCode(WriteFileError),
+
+    #[error("{0}")]
+    CreateModFileError(CreateModFileError),
 }
 
 /// Generates code for indexer handlers based on the manifest file.
@@ -194,59 +269,92 @@ pub fn generate_rindexer_typings(
 ///
 /// * `manifest_location` - A reference to the path of the manifest file.
 ///
-/// # Returns
-///
-/// A `Result` indicating success or failure.
 pub fn generate_rindexer_handlers(
     manifest: Manifest,
     manifest_location: &Path,
-) -> Result<(), Box<dyn Error>> {
-    let output = manifest_location.parent().unwrap().join("./src/rindexer");
+) -> Result<(), GenerateRindexerHandlersError> {
+    let output_parent = manifest_location.parent();
+    match output_parent {
+        None => Err(GenerateRindexerHandlersError::ManifestLocationDoesNotHaveAParent),
+        Some(output_parent) => {
+            let output = output_parent.join("./src/rindexer");
 
-    let mut all_indexers = String::new();
-    all_indexers.push_str(
-        r#"
+            let mut all_indexers = String::new();
+            all_indexers.push_str(
+                r#"
         use rindexer_core::generator::event_callback_registry::EventCallbackRegistry;
         
         pub async fn register_all_handlers() -> EventCallbackRegistry {
              let mut registry = EventCallbackRegistry::new();
         "#,
-    );
-
-    for indexer in manifest.indexers {
-        for mut contract in indexer.contracts {
-            let is_filter = identify_and_modify_filter(&mut contract);
-
-            let indexer_name = camel_to_snake(&indexer.name);
-            let contract_name = camel_to_snake(&contract.name);
-            let handler_fn_name = format!("{}_handlers", contract_name);
-
-            all_indexers.insert_str(
-                0,
-                &format!(r#"use super::{indexer_name}::{contract_name}::{handler_fn_name};"#,),
             );
 
-            all_indexers.push_str(&format!(r#"{handler_fn_name}(&mut registry).await;"#));
+            for indexer in manifest.indexers {
+                for mut contract in indexer.contracts {
+                    let is_filter = identify_and_modify_filter(&mut contract);
 
-            let handler_path = format!("indexers/{}/{}", indexer_name, contract_name);
+                    let indexer_name = camel_to_snake(&indexer.name);
+                    let contract_name = camel_to_snake(&contract.name);
+                    let handler_fn_name = format!("{}_handlers", contract_name);
 
+                    all_indexers.insert_str(
+                        0,
+                        &format!(
+                            r#"use super::{indexer_name}::{contract_name}::{handler_fn_name};"#,
+                        ),
+                    );
+
+                    all_indexers.push_str(&format!(r#"{handler_fn_name}(&mut registry).await;"#));
+
+                    let handler_path = format!("indexers/{}/{}", indexer_name, contract_name);
+
+                    write_file(
+                        &generate_file_location(&output, &handler_path),
+                        generate_event_handlers(
+                            &indexer.name,
+                            is_filter,
+                            &contract,
+                            &manifest.storage,
+                        )
+                        .map_err(GenerateRindexerHandlersError::GenerateEventBindingCodeError)?
+                        .as_str(),
+                    )
+                    .map_err(GenerateRindexerHandlersError::CouldNotWriteEventHandlerCode)?;
+                }
+            }
+
+            all_indexers.push_str("registry");
+            all_indexers.push('}');
             write_file(
-                &generate_file_location(output.to_str().unwrap(), &handler_path),
-                &generate_event_handlers(&indexer.name, is_filter, &contract, &manifest.storage)?,
-            )?;
+                &generate_file_location(&output, "indexers/all_handlers"),
+                &all_indexers,
+            )
+            .map_err(GenerateRindexerHandlersError::CouldNotWriteEventHandlersCode)?;
+
+            create_mod_file(output.as_path(), false)
+                .map_err(GenerateRindexerHandlersError::CreateModFileError)?;
+
+            Ok(())
         }
     }
+}
 
-    all_indexers.push_str("registry");
-    all_indexers.push('}');
-    write_file(
-        &generate_file_location(output.to_str().unwrap(), "indexers/all_handlers"),
-        &all_indexers,
-    )?;
+#[derive(thiserror::Error, Debug)]
+pub enum GenerateError {
+    #[error("{0}")]
+    ReadManifestError(ReadManifestError),
 
-    create_mod_file(output.as_path(), false)?;
+    #[error("{0}")]
+    GenerateRindexerTypingsError(GenerateRindexerTypingsError),
 
-    Ok(())
+    #[error("{0}")]
+    GenerateRindexerHandlersError(GenerateRindexerHandlersError),
+
+    #[error("Manifest location does not have a parent - {0}")]
+    ManifestLocationDoesNotHaveAParent(String),
+
+    #[error("Manifest location can not be resolved")]
+    ManifestLocationCanNotBeResolved(),
 }
 
 /// Generates all the rindexer project typings and handlers
@@ -255,27 +363,56 @@ pub fn generate_rindexer_handlers(
 ///
 /// * `manifest_location` - A reference to the path of the manifest file.
 ///
-/// # Returns
-///
-/// A `Result` indicating success or failure.
-pub fn generate(manifest_location: &PathBuf) -> Result<(), Box<dyn Error>> {
-    let manifest = read_manifest(manifest_location)?;
+pub fn generate(manifest_location: &PathBuf) -> Result<(), GenerateError> {
+    let manifest = read_manifest(manifest_location).map_err(GenerateError::ReadManifestError)?;
 
-    generate_rindexer_typings(manifest.clone(), manifest_location)?;
-    generate_rindexer_handlers(manifest.clone(), manifest_location)?;
+    generate_rindexer_typings(manifest.clone(), manifest_location)
+        .map_err(GenerateError::GenerateRindexerTypingsError)?;
+    generate_rindexer_handlers(manifest.clone(), manifest_location)
+        .map_err(GenerateError::GenerateRindexerHandlersError)?;
 
-    format_all_files_for_project(manifest_location.parent().unwrap());
-
-    Ok(())
+    let parent = manifest_location.parent();
+    match parent {
+        Some(parent) => {
+            format_all_files_for_project(parent);
+            Ok(())
+        },
+        None => {
+            let manifest_location = manifest_location.to_str();
+            match manifest_location {
+                Some(manifest_location) => Err(GenerateError::ManifestLocationDoesNotHaveAParent(
+                    manifest_location.to_string(),
+                )),
+                None => Err(GenerateError::ManifestLocationCanNotBeResolved()),
+            }
+        }
+    }
 }
 
-pub fn generate_rust_project(project_path: &Path) -> Result<(), Box<dyn Error>> {
+#[derive(thiserror::Error, Debug)]
+pub enum GenerateRustProjectError {
+    #[error("{0}")]
+    ReadManifestError(ReadManifestError),
+
+    #[error("Could not create the dir :{0}")]
+    CouldNotCreateDir(std::io::Error),
+
+    #[error("Could not write the file: {0}")]
+    WriteFileError(WriteFileError),
+
+    #[error("{0}")]
+    GenerateError(GenerateError),
+}
+
+pub fn generate_rust_project(project_path: &Path) -> Result<(), GenerateRustProjectError> {
     let manifest_location = project_path.join(YAML_CONFIG_NAME);
-    let manifest = read_manifest(&project_path.join(&manifest_location))?;
+    let manifest = read_manifest(&project_path.join(&manifest_location))
+        .map_err(GenerateRustProjectError::ReadManifestError)?;
 
-    fs::create_dir_all(project_path.join("abis"))?;
+    let abi_path = project_path.join("abis");
 
-    // TODO! max rindexer_core to github
+    fs::create_dir_all(abi_path).map_err(GenerateRustProjectError::CouldNotCreateDir)?;
+
     let cargo = format!(
         r#"
 [package]
@@ -292,9 +429,11 @@ serde = {{ version = "1.0.194", features = ["derive"] }}
         project_name = manifest.name,
     );
 
-    write_file(project_path.join("Cargo.toml").to_str().unwrap(), &cargo).unwrap();
+    let cargo_path = project_path.join("Cargo.toml");
+    write_file(&cargo_path, &cargo).map_err(GenerateRustProjectError::WriteFileError)?;
 
-    fs::create_dir_all(project_path.join("src"))?;
+    fs::create_dir_all(project_path.join("src"))
+        .map_err(GenerateRustProjectError::CouldNotCreateDir)?;
 
     let main_code = r#"
             use std::env;
@@ -341,37 +480,38 @@ serde = {{ version = "1.0.194", features = ["derive"] }}
                     }
                 }
 
-                let _ = start_rindexer(StartDetails {
-                    manifest_path: env::current_dir().unwrap().join("rindexer.yaml"),
-                    indexing_details: if enable_indexer {
-                        Some(IndexingDetails {
-                            registry: register_all_handlers().await,
-                            settings: Default::default(),
-                        })
-                    } else {
-                        None
-                    },
-                    graphql_server: if enable_graphql {
-                        Some(GraphQLServerDetails {
-                            settings: if port.is_some() {
-                                GraphQLServerSettings::port(port.unwrap())
+                let path = env::current_dir();
+                match path {
+                    Ok(path) => {
+                        let _ = start_rindexer(StartDetails {
+                            manifest_path: path.join("rindexer.yaml"),
+                            indexing_details: if enable_indexer {
+                                Some(IndexingDetails {
+                                    registry: register_all_handlers().await,
+                                    settings: Default::default(),
+                                })
                             } else {
-                                Default::default()
+                                None
+                            },
+                            graphql_server: if enable_graphql {
+                                Some(GraphQLServerDetails {
+                                    settings: port.map_or_else(Default::default, GraphQLServerSettings::port),
+                                })
+                            } else {
+                                None
                             },
                         })
-                    } else {
-                        None
-                    },
-                })
-                .await;
+                        .await;
+                    }
+                    Err(e) => {
+                        println!("Error getting current directory: {:?}", e);
+                    }
+                }
             }
           "#;
 
-    write_file(
-        project_path.join("src").join("main.rs").to_str().unwrap(),
-        main_code,
-    )
-    .unwrap();
+    let main_path = project_path.join("src").join("main.rs");
+    write_file(&main_path, main_code).map_err(GenerateRustProjectError::WriteFileError)?;
 
-    generate(&manifest_location)
+    generate(&manifest_location).map_err(GenerateRustProjectError::GenerateError)
 }

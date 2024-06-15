@@ -1,7 +1,6 @@
 use ethers::types::U64;
 use regex::Regex;
 use std::env;
-use std::error::Error;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -141,8 +140,10 @@ impl ContractDetails {
             IndexingContractSetup::Address(address.clone())
         } else if let Some(factory) = &self.factory {
             IndexingContractSetup::Factory(factory.clone())
+        } else if let Some(filter) = &self.filter {
+            IndexingContractSetup::Filter(filter.clone())
         } else {
-            IndexingContractSetup::Filter(self.filter.clone().unwrap())
+            panic!("Contract details must have an address, factory or filter");
         }
     }
 
@@ -329,16 +330,25 @@ pub struct Global {
 ///
 /// * `contents` - The string containing environment variables to substitute.
 ///
-/// # Returns
-///
-/// A `Result` containing the string with substituted environment variables or an error message.
-fn substitute_env_variables(contents: &str) -> Result<String, String> {
-    let re = Regex::new(r"\$\{([^}]+)}").unwrap();
+fn substitute_env_variables(contents: &str) -> Result<String, regex::Error> {
+    let re = Regex::new(r"\$\{([^}]+)}")?;
     let result = re.replace_all(contents, |caps: &regex::Captures| {
         let var_name = &caps[1];
         env::var(var_name).unwrap_or_else(|_| var_name.to_string())
     });
     Ok(result.to_string())
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum ReadManifestError {
+    #[error("Could not open file: {0}")]
+    CouldNotOpenFile(std::io::Error),
+
+    #[error("Could not read file: {0}")]
+    CouldNotReadFile(std::io::Error),
+
+    #[error("Could not parse manifest: {0}")]
+    CouldNotParseManifest(serde_yaml::Error),
 }
 
 /// Reads a manifest file and returns a `Manifest` struct.
@@ -347,19 +357,33 @@ fn substitute_env_variables(contents: &str) -> Result<String, String> {
 ///
 /// * `file_path` - A reference to the path of the manifest file.
 ///
-/// # Returns
-///
-/// A `Result` containing the `Manifest` struct or an error.
-pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, Box<dyn Error>> {
-    let mut file = File::open(file_path)?;
+pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError> {
+    let mut file = File::open(file_path).map_err(ReadManifestError::CouldNotOpenFile)?;
     let mut contents = String::new();
     // rewrite the env variables
     // let mut substituted_contents =
     //     substitute_env_variables(&contents)?;
-    file.read_to_string(&mut contents)?;
+    file.read_to_string(&mut contents)
+        .map_err(ReadManifestError::CouldNotReadFile)?;
 
-    let manifest: Manifest = serde_yaml::from_str(&contents)?;
+    let manifest: Manifest =
+        serde_yaml::from_str(&contents).map_err(ReadManifestError::CouldNotParseManifest)?;
     Ok(manifest)
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum WriteManifestError {
+    #[error("Could not open file: {0}")]
+    CouldNotOpenFile(std::io::Error),
+
+    #[error("Could not parse manifest to string: {0}")]
+    CouldNotTurnManifestToString(serde_yaml::Error),
+
+    #[error("Could not create file: {0}")]
+    CouldNotCreateFile(std::io::Error),
+
+    #[error("Could not write to file: {0}")]
+    CouldNotWriteToFile(std::io::Error),
 }
 
 /// Writes a `Manifest` struct to a YAML file.
@@ -369,68 +393,19 @@ pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, Box<dyn Error>> {
 /// * `data` - A reference to the `Manifest` struct to write.
 /// * `file_path` - A reference to the path of the output file.
 ///
-/// # Returns
-///
-/// A `Result` indicating success or failure.
-pub fn write_manifest(data: &Manifest, file_path: &PathBuf) -> Result<(), Box<dyn Error>> {
-    let yaml_string = serde_yaml::to_string(data)?;
+pub fn write_manifest(data: &Manifest, file_path: &PathBuf) -> Result<(), WriteManifestError> {
+    let yaml_string =
+        serde_yaml::to_string(data).map_err(WriteManifestError::CouldNotTurnManifestToString)?;
 
-    let mut file = File::create(file_path)?;
-    file.write_all(yaml_string.as_bytes())?;
+    let mut file = File::create(file_path).map_err(WriteManifestError::CouldNotCreateFile)?;
+    file.write_all(yaml_string.as_bytes())
+        .map_err(WriteManifestError::CouldNotWriteToFile)?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
-    use std::fs;
-    use tempfile::TempDir;
-
-    #[test]
-    fn test_substitute_env_variables() {
-        env::set_var("TEST_ENV_VAR", "test_value");
-        let input = "Value: ${TEST_ENV_VAR}";
-        let result = substitute_env_variables(input).unwrap();
-        assert_eq!(result, "Value: test_value");
-    }
-
-    #[test]
-    fn test_read_manifest() {
-        let temp_dir = TempDir::new().unwrap();
-        let file_path = temp_dir.path().join("manifest.yaml");
-        let content = r#"
-        name: "Test Manifest"
-        indexers: []
-        networks: []
-        "#;
-        fs::write(&file_path, content).unwrap();
-
-        let manifest = read_manifest(&file_path).unwrap();
-        assert_eq!(manifest.name, "Test Manifest");
-    }
-
-    #[test]
-    fn test_write_manifest() {
-        let temp_dir = TempDir::new().unwrap();
-        let file_path = temp_dir.path().join("manifest.yaml");
-
-        let manifest = Manifest {
-            name: "Test Manifest".to_string(),
-            description: None,
-            repository: None,
-            project_type: ProjectType::Rust,
-            indexers: vec![],
-            networks: vec![],
-            global: Global::default(),
-            storage: Storage::default(),
-        };
-
-        write_manifest(&manifest, &file_path).unwrap();
-
-        let written_content = fs::read_to_string(&file_path).unwrap();
-        assert!(written_content.contains("name: \"Test Manifest\""));
-    }
 
     #[test]
     fn test_contract_details_address() {

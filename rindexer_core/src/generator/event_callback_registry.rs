@@ -1,4 +1,5 @@
 use ethers::addressbook::Address;
+use ethers::contract::LogMeta;
 use ethers::prelude::{Filter, RetryClient};
 use ethers::types::BigEndianHash;
 use ethers::utils::keccak256;
@@ -153,14 +154,11 @@ pub struct ContractInformation {
 pub struct TxInformation {
     pub network: String,
     pub address: Address,
-    pub block_hash: Option<H256>,
-    pub block_number: Option<U64>,
-    pub transaction_hash: Option<H256>,
-    pub transaction_index: Option<U64>,
-    pub log_index: Option<U256>,
-    pub transaction_log_index: Option<U256>,
-    pub log_type: Option<String>,
-    pub removed: Option<bool>,
+    pub block_hash: H256,
+    pub block_number: U64,
+    pub transaction_hash: H256,
+    pub log_index: U256,
+    pub transaction_index: U64,
 }
 
 /// Result of an event, including decoded data and transaction information.
@@ -183,20 +181,18 @@ impl EventResult {
     ///
     /// A new `EventResult`.
     pub fn new(network_contract: Arc<NetworkContract>, log: &Log) -> Self {
+        let log_meta = LogMeta::from(log);
         Self {
             log: log.clone(),
             decoded_data: network_contract.decode_log(log.clone()),
             tx_information: TxInformation {
                 network: network_contract.network.to_string(),
                 address: log.address,
-                block_hash: log.block_hash,
-                block_number: log.block_number,
-                transaction_hash: log.transaction_hash,
-                transaction_index: log.transaction_index,
-                log_index: log.log_index,
-                transaction_log_index: log.transaction_log_index,
-                log_type: log.log_type.clone(),
-                removed: log.removed,
+                block_hash: log_meta.block_hash,
+                block_number: log_meta.block_number,
+                transaction_hash: log_meta.transaction_hash,
+                transaction_index: log_meta.transaction_index,
+                log_index: log_meta.log_index,
             },
         }
     }

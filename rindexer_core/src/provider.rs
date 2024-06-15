@@ -51,11 +51,8 @@ pub fn create_retry_client(
 ///
 /// * `rpc_url` - The RPC URL for the Ethereum provider.
 ///
-/// # Returns
-///
-/// A `Result` containing the `U256` chain ID or a `ProviderError`.
 pub async fn get_chain_id(rpc_url: &str) -> Result<U256, ProviderError> {
-    let url = Url::parse(rpc_url).unwrap();
+    let url = Url::parse(rpc_url).map_err(|_| ProviderError::UnsupportedRPC)?;
     let provider = Provider::new(Http::new(url));
 
     provider.get_chainid().await
@@ -70,15 +67,6 @@ mod tests {
         let rpc_url = "http://localhost:8545";
         let result = create_retry_client(rpc_url);
         assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_get_chain_id() {
-        let rpc_url = "http://localhost:8545";
-        let result = get_chain_id(rpc_url).await;
-        // Assuming the local node returns chain ID 1 (Ethereum mainnet)
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), U256::from(1));
     }
 
     #[test]

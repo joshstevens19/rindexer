@@ -1,6 +1,5 @@
 use clap::{Parser, Subcommand};
 use colored::Colorize;
-use ethers::types::spoof::storage;
 use ethers::types::{Chain, U64};
 use ethers_etherscan::Client;
 use regex::Regex;
@@ -12,7 +11,10 @@ use rindexer_core::manifest::yaml::{
     read_manifest, write_manifest, Contract, ContractDetails, CsvDetails, Global, Indexer,
     Manifest, Network, PostgresConnectionDetails, ProjectType, Storage, YAML_CONFIG_NAME,
 };
-use rindexer_core::{start_rindexer_no_code, write_file, GraphQLServerDetails, GraphQLServerSettings, PostgresClient, StartNoCodeDetails, drop_tables_for_indexer_sql};
+use rindexer_core::{
+    drop_tables_for_indexer_sql, start_rindexer_no_code, write_file, GraphQLServerDetails,
+    GraphQLServerSettings, PostgresClient, StartNoCodeDetails, WriteFileError,
+};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -161,7 +163,7 @@ enum CodegenSubcommands {
     All,
 }
 
-const VALID_URL: &str = r"^(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})(:[0-9]+)?(\/[\w \.-]*)*\/?(\\?[\w=&.+-]*)?(#[\w.-]*)?$";
+// const VALID_URL: &str = r"^(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})(:[0-9]+)?(\/[\w \.-]*)*\/?(\\?[\w=&.+-]*)?(#[\w.-]*)?$";
 
 fn print_error_message(error_message: &str) {
     println!("{}", error_message.red());
@@ -190,15 +192,7 @@ fn validate_rindexer_yaml_exist() {
     }
 }
 
-fn read_rindexer_yaml(rindexer_yaml_path: &PathBuf) -> Manifest {
-    read_manifest(rindexer_yaml_path).unwrap()
-}
-
-fn write_rindexer_yaml(manifest: &Manifest, rindexer_yaml_path: &PathBuf) {
-    write_manifest(manifest, rindexer_yaml_path).unwrap();
-}
-
-fn generate_rindexer_rust_project(project_path: &PathBuf) {
+fn generate_rindexer_rust_project(project_path: &Path) {
     let generated = generate_rust_project(project_path);
     match generated {
         Ok(_) => {
@@ -213,7 +207,7 @@ fn generate_rindexer_rust_project(project_path: &PathBuf) {
     }
 }
 
-fn handle_new_command(project_path: PathBuf) {
+fn handle_new_command(project_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     print_success_message("Initializing new rindexer project...");
 
     let rindexer_type = prompt_for_input_list(
@@ -225,7 +219,7 @@ fn handle_new_command(project_path: PathBuf) {
     let project_name = prompt_for_input("Project Name", None, None, None);
     if project_path.exists() {
         print_error_message("Directory already exists. Please choose a different project name.");
-        return;
+        return Err("Directory already exists.".into());
     }
     let project_description = prompt_for_optional_input::<String>("Project Description", None);
     let repository = prompt_for_optional_input::<String>("Repository", None);
@@ -258,16 +252,19 @@ fn handle_new_command(project_path: PathBuf) {
     // Create the project directory
     if let Err(err) = fs::create_dir_all(&project_path) {
         print_error_message(&format!("Failed to create directory: {}", err));
-        return;
+        return Err(err.into());
     }
 
     // Create the ABIs directory
     if let Err(err) = fs::create_dir_all(&rindexer_abis_folder) {
         print_error_message(&format!("Failed to create directory: {}", err));
-        return;
+        return Err(err.into());
     }
 
-    let abi_example_path = write_example_abi(&rindexer_abis_folder);
+    let abi_example_path = write_example_abi(&rindexer_abis_folder).map_err(|e| {
+        print_error_message(&format!("Failed to write example ABI file: {}", e));
+        e
+    })?;
 
     let project_type = if rindexer_type == "no-code" {
         ProjectType::NoCode
@@ -298,7 +295,7 @@ fn handle_new_command(project_path: PathBuf) {
                     Some(U64::from(19000000)),
                     None,
                 )],
-                abi: abi_example_path.to_str().unwrap().to_string(),
+                abi: abi_example_path.display().to_string(),
                 include_events: Some(vec!["Transfer".to_string()]),
                 generate_csv: csv_enabled,
                 reorg_safe_distance: false,
@@ -326,20 +323,29 @@ fn handle_new_command(project_path: PathBuf) {
     };
 
     // Write the rindexer.yaml file
-    write_rindexer_yaml(&manifest, &rindexer_yaml_path);
+    write_manifest(&manifest, &rindexer_yaml_path)?;
 
     // Write .env if required
     if postgres_enabled {
         if postgres_docker_enable {
             let env = r#"DATABASE_URL=postgresql://postgres:U3uaAFmEbv9dnxjKOo9SbUFwc9wMU5ADBHW+HUT/7+DpQaDeUYV/@localhost:5440/postgres"#;
 
-            write_file(project_path.join(".env").to_str().unwrap(), env).unwrap();
+            write_file(&project_path.join(".env"), env).map_err(|e| {
+                print_error_message(&format!("Failed to write .env file: {}", e));
+                e
+            })?;
 
-            write_docker_compose(&project_path);
+            write_docker_compose(&project_path).map_err(|e| {
+                print_error_message(&format!("Failed to write docker-compose file: {}", e));
+                e
+            })?;
         } else {
             let env = r#"DATABASE_URL=INSERT_HERE"#;
 
-            write_file(project_path.join(".env").to_str().unwrap(), env).unwrap();
+            write_file(&project_path.join(".env"), env).map_err(|e| {
+                print_error_message(&format!("Failed to write .env file: {}", e));
+                e
+            })?;
         }
     }
 
@@ -353,16 +359,20 @@ fn handle_new_command(project_path: PathBuf) {
             "rindexer no-code project created with a starter manifest.\n- run rindexer start to start rindexer\n- run rindexer download-abi to download new ABIs",
         );
     }
+
+    Ok(())
 }
 
-async fn handle_download_abi_command(project_path: PathBuf) {
+async fn handle_download_abi_command(
+    project_path: PathBuf,
+) -> Result<(), Box<dyn std::error::Error>> {
     validate_rindexer_yaml_exist();
 
     let rindexer_abis_folder = project_path.join("abis");
 
     if let Err(err) = fs::create_dir_all(&rindexer_abis_folder) {
         print_error_message(&format!("Failed to create directory: {}", err));
-        return;
+        return Err(err.into());
     }
 
     let network = prompt_for_input(
@@ -371,25 +381,39 @@ async fn handle_download_abi_command(project_path: PathBuf) {
         Some("Invalid network chain id. Please enter a valid chain id."),
         None,
     );
-    let network = U64::from_dec_str(&network)
-        .map_err(|_| {
-            print_error_message("Invalid network chain id. Please enter a valid chain id.");
-        })
-        .unwrap();
+    let network = U64::from_dec_str(&network).map_err(|e| {
+        print_error_message("Invalid network chain id. Please enter a valid chain id.");
+        e
+    })?;
 
-    let network = Chain::try_from(network)
-        .map_err(|_| {
-            print_error_message("Chain id is not supported by etherscan API.");
-        })
-        .unwrap();
+    let network = Chain::try_from(network).map_err(|e| {
+        print_error_message("Chain id is not supported by etherscan API.");
+        e
+    })?;
     let contract_address = prompt_for_input("Enter Contract Address", None, None, None);
 
-    let client = Client::builder().chain(network).unwrap().build().unwrap();
+    let client = Client::builder()
+        .chain(network)
+        .map_err(|e| {
+            print_error_message(&format!("Invalid chain id {}", e));
+            e
+        })?
+        .build()
+        .map_err(|e| {
+            print_error_message(&format!("Failed to create etherscan client: {}", e));
+            e
+        })?;
 
-    let address = contract_address.parse().unwrap();
+    let address = contract_address.parse().map_err(|e| {
+        print_error_message(&format!("Invalid contract address: {}", e));
+        e
+    })?;
 
     loop {
-        let metadata = client.contract_source_code(address).await.unwrap();
+        let metadata = client.contract_source_code(address).await.map_err(|e| {
+            print_error_message(&format!("Failed to fetch contract metadata: {}", e));
+            e
+        })?;
 
         if metadata.items.is_empty() {
             print_error_message(&format!(
@@ -406,49 +430,83 @@ async fn handle_download_abi_command(project_path: PathBuf) {
         }
 
         let abi_path = rindexer_abis_folder.join(format!("{}.abi.json", item.contract_name));
-        write_file(abi_path.to_str().unwrap(), &item.abi).unwrap();
+        write_file(&abi_path, &item.abi).map_err(|e| {
+            print_error_message(&format!("Failed to write ABI file: {}", e));
+            e
+        })?;
         print_success_message(&format!("Downloaded ABI for: {}", item.contract_name));
 
         break;
     }
+
+    Ok(())
 }
 
-fn handle_codegen_command(project_path: PathBuf, subcommand: &CodegenSubcommands) {
+fn handle_codegen_command(
+    project_path: PathBuf,
+    subcommand: &CodegenSubcommands,
+) -> Result<(), Box<dyn std::error::Error>> {
     validate_rindexer_yaml_exist();
 
     let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
 
-    let manifest = read_manifest(&rindexer_yaml_path).unwrap();
+    let manifest = read_manifest(&rindexer_yaml_path).map_err(|e| {
+        print_error_message(&format!("Could not read the rindexer.yaml file: {}", e));
+        e
+    })?;
     if manifest.project_type == ProjectType::NoCode {
-        print_error_message("This command is not supported for no-code projects, please migrate to a project to use this.");
-        return;
+        let error = "This command is not supported for no-code projects, please migrate to a project to use this.";
+        print_error_message(error);
+        return Err(error.into());
     }
 
     match subcommand {
         CodegenSubcommands::Typings => {
-            generate_rindexer_typings(manifest.clone(), &rindexer_yaml_path).unwrap();
+            generate_rindexer_typings(manifest.clone(), &rindexer_yaml_path).map_err(|e| {
+                print_error_message(&format!("Failed to generate rindexer typings: {}", e));
+                e
+            })?;
             print_success_message("Generated rindexer typings.");
         }
         CodegenSubcommands::Indexer => {
-            generate_rindexer_handlers(manifest.clone(), &rindexer_yaml_path).unwrap();
+            generate_rindexer_handlers(manifest.clone(), &rindexer_yaml_path).map_err(|e| {
+                print_error_message(&format!(
+                    "Failed to generate rindexer indexer handlers: {}",
+                    e
+                ));
+                e
+            })?;
             print_success_message("Generated rindexer indexer handlers.");
         }
         CodegenSubcommands::All => {
-            generate(&rindexer_yaml_path).unwrap();
+            generate(&rindexer_yaml_path).map_err(|e| {
+                print_error_message(&format!("Failed to generate rindexer code: {}", e));
+                e
+            })?;
             print_success_message("Generated rindexer typings and indexer handlers");
         }
     }
+
+    Ok(())
 }
 
-async fn start(project_path: PathBuf, command: &StartSubcommands) {
+async fn start(
+    project_path: PathBuf,
+    command: &StartSubcommands,
+) -> Result<(), Box<dyn std::error::Error>> {
     validate_rindexer_yaml_exist();
 
-    let manifest = read_rindexer_yaml(&project_path.join(YAML_CONFIG_NAME));
+    let manifest = read_manifest(&project_path.join(YAML_CONFIG_NAME)).map_err(|e| {
+        print_error_message(&format!("Could not read the rindexer.yaml file: {}", e));
+        e
+    })?;
+
     if manifest.storage.postgres_enabled() {
         let client = PostgresClient::new().await;
         if client.is_err() {
-            print_error_message("Failed to connect to the postgres database.\nMake sure the database is running and the connection details are correct in the .env file and yaml file.\nIf you are running locally and using docker do not forget to run docker-compose up before you run the indexer.");
-            return;
+            let error = "Failed to connect to the postgres database.\nMake sure the database is running and the connection details are correct in the .env file and yaml file.\nIf you are running locally and using docker do not forget to run docker-compose up before you run the indexer.";
+            print_error_message(error);
+            return Err(error.into());
         }
     }
 
@@ -485,7 +543,10 @@ async fn start(project_path: PathBuf, command: &StartSubcommands) {
                     graphql_server: None,
                 };
 
-                start_rindexer_no_code(details).await.unwrap();
+                start_rindexer_no_code(details).await.map_err(|e| {
+                    print_error_message(&format!("Error starting the server: {}", e));
+                    e
+                })?;
             }
             StartSubcommands::Graphql { port } => {
                 let details = StartNoCodeDetails {
@@ -499,7 +560,10 @@ async fn start(project_path: PathBuf, command: &StartSubcommands) {
                     }),
                 };
 
-                start_rindexer_no_code(details).await.unwrap();
+                start_rindexer_no_code(details).await.map_err(|e| {
+                    print_error_message(&format!("Error starting the indexer: {}", e));
+                    e
+                })?;
             }
             StartSubcommands::All { port } => {
                 let details = StartNoCodeDetails {
@@ -519,22 +583,29 @@ async fn start(project_path: PathBuf, command: &StartSubcommands) {
             }
         },
     }
+
+    Ok(())
 }
 
-async fn handle_delete_command(project_path: PathBuf) {
+async fn handle_delete_command(project_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     print_warn_message(&format!(
         "This will delete all data in the postgres database and csv files for the project at: {}",
         project_path.display()
     ));
-    print_warn_message("This operation can not be reverted. Make sure you know what you are doing.");
-    let manifest = read_rindexer_yaml(&project_path.join(YAML_CONFIG_NAME));
+    print_warn_message(
+        "This operation can not be reverted. Make sure you know what you are doing.",
+    );
+    let manifest = read_manifest(&project_path.join(YAML_CONFIG_NAME)).map_err(|e| {
+        print_error_message(&format!("Could read the rindexer.yaml please make sure you are running the command with rindexer.yaml in root: trace: {}", e));
+        e
+    })?;
 
     let postgres_enabled = manifest.storage.postgres_enabled();
     let csv_enabled = manifest.storage.csv_enabled();
 
     if !postgres_enabled && !csv_enabled {
         print_success_message("No storage enabled. Nothing to delete.");
-        return;
+        return Ok(());
     }
 
     if postgres_enabled {
@@ -545,12 +616,21 @@ async fn handle_delete_command(project_path: PathBuf) {
         );
 
         if postgres_delete == "yes" {
-            let postgres_client = PostgresClient::new().await.unwrap();
+            let postgres_client = PostgresClient::new().await.map_err(|e| {
+                print_error_message(&format!("Could not connect to Postgres, make sure your connection string is mapping in the .env correctly: trace: {}", e));
+                e
+            })?;
+            // TODO! sort unwrap here
             let sql = drop_tables_for_indexer_sql(manifest.indexers.first().unwrap());
-            
-            postgres_client.batch_execute(&sql).await.unwrap();
-            
-            print_success_message("\n\nSuccessfully deleted all data from the postgres database.\n\n");
+
+            postgres_client.batch_execute(sql.as_str()).await.map_err(|e| {
+                print_error_message(&format!("Could not delete tables from Postgres make sure your connection string is mapping in the .env correctly: trace: {}", e));
+                e
+            })?;
+
+            print_success_message(
+                "\n\nSuccessfully deleted all data from the postgres database.\n\n",
+            );
         }
     }
 
@@ -565,52 +645,61 @@ async fn handle_delete_command(project_path: PathBuf) {
             let path = &project_path.join(manifest.storage.csv.unwrap().path);
             // if no csv exist we will just look like it cleared it
             if path.exists() {
-                remove_dir_all(&project_path.join(path)).await.unwrap();
+                remove_dir_all(&project_path.join(path))
+                    .await
+                    .map_err(|e| {
+                        print_error_message(&format!("Could not delete csv files: trace: {}", e));
+                        e
+                    })?;
             }
-            
+
             print_success_message("\n\nSuccessfully deleted all csv files.\n\n");
         }
     }
+
+    Ok(())
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = CLI::parse();
 
     match &cli.command {
-        Commands::New { path } => handle_new_command(
-            resolve_path(path)
-                .map_err(|e| print_error_message(&e))
-                .unwrap(),
-        ),
+        Commands::New { path } => {
+            let resolved_path = resolve_path(path).map_err(|e| {
+                print_error_message(&e);
+                e
+            })?; // Ensure error is returned, not ()
+            handle_new_command(resolved_path)
+        }
         Commands::DownloadAbi { path } => {
-            handle_download_abi_command(
-                resolve_path(path)
-                    .map_err(|e| print_error_message(&e))
-                    .unwrap(),
-            )
-            .await
+            let resolved_path = resolve_path(path).map_err(|e| {
+                print_error_message(&e);
+                e
+            })?;
+            handle_download_abi_command(resolved_path).await
         }
-        Commands::Codegen { subcommand, path } => handle_codegen_command(
-            resolve_path(path)
-                .map_err(|e| print_error_message(&e))
-                .unwrap(),
-            subcommand,
-        ),
+        Commands::Codegen { subcommand, path } => {
+            let resolved_path = resolve_path(path).map_err(|e| {
+                print_error_message(&e);
+                e
+            })?;
+            handle_codegen_command(resolved_path, subcommand)
+        }
         Commands::Start { subcommand, path } => {
-            start(
-                resolve_path(path)
-                    .map_err(|e| print_error_message(&e))
-                    .unwrap(),
-                subcommand,
-            )
-            .await
+            let resolved_path = resolve_path(path).map_err(|e| {
+                print_error_message(&e);
+                e
+            })?;
+            start(resolved_path, subcommand).await
         }
-        Commands::Delete { path } => handle_delete_command(
-            resolve_path(path)
-                .map_err(|e| print_error_message(&e))
-                .unwrap(),
-        ).await,
+        Commands::Delete { path } => {
+            let resolved_path = resolve_path(path).map_err(|e| {
+                print_error_message(&e);
+                e
+            })?;
+            handle_delete_command(resolved_path).await
+        }
     }
 }
 
@@ -744,20 +833,16 @@ fn prompt_for_input_list(
     }
 }
 
-fn write_example_abi(rindexer_abis_folder: &Path) -> PathBuf {
+fn write_example_abi(rindexer_abis_folder: &Path) -> Result<PathBuf, WriteFileError> {
     let abi = r#"[{"inputs":[{"internalType":"contract RocketStorageInterface","name":"_rocketStorageAddress","type":"address"}],"stateMutability":"nonpayable","type":"constructor"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"owner","type":"address"},{"indexed":true,"internalType":"address","name":"spender","type":"address"},{"indexed":false,"internalType":"uint256","name":"value","type":"uint256"}],"name":"Approval","type":"event"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"from","type":"address"},{"indexed":false,"internalType":"uint256","name":"amount","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"time","type":"uint256"}],"name":"EtherDeposited","type":"event"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"from","type":"address"},{"indexed":false,"internalType":"uint256","name":"amount","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"ethAmount","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"time","type":"uint256"}],"name":"TokensBurned","type":"event"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"to","type":"address"},{"indexed":false,"internalType":"uint256","name":"amount","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"ethAmount","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"time","type":"uint256"}],"name":"TokensMinted","type":"event"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"from","type":"address"},{"indexed":true,"internalType":"address","name":"to","type":"address"},{"indexed":false,"internalType":"uint256","name":"value","type":"uint256"}],"name":"Transfer","type":"event"},{"inputs":[{"internalType":"address","name":"owner","type":"address"},{"internalType":"address","name":"spender","type":"address"}],"name":"allowance","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"address","name":"spender","type":"address"},{"internalType":"uint256","name":"amount","type":"uint256"}],"name":"approve","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"address","name":"account","type":"address"}],"name":"balanceOf","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"uint256","name":"_rethAmount","type":"uint256"}],"name":"burn","outputs":[],"stateMutability":"nonpayable","type":"function"},{"inputs":[],"name":"decimals","outputs":[{"internalType":"uint8","name":"","type":"uint8"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"address","name":"spender","type":"address"},{"internalType":"uint256","name":"subtractedValue","type":"uint256"}],"name":"decreaseAllowance","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"nonpayable","type":"function"},{"inputs":[],"name":"depositExcess","outputs":[],"stateMutability":"payable","type":"function"},{"inputs":[],"name":"depositExcessCollateral","outputs":[],"stateMutability":"nonpayable","type":"function"},{"inputs":[],"name":"getCollateralRate","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"uint256","name":"_rethAmount","type":"uint256"}],"name":"getEthValue","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"getExchangeRate","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"uint256","name":"_ethAmount","type":"uint256"}],"name":"getRethValue","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"getTotalCollateral","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"address","name":"spender","type":"address"},{"internalType":"uint256","name":"addedValue","type":"uint256"}],"name":"increaseAllowance","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"uint256","name":"_ethAmount","type":"uint256"},{"internalType":"address","name":"_to","type":"address"}],"name":"mint","outputs":[],"stateMutability":"nonpayable","type":"function"},{"inputs":[],"name":"name","outputs":[{"internalType":"string","name":"","type":"string"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"symbol","outputs":[{"internalType":"string","name":"","type":"string"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"totalSupply","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"},{"inputs":[{"internalType":"address","name":"recipient","type":"address"},{"internalType":"uint256","name":"amount","type":"uint256"}],"name":"transfer","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"address","name":"sender","type":"address"},{"internalType":"address","name":"recipient","type":"address"},{"internalType":"uint256","name":"amount","type":"uint256"}],"name":"transferFrom","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"nonpayable","type":"function"},{"inputs":[],"name":"version","outputs":[{"internalType":"uint8","name":"","type":"uint8"}],"stateMutability":"view","type":"function"},{"stateMutability":"payable","type":"receive"}]"#;
 
     let path = rindexer_abis_folder.join("RocketTokenRETH.abi.json");
 
-    write_file(path.to_str().unwrap(), abi).unwrap();
+    write_file(&path, abi)?;
 
-    path
+    Ok(path)
 }
 
-fn write_docker_compose(path: &Path) {
-    write_file(
-        path.join("docker-compose.yml").to_str().unwrap(),
-        generate_docker_file(),
-    )
-    .unwrap();
+fn write_docker_compose(path: &Path) -> Result<(), WriteFileError> {
+    write_file(&path.join("docker-compose.yml"), generate_docker_file())
 }

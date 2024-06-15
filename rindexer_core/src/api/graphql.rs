@@ -2,7 +2,8 @@ use crate::database::postgres::{connection_string, indexer_contract_schema_name}
 use crate::manifest::yaml::Indexer;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::thread;
+use std::{env, thread};
+use thiserror::Error;
 use tracing::{error, info};
 
 pub struct GraphQLServerDetails {
@@ -44,6 +45,15 @@ impl Drop for GraphQLServer {
     }
 }
 
+#[derive(Error, Debug)]
+pub enum StartGraphqlServerError {
+    #[error("Can not read database environment variable: {0}")]
+    UnableToReadDatabaseUrl(env::VarError),
+
+    #[error("Could not start up GraphQL server {0}")]
+    GraphQLServerStartupError(String),
+}
+
 /// Starts the GraphQL server with the given settings.
 ///
 /// # Arguments
@@ -53,11 +63,11 @@ impl Drop for GraphQLServer {
 ///
 /// # Returns
 ///
-/// Returns a `Result` with the `GraphQLServer` on success, or an error message on failure.
+/// Returns a `Result` with the `GraphQLServer` on success, or an `StartGraphqlServerError` on failure.
 pub fn start_graphql_server(
     indexers: &[Indexer],
     settings: GraphQLServerSettings,
-) -> Result<GraphQLServer, String> {
+) -> Result<GraphQLServer, StartGraphqlServerError> {
     info!("Starting GraphQL server");
 
     let schemas: Vec<String> = indexers
@@ -70,7 +80,8 @@ pub fn start_graphql_server(
         })
         .collect();
 
-    let connection_string = connection_string().map_err(|e| e.to_string())?;
+    let connection_string =
+        connection_string().map_err(StartGraphqlServerError::UnableToReadDatabaseUrl)?;
     let port = settings.port.unwrap_or(5005).to_string();
 
     let child = Command::new("npx")
@@ -94,7 +105,7 @@ pub fn start_graphql_server(
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| StartGraphqlServerError::GraphQLServerStartupError(e.to_string()))?;
 
     let pid = child.id();
     let child_arc = Arc::new(Mutex::new(child));
@@ -107,17 +118,21 @@ pub fn start_graphql_server(
 
     let port_clone = port.clone();
     let child_clone_for_thread = Arc::clone(&child_arc);
-    thread::spawn(move || {
-        let status = child_clone_for_thread
-            .lock()
-            .unwrap()
-            .wait()
-            .expect("Failed to wait on child process");
-
-        if status.success() {
-            info!("🚀 GraphQL API ready at http://0.0.0.0:{}/", port_clone);
-        } else {
-            panic!("Could not start up API");
+    thread::spawn(move || match child_clone_for_thread.lock() {
+        Ok(mut guard) => match guard.wait() {
+            Ok(status) => {
+                if status.success() {
+                    info!("🚀 GraphQL API ready at http://0.0.0.0:{}/", port_clone);
+                } else {
+                    error!("GraphQL: Could not start up API: Child process exited with errors");
+                }
+            }
+            Err(e) => {
+                error!("GraphQL: Failed to wait on child process: {}", e);
+            }
+        },
+        Err(e) => {
+            error!("GraphQL: Failed to lock child process for waiting: {}", e);
         }
     });
 
