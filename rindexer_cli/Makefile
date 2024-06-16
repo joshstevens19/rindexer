@@ -6,6 +6,8 @@ start_prod:
 	RUSTFLAGS='-C target-cpu=native' cargo run --profile production --features jemalloc -- start all
 start_indexer:
 	cargo run -- start --path /Users/joshstevens/code/rindexer/examples/rindexer_demo_cli indexer
+start_indexer_prod:
+	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- start --path /Users/joshstevens/code/rindexer/examples/rindexer_demo_cli indexer
 start_graphql:
 	cargo run -- start --path /Users/joshstevens/code/rindexer/examples/rindexer_demo_cli graphql
 codegen:
@@ -18,3 +20,5 @@ download_abi:
 	cargo run -- download_abi --path /Users/joshstevens/code/rindexer/examples/rindexer_demo_cli
 delete:
 	cargo run -- delete --path /Users/joshstevens/code/rindexer/examples/rindexer_demo_cli
+prod_build:
+	RUSTFLAGS='-C target-cpu=native' cargo build --release --features jemalloc
