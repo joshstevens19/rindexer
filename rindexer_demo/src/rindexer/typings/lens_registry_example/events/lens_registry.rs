@@ -163,14 +163,14 @@ where
         }
     }
 
-    fn contract_information(&self) -> Contract {
+    pub fn contract_information(&self) -> Contract {
         Contract {
             name: "LensRegistry".to_string(),
             details: vec![ContractDetails::new_with_address(
                 "polygon".to_string(),
                 "0xD4F2F33680FCCb36748FA9831851643781608844".to_string(),
-                Some(1446614065.into()),
-                None,
+                Some(56399431.into()),
+                Some(56399432.into()),
                 Some(1000),
             )],
             abi:

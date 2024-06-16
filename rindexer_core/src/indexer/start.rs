@@ -637,7 +637,7 @@ fn update_progress_and_last_synced(
                         camel_to_snake(&event_name)
                     ),
                     &[
-                        &EthereumSqlTypeWrapper::U64(&to_block),
+                        &EthereumSqlTypeWrapper::U64(to_block),
                         &network_contract.network,
                     ],
                 )
