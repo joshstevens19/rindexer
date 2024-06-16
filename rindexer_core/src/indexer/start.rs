@@ -36,9 +36,9 @@ impl Default for ConcurrentSettings {
 }
 
 /// Settings for starting the indexing process.
-/// TODO! ADD TO YAML FILE
 pub struct StartIndexingSettings {
     concurrent: Option<ConcurrentSettings>,
+    // TODO ADD TO YAML FILE
     execute_in_event_order: bool,
     execute_event_logs_in_order: bool,
 }
@@ -587,7 +587,7 @@ async fn get_last_synced_block_number(
             let row = database.query_one(&query, &[&network]).await;
             match row {
                 Ok(row) => {
-                    // TODO! UNCOMMENT
+                    // TODO UNCOMMENT
                     // let result: Decimal = row.get("last_synced_block");
                     // Some(U64::from_dec_str(&result.to_string()).unwrap())
                     None

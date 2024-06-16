@@ -620,7 +620,7 @@ async fn handle_delete_command(project_path: PathBuf) -> Result<(), Box<dyn std:
                 print_error_message(&format!("Could not connect to Postgres, make sure your connection string is mapping in the .env correctly: trace: {}", e));
                 e
             })?;
-            // TODO! sort unwrap here
+            // TODO sort unwrap here
             let sql = drop_tables_for_indexer_sql(manifest.indexers.first().unwrap());
 
             postgres_client.batch_execute(sql.as_str()).await.map_err(|e| {

@@ -756,7 +756,7 @@ pub fn map_log_token_to_ethereum_wrapper(token: &Token) -> Option<EthereumSqlTyp
         Token::Int(uint) | Token::Uint(uint) => Some(EthereumSqlTypeWrapper::U256(*uint)),
         Token::Bool(b) => Some(EthereumSqlTypeWrapper::Bool(*b)),
         Token::String(s) => Some(EthereumSqlTypeWrapper::String(s.clone())),
-        // TODO! HANDLE THE MORE ADVANCED STRUCT SYSTEMS
+        // TODO HANDLE THE MORE ADVANCED STRUCT SYSTEMS
         // Token::FixedBytes(bytes) | Token::Bytes(bytes) => Some(EthereumSqlTypeWrapper::Bytes(bytes.into())),
         // Token::FixedArray(tokens) | Token::Array(tokens) => {
         //     let mut wrappers = Vec::new();
