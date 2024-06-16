@@ -438,14 +438,10 @@ fn generate_indexed_vec_string(indexed: &Option<Vec<String>>) -> Code {
         None => Code::new("None".to_string()),
     }
 }
-
-// TODO! REMOVE
-#[derive(thiserror::Error, Debug)]
-pub enum GenerateContractTypeFnError {}
-
+refac
 fn generate_contract_type_fn_code(
     contract: &Contract,
-) -> Result<Code, GenerateContractTypeFnError> {
+) -> Code {
     let mut details = String::new();
     details.push_str("vec![");
 
@@ -551,7 +547,7 @@ fn generate_contract_type_fn_code(
         "None".to_string()
     };
 
-    Ok(Code::new(format!(
+    Code::new(format!(
         r#"
         pub fn contract_information(&self) -> Contract {{
             Contract {{
@@ -570,7 +566,7 @@ fn generate_contract_type_fn_code(
         include_events_code,
         contract.reorg_safe_distance,
         contract.generate_csv
-    )))
+    ))
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -847,9 +843,6 @@ pub enum GenerateEventBindingCodeError {
 
     #[error("{0}")]
     GenerateEventCallbackStructsError(GenerateEventCallbackStructsError),
-
-    #[error("{0}")]
-    GenerateContractTypeFnError(GenerateContractTypeFnError),
 }
 
 /// Generates the Rust code for event bindings.
@@ -1013,8 +1006,7 @@ fn generate_event_bindings_code(
         topic_ids_match_arms = generate_topic_ids_match_arms_code(&event_type_name, &event_info),
         event_names_match_arms =
             generate_event_names_match_arms_code(&event_type_name, &event_info),
-        contract_type_fn = generate_contract_type_fn_code(contract)
-            .map_err(GenerateEventBindingCodeError::GenerateContractTypeFnError)?,
+        contract_type_fn = generate_contract_type_fn_code(contract),
         build_get_provider_fn =
             build_get_provider_fn(contract.details.iter().map(|c| c.network.clone()).collect()),
         build_contract_fn = build_contract_fn(
