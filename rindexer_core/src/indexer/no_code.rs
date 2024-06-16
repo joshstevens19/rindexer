@@ -186,6 +186,7 @@ async fn bulk_insert_via_copy(
     Ok(())
 }
 
+#[derive(Clone)]
 struct NoCodeCallbackParams {
     event_name: String,
     indexer_name: String,
@@ -199,25 +200,18 @@ struct NoCodeCallbackParams {
 
 type NoCodeCallbackResult = Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, ()> + Send + Sync>;
 
-fn no_code_callback(params: NoCodeCallbackParams) -> NoCodeCallbackResult {
+fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
     Arc::new(move |results| {
-        let name_clone = params.event_name.clone();
-        let indexer_name = params.indexer_name.clone();
-        let contract_name = params.contract_name.clone();
-        let event_clone = params.event.clone();
-        let csv_clone = params.csv.clone();
-        let postgres = params.postgres.clone();
-        let postgres_event_table_name = params.postgres_event_table_name.clone();
-        let postgres_column_names = params.postgres_column_names.clone();
-
+        let params = params.clone();
+        
         async move {
             let event_length = results.len();
             if event_length == 0 {
                 debug!(
                     "{} {}: {} - {}",
-                    indexer_name,
-                    contract_name,
-                    name_clone,
+                    params.indexer_name,
+                    params.contract_name,
+                    params.event_name,
                     "NO EVENTS".red()
                 );
                 return;
@@ -245,7 +239,7 @@ fn no_code_callback(params: NoCodeCallbackParams) -> NoCodeCallbackResult {
             let owned_results: Vec<_> = results
                 .iter()
                 .map(|result| {
-                    let log = match event_clone.parse_log(RawLog {
+                    let log = match params.event.parse_log(RawLog {
                         topics: result.log.topics.clone(),
                         data: result.log.data.to_vec(),
                     }) {
@@ -310,7 +304,7 @@ fn no_code_callback(params: NoCodeCallbackParams) -> NoCodeCallbackResult {
 
                 bulk_data.push(all_params);
 
-                if let Some(csv) = &csv_clone {
+                if let Some(csv) = &params.csv {
                     let mut csv_data: Vec<String> = vec![format!("{}", address)];
 
                     for param in &log_params {
@@ -330,7 +324,7 @@ fn no_code_callback(params: NoCodeCallbackParams) -> NoCodeCallbackResult {
                 }
             }
 
-            if let Some(postgres) = &postgres {
+            if let Some(postgres) = &params.postgres {
                 // anything over 100 events is considered bulk and goes the COPY route
                 if event_length > 100 {
                     if !bulk_data.is_empty() {
@@ -345,8 +339,8 @@ fn no_code_callback(params: NoCodeCallbackParams) -> NoCodeCallbackResult {
                         if let Err(e) = bulk_insert_via_copy(
                             postgres,
                             bulk_data_refs,
-                            &postgres_event_table_name,
-                            &postgres_column_names,
+                            &params.postgres_event_table_name,
+                            &params.postgres_column_names,
                             &bulk_column_types,
                         )
                         .await
@@ -356,8 +350,8 @@ fn no_code_callback(params: NoCodeCallbackParams) -> NoCodeCallbackResult {
                     }
                 } else {
                     let (query, params) = generate_bulk_insert_statement(
-                        &postgres_event_table_name,
-                        &postgres_column_names,
+                        &params.postgres_event_table_name,
+                        &params.postgres_column_names,
                         &bulk_data,
                     );
                     if let Err(e) = postgres.execute(&query, &params).await {
@@ -370,9 +364,9 @@ fn no_code_callback(params: NoCodeCallbackParams) -> NoCodeCallbackResult {
 
             info!(
                 "{} {}: {} - {} - {} events {}",
-                indexer_name,
-                contract_name,
-                name_clone,
+                params.indexer_name,
+                params.contract_name,
+                params.event_name,
                 "INDEXED".green(),
                 event_length,
                 format!("- blocks: {} - {}", from_block, to_block)
@@ -467,7 +461,7 @@ pub async fn process_indexers(
                     event_name: event_info.name.clone(),
                     topic_id: event_info.topic_id(),
                     contract: contract_information,
-                    callback: no_code_callback(NoCodeCallbackParams {
+                    callback: no_code_callback(Arc::new(NoCodeCallbackParams {
                         event_name: event_info.name.clone(),
                         indexer_name: indexer.name.clone(),
                         contract_name: contract.name.clone(),
@@ -480,7 +474,7 @@ pub async fn process_indexers(
                             &event_info.name,
                         ),
                         postgres_column_names: generate_columns_names_only(&event_info.inputs),
-                    }),
+                    })),
                 };
 
                 events.push(event);
