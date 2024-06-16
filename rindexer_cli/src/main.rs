@@ -1,3 +1,10 @@
+#[cfg(feature = "jemalloc")]
+use jemallocator::Jemalloc;
+
+#[cfg(feature = "jemalloc")]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use ethers::types::{Chain, U64};

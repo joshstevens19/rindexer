@@ -7,11 +7,17 @@ networks - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60adde36
 eth_getLogs - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60adde361736deeb3b2c/packages/core/src/sync-historical/service.ts#L946
 
 checklist v1.0:
+- remove indexers from yaml and make it a flat indexer yaml
+- handle concurrency issues indexing and rate limits for RPCs
+- change database password to be simpler
 - fix TODOs
+- look into .clone() to see if we can share some data
 - investigate graphql/REST API exposing
   - npx postgraphile -c postgres://rindexer_user:U3uaAFmEbv9dnxjKOo9SbUFwc9wMU5ADBHW%2BHUT%2F7%2BDpQaDeUYV%2F@localhost:5440/postgres --host 0.0.0.0 --port 5005 --watch --schema public,lens_registry_example --default-role rindexer_user --enhance-graphiql --cors --disable-default-mutations
-- look into deployments to make it easy to do
+- look into migrating to alloy from ethers
 - look into setting your own schema for the database using diesel
+- add a getting started guide for rust / no-code
+- look into deployments to make it easy to do
 
 bugs:
 - not having endBlock throws and error on manifest
