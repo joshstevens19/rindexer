@@ -752,10 +752,10 @@ pub fn solidity_type_to_ethereum_sql_type_wrapper(
 }
 pub fn map_log_token_to_ethereum_wrapper(token: &Token) -> Option<EthereumSqlTypeWrapper> {
     match &token {
-        Token::Address(address) => Some(EthereumSqlTypeWrapper::Address(address.to_owned())),
-        Token::Int(uint) | Token::Uint(uint) => Some(EthereumSqlTypeWrapper::U256(uint.to_owned())),
-        Token::Bool(b) => Some(EthereumSqlTypeWrapper::Bool(b.to_owned())),
-        Token::String(s) => Some(EthereumSqlTypeWrapper::String(s.to_owned())),
+        Token::Address(address) => Some(EthereumSqlTypeWrapper::Address(*address)),
+        Token::Int(uint) | Token::Uint(uint) => Some(EthereumSqlTypeWrapper::U256(*uint)),
+        Token::Bool(b) => Some(EthereumSqlTypeWrapper::Bool(*b)),
+        Token::String(s) => Some(EthereumSqlTypeWrapper::String(s.clone())),
         // TODO! HANDLE THE MORE ADVANCED STRUCT SYSTEMS
         // Token::FixedBytes(bytes) | Token::Bytes(bytes) => Some(EthereumSqlTypeWrapper::Bytes(bytes.into())),
         // Token::FixedArray(tokens) | Token::Array(tokens) => {
@@ -776,7 +776,7 @@ pub fn map_log_token_to_ethereum_wrapper(token: &Token) -> Option<EthereumSqlTyp
 
 impl From<&Address> for EthereumSqlTypeWrapper {
     fn from(address: &Address) -> Self {
-        EthereumSqlTypeWrapper::Address(address.to_owned())
+        EthereumSqlTypeWrapper::Address(*address)
     }
 }
 
