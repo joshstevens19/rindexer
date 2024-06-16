@@ -438,10 +438,8 @@ fn generate_indexed_vec_string(indexed: &Option<Vec<String>>) -> Code {
         None => Code::new("None".to_string()),
     }
 }
-refac
-fn generate_contract_type_fn_code(
-    contract: &Contract,
-) -> Code {
+
+fn generate_contract_type_fn_code(contract: &Contract) -> Code {
     let mut details = String::new();
     details.push_str("vec![");
 
