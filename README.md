@@ -13,6 +13,9 @@ checklist v1.0:
 - look into deployments to make it easy to do
 - look into setting your own schema for the database using diesel
 
+bugs:
+- not having endBlock throws and error on manifest
+
 nice to have:
 
 - investigate indexing contracts that are deployed within an event onchain

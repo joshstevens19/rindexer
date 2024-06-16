@@ -1,5 +1,5 @@
 use crate::database::postgres::{
-    generated_insert_query_for_event, solidity_type_to_db_type,
+    generate_insert_query_for_event, solidity_type_to_db_type,
     solidity_type_to_ethereum_sql_type_wrapper,
 };
 use crate::generator::event_callback_registry::IndexingContractSetup;
@@ -439,11 +439,9 @@ fn generate_indexed_vec_string(indexed: &Option<Vec<String>>) -> Code {
     }
 }
 
+// TODO! REMOVE
 #[derive(thiserror::Error, Debug)]
-pub enum GenerateContractTypeFnError {
-    #[error("include events data is required but was not provided")]
-    MissingIncludeEventsData,
-}
+pub enum GenerateContractTypeFnError {}
 
 fn generate_contract_type_fn_code(
     contract: &Contract,
@@ -550,7 +548,7 @@ fn generate_contract_type_fn_code(
                 .join(", ")
         )
     } else {
-        return Err(GenerateContractTypeFnError::MissingIncludeEventsData);
+        "None".to_string()
     };
 
     Ok(Code::new(format!(
@@ -1041,14 +1039,14 @@ pub enum GenerateAbiPropertiesType {
 
 /// Represents the result of generating ABI name properties.
 #[derive(Debug)]
-pub struct GenerateAbiNamePropertiesResult<'a> {
+pub struct GenerateAbiNamePropertiesResult {
     pub value: String,
     pub abi_type: String,
     pub abi_name: String,
-    pub ethereum_sql_type_wrapper: Option<EthereumSqlTypeWrapper<'a>>,
+    pub ethereum_sql_type_wrapper: Option<EthereumSqlTypeWrapper>,
 }
 
-impl<'a> GenerateAbiNamePropertiesResult<'a> {
+impl GenerateAbiNamePropertiesResult {
     pub fn new(value: String, name: &str, abi_type: &str) -> Self {
         Self {
             value,
@@ -1070,11 +1068,11 @@ impl<'a> GenerateAbiNamePropertiesResult<'a> {
 /// # Returns
 ///
 /// A vector of `GenerateAbiNamePropertiesResult` containing the generated ABI name properties.
-pub fn generate_abi_name_properties<'a>(
+pub fn generate_abi_name_properties(
     inputs: &[ABIInput],
     properties_type: &GenerateAbiPropertiesType,
     prefix: Option<&str>,
-) -> Vec<GenerateAbiNamePropertiesResult<'a>> {
+) -> Vec<GenerateAbiNamePropertiesResult> {
     inputs
         .iter()
         .flat_map(|input| {
@@ -1096,8 +1094,8 @@ pub fn generate_abi_name_properties<'a>(
 
                         vec![GenerateAbiNamePropertiesResult::new(
                             value,
-                            &input.type_,
                             &input.name,
+                            &input.type_,
                         )]
                     }
                     GenerateAbiPropertiesType::PostgresColumnsNamesOnly
@@ -1110,8 +1108,8 @@ pub fn generate_abi_name_properties<'a>(
 
                         vec![GenerateAbiNamePropertiesResult::new(
                             value,
-                            &input.type_,
                             &input.name,
+                            &input.type_,
                         )]
                     }
                     GenerateAbiPropertiesType::Object => {
@@ -1123,8 +1121,8 @@ pub fn generate_abi_name_properties<'a>(
 
                         vec![GenerateAbiNamePropertiesResult::new(
                             value,
-                            &input.type_,
                             &input.name,
+                            &input.type_,
                         )]
                     }
                 }
@@ -1273,16 +1271,17 @@ pub fn generate_event_handlers(
 
         // this checks storage enabled as well
         if !storage.postgres_disable_create_tables() {
-            let insert_sql = generated_insert_query_for_event(&event, indexer_name, &contract.name);
+            // TODO look at doing the bulk insert + copy route here as well
+            let insert_sql = generate_insert_query_for_event(&event, indexer_name, &contract.name);
 
             let mut params_sql = String::new();
             params_sql
-                .push_str("&[&EthereumSqlTypeWrapper::Address(&result.tx_information.address),");
+                .push_str("&[&EthereumSqlTypeWrapper::Address(result.tx_information.address),");
 
             for item in &abi_name_properties {
                 if let Some(wrapper) = &item.ethereum_sql_type_wrapper {
                     params_sql.push_str(&format!(
-                        "&EthereumSqlTypeWrapper::{}(&result.event_data.{}{}),",
+                        "&EthereumSqlTypeWrapper::{}(result.event_data.{}{}),",
                         wrapper.raw_name(),
                         item.value,
                         if item.abi_type.contains("bytes") {
@@ -1301,12 +1300,11 @@ pub fn generate_event_handlers(
                 }
             }
 
-            params_sql.push_str(
-                "&EthereumSqlTypeWrapper::H256(&result.tx_information.transaction_hash),",
-            );
             params_sql
-                .push_str("&EthereumSqlTypeWrapper::U64(&result.tx_information.block_number),");
-            params_sql.push_str("&EthereumSqlTypeWrapper::H256(&result.tx_information.block_hash)");
+                .push_str("&EthereumSqlTypeWrapper::H256(result.tx_information.transaction_hash),");
+            params_sql
+                .push_str("&EthereumSqlTypeWrapper::U64(result.tx_information.block_number),");
+            params_sql.push_str("&EthereumSqlTypeWrapper::H256(result.tx_information.block_hash)");
             params_sql.push(']');
 
             postgres_write = format!(

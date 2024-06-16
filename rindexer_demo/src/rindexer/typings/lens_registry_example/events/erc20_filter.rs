@@ -153,7 +153,7 @@ where
         }
     }
 
-    fn contract_information(&self) -> Contract {
+    pub fn contract_information(&self) -> Contract {
         Contract {
             name: "ERC20Filter".to_string(),
             details: vec![ContractDetails::new_with_filter(
@@ -166,8 +166,8 @@ where
                     indexed_2: None,
                     indexed_3: None,
                 },
-                Some(1446614065.into()),
-                None,
+                Some(56399431.into()),
+                Some(56399432.into()),
                 Some(1000),
             )],
             abi: "/Users/joshstevens/code/rindexer/rindexer_demo/abis/erc20-abi.json".to_string(),
@@ -179,7 +179,7 @@ where
 
     fn get_provider(&self, network: &str) -> Arc<Provider<RetryClient<Http>>> {
         if network == "polygon" {
-            return super::super::super::networks::get_polygon_provider();
+            super::super::super::networks::get_polygon_provider()
         } else {
             panic!("Network not supported")
         }

@@ -1,6 +1,9 @@
 use std::env;
+use std::path::PathBuf;
+use std::str::FromStr;
 
 use self::rindexer::indexers::all_handlers::register_all_handlers;
+use rindexer_core::manifest::yaml::read_manifest;
 use rindexer_core::{
     start_rindexer, GraphQLServerDetails, GraphQLServerSettings, IndexingDetails, StartDetails,
 };
@@ -65,31 +68,43 @@ async fn main() {
     }
 }
 
-// fn generate() {
-//     rindexer_core::generator::build::generate_rindexer_typings(
-//         &PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap(),
-//     )
-//     .unwrap();
-// }
-//
-// fn generate_code_test() {
-//     rindexer_core::generator::build::generate_rindexer_handlers(
-//         &PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap(),
-//     )
-//     .unwrap();
-// }
-//
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//
-//     #[test]
-//     fn test_generate() {
-//         generate();
-//     }
-//
-//     #[test]
-//     fn test_code_generate() {
-//         generate_code_test();
-//     }
-// }
+fn generate() {
+    let path =
+        PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap();
+    let manifest = read_manifest(&path).unwrap();
+    rindexer_core::generator::build::generate_rindexer_typings(manifest, &path).unwrap();
+}
+
+fn generate_code_test() {
+    let path =
+        PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap();
+    let manifest = read_manifest(&path).unwrap();
+
+    rindexer_core::generator::build::generate_rindexer_handlers(manifest, &path).unwrap();
+}
+
+fn generate_all() {
+    let path =
+        PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap();
+    rindexer_core::generator::build::generate(&path).unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_generate() {
+        generate();
+    }
+
+    #[test]
+    fn test_code_generate() {
+        generate_code_test();
+    }
+
+    #[test]
+    fn test_generate_all() {
+        generate_all();
+    }
+}
