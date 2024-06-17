@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use crate::generator::event_callback_registry::{
     FactoryDetails, FilterDetails, IndexingContractSetup,
 };
+use crate::indexer::Indexer;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_yaml::Value;
 
@@ -90,17 +91,19 @@ pub struct Manifest {
     #[serde(default = "default_storage")]
     pub storage: Storage,
 
-    pub indexers: Vec<Indexer>,
+    pub contracts: Vec<Contract>,
 
     #[serde(default = "default_global")]
     pub global: Global,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Indexer {
-    pub name: String,
-
-    pub contracts: Vec<Contract>,
+impl Manifest {
+    pub fn to_indexer(&self) -> Indexer {
+        Indexer {
+            name: self.name.clone(),
+            contracts: self.contracts.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

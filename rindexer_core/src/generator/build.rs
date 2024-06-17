@@ -8,8 +8,9 @@ use crate::helpers::{
     camel_to_snake, create_mod_file, format_all_files_for_project, write_file, CreateModFileError,
     WriteFileError,
 };
+use crate::indexer::Indexer;
 use crate::manifest::yaml::{
-    read_manifest, Contract, Global, Indexer, Manifest, Network, ReadManifestError, Storage,
+    read_manifest, Contract, Global, Manifest, Network, ReadManifestError, Storage,
     YAML_CONFIG_NAME,
 };
 
@@ -214,10 +215,13 @@ pub fn generate_rindexer_typings(
             write_global(&output, &manifest.global, &manifest.networks)
                 .map_err(GenerateRindexerTypingsError::WriteGlobalError)?;
 
-            for indexer in manifest.indexers {
-                write_indexer_events(project_path, &output, indexer, &manifest.storage)
-                    .map_err(GenerateRindexerTypingsError::WriteIndexerEventsError)?;
-            }
+            write_indexer_events(
+                project_path,
+                &output,
+                manifest.to_indexer(),
+                &manifest.storage,
+            )
+            .map_err(GenerateRindexerTypingsError::WriteIndexerEventsError)?;
 
             create_mod_file(output.as_path(), true)
                 .map_err(GenerateRindexerTypingsError::CreateModFileError)?;
@@ -278,8 +282,8 @@ pub fn generate_rindexer_handlers(
         Some(output_parent) => {
             let output = output_parent.join("./src/rindexer");
 
-            let mut all_indexers = String::new();
-            all_indexers.push_str(
+            let mut handlers = String::new();
+            handlers.push_str(
                 r#"
         use rindexer_core::generator::event_callback_registry::EventCallbackRegistry;
         
@@ -288,45 +292,41 @@ pub fn generate_rindexer_handlers(
         "#,
             );
 
-            for indexer in manifest.indexers {
-                for mut contract in indexer.contracts {
-                    let is_filter = identify_and_modify_filter(&mut contract);
+            for mut contract in manifest.contracts {
+                let is_filter = identify_and_modify_filter(&mut contract);
 
-                    let indexer_name = camel_to_snake(&indexer.name);
-                    let contract_name = camel_to_snake(&contract.name);
-                    let handler_fn_name = format!("{}_handlers", contract_name);
+                let indexer_name = camel_to_snake(&manifest.name);
+                let contract_name = camel_to_snake(&contract.name);
+                let handler_fn_name = format!("{}_handlers", contract_name);
 
-                    all_indexers.insert_str(
-                        0,
-                        &format!(
-                            r#"use super::{indexer_name}::{contract_name}::{handler_fn_name};"#,
-                        ),
-                    );
+                handlers.insert_str(
+                    0,
+                    &format!(r#"use super::{indexer_name}::{contract_name}::{handler_fn_name};"#,),
+                );
 
-                    all_indexers.push_str(&format!(r#"{handler_fn_name}(&mut registry).await;"#));
+                handlers.push_str(&format!(r#"{handler_fn_name}(&mut registry).await;"#));
 
-                    let handler_path = format!("indexers/{}/{}", indexer_name, contract_name);
+                let handler_path = format!("indexers/{}/{}", indexer_name, contract_name);
 
-                    write_file(
-                        &generate_file_location(&output, &handler_path),
-                        generate_event_handlers(
-                            &indexer.name,
-                            is_filter,
-                            &contract,
-                            &manifest.storage,
-                        )
-                        .map_err(GenerateRindexerHandlersError::GenerateEventBindingCodeError)?
-                        .as_str(),
+                write_file(
+                    &generate_file_location(&output, &handler_path),
+                    generate_event_handlers(
+                        &manifest.name,
+                        is_filter,
+                        &contract,
+                        &manifest.storage,
                     )
-                    .map_err(GenerateRindexerHandlersError::CouldNotWriteEventHandlerCode)?;
-                }
+                    .map_err(GenerateRindexerHandlersError::GenerateEventBindingCodeError)?
+                    .as_str(),
+                )
+                .map_err(GenerateRindexerHandlersError::CouldNotWriteEventHandlerCode)?;
             }
 
-            all_indexers.push_str("registry");
-            all_indexers.push('}');
+            handlers.push_str("registry");
+            handlers.push('}');
             write_file(
                 &generate_file_location(&output, "indexers/all_handlers"),
-                &all_indexers,
+                &handlers,
             )
             .map_err(GenerateRindexerHandlersError::CouldNotWriteEventHandlersCode)?;
 

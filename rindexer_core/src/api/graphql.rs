@@ -1,5 +1,5 @@
 use crate::database::postgres::{connection_string, indexer_contract_schema_name};
-use crate::manifest::yaml::Indexer;
+use crate::indexer::Indexer;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::{env, thread};
@@ -65,19 +65,15 @@ pub enum StartGraphqlServerError {
 ///
 /// Returns a `Result` with the `GraphQLServer` on success, or an `StartGraphqlServerError` on failure.
 pub fn start_graphql_server(
-    indexers: &[Indexer],
+    indexer: &Indexer,
     settings: GraphQLServerSettings,
 ) -> Result<GraphQLServer, StartGraphqlServerError> {
     info!("Starting GraphQL server");
 
-    let schemas: Vec<String> = indexers
+    let schemas: Vec<String> = indexer
+        .contracts
         .iter()
-        .flat_map(|indexer| {
-            indexer
-                .contracts
-                .iter()
-                .map(move |contract| indexer_contract_schema_name(&indexer.name, &contract.name))
-        })
+        .map(move |contract| indexer_contract_schema_name(&indexer.name, &contract.name))
         .collect();
 
     let connection_string =
