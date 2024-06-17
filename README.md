@@ -8,16 +8,21 @@ eth_getLogs - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60add
 
 checklist v1.0:
 - remove indexers from yaml and make it a flat indexer yaml
+- cache get latest block on provider to avoid multiple calls
 - handle concurrency issues indexing and rate limits for RPCs
 - change database password to be simpler
 - fix TODOs
+- look into making the rust handlers abstracted away a bit more with Arc and Box 
 - look into .clone() to see if we can share some data
-- investigate graphql/REST API exposing
+- fix graphql endpoint to work everytime
   - npx postgraphile -c postgres://rindexer_user:U3uaAFmEbv9dnxjKOo9SbUFwc9wMU5ADBHW%2BHUT%2F7%2BDpQaDeUYV%2F@localhost:5440/postgres --host 0.0.0.0 --port 5005 --watch --schema public,lens_registry_example --default-role rindexer_user --enhance-graphiql --cors --disable-default-mutations
 - look into migrating to alloy from ethers
+- go through all methods add summaries + refactor if needed
+- finish the documentation
 - look into setting your own schema for the database using diesel
 - add a getting started guide for rust / no-code
 - look into deployments to make it easy to do
+- unit tests for the project
 
 bugs:
 - not having endBlock throws and error on manifest
