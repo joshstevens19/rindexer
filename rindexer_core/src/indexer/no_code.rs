@@ -203,7 +203,7 @@ type NoCodeCallbackResult = Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, (
 fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
     Arc::new(move |results| {
         let params = params.clone();
-        
+
         async move {
             let event_length = results.len();
             if event_length == 0 {
@@ -345,7 +345,10 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                         )
                         .await
                         {
-                            error!("Error performing bulk insert: {}", e);
+                            error!(
+                                "{} {}: {} - Error performing bulk insert: {}",
+                                params.indexer_name, params.contract_name, params.event_name, e
+                            );
                         }
                     }
                 } else {
