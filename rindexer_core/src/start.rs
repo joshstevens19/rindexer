@@ -81,10 +81,20 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
     Ok(())
 }
 
+pub struct IndexerNoCodeDetails {
+    pub enabled: bool,
+    pub settings: Option<StartIndexingSettings>,
+}
+
+pub struct GraphqlNoCodeDetails {
+    pub enabled: bool,
+    pub settings: Option<GraphQLServerDetails>,
+}
+
 pub struct StartNoCodeDetails {
     pub manifest_path: PathBuf,
-    pub indexing_settings: Option<StartIndexingSettings>,
-    pub graphql_server: Option<GraphQLServerDetails>,
+    pub indexing_details: IndexerNoCodeDetails,
+    pub graphql_details: GraphqlNoCodeDetails,
 }
 
 #[derive(thiserror::Error, Debug)]

@@ -756,7 +756,7 @@ pub fn map_log_token_to_ethereum_wrapper(token: &Token) -> Option<EthereumSqlTyp
         Token::String(s) => Some(EthereumSqlTypeWrapper::String(s.clone())),
         Token::FixedBytes(bytes) | Token::Bytes(bytes) => {
             Some(EthereumSqlTypeWrapper::Bytes(Bytes::from(bytes.clone())))
-        },
+        }
         Token::FixedArray(tokens) | Token::Array(tokens) => {
             // events arrays can only be one type so get it from the first one
             let token_type = tokens.first().unwrap();

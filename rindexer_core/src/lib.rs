@@ -31,7 +31,8 @@ mod types;
 pub use logger::setup_logger;
 
 pub use start::{
-    start_rindexer, start_rindexer_no_code, IndexingDetails, StartDetails, StartNoCodeDetails,
+    start_rindexer, start_rindexer_no_code, GraphqlNoCodeDetails, IndexerNoCodeDetails,
+    IndexingDetails, StartDetails, StartNoCodeDetails,
 };
 
 // export 3rd party dependencies
