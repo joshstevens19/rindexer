@@ -768,7 +768,7 @@ pub fn map_log_token_to_ethereum_wrapper(token: &Token) -> Option<EthereumSqlTyp
                             vec.push(*address);
                         }
                     }
-                    
+
                     Some(EthereumSqlTypeWrapper::VecAddress(vec))
                 }
                 Token::FixedBytes(_) | Token::Bytes(_) => {
@@ -778,7 +778,7 @@ pub fn map_log_token_to_ethereum_wrapper(token: &Token) -> Option<EthereumSqlTyp
                             vec.push(Bytes::from(bytes.clone()));
                         }
                     }
-                    
+
                     Some(EthereumSqlTypeWrapper::VecBytes(vec))
                 }
                 Token::Int(_) | Token::Uint(_) => {
@@ -788,7 +788,7 @@ pub fn map_log_token_to_ethereum_wrapper(token: &Token) -> Option<EthereumSqlTyp
                             vec.push(*uint);
                         }
                     }
-                    
+
                     Some(EthereumSqlTypeWrapper::VecU256(vec))
                 }
                 Token::Bool(_) => {
@@ -798,7 +798,7 @@ pub fn map_log_token_to_ethereum_wrapper(token: &Token) -> Option<EthereumSqlTyp
                             vec.push(*b);
                         }
                     }
-                    
+
                     Some(EthereumSqlTypeWrapper::VecBool(vec))
                 }
                 Token::String(_) => {
@@ -808,7 +808,7 @@ pub fn map_log_token_to_ethereum_wrapper(token: &Token) -> Option<EthereumSqlTyp
                             vec.push(s.clone());
                         }
                     }
-                    
+
                     Some(EthereumSqlTypeWrapper::VecString(vec))
                 }
                 Token::FixedArray(_) | Token::Array(_) => {
