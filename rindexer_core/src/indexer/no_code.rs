@@ -71,6 +71,14 @@ pub async fn setup_no_code(details: StartNoCodeDetails) -> Result<StartDetails, 
         ));
     }
 
+    if !details.indexing_details.enabled {
+        return Ok(StartDetails {
+            manifest_path: details.manifest_path,
+            indexing_details: None,
+            graphql_server: details.graphql_details.settings,
+        });
+    }
+
     let network_providers =
         create_network_providers(&manifest).map_err(SetupNoCodeError::RetryClientError)?;
     info!(
@@ -104,9 +112,9 @@ pub async fn setup_no_code(details: StartNoCodeDetails) -> Result<StartDetails, 
                 manifest_path: details.manifest_path,
                 indexing_details: Some(IndexingDetails {
                     registry,
-                    settings: details.indexing_settings.unwrap_or_default(),
+                    settings: details.indexing_details.settings.unwrap_or_default(),
                 }),
-                graphql_server: details.graphql_server,
+                graphql_server: details.graphql_details.settings,
             })
         }
         None => Err(SetupNoCodeError::NoParentInManifestPath),

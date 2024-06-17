@@ -109,7 +109,7 @@ pub async fn start_indexing(
     settings: StartIndexingSettings,
 ) -> Result<(), StartIndexingError> {
     let start = Instant::now();
-    
+
     let database = if manifest.storage.postgres_enabled() {
         let postgres = PostgresClient::new().await;
         match postgres {

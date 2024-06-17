@@ -20,7 +20,8 @@ use rindexer_core::manifest::yaml::{
 };
 use rindexer_core::{
     drop_tables_for_indexer_sql, start_rindexer_no_code, write_file, GraphQLServerDetails,
-    GraphQLServerSettings, PostgresClient, StartNoCodeDetails, WriteFileError,
+    GraphQLServerSettings, GraphqlNoCodeDetails, IndexerNoCodeDetails, PostgresClient,
+    StartNoCodeDetails, WriteFileError,
 };
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -544,8 +545,14 @@ async fn start(
             StartSubcommands::Indexer => {
                 let details = StartNoCodeDetails {
                     manifest_path: project_path.join(YAML_CONFIG_NAME),
-                    indexing_settings: None,
-                    graphql_server: None,
+                    indexing_details: IndexerNoCodeDetails {
+                        enabled: true,
+                        settings: None,
+                    },
+                    graphql_details: GraphqlNoCodeDetails {
+                        enabled: false,
+                        settings: None,
+                    },
                 };
 
                 start_rindexer_no_code(details).await.map_err(|e| {
@@ -556,13 +563,19 @@ async fn start(
             StartSubcommands::Graphql { port } => {
                 let details = StartNoCodeDetails {
                     manifest_path: project_path.join(YAML_CONFIG_NAME),
-                    indexing_settings: None,
-                    graphql_server: Some(GraphQLServerDetails {
-                        settings: match port {
-                            Some(port) => GraphQLServerSettings::port(port.parse().unwrap()),
-                            None => Default::default(),
-                        },
-                    }),
+                    indexing_details: IndexerNoCodeDetails {
+                        enabled: false,
+                        settings: None,
+                    },
+                    graphql_details: GraphqlNoCodeDetails {
+                        enabled: true,
+                        settings: Some(GraphQLServerDetails {
+                            settings: match port {
+                                Some(port) => GraphQLServerSettings::port(port.parse().unwrap()),
+                                None => Default::default(),
+                            },
+                        }),
+                    },
                 };
 
                 start_rindexer_no_code(details).await.map_err(|e| {
@@ -573,13 +586,19 @@ async fn start(
             StartSubcommands::All { port } => {
                 let details = StartNoCodeDetails {
                     manifest_path: project_path.join(YAML_CONFIG_NAME),
-                    indexing_settings: None,
-                    graphql_server: Some(GraphQLServerDetails {
-                        settings: match port {
-                            Some(port) => GraphQLServerSettings::port(port.parse().unwrap()),
-                            None => Default::default(),
-                        },
-                    }),
+                    indexing_details: IndexerNoCodeDetails {
+                        enabled: true,
+                        settings: None,
+                    },
+                    graphql_details: GraphqlNoCodeDetails {
+                        enabled: false,
+                        settings: Some(GraphQLServerDetails {
+                            settings: match port {
+                                Some(port) => GraphQLServerSettings::port(port.parse().unwrap()),
+                                None => Default::default(),
+                            },
+                        }),
+                    },
                 };
 
                 let _ = start_rindexer_no_code(details).await.map_err(|e| {

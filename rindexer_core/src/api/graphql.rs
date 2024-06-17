@@ -38,13 +38,6 @@ pub struct GraphQLServer {
     pid: u32,
 }
 
-impl Drop for GraphQLServer {
-    fn drop(&mut self) {
-        kill_process_tree(self.pid).expect("Failed to kill child process");
-        error!("GraphQL server process killed");
-    }
-}
-
 #[derive(Error, Debug)]
 pub enum StartGraphqlServerError {
     #[error("Can not read database environment variable: {0}")]

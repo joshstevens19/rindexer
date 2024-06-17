@@ -11,8 +11,6 @@ checklist v1.0:
 - fix TODOs
 - look into making the rust handlers abstracted away a bit more with Arc and Box 
 - look into .clone() to see if we can share some data
-- fix graphql endpoint to work everytime
-  - npx postgraphile -c postgres://rindexer_user:U3uaAFmEbv9dnxjKOo9SbUFwc9wMU5ADBHW%2BHUT%2F7%2BDpQaDeUYV%2F@localhost:5440/postgres --host 0.0.0.0 --port 5005 --watch --schema public,lens_registry_example --default-role rindexer_user --enhance-graphiql --cors --disable-default-mutations
 - go through all methods add summaries + refactor if needed
 - finish the documentation
 - look into setting your own schema for the database using diesel

@@ -60,8 +60,8 @@ where
 
 // Custom deserialization function that parses a string as a decimal U64
 fn deserialize_option_u64_from_string<'de, D>(deserializer: D) -> Result<Option<U64>, D::Error>
-    where
-        D: Deserializer<'de>,
+where
+    D: Deserializer<'de>,
 {
     let s: Option<String> = Option::deserialize(deserializer)?;
     match s {
@@ -122,14 +122,14 @@ pub struct ContractDetails {
     #[serde(
         rename = "startBlock",
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_option_u64_from_string",
+        deserialize_with = "deserialize_option_u64_from_string"
     )]
     pub start_block: Option<U64>,
 
     #[serde(
         rename = "endBlock",
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_option_u64_from_string",
+        deserialize_with = "deserialize_option_u64_from_string"
     )]
     pub end_block: Option<U64>,
 
