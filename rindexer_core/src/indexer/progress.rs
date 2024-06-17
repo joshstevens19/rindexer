@@ -122,13 +122,14 @@ impl IndexingEventsProgressState {
         let mut events = Vec::new();
         for event_info in event_information {
             for network_contract in event_info.contract.details {
-                let latest_block = network_contract.provider.get_block_number().await.unwrap();
+                // TODO! LOOK at
+                // let latest_block = network_contract.provider.get_block_number().await.unwrap();
                 events.push(IndexingEventProgress::running(
                     network_contract.id,
                     event_info.contract.name.clone(),
                     event_info.event_name.to_string(),
                     network_contract.start_block.unwrap_or(U64::zero()),
-                    network_contract.end_block.unwrap_or(latest_block),
+                    network_contract.end_block.unwrap_or(U64::zero()),
                     network_contract.network.clone(),
                     network_contract.end_block.is_none(),
                 ));
