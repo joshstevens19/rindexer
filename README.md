@@ -8,7 +8,6 @@ eth_getLogs - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60add
 
 checklist v1.0:
 - handle concurrency issues indexing and rate limits for RPCs
-- change database password to be simpler
 - fix TODOs
 - look into making the rust handlers abstracted away a bit more with Arc and Box 
 - look into .clone() to see if we can share some data

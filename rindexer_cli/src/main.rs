@@ -332,7 +332,8 @@ fn handle_new_command(project_path: PathBuf) -> Result<(), Box<dyn std::error::E
     // Write .env if required
     if postgres_enabled {
         if postgres_docker_enable {
-            let env = r#"DATABASE_URL=postgresql://postgres:U3uaAFmEbv9dnxjKOo9SbUFwc9wMU5ADBHW+HUT/7+DpQaDeUYV/@localhost:5440/postgres"#;
+            let env = r#"DATABASE_URL=postgresql://postgres:rindexer@localhost:5440/postgres
+POSTGRES_PASSWORD=rindexer"#;
 
             write_file(&project_path.join(".env"), env).map_err(|e| {
                 print_error_message(&format!("Failed to write .env file: {}", e));
