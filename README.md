@@ -7,7 +7,6 @@ networks - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60adde36
 eth_getLogs - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60adde361736deeb3b2c/packages/core/src/sync-historical/service.ts#L946
 
 checklist v1.0:
-- remove indexers from yaml and make it a flat indexer yaml
 - cache get latest block on provider to avoid multiple calls
 - handle concurrency issues indexing and rate limits for RPCs
 - change database password to be simpler

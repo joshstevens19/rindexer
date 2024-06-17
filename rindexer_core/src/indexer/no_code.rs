@@ -85,7 +85,7 @@ pub async fn setup_no_code(details: StartNoCodeDetails) -> Result<StartDetails, 
     let parent = details.manifest_path.parent();
     match parent {
         Some(parent) => {
-            let events = process_indexers(parent, &mut manifest, postgres, &network_providers)
+            let events = process_events(parent, &mut manifest, postgres, &network_providers)
                 .await
                 .map_err(SetupNoCodeError::ProcessIndexersError)?;
 
@@ -346,8 +346,8 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                         .await
                         {
                             error!(
-                                "{} {}: {} - Error performing bulk insert: {}",
-                                params.indexer_name, params.contract_name, params.event_name, e
+                                "{}::{} - Error performing bulk insert: {}",
+                                params.contract_name, params.event_name, e
                             );
                         }
                     }
@@ -366,8 +366,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
             while (csv_tasks.next().await).is_some() {}
 
             info!(
-                "{} {}: {} - {} - {} events {}",
-                params.indexer_name,
+                "{}::{} - {} - {} events {}",
                 params.contract_name,
                 params.event_name,
                 "INDEXED".green(),
@@ -379,7 +378,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
     })
 }
 
-pub async fn process_indexers(
+pub async fn process_events(
     project_path: &Path,
     manifest: &mut Manifest,
     postgres: Option<Arc<PostgresClient>>,
@@ -387,101 +386,99 @@ pub async fn process_indexers(
 ) -> Result<Vec<EventInformation>, ProcessIndexersError> {
     let mut events: Vec<EventInformation> = vec![];
 
-    for indexer in &mut manifest.indexers {
-        for contract in &mut indexer.contracts {
-            let abi_str = fs::read_to_string(&contract.abi)
-                .map_err(ProcessIndexersError::CouldNotReadAbiString)?;
+    for contract in &mut manifest.contracts {
+        let abi_str = fs::read_to_string(&contract.abi)
+            .map_err(ProcessIndexersError::CouldNotReadAbiString)?;
 
-            let abi: Abi = serde_json::from_str(&abi_str)
-                .map_err(ProcessIndexersError::CouldNotReadAbiJson)?;
+        let abi: Abi =
+            serde_json::from_str(&abi_str).map_err(ProcessIndexersError::CouldNotReadAbiJson)?;
 
-            #[allow(clippy::useless_conversion)]
-            let abi_gen = EthersContract::from(abi);
+        #[allow(clippy::useless_conversion)]
+        let abi_gen = EthersContract::from(abi);
 
-            let is_filter = identify_and_modify_filter(contract);
-            let abi_items = get_abi_items(contract, is_filter)
-                .map_err(ProcessIndexersError::CouldNotReadAbiItems)?;
-            let event_names = extract_event_names_and_signatures_from_abi(&abi_items)
-                .map_err(ProcessIndexersError::ParamTypeError)?;
+        let is_filter = identify_and_modify_filter(contract);
+        let abi_items = get_abi_items(contract, is_filter)
+            .map_err(ProcessIndexersError::CouldNotReadAbiItems)?;
+        let event_names = extract_event_names_and_signatures_from_abi(&abi_items)
+            .map_err(ProcessIndexersError::ParamTypeError)?;
 
-            for event_info in event_names {
-                let event_name = event_info.name.clone();
-                let event = &abi_gen
-                    .events
-                    .iter()
-                    .find(|(name, _)| *name == &event_name)
-                    .map(|(_, event)| event)
-                    .ok_or_else(|| {
-                        ProcessIndexersError::EventNameNotFoundInAbi(
-                            contract.name.clone(),
-                            event_name.clone(),
-                        )
-                    })?
-                    .first()
-                    .ok_or_else(|| {
-                        ProcessIndexersError::EventNameNotFoundInAbi(
-                            contract.name.clone(),
-                            event_name.clone(),
-                        )
-                    })?
-                    .clone();
+        for event_info in event_names {
+            let event_name = event_info.name.clone();
+            let event = &abi_gen
+                .events
+                .iter()
+                .find(|(name, _)| *name == &event_name)
+                .map(|(_, event)| event)
+                .ok_or_else(|| {
+                    ProcessIndexersError::EventNameNotFoundInAbi(
+                        contract.name.clone(),
+                        event_name.clone(),
+                    )
+                })?
+                .first()
+                .ok_or_else(|| {
+                    ProcessIndexersError::EventNameNotFoundInAbi(
+                        contract.name.clone(),
+                        event_name.clone(),
+                    )
+                })?
+                .clone();
 
-                let contract_information = create_contract_information(
-                    contract,
-                    network_providers,
-                    Arc::new(move |_topics: Vec<H256>, _data: Bytes| {
-                        // TODO empty decoder for now to avoid decoder being an option - come back to look at it
-                        Arc::new(String::new())
-                    }),
-                )
-                .map_err(ProcessIndexersError::CreateContractInformationError)?;
+            let contract_information = create_contract_information(
+                contract,
+                network_providers,
+                Arc::new(move |_topics: Vec<H256>, _data: Bytes| {
+                    // TODO empty decoder for now to avoid decoder being an option - come back to look at it
+                    Arc::new(String::new())
+                }),
+            )
+            .map_err(ProcessIndexersError::CreateContractInformationError)?;
 
-                // 1. generate CSV header if required
-                let mut csv: Option<Arc<AsyncCsvAppender>> = None;
-                if contract.generate_csv && manifest.storage.csv_enabled() {
-                    let csv_path = manifest
-                        .storage
-                        .csv
-                        .as_ref()
-                        .map_or("./generated_csv", |c| &c.path);
-                    let headers: Vec<String> = csv_headers_for_event(&event_info);
-                    let csv_path =
-                        create_csv_file_for_event(project_path, contract, &event_info, csv_path)
-                            .map_err(ProcessIndexersError::CreateCsvFileForEventError)?;
-                    let csv_appender = AsyncCsvAppender::new(csv_path.clone());
-                    if !Path::new(&csv_path).exists() {
-                        csv_appender
-                            .append_header(headers)
-                            .await
-                            .map_err(ProcessIndexersError::CsvHeadersAppendError)?;
-                    }
-
-                    csv = Some(Arc::new(csv_appender));
+            // 1. generate CSV header if required
+            let mut csv: Option<Arc<AsyncCsvAppender>> = None;
+            if contract.generate_csv && manifest.storage.csv_enabled() {
+                let csv_path = manifest
+                    .storage
+                    .csv
+                    .as_ref()
+                    .map_or("./generated_csv", |c| &c.path);
+                let headers: Vec<String> = csv_headers_for_event(&event_info);
+                let csv_path =
+                    create_csv_file_for_event(project_path, contract, &event_info, csv_path)
+                        .map_err(ProcessIndexersError::CreateCsvFileForEventError)?;
+                let csv_appender = AsyncCsvAppender::new(csv_path.clone());
+                if !Path::new(&csv_path).exists() {
+                    csv_appender
+                        .append_header(headers)
+                        .await
+                        .map_err(ProcessIndexersError::CsvHeadersAppendError)?;
                 }
 
-                let event = EventInformation {
-                    indexer_name: indexer.name.clone(),
-                    event_name: event_info.name.clone(),
-                    topic_id: event_info.topic_id(),
-                    contract: contract_information,
-                    callback: no_code_callback(Arc::new(NoCodeCallbackParams {
-                        event_name: event_info.name.clone(),
-                        indexer_name: indexer.name.clone(),
-                        contract_name: contract.name.clone(),
-                        event: event.clone(),
-                        csv: csv.clone(),
-                        postgres: postgres.clone(),
-                        postgres_event_table_name: event_table_full_name(
-                            &indexer.name,
-                            &contract.name,
-                            &event_info.name,
-                        ),
-                        postgres_column_names: generate_columns_names_only(&event_info.inputs),
-                    })),
-                };
-
-                events.push(event);
+                csv = Some(Arc::new(csv_appender));
             }
+
+            let event = EventInformation {
+                indexer_name: manifest.name.clone(),
+                event_name: event_info.name.clone(),
+                topic_id: event_info.topic_id(),
+                contract: contract_information,
+                callback: no_code_callback(Arc::new(NoCodeCallbackParams {
+                    event_name: event_info.name.clone(),
+                    indexer_name: manifest.name.clone(),
+                    contract_name: contract.name.clone(),
+                    event: event.clone(),
+                    csv: csv.clone(),
+                    postgres: postgres.clone(),
+                    postgres_event_table_name: event_table_full_name(
+                        &manifest.name,
+                        &contract.name,
+                        &event_info.name,
+                    ),
+                    postgres_column_names: generate_columns_names_only(&event_info.inputs),
+                })),
+            };
+
+            events.push(event);
         }
     }
 

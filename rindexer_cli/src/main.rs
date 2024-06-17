@@ -15,8 +15,8 @@ use rindexer_core::generator::build::{
 };
 use rindexer_core::generator::generate_docker_file;
 use rindexer_core::manifest::yaml::{
-    read_manifest, write_manifest, Contract, ContractDetails, CsvDetails, Global, Indexer,
-    Manifest, Network, PostgresConnectionDetails, ProjectType, Storage, YAML_CONFIG_NAME,
+    read_manifest, write_manifest, Contract, ContractDetails, CsvDetails, Global, Manifest,
+    Network, PostgresConnectionDetails, ProjectType, Storage, YAML_CONFIG_NAME,
 };
 use rindexer_core::{
     drop_tables_for_indexer_sql, start_rindexer_no_code, write_file, GraphQLServerDetails,
@@ -291,22 +291,19 @@ fn handle_new_command(project_path: PathBuf) -> Result<(), Box<dyn std::error::E
             max_block_range: None,
             max_concurrency: None,
         }],
-        indexers: vec![Indexer {
-            name: "MyFirstIndexerExample".to_string(),
-            contracts: vec![Contract {
-                name: "RocketPoolETH".to_string(),
-                details: vec![ContractDetails::new_with_address(
-                    "ethereum".to_string(),
-                    "0xae78736cd615f374d3085123a210448e74fc6393".to_string(),
-                    Some(U64::from(18900000)),
-                    Some(U64::from(19000000)),
-                    None,
-                )],
-                abi: abi_example_path.display().to_string(),
-                include_events: Some(vec!["Transfer".to_string()]),
-                generate_csv: csv_enabled,
-                reorg_safe_distance: false,
-            }],
+        contracts: vec![Contract {
+            name: "RocketPoolETH".to_string(),
+            details: vec![ContractDetails::new_with_address(
+                "ethereum".to_string(),
+                "0xae78736cd615f374d3085123a210448e74fc6393".to_string(),
+                Some(U64::from(18900000)),
+                Some(U64::from(19000000)),
+                None,
+            )],
+            abi: abi_example_path.display().to_string(),
+            include_events: Some(vec!["Transfer".to_string()]),
+            generate_csv: csv_enabled,
+            reorg_safe_distance: false,
         }],
         global: Global { contracts: None },
         storage: Storage {
@@ -627,8 +624,7 @@ async fn handle_delete_command(project_path: PathBuf) -> Result<(), Box<dyn std:
                 print_error_message(&format!("Could not connect to Postgres, make sure your connection string is mapping in the .env correctly: trace: {}", e));
                 e
             })?;
-            // TODO sort unwrap here
-            let sql = drop_tables_for_indexer_sql(manifest.indexers.first().unwrap());
+            let sql = drop_tables_for_indexer_sql(&manifest.to_indexer());
 
             postgres_client.batch_execute(sql.as_str()).await.map_err(|e| {
                 print_error_message(&format!("Could not delete tables from Postgres make sure your connection string is mapping in the .env correctly: trace: {}", e));

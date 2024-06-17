@@ -210,8 +210,8 @@ pub struct EventInformation {
 impl EventInformation {
     pub fn info_log_name(&self) -> String {
         format!(
-            "{} {}: {}",
-            self.indexer_name, self.contract.name, self.event_name
+            "{}::{}",
+            self.contract.name, self.event_name
         )
     }
 }

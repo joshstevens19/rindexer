@@ -8,6 +8,7 @@ use crate::database::postgres::SetupPostgresError;
 use crate::generator::event_callback_registry::EventCallbackRegistry;
 use crate::indexer::no_code::{setup_no_code, SetupNoCodeError};
 use crate::indexer::start::{start_indexing, StartIndexingError, StartIndexingSettings};
+use crate::indexer::Indexer;
 use crate::manifest::yaml::{read_manifest, ProjectType, ReadManifestError};
 use crate::{setup_logger, setup_postgres, GraphQLServerDetails};
 
@@ -50,7 +51,7 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
     }
 
     if let Some(graphql_server) = details.graphql_server {
-        let _ = start_graphql_server(&manifest.indexers, graphql_server.settings)
+        let _ = start_graphql_server(&manifest.to_indexer(), graphql_server.settings)
             .map_err(StartRindexerError::CouldNotStartGraphqlServer)?;
         if details.indexing_details.is_none() {
             signal::ctrl_c()

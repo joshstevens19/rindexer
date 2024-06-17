@@ -23,7 +23,8 @@ use crate::generator::{
 // Internal modules
 use crate::generator::build::{contract_name_to_filter_name, is_filter};
 use crate::helpers::camel_to_snake;
-use crate::manifest::yaml::{Indexer, Manifest, ProjectType};
+use crate::indexer::Indexer;
+use crate::manifest::yaml::{Manifest, ProjectType};
 use crate::types::code::Code;
 
 // pub fn database_user() -> Result<String, env::VarError> {
@@ -295,18 +296,15 @@ pub async fn setup_postgres(manifest: &Manifest) -> Result<PostgresClient, Setup
     if !manifest.storage.postgres_disable_create_tables()
         || manifest.project_type == ProjectType::NoCode
     {
-        info!("Creating tables for all indexers");
-        for indexer in &manifest.indexers {
-            info!("Creating tables for indexer: {}", indexer.name);
-            let sql =
-                create_tables_for_indexer_sql(indexer).map_err(SetupPostgresError::CreateTables)?;
-            debug!("{}", sql);
-            client
-                .batch_execute(sql.as_str())
-                .await
-                .map_err(SetupPostgresError::PostgresError)?;
-            info!("Created tables for indexer: {}", indexer.name);
-        }
+        info!("Creating tables for indexer: {}", manifest.name);
+        let sql = create_tables_for_indexer_sql(&manifest.to_indexer())
+            .map_err(SetupPostgresError::CreateTables)?;
+        debug!("{}", sql);
+        client
+            .batch_execute(sql.as_str())
+            .await
+            .map_err(SetupPostgresError::PostgresError)?;
+        info!("Created tables for indexer: {}", manifest.name);
     }
 
     Ok(client)
