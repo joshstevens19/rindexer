@@ -7,7 +7,6 @@ networks - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60adde36
 eth_getLogs - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60adde361736deeb3b2c/packages/core/src/sync-historical/service.ts#L946
 
 checklist v1.0:
-- cache get latest block on provider to avoid multiple calls
 - handle concurrency issues indexing and rate limits for RPCs
 - change database password to be simpler
 - fix TODOs
@@ -15,7 +14,6 @@ checklist v1.0:
 - look into .clone() to see if we can share some data
 - fix graphql endpoint to work everytime
   - npx postgraphile -c postgres://rindexer_user:U3uaAFmEbv9dnxjKOo9SbUFwc9wMU5ADBHW%2BHUT%2F7%2BDpQaDeUYV%2F@localhost:5440/postgres --host 0.0.0.0 --port 5005 --watch --schema public,lens_registry_example --default-role rindexer_user --enhance-graphiql --cors --disable-default-mutations
-- look into migrating to alloy from ethers
 - go through all methods add summaries + refactor if needed
 - finish the documentation
 - look into setting your own schema for the database using diesel
@@ -24,7 +22,7 @@ checklist v1.0:
 - unit tests for the project
 
 bugs:
-- not having endBlock throws and error on manifest
+- not having startBlock or endBlock throws and error on manifest
 
 nice to have:
 
@@ -34,6 +32,7 @@ nice to have:
   - emit the log through the same event register as the event defined in the manifest
 
 future features:
+- look into migrating to alloy from ethers
 - investigate handle advanced top of head reorgs process
 - cron registering for networks to fire
 - multiple ABIs merged into one

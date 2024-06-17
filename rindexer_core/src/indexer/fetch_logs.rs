@@ -17,9 +17,7 @@ struct RetryWithBlockRangeResult {
     to: BlockNumber,
 }
 
-// TODO https://github.com/ponder-sh/ponder/blob/889096a3ef5f54a0c5a06df82b0da9cf9a113996/packages/utils/src/getLogsRetryHelper.ts#L34 - handle the rest
 /// Attempts to retry with a new block range based on the error message.
-///
 /// This function parses the error message to extract a suggested block range for retrying the request.
 ///
 /// # Arguments
@@ -41,6 +39,8 @@ fn retry_with_block_range(
     fn compile_regex(pattern: &str) -> Result<Regex, regex::Error> {
         Regex::new(pattern)
     }
+
+    // Thanks Ponder for the regex patterns - https://github.com/ponder-sh/ponder/blob/889096a3ef5f54a0c5a06df82b0da9cf9a113996/packages/utils/src/getLogsRetryHelper.ts#L34
 
     // Alchemy
     if let Ok(re) =
@@ -214,6 +214,12 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
             }
         }
 
+        info!(
+            "{} - {} - Finished indexing historic events",
+            &info_log_name,
+            IndexingEventProgressStatus::Completed.log()
+        );
+
         // Live indexing mode
         if live_indexing {
             live_indexing_mode(
@@ -256,7 +262,7 @@ async fn process_historic_logs<M: Middleware + Clone + Send + 'static>(
 ) -> Option<Filter> {
     let from_block = current_filter.get_from_block().unwrap();
     let to_block = current_filter.get_to_block().unwrap_or(snapshot_to_block);
-    info!(
+    debug!(
         "{} - {} - Process historic events - blocks: {} - {}",
         info_log_name,
         IndexingEventProgressStatus::Syncing.log(),
@@ -294,7 +300,7 @@ async fn process_historic_logs<M: Middleware + Clone + Send + 'static>(
                 to_block
             );
 
-            info!(
+            debug!(
                 "{} - {} - Fetched {} event logs - blocks: {} - {}",
                 info_log_name,
                 IndexingEventProgressStatus::Syncing.log(),
@@ -332,6 +338,11 @@ async fn process_historic_logs<M: Middleware + Clone + Send + 'static>(
                     snapshot_to_block
                 );
                 return if new_from_block > snapshot_to_block {
+                    // to avoid the thread closing before the stream is consumed
+                    // lets just sit here for 1 seconds to avoid the race
+                    // probably a better way to handle this but hey
+                    // TODO handle this nicer
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
                     None
                 } else {
                     Some(new_filter)
@@ -411,6 +422,7 @@ async fn live_indexing_mode<M: Middleware + Clone + Send + 'static>(
     loop {
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
+        // TODO cache get latest block on provider to avoid multiple calls with many contracts
         if let Some(latest_block) = provider.get_block(BlockNumber::Latest).await.unwrap() {
             if last_seen_block == latest_block.number.unwrap() {
                 info!(
@@ -485,7 +497,7 @@ async fn live_indexing_mode<M: Middleware + Clone + Send + 'static>(
                         to_block
                     );
 
-                    info!(
+                    debug!(
                         "{} - {} - Fetched {} event logs - blocks: {} - {}",
                         info_log_name,
                         IndexingEventProgressStatus::Live.log(),
@@ -526,7 +538,6 @@ async fn live_indexing_mode<M: Middleware + Clone + Send + 'static>(
                         IndexingEventProgressStatus::Live.log(),
                         err
                     );
-                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                 }
             }
         }

@@ -91,13 +91,13 @@ pub async fn setup_no_code(details: StartNoCodeDetails) -> Result<StartDetails, 
 
             let registry = EventCallbackRegistry { events };
             info!(
-                "Events registered to index: {}",
+                "Events registered to index:\n {}",
                 registry
                     .events
                     .iter()
                     .map(|event| event.info_log_name())
                     .collect::<Vec<String>>()
-                    .join(", ")
+                    .join("\n")
             );
 
             Ok(StartDetails {

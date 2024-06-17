@@ -5,9 +5,9 @@ use ethers::{
 };
 use log::error;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::{AcquireError, Mutex, Semaphore};
 use tokio::task::JoinError;
+use tokio::time::Instant;
 use tokio_stream::StreamExt;
 use tracing::{debug, info};
 
@@ -108,6 +108,8 @@ pub async fn start_indexing(
     registry: Arc<EventCallbackRegistry>,
     settings: StartIndexingSettings,
 ) -> Result<(), StartIndexingError> {
+    let start = Instant::now();
+    
     let database = if manifest.storage.postgres_enabled() {
         let postgres = PostgresClient::new().await;
         match postgres {
@@ -135,7 +137,7 @@ pub async fn start_indexing(
 
     for event in registry.events.clone() {
         fn event_info(event: &EventInformation, message: &str) {
-            info!("{} - {}", event.info_log_name(), message);
+            debug!("{} - {}", event.info_log_name(), message);
         }
 
         for contract in event.contract.details.clone() {
@@ -227,7 +229,9 @@ pub async fn start_indexing(
             .map_err(StartIndexingError::CouldNotRunAllIndexHandlers)?;
     }
 
-    tokio::time::sleep(Duration::from_secs(1000)).await;
+    let duration = start.elapsed();
+
+    info!("Indexing complete - time taken: {:?}", duration);
 
     Ok(())
 }
@@ -255,7 +259,7 @@ pub enum ProcessEventSequentiallyError {
 async fn process_event_sequentially(
     event_processing_config: EventProcessingConfig,
 ) -> Result<(), ProcessEventSequentiallyError> {
-    info!(
+    debug!(
         "{} - Processing event sequentially",
         event_processing_config.info_log_name
     );
@@ -333,7 +337,7 @@ pub enum ProcessEventConcurrentlyError {
 async fn process_event_concurrently(
     event_processing_config: EventProcessingConfig,
 ) -> Result<(), ProcessEventConcurrentlyError> {
-    info!(
+    debug!(
         "{} - Processing event concurrently",
         event_processing_config.info_log_name
     );
@@ -381,7 +385,7 @@ async fn process_event_concurrently(
         let indexing_distance_from_head = event_processing_config.indexing_distance_from_head;
 
         let handle = tokio::spawn(async move {
-            info!(
+            debug!(
                 "{} - Processing logs between {} and {}",
                 info_log_name, current_block, next_block
             );

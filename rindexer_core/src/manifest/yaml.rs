@@ -59,9 +59,9 @@ where
 }
 
 // Custom deserialization function that parses a string as a decimal U64
-fn deserialize_u64_from_string<'de, D>(deserializer: D) -> Result<Option<U64>, D::Error>
-where
-    D: Deserializer<'de>,
+fn deserialize_option_u64_from_string<'de, D>(deserializer: D) -> Result<Option<U64>, D::Error>
+    where
+        D: Deserializer<'de>,
 {
     let s: Option<String> = Option::deserialize(deserializer)?;
     match s {
@@ -121,15 +121,15 @@ pub struct ContractDetails {
 
     #[serde(
         rename = "startBlock",
-        deserialize_with = "deserialize_u64_from_string",
-        skip_serializing_if = "Option::is_none"
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_option_u64_from_string",
     )]
     pub start_block: Option<U64>,
 
     #[serde(
         rename = "endBlock",
-        deserialize_with = "deserialize_u64_from_string",
-        skip_serializing_if = "Option::is_none"
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_option_u64_from_string",
     )]
     pub end_block: Option<U64>,
 
@@ -220,7 +220,7 @@ fn default_reorg_safe_distance() -> bool {
 }
 
 fn default_generate_csv() -> bool {
-    false
+    true
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
