@@ -754,21 +754,76 @@ pub fn map_log_token_to_ethereum_wrapper(token: &Token) -> Option<EthereumSqlTyp
         Token::Int(uint) | Token::Uint(uint) => Some(EthereumSqlTypeWrapper::U256(*uint)),
         Token::Bool(b) => Some(EthereumSqlTypeWrapper::Bool(*b)),
         Token::String(s) => Some(EthereumSqlTypeWrapper::String(s.clone())),
-        // TODO HANDLE THE MORE ADVANCED STRUCT SYSTEMS
-        // Token::FixedBytes(bytes) | Token::Bytes(bytes) => Some(EthereumSqlTypeWrapper::Bytes(bytes.into())),
-        // Token::FixedArray(tokens) | Token::Array(tokens) => {
-        //     let mut wrappers = Vec::new();
-        //     for token in tokens {
-        //         if let Some(wrapper) = map_log_token_to_ethereum_wrapper(token) {
-        //             wrappers.push(wrapper);
-        //         }
-        //     }
-        //     Some(EthereumSqlTypeWrapper::VecAddress(wrappers.iter().map(|w| match w {
-        //         EthereumSqlTypeWrapper::Address(address) => address,
-        //         _ => unreachable!(),
-        //     }).collect()))
-        // }
-        _ => None,
+        Token::FixedBytes(bytes) | Token::Bytes(bytes) => {
+            Some(EthereumSqlTypeWrapper::Bytes(Bytes::from(bytes.clone())))
+        },
+        Token::FixedArray(tokens) | Token::Array(tokens) => {
+            // events arrays can only be one type so get it from the first one
+            let token_type = tokens.first().unwrap();
+            match token_type {
+                Token::Address(_) => {
+                    let mut vec: Vec<Address> = vec![];
+                    for token in tokens {
+                        if let Token::Address(address) = token {
+                            vec.push(*address);
+                        }
+                    }
+                    
+                    Some(EthereumSqlTypeWrapper::VecAddress(vec))
+                }
+                Token::FixedBytes(_) | Token::Bytes(_) => {
+                    let mut vec: Vec<Bytes> = vec![];
+                    for token in tokens {
+                        if let Token::FixedBytes(bytes) = token {
+                            vec.push(Bytes::from(bytes.clone()));
+                        }
+                    }
+                    
+                    Some(EthereumSqlTypeWrapper::VecBytes(vec))
+                }
+                Token::Int(_) | Token::Uint(_) => {
+                    let mut vec: Vec<U256> = vec![];
+                    for token in tokens {
+                        if let Token::Int(uint) = token {
+                            vec.push(*uint);
+                        }
+                    }
+                    
+                    Some(EthereumSqlTypeWrapper::VecU256(vec))
+                }
+                Token::Bool(_) => {
+                    let mut vec: Vec<bool> = vec![];
+                    for token in tokens {
+                        if let Token::Bool(b) = token {
+                            vec.push(*b);
+                        }
+                    }
+                    
+                    Some(EthereumSqlTypeWrapper::VecBool(vec))
+                }
+                Token::String(_) => {
+                    let mut vec: Vec<String> = vec![];
+                    for token in tokens {
+                        if let Token::String(s) = token {
+                            vec.push(s.clone());
+                        }
+                    }
+                    
+                    Some(EthereumSqlTypeWrapper::VecString(vec))
+                }
+                Token::FixedArray(_) | Token::Array(_) => {
+                    unreachable!("Nested arrays are not supported by the EVM")
+                }
+                Token::Tuple(_) => {
+                    // TODO!
+                    panic!("Tuple not supported yet")
+                }
+            }
+        }
+        Token::Tuple(_tuple) => {
+            // TODO!
+            panic!("Tuple not supported yet")
+        }
     }
 }
 
