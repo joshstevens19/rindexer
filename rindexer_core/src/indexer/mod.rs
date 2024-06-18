@@ -5,6 +5,7 @@ use crate::manifest::yaml::Contract;
 pub use progress::IndexingEventProgressStatus;
 use serde::{Deserialize, Serialize};
 
+mod log_helpers;
 pub mod no_code;
 mod reorg;
 pub mod start;

@@ -1,6 +1,7 @@
 use futures::pin_mut;
 use std::error::Error;
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -30,6 +31,7 @@ use crate::generator::{
     create_csv_file_for_event, csv_headers_for_event, extract_event_names_and_signatures_from_abi,
     get_abi_items, CreateCsvFileForEvent, ParamTypeError, ReadAbiError,
 };
+use crate::indexer::log_helpers::parse_log;
 use crate::manifest::yaml::{read_manifest, Contract, Manifest, ReadManifestError};
 use crate::provider::{create_retry_client, RetryClientError};
 use crate::{
@@ -180,6 +182,7 @@ async fn bulk_insert_via_copy(
         "COPY {} (contract_address, {}, \"tx_hash\", \"block_number\", \"block_hash\") FROM STDIN WITH (FORMAT binary)",
         table_name, column_names.join(", "),
     );
+
     let sink = client.copy_in(&stmt).await?;
 
     let writer = BinaryCopyInWriter::new(sink, column_types);
@@ -246,17 +249,8 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
             // Collect owned results to avoid lifetime issues
             let owned_results: Vec<_> = results
                 .iter()
-                .map(|result| {
-                    let log = match params.event.parse_log(RawLog {
-                        topics: result.log.topics.clone(),
-                        data: result.log.data.to_vec(),
-                    }) {
-                        Ok(log) => log,
-                        Err(err) => {
-                            error!("Error parsing log: {}", err.to_string().red());
-                            return None;
-                        }
-                    };
+                .filter_map(|result| {
+                    let log = parse_log(&params.event, &result.log)?;
 
                     let address = result.tx_information.address;
                     let transaction_hash = result.tx_information.transaction_hash;
@@ -287,8 +281,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                         end_global_parameters,
                     ))
                 })
-                .collect::<Option<Vec<_>>>()
-                .unwrap_or_default();
+                .collect();
 
             for (
                 log_params,
@@ -332,10 +325,12 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                 }
             }
 
+            let bulk_data_length = bulk_data.len();
+
             if let Some(postgres) = &params.postgres {
-                // anything over 100 events is considered bulk and goes the COPY route
-                if event_length > 100 {
-                    if !bulk_data.is_empty() {
+                if bulk_data_length > 0 {
+                    // anything over 100 events is considered bulk and goes the COPY route
+                    if bulk_data_length > 100 {
                         let bulk_data_refs: Vec<Vec<&(dyn ToSql + Sync)>> = bulk_data
                             .iter()
                             .map(|row| {
@@ -358,15 +353,15 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                                 params.contract_name, params.event_name, e
                             );
                         }
-                    }
-                } else {
-                    let (query, params) = generate_bulk_insert_statement(
-                        &params.postgres_event_table_name,
-                        &params.postgres_column_names,
-                        &bulk_data,
-                    );
-                    if let Err(e) = postgres.execute(&query, &params).await {
-                        error!("Error performing bulk insert: {}", e);
+                    } else {
+                        let (query, params) = generate_bulk_insert_statement(
+                            &params.postgres_event_table_name,
+                            &params.postgres_column_names,
+                            &bulk_data,
+                        );
+                        if let Err(e) = postgres.execute(&query, &params).await {
+                            error!("Error performing bulk insert: {}", e);
+                        }
                     }
                 }
             }
@@ -378,7 +373,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                 params.contract_name,
                 params.event_name,
                 "INDEXED".green(),
-                event_length,
+                bulk_data.len(),
                 format!("- blocks: {} - {}", from_block, to_block)
             );
         }
