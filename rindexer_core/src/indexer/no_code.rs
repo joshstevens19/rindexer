@@ -1,19 +1,15 @@
-use futures::pin_mut;
-use std::error::Error;
 use std::fs;
-use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 
 use async_std::prelude::StreamExt;
 use colored::Colorize;
-use ethers::abi::{Abi, Contract as EthersContract, Event, RawLog};
+use ethers::abi::{Abi, Contract as EthersContract, Event};
 use ethers::prelude::Http;
 use ethers::providers::{Provider, RetryClient};
 use ethers::types::{Bytes, H256};
 use futures::future::BoxFuture;
 use futures::stream::FuturesUnordered;
-use tokio_postgres::binary_copy::BinaryCopyInWriter;
 use tokio_postgres::types::{ToSql, Type};
 use tracing::level_filters::LevelFilter;
 use tracing::{debug, error, info};
@@ -343,7 +339,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                         }
                     }
 
-                    while (csv_tasks.next().await).is_some() {}
+                    while csv_tasks.next().await.is_some() {}
 
                     info!(
                         "{}::{} - {} - {} events {}",
