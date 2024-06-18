@@ -1,11 +1,11 @@
 use crate::generator::event_callback_registry::EventInformation;
+use colored::{ColoredString, Colorize};
 use ethers::providers::Middleware;
 use ethers::types::U64;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::info;
-use colored::{ColoredString, Colorize};
 
 /// Enum representing the progress status of an indexing event.
 #[derive(Clone, Debug, Hash)]

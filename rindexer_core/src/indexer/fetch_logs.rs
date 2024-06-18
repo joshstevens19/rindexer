@@ -2,19 +2,23 @@ use crate::indexer::progress::IndexingEventProgressStatus;
 use ethers::middleware::{Middleware, MiddlewareError};
 use ethers::prelude::{Block, Filter, JsonRpcError, Log};
 use ethers::types::{Address, BlockNumber, Bloom, FilteredParams, ValueOrArray, H256, U64};
-use log::error;
 use regex::Regex;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 /// Struct to hold the result of retrying with a new block range.
 #[derive(Debug)]
 struct RetryWithBlockRangeResult {
     from: BlockNumber,
     to: BlockNumber,
+    // This is only populated if you are using an RPC provider
+    // who doesn't give block ranges, this tends to be providers
+    // which are a lot slower than others, expect these providers
+    // to be slow
+    max_block_range: Option<U64>,
 }
 
 /// Attempts to retry with a new block range based on the error message.
@@ -35,6 +39,11 @@ fn retry_with_block_range(
     to_block: U64,
 ) -> Option<RetryWithBlockRangeResult> {
     let error_message = &error.message;
+    // some providers put the data in the data field
+    let error_data = match &error.data {
+        Some(data) => &data.to_string(),
+        None => &String::from(""),
+    };
 
     fn compile_regex(pattern: &str) -> Result<Regex, regex::Error> {
         Regex::new(pattern)
@@ -43,28 +52,42 @@ fn retry_with_block_range(
     // Thanks Ponder for the regex patterns - https://github.com/ponder-sh/ponder/blob/889096a3ef5f54a0c5a06df82b0da9cf9a113996/packages/utils/src/getLogsRetryHelper.ts#L34
 
     // Alchemy
-    if let Ok(re) =
-        compile_regex(r"this block range should work: \[(0x[0-9a-fA-F]+),\s*(0x[0-9a-fA-F]+)]")
-    {
-        if let Some(captures) = re.captures(error_message) {
-            let start_block = captures.get(1)?.as_str();
-            let end_block = captures.get(2)?.as_str();
-            let from = BlockNumber::from_str(start_block).ok()?;
-            let to = BlockNumber::from_str(end_block).ok()?;
-            return Some(RetryWithBlockRangeResult { from, to });
+    if let Ok(re) = compile_regex(r"this block range should work: \[(0x[0-9a-fA-F]+),\s*(0x[0-9a-fA-F]+)]") {
+        if let Some(captures) = re.captures(error_message).or_else(|| re.captures(error_data)) {
+            if let (Some(start_block), Some(end_block)) = (captures.get(1), captures.get(2)) {
+                let start_block_str = start_block.as_str();
+                let end_block_str = end_block.as_str();
+                if let (Ok(from), Ok(to)) = (
+                    BlockNumber::from_str(start_block_str),
+                    BlockNumber::from_str(end_block_str),
+                ) {
+                    return Some(RetryWithBlockRangeResult {
+                        from,
+                        to,
+                        max_block_range: None,
+                    });
+                }
+            }
         }
     }
-
-    // Infura, Thirdweb, zkSync
-    if let Ok(re) =
-        compile_regex(r"Try with this block range \[0x([0-9a-fA-F]+),\s*0x([0-9a-fA-F]+)\]")
-    {
-        if let Some(captures) = re.captures(error_message) {
-            let start_block = captures.get(1)?.as_str();
-            let end_block = captures.get(2)?.as_str();
-            let from = BlockNumber::from_str(start_block).ok()?;
-            let to = BlockNumber::from_str(end_block).ok()?;
-            return Some(RetryWithBlockRangeResult { from, to });
+    
+    // Infura, Thirdweb, zkSync, Tenderly
+    if let Ok(re) = compile_regex(r"Try with this block range \[0x([0-9a-fA-F]+),\s*0x([0-9a-fA-F]+)\]") {
+        if let Some(captures) = re.captures(error_message).or_else(|| re.captures(error_data)) {
+            if let (Some(start_block), Some(end_block)) = (captures.get(1), captures.get(2)) {
+                let start_block_str = format!("0x{}", start_block.as_str());
+                let end_block_str = format!("0x{}", end_block.as_str());
+                if let (Ok(from), Ok(to)) = (
+                    BlockNumber::from_str(&start_block_str),
+                    BlockNumber::from_str(&end_block_str),
+                ) {
+                    return Some(RetryWithBlockRangeResult {
+                        from,
+                        to,
+                        max_block_range: None,
+                    });
+                }
+            }
         }
     }
 
@@ -73,30 +96,23 @@ fn retry_with_block_range(
         return Some(RetryWithBlockRangeResult {
             from: BlockNumber::from(from_block),
             to: BlockNumber::from(from_block + 3000),
+            max_block_range: Some(3000.into()),
         });
     }
 
-    // QuickNode, 1RPC, zkEVM, Blast
+    // QuickNode, 1RPC, zkEVM, Blast, BlockPI
     if let Ok(re) = compile_regex(r"limited to a ([\d,.]+)") {
-        if let Some(captures) = re.captures(error_message) {
-            let range_str = captures[1].replace(&['.', ','][..], "");
-            let range = U64::from_dec_str(&range_str).ok()?;
-            return Some(RetryWithBlockRangeResult {
-                from: BlockNumber::from(from_block),
-                to: BlockNumber::from(from_block + range),
-            });
-        }
-    }
-
-    // BlockPI
-    if let Ok(re) = compile_regex(r"limited to ([\d,.]+) block") {
-        if let Some(captures) = re.captures(error_message) {
-            let range_str = captures[1].replace(&['.', ','][..], "");
-            let range = U64::from_dec_str(&range_str).ok()?;
-            return Some(RetryWithBlockRangeResult {
-                from: BlockNumber::from(from_block),
-                to: BlockNumber::from(from_block + range),
-            });
+        if let Some(captures) = re.captures(error_message).or_else(|| re.captures(error_data)) {
+            if let Some(range_str_match) = captures.get(1) {
+                let range_str = range_str_match.as_str().replace(&['.', ','][..], "");
+                if let Ok(range) = U64::from_dec_str(&range_str) {
+                    return Some(RetryWithBlockRangeResult {
+                        from: BlockNumber::from(from_block),
+                        to: BlockNumber::from(from_block + range),
+                        max_block_range: Some(range),
+                    });
+                }
+            }
         }
     }
 
@@ -105,6 +121,7 @@ fn retry_with_block_range(
         return Some(RetryWithBlockRangeResult {
             from: BlockNumber::from(from_block),
             to: BlockNumber::from(from_block + 2000),
+            max_block_range: Some(2000.into()),
         });
     }
 
@@ -114,6 +131,7 @@ fn retry_with_block_range(
         return Some(RetryWithBlockRangeResult {
             from: BlockNumber::from(from_block),
             to: BlockNumber::from(from_block + fallback_range),
+            max_block_range: Some(fallback_range),
         });
     }
 
@@ -196,19 +214,31 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
         let mut current_filter = initial_filter.clone();
 
         // Process historical logs first
+        let mut max_block_range_limitation = None;
         while current_filter.get_from_block().unwrap() <= snapshot_to_block {
             let result = process_historic_logs(
                 &provider,
                 &tx,
                 &topic_id,
                 current_filter.clone(),
+                max_block_range_limitation,
                 snapshot_to_block,
                 &info_log_name,
             )
             .await;
 
-            if let Some(new_filter) = result {
-                current_filter = new_filter;
+            // slow indexing warn user
+            if let Some(range) = max_block_range_limitation {
+                info!(
+                    "{} - RPC PROVIDER IS SLOW - Slow indexing mode enabled, max block range limitation: {} blocks - we advise using a faster provider who can predict the next block ranges.",
+                    &info_log_name,
+                    range
+                );
+            }
+
+            if let Some(result) = result {
+                current_filter = result.next;
+                max_block_range_limitation = result.max_block_range_limitation;
             } else {
                 break;
             }
@@ -238,28 +268,37 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
     UnboundedReceiverStream::new(rx)
 }
 
-/// Processes logs within the specified historical range, fetches logs using the provider,
-/// and sends them to the provided channel. Updates the filter to move to the next block range.
-///
-/// # Arguments
-///
-/// * `provider` - The provider to interact with the Ethereum blockchain.
-/// * `tx` - The channel to send fetched logs to.
-/// * `topic_id` - The topic ID to filter logs by.
-/// * `current_filter` - The current filter specifying the block range and other parameters.
-/// * `snapshot_to_block` - The upper block limit for processing historical logs.
-///
-/// # Returns
-///
-/// An updated filter for further processing, or `None` if processing should stop.
+fn calculate_process_historic_log_to_block(
+    new_from_block: &U64,
+    snapshot_to_block: &U64,
+    max_block_range_limitation: &Option<U64>,
+) -> U64 {
+    if let Some(max_block_range_limitation) = max_block_range_limitation {
+        let to_block = new_from_block + max_block_range_limitation;
+        if to_block > *snapshot_to_block {
+            *snapshot_to_block
+        } else {
+            to_block
+        }
+    } else {
+        *snapshot_to_block
+    }
+}
+
+struct ProcessHistoricLogsResult {
+    pub next: Filter,
+    pub max_block_range_limitation: Option<U64>,
+}
+
 async fn process_historic_logs<M: Middleware + Clone + Send + 'static>(
     provider: &Arc<M>,
     tx: &mpsc::UnboundedSender<Result<FetchLogsStream, Box<<M as Middleware>::Error>>>,
     topic_id: &H256,
     current_filter: Filter,
+    max_block_range_limitation: Option<U64>,
     snapshot_to_block: U64,
     info_log_name: &str,
-) -> Option<Filter> {
+) -> Option<ProcessHistoricLogsResult> {
     let from_block = current_filter.get_from_block().unwrap();
     let to_block = current_filter.get_to_block().unwrap_or(snapshot_to_block);
     debug!(
@@ -278,7 +317,10 @@ async fn process_historic_logs<M: Middleware + Clone + Send + 'static>(
             from_block,
             to_block
         );
-        return Some(current_filter.from_block(to_block));
+        return Some(ProcessHistoricLogsResult {
+            next: current_filter.from_block(to_block),
+            max_block_range_limitation: None,
+        });
     }
 
     debug!(
@@ -326,18 +368,8 @@ async fn process_historic_logs<M: Middleware + Clone + Send + 'static>(
             }
 
             if logs.is_empty() {
-                let new_from_block = to_block + 1;
-                let new_filter = current_filter
-                    .from_block(new_from_block)
-                    .to_block(snapshot_to_block);
-                debug!(
-                    "{} - {} - new_from_block {:?} snapshot_to_block {:?}",
-                    info_log_name,
-                    IndexingEventProgressStatus::Syncing.log(),
-                    new_from_block,
-                    snapshot_to_block
-                );
-                return if new_from_block > snapshot_to_block {
+                let next_from_block = to_block + 1;
+                return if next_from_block > snapshot_to_block {
                     // to avoid the thread closing before the stream is consumed
                     // lets just sit here for 1 seconds to avoid the race
                     // and info logs are not in the wrong order
@@ -346,31 +378,67 @@ async fn process_historic_logs<M: Middleware + Clone + Send + 'static>(
                     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
                     None
                 } else {
-                    Some(new_filter)
+                    let new_to_block = calculate_process_historic_log_to_block(
+                        &next_from_block,
+                        &snapshot_to_block,
+                        &max_block_range_limitation,
+                    );
+
+                    debug!(
+                        "{} - {} - new_from_block {:?} new_to_block {:?}",
+                        info_log_name,
+                        IndexingEventProgressStatus::Syncing.log(),
+                        next_from_block,
+                        new_to_block
+                    );
+
+                    Some(ProcessHistoricLogsResult {
+                        next: current_filter
+                            .from_block(next_from_block)
+                            .to_block(new_to_block),
+                        max_block_range_limitation,
+                    })
                 };
             }
 
             if let Some(last_log) = logs.last() {
-                let next_block = last_log.block_number.unwrap() + U64::from(1);
+                let next_from_block = last_log.block_number.unwrap() + U64::from(1);
                 debug!(
                     "{} - {} - next_block {:?}",
                     info_log_name,
                     IndexingEventProgressStatus::Syncing.log(),
-                    next_block
+                    next_from_block
                 );
-                if next_block > snapshot_to_block {
+                return if next_from_block > snapshot_to_block {
                     // to avoid the thread closing before the stream is consumed
                     // lets just sit here for 1 seconds to avoid the race
                     // and info logs are not in the wrong order
                     // probably a better way to handle this but hey
                     // TODO handle this nicer
                     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                }
-                return Some(
-                    current_filter
-                        .from_block(next_block)
-                        .to_block(snapshot_to_block),
-                );
+                    None
+                } else {
+                    let new_to_block = calculate_process_historic_log_to_block(
+                        &next_from_block,
+                        &snapshot_to_block,
+                        &max_block_range_limitation,
+                    );
+
+                    debug!(
+                        "{} - {} - new_from_block {:?} new_to_block {:?}",
+                        info_log_name,
+                        IndexingEventProgressStatus::Syncing.log(),
+                        next_from_block,
+                        new_to_block
+                    );
+
+                    Some(ProcessHistoricLogsResult {
+                        next: current_filter
+                            .from_block(next_from_block)
+                            .to_block(new_to_block),
+                        max_block_range_limitation,
+                    })
+                };
             }
         }
         Err(err) => {
@@ -384,11 +452,12 @@ async fn process_historic_logs<M: Middleware + Clone + Send + 'static>(
                         IndexingEventProgressStatus::Syncing.log(),
                         retry_result
                     );
-                    return Some(
-                        current_filter
+                    return Some(ProcessHistoricLogsResult {
+                        next: current_filter
                             .from_block(retry_result.from)
                             .to_block(retry_result.to),
-                    );
+                        max_block_range_limitation: retry_result.max_block_range,
+                    });
                 }
             }
 
