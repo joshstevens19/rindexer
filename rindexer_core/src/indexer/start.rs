@@ -542,21 +542,30 @@ async fn handle_logs_result(
             if !fn_data.is_empty() {
                 if execute_events_logs_in_order {
                     registry.trigger_event(&topic_id, fn_data).await;
+                    update_progress_and_last_synced(
+                        indexer_name.clone(),
+                        contract_name,
+                        event_name.clone(),
+                        progress,
+                        network_contract,
+                        database,
+                        result.to_block,
+                    );
                 } else {
                     tokio::spawn(async move {
                         registry.trigger_event(&topic_id, fn_data).await;
+                        update_progress_and_last_synced(
+                            indexer_name.clone(),
+                            contract_name,
+                            event_name.clone(),
+                            progress,
+                            network_contract,
+                            database,
+                            result.to_block,
+                        );
                     });
                 }
             }
-            update_progress_and_last_synced(
-                indexer_name.clone(),
-                contract_name,
-                event_name.clone(),
-                progress,
-                network_contract,
-                database,
-                result.to_block,
-            );
 
             Ok(())
         }
