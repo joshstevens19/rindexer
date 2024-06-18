@@ -10,12 +10,12 @@ use ethers::types::{Address, Bytes, H128, H160, H256, H512, U128, U256, U512, U6
 use futures::pin_mut;
 use rust_decimal::Decimal;
 use thiserror::Error;
+use tokio_postgres::binary_copy::BinaryCopyInWriter;
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type as PgType, Type};
 use tokio_postgres::{
     CopyInSink, Error as PgError, Error, NoTls, Row, Statement, ToStatement,
     Transaction as PgTransaction,
 };
-use tokio_postgres::binary_copy::BinaryCopyInWriter;
 use tracing::{debug, error, info};
 
 use crate::generator::{
@@ -569,14 +569,14 @@ pub fn event_table_full_name(indexer_name: &str, contract_name: &str, event_name
     format!("{}.{}", schema_name, camel_to_snake(event_name))
 }
 
-fn generate_event_table_columns_names_sql(
-    column_names: &[String],
-) -> String {
-   format!(
+fn generate_event_table_columns_names_sql(column_names: &[String]) -> String {
+    format!(
         "contract_address, {}, \"tx_hash\", \"block_number\", \"block_hash\", \"network\"",
         column_names.join(", ")
-   )
+    )
 }
+
+pub const CUSTOM_COLUMNS_COUNT: usize = 5;
 
 pub fn generate_insert_query_for_event(
     event_info: &EventInfo,
@@ -588,7 +588,7 @@ pub fn generate_insert_query_for_event(
         "INSERT INTO {} ({}) {}",
         event_table_full_name(indexer_name, contract_name, &event_info.name),
         generate_event_table_columns_names_sql(&column_names),
-        generate_injected_param(5 + column_names.len())
+        generate_injected_param(CUSTOM_COLUMNS_COUNT + column_names.len())
     )
 }
 
@@ -601,7 +601,8 @@ pub async fn bulk_insert_via_copy(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let stmt = format!(
         "COPY {} ({}) FROM STDIN WITH (FORMAT binary)",
-        table_name, generate_event_table_columns_names_sql(column_names),
+        table_name,
+        generate_event_table_columns_names_sql(column_names),
     );
 
     let sink = client.copy_in(&stmt).await?;
@@ -624,12 +625,12 @@ pub fn generate_bulk_insert_statement<'a>(
     bulk_data: &'a [Vec<EthereumSqlTypeWrapper>],
 ) -> (String, Vec<&'a (dyn ToSql + Sync + 'a)>) {
     // including placeholders
-    let total_columns = column_names.len() + 4;
+    let total_columns = column_names.len() + CUSTOM_COLUMNS_COUNT;
 
     let mut query = format!(
         "INSERT INTO {} ({}) VALUES ",
         table_name,
-        generate_event_table_columns_names_sql(&column_names),
+        generate_event_table_columns_names_sql(column_names),
     );
     let mut params: Vec<&'a (dyn ToSql + Sync + 'a)> = Vec::new();
 

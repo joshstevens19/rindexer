@@ -1296,7 +1296,9 @@ pub fn generate_event_handlers(
             params_sql
                 .push_str("&EthereumSqlTypeWrapper::U64(result.tx_information.block_number),");
             params_sql.push_str("&EthereumSqlTypeWrapper::H256(result.tx_information.block_hash)");
-            params_sql.push_str("&EthereumSqlTypeWrapper::String(result.tx_information.network.to_string())");
+            params_sql.push_str(
+                "&EthereumSqlTypeWrapper::String(result.tx_information.network.to_string())",
+            );
             params_sql.push(']');
 
             postgres_write = format!(

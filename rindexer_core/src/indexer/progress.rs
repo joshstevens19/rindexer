@@ -1,27 +1,11 @@
 use crate::generator::event_callback_registry::EventInformation;
-use crossterm::event::{KeyCode, KeyModifiers};
-use crossterm::style::{StyledContent, Stylize};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use crossterm::{
-    event, execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen},
-};
-use ethers::middleware::Middleware;
+use ethers::providers::Middleware;
 use ethers::types::U64;
-use log::warn;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::io;
-use std::io::Stdout;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tui::style::{Color, Style};
-use tui::widgets::{Cell, Row, Table};
-use tui::{
-    backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
-    widgets::{Block, Borders},
-    Frame, Terminal,
-};
+use tracing::info;
+use colored::{ColoredString, Colorize};
 
 /// Enum representing the progress status of an indexing event.
 #[derive(Clone, Debug, Hash)]
@@ -43,7 +27,7 @@ impl IndexingEventProgressStatus {
         }
     }
 
-    pub fn log(&self) -> StyledContent<&str> {
+    pub fn log(&self) -> ColoredString {
         self.as_str().green()
     }
 }
@@ -60,6 +44,7 @@ pub struct IndexingEventProgress {
     pub live_indexing: bool,
     pub status: IndexingEventProgressStatus,
     pub progress: f64,
+    pub info_log: String,
 }
 
 impl Hash for IndexingEventProgress {
@@ -78,6 +63,7 @@ impl Hash for IndexingEventProgress {
 
 impl IndexingEventProgress {
     /// Creates a new `IndexingEventProgress` with a status of `Syncing`.
+    #[warn(clippy::too_many_arguments)]
     fn running(
         id: String,
         contract_name: String,
@@ -86,6 +72,7 @@ impl IndexingEventProgress {
         syncing_to_block: U64,
         network: String,
         live_indexing: bool,
+        info_log: String,
     ) -> Self {
         Self {
             id,
@@ -97,6 +84,7 @@ impl IndexingEventProgress {
             live_indexing,
             status: IndexingEventProgressStatus::Syncing,
             progress: 0.0,
+            info_log,
         }
     }
 }
@@ -120,25 +108,30 @@ impl IndexingEventsProgressState {
         event_information: Vec<EventInformation>,
     ) -> Arc<Mutex<IndexingEventsProgressState>> {
         let mut events = Vec::new();
-        for event_info in event_information {
-            for network_contract in event_info.contract.details {
+        for event_info in &event_information {
+            for network_contract in &event_info.contract.details {
                 // TODO! LOOK at
-                // let latest_block = network_contract.provider.get_block_number().await.unwrap();
+                let latest_block = network_contract.provider.get_block_number().await.unwrap();
+                let end_block = network_contract.end_block.unwrap_or(latest_block);
+
                 events.push(IndexingEventProgress::running(
-                    network_contract.id,
+                    network_contract.id.to_string(),
                     event_info.contract.name.clone(),
                     event_info.event_name.to_string(),
                     network_contract.start_block.unwrap_or(U64::zero()),
-                    network_contract.end_block.unwrap_or(U64::zero()),
+                    if latest_block > end_block {
+                        end_block
+                    } else {
+                        latest_block
+                    },
                     network_contract.network.clone(),
                     network_contract.end_block.is_none(),
+                    event_info.info_log_name(),
                 ));
             }
         }
 
-        let state = Arc::new(Mutex::new(Self { events }));
-        // tokio::spawn(monitor_state_and_update_ui(state.clone()));
-        state
+        Arc::new(Mutex::new(Self { events }))
     }
 
     /// Updates the last synced block for a given event.
@@ -176,182 +169,18 @@ impl IndexingEventsProgressState {
                             IndexingEventProgressStatus::Completed
                         };
                     }
+
+                    info!(
+                        "{} - network {} - {:.2}% progress",
+                        event.info_log,
+                        event.network,
+                        event.progress * 100.0
+                    );
                 }
 
                 event.last_synced_block = new_last_synced_block;
                 break;
             }
         }
-    }
-}
-
-/// Sets up the terminal for TUI (Text User Interface) mode.
-///
-/// # Returns
-///
-/// A `Result` indicating success or failure.
-pub fn setup_terminal() -> Result<(), io::Error> {
-    let mut stdout = io::stdout();
-    enable_raw_mode()?;
-    execute!(stdout, EnterAlternateScreen)?;
-    Ok(())
-}
-
-/// Tears down the terminal from TUI mode.
-///
-/// # Returns
-///
-/// A `Result` indicating success or failure.
-pub fn teardown_terminal() -> Result<(), io::Error> {
-    let mut stdout = io::stdout();
-    execute!(stdout, LeaveAlternateScreen)?;
-    disable_raw_mode()?;
-    Ok(())
-}
-
-/// Listens for the exit command (q key) to quit the application.
-///
-/// # Returns
-///
-/// A `Result` indicating success or failure.
-async fn listen_for_exit_command() -> Result<(), std::io::Error> {
-    loop {
-        if event::poll(std::time::Duration::from_millis(500))? {
-            if let event::Event::Key(key) = event::read()? {
-                if key.code == KeyCode::Char('q') && key.modifiers == KeyModifiers::NONE {
-                    return Ok(());
-                }
-            }
-        }
-    }
-}
-
-/// Draws the UI for the TUI application.
-///
-/// # Arguments
-///
-/// * `f` - The frame to draw on.
-/// * `events` - A slice of `IndexingEventProgress` representing the events.
-/// * `scroll` - The current scroll position.
-fn draw_ui(
-    f: &mut Frame<CrosstermBackend<Stdout>>,
-    events: &[IndexingEventProgress],
-    scroll: usize,
-) {
-    let size = f.size();
-    let table_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0)])
-        .split(size);
-
-    let visible_items = std::cmp::min(events.len(), size.height as usize / 3);
-
-    let table_rows: Vec<Row> = events
-        .iter()
-        .skip(scroll)
-        .take(visible_items)
-        .map(|event| {
-            Row::new(vec![
-                Cell::from(event.contract_name.clone()),
-                Cell::from(event.event_name.clone()),
-                Cell::from(event.last_synced_block.to_string()),
-                Cell::from(event.network.clone()),
-                Cell::from(event.status.as_str().to_string()),
-                Cell::from(format!("{:.2}%", event.progress * 100.0)),
-            ])
-        })
-        .collect();
-
-    let table = Table::new(table_rows)
-        .header(
-            Row::new(vec![
-                "Contract",
-                "Event",
-                "Last Indexed",
-                "Network",
-                "Status",
-                "Progress",
-            ])
-            .style(Style::default().fg(Color::Yellow)),
-        )
-        .block(
-            Block::default()
-                .title("Events Indexing Status")
-                .borders(Borders::ALL),
-        )
-        .widths(&[
-            Constraint::Length(20),
-            Constraint::Length(20),
-            Constraint::Length(20),
-            Constraint::Length(20),
-            Constraint::Length(10),
-            Constraint::Length(10),
-        ]);
-
-    f.render_widget(table, table_chunks[0]);
-}
-
-/// Calculates a hash for a list of `IndexingEventProgress` for change detection.
-///
-/// # Arguments
-///
-/// * `events` - A slice of `IndexingEventProgress`.
-///
-/// # Returns
-///
-/// A `u64` hash representing the current state of the events.
-fn calculate_events_hash(events: &[IndexingEventProgress]) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    for event in events {
-        event.hash(&mut hasher);
-    }
-    hasher.finish()
-}
-
-/// Monitors the state of indexing events and updates the TUI.
-///
-/// # Arguments
-///
-/// * `state` - An `Arc<Mutex<IndexingEventsProgressState>>` representing the shared state.
-pub async fn monitor_state_and_update_ui(state: Arc<Mutex<IndexingEventsProgressState>>) {
-    let stdout = io::stdout();
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend).unwrap();
-
-    setup_terminal().unwrap();
-
-    tokio::spawn(async {
-        listen_for_exit_command().await.unwrap();
-        teardown_terminal().unwrap();
-        warn!("Exiting rindexer...");
-        std::process::exit(0);
-    });
-
-    let mut scroll: usize = 0;
-    let mut last_seen_hash = 0;
-
-    loop {
-        if event::poll(std::time::Duration::from_millis(100)).unwrap() {
-            if let event::Event::Key(key) = event::read().unwrap() {
-                match key.code {
-                    KeyCode::Down => scroll = scroll.saturating_add(1),
-                    KeyCode::Up => scroll = scroll.saturating_sub(1),
-                    _ => {}
-                }
-            }
-        }
-
-        let state_lock = state.lock().await;
-        let current_hash = calculate_events_hash(&state_lock.events);
-        if last_seen_hash != current_hash {
-            terminal
-                .draw(|f| {
-                    draw_ui(f, &state_lock.events, scroll);
-                })
-                .unwrap();
-            last_seen_hash = current_hash;
-        }
-        drop(state_lock);
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
 }

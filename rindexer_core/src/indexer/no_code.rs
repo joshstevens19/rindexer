@@ -18,7 +18,10 @@ use tokio_postgres::types::{ToSql, Type};
 use tracing::level_filters::LevelFilter;
 use tracing::{debug, error, info};
 
-use crate::database::postgres::{bulk_insert_via_copy, event_table_full_name, generate_bulk_insert_statement, generate_columns_names_only, map_log_token_to_ethereum_wrapper, SetupPostgresError};
+use crate::database::postgres::{
+    bulk_insert_via_copy, event_table_full_name, generate_bulk_insert_statement,
+    generate_columns_names_only, map_log_token_to_ethereum_wrapper, SetupPostgresError,
+};
 use crate::generator::build::identify_and_modify_filter;
 use crate::generator::event_callback_registry::{
     ContractInformation, Decoder, EventCallbackRegistry, EventInformation, EventResult,
@@ -98,13 +101,13 @@ pub async fn setup_no_code(details: StartNoCodeDetails) -> Result<StartDetails, 
 
             let registry = EventCallbackRegistry { events };
             info!(
-                "Events registered to index:\n {}",
+                "Events registered to index:{}",
                 registry
                     .events
                     .iter()
                     .map(|event| event.info_log_name())
                     .collect::<Vec<String>>()
-                    .join("\n")
+                    .join(", ")
             );
 
             Ok(StartDetails {
@@ -240,7 +243,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                         EthereumSqlTypeWrapper::H256(transaction_hash),
                         EthereumSqlTypeWrapper::U64(block_number),
                         EthereumSqlTypeWrapper::H256(block_hash),
-                        EthereumSqlTypeWrapper::String(network.to_string())
+                        EthereumSqlTypeWrapper::String(network.to_string()),
                     ];
 
                     Some((
@@ -339,19 +342,19 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                             error!("Error performing bulk insert: {}", e);
                         }
                     }
+
+                    while (csv_tasks.next().await).is_some() {}
+
+                    info!(
+                        "{}::{} - {} - {} events {}",
+                        params.contract_name,
+                        params.event_name,
+                        "INDEXED".green(),
+                        bulk_data.len(),
+                        format!("- blocks: {} - {}", from_block, to_block)
+                    );
                 }
             }
-
-            while (csv_tasks.next().await).is_some() {}
-
-            info!(
-                "{}::{} - {} - {} events {}",
-                params.contract_name,
-                params.event_name,
-                "INDEXED".green(),
-                bulk_data.len(),
-                format!("- blocks: {} - {}", from_block, to_block)
-            );
         }
         .boxed()
     })
