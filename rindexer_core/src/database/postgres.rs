@@ -7,6 +7,7 @@ use bytes::{Buf, BytesMut};
 use dotenv::dotenv;
 use ethers::abi::Token;
 use ethers::types::{Address, Bytes, H128, H160, H256, H512, U128, U256, U512, U64};
+use futures::pin_mut;
 use rust_decimal::Decimal;
 use thiserror::Error;
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type as PgType, Type};
@@ -14,6 +15,7 @@ use tokio_postgres::{
     CopyInSink, Error as PgError, Error, NoTls, Row, Statement, ToStatement,
     Transaction as PgTransaction,
 };
+use tokio_postgres::binary_copy::BinaryCopyInWriter;
 use tracing::{debug, error, info};
 
 use crate::generator::{
@@ -410,12 +412,12 @@ fn generate_event_table_sql(abi_inputs: &[EventInfo], schema_name: &str) -> Stri
             info!("Creating table: {}", table_name);
             format!(
                 "CREATE TABLE IF NOT EXISTS {} (\
-                rindexer_id SERIAL PRIMARY KEY, \
-                contract_address CHAR(66), \
+                rindexer_id SERIAL PRIMARY KEY NOT NULL, \
+                contract_address CHAR(66) NOT NULL, \
                 {}, \
-                tx_hash CHAR(66), \
-                block_number NUMERIC, \
-                block_hash CHAR(66)\
+                tx_hash CHAR(66) NOT NULL, \
+                block_number NUMERIC NOT NULL, \
+                block_hash CHAR(66) NOT NULL
             );",
                 table_name,
                 generate_columns_with_data_types(&event_info.inputs).join(", ")
@@ -566,18 +568,53 @@ pub fn event_table_full_name(indexer_name: &str, contract_name: &str, event_name
     format!("{}.{}", schema_name, camel_to_snake(event_name))
 }
 
+fn generate_event_table_columns_names_sql(
+    column_names: &[String],
+) -> String {
+   format!(
+        "contract_address, {}, \"tx_hash\", \"block_number\", \"block_hash\"",
+        column_names.join(", ")
+   )
+}
+
 pub fn generate_insert_query_for_event(
     event_info: &EventInfo,
     indexer_name: &str,
     contract_name: &str,
 ) -> String {
-    let columns = generate_columns_names_only(&event_info.inputs);
+    let column_names = generate_columns_names_only(&event_info.inputs);
     format!(
-        "INSERT INTO {} (contract_address, {}, \"tx_hash\", \"block_number\", \"block_hash\") {}",
+        "INSERT INTO {} ({}) {}",
         event_table_full_name(indexer_name, contract_name, &event_info.name),
-        &columns.join(", "),
-        generate_injected_param(4 + columns.len())
+        generate_event_table_columns_names_sql(&column_names),
+        generate_injected_param(4 + column_names.len())
     )
+}
+
+pub async fn bulk_insert_via_copy(
+    client: &PostgresClient,
+    data: Vec<Vec<&(dyn ToSql + Sync)>>,
+    table_name: &str,
+    column_names: &[String],
+    column_types: &[Type],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let stmt = format!(
+        "COPY {} ({}) FROM STDIN WITH (FORMAT binary)",
+        table_name, generate_event_table_columns_names_sql(column_names),
+    );
+
+    let sink = client.copy_in(&stmt).await?;
+
+    let writer = BinaryCopyInWriter::new(sink, column_types);
+    pin_mut!(writer);
+
+    for row in data.iter() {
+        writer.as_mut().write(row).await?;
+    }
+
+    writer.finish().await?;
+
+    Ok(())
 }
 
 pub fn generate_bulk_insert_statement<'a>(
@@ -589,9 +626,9 @@ pub fn generate_bulk_insert_statement<'a>(
     let total_columns = column_names.len() + 4;
 
     let mut query = format!(
-        "INSERT INTO {} (contract_address, {}, tx_hash, block_number, block_hash) VALUES ",
+        "INSERT INTO {} ({}) VALUES ",
         table_name,
-        column_names.join(", ")
+        generate_event_table_columns_names_sql(&column_names),
     );
     let mut params: Vec<&'a (dyn ToSql + Sync + 'a)> = Vec::new();
 

@@ -18,10 +18,7 @@ use tokio_postgres::types::{ToSql, Type};
 use tracing::level_filters::LevelFilter;
 use tracing::{debug, error, info};
 
-use crate::database::postgres::{
-    event_table_full_name, generate_bulk_insert_statement, generate_columns_names_only,
-    map_log_token_to_ethereum_wrapper, SetupPostgresError,
-};
+use crate::database::postgres::{bulk_insert_via_copy, event_table_full_name, generate_bulk_insert_statement, generate_columns_names_only, map_log_token_to_ethereum_wrapper, SetupPostgresError};
 use crate::generator::build::identify_and_modify_filter;
 use crate::generator::event_callback_registry::{
     ContractInformation, Decoder, EventCallbackRegistry, EventInformation, EventResult,
@@ -169,32 +166,6 @@ pub enum ProcessIndexersError {
 
     #[error("Event name not found in ABI for contract: {0} - event: {1}")]
     EventNameNotFoundInAbi(String, String),
-}
-
-async fn bulk_insert_via_copy(
-    client: &PostgresClient,
-    data: Vec<Vec<&(dyn ToSql + Sync)>>,
-    table_name: &str,
-    column_names: &[String],
-    column_types: &[Type],
-) -> Result<(), Box<dyn Error>> {
-    let stmt = format!(
-        "COPY {} (contract_address, {}, \"tx_hash\", \"block_number\", \"block_hash\") FROM STDIN WITH (FORMAT binary)",
-        table_name, column_names.join(", "),
-    );
-
-    let sink = client.copy_in(&stmt).await?;
-
-    let writer = BinaryCopyInWriter::new(sink, column_types);
-    pin_mut!(writer);
-
-    for row in data.iter() {
-        writer.as_mut().write(row).await?;
-    }
-
-    writer.finish().await?;
-
-    Ok(())
 }
 
 #[derive(Clone)]
