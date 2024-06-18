@@ -227,6 +227,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                     let transaction_hash = result.tx_information.transaction_hash;
                     let block_number = result.tx_information.block_number;
                     let block_hash = result.tx_information.block_hash;
+                    let network = result.tx_information.network.to_string();
 
                     let event_parameters: Vec<EthereumSqlTypeWrapper> = log
                         .params
@@ -239,6 +240,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                         EthereumSqlTypeWrapper::H256(transaction_hash),
                         EthereumSqlTypeWrapper::U64(block_number),
                         EthereumSqlTypeWrapper::H256(block_hash),
+                        EthereumSqlTypeWrapper::String(network.to_string())
                     ];
 
                     Some((
@@ -247,6 +249,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                         transaction_hash,
                         block_number,
                         block_hash,
+                        network,
                         contract_address,
                         event_parameters,
                         end_global_parameters,
@@ -260,6 +263,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                 transaction_hash,
                 block_number,
                 block_hash,
+                network,
                 contract_address,
                 event_parameters,
                 end_global_parameters,
@@ -286,6 +290,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                     csv_data.push(format!("{:?}", transaction_hash));
                     csv_data.push(format!("{:?}", block_number));
                     csv_data.push(format!("{:?}", block_hash));
+                    csv_data.push(format!("{:?}", network));
 
                     let csv_clone = csv.clone();
                     csv_tasks.push(Box::pin(async move {

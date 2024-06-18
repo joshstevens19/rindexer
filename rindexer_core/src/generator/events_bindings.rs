@@ -605,6 +605,7 @@ pub fn csv_headers_for_event(event_info: &EventInfo) -> Vec<String> {
     headers.push(r#""tx_hash""#.to_string());
     headers.push(r#""block_number""#.to_string());
     headers.push(r#""block_hash""#.to_string());
+    headers.push(r#""network""#.to_string());
 
     headers
 }
@@ -1295,6 +1296,7 @@ pub fn generate_event_handlers(
             params_sql
                 .push_str("&EthereumSqlTypeWrapper::U64(result.tx_information.block_number),");
             params_sql.push_str("&EthereumSqlTypeWrapper::H256(result.tx_information.block_hash)");
+            params_sql.push_str("&EthereumSqlTypeWrapper::String(result.tx_information.network.to_string())");
             params_sql.push(']');
 
             postgres_write = format!(
@@ -1331,6 +1333,7 @@ pub fn generate_event_handlers(
             csv_data.push_str(r#"format!("{:?}", result.tx_information.transaction_hash),"#);
             csv_data.push_str(r#"result.tx_information.block_number.to_string(),"#);
             csv_data.push_str(r#"result.tx_information.block_hash.to_string()"#);
+            csv_data.push_str(r#"result.tx_information.network.to_string()"#);
 
             csv_write = format!(
                 r#"context.csv.append(vec![{csv_data}]).await.unwrap();"#,
