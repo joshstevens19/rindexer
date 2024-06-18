@@ -340,6 +340,7 @@ async fn process_historic_logs<M: Middleware + Clone + Send + 'static>(
                 return if new_from_block > snapshot_to_block {
                     // to avoid the thread closing before the stream is consumed
                     // lets just sit here for 1 seconds to avoid the race
+                    // and info logs are not in the wrong order
                     // probably a better way to handle this but hey
                     // TODO handle this nicer
                     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
@@ -357,6 +358,14 @@ async fn process_historic_logs<M: Middleware + Clone + Send + 'static>(
                     IndexingEventProgressStatus::Syncing.log(),
                     next_block
                 );
+                if next_block > snapshot_to_block {
+                    // to avoid the thread closing before the stream is consumed
+                    // lets just sit here for 1 seconds to avoid the race
+                    // and info logs are not in the wrong order
+                    // probably a better way to handle this but hey
+                    // TODO handle this nicer
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                }
                 return Some(
                     current_filter
                         .from_block(next_block)
