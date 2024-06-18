@@ -417,7 +417,8 @@ fn generate_event_table_sql(abi_inputs: &[EventInfo], schema_name: &str) -> Stri
                 {}, \
                 tx_hash CHAR(66) NOT NULL, \
                 block_number NUMERIC NOT NULL, \
-                block_hash CHAR(66) NOT NULL
+                block_hash CHAR(66) NOT NULL, \
+                network VARCHAR(50) NOT NULL\
             );",
                 table_name,
                 generate_columns_with_data_types(&event_info.inputs).join(", ")
@@ -572,7 +573,7 @@ fn generate_event_table_columns_names_sql(
     column_names: &[String],
 ) -> String {
    format!(
-        "contract_address, {}, \"tx_hash\", \"block_number\", \"block_hash\"",
+        "contract_address, {}, \"tx_hash\", \"block_number\", \"block_hash\", \"network\"",
         column_names.join(", ")
    )
 }
@@ -587,7 +588,7 @@ pub fn generate_insert_query_for_event(
         "INSERT INTO {} ({}) {}",
         event_table_full_name(indexer_name, contract_name, &event_info.name),
         generate_event_table_columns_names_sql(&column_names),
-        generate_injected_param(4 + column_names.len())
+        generate_injected_param(5 + column_names.len())
     )
 }
 
