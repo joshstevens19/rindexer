@@ -8,7 +8,6 @@ use crate::database::postgres::SetupPostgresError;
 use crate::generator::event_callback_registry::EventCallbackRegistry;
 use crate::indexer::no_code::{setup_no_code, SetupNoCodeError};
 use crate::indexer::start::{start_indexing, StartIndexingError, StartIndexingSettings};
-use crate::indexer::Indexer;
 use crate::manifest::yaml::{read_manifest, ProjectType, ReadManifestError};
 use crate::{setup_logger, setup_postgres, GraphQLServerDetails};
 

@@ -288,9 +288,9 @@ fn handle_new_command(project_path: PathBuf) -> Result<(), Box<dyn std::error::E
         networks: vec![Network {
             name: "ethereum".to_string(),
             chain_id: 1,
-            url: "https://eth.rpc.blxrbdn.com".to_string(),
+            url: "https://mainnet.gateway.tenderly.co".to_string(),
             max_block_range: None,
-            max_concurrency: None,
+            compute_units_per_second: None,
         }],
         contracts: vec![Contract {
             name: "RocketPoolETH".to_string(),

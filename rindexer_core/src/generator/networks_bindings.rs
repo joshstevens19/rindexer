@@ -71,10 +71,16 @@ pub fn network_provider_fn_name_by_name(network_name: &str) -> String {
 fn generate_network_lazy_provider_code(network: &Network) -> Code {
     Code::new(format!(
         r#"
-            static ref {network_name}: Arc<Provider<RetryClient<Http>>> = create_retry_client("{network_url}").expect("Error creating provider");
+            static ref {network_name}: Arc<Provider<RetryClient<Http>>> = create_retry_client("{network_url}", {compute_units_per_second}).expect("Error creating provider");
         "#,
         network_name = network_provider_name(network),
-        network_url = network.url
+        network_url = network.url,
+        compute_units_per_second =
+            if let Some(compute_units_per_second) = network.compute_units_per_second {
+                format!("Some({})", compute_units_per_second)
+            } else {
+                "None".to_string()
+            }
     ))
 }
 

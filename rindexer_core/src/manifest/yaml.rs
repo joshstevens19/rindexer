@@ -257,8 +257,10 @@ pub struct Network {
     #[serde(rename = "maxBlockRange", skip_serializing_if = "Option::is_none")]
     pub max_block_range: Option<u64>,
 
-    #[serde(rename = "maxConcurrency", skip_serializing_if = "Option::is_none")]
-    pub max_concurrency: Option<u32>,
+    // #[serde(rename = "maxConcurrency", skip_serializing_if = "Option::is_none")]
+    // pub max_concurrency: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compute_units_per_second: Option<u64>,
 }
 
 fn default_disable_create_tables() -> bool {
