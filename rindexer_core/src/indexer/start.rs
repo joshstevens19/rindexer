@@ -168,7 +168,7 @@ pub async fn start_indexing(
                     error!("{} - end_block supplied in yaml - {} is higher then latest - {} - end_block now will be {}", event.info_log_name(), end_block, latest_block, latest_block);
                 }
             }
-            
+
             if event.contract.reorg_safe_distance {
                 let chain_id = contract
                     .provider
