@@ -303,6 +303,7 @@ fn handle_new_command(project_path: PathBuf) -> Result<(), Box<dyn std::error::E
             )],
             abi: abi_example_path.display().to_string(),
             include_events: Some(vec!["Transfer".to_string()]),
+            index_event_in_order: None,
             generate_csv: csv_enabled,
             reorg_safe_distance: false,
         }],

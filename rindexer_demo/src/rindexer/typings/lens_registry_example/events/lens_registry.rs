@@ -177,6 +177,7 @@ where
                 "/Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json"
                     .to_string(),
             include_events: Some(vec!["HandleLinked".to_string()]),
+            index_event_in_order: None,
             reorg_safe_distance: false,
             generate_csv: true,
         }
@@ -257,6 +258,7 @@ where
         registry.register_event(EventInformation {
             indexer_name: "LensRegistryExample".to_string(),
             event_name: event_name.to_string(),
+            index_event_in_order: false,
             topic_id: topic_id.to_string(),
             contract,
             callback,
