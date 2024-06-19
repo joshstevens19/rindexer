@@ -3,13 +3,12 @@ use ethers::{
     providers::Middleware,
     types::{Address, Filter, H256, U64},
 };
-use log::error;
 use std::sync::Arc;
-use tokio::sync::{AcquireError, Mutex, Semaphore};
+use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinError;
 use tokio::time::Instant;
 use tokio_stream::StreamExt;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 use crate::database::postgres::PostgresConnectionError;
 use crate::generator::event_callback_registry::{
@@ -62,7 +61,6 @@ struct EventProcessingConfig {
     network_contract: Arc<NetworkContract>,
     start_block: U64,
     end_block: U64,
-    max_block_range: u64,
     semaphore: Arc<Semaphore>,
     registry: Arc<EventCallbackRegistry>,
     progress: Arc<Mutex<IndexingEventsProgressState>>,
@@ -78,7 +76,7 @@ pub enum StartIndexingError {
     CouldNotRunAllIndexHandlersJoin(JoinError),
 
     #[error("Could not run all index handlers {0}")]
-    CouldNotRunAllIndexHandlers(ProcessEventConcurrentlyError),
+    CouldNotRunAllIndexHandlers(ProcessEventError),
 
     #[error("{0}")]
     PostgresConnectionError(PostgresConnectionError),
@@ -90,7 +88,7 @@ pub enum StartIndexingError {
     GetChainIdError(ProviderError),
 
     #[error("Could not process event sequentially: {0}")]
-    ProcessEventSequentiallyError(ProcessEventSequentiallyError),
+    ProcessEventSequentiallyError(ProcessEventError),
 }
 
 /// Starts the indexing process based on the provided settings and registry.
@@ -124,7 +122,6 @@ pub async fn start_indexing(
     };
     let event_progress_state = IndexingEventsProgressState::monitor(registry.events.clone()).await;
 
-    let max_block_range = 20_000_000_000;
     let semaphore = Arc::new(Semaphore::new(
         settings
             .concurrent
@@ -166,6 +163,12 @@ pub async fn start_indexing(
             let mut end_block =
                 std::cmp::min(contract.end_block.unwrap_or(latest_block), latest_block);
 
+            if let Some(end_block) = contract.end_block {
+                if end_block > latest_block {
+                    error!("{} - end_block supplied in yaml - {} is higher then latest - {} - end_block now will be {}", event.info_log_name(), end_block, latest_block, latest_block);
+                }
+            }
+            
             if event.contract.reorg_safe_distance {
                 let chain_id = contract
                     .provider
@@ -201,7 +204,6 @@ pub async fn start_indexing(
                 network_contract: Arc::new(contract),
                 start_block,
                 end_block,
-                max_block_range,
                 semaphore: semaphore.clone(),
                 registry: registry.clone(),
                 progress: event_progress_state.clone(),
@@ -212,11 +214,11 @@ pub async fn start_indexing(
             };
 
             if settings.execute_in_event_order {
-                process_event_sequentially(event_processing_config)
+                process_event(event_processing_config)
                     .await
                     .map_err(StartIndexingError::ProcessEventSequentiallyError)?
             } else {
-                let handle = tokio::spawn(process_event_concurrently(event_processing_config));
+                let handle = tokio::spawn(process_event(event_processing_config));
                 handles.push(handle);
             }
         }
@@ -245,187 +247,50 @@ pub async fn start_indexing(
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum ProcessEventSequentiallyError {
+pub enum ProcessEventError {
     #[error("Could not process logs: {0}")]
     ProcessLogs(Box<ProviderError>),
-
-    #[error("Could not acquire semaphore: {0}")]
-    AcquireError(AcquireError),
 
     #[error("Could not build filter: {0}")]
     BuildFilterError(BuildFilterError),
 }
-/// Processes events sequentially.
-///
-/// # Arguments
-///
-/// * `event_processing_config` - The configuration for event processing.
-///
-/// # Returns
-///
-/// A `Result` indicating success or failure.
-async fn process_event_sequentially(
+
+async fn process_event(
     event_processing_config: EventProcessingConfig,
-) -> Result<(), ProcessEventSequentiallyError> {
+) -> Result<(), ProcessEventError> {
     debug!(
         "{} - Processing event sequentially",
         event_processing_config.info_log_name
     );
-    for _current_block in (event_processing_config.start_block.as_u64()
-        ..event_processing_config.end_block.as_u64())
-        .step_by(event_processing_config.max_block_range as usize)
-    {
-        let current_block = U64::from(_current_block);
-        let next_block = std::cmp::min(
-            current_block + event_processing_config.max_block_range,
-            event_processing_config.end_block,
-        );
 
-        let filter = build_filter(
-            &event_processing_config.topic_id,
-            &event_processing_config
-                .network_contract
-                .indexing_contract_setup,
-            current_block,
-            next_block,
-        )
-        .map_err(ProcessEventSequentiallyError::BuildFilterError)?;
+    let filter = build_filter(
+        &event_processing_config.topic_id,
+        &event_processing_config
+            .network_contract
+            .indexing_contract_setup,
+        event_processing_config.start_block,
+        event_processing_config.end_block,
+    )
+    .map_err(ProcessEventError::BuildFilterError)?;
 
-        let semaphore_client = event_processing_config.semaphore.clone();
-        let permit = semaphore_client
-            .acquire_owned()
-            .await
-            .map_err(ProcessEventSequentiallyError::AcquireError)?;
-        process_logs(ProcessLogsParams {
-            indexer_name: event_processing_config.indexer_name.clone(),
-            contract_name: event_processing_config.contract_name.clone(),
-            info_log_name: event_processing_config.info_log_name.clone(),
-            topic_id: event_processing_config.topic_id.clone(),
-            event_name: event_processing_config.event_name.clone(),
-            network_contract: event_processing_config.network_contract.clone(),
-            filter,
-            registry: event_processing_config.registry.clone(),
-            progress: event_processing_config.progress.clone(),
-            database: event_processing_config.database.clone(),
-            execute_events_logs_in_order: event_processing_config.execute_event_logs_in_order,
-            live_indexing: event_processing_config.live_indexing,
-            indexing_distance_from_head: event_processing_config.indexing_distance_from_head,
-        })
-        .await
-        .map_err(ProcessEventSequentiallyError::ProcessLogs)?;
-        drop(permit);
-    }
-    Ok(())
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum ProcessEventConcurrentlyError {
-    #[error("Could not run all log handlers join error: {0}")]
-    CouldNotRunAllLogHandlersJoin(JoinError),
-
-    #[error("Could not run all log handlers {0}")]
-    CouldNotRunAllLogHandlers(Box<ProviderError>),
-
-    #[error("Could not acquire semaphore: {0}")]
-    AcquireError(AcquireError),
-
-    #[error("Could not build filter: {0}")]
-    BuildFilterError(BuildFilterError),
-}
-
-/// Processes events concurrently.
-///
-/// # Arguments
-///
-/// * `event_processing_config` - The configuration for event processing.
-///
-/// # Returns
-///
-/// A `Result` indicating success or failure.
-async fn process_event_concurrently(
-    event_processing_config: EventProcessingConfig,
-) -> Result<(), ProcessEventConcurrentlyError> {
-    debug!(
-        "{} - Processing event concurrently",
-        event_processing_config.info_log_name
-    );
-
-    let mut handles = Vec::new();
-    for _current_block in (event_processing_config.start_block.as_u64()
-        ..event_processing_config.end_block.as_u64())
-        .step_by(event_processing_config.max_block_range as usize)
-    {
-        let current_block = U64::from(_current_block);
-        let next_block = std::cmp::min(
-            current_block + event_processing_config.max_block_range,
-            event_processing_config.end_block,
-        );
-
-        let filter = build_filter(
-            &event_processing_config.topic_id,
-            &event_processing_config
-                .network_contract
-                .indexing_contract_setup,
-            current_block,
-            next_block,
-        )
-        .map_err(ProcessEventConcurrentlyError::BuildFilterError)?;
-
-        let registry_copy = event_processing_config.registry.clone();
-        let permit = event_processing_config
-            .semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(ProcessEventConcurrentlyError::AcquireError)?;
-
-        // Clone the necessary fields
-        let network_contract = event_processing_config.network_contract.clone();
-        let progress = event_processing_config.progress.clone();
-        let database = event_processing_config.database.clone();
-        let indexer_name = event_processing_config.indexer_name.clone();
-        let contract_name = event_processing_config.contract_name.clone();
-        let info_log_name = event_processing_config.info_log_name.clone();
-        let topic_id = event_processing_config.topic_id.clone();
-        let event_name = event_processing_config.event_name.clone();
-        let execute_events_logs_in_order = event_processing_config.execute_event_logs_in_order;
-        let live_indexing = event_processing_config.live_indexing;
-        let indexing_distance_from_head = event_processing_config.indexing_distance_from_head;
-
-        let handle = tokio::spawn(async move {
-            debug!(
-                "{} - Processing logs between {} and {}",
-                info_log_name, current_block, next_block
-            );
-            let result = process_logs(ProcessLogsParams {
-                indexer_name,
-                contract_name,
-                info_log_name,
-                topic_id,
-                event_name,
-                network_contract: network_contract.clone(),
-                filter,
-                registry: registry_copy,
-                progress,
-                database,
-                execute_events_logs_in_order,
-                live_indexing,
-                indexing_distance_from_head,
-            })
-            .await;
-
-            drop(permit);
-            result
-        });
-        handles.push(handle);
-    }
-
-    for handle in handles {
-        handle
-            .await
-            .map_err(ProcessEventConcurrentlyError::CouldNotRunAllLogHandlersJoin)?
-            .map_err(ProcessEventConcurrentlyError::CouldNotRunAllLogHandlers)?;
-    }
+    process_logs(ProcessLogsParams {
+        indexer_name: event_processing_config.indexer_name,
+        contract_name: event_processing_config.contract_name,
+        info_log_name: event_processing_config.info_log_name,
+        topic_id: event_processing_config.topic_id,
+        event_name: event_processing_config.event_name,
+        network_contract: event_processing_config.network_contract,
+        filter,
+        registry: event_processing_config.registry,
+        progress: event_processing_config.progress,
+        database: event_processing_config.database,
+        execute_events_logs_in_order: event_processing_config.execute_event_logs_in_order,
+        live_indexing: event_processing_config.live_indexing,
+        indexing_distance_from_head: event_processing_config.indexing_distance_from_head,
+        semaphore: event_processing_config.semaphore,
+    })
+    .await
+    .map_err(ProcessEventError::ProcessLogs)?;
 
     Ok(())
 }
@@ -446,6 +311,7 @@ pub struct ProcessLogsParams {
     execute_events_logs_in_order: bool,
     live_indexing: bool,
     indexing_distance_from_head: U64,
+    semaphore: Arc<Semaphore>,
 }
 
 /// Processes logs based on the given parameters.
@@ -474,6 +340,7 @@ async fn process_logs(params: ProcessLogsParams) -> Result<(), Box<ProviderError
         } else {
             None
         },
+        params.semaphore,
     );
 
     while let Some(result) = logs_stream.next().await {

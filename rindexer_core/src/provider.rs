@@ -27,6 +27,7 @@ pub enum RetryClientError {
 /// A `Result` containing an `Arc<Provider<RetryClient<Http>>>` or a `RetryClientError`.
 pub fn create_retry_client(
     rpc_url: &str,
+    compute_units_per_second: Option<u64>,
 ) -> Result<Arc<Provider<RetryClient<Http>>>, RetryClientError> {
     let url = Url::parse(rpc_url).map_err(|e| {
         RetryClientError::HttpProviderCantBeCreated(rpc_url.to_string(), e.to_string())
@@ -35,8 +36,10 @@ pub fn create_retry_client(
     // Configure the retry client with intense retry settings
     Ok(Arc::new(Provider::new(
         RetryClientBuilder::default()
-            .rate_limit_retries(50)
-            .timeout_retries(10)
+            // assume minimum compute units per second if not provided as growth plan standard
+            .compute_units_per_second(compute_units_per_second.unwrap_or(660))
+            .rate_limit_retries(5000)
+            .timeout_retries(1000)
             .initial_backoff(Duration::from_millis(500))
             .build(
                 provider,
@@ -65,14 +68,14 @@ mod tests {
     #[test]
     fn test_create_retry_client() {
         let rpc_url = "http://localhost:8545";
-        let result = create_retry_client(rpc_url);
+        let result = create_retry_client(rpc_url, Some(660));
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_create_retry_client_invalid_url() {
         let rpc_url = "invalid_url";
-        let result = create_retry_client(rpc_url);
+        let result = create_retry_client(rpc_url, Some(660));
         assert!(result.is_err());
         if let Err(RetryClientError::HttpProviderCantBeCreated(url, _)) = result {
             assert_eq!(url, rpc_url);

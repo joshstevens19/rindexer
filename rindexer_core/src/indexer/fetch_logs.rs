@@ -1,11 +1,12 @@
 use crate::indexer::progress::IndexingEventProgressStatus;
+use crate::indexer::start::ProcessEventError;
 use ethers::middleware::{Middleware, MiddlewareError};
 use ethers::prelude::{Block, Filter, JsonRpcError, Log};
 use ethers::types::{Address, BlockNumber, Bloom, FilteredParams, ValueOrArray, H256, U64};
 use regex::Regex;
 use std::str::FromStr;
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, AcquireError, OwnedSemaphorePermit, Semaphore};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, error, info};
 
@@ -52,8 +53,13 @@ fn retry_with_block_range(
     // Thanks Ponder for the regex patterns - https://github.com/ponder-sh/ponder/blob/889096a3ef5f54a0c5a06df82b0da9cf9a113996/packages/utils/src/getLogsRetryHelper.ts#L34
 
     // Alchemy
-    if let Ok(re) = compile_regex(r"this block range should work: \[(0x[0-9a-fA-F]+),\s*(0x[0-9a-fA-F]+)]") {
-        if let Some(captures) = re.captures(error_message).or_else(|| re.captures(error_data)) {
+    if let Ok(re) =
+        compile_regex(r"this block range should work: \[(0x[0-9a-fA-F]+),\s*(0x[0-9a-fA-F]+)]")
+    {
+        if let Some(captures) = re
+            .captures(error_message)
+            .or_else(|| re.captures(error_data))
+        {
             if let (Some(start_block), Some(end_block)) = (captures.get(1), captures.get(2)) {
                 let start_block_str = start_block.as_str();
                 let end_block_str = end_block.as_str();
@@ -70,10 +76,15 @@ fn retry_with_block_range(
             }
         }
     }
-    
+
     // Infura, Thirdweb, zkSync, Tenderly
-    if let Ok(re) = compile_regex(r"Try with this block range \[0x([0-9a-fA-F]+),\s*0x([0-9a-fA-F]+)\]") {
-        if let Some(captures) = re.captures(error_message).or_else(|| re.captures(error_data)) {
+    if let Ok(re) =
+        compile_regex(r"Try with this block range \[0x([0-9a-fA-F]+),\s*0x([0-9a-fA-F]+)\]")
+    {
+        if let Some(captures) = re
+            .captures(error_message)
+            .or_else(|| re.captures(error_data))
+        {
             if let (Some(start_block), Some(end_block)) = (captures.get(1), captures.get(2)) {
                 let start_block_str = format!("0x{}", start_block.as_str());
                 let end_block_str = format!("0x{}", end_block.as_str());
@@ -102,7 +113,10 @@ fn retry_with_block_range(
 
     // QuickNode, 1RPC, zkEVM, Blast, BlockPI
     if let Ok(re) = compile_regex(r"limited to a ([\d,.]+)") {
-        if let Some(captures) = re.captures(error_message).or_else(|| re.captures(error_data)) {
+        if let Some(captures) = re
+            .captures(error_message)
+            .or_else(|| re.captures(error_data))
+        {
             if let Some(range_str_match) = captures.get(1) {
                 let range_str = range_str_match.as_str().replace(&['.', ','][..], "");
                 if let Ok(range) = U64::from_dec_str(&range_str) {
@@ -182,24 +196,13 @@ fn topic_in_bloom(topic_id: H256, logs_bloom: Bloom) -> bool {
     FilteredParams::matches_topics(logs_bloom, &topic_filter)
 }
 
-/// Fetches logs from the Ethereum blockchain, starting with historical logs and transitioning to live indexing mode if enabled.
-///
-/// # Arguments
-///
-/// * `provider` - The provider to interact with the Ethereum blockchain.
-/// * `topic_id` - The topic ID to filter logs by.
-/// * `initial_filter` - The initial filter specifying the block range and other parameters.
-/// * `live_indexing_details` - Optional details for live indexing.
-///
-/// # Returns
-///
-/// A stream of fetched logs, wrapped in a `Result` to handle any errors.
 pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
     provider: Arc<M>,
     topic_id: H256,
     initial_filter: Filter,
     info_log_name: String,
     live_indexing_details: Option<LiveIndexingDetails>,
+    semaphore: Arc<Semaphore>,
 ) -> impl tokio_stream::Stream<Item = Result<FetchLogsStream, Box<<M as Middleware>::Error>>>
        + Send
        + Unpin {
@@ -216,31 +219,49 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
         // Process historical logs first
         let mut max_block_range_limitation = None;
         while current_filter.get_from_block().unwrap() <= snapshot_to_block {
-            let result = process_historic_logs(
-                &provider,
-                &tx,
-                &topic_id,
-                current_filter.clone(),
-                max_block_range_limitation,
-                snapshot_to_block,
-                &info_log_name,
-            )
-            .await;
+            let semaphore_client = semaphore.clone();
+            let permit = semaphore_client.acquire_owned().await;
 
-            // slow indexing warn user
-            if let Some(range) = max_block_range_limitation {
-                info!(
-                    "{} - RPC PROVIDER IS SLOW - Slow indexing mode enabled, max block range limitation: {} blocks - we advise using a faster provider who can predict the next block ranges.",
-                    &info_log_name,
-                    range
-                );
-            }
+            match permit {
+                Ok(permit) => {
+                    let result = process_historic_logs(
+                        &provider,
+                        &tx,
+                        &topic_id,
+                        current_filter.clone(),
+                        max_block_range_limitation,
+                        snapshot_to_block,
+                        &info_log_name,
+                    )
+                    .await;
 
-            if let Some(result) = result {
-                current_filter = result.next;
-                max_block_range_limitation = result.max_block_range_limitation;
-            } else {
-                break;
+                    drop(permit);
+
+                    // slow indexing warn user
+                    if let Some(range) = max_block_range_limitation {
+                        info!(
+                            "{} - RPC PROVIDER IS SLOW - Slow indexing mode enabled, max block range limitation: {} blocks - we advise using a faster provider who can predict the next block ranges.",
+                            &info_log_name,
+                            range
+                        );
+                    }
+
+                    if let Some(result) = result {
+                        current_filter = result.next;
+                        max_block_range_limitation = result.max_block_range_limitation;
+                    } else {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    error!(
+                        "{} - {} - Semaphore error: {}",
+                        &info_log_name,
+                        IndexingEventProgressStatus::Syncing.log(),
+                        e
+                    );
+                    continue;
+                }
             }
         }
 
@@ -260,6 +281,7 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
                 reorg_safe_distance,
                 current_filter,
                 &info_log_name,
+                semaphore,
             )
             .await;
         }
@@ -495,6 +517,7 @@ async fn live_indexing_mode<M: Middleware + Clone + Send + 'static>(
     reorg_safe_distance: U64,
     mut current_filter: Filter,
     info_log_name: &str,
+    semaphore: Arc<Semaphore>,
 ) {
     let mut last_seen_block = U64::from(0);
     loop {
@@ -503,7 +526,7 @@ async fn live_indexing_mode<M: Middleware + Clone + Send + 'static>(
         // TODO cache get latest block on provider to avoid multiple calls with many contracts
         if let Some(latest_block) = provider.get_block(BlockNumber::Latest).await.unwrap() {
             if last_seen_block == latest_block.number.unwrap() {
-                info!(
+                debug!(
                     "{} - {} - No new blocks to process...",
                     info_log_name,
                     IndexingEventProgressStatus::Live.log()
@@ -523,7 +546,7 @@ async fn live_indexing_mode<M: Middleware + Clone + Send + 'static>(
             // check reorg distance and skip if not safe
             if from_block > safe_block_number {
                 info!(
-                    "{} - {} - not in safe reorg block range yet block: {} >  range: {}",
+                    "{} - {} - not in safe reorg block range yet block: {} > range: {}",
                     info_log_name,
                     IndexingEventProgressStatus::Live.log(),
                     from_block,
@@ -544,7 +567,7 @@ async fn live_indexing_mode<M: Middleware + Clone + Send + 'static>(
                     from_block
                 );
                 info!(
-                    "{} - {} - No events found block {}",
+                    "{} - {} - LogsBloom check - No events found in the block {}",
                     info_log_name,
                     IndexingEventProgressStatus::Live.log(),
                     from_block
@@ -563,59 +586,75 @@ async fn live_indexing_mode<M: Middleware + Clone + Send + 'static>(
                 current_filter
             );
 
-            match provider.get_logs(&current_filter).await {
-                Ok(logs) => {
-                    debug!(
-                        "{} - {} - Live topic_id {}, Logs: {} from {} to {}",
-                        info_log_name,
-                        IndexingEventProgressStatus::Live.log(),
-                        topic_id,
-                        logs.len(),
-                        from_block,
-                        to_block
-                    );
+            let semaphore_client = semaphore.clone();
+            let permit = semaphore_client.acquire_owned().await;
 
-                    debug!(
-                        "{} - {} - Fetched {} event logs - blocks: {} - {}",
-                        info_log_name,
-                        IndexingEventProgressStatus::Live.log(),
-                        logs.len(),
-                        from_block,
-                        to_block
-                    );
-
-                    last_seen_block = to_block;
-
-                    if tx
-                        .send(Ok(FetchLogsStream {
-                            logs: logs.clone(),
-                            from_block,
-                            to_block,
-                        }))
-                        .is_err()
-                    {
-                        error!(
-                            "{} - {} - Failed to send logs to stream consumer!",
+            if let Ok(permit) = permit {
+                match provider.get_logs(&current_filter).await {
+                    Ok(logs) => {
+                        debug!(
+                            "{} - {} - Live topic_id {}, Logs: {} from {} to {}",
                             info_log_name,
-                            IndexingEventProgressStatus::Live.log()
+                            IndexingEventProgressStatus::Live.log(),
+                            topic_id,
+                            logs.len(),
+                            from_block,
+                            to_block
                         );
-                        break;
-                    }
 
-                    if logs.is_empty() {
-                        current_filter = current_filter.from_block(to_block + 1);
-                    } else if let Some(last_log) = logs.last() {
-                        current_filter = current_filter
-                            .from_block(last_log.block_number.unwrap() + U64::from(1));
+                        debug!(
+                            "{} - {} - Fetched {} event logs - blocks: {} - {}",
+                            info_log_name,
+                            IndexingEventProgressStatus::Live.log(),
+                            logs.len(),
+                            from_block,
+                            to_block
+                        );
+
+                        last_seen_block = to_block;
+
+                        if tx
+                            .send(Ok(FetchLogsStream {
+                                logs: logs.clone(),
+                                from_block,
+                                to_block,
+                            }))
+                            .is_err()
+                        {
+                            error!(
+                                "{} - {} - Failed to send logs to stream consumer!",
+                                info_log_name,
+                                IndexingEventProgressStatus::Live.log()
+                            );
+                            drop(permit);
+                            break;
+                        }
+
+                        if logs.is_empty() {
+                            current_filter = current_filter.from_block(to_block + 1);
+                            info!(
+                                "{} - {} - No events found between blocks {} - {}",
+                                info_log_name,
+                                IndexingEventProgressStatus::Live.log(),
+                                from_block,
+                                to_block
+                            );
+                        } else if let Some(last_log) = logs.last() {
+                            current_filter = current_filter
+                                .from_block(last_log.block_number.unwrap() + U64::from(1));
+                        }
+
+                        drop(permit);
                     }
-                }
-                Err(err) => {
-                    error!(
-                        "{} - {} - Error fetching logs: {}",
-                        info_log_name,
-                        IndexingEventProgressStatus::Live.log(),
-                        err
-                    );
+                    Err(err) => {
+                        error!(
+                            "{} - {} - Error fetching logs: {}",
+                            info_log_name,
+                            IndexingEventProgressStatus::Live.log(),
+                            err
+                        );
+                        drop(permit);
+                    }
                 }
             }
         }

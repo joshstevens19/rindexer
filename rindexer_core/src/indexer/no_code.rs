@@ -130,7 +130,7 @@ fn create_network_providers(
 ) -> Result<Vec<CreateNetworkProvider>, RetryClientError> {
     let mut result: Vec<CreateNetworkProvider> = vec![];
     for network in &manifest.networks {
-        let provider = create_retry_client(&network.url)?;
+        let provider = create_retry_client(&network.url, network.compute_units_per_second)?;
         result.push(CreateNetworkProvider {
             network_name: network.name.clone(),
             provider,
