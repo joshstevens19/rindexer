@@ -31,7 +31,7 @@ pub enum ProjectType {
 
 fn deserialize_project_type<'de, D>(deserializer: D) -> Result<ProjectType, D::Error>
 where
-    D: serde::Deserializer<'de>,
+    D: Deserializer<'de>,
 {
     let value: Value = Deserialize::deserialize(deserializer)?;
     match value {
@@ -120,20 +120,18 @@ pub struct ContractDetails {
     factory: Option<FactoryDetails>,
 
     #[serde(
-        rename = "startBlock",
         skip_serializing_if = "Option::is_none",
         deserialize_with = "deserialize_option_u64_from_string"
     )]
     pub start_block: Option<U64>,
 
     #[serde(
-        rename = "endBlock",
         skip_serializing_if = "Option::is_none",
         deserialize_with = "deserialize_option_u64_from_string"
     )]
     pub end_block: Option<U64>,
 
-    #[serde(rename = "pollingEvery", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub polling_every: Option<u64>,
 }
 
@@ -252,16 +250,13 @@ impl Contract {
 pub struct Network {
     pub name: String,
 
-    #[serde(rename = "chainId")]
     pub chain_id: u32,
 
     pub url: String,
 
-    #[serde(rename = "maxBlockRange", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_block_range: Option<u64>,
 
-    // #[serde(rename = "maxConcurrency", skip_serializing_if = "Option::is_none")]
-    // pub max_concurrency: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compute_units_per_second: Option<u64>,
 }

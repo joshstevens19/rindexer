@@ -7,13 +7,12 @@ use crate::api::{start_graphql_server, StartGraphqlServerError};
 use crate::database::postgres::SetupPostgresError;
 use crate::generator::event_callback_registry::EventCallbackRegistry;
 use crate::indexer::no_code::{setup_no_code, SetupNoCodeError};
-use crate::indexer::start::{start_indexing, StartIndexingError, StartIndexingSettings};
+use crate::indexer::start::{start_indexing, StartIndexingError};
 use crate::manifest::yaml::{read_manifest, ProjectType, ReadManifestError};
 use crate::{setup_logger, setup_postgres, GraphQLServerDetails};
 
 pub struct IndexingDetails {
     pub registry: EventCallbackRegistry,
-    pub settings: StartIndexingSettings,
 }
 
 pub struct StartDetails {
@@ -68,13 +67,9 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
                 .map_err(StartRindexerError::SetupPostgresError)?;
         }
 
-        start_indexing(
-            &manifest,
-            indexing_details.registry.complete(),
-            indexing_details.settings,
-        )
-        .await
-        .map_err(StartRindexerError::CouldNotStartIndexing)?;
+        start_indexing(&manifest, indexing_details.registry.complete())
+            .await
+            .map_err(StartRindexerError::CouldNotStartIndexing)?;
     }
 
     Ok(())
@@ -82,7 +77,6 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
 
 pub struct IndexerNoCodeDetails {
     pub enabled: bool,
-    pub settings: Option<StartIndexingSettings>,
 }
 
 pub struct GraphqlNoCodeDetails {

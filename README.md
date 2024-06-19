@@ -13,7 +13,7 @@ checklist v1.0:
 - go through all methods add summaries + refactor if needed
 - look into making the rust handlers abstracted away a bit more with Arc and Box
 - look into setting your own schema for the database using diesel
-- finish the documentation
+- finish the documentation (note about block timestamp)
 - add a getting started guide for rust / no-code
 - look into deployments to make it easy to do
 - unit tests for the project

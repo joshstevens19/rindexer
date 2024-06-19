@@ -21,35 +21,6 @@ use crate::indexer::reorg::reorg_safe_distance_for_chain;
 use crate::manifest::yaml::Manifest;
 use crate::{EthereumSqlTypeWrapper, PostgresClient};
 
-/// Settings for controlling concurrent processing of events.
-pub struct ConcurrentSettings {
-    max_concurrency: usize,
-}
-
-impl Default for ConcurrentSettings {
-    fn default() -> Self {
-        Self {
-            max_concurrency: 100,
-        }
-    }
-}
-
-/// Settings for starting the indexing process.
-pub struct StartIndexingSettings {
-    concurrent: Option<ConcurrentSettings>,
-    // TODO ADD TO YAML FILE
-    execute_in_event_order: bool,
-}
-
-impl Default for StartIndexingSettings {
-    fn default() -> Self {
-        Self {
-            concurrent: Some(ConcurrentSettings::default()),
-            execute_in_event_order: false,
-        }
-    }
-}
-
 struct EventProcessingConfig {
     indexer_name: String,
     contract_name: String,
@@ -89,20 +60,9 @@ pub enum StartIndexingError {
     ProcessEventSequentiallyError(ProcessEventError),
 }
 
-/// Starts the indexing process based on the provided settings and registry.
-///
-/// # Arguments
-///
-/// * `registry` - The event callback registry.
-/// * `settings` - The settings for starting the indexing process.
-///
-/// # Returns
-///
-/// A `Result` indicating success or failure.
 pub async fn start_indexing(
     manifest: &Manifest,
     registry: Arc<EventCallbackRegistry>,
-    settings: StartIndexingSettings,
 ) -> Result<(), StartIndexingError> {
     let start = Instant::now();
 
@@ -120,13 +80,8 @@ pub async fn start_indexing(
     };
     let event_progress_state = IndexingEventsProgressState::monitor(registry.events.clone()).await;
 
-    let semaphore = Arc::new(Semaphore::new(
-        settings
-            .concurrent
-            .map_or(ConcurrentSettings::default().max_concurrency, |c| {
-                c.max_concurrency
-            }),
-    ));
+    // we can bring this into the yaml file later if required
+    let semaphore = Arc::new(Semaphore::new(100));
 
     let mut handles = Vec::new();
 
@@ -211,7 +166,8 @@ pub async fn start_indexing(
                 indexing_distance_from_head,
             };
 
-            if settings.execute_in_event_order {
+            // TODO! FIX
+            if false {
                 process_event(event_processing_config)
                     .await
                     .map_err(StartIndexingError::ProcessEventSequentiallyError)?
