@@ -232,6 +232,9 @@ pub struct Contract {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_events: Option<Vec<String>>,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index_event_in_order: Option<Vec<String>>,
+
     #[serde(default = "default_reorg_safe_distance")]
     pub reorg_safe_distance: bool,
 

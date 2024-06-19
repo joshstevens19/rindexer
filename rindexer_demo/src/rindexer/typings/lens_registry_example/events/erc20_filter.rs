@@ -153,6 +153,14 @@ where
         }
     }
 
+    pub fn index_event_in_order(&self) -> bool {
+        let event_name = self.event_name();
+        match event_name {
+            "Transfer" => true,
+            _ => false,
+        }
+    }
+
     pub fn contract_information(&self) -> Contract {
         Contract {
             name: "ERC20Filter".to_string(),
@@ -172,6 +180,7 @@ where
             )],
             abi: "/Users/joshstevens/code/rindexer/rindexer_demo/abis/erc20-abi.json".to_string(),
             include_events: None,
+            index_event_in_order: None,
             reorg_safe_distance: false,
             generate_csv: true,
         }
@@ -215,6 +224,7 @@ where
     pub fn register(self, registry: &mut EventCallbackRegistry) {
         let topic_id = self.topic_id();
         let event_name = self.event_name();
+        let index_event_in_order = self.index_event_in_order();
         let contract_information = self.contract_information();
         let contract = ContractInformation {
             name: contract_information.name,
@@ -250,6 +260,7 @@ where
         registry.register_event(EventInformation {
             indexer_name: "LensRegistryExample".to_string(),
             event_name: event_name.to_string(),
+            index_event_in_order,
             topic_id: topic_id.to_string(),
             contract,
             callback,

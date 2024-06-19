@@ -203,6 +203,7 @@ pub struct EventInformation {
     pub indexer_name: String,
     pub topic_id: String,
     pub event_name: String,
+    pub index_event_in_order: bool,
     pub contract: ContractInformation,
     pub callback: Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, ()> + Send + Sync>,
 }
@@ -219,6 +220,7 @@ impl Clone for EventInformation {
             indexer_name: self.indexer_name.clone(),
             topic_id: self.topic_id.clone(),
             event_name: self.event_name.clone(),
+            index_event_in_order: self.index_event_in_order,
             contract: self.contract.clone(),
             callback: Arc::clone(&self.callback),
         }

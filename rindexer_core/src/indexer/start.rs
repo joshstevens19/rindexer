@@ -39,7 +39,6 @@ pub struct StartIndexingSettings {
     concurrent: Option<ConcurrentSettings>,
     // TODO ADD TO YAML FILE
     execute_in_event_order: bool,
-    execute_event_logs_in_order: bool,
 }
 
 impl Default for StartIndexingSettings {
@@ -47,7 +46,6 @@ impl Default for StartIndexingSettings {
         Self {
             concurrent: Some(ConcurrentSettings::default()),
             execute_in_event_order: false,
-            execute_event_logs_in_order: false,
         }
     }
 }
@@ -65,7 +63,7 @@ struct EventProcessingConfig {
     registry: Arc<EventCallbackRegistry>,
     progress: Arc<Mutex<IndexingEventsProgressState>>,
     database: Option<Arc<PostgresClient>>,
-    execute_event_logs_in_order: bool,
+    index_event_in_order: bool,
     live_indexing: bool,
     indexing_distance_from_head: U64,
 }
@@ -209,7 +207,7 @@ pub async fn start_indexing(
                 progress: event_progress_state.clone(),
                 database: database.clone(),
                 live_indexing,
-                execute_event_logs_in_order: settings.execute_event_logs_in_order,
+                index_event_in_order: event.index_event_in_order,
                 indexing_distance_from_head,
             };
 
@@ -284,7 +282,7 @@ async fn process_event(
         registry: event_processing_config.registry,
         progress: event_processing_config.progress,
         database: event_processing_config.database,
-        execute_events_logs_in_order: event_processing_config.execute_event_logs_in_order,
+        execute_events_logs_in_order: event_processing_config.index_event_in_order,
         live_indexing: event_processing_config.live_indexing,
         indexing_distance_from_head: event_processing_config.indexing_distance_from_head,
         semaphore: event_processing_config.semaphore,

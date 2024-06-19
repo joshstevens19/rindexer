@@ -438,6 +438,10 @@ pub async fn process_events(
             let event = EventInformation {
                 indexer_name: manifest.name.clone(),
                 event_name: event_info.name.clone(),
+                index_event_in_order: contract
+                    .index_event_in_order
+                    .as_ref()
+                    .map_or(false, |vec| vec.contains(&event_info.name)),
                 topic_id: event_info.topic_id(),
                 contract: contract_information,
                 callback: no_code_callback(Arc::new(NoCodeCallbackParams {

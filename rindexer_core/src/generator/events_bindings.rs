@@ -356,6 +356,27 @@ fn generate_event_names_match_arms_code(event_type_name: &str, event_info: &[Eve
     )
 }
 
+fn generate_index_event_in_order_arms_code(
+    event_info: &[EventInfo],
+    index_event_in_order: &Option<Vec<String>>,
+) -> Code {
+    Code::new(
+        event_info
+            .iter()
+            .map(|info| {
+                format!(
+                    "\"{}\" => {},",
+                    info.name,
+                    index_event_in_order
+                        .as_ref()
+                        .map_or(false, |vec| vec.contains(&info.name)),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
 /// Generates match arms for event registration.
 ///
 /// # Arguments
@@ -545,6 +566,19 @@ fn generate_contract_type_fn_code(contract: &Contract) -> Code {
         "None".to_string()
     };
 
+    let index_event_in_order = if let Some(include_events) = &contract.index_event_in_order {
+        format!(
+            "Some(vec![{}])",
+            include_events
+                .iter()
+                .map(|s| format!("\"{}\".to_string()", s))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    } else {
+        "None".to_string()
+    };
+
     Code::new(format!(
         r#"
         pub fn contract_information(&self) -> Contract {{
@@ -553,6 +587,7 @@ fn generate_contract_type_fn_code(contract: &Contract) -> Code {
                 details: {},
                 abi: "{}".to_string(),
                 include_events: {},
+                index_event_in_order: {},
                 reorg_safe_distance: {},
                 generate_csv: {},
             }}
@@ -562,6 +597,7 @@ fn generate_contract_type_fn_code(contract: &Contract) -> Code {
         details,
         contract.abi,
         include_events_code,
+        index_event_in_order,
         contract.reorg_safe_distance,
         contract.generate_csv
     ))
@@ -930,6 +966,13 @@ fn generate_event_bindings_code(
                 }}
             }}
 
+            pub fn index_event_in_order(&self) -> bool {{
+                let event_name = self.event_name();
+                match event_name {{
+                   {index_event_in_order_match_arms}
+                }}
+            }}
+
             {contract_type_fn}
 
             {build_get_provider_fn}
@@ -947,6 +990,7 @@ fn generate_event_bindings_code(
             pub fn register(self, registry: &mut EventCallbackRegistry) {{
                 let topic_id = self.topic_id();
                 let event_name = self.event_name();
+                let index_event_in_order = self.index_event_in_order();
                 let contract_information = self.contract_information();
                 let contract = ContractInformation {{
                     name: contract_information.name,
@@ -975,6 +1019,7 @@ fn generate_event_bindings_code(
                registry.register_event(EventInformation {{
                     indexer_name: "{indexer_name}".to_string(),
                     event_name: event_name.to_string(),
+                    index_event_in_order,
                     topic_id: topic_id.to_string(),
                     contract,
                     callback,
@@ -1005,6 +1050,8 @@ fn generate_event_bindings_code(
         topic_ids_match_arms = generate_topic_ids_match_arms_code(&event_type_name, &event_info),
         event_names_match_arms =
             generate_event_names_match_arms_code(&event_type_name, &event_info),
+        index_event_in_order_match_arms =
+            generate_index_event_in_order_arms_code(&event_info, &contract.index_event_in_order),
         contract_type_fn = generate_contract_type_fn_code(contract),
         build_get_provider_fn =
             build_get_provider_fn(contract.details.iter().map(|c| c.network.clone()).collect()),
