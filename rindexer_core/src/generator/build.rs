@@ -487,7 +487,6 @@ serde = {{ version = "1.0.194", features = ["derive"] }}
                             indexing_details: if enable_indexer {
                                 Some(IndexingDetails {
                                     registry: register_all_handlers().await,
-                                    settings: Default::default(),
                                 })
                             } else {
                                 None

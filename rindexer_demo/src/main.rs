@@ -47,7 +47,6 @@ async fn main() {
                 indexing_details: if enable_indexer {
                     Some(IndexingDetails {
                         registry: register_all_handlers().await,
-                        settings: Default::default(),
                     })
                 } else {
                     None

@@ -108,10 +108,7 @@ pub async fn setup_no_code(details: StartNoCodeDetails) -> Result<StartDetails, 
 
             Ok(StartDetails {
                 manifest_path: details.manifest_path,
-                indexing_details: Some(IndexingDetails {
-                    registry,
-                    settings: details.indexing_details.settings.unwrap_or_default(),
-                }),
+                indexing_details: Some(IndexingDetails { registry }),
                 graphql_server: details.graphql_details.settings,
             })
         }
