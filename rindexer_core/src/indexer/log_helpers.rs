@@ -50,10 +50,10 @@ pub fn parse_log(event: &Event, log: &Log) -> Option<ParsedLog> {
     //     return log;
     // }
 
-    println!("topics_length: {:?}", topics_length);
-    println!("indexed_inputs_abi_length: {:?}", indexed_inputs_abi_length);
-    println!("event: {:?}", event);
-    println!("log: {:?}", log);
+    // println!("topics_length: {:?}", topics_length);
+    // println!("indexed_inputs_abi_length: {:?}", indexed_inputs_abi_length);
+    // println!("event: {:?}", event);
+    // println!("log: {:?}", log);
 
     // see if value is in data but ABI expects it in topics
     // Log - Transfer (indexed address from, indexed address to, indexed uint256 tokenId)

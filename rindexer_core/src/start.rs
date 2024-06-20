@@ -8,10 +8,8 @@ use crate::api::{start_graphql_server, StartGraphqlServerError};
 use crate::database::postgres::SetupPostgresError;
 use crate::generator::event_callback_registry::EventCallbackRegistry;
 use crate::indexer::no_code::{setup_no_code, SetupNoCodeError};
-use crate::indexer::start::{
-    start_indexing, ContractEventDependencies, DependencyTree, EventDependencies,
-    StartIndexingError,
-};
+use crate::indexer::start::{start_indexing, StartIndexingError};
+use crate::indexer::{ContractEventDependencies, EventDependencies, EventsDependencyTree};
 use crate::manifest::yaml::{read_manifest, ProjectType, ReadManifestError};
 use crate::{setup_logger, setup_postgres, GraphQLServerDetails};
 
@@ -75,7 +73,7 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
         for contract in &manifest.contracts {
             if let Some(dependency) = contract.dependency_events.clone() {
                 let dependency_event_names = dependency.collect_dependency_events();
-                let dependency_tree = DependencyTree::from_dependency_event_tree(dependency);
+                let dependency_tree = EventsDependencyTree::from_dependency_event_tree(dependency);
                 dependencies.push(ContractEventDependencies {
                     contract_name: contract.name.clone(),
                     event_dependencies: EventDependencies {
