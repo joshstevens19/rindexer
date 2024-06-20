@@ -225,8 +225,9 @@ fn retry_with_block_range(
 }
 
 /// Struct to hold the logs fetched in a block range.
-pub struct FetchLogsStream {
+pub struct FetchLogsResult {
     pub logs: Vec<Log>,
+    #[allow(dead_code)]
     pub from_block: U64,
     pub to_block: U64,
 }
@@ -275,7 +276,7 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
     info_log_name: String,
     live_indexing_details: Option<LiveIndexingDetails>,
     semaphore: Arc<Semaphore>,
-) -> impl tokio_stream::Stream<Item = Result<FetchLogsStream, Box<<M as Middleware>::Error>>>
+) -> impl tokio_stream::Stream<Item = Result<FetchLogsResult, Box<<M as Middleware>::Error>>>
        + Send
        + Unpin {
     let (tx, rx) = mpsc::unbounded_channel();
@@ -386,7 +387,7 @@ struct ProcessHistoricLogsStreamResult {
 
 async fn process_historic_logs_stream<M: Middleware + Clone + Send + 'static>(
     provider: &Arc<M>,
-    tx: &mpsc::UnboundedSender<Result<FetchLogsStream, Box<<M as Middleware>::Error>>>,
+    tx: &mpsc::UnboundedSender<Result<FetchLogsResult, Box<<M as Middleware>::Error>>>,
     topic_id: &H256,
     current_filter: Filter,
     max_block_range_limitation: Option<U64>,
@@ -446,7 +447,7 @@ async fn process_historic_logs_stream<M: Middleware + Clone + Send + 'static>(
             );
 
             if tx
-                .send(Ok(FetchLogsStream {
+                .send(Ok(FetchLogsResult {
                     logs: logs.clone(),
                     from_block,
                     to_block,
@@ -572,9 +573,10 @@ async fn process_historic_logs_stream<M: Middleware + Clone + Send + 'static>(
 
 /// Handles live indexing mode, continuously checking for new blocks, ensuring they are
 /// within a safe range, updating the filter, and sending the logs to the provided channel.
+#[allow(clippy::too_many_arguments)]
 async fn live_indexing_stream<M: Middleware + Clone + Send + 'static>(
     provider: &Arc<M>,
-    tx: &mpsc::UnboundedSender<Result<FetchLogsStream, Box<<M as Middleware>::Error>>>,
+    tx: &mpsc::UnboundedSender<Result<FetchLogsResult, Box<<M as Middleware>::Error>>>,
     contract_address: &Option<ValueOrArray<Address>>,
     topic_id: &H256,
     reorg_safe_distance: U64,
@@ -678,7 +680,7 @@ async fn live_indexing_stream<M: Middleware + Clone + Send + 'static>(
                         last_seen_block_number = to_block;
 
                         if tx
-                            .send(Ok(FetchLogsStream {
+                            .send(Ok(FetchLogsResult {
                                 logs: logs.clone(),
                                 from_block,
                                 to_block,
@@ -1071,7 +1073,7 @@ async fn process_events_dependency_tree(
                                 to_block
                             );
 
-                            let fetched_logs = Ok(FetchLogsStream {
+                            let fetched_logs = Ok(FetchLogsResult {
                                 logs: logs.clone(),
                                 from_block,
                                 to_block,
@@ -1295,7 +1297,7 @@ async fn handle_logs_result(
     network_contract: Arc<NetworkContract>,
     database: Option<Arc<PostgresClient>>,
     registry: Arc<EventCallbackRegistry>,
-    result: Result<FetchLogsStream, Box<ProviderError>>,
+    result: Result<FetchLogsResult, Box<ProviderError>>,
 ) -> Result<(), Box<ProviderError>> {
     match result {
         Ok(result) => {

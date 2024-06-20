@@ -12,6 +12,7 @@ pub struct GraphQLServerDetails {
 
 pub struct GraphQLServerSettings {
     port: Option<usize>,
+    #[allow(dead_code)]
     watch: Option<bool>,
 }
 
@@ -33,6 +34,7 @@ impl Default for GraphQLServerSettings {
     }
 }
 
+#[allow(dead_code)]
 pub struct GraphQLServer {
     child: Arc<Mutex<Child>>,
     pid: u32,

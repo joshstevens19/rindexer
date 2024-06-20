@@ -1,2 +1,2 @@
-#![allow(dead_code)]
+#![allow(dead_code, unused)]
 pub mod main;

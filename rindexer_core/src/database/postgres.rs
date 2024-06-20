@@ -1,29 +1,25 @@
 use bb8::{Pool, RunError};
 use bb8_postgres::PostgresConnectionManager;
-use std::{env, str};
-
-// External crates
 use bytes::{Buf, BytesMut};
 use dotenv::dotenv;
 use ethers::abi::Token;
 use ethers::types::{Address, Bytes, H128, H160, H256, H512, U128, U256, U512, U64};
 use futures::pin_mut;
 use rust_decimal::Decimal;
+use std::{env, str};
 use thiserror::Error;
 use tokio_postgres::binary_copy::BinaryCopyInWriter;
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type as PgType, Type};
 use tokio_postgres::{
-    CopyInSink, Error as PgError, Error, NoTls, Row, Statement, ToStatement,
-    Transaction as PgTransaction,
+    CopyInSink, Error as PgError, NoTls, Row, Statement, ToStatement, Transaction as PgTransaction,
 };
 use tracing::{debug, error, info};
 
+use crate::generator::build::{contract_name_to_filter_name, is_filter};
 use crate::generator::{
     extract_event_names_and_signatures_from_abi, generate_abi_name_properties, read_abi_items,
     ABIInput, EventInfo, GenerateAbiPropertiesType, ParamTypeError, ReadAbiError,
 };
-// Internal modules
-use crate::generator::build::{contract_name_to_filter_name, is_filter};
 use crate::helpers::camel_to_snake;
 use crate::indexer::Indexer;
 use crate::manifest::yaml::{Manifest, ProjectType};
@@ -126,7 +122,7 @@ impl PostgresClient {
         params: &[&(dyn ToSql + Sync)],
     ) -> Result<u64, PostgresError>
     where
-        T: ?Sized + tokio_postgres::ToStatement,
+        T: ?Sized + ToStatement,
     {
         let conn = self
             .pool
@@ -175,7 +171,7 @@ impl PostgresClient {
         params: &[&(dyn ToSql + Sync)],
     ) -> Result<Vec<Row>, PostgresError>
     where
-        T: ?Sized + tokio_postgres::ToStatement,
+        T: ?Sized + ToStatement,
     {
         let conn = self
             .pool
@@ -195,7 +191,7 @@ impl PostgresClient {
         params: &[&(dyn ToSql + Sync)],
     ) -> Result<Row, PostgresError>
     where
-        T: ?Sized + tokio_postgres::ToStatement,
+        T: ?Sized + ToStatement,
     {
         let conn = self
             .pool
@@ -215,7 +211,7 @@ impl PostgresClient {
         params: &[&(dyn ToSql + Sync)],
     ) -> Result<Option<Row>, PostgresError>
     where
-        T: ?Sized + tokio_postgres::ToStatement,
+        T: ?Sized + ToStatement,
     {
         let conn = self
             .pool
@@ -235,7 +231,7 @@ impl PostgresClient {
         params_list: Vec<Vec<Box<dyn ToSql + Send + Sync>>>,
     ) -> Result<(), PostgresError>
     where
-        T: ?Sized + tokio_postgres::ToStatement,
+        T: ?Sized + ToStatement,
     {
         let mut conn = self
             .pool
