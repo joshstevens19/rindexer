@@ -785,7 +785,7 @@ pub enum ProcessEventsWithDependenciesError {
     EventConfigNotFound,
 
     #[error("Could not run all the logs processes {0}")]
-    JoinError(JoinError)
+    JoinError(JoinError),
 }
 
 async fn process_events_with_dependencies(

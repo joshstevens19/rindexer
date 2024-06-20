@@ -58,7 +58,6 @@ where
     serializer.serialize_str(string_value)
 }
 
-
 fn deserialize_option_u64_from_string<'de, D>(deserializer: D) -> Result<Option<U64>, D::Error>
 where
     D: Deserializer<'de>,
@@ -248,9 +247,9 @@ impl DependencyEventTree {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Contract {
     pub name: String,
-    
+
     pub details: Vec<ContractDetails>,
-    
+
     pub abi: String,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -386,10 +385,10 @@ pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError>
     //     substitute_env_variables(&contents)?;
     file.read_to_string(&mut contents)
         .map_err(ReadManifestError::CouldNotReadFile)?;
-    
+
     let manifest: Manifest =
         serde_yaml::from_str(&contents).map_err(ReadManifestError::CouldNotParseManifest)?;
-    
+
     Ok(manifest)
 }
 

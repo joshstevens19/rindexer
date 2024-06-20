@@ -12,6 +12,8 @@ start_graphql_base_paint:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- start --path /Users/joshstevens/code/rindexer/examples/base_paint graphql
 start_indexer_prod:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- start --path /Users/joshstevens/code/rindexer/examples/rindexer_demo_cli indexer
+start_indexer_lens_mirrors:
+	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- start --path /Users/joshstevens/code/rindexer/examples/lens_mirrors indexer
 start_graphql:
 	cargo run -- start --path /Users/joshstevens/code/rindexer/examples/rindexer_demo_cli graphql
 codegen:

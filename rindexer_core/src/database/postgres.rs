@@ -2,12 +2,11 @@ use bb8::{Pool, RunError};
 use bb8_postgres::PostgresConnectionManager;
 use bytes::{Buf, BytesMut};
 use dotenv::dotenv;
-use ethers::abi::Token;
+use ethers::abi::{LogParam, Token};
 use ethers::types::{Address, Bytes, H128, H160, H256, H512, U128, U256, U512, U64};
 use futures::pin_mut;
 use rust_decimal::Decimal;
 use std::{env, str};
-use thiserror::Error;
 use tokio_postgres::binary_copy::BinaryCopyInWriter;
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type as PgType, Type};
 use tokio_postgres::{
@@ -60,7 +59,7 @@ pub struct PostgresClient {
     pool: Pool<PostgresConnectionManager<NoTls>>,
 }
 
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum PostgresConnectionError {
     #[error("The database connection string is wrong please check your environment: {0}")]
     DatabaseConnectionConfigWrong(env::VarError),
@@ -69,7 +68,7 @@ pub enum PostgresConnectionError {
     ConnectionPoolError(tokio_postgres::Error),
 }
 
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum PostgresError {
     #[error("PgError {0}")]
     PgError(PgError),
@@ -264,7 +263,7 @@ impl PostgresClient {
     }
 }
 
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum SetupPostgresError {
     #[error("{0}")]
     PostgresConnection(PostgresConnectionError),
@@ -699,16 +698,55 @@ pub fn solidity_type_to_ethereum_sql_type_wrapper(
         _ => None,
     }
 }
-pub fn map_log_token_to_ethereum_wrapper(token: &Token) -> Option<EthereumSqlTypeWrapper> {
+
+pub fn map_log_params_to_ethereum_wrapper(params: &Vec<LogParam>) -> Vec<EthereumSqlTypeWrapper> {
+    let mut wrappers = vec![];
+
+    for param in params {
+        match &param.value {
+            Token::Tuple(tuple) => {
+                wrappers.extend(process_tuple(tuple));
+            }
+            _ => {
+                wrappers.push(map_log_token_to_ethereum_wrapper(&param.value));
+            }
+        }
+    }
+
+    wrappers
+}
+
+fn process_tuple(tokens: &Vec<Token>) -> Vec<EthereumSqlTypeWrapper> {
+    let mut wrappers = vec![];
+
+    for token in tokens {
+        match token {
+            Token::Tuple(tuple) => {
+                wrappers.extend(process_tuple(tuple));
+            }
+            _ => {
+                wrappers.push(map_log_token_to_ethereum_wrapper(token));
+            }
+        }
+    }
+
+    wrappers
+}
+
+fn map_log_token_to_ethereum_wrapper(token: &Token) -> EthereumSqlTypeWrapper {
     match &token {
-        Token::Address(address) => Some(EthereumSqlTypeWrapper::Address(*address)),
-        Token::Int(uint) | Token::Uint(uint) => Some(EthereumSqlTypeWrapper::U256(*uint)),
-        Token::Bool(b) => Some(EthereumSqlTypeWrapper::Bool(*b)),
-        Token::String(s) => Some(EthereumSqlTypeWrapper::String(s.clone())),
+        Token::Address(address) => EthereumSqlTypeWrapper::Address(*address),
+        Token::Int(uint) | Token::Uint(uint) => EthereumSqlTypeWrapper::U256(*uint),
+        Token::Bool(b) => EthereumSqlTypeWrapper::Bool(*b),
+        Token::String(s) => EthereumSqlTypeWrapper::String(s.clone()),
         Token::FixedBytes(bytes) | Token::Bytes(bytes) => {
-            Some(EthereumSqlTypeWrapper::Bytes(Bytes::from(bytes.clone())))
+            EthereumSqlTypeWrapper::Bytes(Bytes::from(bytes.clone()))
         }
         Token::FixedArray(tokens) | Token::Array(tokens) => {
+            if tokens.is_empty() {
+                return EthereumSqlTypeWrapper::VecString(vec![]);
+            }
+
             // events arrays can only be one type so get it from the first one
             let token_type = tokens.first().unwrap();
             match token_type {
@@ -720,7 +758,7 @@ pub fn map_log_token_to_ethereum_wrapper(token: &Token) -> Option<EthereumSqlTyp
                         }
                     }
 
-                    Some(EthereumSqlTypeWrapper::VecAddress(vec))
+                    EthereumSqlTypeWrapper::VecAddress(vec)
                 }
                 Token::FixedBytes(_) | Token::Bytes(_) => {
                     let mut vec: Vec<Bytes> = vec![];
@@ -730,7 +768,7 @@ pub fn map_log_token_to_ethereum_wrapper(token: &Token) -> Option<EthereumSqlTyp
                         }
                     }
 
-                    Some(EthereumSqlTypeWrapper::VecBytes(vec))
+                    EthereumSqlTypeWrapper::VecBytes(vec)
                 }
                 Token::Int(_) | Token::Uint(_) => {
                     let mut vec: Vec<U256> = vec![];
@@ -740,7 +778,7 @@ pub fn map_log_token_to_ethereum_wrapper(token: &Token) -> Option<EthereumSqlTyp
                         }
                     }
 
-                    Some(EthereumSqlTypeWrapper::VecU256(vec))
+                    EthereumSqlTypeWrapper::VecU256(vec)
                 }
                 Token::Bool(_) => {
                     let mut vec: Vec<bool> = vec![];
@@ -750,7 +788,7 @@ pub fn map_log_token_to_ethereum_wrapper(token: &Token) -> Option<EthereumSqlTyp
                         }
                     }
 
-                    Some(EthereumSqlTypeWrapper::VecBool(vec))
+                    EthereumSqlTypeWrapper::VecBool(vec)
                 }
                 Token::String(_) => {
                     let mut vec: Vec<String> = vec![];
@@ -760,20 +798,19 @@ pub fn map_log_token_to_ethereum_wrapper(token: &Token) -> Option<EthereumSqlTyp
                         }
                     }
 
-                    Some(EthereumSqlTypeWrapper::VecString(vec))
+                    EthereumSqlTypeWrapper::VecString(vec)
                 }
                 Token::FixedArray(_) | Token::Array(_) => {
                     unreachable!("Nested arrays are not supported by the EVM")
                 }
                 Token::Tuple(_) => {
                     // TODO!
-                    panic!("Tuple not supported yet")
+                    panic!("Array tuple not supported yet - please raise issue in github with ABI to recreate")
                 }
             }
         }
         Token::Tuple(_tuple) => {
-            // TODO!
-            panic!("Tuple not supported yet")
+            panic!("You should not be calling a tuple type in this function!")
         }
     }
 }
