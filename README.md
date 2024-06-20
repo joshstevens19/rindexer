@@ -8,15 +8,13 @@ eth_getLogs - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60add
 
 checklist v1.0:
 - fix TODOs
-- look into making the rust handlers abstracted away a bit more with Arc and Box
+- look into making the rust handlers abstracted away a bit more with Arc and Box + look at doing the bulk insert + copy route
 - look into setting your own schema for the database using diesel
 - finish the documentation (note about block timestamp)
 - add a getting started guide for rust / no-code
 - look into deployments to make it easy to do
-- unit tests for the project
 
 bugs:
-- not having startBlock or endBlock throws and error on manifest
 - same start and end block doesn't index the data at all
 
 nice to have:
@@ -27,6 +25,7 @@ nice to have:
   - emit the log through the same event register as the event defined in the manifest
 
 future features:
+- unit tests for the project
 - block timestamp indexing
 - look into migrating to alloy from ethers
 - investigate handle advanced top of head reorgs process

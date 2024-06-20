@@ -58,6 +58,7 @@ where
     serializer.serialize_str(string_value)
 }
 
+
 fn deserialize_option_u64_from_string<'de, D>(deserializer: D) -> Result<Option<U64>, D::Error>
 where
     D: Deserializer<'de>,
@@ -75,10 +76,10 @@ where
 pub struct Manifest {
     pub name: String,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repository: Option<String>,
 
     #[serde(deserialize_with = "deserialize_project_type")]
@@ -109,28 +110,30 @@ impl Manifest {
 pub struct ContractDetails {
     pub network: String,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     address: Option<String>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     filter: Option<FilterDetails>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     factory: Option<FactoryDetails>,
 
     #[serde(
+        default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "deserialize_option_u64_from_string"
     )]
     pub start_block: Option<U64>,
 
     #[serde(
+        default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "deserialize_option_u64_from_string"
     )]
     pub end_block: Option<U64>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub polling_every: Option<u64>,
 }
 
@@ -245,16 +248,18 @@ impl DependencyEventTree {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Contract {
     pub name: String,
+    
     pub details: Vec<ContractDetails>,
+    
     pub abi: String,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_events: Option<Vec<String>>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index_event_in_order: Option<Vec<String>>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dependency_events: Option<DependencyEventTree>,
 
     #[serde(default = "default_reorg_safe_distance")]
@@ -278,10 +283,10 @@ pub struct Network {
 
     pub url: String,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_block_range: Option<u64>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compute_units_per_second: Option<u64>,
 }
 
@@ -351,6 +356,7 @@ pub struct Global {
     pub contracts: Option<Vec<Contract>>,
 }
 
+// TODO: make this work
 fn substitute_env_variables(contents: &str) -> Result<String, regex::Error> {
     let re = Regex::new(r"\$\{([^}]+)}")?;
     let result = re.replace_all(contents, |caps: &regex::Captures| {
@@ -380,9 +386,10 @@ pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError>
     //     substitute_env_variables(&contents)?;
     file.read_to_string(&mut contents)
         .map_err(ReadManifestError::CouldNotReadFile)?;
-
+    
     let manifest: Manifest =
         serde_yaml::from_str(&contents).map_err(ReadManifestError::CouldNotParseManifest)?;
+    
     Ok(manifest)
 }
 

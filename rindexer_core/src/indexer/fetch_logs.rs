@@ -783,6 +783,9 @@ pub enum ProcessEventsWithDependenciesError {
 
     #[error("Event config not found")]
     EventConfigNotFound,
+
+    #[error("Could not run all the logs processes {0}")]
+    JoinError(JoinError)
 }
 
 async fn process_events_with_dependencies(
@@ -869,8 +872,8 @@ async fn process_events_dependency_tree(
         let results = join_all(tasks).await;
         for result in results {
             if let Err(e) = result {
-                // TODO! handle
-                eprintln!("Error processing dependency: {:?}", e);
+                error!("Error processing logs: {:?}", e);
+                return Err(ProcessEventsWithDependenciesError::JoinError(e));
             }
         }
 

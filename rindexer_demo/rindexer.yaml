@@ -8,7 +8,6 @@ contracts:
         - address: 0xD4F2F33680FCCb36748FA9831851643781608844
           network: polygon
           startBlock: 56399431
-          ## TODO SORT OUT END BLOCK
           endBlock: 56399432
   # ADD COMMENT EXPLAINING ABOUT rindexer download-abi
       abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
@@ -40,9 +39,7 @@ contracts:
             indexed_1:
               - 0x4A1a2197f307222cD67A1762D9A352F64558d9Be
           network: polygon
-          ## TODO SORT OUT END BLOCK
           startBlock: 56399431
-          ## TODO SORT OUT END BLOCK
           endBlock: 56399432
       abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/erc20-abi.json
       generate_csv: true
@@ -62,9 +59,7 @@ global:
       details:
         - address: '0x2E645469f354BB4F5c8a05B3b30A929361cf77eC'
           network: polygon
-          ## TODO SORT OUT END BLOCK
           startBlock: 56399431
-          ## TODO SORT OUT END BLOCK
           endBlock: 56399432
       abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
 storage:

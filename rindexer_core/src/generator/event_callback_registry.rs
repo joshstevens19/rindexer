@@ -16,6 +16,12 @@ use tracing::error;
 
 pub type Decoder = Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync>;
 
+pub fn noop_decoder() -> Decoder {
+    Arc::new(move |_topics: Vec<H256>, _data: Bytes| {
+        Arc::new(String::new()) as Arc<dyn Any + Send + Sync>
+    }) as Decoder
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FactoryDetails {
     pub address: String,
