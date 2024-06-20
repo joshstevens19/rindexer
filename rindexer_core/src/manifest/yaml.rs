@@ -1,5 +1,5 @@
 use ethers::types::U64;
-use regex::Regex;
+use regex::{Captures, Regex};
 use std::env;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -295,7 +295,7 @@ fn default_disable_create_tables() -> bool {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PostgresConnectionDetails {
-    pub database_url: String,
+    pub enabled: bool,
     #[serde(default = "default_disable_create_tables")]
     pub disable_create_tables: bool,
 }
@@ -319,7 +319,10 @@ pub struct Storage {
 
 impl Storage {
     pub fn postgres_enabled(&self) -> bool {
-        self.postgres.is_some()
+        match &self.postgres {
+            Some(details) => details.enabled,
+            None => false,
+        }
     }
 
     pub fn postgres_disable_create_tables(&self) -> bool {
@@ -355,14 +358,18 @@ pub struct Global {
     pub contracts: Option<Vec<Contract>>,
 }
 
-// TODO: make this work
 fn substitute_env_variables(contents: &str) -> Result<String, regex::Error> {
-    let re = Regex::new(r"\$\{([^}]+)}")?;
-    let result = re.replace_all(contents, |caps: &regex::Captures| {
+    let re = Regex::new(r"\$<([^>]+)>")?;
+    let result = re.replace_all(contents, |caps: &Captures| {
         let var_name = &caps[1];
-        env::var(var_name).unwrap_or_else(|_| var_name.to_string())
+        match env::var(var_name) {
+            Ok(val) => val,
+            Err(_) => {
+                panic!("Environment variable {} not found", var_name)
+            }
+        }
     });
-    Ok(result.to_string())
+    Ok(result.into_owned())
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -375,16 +382,20 @@ pub enum ReadManifestError {
 
     #[error("Could not parse manifest: {0}")]
     CouldNotParseManifest(serde_yaml::Error),
+
+    #[error("Could not substitute env variables: {0}")]
+    CouldNotSubstituteEnvVariables(regex::Error),
 }
 
 pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError> {
     let mut file = File::open(file_path).map_err(ReadManifestError::CouldNotOpenFile)?;
     let mut contents = String::new();
-    // rewrite the env variables
-    // let mut substituted_contents =
-    //     substitute_env_variables(&contents)?;
+    
     file.read_to_string(&mut contents)
         .map_err(ReadManifestError::CouldNotReadFile)?;
+
+    contents = substitute_env_variables(&contents)
+        .map_err(ReadManifestError::CouldNotSubstituteEnvVariables)?;
 
     let manifest: Manifest =
         serde_yaml::from_str(&contents).map_err(ReadManifestError::CouldNotParseManifest)?;
