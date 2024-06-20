@@ -866,7 +866,6 @@ async fn process_events_dependency_tree(
             tasks.push(task);
         }
 
-        // Await all tasks to complete
         let results = join_all(tasks).await;
         for result in results {
             if let Err(e) = result {
