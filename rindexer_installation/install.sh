@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -eo pipefail
 
-# Define base directories and default download URL
 BASE_DIR="${XDG_CONFIG_HOME:-$HOME}"
 RINDEXER_DIR="${RINDEXER_DIR:-"$BASE_DIR/.rindexer"}"
 RINDEXER_BIN_DIR="$RINDEXER_DIR/bin"
@@ -72,7 +71,7 @@ EOF
 
 chmod +x "$RINDEXERUP_PATH"
 
-# Create the rindexerdown script
+# rindexerdown
 cat <<EOF > "$RINDEXERDOWN_PATH"
 #!/usr/bin/env bash
 set -eo pipefail

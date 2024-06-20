@@ -49,16 +49,6 @@ pub enum StartGraphqlServerError {
     GraphQLServerStartupError(String),
 }
 
-/// Starts the GraphQL server with the given settings.
-///
-/// # Arguments
-///
-/// * `indexers` - A slice of `Indexer` structs representing the schemas to be indexed.
-/// * `settings` - The settings for configuring the server.
-///
-/// # Returns
-///
-/// Returns a `Result` with the `GraphQLServer` on success, or an `StartGraphqlServerError` on failure.
 pub fn start_graphql_server(
     indexer: &Indexer,
     settings: GraphQLServerSettings,
@@ -133,15 +123,6 @@ pub fn start_graphql_server(
     })
 }
 
-/// Kills the process tree for the given PID.
-///
-/// # Arguments
-///
-/// * `pid` - The process ID of the root process to kill.
-///
-/// # Returns
-///
-/// Returns a `Result` indicating success or an error message on failure.
 fn kill_process_tree(pid: u32) -> Result<(), String> {
     if cfg!(target_os = "windows") {
         Command::new("taskkill")

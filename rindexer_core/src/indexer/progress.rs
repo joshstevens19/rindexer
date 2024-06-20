@@ -7,7 +7,6 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::info;
 
-/// Enum representing the progress status of an indexing event.
 #[derive(Clone, Debug, Hash)]
 pub enum IndexingEventProgressStatus {
     Syncing,
@@ -17,7 +16,6 @@ pub enum IndexingEventProgressStatus {
 }
 
 impl IndexingEventProgressStatus {
-    /// Returns the string representation of the progress status.
     fn as_str(&self) -> &str {
         match self {
             Self::Syncing => "SYNCING",
@@ -32,7 +30,6 @@ impl IndexingEventProgressStatus {
     }
 }
 
-/// Struct representing the progress of an indexing event.
 #[derive(Clone, Debug)]
 pub struct IndexingEventProgress {
     pub id: String,
@@ -62,7 +59,6 @@ impl Hash for IndexingEventProgress {
 }
 
 impl IndexingEventProgress {
-    /// Creates a new `IndexingEventProgress` with a status of `Syncing`.
     #[allow(clippy::too_many_arguments)]
     fn running(
         id: String,
@@ -89,21 +85,11 @@ impl IndexingEventProgress {
     }
 }
 
-/// Struct representing the state of indexing events progress.
 pub struct IndexingEventsProgressState {
     pub events: Vec<IndexingEventProgress>,
 }
 
 impl IndexingEventsProgressState {
-    /// Monitors the progress of indexing events and updates the state.
-    ///
-    /// # Arguments
-    ///
-    /// * `event_information` - A vector of `EventInformation`.
-    ///
-    /// # Returns
-    ///
-    /// An `Arc<Mutex<IndexingEventsProgressState>>` representing the shared state.
     pub async fn monitor(
         event_information: Vec<EventInformation>,
     ) -> Arc<Mutex<IndexingEventsProgressState>> {
@@ -134,12 +120,6 @@ impl IndexingEventsProgressState {
         Arc::new(Mutex::new(Self { events }))
     }
 
-    /// Updates the last synced block for a given event.
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - The ID of the event.
-    /// * `new_last_synced_block` - The new last synced block number.
     pub fn update_last_synced_block(&mut self, id: &str, new_last_synced_block: U64) {
         for event in &mut self.events {
             if event.id == id {

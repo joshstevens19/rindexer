@@ -30,14 +30,6 @@ use crate::types::code::Code;
 //     env::var("DATABASE_USER")
 // }
 
-/// Constructs a PostgresSQL connection string using environment variables.
-///
-/// This function reads database connection details from environment variables
-/// and constructs a connection string in the format required by PostgresSQL.
-///
-/// # Returns
-///
-/// A `Result` containing the connection string on success, or an `env::VarError` on failure.
 pub fn connection_string() -> Result<String, env::VarError> {
     dotenv().ok();
     let connection = env::var("DATABASE_URL")?;
@@ -308,21 +300,6 @@ pub async fn setup_postgres(manifest: &Manifest) -> Result<PostgresClient, Setup
     Ok(client)
 }
 
-/// Converts a Solidity ABI type to a corresponding SQL data type.
-///
-/// This function maps various Solidity types to their appropriate SQL types.
-/// If the Solidity type is an array, the corresponding SQL type will also be an array.
-///
-/// # Arguments
-///
-/// * `abi_type` - A string slice that holds the Solidity ABI type.
-///
-/// # Returns
-///
-/// A `String` representing the corresponding SQL data type.
-///
-/// # Panics
-///
 pub fn solidity_type_to_db_type(abi_type: &str) -> String {
     let is_array = abi_type.ends_with("[]");
     let base_type = abi_type.trim_end_matches("[]");
@@ -347,16 +324,7 @@ pub fn solidity_type_to_db_type(abi_type: &str) -> String {
     }
 }
 
-/// Generates a vector of strings based on ABI input properties and a specified property type.
-///
-/// # Arguments
-///
-/// * `inputs` - A slice of `ABIInput` containing the ABI input details.
-/// * `property_type` - The type of property generation (e.g., with data types or names only).
-///
-/// # Returns
-///
-/// A `Vec<String>` containing the generated properties as strings.
+/// Generates an array of strings based on ABI input properties and a specified property type.
 fn generate_columns(inputs: &[ABIInput], property_type: &GenerateAbiPropertiesType) -> Vec<String> {
     generate_abi_name_properties(inputs, property_type, None)
         .iter()
@@ -364,42 +332,17 @@ fn generate_columns(inputs: &[ABIInput], property_type: &GenerateAbiPropertiesTy
         .collect()
 }
 
-/// Generates a vector of columns with data types based on ABI input properties.
-///
-/// # Arguments
-///
-/// * `inputs` - A slice of `ABIInput` containing the ABI input details.
-///
-/// # Returns
-///
-/// A `Vec<String>` containing the column definitions with data types.
+/// Generates an array of columns with data types based on ABI input properties.
 pub fn generate_columns_with_data_types(inputs: &[ABIInput]) -> Vec<String> {
     generate_columns(inputs, &GenerateAbiPropertiesType::PostgresWithDataTypes)
 }
 
-/// Generates a vector of column names based on ABI input properties.
-///
-/// # Arguments
-///
-/// * `inputs` - A slice of `ABIInput` containing the ABI input details.
-///
-/// # Returns
-///
-/// A `Vec<String>` containing the column names.
+/// Generates an array of column names based on ABI input properties.
 pub fn generate_columns_names_only(inputs: &[ABIInput]) -> Vec<String> {
     generate_columns(inputs, &GenerateAbiPropertiesType::PostgresColumnsNamesOnly)
 }
 
 /// Generates SQL queries to create tables based on provided event information.
-///
-/// # Arguments
-///
-/// * `abi_inputs` - A slice of `EventInfo` containing the event details.
-/// * `schema_name` - The name of the database schema.
-///
-/// # Returns
-///
-/// A `String` containing the SQL queries to create the tables.
 fn generate_event_table_sql(abi_inputs: &[EventInfo], schema_name: &str) -> String {
     abi_inputs
         .iter()
@@ -425,19 +368,6 @@ fn generate_event_table_sql(abi_inputs: &[EventInfo], schema_name: &str) -> Stri
 }
 
 /// Generates SQL queries to create internal event tables and insert initial data.
-///
-/// This function creates SQL tables to track the last synced block for each event on different networks.
-/// It constructs a table for each event and inserts an initial record for each network.
-///
-/// # Arguments
-///
-/// * `abi_inputs` - A slice of `EventInfo` containing the event details.
-/// * `schema_name` - The name of the schema.
-/// * `networks` - A vector of strings representing the network names.
-///
-/// # Returns
-///
-/// A `String` containing the SQL queries to create the tables and insert initial data.
 fn generate_internal_event_table_sql(
     abi_inputs: &[EventInfo],
     schema_name: &str,
@@ -486,13 +416,6 @@ pub enum CreateTablesForIndexerSqlError {
 }
 
 /// Generates SQL queries to create tables and schemas for the given indexer.
-///
-/// This function constructs SQL queries to create the necessary schemas and tables based on the provided indexer configuration.
-///
-/// # Arguments
-///
-/// * `indexer` - A reference to the `Indexer` containing the configuration details.
-///
 pub fn create_tables_for_indexer_sql(
     indexer: &Indexer,
 ) -> Result<Code, CreateTablesForIndexerSqlError> {
@@ -542,16 +465,9 @@ pub fn drop_tables_for_indexer_sql(indexer: &Indexer) -> Code {
 
 /// Generates a SQL VALUES clause with injected parameters.
 ///
-/// This function constructs a VALUES clause for a SQL statement with a specified number of
+/// Constructs a VALUES clause for a SQL statement with a specified number of
 /// parameters, formatted as `$1, $2, ..., $count`.
 ///
-/// # Arguments
-///
-/// * `count` - The number of parameters to generate.
-///
-/// # Returns
-///
-/// A `String` containing the SQL VALUES clause with the injected parameters.
 pub fn generate_injected_param(count: usize) -> String {
     let params = (1..=count)
         .map(|i| format!("${}", i))

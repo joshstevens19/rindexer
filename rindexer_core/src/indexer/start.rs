@@ -243,7 +243,7 @@ pub async fn start_indexing(
     let results = try_join_all(handles)
         .await
         .map_err(StartIndexingError::CouldNotRunAllIndexHandlersJoin)?;
-    // Handle the results
+
     for result in results {
         match result {
             Ok(()) => {}

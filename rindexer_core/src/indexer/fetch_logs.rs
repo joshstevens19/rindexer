@@ -82,7 +82,6 @@ pub struct ContractEventsConfig {
     pub events_config: Vec<EventProcessingConfig>,
 }
 
-/// Struct to hold the result of retrying with a new block range.
 #[derive(Debug)]
 struct RetryWithBlockRangeResult {
     from: BlockNumber,
@@ -95,17 +94,6 @@ struct RetryWithBlockRangeResult {
 }
 
 /// Attempts to retry with a new block range based on the error message.
-/// This function parses the error message to extract a suggested block range for retrying the request.
-///
-/// # Arguments
-///
-/// * `error` - The JSON-RPC error received.
-/// * `from_block` - The starting block number of the current request.
-/// * `to_block` - The ending block number of the current request.
-///
-/// # Returns
-///
-/// An `Option<RetryWithBlockRangeResult>` with the new block range to retry, or `None` if no suggestion is found.
 fn retry_with_block_range(
     error: &JsonRpcError,
     from_block: U64,
@@ -224,7 +212,6 @@ fn retry_with_block_range(
     None
 }
 
-/// Struct to hold the logs fetched in a block range.
 pub struct FetchLogsResult {
     pub logs: Vec<Log>,
     #[allow(dead_code)]
@@ -232,37 +219,16 @@ pub struct FetchLogsResult {
     pub to_block: U64,
 }
 
-/// Struct to hold details for live indexing.
 pub struct LiveIndexingDetails {
     pub indexing_distance_from_head: U64,
 }
 
-/// Checks if a contract address is present in the logs bloom filter.
-///
-/// # Arguments
-///
-/// * `contract_address` - The contract address to check.
-/// * `logs_bloom` - The logs bloom filter to match against.
-///
-/// # Returns
-///
-/// `true` if the contract address is in the bloom filter, otherwise `false`.
 fn contract_in_bloom(contract_address: Address, logs_bloom: Bloom) -> bool {
     let address_filter =
         FilteredParams::address_filter(&Some(ValueOrArray::Value(contract_address)));
     FilteredParams::matches_address(logs_bloom, &address_filter)
 }
 
-/// Checks if a topic ID is present in the logs bloom filter.
-///
-/// # Arguments
-///
-/// * `topic_id` - The topic ID to check.
-/// * `logs_bloom` - The logs bloom filter to match against.
-///
-/// # Returns
-///
-/// `true` if the topic ID is in the bloom filter, otherwise `false`.
 fn topic_in_bloom(topic_id: H256, logs_bloom: Bloom) -> bool {
     let topic_filter =
         FilteredParams::topics_filter(&Some(vec![ValueOrArray::Value(Some(topic_id))]));
@@ -729,13 +695,6 @@ async fn live_indexing_stream<M: Middleware + Clone + Send + 'static>(
 
 /// Checks if a given block is relevant by examining the bloom filter for the contract
 /// address and topic ID. Returns true if the block contains relevant logs, false otherwise.
-///
-/// # Arguments
-///
-/// * `contract_address` - The contract address to check.
-/// * `topic_id` - The topic ID to check.
-/// * `latest_block` - The latest block containing the logs bloom filter.
-///
 fn is_relevant_block(
     contract_address: &Option<ValueOrArray<Address>>,
     topic_id: &H256,
@@ -911,7 +870,7 @@ async fn process_events_dependency_tree(
         let results = join_all(tasks).await;
         for result in results {
             if let Err(e) = result {
-                // Handle individual task errors if needed
+                // TODO! handle
                 eprintln!("Error processing dependency: {:?}", e);
             }
         }
@@ -1221,15 +1180,6 @@ pub struct ProcessLogsParams {
     semaphore: Arc<Semaphore>,
 }
 
-/// Processes logs based on the given parameters.
-///
-/// # Arguments
-///
-/// * `params` - The parameters for processing logs.
-///
-/// # Returns
-///
-/// A `Result` indicating success or failure.
 async fn process_logs(params: ProcessLogsParams) -> Result<(), Box<ProviderError>> {
     let provider = Arc::new(params.network_contract.provider.clone());
     let mut logs_stream = fetch_logs_stream(
@@ -1269,23 +1219,6 @@ async fn process_logs(params: ProcessLogsParams) -> Result<(), Box<ProviderError
     Ok(())
 }
 
-/// Handles the result of fetching logs.
-///
-/// # Arguments
-///
-/// * `indexer_name` - The name of the indexer.
-/// * `event_name` - The name of the event.
-/// * `topic_id` - The ID of the topic.
-/// * `execute_events_logs_in_order` - Whether to execute logs in order.
-/// * `progress` - The progress state.
-/// * `network_contract` - The network contract.
-/// * `database` - The database client.
-/// * `registry` - The event callback registry.
-/// * `result` - The result of fetching logs.
-///
-/// # Returns
-///
-/// A `Result` indicating success or failure.
 #[allow(clippy::too_many_arguments)]
 async fn handle_logs_result(
     indexer_name: String,
@@ -1351,18 +1284,6 @@ async fn handle_logs_result(
 }
 
 /// Retrieves the last synced block number from the database.
-///
-/// # Arguments
-///
-/// * `database` - The database client.
-/// * `indexer_name` - The name of the indexer.
-/// * `contract_name` - The name of the contract.
-/// * `event_name` - The name of the event.
-/// * `network` - The network.
-///
-/// # Returns
-///
-/// An `Option` containing the last synced block number, if available.
 pub async fn get_last_synced_block_number(
     database: Option<Arc<PostgresClient>>,
     indexer_name: &str,
@@ -1397,16 +1318,7 @@ pub async fn get_last_synced_block_number(
     }
 }
 
-/// Updates the progress and the last synced block number.
-///
-/// # Arguments
-///
-/// * `indexer_name` - The name of the indexer.
-/// * `event_name` - The name of the event.
-/// * `progress` - The progress state.
-/// * `network_contract` - The network contract.
-/// * `database` - The database client.
-/// * `to_block` - The block number to update to.
+/// Updates the progress and the last synced block number.to the database
 fn update_progress_and_last_synced(
     indexer_name: String,
     contract_name: String,

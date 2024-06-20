@@ -1,28 +1,10 @@
 use crate::manifest::yaml::Network;
 use crate::types::code::Code;
 
-/// Generates the provider name for a given network.
-///
-/// # Arguments
-///
-/// * `network` - A reference to the `Network` configuration.
-///
-/// # Returns
-///
-/// A `String` representing the provider name.
 fn network_provider_name(network: &Network) -> String {
     network_provider_name_from_name(&network.name)
 }
 
-/// Generates the provider name from the network name.
-///
-/// # Arguments
-///
-/// * `network_name` - The name of the network.
-///
-/// # Returns
-///
-/// A `String` representing the provider name.
 fn network_provider_name_from_name(network_name: &str) -> String {
     format!(
         "{network_name}_PROVIDER",
@@ -30,15 +12,6 @@ fn network_provider_name_from_name(network_name: &str) -> String {
     )
 }
 
-/// Generates the function name for the network provider.
-///
-/// # Arguments
-///
-/// * `network` - A reference to the `Network` configuration.
-///
-/// # Returns
-///
-/// A `String` representing the function name for the network provider.
 pub fn network_provider_fn_name(network: &Network) -> String {
     format!(
         "get_{fn_name}",
@@ -46,15 +19,6 @@ pub fn network_provider_fn_name(network: &Network) -> String {
     )
 }
 
-/// Generates the function name for the network provider from the network name.
-///
-/// # Arguments
-///
-/// * `network_name` - The name of the network.
-///
-/// # Returns
-///
-/// A `String` representing the function name for the network provider.
 pub fn network_provider_fn_name_by_name(network_name: &str) -> String {
     format!(
         "get_{fn_name}",
@@ -62,12 +26,6 @@ pub fn network_provider_fn_name_by_name(network_name: &str) -> String {
     )
 }
 
-/// Generates the lazy provider code for a given network.
-///
-/// # Arguments
-///
-/// * `network` - A reference to the `Network` configuration.
-///
 fn generate_network_lazy_provider_code(network: &Network) -> Code {
     Code::new(format!(
         r#"
@@ -84,12 +42,6 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
     ))
 }
 
-/// Generates the provider function code for a given network.
-///
-/// # Arguments
-///
-/// * `network` - A reference to the `Network` configuration.
-///
 fn generate_network_provider_code(network: &Network) -> Code {
     Code::new(format!(
         r#"
@@ -102,15 +54,6 @@ fn generate_network_provider_code(network: &Network) -> Code {
     ))
 }
 
-/// Generates the code for all network providers.
-///
-/// # Arguments
-///
-/// * `networks` - A reference to a slice of `Network` configurations.
-///
-/// # Returns
-///
-/// The generated network providers code.
 pub fn generate_networks_code(networks: &[Network]) -> Code {
     let mut output = Code::new(r#"
             /// THIS IS A GENERATED FILE. DO NOT MODIFY MANUALLY.

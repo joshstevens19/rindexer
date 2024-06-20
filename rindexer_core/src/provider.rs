@@ -6,25 +6,12 @@ use std::time::Duration;
 use thiserror::Error;
 use url::Url;
 
-/// Custom error type for RetryClient creation errors.
 #[derive(Error, Debug)]
 pub enum RetryClientError {
     #[error("http provider can't be created for {0}: {1}")]
     HttpProviderCantBeCreated(String, String),
 }
 
-/// Creates a retry-enabled HTTP provider client.
-///
-/// This function sets up a `Provider` with a `RetryClient` to handle retries in case of request failures.
-/// It uses a predefined retry policy.
-///
-/// # Arguments
-///
-/// * `rpc_url` - The RPC URL for the Ethereum provider.
-///
-/// # Returns
-///
-/// A `Result` containing an `Arc<Provider<RetryClient<Http>>>` or a `RetryClientError`.
 pub fn create_retry_client(
     rpc_url: &str,
     compute_units_per_second: Option<u64>,
@@ -48,12 +35,6 @@ pub fn create_retry_client(
     )))
 }
 
-/// Retrieves the chain ID from the specified Ethereum provider.
-///
-/// # Arguments
-///
-/// * `rpc_url` - The RPC URL for the Ethereum provider.
-///
 pub async fn get_chain_id(rpc_url: &str) -> Result<U256, ProviderError> {
     let url = Url::parse(rpc_url).map_err(|_| ProviderError::UnsupportedRPC)?;
     let provider = Provider::new(Http::new(url));
