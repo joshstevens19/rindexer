@@ -58,7 +58,6 @@ where
     serializer.serialize_str(string_value)
 }
 
-// Custom deserialization function that parses a string as a decimal U64
 fn deserialize_option_u64_from_string<'de, D>(deserializer: D) -> Result<Option<U64>, D::Error>
 where
     D: Deserializer<'de>,
@@ -352,12 +351,6 @@ pub struct Global {
     pub contracts: Option<Vec<Contract>>,
 }
 
-/// Substitutes environment variables in a string with their values.
-///
-/// # Arguments
-///
-/// * `contents` - The string containing environment variables to substitute.
-///
 fn substitute_env_variables(contents: &str) -> Result<String, regex::Error> {
     let re = Regex::new(r"\$\{([^}]+)}")?;
     let result = re.replace_all(contents, |caps: &regex::Captures| {
@@ -379,12 +372,6 @@ pub enum ReadManifestError {
     CouldNotParseManifest(serde_yaml::Error),
 }
 
-/// Reads a manifest file and returns a `Manifest` struct.
-///
-/// # Arguments
-///
-/// * `file_path` - A reference to the path of the manifest file.
-///
 pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError> {
     let mut file = File::open(file_path).map_err(ReadManifestError::CouldNotOpenFile)?;
     let mut contents = String::new();
@@ -414,13 +401,6 @@ pub enum WriteManifestError {
     CouldNotWriteToFile(std::io::Error),
 }
 
-/// Writes a `Manifest` struct to a YAML file.
-///
-/// # Arguments
-///
-/// * `data` - A reference to the `Manifest` struct to write.
-/// * `file_path` - A reference to the path of the output file.
-///
 pub fn write_manifest(data: &Manifest, file_path: &PathBuf) -> Result<(), WriteManifestError> {
     let yaml_string =
         serde_yaml::to_string(data).map_err(WriteManifestError::CouldNotTurnManifestToString)?;

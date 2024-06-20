@@ -409,7 +409,6 @@ pub async fn process_events(
             )
             .map_err(ProcessIndexersError::CreateContractInformationError)?;
 
-            // 1. generate CSV header if required
             let mut csv: Option<Arc<AsyncCsvAppender>> = None;
             if contract.generate_csv && manifest.storage.csv_enabled() {
                 let csv_path = manifest

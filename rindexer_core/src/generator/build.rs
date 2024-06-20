@@ -2,7 +2,6 @@ use std::path::Path;
 use std::{fs, path::PathBuf};
 
 use ethers::contract::Abigen;
-use thiserror::Error;
 
 use crate::helpers::{
     camel_to_snake, create_mod_file, format_all_files_for_project, write_file, CreateModFileError,
@@ -26,7 +25,7 @@ fn generate_file_location(output: &Path, location: &str) -> PathBuf {
     path
 }
 
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum WriteNetworksError {
     #[error("{0}")]
     CanNotWriteNetworksCode(WriteFileError),
@@ -41,7 +40,7 @@ fn write_networks(output: &Path, networks: &[Network]) -> Result<(), WriteNetwor
     .map_err(WriteNetworksError::CanNotWriteNetworksCode)
 }
 
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum WriteGlobalError {
     #[error("{0}")]
     CanNotWriteGlobalCode(WriteFileError),
@@ -63,14 +62,6 @@ fn write_global(
 }
 
 /// Identifies if the contract uses a filter
-///
-/// # Arguments
-///
-/// * `contract` - A reference to a `Contract`.
-///
-/// # Returns
-///
-/// A `bool` indicating whether the contract uses a filter.
 pub fn is_filter(contract: &Contract) -> bool {
     let filter_count = contract
         .details
@@ -86,20 +77,11 @@ pub fn is_filter(contract: &Contract) -> bool {
     filter_count > 0
 }
 
-/// Converts a contract name to a filter name.
 pub fn contract_name_to_filter_name(contract_name: &str) -> String {
     format!("{}Filter", contract_name)
 }
 
 /// Identifies if the contract uses a filter and updates its name if necessary.
-///
-/// # Arguments
-///
-/// * `contract` - A mutable reference to a `Contract`.
-///
-/// # Returns
-///
-/// A `bool` indicating whether the contract uses a filter.
 pub fn identify_and_modify_filter(contract: &mut Contract) -> bool {
     if is_filter(contract) {
         contract.override_name(contract_name_to_filter_name(&contract.name));
@@ -195,12 +177,6 @@ pub enum GenerateRindexerTypingsError {
     CreateModFileError(CreateModFileError),
 }
 
-/// Generates typings for the rindexer based on the manifest file.
-///
-/// # Arguments
-///
-/// * `manifest_location` - A reference to the path of the manifest file.
-///
 pub fn generate_rindexer_typings(
     manifest: Manifest,
     manifest_location: &Path,
@@ -266,12 +242,6 @@ pub enum GenerateRindexerHandlersError {
     CreateModFileError(CreateModFileError),
 }
 
-/// Generates code for indexer handlers based on the manifest file.
-///
-/// # Arguments
-///
-/// * `manifest_location` - A reference to the path of the manifest file.
-///
 pub fn generate_rindexer_handlers(
     manifest: Manifest,
     manifest_location: &Path,
@@ -357,11 +327,6 @@ pub enum GenerateError {
 }
 
 /// Generates all the rindexer project typings and handlers
-///
-/// # Arguments
-///
-/// * `manifest_location` - A reference to the path of the manifest file.
-///
 pub fn generate(manifest_location: &PathBuf) -> Result<(), GenerateError> {
     let manifest = read_manifest(manifest_location).map_err(GenerateError::ReadManifestError)?;
 

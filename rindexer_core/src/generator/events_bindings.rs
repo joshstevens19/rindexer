@@ -17,7 +17,6 @@ use crate::types::code::Code;
 
 use super::networks_bindings::network_provider_fn_name_by_name;
 
-/// Struct representing an ABI item.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ABIItem {
     #[serde(default)]
@@ -37,19 +36,6 @@ pub enum ReadAbiError {
     CouldNotReadAbiJson(serde_json::Error),
 }
 
-/// Reads and filters ABI items from the contract's ABI file.
-///
-/// This function reads the ABI JSON string from the file specified in the `contract.abi` path,
-/// deserializes it into a vector of `ABIItem`, and filters the items based on the `include_events`
-/// option in the contract. If `include_events` is `Some`, only the events listed in `include_events`
-/// will be included along with all non-event items. If `include_events` is `None`, all items will
-/// be included.
-///
-/// # Arguments
-///
-/// * `contract` - A reference to a `Contract` struct containing the ABI file path and an optional
-///                list of event names to include.
-///
 pub fn read_abi_items(contract: &Contract) -> Result<Vec<ABIItem>, ReadAbiError> {
     // Read the ABI JSON string from the file
     let abi_str = fs::read_to_string(&contract.abi).map_err(ReadAbiError::CouldNotReadAbiString)?;
@@ -70,7 +56,6 @@ pub fn read_abi_items(contract: &Contract) -> Result<Vec<ABIItem>, ReadAbiError>
     Ok(filtered_abi_items)
 }
 
-/// Struct representing an ABI input.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ABIInput {
     pub indexed: Option<bool>,
@@ -80,7 +65,6 @@ pub struct ABIInput {
     pub components: Option<Vec<ABIInput>>,
 }
 
-/// Struct representing information about an event.
 #[derive(Debug)]
 pub struct EventInfo {
     pub name: String,
@@ -91,16 +75,6 @@ pub struct EventInfo {
 }
 
 impl EventInfo {
-    /// Creates a new `EventInfo`.
-    ///
-    /// # Arguments
-    ///
-    /// * `item` - The ABI item.
-    /// * `signature` - The event signature.
-    ///
-    /// # Returns
-    ///
-    /// A new `EventInfo`.
     pub fn new(item: &ABIItem, signature: String) -> Self {
         EventInfo {
             name: item.name.clone(),
@@ -141,15 +115,6 @@ fn format_param_type(input: &ABIInput) -> Result<String, ParamTypeError> {
     }
 }
 
-/// Computes the topic ID for an event signature.
-///
-/// # Arguments
-///
-/// * `event_signature` - The event signature.
-///
-/// # Returns
-///
-/// A string representing the topic ID.
 fn compute_topic_id(event_signature: &str) -> String {
     Map::collect(
         keccak256(event_signature)
@@ -158,15 +123,6 @@ fn compute_topic_id(event_signature: &str) -> String {
     )
 }
 
-/// Formats the event signature.
-///
-/// # Arguments
-///
-/// * `item` - The ABI item.
-///
-/// # Returns
-///
-/// A formatted string representing the event signature.
 fn format_event_signature(item: &ABIItem) -> Result<String, ParamTypeError> {
     let formatted_inputs = item
         .inputs
@@ -175,41 +131,15 @@ fn format_event_signature(item: &ABIItem) -> Result<String, ParamTypeError> {
         .collect::<Result<Vec<_>, _>>()?;
     Ok(formatted_inputs.join(","))
 }
-/// Generates the contract name for ABI generation.
-///
-/// # Arguments
-///
-/// * `contract` - The contract.
-///
-/// # Returns
-///
-/// A string representing the contract name for ABI generation.
+
 pub fn abigen_contract_name(contract: &Contract) -> String {
     format!("Rindexer{}Gen", contract.name)
 }
 
-/// Generates the module name for the contract.
-///
-/// # Arguments
-///
-/// * `contract` - The contract.
-///
-/// # Returns
-///
-/// A string representing the module name for the contract.
 fn abigen_contract_mod_name(contract: &Contract) -> String {
     camel_to_snake(&abigen_contract_name(contract))
 }
 
-/// Generates the file name for the contract ABI.
-///
-/// # Arguments
-///
-/// * `contract` - The contract.
-///
-/// # Returns
-///
-/// A string representing the file name for the contract ABI.
 pub fn abigen_contract_file_name(contract: &Contract) -> String {
     format!("{}_abi_gen", camel_to_snake(&contract.name))
 }
@@ -239,12 +169,6 @@ pub enum GenerateStructsError {
     InvalidAbiJsonFormat,
 }
 
-/// Generates Rust structs for the events in a contract.
-///
-/// # Arguments
-///
-/// * `contract` - The contract.
-///
 fn generate_structs(contract: &Contract) -> Result<Code, GenerateStructsError> {
     let abi_str =
         fs::read_to_string(&contract.abi).map_err(GenerateStructsError::CouldNotReadAbiString)?;
@@ -284,12 +208,6 @@ fn generate_structs(contract: &Contract) -> Result<Code, GenerateStructsError> {
     Ok(structs)
 }
 
-/// Generates Rust enum variants for the events.
-///
-/// # Arguments
-///
-/// * `event_info` - The event information.
-///
 fn generate_event_enums_code(event_info: &[EventInfo]) -> Code {
     Code::new(
         event_info
@@ -300,23 +218,10 @@ fn generate_event_enums_code(event_info: &[EventInfo]) -> Code {
     )
 }
 
-/// Generates the event type name.
-///
-/// # Arguments
-///
-/// * `name` - The name of the event.
-///
 fn generate_event_type_name(name: &str) -> String {
     format!("{}EventType", name)
 }
 
-/// Generates match arms for topic IDs.
-///
-/// # Arguments
-///
-/// * `event_type_name` - The event type name.
-/// * `event_info` - The event information.
-///
 fn generate_topic_ids_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> Code {
     Code::new(
         event_info
@@ -334,13 +239,6 @@ fn generate_topic_ids_match_arms_code(event_type_name: &str, event_info: &[Event
     )
 }
 
-/// Generates match arms for event names.
-///
-/// # Arguments
-///
-/// * `event_type_name` - The event type name.
-/// * `event_info` - The event information.
-///
 fn generate_event_names_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> Code {
     Code::new(
         event_info
@@ -377,13 +275,6 @@ fn generate_index_event_in_order_arms_code(
     )
 }
 
-/// Generates match arms for event registration.
-///
-/// # Arguments
-///
-/// * `event_type_name` - The event type name.
-/// * `event_info` - The event information.
-///
 fn generate_register_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> Code {
     Code::new(
         event_info
@@ -407,13 +298,6 @@ fn generate_register_match_arms_code(event_type_name: &str, event_info: &[EventI
     )
 }
 
-/// Generates match arms for event decoders.
-///
-/// # Arguments
-///
-/// * `event_type_name` - The event type name.
-/// * `event_info` - The event information.
-///
 fn generate_decoder_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> Code {
     Code::new(event_info
         .iter()
@@ -437,15 +321,6 @@ fn generate_decoder_match_arms_code(event_type_name: &str, event_info: &[EventIn
         .join("\n"))
 }
 
-/// Generates a string representation of an optional vector of strings.
-///
-/// # Arguments
-///
-/// * `indexed` - The optional vector of strings.
-///
-/// # Returns
-///
-/// A string representation of the vector.
 fn generate_indexed_vec_string(indexed: &Option<Vec<String>>) -> Code {
     match indexed {
         Some(values) => Code::new(format!(
@@ -674,7 +549,6 @@ pub fn csv_headers_for_event(event_info: &EventInfo) -> Vec<String> {
     .map(|m| m.value.clone())
     .collect();
 
-    // Add additional headers.
     headers.insert(0, r#""contract_address""#.to_string());
     headers.push(r#""tx_hash""#.to_string());
     headers.push(r#""block_number""#.to_string());
@@ -804,15 +678,6 @@ fn generate_event_callback_structs_code(
     Ok(Code::new(parts.join("\n")))
 }
 
-/// Generates the Rust code for a function that returns a provider for a given network.
-///
-/// This function constructs a Rust function that returns a provider instance based on the specified network.
-/// It handles multiple network names and generates the appropriate conditional branches.
-///
-/// # Arguments
-///
-/// * `networks` - A vector of network names.
-///
 fn build_get_provider_fn(networks: Vec<String>) -> Code {
     let mut function = String::new();
     function
@@ -845,16 +710,6 @@ fn build_get_provider_fn(networks: Vec<String>) -> Code {
     Code::new(function)
 }
 
-/// Generates the Rust code for a function that returns a contract instance for a given network.
-///
-/// This function constructs a Rust function that returns a contract instance based on the specified network.
-/// It handles multiple contract details and generates the appropriate conditional branches.
-///
-/// # Arguments
-///
-/// * `contracts_details` - A vector of references to `ContractDetails`.
-/// * `abi_gen_name` - The name of the ABI generation struct.
-///
 fn build_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &str) -> Code {
     let mut function = String::new();
     function.push_str(&format!(
@@ -918,20 +773,6 @@ pub enum GenerateEventBindingCodeError {
     GenerateEventCallbackStructsError(GenerateEventCallbackStructsError),
 }
 
-/// Generates the Rust code for event bindings.
-///
-/// This function constructs Rust code for event bindings, including the event callback structs, context,
-/// provider function, and contract-related functions. It handles the initialization of CSV, storage setup,
-/// and the setup of event callbacks.
-///
-/// # Arguments
-///
-/// * `project_path` - The project path.
-/// * `indexer_name` - The name of the indexer.
-/// * `contract` - The contract information.
-/// * `storage` - An `storage` configuration.
-/// * `event_info` - A vector of `EventInfo` containing details about the events.
-///
 fn generate_event_bindings_code(
     project_path: &Path,
     indexer_name: &str,
@@ -1104,7 +945,6 @@ fn generate_event_bindings_code(
     Ok(code)
 }
 
-/// Enumeration to specify the type of ABI properties to generate.
 #[derive(PartialEq)]
 pub enum GenerateAbiPropertiesType {
     PostgresWithDataTypes,
@@ -1113,7 +953,6 @@ pub enum GenerateAbiPropertiesType {
     Object,
 }
 
-/// Represents the result of generating ABI name properties.
 #[derive(Debug)]
 pub struct GenerateAbiNamePropertiesResult {
     pub value: String,
@@ -1133,17 +972,6 @@ impl GenerateAbiNamePropertiesResult {
     }
 }
 
-/// Generates ABI name properties based on the inputs and specified properties type.
-///
-/// # Arguments
-///
-/// * `inputs` - A slice of `ABIInput` containing ABI inputs.
-/// * `properties_type` - The type of ABI properties to generate.
-/// * `prefix` - An optional prefix for the property names.
-///
-/// # Returns
-///
-/// A vector of `GenerateAbiNamePropertiesResult` containing the generated ABI name properties.
 pub fn generate_abi_name_properties(
     inputs: &[ABIInput],
     properties_type: &GenerateAbiPropertiesType,
@@ -1207,13 +1035,6 @@ pub fn generate_abi_name_properties(
         .collect()
 }
 
-/// Retrieves ABI items from the contract.
-///
-/// # Arguments
-///
-/// * `contract` - The contract information.
-/// * `is_filter` - A boolean indicating whether the ABI items are for filtering.
-///
 pub fn get_abi_items(contract: &Contract, is_filter: bool) -> Result<Vec<ABIItem>, ReadAbiError> {
     let mut abi_items = read_abi_items(contract)?;
     if is_filter {
@@ -1251,16 +1072,6 @@ pub enum GenerateEventBindingsError {
     ParamType(ParamTypeError),
 }
 
-/// Generates event bindings for the specified contract.
-///
-/// # Arguments
-///
-/// * `project_path` - The project path.
-/// * `indexer_name` - The name of the indexer.
-/// * `contract` - The contract information.
-/// * `is_filter` - A boolean indicating whether the ABI items are for filtering.
-/// * `storage` - The storage configuration.
-///
 pub fn generate_event_bindings(
     project_path: &Path,
     indexer_name: &str,
@@ -1286,15 +1097,6 @@ pub enum GenerateEventHandlersError {
     ParamTypeError(ParamTypeError),
 }
 
-/// Generates event handlers for the specified contract.
-///
-/// # Arguments
-///
-/// * `indexer_name` - The name of the indexer.
-/// * `is_filter` - A boolean indicating whether the ABI items are for filtering.
-/// * `contract` - The contract information.
-/// * `storage` - The storage configuration.
-///
 pub fn generate_event_handlers(
     indexer_name: &str,
     is_filter: bool,

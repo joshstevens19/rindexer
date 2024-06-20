@@ -7,15 +7,6 @@ use crate::{
 
 use super::networks_bindings::network_provider_fn_name;
 
-/// Generates the contract code for a specific contract and network.
-///
-/// # Arguments
-///
-/// * `contract_name` - The name of the contract.
-/// * `contract_details` - The details of the contract.
-/// * `abi_location` - The location of the ABI file.
-/// * `network` - The network configuration.
-///
 fn generate_contract_code(
     contract_name: &str,
     contract_details: &ContractDetails,
@@ -47,13 +38,6 @@ fn generate_contract_code(
     }
 }
 
-/// Generates the code for all contracts across multiple networks.
-///
-/// # Arguments
-///
-/// * `contracts` - A reference to a vector of `Contract` configurations.
-/// * `networks` - A reference to a slice of `Network` configurations.
-///
 fn generate_contracts_code(contracts: &[Contract], networks: &[Network]) -> Code {
     let network_imports: Vec<String> = networks.iter().map(network_provider_fn_name).collect();
     let mut output = Code::new(format!(
@@ -90,13 +74,6 @@ fn generate_contracts_code(contracts: &[Contract], networks: &[Network]) -> Code
     output
 }
 
-/// Generates the context code for the given contracts and networks.
-///
-/// # Arguments
-///
-/// * `contracts` - An optional reference to a vector of `Contract` configurations.
-/// * `networks` - A reference to a slice of `Network` configurations.
-///
 pub fn generate_context_code(contracts: &Option<Vec<Contract>>, networks: &[Network]) -> Code {
     if let Some(contracts) = contracts {
         generate_contracts_code(contracts, networks)

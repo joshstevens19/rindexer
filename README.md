@@ -9,7 +9,6 @@ eth_getLogs - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60add
 checklist v1.0:
 - fix TODOs
 - look into .clone() to see if we can share some data
-- go through all methods add summaries + refactor if needed
 - look into making the rust handlers abstracted away a bit more with Arc and Box
 - look into setting your own schema for the database using diesel
 - finish the documentation (note about block timestamp)

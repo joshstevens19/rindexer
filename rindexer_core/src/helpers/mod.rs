@@ -7,14 +7,6 @@ use std::path::Path;
 use std::process::Command;
 
 /// Converts a CamelCase string to snake_case.
-///
-/// # Arguments
-///
-/// * `s` - The CamelCase string to convert.
-///
-/// # Returns
-///
-/// A `String` representing the snake_case version of the input string.
 pub fn camel_to_snake(s: &str) -> String {
     let mut snake_case = String::new();
     let mut previous_was_uppercase = false;
@@ -40,10 +32,6 @@ pub fn camel_to_snake(s: &str) -> String {
 }
 
 /// Formats all Rust source files in the given folder using `cargo fmt`.
-///
-/// # Arguments
-///
-/// * `project_path` - The path to the folder containing the Rust project.
 pub fn format_all_files_for_project<P: AsRef<Path>>(project_path: P) {
     let manifest_path = project_path.as_ref().join("Cargo.toml");
 
@@ -72,15 +60,6 @@ pub enum WriteFileError {
 }
 
 /// Writes contents to a file, creating directories as needed, and formats the file.
-///
-/// # Arguments
-///
-/// * `path` - The path to the file.
-/// * `contents` - The contents to write to the file.
-///
-/// # Returns
-///
-/// A `Result` indicating success or failure.
 pub fn write_file(path: &Path, contents: &str) -> Result<(), WriteFileError> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(WriteFileError::CouldNotCreateDir)?
@@ -108,11 +87,6 @@ pub enum CreateModFileError {
 }
 
 /// Creates a `mod.rs` file for a given directory, including submodules for all Rust files and directories.
-///
-/// # Arguments
-///
-/// * `path` - The path to the directory.
-///
 pub fn create_mod_file(
     path: &Path,
     code_generated_comment: bool,
@@ -172,15 +146,6 @@ pub fn create_mod_file(
     Ok(())
 }
 
-/// Generates a random alphanumeric string of the given length.
-///
-/// # Arguments
-///
-/// * `len` - The length of the random string to generate.
-///
-/// # Returns
-///
-/// A `String` containing the generated random alphanumeric string.
 pub fn generate_random_id(len: usize) -> String {
     rand::thread_rng()
         .sample_iter(&Alphanumeric)

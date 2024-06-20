@@ -20,9 +20,9 @@ pub fn setup_logger(log_level: LevelFilter) {
     let filter = EnvFilter::from_default_env().add_directive(log_level.into());
 
     let format = Format::default()
-        .with_timer(CustomTimer) // As time is included in the custom timer.
+        .with_timer(CustomTimer)
         .with_level(true)
-        .with_target(false); // Disable logging the target (module path).
+        .with_target(false);
 
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(filter)
