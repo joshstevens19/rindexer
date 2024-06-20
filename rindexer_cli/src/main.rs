@@ -281,7 +281,7 @@ fn handle_new_command(project_path: PathBuf) -> Result<(), Box<dyn std::error::E
     };
 
     let manifest = Manifest {
-        name: project_name.clone(),
+        name: project_name,
         description: project_description,
         repository,
         project_type: project_type.clone(),
@@ -470,14 +470,14 @@ fn handle_codegen_command(
 
     match subcommand {
         CodegenSubcommands::Typings => {
-            generate_rindexer_typings(manifest.clone(), &rindexer_yaml_path).map_err(|e| {
+            generate_rindexer_typings(manifest, &rindexer_yaml_path).map_err(|e| {
                 print_error_message(&format!("Failed to generate rindexer typings: {}", e));
                 e
             })?;
             print_success_message("Generated rindexer typings.");
         }
         CodegenSubcommands::Indexer => {
-            generate_rindexer_handlers(manifest.clone(), &rindexer_yaml_path).map_err(|e| {
+            generate_rindexer_handlers(manifest, &rindexer_yaml_path).map_err(|e| {
                 print_error_message(&format!(
                     "Failed to generate rindexer indexer handlers: {}",
                     e

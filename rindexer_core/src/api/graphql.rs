@@ -97,13 +97,12 @@ pub fn start_graphql_server(
     })
     .expect("Error setting Ctrl-C handler");
 
-    let port_clone = port.clone();
     let child_clone_for_thread = Arc::clone(&child_arc);
     thread::spawn(move || match child_clone_for_thread.lock() {
         Ok(mut guard) => match guard.wait() {
             Ok(status) => {
                 if status.success() {
-                    info!("🚀 GraphQL API ready at http://0.0.0.0:{}/", port_clone);
+                    info!("🚀 GraphQL API ready at http://0.0.0.0:{}/", port);
                 } else {
                     error!("GraphQL: Could not start up API: Child process exited with errors");
                 }
