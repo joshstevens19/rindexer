@@ -7,7 +7,6 @@ use colored::Colorize;
 use ethers::abi::{Abi, Contract as EthersContract, Event};
 use ethers::prelude::Http;
 use ethers::providers::{Provider, RetryClient};
-use ethers::types::{Bytes, H256};
 use futures::future::BoxFuture;
 use futures::stream::FuturesUnordered;
 use tokio_postgres::types::{ToSql, Type};
@@ -19,10 +18,7 @@ use crate::database::postgres::{
     generate_columns_names_only, map_log_token_to_ethereum_wrapper, SetupPostgresError,
 };
 use crate::generator::build::identify_and_modify_filter;
-use crate::generator::event_callback_registry::{
-    ContractInformation, Decoder, EventCallbackRegistry, EventInformation, EventResult,
-    NetworkContract,
-};
+use crate::generator::event_callback_registry::{ContractInformation, Decoder, EventCallbackRegistry, EventInformation, EventResult, NetworkContract, noop_decoder};
 use crate::generator::{
     create_csv_file_for_event, csv_headers_for_event, extract_event_names_and_signatures_from_abi,
     get_abi_items, CreateCsvFileForEvent, ParamTypeError, ReadAbiError,
@@ -402,10 +398,7 @@ pub async fn process_events(
             let contract_information = create_contract_information(
                 contract,
                 network_providers,
-                Arc::new(move |_topics: Vec<H256>, _data: Bytes| {
-                    // TODO empty decoder for now to avoid decoder being an option - come back to look at it
-                    Arc::new(String::new())
-                }),
+                noop_decoder()
             )
             .map_err(ProcessIndexersError::CreateContractInformationError)?;
 

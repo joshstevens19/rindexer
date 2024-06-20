@@ -5,7 +5,7 @@ use ethers::types::U64;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{error, info};
 
 #[derive(Clone, Debug, Hash)]
 pub enum IndexingEventProgressStatus {
@@ -96,24 +96,33 @@ impl IndexingEventsProgressState {
         let mut events = Vec::new();
         for event_info in &event_information {
             for network_contract in &event_info.contract.details {
-                // TODO! LOOK at
-                let latest_block = network_contract.provider.get_block_number().await.unwrap();
-                let end_block = network_contract.end_block.unwrap_or(latest_block);
+                let latest_block = network_contract.provider.get_block_number().await;
+                match latest_block {
+                    Ok(latest_block) => {
+                        let end_block = network_contract.end_block.unwrap_or(latest_block);
 
-                events.push(IndexingEventProgress::running(
-                    network_contract.id.to_string(),
-                    event_info.contract.name.clone(),
-                    event_info.event_name.to_string(),
-                    network_contract.start_block.unwrap_or(U64::zero()),
-                    if latest_block > end_block {
-                        end_block
-                    } else {
-                        latest_block
-                    },
-                    network_contract.network.clone(),
-                    network_contract.end_block.is_none(),
-                    event_info.info_log_name(),
-                ));
+                        events.push(IndexingEventProgress::running(
+                            network_contract.id.to_string(),
+                            event_info.contract.name.clone(),
+                            event_info.event_name.to_string(),
+                            network_contract.start_block.unwrap_or(U64::zero()),
+                            if latest_block > end_block {
+                                end_block
+                            } else {
+                                latest_block
+                            },
+                            network_contract.network.clone(),
+                            network_contract.end_block.is_none(),
+                            event_info.info_log_name(),
+                        ));
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to get latest block for network {}: {}",
+                            network_contract.network, e
+                        );
+                    }
+                }
             }
         }
 
