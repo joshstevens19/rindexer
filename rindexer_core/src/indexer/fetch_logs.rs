@@ -224,7 +224,7 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
 
             match permit {
                 Ok(permit) => {
-                    let result = process_historic_logs(
+                    let result = process_historic_logs_stream(
                         &provider,
                         &tx,
                         &topic_id,
@@ -273,7 +273,7 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
 
         // Live indexing mode
         if live_indexing {
-            live_indexing_mode(
+            live_indexing_stream(
                 &provider,
                 &tx,
                 &contract_address,
@@ -307,12 +307,12 @@ fn calculate_process_historic_log_to_block(
     }
 }
 
-struct ProcessHistoricLogsResult {
+struct ProcessHistoricLogsStreamResult {
     pub next: Filter,
     pub max_block_range_limitation: Option<U64>,
 }
 
-async fn process_historic_logs<M: Middleware + Clone + Send + 'static>(
+async fn process_historic_logs_stream<M: Middleware + Clone + Send + 'static>(
     provider: &Arc<M>,
     tx: &mpsc::UnboundedSender<Result<FetchLogsStream, Box<<M as Middleware>::Error>>>,
     topic_id: &H256,
@@ -320,7 +320,7 @@ async fn process_historic_logs<M: Middleware + Clone + Send + 'static>(
     max_block_range_limitation: Option<U64>,
     snapshot_to_block: U64,
     info_log_name: &str,
-) -> Option<ProcessHistoricLogsResult> {
+) -> Option<ProcessHistoricLogsStreamResult> {
     let from_block = current_filter.get_from_block().unwrap();
     let to_block = current_filter.get_to_block().unwrap_or(snapshot_to_block);
     debug!(
@@ -339,7 +339,7 @@ async fn process_historic_logs<M: Middleware + Clone + Send + 'static>(
             from_block,
             to_block
         );
-        return Some(ProcessHistoricLogsResult {
+        return Some(ProcessHistoricLogsStreamResult {
             next: current_filter.from_block(to_block),
             max_block_range_limitation: None,
         });
@@ -414,7 +414,7 @@ async fn process_historic_logs<M: Middleware + Clone + Send + 'static>(
                         new_to_block
                     );
 
-                    Some(ProcessHistoricLogsResult {
+                    Some(ProcessHistoricLogsStreamResult {
                         next: current_filter
                             .from_block(next_from_block)
                             .to_block(new_to_block),
@@ -454,7 +454,7 @@ async fn process_historic_logs<M: Middleware + Clone + Send + 'static>(
                         new_to_block
                     );
 
-                    Some(ProcessHistoricLogsResult {
+                    Some(ProcessHistoricLogsStreamResult {
                         next: current_filter
                             .from_block(next_from_block)
                             .to_block(new_to_block),
@@ -474,7 +474,7 @@ async fn process_historic_logs<M: Middleware + Clone + Send + 'static>(
                         IndexingEventProgressStatus::Syncing.log(),
                         retry_result
                     );
-                    return Some(ProcessHistoricLogsResult {
+                    return Some(ProcessHistoricLogsStreamResult {
                         next: current_filter
                             .from_block(retry_result.from)
                             .to_block(retry_result.to),
@@ -500,16 +500,7 @@ async fn process_historic_logs<M: Middleware + Clone + Send + 'static>(
 
 /// Handles live indexing mode, continuously checking for new blocks, ensuring they are
 /// within a safe range, updating the filter, and sending the logs to the provided channel.
-///
-/// # Arguments
-///
-/// * `provider` - The provider to interact with the Ethereum blockchain.
-/// * `tx` - The channel to send fetched logs to.
-/// * `contract_address` - The contract address to filter logs by.
-/// * `topic_id` - The topic ID to filter logs by.
-/// * `reorg_safe_distance` - The safe distance from the latest block to avoid reorgs.
-/// * `current_filter` - The current filter specifying the block range and other parameters.
-async fn live_indexing_mode<M: Middleware + Clone + Send + 'static>(
+async fn live_indexing_stream<M: Middleware + Clone + Send + 'static>(
     provider: &Arc<M>,
     tx: &mpsc::UnboundedSender<Result<FetchLogsStream, Box<<M as Middleware>::Error>>>,
     contract_address: &Option<ValueOrArray<Address>>,
@@ -519,13 +510,14 @@ async fn live_indexing_mode<M: Middleware + Clone + Send + 'static>(
     info_log_name: &str,
     semaphore: Arc<Semaphore>,
 ) {
-    let mut last_seen_block = U64::from(0);
+    let mut last_seen_block_number = U64::from(0);
     loop {
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
         // TODO cache get latest block on provider to avoid multiple calls with many contracts
         if let Some(latest_block) = provider.get_block(BlockNumber::Latest).await.unwrap() {
-            if last_seen_block == latest_block.number.unwrap() {
+            let latest_block_number = latest_block.number.unwrap();
+            if last_seen_block_number == latest_block_number {
                 debug!(
                     "{} - {} - No new blocks to process...",
                     info_log_name,
@@ -537,10 +529,10 @@ async fn live_indexing_mode<M: Middleware + Clone + Send + 'static>(
                 "{} - {} - New block seen {} - Last seen block {}",
                 info_log_name,
                 IndexingEventProgressStatus::Live.log(),
-                latest_block.number.unwrap(),
-                last_seen_block
+                latest_block_number,
+                last_seen_block_number
             );
-            let safe_block_number = latest_block.number.unwrap() - reorg_safe_distance;
+            let safe_block_number = latest_block_number - reorg_safe_distance;
 
             let from_block = current_filter.get_from_block().unwrap();
             // check reorg distance and skip if not safe
@@ -573,7 +565,7 @@ async fn live_indexing_mode<M: Middleware + Clone + Send + 'static>(
                     from_block
                 );
                 current_filter = current_filter.from_block(to_block + 1);
-                last_seen_block = to_block;
+                last_seen_block_number = to_block;
                 continue;
             }
 
@@ -611,7 +603,7 @@ async fn live_indexing_mode<M: Middleware + Clone + Send + 'static>(
                             to_block
                         );
 
-                        last_seen_block = to_block;
+                        last_seen_block_number = to_block;
 
                         if tx
                             .send(Ok(FetchLogsStream {
@@ -670,7 +662,7 @@ async fn live_indexing_mode<M: Middleware + Clone + Send + 'static>(
 /// * `topic_id` - The topic ID to check.
 /// * `latest_block` - The latest block containing the logs bloom filter.
 ///
-fn is_relevant_block(
+pub fn is_relevant_block(
     contract_address: &Option<ValueOrArray<Address>>,
     topic_id: &H256,
     latest_block: &Block<H256>,
