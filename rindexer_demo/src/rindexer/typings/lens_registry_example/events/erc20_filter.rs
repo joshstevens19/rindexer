@@ -181,6 +181,7 @@ where
             abi: "/Users/joshstevens/code/rindexer/rindexer_demo/abis/erc20-abi.json".to_string(),
             include_events: None,
             index_event_in_order: None,
+            dependency_events: None,
             reorg_safe_distance: false,
             generate_csv: true,
         }

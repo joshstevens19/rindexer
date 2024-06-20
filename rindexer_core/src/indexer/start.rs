@@ -1,11 +1,14 @@
+use ethers::prelude::BlockNumber;
 use ethers::providers::ProviderError;
 use ethers::{
     providers::Middleware,
     types::{Address, Filter, H256, U64},
 };
+use futures::future::{join_all, try_join_all};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, Semaphore};
-use tokio::task::JoinError;
+use tokio::task::{JoinError, JoinHandle};
 use tokio::time::Instant;
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info};
@@ -15,10 +18,13 @@ use crate::generator::event_callback_registry::{
     EventCallbackRegistry, EventInformation, EventResult, IndexingContractSetup, NetworkContract,
 };
 use crate::helpers::camel_to_snake;
-use crate::indexer::fetch_logs::{fetch_logs_stream, FetchLogsStream, LiveIndexingDetails};
+use crate::indexer::fetch_logs::{
+    fetch_logs_stream, is_relevant_block, FetchLogsStream, LiveIndexingDetails,
+};
 use crate::indexer::progress::IndexingEventsProgressState;
 use crate::indexer::reorg::reorg_safe_distance_for_chain;
-use crate::manifest::yaml::Manifest;
+use crate::indexer::IndexingEventProgressStatus;
+use crate::manifest::yaml::{DependencyEventTree, Manifest};
 use crate::{EthereumSqlTypeWrapper, PostgresClient};
 
 struct EventProcessingConfig {
@@ -37,6 +43,78 @@ struct EventProcessingConfig {
     index_event_in_order: bool,
     live_indexing: bool,
     indexing_distance_from_head: U64,
+}
+
+#[derive(Debug, Clone)]
+pub struct DependencyTree {
+    pub events_name: Vec<String>,
+    pub then: Box<Option<Arc<DependencyTree>>>,
+}
+
+impl DependencyTree {
+    pub fn from_dependency_event_tree(event_tree: DependencyEventTree) -> Self {
+        Self {
+            events_name: event_tree.events,
+            then: match event_tree.then {
+                Some(children) if !children.is_empty() => Box::new(Some(Arc::new(
+                    DependencyTree::from_dependency_event_tree(children[0].clone()),
+                ))),
+                _ => Box::new(None),
+            },
+        }
+    }
+}
+#[derive(Debug, Clone)]
+pub struct ContractEventDependencies {
+    pub contract_name: String,
+    pub event_dependencies: EventDependencies,
+}
+
+#[derive(Debug, Clone)]
+pub struct EventDependencies {
+    pub tree: Arc<DependencyTree>,
+    pub dependency_event_names: Vec<String>,
+}
+
+impl EventDependencies {
+    pub fn has_dependency(&self, event_name: &str) -> bool {
+        self.dependency_event_names
+            .contains(&event_name.to_string())
+    }
+}
+
+struct ContractEventsConfig {
+    pub contract_name: String,
+    pub event_dependencies: EventDependencies,
+    pub events_config: Vec<EventProcessingConfig>,
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum CombinedLogEventProcessingError {
+    #[error("{0}")]
+    DependencyError(ProcessContractEventsWithDependenciesError),
+    #[error("{0}")]
+    NonBlockingError(ProcessEventError),
+    #[error("{0}")]
+    JoinError(tokio::task::JoinError),
+}
+
+impl From<ProcessContractEventsWithDependenciesError> for CombinedLogEventProcessingError {
+    fn from(err: ProcessContractEventsWithDependenciesError) -> CombinedLogEventProcessingError {
+        CombinedLogEventProcessingError::DependencyError(err)
+    }
+}
+
+impl From<ProcessEventError> for CombinedLogEventProcessingError {
+    fn from(err: ProcessEventError) -> CombinedLogEventProcessingError {
+        CombinedLogEventProcessingError::NonBlockingError(err)
+    }
+}
+
+impl From<JoinError> for CombinedLogEventProcessingError {
+    fn from(err: JoinError) -> CombinedLogEventProcessingError {
+        CombinedLogEventProcessingError::JoinError(err)
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -58,12 +136,17 @@ pub enum StartIndexingError {
 
     #[error("Could not process event sequentially: {0}")]
     ProcessEventSequentiallyError(ProcessEventError),
+
+    #[error("{0}")]
+    CombinedError(CombinedLogEventProcessingError),
 }
 
 pub async fn start_indexing(
     manifest: &Manifest,
+    dependencies: Vec<ContractEventDependencies>,
     registry: Arc<EventCallbackRegistry>,
 ) -> Result<(), StartIndexingError> {
+    println!("dependencies... {:?}", dependencies);
     let start = Instant::now();
 
     let database = if manifest.storage.postgres_enabled() {
@@ -83,7 +166,9 @@ pub async fn start_indexing(
     // we can bring this into the yaml file later if required
     let semaphore = Arc::new(Semaphore::new(100));
 
-    let mut handles = Vec::new();
+    // any events which are non-blocking and can be fired in parallel
+    let mut non_blocking_process_events = Vec::new();
+    let mut dependency_event_processing_configs: Vec<ContractEventsConfig> = Vec::new();
 
     for event in registry.events.clone() {
         fn event_info(event: &EventInformation, message: &str) {
@@ -166,23 +251,92 @@ pub async fn start_indexing(
                 indexing_distance_from_head,
             };
 
-            // TODO! FIX
-            if false {
-                process_event(event_processing_config)
-                    .await
-                    .map_err(StartIndexingError::ProcessEventSequentiallyError)?
+            if dependencies
+                .iter()
+                .find(|d| d.contract_name == event.contract.name)
+                .map_or(false, |deps| {
+                    deps.event_dependencies.has_dependency(&event.event_name)
+                })
+            {
+                let contract_events_config = dependency_event_processing_configs
+                    .iter_mut()
+                    .find(|c| c.contract_name == event.contract.name);
+
+                match contract_events_config {
+                    Some(contract_events_config) => {
+                        contract_events_config
+                            .events_config
+                            .push(event_processing_config);
+                    }
+                    None => {
+                        dependency_event_processing_configs.push(ContractEventsConfig {
+                            contract_name: event.contract.name.clone(),
+                            event_dependencies: dependencies
+                                .iter()
+                                .find(|d| d.contract_name == event.contract.name)
+                                .unwrap()
+                                .event_dependencies
+                                .clone(),
+                            events_config: vec![event_processing_config],
+                        });
+                    }
+                }
             } else {
-                let handle = tokio::spawn(process_event(event_processing_config));
-                handles.push(handle);
+                let process_event = tokio::spawn(process_event(event_processing_config));
+                non_blocking_process_events.push(process_event);
             }
         }
     }
 
-    for handle in handles {
-        handle
+    println!(
+        "dependency_event_processing_configs: {:?}",
+        dependency_event_processing_configs
+            .iter()
+            .map(|e| (e.contract_name.clone(), e.event_dependencies.clone()))
+            .collect::<Vec<_>>()
+    );
+
+    let dependency_handle: JoinHandle<Result<(), ProcessContractEventsWithDependenciesError>> =
+        tokio::spawn(process_contract_events_with_dependencies(
+            dependency_event_processing_configs,
+        ));
+
+    // Create a vector to hold both types of handles
+    let mut handles: Vec<JoinHandle<Result<(), CombinedLogEventProcessingError>>> = Vec::new();
+
+    // Add dependency_handle to handles
+    handles.push(tokio::spawn(async {
+        dependency_handle
             .await
-            .map_err(StartIndexingError::CouldNotRunAllIndexHandlersJoin)?
-            .map_err(StartIndexingError::CouldNotRunAllIndexHandlers)?;
+            .map_err(CombinedLogEventProcessingError::from)
+            .and_then(|res| res.map_err(CombinedLogEventProcessingError::from))
+    }));
+
+    println!(
+        "non_blocking_process_events: {:?}",
+        non_blocking_process_events.len()
+    );
+
+    // Add non-blocking process events handles to handles
+    for handle in non_blocking_process_events {
+        handles.push(tokio::spawn(async {
+            handle
+                .await
+                .map_err(CombinedLogEventProcessingError::from)
+                .and_then(|res| res.map_err(CombinedLogEventProcessingError::from))
+        }));
+    }
+
+    // Use try_join_all to wait for all the futures to complete
+    let results = try_join_all(handles)
+        .await
+        .map_err(StartIndexingError::CouldNotRunAllIndexHandlersJoin)?;
+    // Handle the results
+    for result in results {
+        match result {
+            Ok(()) => {}
+            Err(e) => return Err(StartIndexingError::CombinedError(e)),
+        }
     }
 
     let duration = start.elapsed();
@@ -201,6 +355,385 @@ pub async fn start_indexing(
 }
 
 #[derive(thiserror::Error, Debug)]
+pub enum ProcessContractEventsWithDependenciesError {
+    #[error("{0}")]
+    ProcessEventsWithDependenciesError(ProcessEventsWithDependenciesError),
+
+    #[error("{0}")]
+    JoinError(JoinError),
+}
+
+async fn process_contract_events_with_dependencies(
+    contract_events_config: Vec<ContractEventsConfig>,
+) -> Result<(), ProcessContractEventsWithDependenciesError> {
+    let mut handles: Vec<JoinHandle<Result<(), ProcessEventsWithDependenciesError>>> = Vec::new();
+
+    for contract_events in contract_events_config {
+        let handle = tokio::spawn(async move {
+            process_events_with_dependencies(
+                contract_events.event_dependencies,
+                contract_events.events_config,
+            )
+            .await
+        });
+        handles.push(handle);
+    }
+
+    let results = join_all(handles).await;
+
+    for result in results {
+        match result {
+            Ok(inner_result) => inner_result.map_err(
+                ProcessContractEventsWithDependenciesError::ProcessEventsWithDependenciesError,
+            )?,
+            Err(join_error) => {
+                return Err(ProcessContractEventsWithDependenciesError::JoinError(
+                    join_error,
+                ))
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum ProcessEventsWithDependenciesError {
+    #[error("Could not process logs: {0}")]
+    ProcessLogs(Box<ProviderError>),
+
+    #[error("Could not build filter: {0}")]
+    BuildFilterError(BuildFilterError),
+
+    #[error("Event config not found")]
+    EventConfigNotFound,
+}
+
+async fn process_events_with_dependencies(
+    dependencies: EventDependencies,
+    events_processing_config: Vec<EventProcessingConfig>,
+) -> Result<(), ProcessEventsWithDependenciesError> {
+    process_dependency_tree(dependencies.tree, Arc::new(events_processing_config)).await
+}
+
+#[derive(Debug, Clone)]
+struct OrderedLiveIndexingDetails {
+    pub filter: Filter,
+    pub last_seen_block_number: U64,
+}
+
+async fn process_dependency_tree(
+    tree: Arc<DependencyTree>,
+    events_processing_config: Arc<Vec<EventProcessingConfig>>,
+) -> Result<(), ProcessEventsWithDependenciesError> {
+    let mut stack = vec![tree];
+
+    let live_indexing_events = Arc::new(Mutex::new(Vec::<(ProcessLogsParams, H256)>::new()));
+
+    while let Some(current_tree) = stack.pop() {
+        println!("Processing: {:?}", current_tree.events_name);
+
+        let mut tasks = vec![];
+
+        for dependency in &current_tree.events_name {
+            println!("Processing: {:?}", dependency);
+
+            let event_processing_config = events_processing_config.clone(); // Clone the Arc
+            let dependency = dependency.clone();
+            let live_indexing_events = Arc::clone(&live_indexing_events);
+
+            let task = tokio::spawn(async move {
+                let event_processing_config = event_processing_config
+                    .iter()
+                    .find(|e| e.event_name == dependency)
+                    .ok_or(ProcessEventsWithDependenciesError::EventConfigNotFound)?;
+
+                let filter = build_filter(
+                    &event_processing_config.topic_id,
+                    &event_processing_config
+                        .network_contract
+                        .indexing_contract_setup,
+                    event_processing_config.start_block,
+                    event_processing_config.end_block,
+                )
+                .map_err(ProcessEventsWithDependenciesError::BuildFilterError)?;
+
+                let logs_params = ProcessLogsParams {
+                    indexer_name: event_processing_config.indexer_name.clone(),
+                    contract_name: event_processing_config.contract_name.clone(),
+                    info_log_name: event_processing_config.info_log_name.clone(),
+                    topic_id: event_processing_config.topic_id.clone(),
+                    event_name: event_processing_config.event_name.clone(),
+                    network_contract: event_processing_config.network_contract.clone(),
+                    filter,
+                    registry: event_processing_config.registry.clone(),
+                    progress: event_processing_config.progress.clone(),
+                    database: event_processing_config.database.clone(),
+                    execute_events_logs_in_order: event_processing_config.index_event_in_order,
+                    live_indexing: false, // sync the historic ones first
+                    indexing_distance_from_head: event_processing_config
+                        .indexing_distance_from_head,
+                    semaphore: event_processing_config.semaphore.clone(),
+                };
+
+                process_logs(logs_params.clone())
+                    .await
+                    .map_err(ProcessEventsWithDependenciesError::ProcessLogs)?;
+                
+                if logs_params.live_indexing {
+                    let topic_id = event_processing_config.topic_id.parse::<H256>().unwrap();
+                    live_indexing_events
+                        .lock()
+                        .await
+                        .push((logs_params.clone(), topic_id));
+                }
+
+                Ok::<(), ProcessEventsWithDependenciesError>(())
+            });
+
+            tasks.push(task);
+        }
+
+        // Await all tasks to complete
+        let results = join_all(tasks).await;
+        for result in results {
+            if let Err(e) = result {
+                // Handle individual task errors if needed
+                eprintln!("Error processing dependency: {:?}", e);
+            }
+        }
+
+        // If there are more dependencies to process, push the next level onto the stack
+        if let Some(next_tree) = &*current_tree.then {
+            stack.push(next_tree.clone());
+        }
+    }
+
+    let mut ordering_live_indexing_details_map: HashMap<
+        H256,
+        Arc<Mutex<OrderedLiveIndexingDetails>>,
+    > = HashMap::new();
+    let live_indexing_events = live_indexing_events.lock().await;
+    for (log, topic) in live_indexing_events.iter() {
+        let mut filter = log.filter.clone();
+        let last_seen_block_number = filter.get_to_block().unwrap();
+        let next_block_number = last_seen_block_number + 1;
+        filter = filter
+            .from_block(next_block_number)
+            .to_block(next_block_number);
+        ordering_live_indexing_details_map.insert(
+            *topic,
+            Arc::new(Mutex::new(OrderedLiveIndexingDetails {
+                filter,
+                last_seen_block_number,
+            })),
+        );
+    }
+
+    loop {
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+        for (logs_params, parsed_topic_id) in live_indexing_events.iter() {
+            let mut ordering_live_indexing_details = ordering_live_indexing_details_map
+                .get(parsed_topic_id)
+                .unwrap()
+                .lock()
+                .await
+                .clone();
+
+            let reorg_safe_distance = logs_params.indexing_distance_from_head;
+            if let Some(latest_block) = logs_params
+                .network_contract
+                .provider
+                .get_block(BlockNumber::Latest)
+                .await
+                .unwrap()
+            {
+                let latest_block_number = latest_block.number.unwrap();
+                if ordering_live_indexing_details.last_seen_block_number == latest_block_number {
+                    debug!(
+                        "{} - {} - No new blocks to process...",
+                        logs_params.info_log_name,
+                        IndexingEventProgressStatus::Live.log()
+                    );
+                    continue;
+                }
+                info!(
+                    "{} - {} - New block seen {} - Last seen block {}",
+                    logs_params.info_log_name,
+                    IndexingEventProgressStatus::Live.log(),
+                    latest_block_number,
+                    ordering_live_indexing_details.last_seen_block_number
+                );
+                let safe_block_number = latest_block_number - reorg_safe_distance;
+
+                let from_block = ordering_live_indexing_details.filter.get_from_block().unwrap();
+                // check reorg distance and skip if not safe
+                if from_block > safe_block_number {
+                    info!(
+                        "{} - {} - not in safe reorg block range yet block: {} > range: {}",
+                        logs_params.info_log_name,
+                        IndexingEventProgressStatus::Live.log(),
+                        from_block,
+                        safe_block_number
+                    );
+                    continue;
+                }
+
+                let to_block = safe_block_number;
+
+                if from_block == to_block
+                    && !is_relevant_block(
+                        &ordering_live_indexing_details.filter.address,
+                        parsed_topic_id,
+                        &latest_block,
+                    )
+                {
+                    debug!(
+                        "{} - {} - Skipping block {} as it's not relevant",
+                        logs_params.info_log_name,
+                        IndexingEventProgressStatus::Live.log(),
+                        from_block
+                    );
+                    info!(
+                        "{} - {} - LogsBloom check - No events found in the block {}",
+                        logs_params.info_log_name,
+                        IndexingEventProgressStatus::Live.log(),
+                        from_block
+                    );
+                    ordering_live_indexing_details.filter = ordering_live_indexing_details
+                        .filter
+                        .from_block(to_block + 1);
+                    ordering_live_indexing_details.last_seen_block_number = to_block;
+                    *ordering_live_indexing_details_map
+                        .get(parsed_topic_id)
+                        .unwrap()
+                        .lock()
+                        .await = ordering_live_indexing_details;
+                    continue;
+                }
+
+                ordering_live_indexing_details.filter =
+                    ordering_live_indexing_details.filter.to_block(to_block);
+
+                debug!(
+                    "{} - {} - Processing live filter: {:?}",
+                    logs_params.info_log_name,
+                    IndexingEventProgressStatus::Live.log(),
+                    ordering_live_indexing_details.filter
+                );
+
+                let semaphore_client = logs_params.semaphore.clone();
+                let permit = semaphore_client.acquire_owned().await;
+
+                if let Ok(permit) = permit {
+                    match logs_params
+                        .network_contract
+                        .provider
+                        .get_logs(&ordering_live_indexing_details.filter)
+                        .await
+                    {
+                        Ok(logs) => {
+                            debug!(
+                                "{} - {} - Live topic_id {}, Logs: {} from {} to {}",
+                                logs_params.info_log_name,
+                                IndexingEventProgressStatus::Live.log(),
+                                logs_params.topic_id,
+                                logs.len(),
+                                from_block,
+                                to_block
+                            );
+
+                            debug!(
+                                "{} - {} - Fetched {} event logs - blocks: {} - {}",
+                                logs_params.info_log_name,
+                                IndexingEventProgressStatus::Live.log(),
+                                logs.len(),
+                                from_block,
+                                to_block
+                            );
+
+                            let fetched_logs = Ok(FetchLogsStream {
+                                logs: logs.clone(),
+                                from_block,
+                                to_block,
+                            });
+
+                            let result = handle_logs_result(
+                                logs_params.indexer_name.clone(),
+                                logs_params.contract_name.clone(),
+                                logs_params.event_name.clone(),
+                                logs_params.topic_id.clone(),
+                                logs_params.execute_events_logs_in_order,
+                                logs_params.progress.clone(),
+                                logs_params.network_contract.clone(),
+                                logs_params.database.clone(),
+                                logs_params.registry.clone(),
+                                fetched_logs,
+                            )
+                            .await;
+
+                            match result {
+                                Ok(_) => {
+                                    ordering_live_indexing_details.last_seen_block_number =
+                                        to_block;
+                                    if logs.is_empty() {
+                                        ordering_live_indexing_details.filter =
+                                            ordering_live_indexing_details
+                                                .filter
+                                                .from_block(to_block + 1);
+                                        info!(
+                                            "{} - {} - No events found between blocks {} - {}",
+                                            logs_params.info_log_name,
+                                            IndexingEventProgressStatus::Live.log(),
+                                            from_block,
+                                            to_block
+                                        );
+                                    } else if let Some(last_log) = logs.last() {
+                                        ordering_live_indexing_details.filter =
+                                            ordering_live_indexing_details.filter.from_block(
+                                                last_log.block_number.unwrap() + U64::from(1),
+                                            );
+                                    }
+
+                                    *ordering_live_indexing_details_map
+                                        .get(parsed_topic_id)
+                                        .unwrap()
+                                        .lock()
+                                        .await = ordering_live_indexing_details;
+
+                                    drop(permit);
+                                }
+                                Err(err) => {
+                                    error!(
+                                "{} - {} - Error fetching logs: {} - will try again in 200ms",
+                                logs_params.info_log_name,
+                                IndexingEventProgressStatus::Live.log(),
+                                err
+                            );
+                                    drop(permit);
+                                    break;
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            error!(
+                                "{} - {} - Error fetching logs: {} - will try again in 200ms",
+                                logs_params.info_log_name,
+                                IndexingEventProgressStatus::Live.log(),
+                                err
+                            );
+                            drop(permit);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
 pub enum ProcessEventError {
     #[error("Could not process logs: {0}")]
     ProcessLogs(Box<ProviderError>),
@@ -213,7 +746,7 @@ async fn process_event(
     event_processing_config: EventProcessingConfig,
 ) -> Result<(), ProcessEventError> {
     debug!(
-        "{} - Processing event sequentially",
+        "{} - Processing events",
         event_processing_config.info_log_name
     );
 

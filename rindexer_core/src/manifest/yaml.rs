@@ -222,6 +222,28 @@ fn default_generate_csv() -> bool {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DependencyEventTree {
+    pub events: Vec<String>,
+    pub then: Option<Vec<DependencyEventTree>>,
+}
+
+impl DependencyEventTree {
+    pub fn collect_dependency_events(&self) -> Vec<String> {
+        let mut dependencies = Vec::new();
+
+        dependencies.extend(self.events.clone());
+
+        if let Some(children) = &self.then {
+            for child in children {
+                dependencies.extend(child.collect_dependency_events());
+            }
+        }
+
+        dependencies
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Contract {
     pub name: String,
     pub details: Vec<ContractDetails>,
@@ -232,6 +254,9 @@ pub struct Contract {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub index_event_in_order: Option<Vec<String>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dependency_events: Option<DependencyEventTree>,
 
     #[serde(default = "default_reorg_safe_distance")]
     pub reorg_safe_distance: bool,

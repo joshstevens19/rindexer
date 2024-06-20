@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::signal;
 use tracing::info;
 use tracing::level_filters::LevelFilter;
@@ -7,7 +8,10 @@ use crate::api::{start_graphql_server, StartGraphqlServerError};
 use crate::database::postgres::SetupPostgresError;
 use crate::generator::event_callback_registry::EventCallbackRegistry;
 use crate::indexer::no_code::{setup_no_code, SetupNoCodeError};
-use crate::indexer::start::{start_indexing, StartIndexingError};
+use crate::indexer::start::{
+    start_indexing, ContractEventDependencies, DependencyTree, EventDependencies,
+    StartIndexingError,
+};
 use crate::manifest::yaml::{read_manifest, ProjectType, ReadManifestError};
 use crate::{setup_logger, setup_postgres, GraphQLServerDetails};
 
@@ -67,9 +71,28 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
                 .map_err(StartRindexerError::SetupPostgresError)?;
         }
 
-        start_indexing(&manifest, indexing_details.registry.complete())
-            .await
-            .map_err(StartRindexerError::CouldNotStartIndexing)?;
+        let mut dependencies: Vec<ContractEventDependencies> = vec![];
+        for contract in &manifest.contracts {
+            if let Some(dependency) = contract.dependency_events.clone() {
+                let dependency_event_names = dependency.collect_dependency_events();
+                let dependency_tree = DependencyTree::from_dependency_event_tree(dependency);
+                dependencies.push(ContractEventDependencies {
+                    contract_name: contract.name.clone(),
+                    event_dependencies: EventDependencies {
+                        tree: Arc::new(dependency_tree),
+                        dependency_event_names,
+                    },
+                });
+            }
+        }
+
+        start_indexing(
+            &manifest,
+            dependencies,
+            indexing_details.registry.complete(),
+        )
+        .await
+        .map_err(StartRindexerError::CouldNotStartIndexing)?;
     }
 
     Ok(())

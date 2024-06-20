@@ -7,7 +7,6 @@ networks - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60adde36
 eth_getLogs - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60adde361736deeb3b2c/packages/core/src/sync-historical/service.ts#L946
 
 checklist v1.0:
-- handle concurrency issues indexing and rate limits for RPCs
 - fix TODOs
 - look into .clone() to see if we can share some data
 - go through all methods add summaries + refactor if needed
@@ -38,7 +37,6 @@ future features:
 - look into load balancing of RPCs
 - other db support
 - look into internal caching to make things faster
-- look into dependency mappings to allow you to index based on trees structure
 - POC with shadow events using foundry as you index
 - merge subgraph to rindexer yaml
 - merge foundry to rindexer yaml

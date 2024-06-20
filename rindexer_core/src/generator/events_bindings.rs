@@ -12,7 +12,7 @@ use std::iter::Map;
 use std::path::Path;
 
 use crate::helpers::camel_to_snake;
-use crate::manifest::yaml::{Contract, ContractDetails, CsvDetails, Storage};
+use crate::manifest::yaml::{Contract, ContractDetails, CsvDetails, DependencyEventTree, Storage};
 use crate::types::code::Code;
 
 use super::networks_bindings::network_provider_fn_name_by_name;
@@ -579,6 +579,42 @@ fn generate_contract_type_fn_code(contract: &Contract) -> Code {
         "None".to_string()
     };
 
+    fn format_tree(tree: &DependencyEventTree) -> String {
+        let events_str = tree
+            .events
+            .iter()
+            .map(|s| format!("\"{}\".to_string()", s))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let then_str = match &tree.then {
+            Some(children) => children
+                .iter()
+                .map(|t| format_tree(t))
+                .collect::<Vec<_>>()
+                .join(", "),
+            None => String::new(),
+        };
+
+        if then_str.is_empty() {
+            format!(
+                "DependencyEventTree {{ events: vec![{}], then: None }}",
+                events_str
+            )
+        } else {
+            format!(
+                "DependencyEventTree {{ events: vec![{}], then: Some(vec![{}]) }}",
+                events_str, then_str
+            )
+        }
+    }
+
+    let dependency_events = if let Some(event_tree) = &contract.dependency_events {
+        format!("Some({})", format_tree(event_tree))
+    } else {
+        "None".to_string()
+    };
+
     Code::new(format!(
         r#"
         pub fn contract_information(&self) -> Contract {{
@@ -588,6 +624,7 @@ fn generate_contract_type_fn_code(contract: &Contract) -> Code {
                 abi: "{}".to_string(),
                 include_events: {},
                 index_event_in_order: {},
+                dependency_events: {},
                 reorg_safe_distance: {},
                 generate_csv: {},
             }}
@@ -598,6 +635,7 @@ fn generate_contract_type_fn_code(contract: &Contract) -> Code {
         contract.abi,
         include_events_code,
         index_event_in_order,
+        dependency_events,
         contract.reorg_safe_distance,
         contract.generate_csv
     ))

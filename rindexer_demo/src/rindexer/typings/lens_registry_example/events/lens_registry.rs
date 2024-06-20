@@ -179,6 +179,7 @@ where
             include_events: Some(vec!["HandleLinked".to_string()]),
             index_event_in_order: None,
             reorg_safe_distance: false,
+            dependency_events: None,
             generate_csv: true,
         }
     }
