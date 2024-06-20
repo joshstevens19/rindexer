@@ -2,7 +2,7 @@ use crate::generator::event_callback_registry::EventInformation;
 use colored::{ColoredString, Colorize};
 use ethers::providers::Middleware;
 use ethers::types::U64;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::info;
@@ -63,7 +63,7 @@ impl Hash for IndexingEventProgress {
 
 impl IndexingEventProgress {
     /// Creates a new `IndexingEventProgress` with a status of `Syncing`.
-    #[warn(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn running(
         id: String,
         contract_name: String,

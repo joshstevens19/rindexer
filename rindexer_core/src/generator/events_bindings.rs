@@ -590,7 +590,7 @@ fn generate_contract_type_fn_code(contract: &Contract) -> Code {
         let then_str = match &tree.then {
             Some(children) => children
                 .iter()
-                .map(|t| format_tree(t))
+                .map(format_tree)
                 .collect::<Vec<_>>()
                 .join(", "),
             None => String::new(),
