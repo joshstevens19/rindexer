@@ -7,6 +7,7 @@ static GLOBAL: Jemalloc = Jemalloc;
 
 use clap::{Parser, Subcommand};
 use colored::Colorize;
+use dotenv::{dotenv, from_path};
 use ethers::types::{Chain, U64};
 use ethers_etherscan::Client;
 use regex::Regex;
@@ -312,7 +313,7 @@ fn handle_new_command(project_path: PathBuf) -> Result<(), Box<dyn std::error::E
         storage: Storage {
             postgres: if postgres_enabled {
                 Some(PostgresConnectionDetails {
-                    database_url: "${DATABASE_URL}".to_string(),
+                    enabled: true,
                     disable_create_tables: false,
                 })
             } else {
@@ -676,6 +677,13 @@ async fn handle_delete_command(project_path: PathBuf) -> Result<(), Box<dyn std:
     Ok(())
 }
 
+fn load_env_from_path(project_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    if from_path(project_path).is_err() {
+        dotenv().ok();
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = CLI::parse();
@@ -685,7 +693,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let resolved_path = resolve_path(path).map_err(|e| {
                 print_error_message(&e);
                 e
-            })?; // Ensure error is returned, not ()
+            })?;
+            load_env_from_path(&resolved_path)?;
             handle_new_command(resolved_path)
         }
         Commands::DownloadAbi { path } => {
@@ -693,6 +702,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 print_error_message(&e);
                 e
             })?;
+            load_env_from_path(&resolved_path)?;
             handle_download_abi_command(resolved_path).await
         }
         Commands::Codegen { subcommand, path } => {
@@ -700,6 +710,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 print_error_message(&e);
                 e
             })?;
+            load_env_from_path(&resolved_path)?;
             handle_codegen_command(resolved_path, subcommand)
         }
         Commands::Start { subcommand, path } => {
@@ -707,6 +718,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 print_error_message(&e);
                 e
             })?;
+            load_env_from_path(&resolved_path)?;
             start(resolved_path, subcommand).await
         }
         Commands::Delete { path } => {
@@ -714,6 +726,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 print_error_message(&e);
                 e
             })?;
+            load_env_from_path(&resolved_path)?;
             handle_delete_command(resolved_path).await
         }
     }
