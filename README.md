@@ -15,7 +15,6 @@ checklist v1.0:
 - look into deployments to make it easy to do
 
 bugs:
-- same start and end block doesn't index the data at all
 
 nice to have:
 - look into PK with tx hash and tx index and log index to make it unique and not have to worry about duplicates

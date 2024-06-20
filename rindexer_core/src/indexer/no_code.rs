@@ -15,10 +15,13 @@ use tracing::{debug, error, info};
 
 use crate::database::postgres::{
     bulk_insert_via_copy, event_table_full_name, generate_bulk_insert_statement,
-    generate_columns_names_only, map_log_token_to_ethereum_wrapper, SetupPostgresError,
+    generate_columns_names_only, map_log_params_to_ethereum_wrapper, SetupPostgresError,
 };
 use crate::generator::build::identify_and_modify_filter;
-use crate::generator::event_callback_registry::{ContractInformation, Decoder, EventCallbackRegistry, EventInformation, EventResult, NetworkContract, noop_decoder};
+use crate::generator::event_callback_registry::{
+    noop_decoder, ContractInformation, Decoder, EventCallbackRegistry, EventInformation,
+    EventResult, NetworkContract,
+};
 use crate::generator::{
     create_csv_file_for_event, csv_headers_for_event, extract_event_names_and_signatures_from_abi,
     get_abi_items, CreateCsvFileForEvent, ParamTypeError, ReadAbiError,
@@ -221,11 +224,8 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                     let block_hash = result.tx_information.block_hash;
                     let network = result.tx_information.network.to_string();
 
-                    let event_parameters: Vec<EthereumSqlTypeWrapper> = log
-                        .params
-                        .iter()
-                        .filter_map(|param| map_log_token_to_ethereum_wrapper(&param.value))
-                        .collect();
+                    let event_parameters: Vec<EthereumSqlTypeWrapper> =
+                        map_log_params_to_ethereum_wrapper(&log.params);
 
                     let contract_address = EthereumSqlTypeWrapper::Address(address);
                     let end_global_parameters = vec![
@@ -395,12 +395,9 @@ pub async fn process_events(
                 })?
                 .clone();
 
-            let contract_information = create_contract_information(
-                contract,
-                network_providers,
-                noop_decoder()
-            )
-            .map_err(ProcessIndexersError::CreateContractInformationError)?;
+            let contract_information =
+                create_contract_information(contract, network_providers, noop_decoder())
+                    .map_err(ProcessIndexersError::CreateContractInformationError)?;
 
             let mut csv: Option<Arc<AsyncCsvAppender>> = None;
             if contract.generate_csv && manifest.storage.csv_enabled() {
