@@ -7,7 +7,6 @@ networks - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60adde36
 eth_getLogs - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60adde361736deeb3b2c/packages/core/src/sync-historical/service.ts#L946
 
 checklist v1.0:
-- fix TODOs
 - look into making the rust handlers abstracted away a bit more with Arc and Box + look at doing the bulk insert + copy route
 - look into setting your own schema for the database using diesel
 - finish the documentation (note about block timestamp)
@@ -24,15 +23,10 @@ nice to have:
   - emit the log through the same event register as the event defined in the manifest
 
 future features:
-- unit tests for the project
 - block timestamp indexing
-- look into migrating to alloy from ethers
 - investigate handle advanced top of head reorgs process
 - cron registering for networks to fire
 - multiple ABIs merged into one
 - look into load balancing of RPCs
-- other db support
 - look into internal caching to make things faster
 - POC with shadow events using foundry as you index
-- merge subgraph to rindexer yaml
-- merge foundry to rindexer yaml

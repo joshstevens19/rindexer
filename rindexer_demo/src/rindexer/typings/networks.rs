@@ -4,25 +4,34 @@
 /// Any manual changes to this file will be overwritten.
 use ethers::providers::{Http, Provider, RetryClient};
 use rindexer_core::lazy_static;
-use rindexer_core::provider::create_retry_client;
+use rindexer_core::provider::{create_client, JsonRpcCachedProvider};
 use std::sync::Arc;
 
 lazy_static! {
-    static ref POLYGON_PROVIDER: Arc<Provider<RetryClient<Http>>> = create_retry_client(
+    static ref POLYGON_PROVIDER: Arc<JsonRpcCachedProvider> = create_client(
         "https://polygon-mainnet.g.alchemy.com/v2/QLjF9OO90XrczIsf6Nud7RoSc8mLSyra",
         Some(660)
     )
     .expect("Error creating provider");
-    static ref BASE_PROVIDER: Arc<Provider<RetryClient<Http>>> = create_retry_client(
+    static ref BASE_PROVIDER: Arc<JsonRpcCachedProvider> = create_client(
         "https://base-mainnet.g.alchemy.com/v2/fb_ZprvGkE5uIH6bK6BvfFVDSABpTPXk",
         Some(660)
     )
     .expect("Error creating provider");
 }
-pub fn get_polygon_provider() -> Arc<Provider<RetryClient<Http>>> {
+
+pub fn get_polygon_provider_cache() -> Arc<JsonRpcCachedProvider> {
     POLYGON_PROVIDER.clone()
 }
 
-pub fn get_base_provider() -> Arc<Provider<RetryClient<Http>>> {
+pub fn get_polygon_provider() -> Arc<Provider<RetryClient<Http>>> {
+    POLYGON_PROVIDER.get_inner_provider()
+}
+
+pub fn get_base_provider_cache() -> Arc<JsonRpcCachedProvider> {
     BASE_PROVIDER.clone()
+}
+
+pub fn get_base_provider() -> Arc<Provider<RetryClient<Http>>> {
+    BASE_PROVIDER.get_inner_provider()
 }

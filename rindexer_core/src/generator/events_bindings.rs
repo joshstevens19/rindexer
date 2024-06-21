@@ -692,7 +692,7 @@ fn build_get_provider_fn(networks: Vec<String>) -> Code {
         function.push_str(&format!(
             r#"
             if network == "{network}" {{
-                super::super::super::networks::{network_provider_fn_name}()
+                super::super::super::networks::{network_provider_fn_name}_cache()
             }}"#,
             network = network,
             network_provider_fn_name = network_provider_fn_name_by_name(network)
@@ -802,6 +802,7 @@ fn generate_event_bindings_code(
             generator::event_callback_registry::{{EventCallbackRegistry, EventInformation, ContractInformation, NetworkContract, EventResult, TxInformation, FilterDetails, FactoryDetails}},
             manifest::yaml::{{Contract, ContractDetails}},
             {client_import}
+            provider::JsonRpcCachedProvider
         }};
 
         {structs}

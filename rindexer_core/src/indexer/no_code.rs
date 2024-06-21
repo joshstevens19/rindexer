@@ -28,7 +28,7 @@ use crate::generator::{
 };
 use crate::indexer::log_helpers::parse_log;
 use crate::manifest::yaml::{read_manifest, Contract, Manifest, ReadManifestError};
-use crate::provider::{create_retry_client, RetryClientError};
+use crate::provider::{create_client, JsonRpcCachedProvider, RetryClientError};
 use crate::{
     generate_random_id, setup_logger, setup_postgres, AsyncCsvAppender, EthereumSqlTypeWrapper,
     FutureExt, IndexingDetails, PostgresClient, StartDetails, StartNoCodeDetails,
@@ -118,7 +118,7 @@ pub async fn setup_no_code(details: StartNoCodeDetails) -> Result<StartDetails, 
 #[derive(Debug)]
 pub struct CreateNetworkProvider {
     pub network_name: String,
-    pub provider: Arc<Provider<RetryClient<Http>>>,
+    pub client: Arc<JsonRpcCachedProvider>,
 }
 
 fn create_network_providers(
@@ -126,10 +126,10 @@ fn create_network_providers(
 ) -> Result<Vec<CreateNetworkProvider>, RetryClientError> {
     let mut result: Vec<CreateNetworkProvider> = vec![];
     for network in &manifest.networks {
-        let provider = create_retry_client(&network.url, network.compute_units_per_second)?;
+        let provider = create_client(&network.url, network.compute_units_per_second)?;
         result.push(CreateNetworkProvider {
             network_name: network.name.clone(),
-            provider,
+            client: provider,
         });
     }
 
@@ -482,7 +482,7 @@ fn create_contract_information(
                 details.push(NetworkContract {
                     id: generate_random_id(10),
                     network: c.network.clone(),
-                    provider: provider.provider.clone(),
+                    cached_provider: provider.client.clone(),
                     decoder: decoder.clone(),
                     indexing_contract_setup: c.indexing_contract_setup(),
                     start_block: c.start_block,

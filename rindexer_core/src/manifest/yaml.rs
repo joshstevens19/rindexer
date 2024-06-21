@@ -390,7 +390,7 @@ pub enum ReadManifestError {
 pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError> {
     let mut file = File::open(file_path).map_err(ReadManifestError::CouldNotOpenFile)?;
     let mut contents = String::new();
-    
+
     file.read_to_string(&mut contents)
         .map_err(ReadManifestError::CouldNotReadFile)?;
 

@@ -15,6 +15,7 @@ use rindexer_core::{
         FilterDetails, NetworkContract, TxInformation,
     },
     manifest::yaml::{Contract, ContractDetails},
+    provider::JsonRpcCachedProvider,
     AsyncCsvAppender, FutureExt, PostgresClient,
 };
 use std::future::Future;
@@ -187,9 +188,9 @@ where
         }
     }
 
-    fn get_provider(&self, network: &str) -> Arc<Provider<RetryClient<Http>>> {
+    fn get_provider(&self, network: &str) -> Arc<JsonRpcCachedProvider> {
         if network == "polygon" {
-            super::super::super::networks::get_polygon_provider()
+            super::super::super::networks::get_polygon_provider_cache()
         } else {
             panic!("Network not supported")
         }
@@ -200,7 +201,10 @@ where
             let address: Address = "0x0000000000000000000000000000000000000000"
                 .parse()
                 .unwrap();
-            RindexerERC20FilterGen::new(address, Arc::new(self.get_provider(network).clone()))
+            RindexerERC20FilterGen::new(
+                address,
+                Arc::new(self.get_provider(network).get_inner_provider().clone()),
+            )
         } else {
             panic!("Network not supported");
         }
@@ -235,7 +239,7 @@ where
                 .map(|c| NetworkContract {
                     id: generate_random_id(10),
                     network: c.network.clone(),
-                    provider: self.get_provider(&c.network),
+                    cached_provider: self.get_provider(&c.network),
                     decoder: self.decoder(&c.network),
                     indexing_contract_setup: c.indexing_contract_setup(),
                     start_block: c.start_block,
