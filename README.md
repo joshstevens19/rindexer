@@ -6,9 +6,6 @@ checklist v1.0:
 - add a getting started guide for rust / no-code
 - look into deployments to make it easy to do
 
-bugs:
-- name cant have `-` in it
-
 nice to have:
 - look into PK with tx hash and tx index and log index to make it unique and not have to worry about duplicates
 
