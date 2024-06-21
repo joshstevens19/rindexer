@@ -2,6 +2,7 @@
 name = "rindexer_demo"
 version = "0.1.0"
 edition = "2021"
+resolver = "2"
 
 [dependencies]
 # internal dependencies
