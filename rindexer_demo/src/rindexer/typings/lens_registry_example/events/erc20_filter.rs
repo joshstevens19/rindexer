@@ -33,7 +33,7 @@ pub struct ApprovalResult {
 
 pub type TransferData = rindexer_erc20_filter_gen::TransferFilter;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TransferResult {
     pub event_data: TransferData,
     pub tx_information: TxInformation,
@@ -62,13 +62,40 @@ pub fn no_extensions() -> NoExtensions {
     NoExtensions {}
 }
 
+pub fn transfer_handler<TExtensions, F, Fut>(
+    custom_logic: F,
+) -> Arc<
+    dyn for<'a> Fn(&'a Vec<TransferResult>, Arc<EventContext<TExtensions>>) -> BoxFuture<'a, ()>
+        + Send
+        + Sync,
+>
+where
+    TransferResult: Clone + 'static,
+    F: for<'a> Fn(Vec<TransferResult>, Arc<EventContext<TExtensions>>) -> Fut
+        + Send
+        + Sync
+        + 'static
+        + Clone,
+    Fut: Future<Output = ()> + Send + 'static,
+    TExtensions: Send + Sync + 'static,
+{
+    Arc::new(move |results, context| {
+        let custom_logic = custom_logic.clone();
+        let results = results.clone();
+        let context = Arc::clone(&context);
+        async move { (custom_logic)(results, context).await }.boxed()
+    })
+}
+
 type TransferEventCallbackType<TExtensions> = Arc<
-    dyn Fn(&Vec<TransferResult>, Arc<EventContext<TExtensions>>) -> BoxFuture<'_, ()> + Send + Sync,
+    dyn for<'a> Fn(&'a Vec<TransferResult>, Arc<EventContext<TExtensions>>) -> BoxFuture<'a, ()>
+        + Send
+        + Sync,
 >;
 
 pub struct TransferEvent<TExtensions>
 where
-    TExtensions: Send + Sync,
+    TExtensions: Send + Sync + 'static,
 {
     callback: TransferEventCallbackType<TExtensions>,
     context: Arc<EventContext<TExtensions>>,
@@ -76,8 +103,35 @@ where
 
 impl<TExtensions> TransferEvent<TExtensions>
 where
-    TExtensions: Send + Sync,
+    TExtensions: Send + Sync + 'static,
 {
+    pub async fn handler<F, Fut>(closure: F, extensions: TExtensions) -> Self
+    where
+        TransferResult: Clone + 'static,
+        F: for<'a> Fn(Vec<TransferResult>, Arc<EventContext<TExtensions>>) -> Fut
+            + Send
+            + Sync
+            + 'static
+            + Clone,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let csv = AsyncCsvAppender::new("/Users/joshstevens/code/rindexer/rindexer_demo/./generated_csv/ERC20Filter/erc20filter-transfer.csv".to_string());
+        if !Path::new("/Users/joshstevens/code/rindexer/rindexer_demo/./generated_csv/ERC20Filter/erc20filter-transfer.csv").exists() {
+            csv.append_header(vec!["contract_address".into(), "from".into(), "to".into(), "value".into(), "tx_hash".into(), "block_number".into(), "block_hash".into()])
+                .await
+                .unwrap();
+        }
+
+        Self {
+            callback: transfer_handler(closure),
+            context: Arc::new(EventContext {
+                database: Arc::new(PostgresClient::new().await.unwrap()),
+                csv: Arc::new(csv),
+                extensions: Arc::new(extensions),
+            }),
+        }
+    }
+
     pub async fn new(
         callback: TransferEventCallbackType<TExtensions>,
         extensions: TExtensions,
@@ -108,6 +162,11 @@ where
     async fn call(&self, events: Vec<EventResult>) {
         let events_len = events.len();
 
+        // note some can not downcast because it cant decode
+        // this happens on events which failed decoding due to
+        // not having the right abi for example
+        // transfer events with 2 indexed topics cant decode
+        // transfer events with 3 indexed topics
         let result: Vec<TransferResult> = events
             .into_iter()
             .filter_map(|item| {
@@ -120,11 +179,13 @@ where
                     })
             })
             .collect();
-
-        if result.len() == events_len {
+        #[deny(clippy::eq_op)]
+        let is_filter = true;
+        if result.len() == events_len && is_filter == true {
             (self.callback)(&result, self.context.clone()).await;
         } else {
-            panic!("TransferEvent: Unexpected data type - expected: TransferData")
+            println!("Failed to downcast all events");
+            (self.callback)(&result, self.context.clone()).await;
         }
     }
 }
@@ -169,14 +230,12 @@ where
                 "polygon".to_string(),
                 FilterDetails {
                     event_name: "Transfer".to_string(),
-                    indexed_1: Some(vec![
-                        "0x4A1a2197f307222cD67A1762D9A352F64558d9Be".to_string()
-                    ]),
+                    indexed_1: None,
                     indexed_2: None,
                     indexed_3: None,
                 },
                 Some(56399431.into()),
-                Some(56399432.into()),
+                None,
                 Some(1000),
             )],
             abi: "/Users/joshstevens/code/rindexer/rindexer_demo/abis/erc20-abi.json".to_string(),
@@ -263,7 +322,7 @@ where
             };
 
         registry.register_event(EventInformation {
-            indexer_name: "LensRegistryExample".to_string(),
+            indexer_name: "BlahBaby".to_string(),
             event_name: event_name.to_string(),
             index_event_in_order,
             topic_id: topic_id.to_string(),
