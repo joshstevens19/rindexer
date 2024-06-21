@@ -503,29 +503,48 @@ pub fn generate_insert_query_for_event(
     )
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum BulkInsertPostgresError {
+    #[error("{0}")]
+    PostgresError(PostgresError),
+
+    #[error("{0}")]
+    CouldNotWriteDataToPostgres(tokio_postgres::Error),
+}
+
 pub async fn bulk_insert_via_copy(
     client: &PostgresClient,
     data: Vec<Vec<&(dyn ToSql + Sync)>>,
     table_name: &str,
     column_names: &[String],
     column_types: &[Type],
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), BulkInsertPostgresError> {
     let stmt = format!(
         "COPY {} ({}) FROM STDIN WITH (FORMAT binary)",
         table_name,
         generate_event_table_columns_names_sql(column_names),
     );
 
-    let sink = client.copy_in(&stmt).await?;
+    let sink = client
+        .copy_in(&stmt)
+        .await
+        .map_err(BulkInsertPostgresError::PostgresError)?;
 
     let writer = BinaryCopyInWriter::new(sink, column_types);
     pin_mut!(writer);
 
     for row in data.iter() {
-        writer.as_mut().write(row).await?;
+        writer
+            .as_mut()
+            .write(row)
+            .await
+            .map_err(BulkInsertPostgresError::CouldNotWriteDataToPostgres)?;
     }
 
-    writer.finish().await?;
+    writer
+        .finish()
+        .await
+        .map_err(BulkInsertPostgresError::CouldNotWriteDataToPostgres)?;
 
     Ok(())
 }
@@ -805,7 +824,7 @@ fn map_log_token_to_ethereum_wrapper(token: &Token) -> EthereumSqlTypeWrapper {
                 }
                 Token::Tuple(_) => {
                     // TODO!
-                    panic!("Array tuple not supported yet - please raise issue in github with ABI to recreate")
+                    panic!("Array tuple not supported yet - please raise issue in github with ABI to recreate and we will fix")
                 }
             }
         }

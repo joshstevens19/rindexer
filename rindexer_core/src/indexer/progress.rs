@@ -96,7 +96,7 @@ impl IndexingEventsProgressState {
         let mut events = Vec::new();
         for event_info in &event_information {
             for network_contract in &event_info.contract.details {
-                let latest_block = network_contract.provider.get_block_number().await;
+                let latest_block = network_contract.cached_provider.get_block_number().await;
                 match latest_block {
                     Ok(latest_block) => {
                         let end_block = network_contract.end_block.unwrap_or(latest_block);

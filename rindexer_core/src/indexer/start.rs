@@ -110,7 +110,7 @@ pub async fn start_indexing(
                 &format!("Processing event on network {}", contract.network),
             );
             let latest_block = contract
-                .provider
+                .cached_provider
                 .get_block_number()
                 .await
                 .map_err(StartIndexingError::GetBlockNumberError)?;
@@ -138,8 +138,8 @@ pub async fn start_indexing(
 
             if event.contract.reorg_safe_distance {
                 let chain_id = contract
-                    .provider
-                    .get_chainid()
+                    .cached_provider
+                    .get_chain_id()
                     .await
                     .map_err(StartIndexingError::GetChainIdError)?;
                 let reorg_safe_distance = reorg_safe_distance_for_chain(&chain_id);

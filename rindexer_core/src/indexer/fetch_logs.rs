@@ -4,8 +4,9 @@ use crate::generator::event_callback_registry::{
 use crate::helpers::camel_to_snake;
 use crate::indexer::progress::{IndexingEventProgressStatus, IndexingEventsProgressState};
 use crate::manifest::yaml::DependencyEventTree;
+use crate::provider::JsonRpcCachedProvider;
 use crate::{EthereumSqlTypeWrapper, PostgresClient};
-use ethers::middleware::{Middleware, MiddlewareError};
+use ethers::middleware::MiddlewareError;
 use ethers::prelude::{Block, Filter, JsonRpcError, Log, ProviderError};
 use ethers::types::{Address, BlockNumber, Bloom, FilteredParams, ValueOrArray, H256, U64};
 use futures::future::join_all;
@@ -212,6 +213,12 @@ fn retry_with_block_range(
     None
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum FetchLogsError {
+    #[error("Provider error: {0}")]
+    Provider(#[from] ProviderError),
+}
+
 pub struct FetchLogsResult {
     pub logs: Vec<Log>,
     #[allow(dead_code)]
@@ -235,14 +242,14 @@ fn topic_in_bloom(topic_id: H256, logs_bloom: Bloom) -> bool {
     FilteredParams::matches_topics(logs_bloom, &topic_filter)
 }
 
-pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
-    provider: Arc<M>,
+pub fn fetch_logs_stream(
+    cached_provider: Arc<JsonRpcCachedProvider>,
     topic_id: H256,
     initial_filter: Filter,
     info_log_name: String,
     live_indexing_details: Option<LiveIndexingDetails>,
     semaphore: Arc<Semaphore>,
-) -> impl tokio_stream::Stream<Item = Result<FetchLogsResult, Box<<M as Middleware>::Error>>>
+) -> impl tokio_stream::Stream<Item = Result<FetchLogsResult, Box<dyn std::error::Error + Send>>>
        + Send
        + Unpin {
     let (tx, rx) = mpsc::unbounded_channel();
@@ -264,7 +271,7 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
             match permit {
                 Ok(permit) => {
                     let result = process_historic_logs_stream(
-                        &provider,
+                        &cached_provider,
                         &tx,
                         &topic_id,
                         current_filter.clone(),
@@ -313,7 +320,7 @@ pub fn fetch_logs_stream<M: Middleware + Clone + Send + 'static>(
         // Live indexing mode
         if live_indexing {
             live_indexing_stream(
-                &provider,
+                &cached_provider,
                 &tx,
                 &contract_address,
                 &topic_id,
@@ -351,9 +358,9 @@ struct ProcessHistoricLogsStreamResult {
     pub max_block_range_limitation: Option<U64>,
 }
 
-async fn process_historic_logs_stream<M: Middleware + Clone + Send + 'static>(
-    provider: &Arc<M>,
-    tx: &mpsc::UnboundedSender<Result<FetchLogsResult, Box<<M as Middleware>::Error>>>,
+async fn process_historic_logs_stream(
+    cached_provider: &Arc<JsonRpcCachedProvider>,
+    tx: &mpsc::UnboundedSender<Result<FetchLogsResult, Box<dyn std::error::Error + Send>>>,
     topic_id: &H256,
     current_filter: Filter,
     max_block_range_limitation: Option<U64>,
@@ -391,7 +398,7 @@ async fn process_historic_logs_stream<M: Middleware + Clone + Send + 'static>(
         current_filter
     );
 
-    match provider.get_logs(&current_filter).await {
+    match cached_provider.get_logs(&current_filter).await {
         Ok(logs) => {
             debug!(
                 "{} - {} - topic_id {}, Logs: {} from {} to {}",
@@ -540,9 +547,9 @@ async fn process_historic_logs_stream<M: Middleware + Clone + Send + 'static>(
 /// Handles live indexing mode, continuously checking for new blocks, ensuring they are
 /// within a safe range, updating the filter, and sending the logs to the provided channel.
 #[allow(clippy::too_many_arguments)]
-async fn live_indexing_stream<M: Middleware + Clone + Send + 'static>(
-    provider: &Arc<M>,
-    tx: &mpsc::UnboundedSender<Result<FetchLogsResult, Box<<M as Middleware>::Error>>>,
+async fn live_indexing_stream(
+    cached_provider: &Arc<JsonRpcCachedProvider>,
+    tx: &mpsc::UnboundedSender<Result<FetchLogsResult, Box<dyn std::error::Error + Send>>>,
     contract_address: &Option<ValueOrArray<Address>>,
     topic_id: &H256,
     reorg_safe_distance: U64,
@@ -554,8 +561,7 @@ async fn live_indexing_stream<M: Middleware + Clone + Send + 'static>(
     loop {
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
-        // TODO cache get latest block on provider to avoid multiple calls with many contracts
-        if let Some(latest_block) = provider.get_block(BlockNumber::Latest).await.unwrap() {
+        if let Some(latest_block) = cached_provider.get_latest_block().await.unwrap() {
             let latest_block_number = latest_block.number.unwrap();
             if last_seen_block_number == latest_block_number {
                 debug!(
@@ -622,7 +628,7 @@ async fn live_indexing_stream<M: Middleware + Clone + Send + 'static>(
             let permit = semaphore_client.acquire_owned().await;
 
             if let Ok(permit) = permit {
-                match provider.get_logs(&current_filter).await {
+                match cached_provider.get_logs(&current_filter).await {
                     Ok(logs) => {
                         debug!(
                             "{} - {} - Live topic_id {}, Logs: {} from {} to {}",
@@ -922,8 +928,8 @@ async fn process_events_dependency_tree(
             let reorg_safe_distance = logs_params.indexing_distance_from_head;
             if let Some(latest_block) = logs_params
                 .network_contract
-                .provider
-                .get_block(BlockNumber::Latest)
+                .cached_provider
+                .get_latest_block()
                 .await
                 .unwrap()
             {
@@ -1010,7 +1016,7 @@ async fn process_events_dependency_tree(
                 if let Ok(permit) = permit {
                     match logs_params
                         .network_contract
-                        .provider
+                        .cached_provider
                         .get_logs(&ordering_live_indexing_details.filter)
                         .await
                     {
@@ -1183,7 +1189,7 @@ pub struct ProcessLogsParams {
 }
 
 async fn process_logs(params: ProcessLogsParams) -> Result<(), Box<ProviderError>> {
-    let provider = Arc::new(params.network_contract.provider.clone());
+    let provider = params.network_contract.cached_provider.clone();
     let mut logs_stream = fetch_logs_stream(
         provider,
         params
@@ -1215,7 +1221,8 @@ async fn process_logs(params: ProcessLogsParams) -> Result<(), Box<ProviderError
             params.registry.clone(),
             result,
         )
-        .await?;
+        .await
+        .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
     }
 
     Ok(())
@@ -1232,8 +1239,8 @@ async fn handle_logs_result(
     network_contract: Arc<NetworkContract>,
     database: Option<Arc<PostgresClient>>,
     registry: Arc<EventCallbackRegistry>,
-    result: Result<FetchLogsResult, Box<ProviderError>>,
-) -> Result<(), Box<ProviderError>> {
+    result: Result<FetchLogsResult, Box<dyn std::error::Error + Send>>,
+) -> Result<(), Box<dyn std::error::Error + Send>> {
     match result {
         Ok(result) => {
             let fn_data = result

@@ -1,3 +1,4 @@
+use crate::provider::JsonRpcCachedProvider;
 use ethers::addressbook::Address;
 use ethers::contract::LogMeta;
 use ethers::prelude::{Filter, RetryClient};
@@ -99,7 +100,7 @@ pub struct NetworkContract {
     pub id: String,
     pub network: String,
     pub indexing_contract_setup: IndexingContractSetup,
-    pub provider: Arc<Provider<RetryClient<Http>>>,
+    pub cached_provider: Arc<JsonRpcCachedProvider>,
     pub decoder: Decoder,
     pub start_block: Option<U64>,
     pub end_block: Option<U64>,
