@@ -1,6 +1,6 @@
 use std::env;
-// use std::path::PathBuf;
-// use std::str::FromStr;
+//use std::path::PathBuf;
+//use std::str::FromStr;
 
 use self::rindexer::indexers::all_handlers::register_all_handlers;
 //use rindexer_core::manifest::yaml::read_manifest;
@@ -42,7 +42,7 @@ async fn main() {
     let path = env::current_dir();
     match path {
         Ok(path) => {
-            let _ = start_rindexer(StartDetails {
+            let result = start_rindexer(StartDetails {
                 manifest_path: path.join("rindexer.yaml"),
                 indexing_details: if enable_indexer {
                     Some(IndexingDetails {
@@ -60,6 +60,13 @@ async fn main() {
                 },
             })
             .await;
+
+            match result {
+                Ok(_) => {}
+                Err(e) => {
+                    println!("Error starting rindexer: {:?}", e);
+                }
+            }
         }
         Err(e) => {
             println!("Error getting current directory: {:?}", e);
@@ -73,35 +80,35 @@ async fn main() {
 //     let manifest = read_manifest(&path).unwrap();
 //     rindexer_core::generator::build::generate_rindexer_typings(manifest, &path).unwrap();
 // }
-//
+// 
 // fn generate_code_test() {
 //     let path =
 //         PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap();
 //     let manifest = read_manifest(&path).unwrap();
-//
+// 
 //     rindexer_core::generator::build::generate_rindexer_handlers(manifest, &path).unwrap();
 // }
-//
+// 
 // fn generate_all() {
 //     let path =
 //         PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap();
 //     rindexer_core::generator::build::generate(&path).unwrap();
 // }
-//
+// 
 // #[cfg(test)]
 // mod tests {
 //     use super::*;
-//
+// 
 //     #[test]
 //     fn test_generate() {
 //         generate();
 //     }
-//
+// 
 //     #[test]
 //     fn test_code_generate() {
 //         generate_code_test();
 //     }
-//
+// 
 //     #[test]
 //     fn test_generate_all() {
 //         generate_all();
