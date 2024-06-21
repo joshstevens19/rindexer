@@ -851,7 +851,8 @@ async fn process_events_dependency_tree(
                     progress: event_processing_config.progress.clone(),
                     database: event_processing_config.database.clone(),
                     execute_events_logs_in_order: event_processing_config.index_event_in_order,
-                    live_indexing: false, // sync the historic ones first
+                    // sync the historic ones first and live indexing is added to the stack to process after
+                    live_indexing: false,
                     indexing_distance_from_head: event_processing_config
                         .indexing_distance_from_head,
                     semaphore: event_processing_config.semaphore.clone(),
@@ -861,7 +862,7 @@ async fn process_events_dependency_tree(
                     .await
                     .map_err(ProcessEventsWithDependenciesError::ProcessLogs)?;
 
-                if logs_params.live_indexing {
+                if event_processing_config.live_indexing {
                     let topic_id = event_processing_config.topic_id.parse::<H256>().unwrap();
                     live_indexing_events
                         .lock()
