@@ -6,7 +6,11 @@ checklist v1.0:
 - add a getting started guide for rust / no-code
 - look into deployments to make it easy to do
 
+bugs:
+- Do not create a new postgres client each time on rust projects
+
 nice to have:
+- look at the final unwraps
 - look into PK with tx hash and tx index and log index to make it unique and not have to worry about duplicates
 
 future features:
