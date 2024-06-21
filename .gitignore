@@ -21,6 +21,6 @@ Cargo.lock
 rindexer_cli/rindexer.yaml
 rindexer_cli/.env
 examples/*
-rindexer_docs/node_modules
-rindexer_docs/dist
-rindexer_docs/vocs.config.ts*
+documentation/node_modules
+documentation/dist
+documentation/vocs.config.ts*
