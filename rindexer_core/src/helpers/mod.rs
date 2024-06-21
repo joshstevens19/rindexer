@@ -12,19 +12,21 @@ pub fn camel_to_snake(s: &str) -> String {
     let mut previous_was_uppercase = false;
 
     for (i, c) in s.chars().enumerate() {
-        if c.is_uppercase() {
-            // Insert an underscore if it's not the first character and the previous character wasn't uppercase
-            if i > 0
-                && (!previous_was_uppercase
+        if c.is_alphanumeric() || c == '_' {
+            if c.is_uppercase() {
+                // Insert an underscore if it's not the first character and the previous character wasn't uppercase
+                if i > 0
+                    && (!previous_was_uppercase
                     || (i + 1 < s.len() && s.chars().nth(i + 1).unwrap().is_lowercase()))
-            {
-                snake_case.push('_');
+                {
+                    snake_case.push('_');
+                }
+                snake_case.push(c.to_ascii_lowercase());
+                previous_was_uppercase = true;
+            } else {
+                snake_case.push(c);
+                previous_was_uppercase = false;
             }
-            snake_case.push(c.to_ascii_lowercase());
-            previous_was_uppercase = true;
-        } else {
-            snake_case.push(c);
-            previous_was_uppercase = false;
         }
     }
 
@@ -161,7 +163,9 @@ mod tests {
     #[test]
     fn test_camel_to_snake() {
         assert_eq!(camel_to_snake("CamelCase"), "camel_case");
+        assert_eq!(camel_to_snake("Camel-Case"), "camel_case");
         assert_eq!(camel_to_snake("camelCase"), "camel_case");
+        assert_eq!(camel_to_snake("camel_case"), "camel_case");
         assert_eq!(camel_to_snake("Camel"), "camel");
         assert_eq!(camel_to_snake("camel"), "camel");
         assert_eq!(camel_to_snake("collectNFTId"), "collect_nft_id");
