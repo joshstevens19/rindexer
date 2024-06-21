@@ -5,8 +5,6 @@ use std::sync::Arc;
 use async_std::prelude::StreamExt;
 use colored::Colorize;
 use ethers::abi::{Abi, Contract as EthersContract, Event};
-use ethers::prelude::Http;
-use ethers::providers::{Provider, RetryClient};
 use futures::future::BoxFuture;
 use futures::stream::FuturesUnordered;
 use tokio_postgres::types::{ToSql, Type};
