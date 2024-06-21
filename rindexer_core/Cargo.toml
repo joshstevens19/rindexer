@@ -2,6 +2,7 @@
 name = "rindexer_core"
 version = "0.1.0"
 edition = "2021"
+resolver = "2"
 
 [dependencies]
 ethers = { version = "2.0", features = ["rustls", "openssl"] }
