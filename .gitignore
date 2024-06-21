@@ -18,8 +18,8 @@ Cargo.lock
 *.pdb
 
 # App ignores
-rindexer_cli/rindexer.yaml
-rindexer_cli/.env
+cli/rindexer.yaml
+cli/.env
 examples/*
 documentation/node_modules
 documentation/dist
