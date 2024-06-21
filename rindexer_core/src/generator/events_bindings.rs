@@ -2,6 +2,7 @@ use crate::database::postgres::{
     generate_insert_query_for_event, solidity_type_to_db_type,
     solidity_type_to_ethereum_sql_type_wrapper,
 };
+use crate::generator::build::is_filter;
 use crate::generator::event_callback_registry::IndexingContractSetup;
 use crate::EthereumSqlTypeWrapper;
 use ethers::utils::keccak256;
@@ -191,7 +192,7 @@ fn generate_structs(contract: &Contract) -> Result<Code, GenerateStructsError> {
                 r#"
                     pub type {struct_data} = {abigen_mod_name}::{event_name}Filter;
 
-                    #[derive(Debug)]
+                    #[derive(Debug, Clone)]
                     pub struct {struct_result} {{
                         pub event_data: {struct_data},
                         pub tx_information: TxInformation
@@ -255,6 +256,7 @@ fn generate_event_names_match_arms_code(event_type_name: &str, event_info: &[Eve
 }
 
 fn generate_index_event_in_order_arms_code(
+    event_type_name: &str,
     event_info: &[EventInfo],
     index_event_in_order: &Option<Vec<String>>,
 ) -> Code {
@@ -263,7 +265,8 @@ fn generate_index_event_in_order_arms_code(
             .iter()
             .map(|info| {
                 format!(
-                    "\"{}\" => {},",
+                    "{}::{}(_) => {},",
+                    event_type_name,
                     info.name,
                     index_event_in_order
                         .as_ref()
@@ -603,6 +606,7 @@ fn generate_event_callback_structs_code(
     storage: &Storage,
 ) -> Result<Code, GenerateEventCallbackStructsError> {
     let databases_enabled = storage.postgres_enabled();
+    let is_filter = is_filter(contract);
 
     let mut parts = Vec::new();
 
@@ -612,22 +616,57 @@ fn generate_event_callback_structs_code(
 
         let part = format!(
             r#"
-            type {name}EventCallbackType<TExtensions> = Arc<dyn Fn(&Vec<{struct_result}>, Arc<EventContext<TExtensions>>) -> BoxFuture<'_, ()> + Send + Sync>;
+            pub fn {lower_name}_handler<TExtensions, F, Fut>(
+                custom_logic: F,
+            ) -> Arc<
+                dyn for<'a> Fn(&'a Vec<{struct_result}>, Arc<EventContext<TExtensions>>) -> BoxFuture<'a, ()>
+                    + Send
+                    + Sync,
+            >
+            where
+                TransferResult: Clone + 'static,
+                F: for<'a> Fn(Vec<{struct_result}>, Arc<EventContext<TExtensions>>) -> Fut
+                    + Send
+                    + Sync
+                    + 'static
+                    + Clone,
+                Fut: Future<Output = ()> + Send + 'static,
+                TExtensions: Send + Sync + 'static,
+            {{
+                Arc::new(move |results, context| {{
+                    let custom_logic = custom_logic.clone();
+                    let results = results.clone();
+                    let context = Arc::clone(&context);
+                    async move {{ (custom_logic)(results, context).await }}.boxed()
+                }})
+            }}
+            
+            type {name}EventCallbackType<TExtensions> = Arc<
+                dyn for<'a> Fn(&'a Vec<{struct_result}>, Arc<EventContext<TExtensions>>) -> BoxFuture<'a, ()>
+                    + Send
+                    + Sync,
+                >;
 
-            pub struct {name}Event<TExtensions> where TExtensions: Send + Sync {{
+            pub struct {name}Event<TExtensions> where TExtensions: Send + Sync + 'static {{
                 callback: {name}EventCallbackType<TExtensions>,
                 context: Arc<EventContext<TExtensions>>,
             }}
 
-            impl<TExtensions> {name}Event<TExtensions> where TExtensions: Send + Sync {{
-                pub async fn new(
-                    callback: {name}EventCallbackType<TExtensions>,
-                    extensions: TExtensions,
-                ) -> Self {{
+            impl<TExtensions> {name}Event<TExtensions> where TExtensions: Send + Sync + 'static {{
+                pub async fn handler<F, Fut>(closure: F, extensions: TExtensions) -> Self
+                where
+                    {struct_result}: Clone + 'static,
+                    F: for<'a> Fn(Vec<{struct_result}>, Arc<EventContext<TExtensions>>) -> Fut
+                        + Send
+                        + Sync
+                        + 'static
+                        + Clone,
+                    Fut: Future<Output = ()> + Send + 'static,
+                {{
                     {csv_generator}
-
+            
                     Self {{
-                        callback,
+                        callback: {lower_name}_handler(closure),
                         context: Arc::new(EventContext {{
                             {database}
                             csv: Arc::new(csv),
@@ -640,8 +679,13 @@ fn generate_event_callback_structs_code(
             #[async_trait]
             impl<TExtensions> EventCallback for {name}Event<TExtensions> where TExtensions: Send + Sync {{
                 async fn call(&self, events: Vec<EventResult>) {{
-                    let events_len = events.len();
+                    {event_callback_events_len}
 
+                    // note some can not downcast because it cant decode
+                    // this happens on events which failed decoding due to
+                    // not having the right abi for example
+                    // transfer events with 2 indexed topics cant decode
+                    // transfer events with 3 indexed topics
                     let result: Vec<{struct_result}> = events.into_iter()
                         .filter_map(|item| {{
                             item.decoded_data.downcast::<{struct_data}>()
@@ -653,15 +697,12 @@ fn generate_event_callback_structs_code(
                         }})
                         .collect();
 
-                    if result.len() == events_len {{
-                        (self.callback)(&result, self.context.clone()).await;
-                    }} else {{
-                        panic!("{name}Event: Unexpected data type - expected: {struct_data}")
-                    }}
+                    {event_callback_return}
                 }}
             }}
             "#,
             name = info.name,
+            lower_name = info.name.to_lowercase(),
             struct_result = info.struct_result,
             struct_data = info.struct_data,
             database = if databases_enabled {
@@ -670,6 +711,26 @@ fn generate_event_callback_structs_code(
                 ""
             },
             csv_generator = csv_generator,
+            event_callback_events_len = if !is_filter {
+                "let events_len = events.len();"
+            } else {
+                ""
+            },
+            event_callback_return = if !is_filter {
+                format!(
+                    r#"
+                    if result.len() == events_len {{
+                        (self.callback)(&result, self.context.clone()).await;
+                    }} else {{
+                        panic!("{name}Event: Unexpected data type - expected: {struct_data}")
+                    }}
+                    "#,
+                    name = info.name,
+                    struct_data = info.struct_data
+                )
+            } else {
+                "(self.callback)(&result, self.context.clone()).await;".to_string()
+            }
         );
 
         parts.push(part);
@@ -680,8 +741,7 @@ fn generate_event_callback_structs_code(
 
 fn build_get_provider_fn(networks: Vec<String>) -> Code {
     let mut function = String::new();
-    function
-        .push_str("fn get_provider(&self, network: &str) -> Arc<Provider<RetryClient<Http>>> {\n");
+    function.push_str("fn get_provider(&self, network: &str) -> Arc<JsonRpcCachedProvider> {\n");
 
     // Iterate through the networks and generate conditional branches
     for (index, network) in networks.iter().enumerate() {
@@ -738,7 +798,7 @@ fn build_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &st
                 let address: Address = "{address}"
                     .parse()
                     .unwrap();
-                {abi_gen_name}::new(address, Arc::new(self.get_provider(network).clone()))
+                {abi_gen_name}::new(address, Arc::new(self.get_provider(network).get_inner_provider().clone()))
             }}"#,
             network = contract_detail.network,
             address = address,
@@ -847,9 +907,8 @@ fn generate_event_bindings_code(
             }}
 
             pub fn index_event_in_order(&self) -> bool {{
-                let event_name = self.event_name();
-                match event_name {{
-                   {index_event_in_order_match_arms}
+                 match self {{
+                    {index_event_in_order_match_arms}
                 }}
             }}
 
@@ -880,7 +939,7 @@ fn generate_event_bindings_code(
                         .map(|c| NetworkContract {{
                             id: generate_random_id(10),
                             network: c.network.clone(),
-                            provider: self.get_provider(&c.network),
+                            cached_provider: self.get_provider(&c.network),
                             decoder: self.decoder(&c.network),
                             indexing_contract_setup: c.indexing_contract_setup(),
                             start_block: c.start_block,
@@ -930,8 +989,11 @@ fn generate_event_bindings_code(
         topic_ids_match_arms = generate_topic_ids_match_arms_code(&event_type_name, &event_info),
         event_names_match_arms =
             generate_event_names_match_arms_code(&event_type_name, &event_info),
-        index_event_in_order_match_arms =
-            generate_index_event_in_order_arms_code(&event_info, &contract.index_event_in_order),
+        index_event_in_order_match_arms = generate_index_event_in_order_arms_code(
+            &event_type_name,
+            &event_info,
+            &contract.index_event_in_order
+        ),
         contract_type_fn = generate_contract_type_fn_code(contract),
         build_get_provider_fn =
             build_get_provider_fn(contract.details.iter().map(|c| c.network.clone()).collect()),
@@ -1183,7 +1245,7 @@ pub fn generate_event_handlers(
                 .push_str("&EthereumSqlTypeWrapper::H256(result.tx_information.transaction_hash),");
             params_sql
                 .push_str("&EthereumSqlTypeWrapper::U64(result.tx_information.block_number),");
-            params_sql.push_str("&EthereumSqlTypeWrapper::H256(result.tx_information.block_hash)");
+            params_sql.push_str("&EthereumSqlTypeWrapper::H256(result.tx_information.block_hash),");
             params_sql.push_str(
                 "&EthereumSqlTypeWrapper::String(result.tx_information.network.to_string())",
             );
@@ -1222,7 +1284,7 @@ pub fn generate_event_handlers(
 
             csv_data.push_str(r#"format!("{:?}", result.tx_information.transaction_hash),"#);
             csv_data.push_str(r#"result.tx_information.block_number.to_string(),"#);
-            csv_data.push_str(r#"result.tx_information.block_hash.to_string()"#);
+            csv_data.push_str(r#"result.tx_information.block_hash.to_string(),"#);
             csv_data.push_str(r#"result.tx_information.network.to_string()"#);
 
             csv_write = format!(
@@ -1235,18 +1297,15 @@ pub fn generate_event_handlers(
             r#"
             async fn {handler_fn_name}_handler(registry: &mut EventCallbackRegistry) {{
                 {event_type_name}::{handler_name}(
-                    {handler_name}Event::new(
-                        Arc::new(|results, context| {{
-                            Box::pin(async move {{
-                                for result in results {{
-                                    {csv_write}
-                                    {postgres_write}
-                                }}
-                           }})
-                        }}),
-                        no_extensions()
-                    )
-                    .await,
+                    {handler_name}Event::handler(|results, context| async move {{
+                            for result in results {{
+                                {csv_write}
+                                {postgres_write}
+                            }}
+                        }},
+                        no_extensions(),
+                      )
+                      .await,
                 )
                 .register(registry);
             }}

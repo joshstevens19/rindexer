@@ -1,20 +1,20 @@
-name: rindexer-demo
+name: BlahBaby
 description: This is an example manifest file for the rindexer project.
 repository: https://github.com/joshstevens19/rindexer
 project_type: rust
 contracts:
-    - name: LensRegistry
-      details:
-        - address: 0xD4F2F33680FCCb36748FA9831851643781608844
-          network: polygon
-          startBlock: 56399431
-          endBlock: 56399432
-  # ADD COMMENT EXPLAINING ABOUT rindexer download-abi
-      abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
-      include_events:
-        - HandleLinked
-      reorg_safe_distance: false
-      generate_csv: true
+#    - name: LensRegistry
+#      details:
+#        - address: 0xD4F2F33680FCCb36748FA9831851643781608844
+#          network: polygon
+#          startBlock: 56399431
+#          endBlock: 56399432
+#  # ADD COMMENT EXPLAINING ABOUT rindexer download-abi
+#      abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
+#      include_events:
+#        - HandleLinked
+#      reorg_safe_distance: false
+#      generate_csv: true
   #      - name: LensHub
   #        details:
   #          - address: 0xDb46d1Dc155634FbC732f92E853b10B288AD5a1d
@@ -36,34 +36,34 @@ contracts:
       details:
         - filter:
             event_name: Transfer
-            indexed_1:
-              - 0x4A1a2197f307222cD67A1762D9A352F64558d9Be
+#            indexed_1:
+#              - 0x4A1a2197f307222cD67A1762D9A352F64558d9Be
           network: polygon
-          startBlock: 56399431
-          endBlock: 56399432
+          start_block: 56399431
+          #end_block: 57399432
       abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/erc20-abi.json
       generate_csv: true
 networks:
   - name: polygon
-    chainId: 137
+    chain_id: 137
     # this is a free node update with your own for higher and faster indexing
     url: https://polygon-mainnet.g.alchemy.com/v2/QLjF9OO90XrczIsf6Nud7RoSc8mLSyra
     maxBlockRange: 100000 # optional
     maxHistoricalTaskConcurrency: 20 # optional
   - name: base
-    chainId: 8453
+    chain_id: 8453
     url: https://base-mainnet.g.alchemy.com/v2/fb_ZprvGkE5uIH6bK6BvfFVDSABpTPXk
-global:
-  contracts:
-    - name: InjectedGlobal
-      details:
-        - address: '0x2E645469f354BB4F5c8a05B3b30A929361cf77eC'
-          network: polygon
-          startBlock: 56399431
-          endBlock: 56399432
-      abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
+#global:
+#  contracts:
+#    - name: InjectedGlobal
+#      details:
+#        - address: '0x2E645469f354BB4F5c8a05B3b30A929361cf77eC'
+#          network: polygon
+#          startBlock: 56399431
+#          endBlock: 56399432
+#      abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
 storage:
   postgres:
-    database_url: ${DATABASE_URL}
+    enabled: true
   csv:
     path: ./generated_csv

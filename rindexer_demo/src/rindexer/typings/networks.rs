@@ -10,16 +10,15 @@ use std::sync::Arc;
 lazy_static! {
     static ref POLYGON_PROVIDER: Arc<JsonRpcCachedProvider> = create_client(
         "https://polygon-mainnet.g.alchemy.com/v2/QLjF9OO90XrczIsf6Nud7RoSc8mLSyra",
-        Some(660)
+        None
     )
     .expect("Error creating provider");
     static ref BASE_PROVIDER: Arc<JsonRpcCachedProvider> = create_client(
         "https://base-mainnet.g.alchemy.com/v2/fb_ZprvGkE5uIH6bK6BvfFVDSABpTPXk",
-        Some(660)
+        None
     )
     .expect("Error creating provider");
 }
-
 pub fn get_polygon_provider_cache() -> Arc<JsonRpcCachedProvider> {
     POLYGON_PROVIDER.clone()
 }

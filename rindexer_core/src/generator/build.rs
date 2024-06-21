@@ -447,7 +447,7 @@ serde = {{ version = "1.0.194", features = ["derive"] }}
                 let path = env::current_dir();
                 match path {
                     Ok(path) => {
-                        let _ = start_rindexer(StartDetails {
+                        let result = start_rindexer(StartDetails {
                             manifest_path: path.join("rindexer.yaml"),
                             indexing_details: if enable_indexer {
                                 Some(IndexingDetails {
@@ -465,6 +465,13 @@ serde = {{ version = "1.0.194", features = ["derive"] }}
                             },
                         })
                         .await;
+                        
+                        match result {
+                            Ok(_) => {}
+                            Err(e) => {
+                                println!("Error starting rindexer: {:?}", e);
+                            }
+                        }
                     }
                     Err(e) => {
                         println!("Error getting current directory: {:?}", e);

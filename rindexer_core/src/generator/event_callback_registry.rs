@@ -132,7 +132,7 @@ pub struct TxInformation {
     pub transaction_index: U64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EventResult {
     pub log: Log,
     pub decoded_data: Arc<dyn Any + Send + Sync>,

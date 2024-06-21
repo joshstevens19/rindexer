@@ -263,7 +263,7 @@ where
             };
 
         registry.register_event(EventInformation {
-            indexer_name: "LensRegistryExample".to_string(),
+            indexer_name: "BlahBaby".to_string(),
             event_name: event_name.to_string(),
             index_event_in_order: false,
             topic_id: topic_id.to_string(),

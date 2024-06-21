@@ -29,7 +29,7 @@ pub fn network_provider_fn_name_by_name(network_name: &str) -> String {
 fn generate_network_lazy_provider_code(network: &Network) -> Code {
     Code::new(format!(
         r#"
-            static ref {network_name}: Arc<JsonRpcCachedProvider> = create_retry_client("{network_url}", {compute_units_per_second}).expect("Error creating provider");
+            static ref {network_name}: Arc<JsonRpcCachedProvider> = create_client("{network_url}", {compute_units_per_second}).expect("Error creating provider");
         "#,
         network_name = network_provider_name(network),
         network_url = network.url,
@@ -45,7 +45,7 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
 fn generate_network_provider_code(network: &Network) -> Code {
     Code::new(format!(
         r#"
-            pub fn {fn_name}_cache() -> Arc<Provider<RetryClient<Http>>> {{
+            pub fn {fn_name}_cache() -> Arc<JsonRpcCachedProvider> {{
                 {provider_lazy_name}.clone()
             }}
             
@@ -67,7 +67,7 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
             
             use ethers::providers::{Provider, Http, RetryClient};
             use rindexer_core::lazy_static;
-            use rindexer_core::provider::create_retry_client;
+            use rindexer_core::provider::{JsonRpcCachedProvider, create_client};
             use std::sync::Arc;
 
             lazy_static! {

@@ -1,19 +1,14 @@
 # rindexer
 
-inspiration - https://ponder.sh/docs/guides/add-contracts
-
-networks - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60adde361736deeb3b2c/packages/core/src/config/networks.ts#L22
-
-eth_getLogs - https://github.com/ponder-sh/ponder/blob/83e2b4a7a05d847832ba60adde361736deeb3b2c/packages/core/src/sync-historical/service.ts#L946
-
 checklist v1.0:
-- look into making the rust handlers abstracted away a bit more with Arc and Box + look at doing the bulk insert + copy route
+- look at doing the bulk insert + copy route
 - look into setting your own schema for the database using diesel
 - finish the documentation (note about block timestamp)
 - add a getting started guide for rust / no-code
 - look into deployments to make it easy to do
 
 bugs:
+- name cant have `-` in it
 
 nice to have:
 - look into PK with tx hash and tx index and log index to make it unique and not have to worry about duplicates
