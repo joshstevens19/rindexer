@@ -1,9 +1,7 @@
 [workspace]
+resolver = "2"
 members = [
     "rindexer_core",
     "cli",
     "rindexer_demo"
-]
-exclude = [
-    "examples/rindexer_demo_cli",
 ]
