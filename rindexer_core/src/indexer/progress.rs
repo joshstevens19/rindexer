@@ -1,6 +1,5 @@
 use crate::generator::event_callback_registry::EventInformation;
 use colored::{ColoredString, Colorize};
-use ethers::providers::Middleware;
 use ethers::types::U64;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;

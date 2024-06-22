@@ -1,5 +1,5 @@
 use ethers::providers::ProviderError;
-use ethers::{providers::Middleware, types::U64};
+use ethers::{types::U64};
 use futures::future::try_join_all;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
