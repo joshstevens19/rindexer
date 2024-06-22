@@ -80,35 +80,35 @@ async fn main() {
 //     let manifest = read_manifest(&path).unwrap();
 //     rindexer_core::generator::build::generate_rindexer_typings(manifest, &path).unwrap();
 // }
-// 
+//
 // fn generate_code_test() {
 //     let path =
 //         PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap();
 //     let manifest = read_manifest(&path).unwrap();
-// 
+//
 //     rindexer_core::generator::build::generate_rindexer_handlers(manifest, &path).unwrap();
 // }
-// 
+//
 // fn generate_all() {
 //     let path =
 //         PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap();
 //     rindexer_core::generator::build::generate(&path).unwrap();
 // }
-// 
+//
 // #[cfg(test)]
 // mod tests {
 //     use super::*;
-// 
+//
 //     #[test]
 //     fn test_generate() {
 //         generate();
 //     }
-// 
+//
 //     #[test]
 //     fn test_code_generate() {
 //         generate_code_test();
 //     }
-// 
+//
 //     #[test]
 //     fn test_generate_all() {
 //         generate_all();
