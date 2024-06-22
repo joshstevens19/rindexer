@@ -8,7 +8,7 @@ use futures::pin_mut;
 use rust_decimal::Decimal;
 use std::{env, str};
 use tokio_postgres::binary_copy::BinaryCopyInWriter;
-use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type as PgType, Type};
+use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type as PgType};
 use tokio_postgres::{
     CopyInSink, Error as PgError, NoTls, Row, Statement, ToStatement, Transaction as PgTransaction,
 };
@@ -261,6 +261,85 @@ impl PostgresClient {
             .await
             .map_err(PostgresError::PgError)
     }
+
+    pub async fn bulk_insert_via_copy(
+        &self,
+        table_name: &str,
+        column_names: &[String],
+        column_types: &[PgType],
+        data: &[Vec<EthereumSqlTypeWrapper>],
+    ) -> Result<(), BulkInsertPostgresError> {
+        let stmt = format!(
+            "COPY {} ({}) FROM STDIN WITH (FORMAT binary)",
+            table_name,
+            generate_event_table_columns_names_sql(column_names),
+        );
+
+        let prepared_data: Vec<Vec<&(dyn ToSql + Sync)>> = data
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|param| param as &(dyn ToSql + Sync))
+                    .collect()
+            })
+            .collect();
+
+        let sink = self
+            .copy_in(&stmt)
+            .await
+            .map_err(BulkInsertPostgresError::PostgresError)?;
+
+        let writer = BinaryCopyInWriter::new(sink, column_types);
+        pin_mut!(writer);
+
+        for row in prepared_data.iter() {
+            writer
+                .as_mut()
+                .write(row)
+                .await
+                .map_err(BulkInsertPostgresError::CouldNotWriteDataToPostgres)?;
+        }
+
+        writer
+            .finish()
+            .await
+            .map_err(BulkInsertPostgresError::CouldNotWriteDataToPostgres)?;
+
+        Ok(())
+    }
+
+    pub async fn bulk_insert<'a>(
+        &self,
+        table_name: &str,
+        column_names: &[String],
+        bulk_data: &'a [Vec<EthereumSqlTypeWrapper>],
+    ) -> Result<u64, PostgresError> {
+        let total_columns = column_names.len();
+
+        let mut query = format!(
+            "INSERT INTO {} ({}) VALUES ",
+            table_name,
+            generate_event_table_columns_names_sql(column_names),
+        );
+        let mut params: Vec<&'a (dyn ToSql + Sync + 'a)> = Vec::new();
+
+        for (i, row) in bulk_data.iter().enumerate() {
+            if i > 0 {
+                query.push(',');
+            }
+            let mut placeholders = vec![];
+            for j in 0..total_columns {
+                placeholders.push(format!("${}", i * total_columns + j + 1));
+            }
+            query.push_str(&format!("({})", placeholders.join(",")));
+
+            for param in row {
+                params.push(param as &'a (dyn ToSql + Sync + 'a));
+            }
+        }
+
+        self.execute(&query, &params).await
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -337,8 +416,20 @@ pub fn generate_columns_with_data_types(inputs: &[ABIInput]) -> Vec<String> {
 }
 
 /// Generates an array of column names based on ABI input properties.
-pub fn generate_columns_names_only(inputs: &[ABIInput]) -> Vec<String> {
+fn generate_columns_names_only(inputs: &[ABIInput]) -> Vec<String> {
     generate_columns(inputs, &GenerateAbiPropertiesType::PostgresColumnsNamesOnly)
+}
+
+pub fn generate_column_names_only_with_base_properties(inputs: &[ABIInput]) -> Vec<String> {
+    let mut column_names: Vec<String> = vec!["contract_address".to_string()];
+    column_names.extend(generate_columns_names_only(inputs));
+    column_names.extend(vec![
+        "tx_hash".to_string(),
+        "block_number".to_string(),
+        "block_hash".to_string(),
+        "network".to_string(),
+    ]);
+    column_names
 }
 
 /// Generates SQL queries to create tables based on provided event information.
@@ -462,45 +553,17 @@ pub fn drop_tables_for_indexer_sql(indexer: &Indexer) -> Code {
     Code::new(sql)
 }
 
-/// Generates a SQL VALUES clause with injected parameters.
-///
-/// Constructs a VALUES clause for a SQL statement with a specified number of
-/// parameters, formatted as `$1, $2, ..., $count`.
-///
-pub fn generate_injected_param(count: usize) -> String {
-    let params = (1..=count)
-        .map(|i| format!("${}", i))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("VALUES({})", params)
-}
-
 pub fn event_table_full_name(indexer_name: &str, contract_name: &str, event_name: &str) -> String {
     let schema_name = indexer_contract_schema_name(indexer_name, contract_name);
     format!("{}.{}", schema_name, camel_to_snake(event_name))
 }
 
 fn generate_event_table_columns_names_sql(column_names: &[String]) -> String {
-    format!(
-        "contract_address, {}, \"tx_hash\", \"block_number\", \"block_hash\", \"network\"",
-        column_names.join(", ")
-    )
-}
-
-pub const CUSTOM_COLUMNS_COUNT: usize = 5;
-
-pub fn generate_insert_query_for_event(
-    event_info: &EventInfo,
-    indexer_name: &str,
-    contract_name: &str,
-) -> String {
-    let column_names = generate_columns_names_only(&event_info.inputs);
-    format!(
-        "INSERT INTO {} ({}) {}",
-        event_table_full_name(indexer_name, contract_name, &event_info.name),
-        generate_event_table_columns_names_sql(&column_names),
-        generate_injected_param(CUSTOM_COLUMNS_COUNT + column_names.len())
-    )
+    column_names
+        .iter()
+        .map(|name| format!("\"{}\"", name))
+        .collect::<Vec<String>>()
+        .join(", ")
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -510,76 +573,6 @@ pub enum BulkInsertPostgresError {
 
     #[error("{0}")]
     CouldNotWriteDataToPostgres(tokio_postgres::Error),
-}
-
-pub async fn bulk_insert_via_copy(
-    client: &PostgresClient,
-    data: Vec<Vec<&(dyn ToSql + Sync)>>,
-    table_name: &str,
-    column_names: &[String],
-    column_types: &[Type],
-) -> Result<(), BulkInsertPostgresError> {
-    let stmt = format!(
-        "COPY {} ({}) FROM STDIN WITH (FORMAT binary)",
-        table_name,
-        generate_event_table_columns_names_sql(column_names),
-    );
-
-    let sink = client
-        .copy_in(&stmt)
-        .await
-        .map_err(BulkInsertPostgresError::PostgresError)?;
-
-    let writer = BinaryCopyInWriter::new(sink, column_types);
-    pin_mut!(writer);
-
-    for row in data.iter() {
-        writer
-            .as_mut()
-            .write(row)
-            .await
-            .map_err(BulkInsertPostgresError::CouldNotWriteDataToPostgres)?;
-    }
-
-    writer
-        .finish()
-        .await
-        .map_err(BulkInsertPostgresError::CouldNotWriteDataToPostgres)?;
-
-    Ok(())
-}
-
-pub fn generate_bulk_insert_statement<'a>(
-    table_name: &str,
-    column_names: &[String],
-    bulk_data: &'a [Vec<EthereumSqlTypeWrapper>],
-) -> (String, Vec<&'a (dyn ToSql + Sync + 'a)>) {
-    // including placeholders
-    let total_columns = column_names.len() + CUSTOM_COLUMNS_COUNT;
-
-    let mut query = format!(
-        "INSERT INTO {} ({}) VALUES ",
-        table_name,
-        generate_event_table_columns_names_sql(column_names),
-    );
-    let mut params: Vec<&'a (dyn ToSql + Sync + 'a)> = Vec::new();
-
-    for (i, row) in bulk_data.iter().enumerate() {
-        if i > 0 {
-            query.push(',');
-        }
-        let mut placeholders = vec![];
-        for j in 0..total_columns {
-            placeholders.push(format!("${}", i * total_columns + j + 1));
-        }
-        query.push_str(&format!("({})", placeholders.join(",")));
-
-        for param in row {
-            params.push(param as &'a (dyn ToSql + Sync + 'a));
-        }
-    }
-
-    (query, params)
 }
 
 #[derive(Debug, Clone)]
@@ -652,38 +645,38 @@ impl EthereumSqlTypeWrapper {
         }
     }
 
-    pub fn to_type(&self) -> Type {
+    pub fn to_type(&self) -> PgType {
         match self {
-            EthereumSqlTypeWrapper::U64(_) => Type::INT8,
-            EthereumSqlTypeWrapper::VecU64(_) => Type::INT8_ARRAY,
-            EthereumSqlTypeWrapper::U128(_) => Type::NUMERIC,
-            EthereumSqlTypeWrapper::VecU128(_) => Type::NUMERIC_ARRAY,
-            EthereumSqlTypeWrapper::U256(_) => Type::NUMERIC,
-            EthereumSqlTypeWrapper::VecU256(_) => Type::NUMERIC_ARRAY,
-            EthereumSqlTypeWrapper::U512(_) => Type::NUMERIC,
-            EthereumSqlTypeWrapper::VecU512(_) => Type::NUMERIC_ARRAY,
-            EthereumSqlTypeWrapper::H128(_) => Type::BYTEA,
-            EthereumSqlTypeWrapper::VecH128(_) => Type::BYTEA_ARRAY,
-            EthereumSqlTypeWrapper::H160(_) => Type::BYTEA,
-            EthereumSqlTypeWrapper::VecH160(_) => Type::BYTEA_ARRAY,
-            EthereumSqlTypeWrapper::H256(_) => Type::BYTEA,
-            EthereumSqlTypeWrapper::VecH256(_) => Type::BYTEA_ARRAY,
-            EthereumSqlTypeWrapper::H512(_) => Type::BYTEA,
-            EthereumSqlTypeWrapper::VecH512(_) => Type::BYTEA_ARRAY,
-            EthereumSqlTypeWrapper::Address(_) => Type::BYTEA,
-            EthereumSqlTypeWrapper::VecAddress(_) => Type::BYTEA_ARRAY,
-            EthereumSqlTypeWrapper::Bool(_) => Type::BOOL,
-            EthereumSqlTypeWrapper::VecBool(_) => Type::BOOL_ARRAY,
-            EthereumSqlTypeWrapper::U16(_) => Type::INT2,
-            EthereumSqlTypeWrapper::VecU16(_) => Type::INT2_ARRAY,
-            EthereumSqlTypeWrapper::String(_) => Type::TEXT,
-            EthereumSqlTypeWrapper::VecString(_) => Type::TEXT_ARRAY,
-            EthereumSqlTypeWrapper::Bytes(_) => Type::BYTEA,
-            EthereumSqlTypeWrapper::VecBytes(_) => Type::BYTEA_ARRAY,
-            EthereumSqlTypeWrapper::U32(_) => Type::INT4,
-            EthereumSqlTypeWrapper::VecU32(_) => Type::INT4_ARRAY,
-            EthereumSqlTypeWrapper::U8(_) => Type::INT2,
-            EthereumSqlTypeWrapper::VecU8(_) => Type::INT2_ARRAY,
+            EthereumSqlTypeWrapper::U64(_) => PgType::INT8,
+            EthereumSqlTypeWrapper::VecU64(_) => PgType::INT8_ARRAY,
+            EthereumSqlTypeWrapper::U128(_) => PgType::NUMERIC,
+            EthereumSqlTypeWrapper::VecU128(_) => PgType::NUMERIC_ARRAY,
+            EthereumSqlTypeWrapper::U256(_) => PgType::NUMERIC,
+            EthereumSqlTypeWrapper::VecU256(_) => PgType::NUMERIC_ARRAY,
+            EthereumSqlTypeWrapper::U512(_) => PgType::NUMERIC,
+            EthereumSqlTypeWrapper::VecU512(_) => PgType::NUMERIC_ARRAY,
+            EthereumSqlTypeWrapper::H128(_) => PgType::BYTEA,
+            EthereumSqlTypeWrapper::VecH128(_) => PgType::BYTEA_ARRAY,
+            EthereumSqlTypeWrapper::H160(_) => PgType::BYTEA,
+            EthereumSqlTypeWrapper::VecH160(_) => PgType::BYTEA_ARRAY,
+            EthereumSqlTypeWrapper::H256(_) => PgType::BYTEA,
+            EthereumSqlTypeWrapper::VecH256(_) => PgType::BYTEA_ARRAY,
+            EthereumSqlTypeWrapper::H512(_) => PgType::BYTEA,
+            EthereumSqlTypeWrapper::VecH512(_) => PgType::BYTEA_ARRAY,
+            EthereumSqlTypeWrapper::Address(_) => PgType::BYTEA,
+            EthereumSqlTypeWrapper::VecAddress(_) => PgType::BYTEA_ARRAY,
+            EthereumSqlTypeWrapper::Bool(_) => PgType::BOOL,
+            EthereumSqlTypeWrapper::VecBool(_) => PgType::BOOL_ARRAY,
+            EthereumSqlTypeWrapper::U16(_) => PgType::INT2,
+            EthereumSqlTypeWrapper::VecU16(_) => PgType::INT2_ARRAY,
+            EthereumSqlTypeWrapper::String(_) => PgType::TEXT,
+            EthereumSqlTypeWrapper::VecString(_) => PgType::TEXT_ARRAY,
+            EthereumSqlTypeWrapper::Bytes(_) => PgType::BYTEA,
+            EthereumSqlTypeWrapper::VecBytes(_) => PgType::BYTEA_ARRAY,
+            EthereumSqlTypeWrapper::U32(_) => PgType::INT4,
+            EthereumSqlTypeWrapper::VecU32(_) => PgType::INT4_ARRAY,
+            EthereumSqlTypeWrapper::U8(_) => PgType::INT2,
+            EthereumSqlTypeWrapper::VecU8(_) => PgType::INT2_ARRAY,
         }
     }
 }

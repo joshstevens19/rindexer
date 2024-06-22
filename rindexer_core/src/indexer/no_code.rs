@@ -7,13 +7,13 @@ use colored::Colorize;
 use ethers::abi::{Abi, Contract as EthersContract, Event};
 use futures::future::BoxFuture;
 use futures::stream::FuturesUnordered;
-use tokio_postgres::types::{ToSql, Type};
+use tokio_postgres::types::Type as PgType;
 use tracing::level_filters::LevelFilter;
 use tracing::{debug, error, info};
 
 use crate::database::postgres::{
-    bulk_insert_via_copy, event_table_full_name, generate_bulk_insert_statement,
-    generate_columns_names_only, map_log_params_to_ethereum_wrapper, SetupPostgresError,
+    event_table_full_name, generate_column_names_only_with_base_properties,
+    map_log_params_to_ethereum_wrapper, SetupPostgresError,
 };
 use crate::generator::build::identify_and_modify_filter;
 use crate::generator::event_callback_registry::{
@@ -207,7 +207,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
             };
 
             let mut bulk_data: Vec<Vec<EthereumSqlTypeWrapper>> = Vec::new();
-            let mut bulk_column_types: Vec<Type> = Vec::new();
+            let mut bulk_column_types: Vec<PgType> = Vec::new();
             let mut csv_tasks = FuturesUnordered::new();
 
             // Collect owned results to avoid lifetime issues
@@ -297,37 +297,29 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                 if bulk_data_length > 0 {
                     // anything over 100 events is considered bulk and goes the COPY route
                     if bulk_data_length > 100 {
-                        let bulk_data_refs: Vec<Vec<&(dyn ToSql + Sync)>> = bulk_data
-                            .iter()
-                            .map(|row| {
-                                row.iter()
-                                    .map(|param| param as &(dyn ToSql + Sync))
-                                    .collect()
-                            })
-                            .collect();
-                        if let Err(e) = bulk_insert_via_copy(
-                            postgres,
-                            bulk_data_refs,
-                            &params.postgres_event_table_name,
-                            &params.postgres_column_names,
-                            &bulk_column_types,
-                        )
-                        .await
+                        if let Err(e) = postgres
+                            .bulk_insert_via_copy(
+                                &params.postgres_event_table_name,
+                                &params.postgres_column_names,
+                                &bulk_column_types,
+                                &bulk_data,
+                            )
+                            .await
                         {
                             error!(
                                 "{}::{} - Error performing bulk insert: {}",
                                 params.contract_name, params.event_name, e
                             );
                         }
-                    } else {
-                        let (query, params) = generate_bulk_insert_statement(
+                    } else if let Err(e) = postgres
+                        .bulk_insert(
                             &params.postgres_event_table_name,
                             &params.postgres_column_names,
                             &bulk_data,
-                        );
-                        if let Err(e) = postgres.execute(&query, &params).await {
-                            error!("Error performing bulk insert: {}", e);
-                        }
+                        )
+                        .await
+                    {
+                        error!("Error performing bulk insert: {}", e);
                     }
 
                     while csv_tasks.next().await.is_some() {}
@@ -337,7 +329,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                         params.contract_name,
                         params.event_name,
                         "INDEXED".green(),
-                        bulk_data.len(),
+                        bulk_data_length,
                         format!("- blocks: {} - {}", from_block, to_block)
                     );
                 }
@@ -440,7 +432,9 @@ pub async fn process_events(
                         &contract.name,
                         &event_info.name,
                     ),
-                    postgres_column_names: generate_columns_names_only(&event_info.inputs),
+                    postgres_column_names: generate_column_names_only_with_base_properties(
+                        &event_info.inputs,
+                    ),
                 })),
             };
 

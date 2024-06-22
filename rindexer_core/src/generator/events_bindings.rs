@@ -1,6 +1,6 @@
 use crate::database::postgres::{
-    generate_insert_query_for_event, solidity_type_to_db_type,
-    solidity_type_to_ethereum_sql_type_wrapper,
+    event_table_full_name, generate_column_names_only_with_base_properties,
+    solidity_type_to_db_type, solidity_type_to_ethereum_sql_type_wrapper,
 };
 use crate::generator::build::is_filter;
 use crate::generator::event_callback_registry::IndexingContractSetup;
@@ -1068,7 +1068,7 @@ pub fn generate_abi_name_properties(
                     GenerateAbiPropertiesType::PostgresColumnsNamesOnly
                     | GenerateAbiPropertiesType::CsvHeaderNames => {
                         let value = format!(
-                            "\"{}{}\"",
+                            "{}{}",
                             prefix.map_or_else(|| "".to_string(), |p| format!("{}_", p)),
                             camel_to_snake(&input.name),
                         );
@@ -1176,7 +1176,7 @@ pub fn generate_event_handlers(
         r#"
             use rindexer_core::{
                 generator::event_callback_registry::{EventCallbackRegistry},
-                EthereumSqlTypeWrapper
+                EthereumSqlTypeWrapper, PgType, RindexerColorize, rindexer_error, rindexer_info
             };
         "#,
     );
@@ -1208,56 +1208,6 @@ pub fn generate_event_handlers(
             generate_abi_name_properties(&event.inputs, &GenerateAbiPropertiesType::Object, None);
 
         let mut csv_write = String::new();
-        let mut postgres_write = String::new();
-
-        // this checks storage enabled as well
-        if !storage.postgres_disable_create_tables() {
-            // TODO look at doing the bulk insert + copy route here as well
-            let insert_sql = generate_insert_query_for_event(&event, indexer_name, &contract.name);
-
-            let mut params_sql = String::new();
-            params_sql
-                .push_str("&[&EthereumSqlTypeWrapper::Address(result.tx_information.address),");
-
-            for item in &abi_name_properties {
-                if let Some(wrapper) = &item.ethereum_sql_type_wrapper {
-                    params_sql.push_str(&format!(
-                        "&EthereumSqlTypeWrapper::{}(result.event_data.{}{}),",
-                        wrapper.raw_name(),
-                        item.value,
-                        if item.abi_type.contains("bytes") {
-                            let static_bytes = item.abi_type.replace("bytes", "").replace("[]", "");
-                            if !static_bytes.is_empty() {
-                                ".into()"
-                            } else {
-                                ""
-                            }
-                        } else {
-                            ""
-                        }
-                    ));
-                } else {
-                    params_sql.push_str(&format!("&result.event_data.{},", item.value));
-                }
-            }
-
-            params_sql
-                .push_str("&EthereumSqlTypeWrapper::H256(result.tx_information.transaction_hash),");
-            params_sql
-                .push_str("&EthereumSqlTypeWrapper::U64(result.tx_information.block_number),");
-            params_sql.push_str("&EthereumSqlTypeWrapper::H256(result.tx_information.block_hash),");
-            params_sql.push_str(
-                "&EthereumSqlTypeWrapper::String(result.tx_information.network.to_string())",
-            );
-            params_sql.push(']');
-
-            postgres_write = format!(
-                r#"context.database.execute("{insert_sql}",{params_sql}).await.unwrap();"#,
-                insert_sql = insert_sql.replace('"', "\\\""),
-                params_sql = params_sql
-            );
-        }
-
         // this checks storage enabled as well
         if !storage.csv_disable_create_headers() {
             let mut csv_data = String::new();
@@ -1288,8 +1238,123 @@ pub fn generate_event_handlers(
             csv_data.push_str(r#"result.tx_information.network.to_string()"#);
 
             csv_write = format!(
-                r#"context.csv.append(vec![{csv_data}]).await.unwrap();"#,
-                csv_data = csv_data
+                r#"let csv_result = context.csv.append(vec![{csv_data}]).await;
+                
+                   if let Err(e) = csv_result {{ 
+                        rindexer_error!("{event_type_name}::{handler_name} inserting csv data: {{:?}}", e);
+                   }}
+                "#,
+                csv_data = csv_data,
+                handler_name = event.name,
+                event_type_name = event_type_name,
+            );
+
+            if storage.postgres_disable_create_tables() {
+                csv_write = format!(
+                    r#"for result in results {{
+                        {inner_csv_write}
+                    }}"#,
+                    inner_csv_write = csv_write
+                );
+            }
+        }
+
+        let mut postgres_write = String::new();
+
+        // this checks storage enabled as well
+        if !storage.postgres_disable_create_tables() {
+            let mut data =
+                "vec![EthereumSqlTypeWrapper::Address(result.tx_information.address),".to_string();
+
+            for item in &abi_name_properties {
+                if let Some(wrapper) = &item.ethereum_sql_type_wrapper {
+                    data.push_str(&format!(
+                        "EthereumSqlTypeWrapper::{}(result.event_data.{}{}),",
+                        wrapper.raw_name(),
+                        item.value,
+                        if item.abi_type.contains("bytes") {
+                            let static_bytes = item.abi_type.replace("bytes", "").replace("[]", "");
+                            if !static_bytes.is_empty() {
+                                ".into()"
+                            } else {
+                                ""
+                            }
+                        } else {
+                            ""
+                        }
+                    ));
+                } else {
+                    // data.push_str(&format!("result.event_data.{},", item.value));
+                    panic!("No EthereumSqlTypeWrapper found for: {:?}", item.abi_type);
+                }
+            }
+
+            data.push_str("EthereumSqlTypeWrapper::H256(result.tx_information.transaction_hash),");
+            data.push_str("EthereumSqlTypeWrapper::U64(result.tx_information.block_number),");
+            data.push_str("EthereumSqlTypeWrapper::H256(result.tx_information.block_hash),");
+            data.push_str(
+                "EthereumSqlTypeWrapper::String(result.tx_information.network.to_string())",
+            );
+            data.push_str("];");
+
+            postgres_write = format!(
+                r#"
+                    let mut bulk_data: Vec<Vec<EthereumSqlTypeWrapper>> = vec![];
+                    for result in results.iter() {{   
+                        {csv_write}   
+                                      
+                        let data = {data};
+                        bulk_data.push(data);
+                    }}
+                    
+                    if bulk_data.is_empty() {{
+                        return;
+                    }}
+                    
+                     if bulk_data.len() > 100 {{
+                        let result = context
+                            .database
+                            .bulk_insert_via_copy(
+                                "{table_name}",
+                                &[{columns_names}],
+                                &bulk_data
+                                    .first()
+                                    .unwrap()
+                                    .iter()
+                                    .map(|param| param.to_type())
+                                    .collect::<Vec<PgType>>(),
+                                &bulk_data,
+                            )
+                            .await;
+                        
+                        if let Err(e) = result {{
+                            rindexer_error!("{event_type_name}::{handler_name} inserting bulk data: {{:?}}", e);
+                        }}
+                        }} else {{
+                            let result = context
+                                .database
+                                .bulk_insert(
+                                    "{table_name}",
+                                    &[{columns_names}],
+                                    &bulk_data,
+                                )
+                                .await;
+                            
+                            if let Err(e) = result {{
+                                rindexer_error!("{event_type_name}::{handler_name} inserting bulk data: {{:?}}", e);
+                            }}
+                    }}
+                "#,
+                table_name = event_table_full_name(indexer_name, &contract.name, &event.name),
+                handler_name = event.name,
+                event_type_name = event_type_name,
+                columns_names = generate_column_names_only_with_base_properties(&event.inputs)
+                    .iter()
+                    .map(|item| format!("\"{}\".to_string()", item))
+                    .collect::<Vec<String>>()
+                    .join(", "),
+                data = data,
+                csv_write = csv_write
             );
         }
 
@@ -1298,10 +1363,18 @@ pub fn generate_event_handlers(
             async fn {handler_fn_name}_handler(registry: &mut EventCallbackRegistry) {{
                 {event_type_name}::{handler_name}(
                     {handler_name}Event::handler(|results, context| async move {{
-                            for result in results {{
-                                {csv_write}
-                                {postgres_write}
+                            if results.is_empty() {{
+                                return;
                             }}
+
+                            {csv_write}
+                            {postgres_write}
+                            
+                            rindexer_info!(
+                                "{contract_name}::{handler_name} - {{}} - {{}} events",
+                                "INDEXED".green(),
+                                results.len(),
+                            );
                         }},
                         no_extensions(),
                       )
@@ -1313,7 +1386,12 @@ pub fn generate_event_handlers(
             handler_fn_name = camel_to_snake(&event.name),
             handler_name = event.name,
             event_type_name = event_type_name,
-            csv_write = csv_write,
+            contract_name = contract.name,
+            csv_write = if !postgres_write.is_empty() {
+                String::new()
+            } else {
+                csv_write
+            },
             postgres_write = postgres_write,
         );
 

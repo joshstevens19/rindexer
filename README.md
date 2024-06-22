@@ -1,7 +1,6 @@
 # rindexer
 
 checklist v1.0:
-- look at doing the bulk insert + copy route in the handlers generated
 - finish the documentation (note about block timestamp + coming soon with build own schemas)
 - add a getting started guide for rust / no-code
 - look into deployments to make it easy to do
