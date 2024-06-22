@@ -66,4 +66,5 @@ storage:
   postgres:
     enabled: true
   csv:
+    enabled: true
     path: ./generated_csv

@@ -321,6 +321,7 @@ fn handle_new_command(project_path: PathBuf) -> Result<(), Box<dyn std::error::E
             },
             csv: if csv_enabled {
                 Some(CsvDetails {
+                    enabled: true,
                     path: "./generated_csv".to_string(),
                     disable_create_headers: false,
                 })

@@ -296,6 +296,7 @@ fn default_disable_create_tables() -> bool {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PostgresConnectionDetails {
     pub enabled: bool,
+
     #[serde(default = "default_disable_create_tables")]
     pub disable_create_tables: bool,
 }
@@ -306,7 +307,10 @@ fn default_disable_create_headers() -> bool {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CsvDetails {
+    pub enabled: bool,
+
     pub path: String,
+
     #[serde(default = "default_disable_create_headers")]
     pub disable_create_headers: bool,
 }
@@ -314,6 +318,7 @@ pub struct CsvDetails {
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct Storage {
     pub postgres: Option<PostgresConnectionDetails>,
+
     pub csv: Option<CsvDetails>,
 }
 
@@ -337,7 +342,10 @@ impl Storage {
     }
 
     pub fn csv_enabled(&self) -> bool {
-        self.csv.is_some()
+        match &self.csv {
+            Some(details) => details.enabled,
+            None => false,
+        }
     }
 
     pub fn csv_disable_create_headers(&self) -> bool {
