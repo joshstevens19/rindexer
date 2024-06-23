@@ -23,4 +23,5 @@ cli/.env
 examples/*
 documentation/node_modules
 documentation/dist
+documentation/docs/dist
 documentation/vocs.config.ts*

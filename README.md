@@ -23,5 +23,5 @@ future features:
 - cron registering for networks to fire
 - multiple ABIs merged into one
 - look into load balancing of RPCs
-- look into internal caching to make things faster
+- look into internal caching to make things faster if you make changes to your schema to make resyncing faster
 - POC with shadow events using foundry as you index
