@@ -6,11 +6,26 @@ import { HomePage } from 'vocs/components'
 
 <HomePage.Root>
   <HomePage.Logo />
-  <HomePage.Tagline>My Awesome Docs</HomePage.Tagline>
-  <HomePage.InstallPackage name="vocs" type="init" />
-  <HomePage.Description>This is a description of my documentation website.</HomePage.Description>
+  <HomePage.Tagline>built in rust</HomePage.Tagline>
+:::code-group
+
+```bash [macOS]
+curl -L https://rindexer.io/install | bash
+```
+
+```bash [linux]
+curl -L https://rindexer.io/install | bash
+```
+
+:::
+
+:::warning
+If you’re on Windows, you will need to install and use Git BASH or WSL, as your terminal,
+since rindexer installation does not support Powershell or Cmd.
+:::
+  <HomePage.Description>A no-code blazing fast EVM indexer tool built in rust.</HomePage.Description>
   <HomePage.Buttons>
-    <HomePage.Button href="/docs/getting-started" variant="accent">Get started</HomePage.Button>
-    <HomePage.Button href="https://github.com/wevm/vocs">GitHub</HomePage.Button>
+    <HomePage.Button href="/docs/introduction/installation" variant="accent">Start building</HomePage.Button>
+    <HomePage.Button href="https://github.com/joshstevens19/rindexer">GitHub</HomePage.Button>
   </HomePage.Buttons>
 </HomePage.Root>
