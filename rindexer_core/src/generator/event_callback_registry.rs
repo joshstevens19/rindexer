@@ -1,12 +1,10 @@
 use crate::provider::JsonRpcCachedProvider;
 use ethers::addressbook::Address;
 use ethers::contract::LogMeta;
-use ethers::prelude::{Filter};
+use ethers::prelude::Filter;
 use ethers::types::BigEndianHash;
+use ethers::types::{Bytes, Log, H256, U256, U64};
 use ethers::utils::keccak256;
-use ethers::{
-    types::{Bytes, Log, H256, U256, U64},
-};
 use futures::future::BoxFuture;
 use log::info;
 use serde::{Deserialize, Serialize};

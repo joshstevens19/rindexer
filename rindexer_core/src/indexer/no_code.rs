@@ -134,33 +134,6 @@ fn create_network_providers(
     Ok(result)
 }
 
-#[derive(thiserror::Error, Debug)]
-pub enum ProcessIndexersError {
-    #[error("Could not read ABI string: {0}")]
-    CouldNotReadAbiString(std::io::Error),
-
-    #[error("Could not read ABI JSON: {0}")]
-    CouldNotReadAbiJson(serde_json::Error),
-
-    #[error("Could not read ABI items: {0}")]
-    CouldNotReadAbiItems(ReadAbiError),
-
-    #[error("Could not append headers to csv: {0}")]
-    CsvHeadersAppendError(csv::Error),
-
-    #[error("{0}")]
-    CreateContractInformationError(CreateContractInformationError),
-
-    #[error("{0}")]
-    CreateCsvFileForEventError(CreateCsvFileForEvent),
-
-    #[error("{0}")]
-    ParamTypeError(ParamTypeError),
-
-    #[error("Event name not found in ABI for contract: {0} - event: {1}")]
-    EventNameNotFoundInAbi(String, String),
-}
-
 #[derive(Clone)]
 struct NoCodeCallbackParams {
     event_name: String,
@@ -177,7 +150,7 @@ type NoCodeCallbackResult = Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, (
 
 fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
     Arc::new(move |results| {
-        let params = params.clone();
+        let params = Arc::clone(&params);
 
         async move {
             let event_length = results.len();
@@ -282,9 +255,9 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                     csv_data.push(format!("{:?}", block_hash));
                     csv_data.push(format!("{:?}", network));
 
-                    let csv_clone = csv.clone();
+                    let csv_writer = Arc::clone(csv);
                     csv_tasks.push(Box::pin(async move {
-                        if let Err(e) = csv_clone.append(csv_data).await {
+                        if let Err(e) = csv_writer.append(csv_data).await {
                             error!("Error writing CSV to disk: {}", e);
                         }
                     }));
@@ -337,6 +310,33 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
         }
         .boxed()
     })
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum ProcessIndexersError {
+    #[error("Could not read ABI string: {0}")]
+    CouldNotReadAbiString(std::io::Error),
+
+    #[error("Could not read ABI JSON: {0}")]
+    CouldNotReadAbiJson(serde_json::Error),
+
+    #[error("Could not read ABI items: {0}")]
+    CouldNotReadAbiItems(ReadAbiError),
+
+    #[error("Could not append headers to csv: {0}")]
+    CsvHeadersAppendError(csv::Error),
+
+    #[error("{0}")]
+    CreateContractInformationError(CreateContractInformationError),
+
+    #[error("{0}")]
+    CreateCsvFileForEventError(CreateCsvFileForEvent),
+
+    #[error("{0}")]
+    ParamTypeError(ParamTypeError),
+
+    #[error("Event name not found in ABI for contract: {0} - event: {1}")]
+    EventNameNotFoundInAbi(String, String),
 }
 
 pub async fn process_events(
@@ -474,7 +474,7 @@ fn create_contract_information(
                 details.push(NetworkContract {
                     id: generate_random_id(10),
                     network: c.network.clone(),
-                    cached_provider: provider.client.clone(),
+                    cached_provider: Arc::clone(&provider.client),
                     decoder: decoder.clone(),
                     indexing_contract_setup: c.indexing_contract_setup(),
                     start_block: c.start_block,

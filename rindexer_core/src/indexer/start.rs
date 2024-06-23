@@ -1,5 +1,5 @@
 use ethers::providers::ProviderError;
-use ethers::{types::U64};
+use ethers::types::U64;
 use futures::future::try_join_all;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
@@ -171,9 +171,9 @@ pub async fn start_indexing(
                 network_contract: Arc::new(contract),
                 start_block,
                 end_block,
-                semaphore: semaphore.clone(),
-                registry: registry.clone(),
-                progress: event_progress_state.clone(),
+                semaphore: Arc::clone(&semaphore),
+                registry: Arc::clone(&registry),
+                progress: Arc::clone(&event_progress_state),
                 database: database.clone(),
                 live_indexing,
                 index_event_in_order: event.index_event_in_order,
