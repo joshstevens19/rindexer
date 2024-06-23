@@ -265,7 +265,7 @@ pub fn fetch_logs_stream(
         // Process historical logs first
         let mut max_block_range_limitation = None;
         while current_filter.get_from_block().unwrap() <= snapshot_to_block {
-            let semaphore_client = semaphore.clone();
+            let semaphore_client = Arc::clone(&semaphore);
             let permit = semaphore_client.acquire_owned().await;
 
             match permit {
@@ -624,7 +624,7 @@ async fn live_indexing_stream(
                 current_filter
             );
 
-            let semaphore_client = semaphore.clone();
+            let semaphore_client = Arc::clone(&semaphore);
             let permit = semaphore_client.acquire_owned().await;
 
             if let Ok(permit) = permit {
@@ -819,7 +819,7 @@ async fn process_events_dependency_tree(
         let mut tasks = vec![];
 
         for dependency in &current_tree.events_name {
-            let event_processing_config = events_processing_config.clone(); // Clone the Arc
+            let event_processing_config = Arc::clone(&events_processing_config);
             let dependency = dependency.clone();
             let live_indexing_events = Arc::clone(&live_indexing_events);
 
@@ -855,7 +855,7 @@ async fn process_events_dependency_tree(
                     live_indexing: false,
                     indexing_distance_from_head: event_processing_config
                         .indexing_distance_from_head,
-                    semaphore: event_processing_config.semaphore.clone(),
+                    semaphore: Arc::clone(&event_processing_config.semaphore),
                 };
 
                 process_logs(logs_params.clone())
@@ -1011,7 +1011,7 @@ async fn process_events_dependency_tree(
                     ordering_live_indexing_details.filter
                 );
 
-                let semaphore_client = logs_params.semaphore.clone();
+                let semaphore_client = Arc::clone(&logs_params.semaphore);
                 let permit = semaphore_client.acquire_owned().await;
 
                 if let Ok(permit) = permit {
@@ -1190,7 +1190,7 @@ pub struct ProcessLogsParams {
 }
 
 async fn process_logs(params: ProcessLogsParams) -> Result<(), Box<ProviderError>> {
-    let provider = params.network_contract.cached_provider.clone();
+    let provider = Arc::clone(&params.network_contract.cached_provider);
     let mut logs_stream = fetch_logs_stream(
         provider,
         params
