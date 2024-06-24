@@ -443,8 +443,7 @@ fn generate_contract_type_fn_code(contract: &Contract) -> Code {
     } else {
         "None".to_string()
     };
-    index_event_in_order
-    let  = if let Some(include_events) = &contract.index_event_in_order {
+    let index_event_in_order = if let Some(include_events) = &contract.index_event_in_order {
         format!(
             "Some(vec![{}])",
             include_events
