@@ -7,7 +7,7 @@ RINDEXER_BIN_DIR="$RINDEXER_DIR/bin"
 RINDEXERUP_PATH="$RINDEXER_BIN_DIR/rindexerup"
 RINDEXERDOWN_PATH="$RINDEXER_BIN_DIR/rindexerdown"
 BIN_PATH="$RINDEXER_BIN_DIR/rindexer"
-BIN_URL="http://localhost:5173/releases/rindexer_cli_latest"
+BIN_URL="https://rindexer.xyz/releases/rindexer_cli_latest"
 LOCAL_BIN_PATH="/Users/joshstevens/code/rindexer/documentation/docs/public/releases/rindexer_cli_latest"
 
 # Install or uninstall based on the command line option
