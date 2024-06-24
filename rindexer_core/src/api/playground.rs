@@ -1,5 +1,5 @@
 use crate::helpers::set_thread_no_logging;
-use crate::logger::set_no_op_logger;
+//use crate::logger::set_no_op_logger;
 use warp::Filter;
 
 pub async fn run(endpoint: String) {
@@ -26,8 +26,8 @@ pub fn run_in_child_thread(endpoint: &str) -> &str {
     let endpoint = endpoint.to_string();
     tokio::spawn(async move {
         set_thread_no_logging();
-
-        let _guard = set_no_op_logger();
+        
+        //let _guard = set_no_op_logger();
         run(endpoint).await;
     });
 
