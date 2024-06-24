@@ -9,11 +9,25 @@ checklist v1.0:
 
 bugs:
 - Do not create a new postgres client each time on rust projects
+- Fix hex string not returning properly on rindexer graphql
+- fix last TODOs in the code
 
 nice to have:
 - look at the final unwraps
 - look into PK with tx hash and tx index and log index to make it unique and not have to worry about duplicates
 - add ability to add indexes to the database
+- ability for one-to-many relationships
+  -     relationships:
+        - contract_name: BasePaint
+          event: Transfer
+          event_input_name: from
+          linked_to:
+            - contract_name: BasePaint
+              event: Approval
+              event_input_name: owner
+            - contract_name: BasePaint
+              event: Approval
+              event_input_name: owner
 
 future features:
 - look into setting your own schema for the database using diesel
@@ -26,5 +40,5 @@ future features:
 - cron registering for networks to fire
 - multiple ABIs merged into one
 - look into load balancing of RPCs
-- look into internal caching to make things faster if you make changes to your schema to make resyncing faster
+- look into internal caching of the log results to make things faster if you make changes to your schema to make resyncing faster
 - POC with shadow events using foundry as you index
