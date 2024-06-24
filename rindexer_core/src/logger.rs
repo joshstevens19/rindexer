@@ -1,6 +1,6 @@
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::fmt::format::{Format, Writer};
-use tracing_subscriber::{EnvFilter};
+use tracing_subscriber::EnvFilter;
 
 struct CustomTimer;
 
@@ -35,8 +35,8 @@ pub fn setup_logger(log_level: LevelFilter) {
 
 // pub fn set_no_op_logger() -> DefaultGuard {
 //     let no_op_subscriber = FmtSubscriber::builder().with_writer(|| NullWriter).finish();
-// 
+//
 //     let no_op_dispatch = Dispatch::new(no_op_subscriber);
-// 
+//
 //     tracing::dispatcher::set_default(&no_op_dispatch)
 // }

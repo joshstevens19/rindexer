@@ -32,7 +32,7 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
             static ref {network_name}: Arc<JsonRpcCachedProvider> = create_client("{network_url}", {compute_units_per_second}).expect("Error creating provider");
         "#,
         network_name = network_provider_name(network),
-        network_url = network.url,
+        network_url = network.rpc,
         compute_units_per_second =
             if let Some(compute_units_per_second) = network.compute_units_per_second {
                 format!("Some({})", compute_units_per_second)

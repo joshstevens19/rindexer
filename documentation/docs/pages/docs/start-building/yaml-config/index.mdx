@@ -1,7 +1,7 @@
 # Overview of the YAML Configuration File
 
 The YAML configuration file is the heart of your rindexer project. It defines the project's name,
-description, repository, and the indexers that will be used to index the data.
+description, repository, and the contracts that will be used to index the data.
 This file is used to set up the project and configure the indexing tasks that will be performed.
 
 **YAML is case-sensitive, so make sure to use the correct case when defining the fields in the configuration file.**
@@ -15,9 +15,10 @@ The syntax for this in the YAML is `${ENV_VARIABLE_NAME}`.
 
 - [Top level fields](/docs/start-building/yaml-config/top-level-fields) - The top-level fields of the YAML configuration file.
 - [Networks](/docs/start-building/yaml-config/networks) - The networks to listen for events on are defined in the YAML configuration file.
-- [Indexers](/docs/start-building/yaml-config/indexers) - The indexers of the project are defined in the YAML configuration file.
-- [Global](/docs/start-building/yaml-config/global) - The global events to listen for are defined in the YAML configuration file.
 - [Storage](/docs/start-building/yaml-config/storage) - The storage configuration is defined in the YAML configuration file.
+- [Contracts](/docs/start-building/yaml-config/indexers) - The indexers of the project are defined in the YAML configuration file.
+- [Global](/docs/start-building/yaml-config/global) - The global events to listen for are defined in the YAML configuration file.
+
 
 ## Example YAML no-code configuration file
 
@@ -32,13 +33,11 @@ repository: https://github.com/joshstevens19/rindexer
 project_type: no-code
 networks:
   - name: ethereum
-    chainId: 1
-    url: https://mainnet.infura.io/v3/your-infura-key
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
 storage:
   postgres:
-    database_url: ${DATABASE_URL}
-  csv:
-    path: ./generated_csv
+    enabled: true
 indexers:
 - name: MyFirstIndexerExample
   contracts:
@@ -46,8 +45,8 @@ indexers:
     details:
     - network: ethereum
       address: 0xae78736cd615f374d3085123a210448e74fc6393
-      startBlock: 18600000
-      endBlock: 18718056
+      start_block: 18600000
+      end_block: 18718056
     abi: ./abis/RocketTokenRETH.abi.json
     include_events:
     - Transfer
@@ -63,13 +62,11 @@ repository: https://github.com/joshstevens19/rindexer
 project_type: no-code
 networks:
   - name: ethereum
-    chainId: 1
-    url: https://mainnet.infura.io/v3/your-infura-key
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
 storage:
   postgres:
-    database_url: ${DATABASE_URL}
-  csv:
-    path: ./generated_csv
+    enabled: true
 indexers:
 - name: MyFirstIndexerExample
   contracts:
@@ -78,8 +75,8 @@ indexers:
     - network: ethereum
       filter:
         event_name: Transfer
-      startBlock: 18600000
-      endBlock: 18718056
+      start_block: 18600000
+      end_block: 18718056
     abi: ./abis/ERC20.abi.json
 ```
 
@@ -92,13 +89,11 @@ repository: https://github.com/joshstevens19/rindexer
 project_type: no-code
 networks:
   - name: ethereum
-    chainId: 1
-    url: https://mainnet.infura.io/v3/your-infura-key
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
 storage:
   postgres:
-    database_url: ${DATABASE_URL}
-  csv:
-    path: ./generated_csv
+    enabled: true
 indexers:
 - name: MyFirstIndexerExample
   contracts:
@@ -109,7 +104,7 @@ indexers:
         event_name: Transfer
         indexed_1:
           - 0x4A1a2197f307222cD67A1762D9A352F64558d9Be
-      startBlock: 18600000
-      endBlock: 18718056
+      start_block: 18600000
+      end_block: 18718056
     abi: ./abis/ERC20.abi.json
 ```

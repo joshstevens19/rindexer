@@ -33,7 +33,7 @@ export default defineConfig({
             { text: 'Top-level fields', link: '/docs/start-building/yaml-config/top-level-fields' },
             { text: 'Networks', link: '/docs/start-building/yaml-config/networks' },
             { text: 'Storage', link: '/docs/start-building/yaml-config/storage' },
-            { text: 'Indexers', link: '/docs/start-building/yaml-config/indexers' },
+            { text: 'Contracts', link: '/docs/start-building/yaml-config/contracts' },
             { text: 'Global', link: '/docs/start-building/yaml-config/global' },
           ],
         },
@@ -42,8 +42,16 @@ export default defineConfig({
           link: '/docs/start-building/download-abi',
         },
         {
+          text: 'Codegen',
+          link: '/docs/start-building/codegen',
+        },
+        {
           text: 'Running',
           link: '/docs/start-building/running',
+        },
+        {
+          text: 'Delete',
+          link: '/docs/start-building/delete',
         },
         {
           text: 'Rust Project Deep Dive',
@@ -68,32 +76,39 @@ export default defineConfig({
     {
       text: 'Accessing Data',
       items: [
-        { text: 'GraphQL', link: '/docs/what-is-rrelayerr' },
-        { text: 'Direct SQL', link: '/docs/what-is-rrelayerr' },
+        { text: 'GraphQL', link: '/docs/accessing-data/graphql' },
+        { text: 'Direct SQL', link: '/docs/accessing-data/direct-sql' },
       ],
     },
     {
       text: 'Deploying',
       items: [
-        { text: 'AWS', link: '/docs/what-is-rrelayerr' },
-        { text: 'GCP', link: '/docs/what-is-rrelayerr' },
-        { text: 'Railway', link: '/docs/what-is-rrelayerr' },
+        { text: 'Railway', link: '/docs/deploying/railway' },
+        { text: 'AWS - coming soon' },
+        { text: 'GCP - coming soon' },
       ],
     },
     {
       text: 'References',
       items: [
-        { text: 'CLI ', link: '/docs/what-is-rrelayerr' },
+        { text: 'CLI ', link: '/docs/references/cli' },
       ],
     },
     {
       text: 'Advanced',
       items: [
-        { text: 'Building Own DB Schema ', link: '/docs/what-is-rrelayerr' },
-        { text: 'From A Foundry Project', link: '/docs/what-is-rrelayerr' },
-        { text: 'From A Hardhat Project', link: '/docs/what-is-rrelayerr' },
+        { text: 'Building Own DB Schema - coming soon' },
+        { text: 'From A Foundry Project - coming soon' },
+        { text: 'From A Hardhat Project - coming soon' },
       ],
     },
-    { text: 'Changelog', link: '/docs/what-is-rrelayerr' },
+    {
+      text: 'Coming soon',
+      items: [
+        { text: 'log block timestamps', link: '/docs/coming-soon/log-block-timestamps' },
+        { text: 'no-code table relationships', link: '/docs/coming-soon/no-code-table-relationships' },
+      ],
+    },
+    { text: 'Changelog', link: '/docs/changelog' },
   ],
 })

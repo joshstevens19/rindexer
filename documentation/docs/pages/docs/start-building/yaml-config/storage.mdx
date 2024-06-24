@@ -15,9 +15,9 @@ If you wish to store the data in a postgres database you can enable the postgres
 This is optional if you do not wish to store the data in a postgres database you can leave this section out of your YAML.
 :::
 
-### database_url
+### enabled
 
-The database url to connect to the database, this is the postgres connection string.
+If postgres is enabled or not, if you do not wish to use postgres you can set this to false or remove postgres from the storage completely.
 
 ```yaml [rindexer.yaml]
 name: rETHIndexer
@@ -26,11 +26,11 @@ repository: https://github.com/joshstevens19/rindexer
 project_type: no-code
 networks:
 - name: ethereum
-  chainId: 1
-  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
 storage:
   postgres:
-    database_url: ${DATABASE_URL} // [!code focus]
+    enabled: true // [!code focus]
 ```
 
 ### disable_create_tables
@@ -50,11 +50,11 @@ repository: https://github.com/joshstevens19/rindexer
 project_type: no-code
 networks:
 - name: ethereum
-  chainId: 1
-  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
 storage:
   postgres:
-    database_url: ${DATABASE_URL}
+    enabled: true
     disable_create_tables: true // [!code focus]
 ```
 
@@ -66,9 +66,9 @@ If you wish to store the data in a CSV files you can enable the csv storage.
 This is optional if you do not wish to store the data in a CSV files you can leave this section out of your YAML.
 :::
 
-### path
+### enabled
 
-The path to store the CSV files, it should be a directory path, if it does not exist it will be created.
+If csv is enabled or not, if you do not wish to use csv you can set this to false or remove csv from the storage completely.
 
 ```yaml [rindexer.yaml]
 name: rETHIndexer
@@ -77,10 +77,34 @@ repository: https://github.com/joshstevens19/rindexer
 project_type: no-code
 networks:
 - name: ethereum
-  chainId: 1
-  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
 storage:
   csv:
+    enabled: true // [!code focus]
+```
+
+### path
+
+:::info
+This field is optional
+:::
+
+The path to store the CSV files, it should be a directory path, if it does not exist it will be created in the project directory
+in folder called `generated_csv`.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  csv:
+    enabled: true
     path: ./generated_csv // [!code focus]
 ```
 
@@ -101,10 +125,11 @@ repository: https://github.com/joshstevens19/rindexer
 project_type: no-code
 networks:
 - name: ethereum
-  chainId: 1
-  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
 storage:
   csv:
+    enabled: true
     path: ./generated_csv
     disable_create_headers: true // [!code focus]
 ```
@@ -120,11 +145,11 @@ repository: https://github.com/joshstevens19/rindexer
 project_type: no-code
 networks:
 - name: ethereum
-  chainId: 1
-  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
-storage:
-  postgres:
-    database_url: ${DATABASE_URL}
-  csv:
-    path: ./generated_csv // [!code focus]
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage: // [!code focus]
+  postgres: // [!code focus]
+    enabled: true // [!code focus]
+  csv: // [!code focus]
+    enabled: true // [!code focus]
 ```

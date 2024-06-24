@@ -23,7 +23,7 @@ repository: https://github.com/joshstevens19/rindexer
 networks:
 - name: ethereum
   chainId: 1
-  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
+  rpc: https://mainnet.gateway.tenderly.co
 storage:
   postgres:
     database_url: ${DATABASE_URL}
@@ -64,7 +64,7 @@ repository: https://github.com/joshstevens19/rindexer
 networks:
 - name: ethereum
   chainId: 1
-  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
+  rpc: https://mainnet.gateway.tenderly.co
 storage:
   postgres:
     database_url: ${DATABASE_URL}
@@ -103,7 +103,7 @@ repository: https://github.com/joshstevens19/rindexer
 networks:
 - name: ethereum
   chainId: 1
-  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
+  rpc: https://mainnet.gateway.tenderly.co
 storage:
   postgres:
     database_url: ${DATABASE_URL}
@@ -143,7 +143,7 @@ repository: https://github.com/joshstevens19/rindexer
 networks:
 - name: ethereum
   chainId: 1
-  rpcUrl: https://mainnet.infura.io/v3/your-infura-key
+  rpc: https://mainnet.gateway.tenderly.co
 storage:
   postgres:
     database_url: ${DATABASE_URL}
@@ -182,10 +182,10 @@ repository: https://github.com/joshstevens19/rindexer
 networks: // [!code focus]
 - name: ethereum // [!code focus]
   chainId: 1 // [!code focus]
-  rpcUrl: https://mainnet.infura.io/v3/your-infura-key // [!code focus]
+  rpc: https://mainnet.gateway.tenderly.co // [!code focus]
 - name: base // [!code focus]
   chainId: 8453 // [!code focus]
-  rpcUrl: https://mainnet.base.org // [!code focus]
+  rpc: https://mainnet.base.org // [!code focus]
 storage:
   postgres:
    database_url: ${DATABASE_URL}

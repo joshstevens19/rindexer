@@ -22,7 +22,7 @@ networks:
 - name: ethereum // [!code focus]
 ```
 
-### chainId
+### chain_id
 
 The chainId of the network.
 
@@ -33,12 +33,12 @@ repository: https://github.com/joshstevens19/rindexer
 project_type: no-code
 networks:
 - name: ethereum
-  chainId: 1 // [!code focus]
+  chain_id: 1 // [!code focus]
 ```
 
-### rpcUrl
+### url
 
-The rpcUrl for the network.
+The rpc url for the network.
 
 ```yaml [rindexer.yaml]
 name: rETHIndexer
@@ -47,8 +47,28 @@ repository: https://github.com/joshstevens19/rindexer
 project_type: no-code
 networks:
 - name: ethereum
-  chainId: 1
-  rpcUrl: https://mainnet.infura.io/v3/your-infura-key // [!code focus]
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co // [!code focus]
+```
+
+### compute_units_per_second
+
+:::info
+This field is optional
+:::
+
+The compute units per second for the network.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+  compute_units_per_second: 660 // [!code focus]
 ```
 
 ## Multiple Networks
@@ -62,9 +82,9 @@ repository: https://github.com/joshstevens19/rindexer
 project_type: no-code
 networks: // [!code focus]
 - name: ethereum // [!code focus]
-  chainId: 1 // [!code focus]
-  rpcUrl: https://mainnet.infura.io/v3/your-infura-key // [!code focus]
+  chain_id: 1 // [!code focus]
+  rpc: https://mainnet.gateway.tenderly.co // [!code focus]
 - name: base // [!code focus]
-  chainId: 8453 // [!code focus]
-  rpcUrl: https://mainnet.base.org // [!code focus]
+  chain_id: 8453 // [!code focus]
+  rpc: https://mainnet.base.org // [!code focus]
 ```

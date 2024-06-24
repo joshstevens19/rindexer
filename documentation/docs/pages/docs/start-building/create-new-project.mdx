@@ -7,6 +7,8 @@ You can find the installation instructions [here](/docs/introduction/installatio
 
 ## 1. Create a new project
 
+This will walk you through setting up your project by asking you a series of questions in the terminal.
+
 :::code-group
 
 ```bash [no-code]
@@ -18,6 +20,23 @@ rindexer new rust
 ```
 
 :::
+
+### Example New
+
+```bash
+Initializing new rindexer project...
+
+Project Name: RocketPoolETHIndexer
+Project Description (skip by pressing Enter): My first rindexer project
+Repository (skip by pressing Enter): https://github.com/joshstevens19/rindexer
+What Storages To Enable? (graphql can only be supported if postgres is enabled) [postgres, csv, both, none]: postgres
+Postgres Docker Support Out The Box? [yes, no]: yes
+
+rindexer no-code project created with a starter manifest.
+
+- run rindexer start all to start rindexer
+- run rindexer download-abi to download new ABIs
+```
 
 If any of the steps are unclear, you can find more information in the [New Project Appendix](#new-project-appendix).
 
@@ -31,16 +50,14 @@ Open up the generated `.env` file and fill in the required environment variables
 ### DATABASE_URL
 
 :::warning
-- SKIP IF POSTGRES WAS NOT ENABLED
-- SKIP IF POSTGRES DOCKER SUPPORT WAS ENABLED
+Can skip if:
+- on question "What Storages To Enable?" you selected csv or none
+- on question "Postgres Docker Support Out The Box?" you selected yes
 :::
 
-Only required if postgres storage was enabled but docker support was marked as no in the project creation step.
-
-For ease of running locally we suggest you enable docker support on the rindexer project.
-
-If you have picked postgres storage but did NOT pick docker support out the box you will have to fill in the `.env`
-file with the correct database url.
+For ease of running locally we suggest you enable docker support on the rindexer project, if you did not 
+enable docker support with postgres storage you will need to provide a postgres database information in the `.env` file 
+which has been generated for you.
 
 ```bash
 DATABASE_URL=FILL_IN
@@ -81,11 +98,132 @@ The boilerplate template uses a free node which may get rate limited, you can ch
 graphql can only run if you have postgres storage enabled
 :::
 
-TODO: Add instructions on how to query the GraphQL API.
+:::code-group
 
-### Generate Typescript SDK for your dApp
+```graphql [request]
+query AllTransfers($orderBy: [TransfersOrderBy!] = [BLOCK_NUMBER_DESC], $first: Int = 5) {
+  allTransfers(orderBy: $orderBy, first: $first) {
+    nodes {
+      blockHash
+      blockNumber
+      contractAddress
+      from
+      network
+      nodeId
+      to
+      txHash
+      value
+    }
+    pageInfo {
+      endCursor
+      hasNextPage
+      hasPreviousPage
+      startCursor
+    }
+    totalCount
+  }
+}
+```
 
-TODO: Add instructions on how to generate a typescript SDK for your dApp.
+```json [response]
+{
+  "data": {
+    "allTransfers": {
+      "nodes": [
+        {
+          "blockHash": "0x8461da7a1d4b47190a01fa6eae219be40aacffab0dd64af7259b2d404572c3d9",
+          "blockNumber": "18718011",
+          "contractAddress": "0xae78736cd615f374d3085123a210448e74fc6393                        ",
+          "from": "0xfac5ddb4e3eb6941a458544bfe2588ee566bd4ff",
+          "network": "ethereum",
+          "nodeId": "WyJ0cmFuc2ZlcnMiLDU4Nzld",
+          "to": "0x2201d2400d30bfd8172104b4ad046d019ca4e7bd",
+          "txHash": "0x145c6705ffbf461e85d08b4a7f5850d6b52a7364d93a057722ca1194034f3ba4",
+          "value": "263518859"
+        },
+        {
+          "blockHash": "0x8461da7a1d4b47190a01fa6eae219be40aacffab0dd64af7259b2d404572c3d9",
+          "blockNumber": "18718011",
+          "contractAddress": "0xae78736cd615f374d3085123a210448e74fc6393                        ",
+          "from": "0xe4f719c11fc5ab883e32068df99962985645e860",
+          "network": "ethereum",
+          "nodeId": "WyJ0cmFuc2ZlcnMiLDU4ODBd",
+          "to": "0xc5c2dd38d29960e7bb015e77be44aefbb08f192b",
+          "txHash": "0x145c6705ffbf461e85d08b4a7f5850d6b52a7364d93a057722ca1194034f3ba4",
+          "value": "19152486233394367"
+        },
+        {
+          "blockHash": "0x8461da7a1d4b47190a01fa6eae219be40aacffab0dd64af7259b2d404572c3d9",
+          "blockNumber": "18718011",
+          "contractAddress": "0xae78736cd615f374d3085123a210448e74fc6393                        ",
+          "from": "0xc5c2dd38d29960e7bb015e77be44aefbb08f192b",
+          "network": "ethereum",
+          "nodeId": "WyJ0cmFuc2ZlcnMiLDU4ODFd",
+          "to": "0x882a41fd4c5d09d01900db378903c5c00cc31d64",
+          "txHash": "0x145c6705ffbf461e85d08b4a7f5850d6b52a7364d93a057722ca1194034f3ba4",
+          "value": "19159007520480803"
+        },
+        {
+          "blockHash": "0x8461da7a1d4b47190a01fa6eae219be40aacffab0dd64af7259b2d404572c3d9",
+          "blockNumber": "18718011",
+          "contractAddress": "0xae78736cd615f374d3085123a210448e74fc6393                        ",
+          "from": "0x882a41fd4c5d09d01900db378903c5c00cc31d64",
+          "network": "ethereum",
+          "nodeId": "WyJ0cmFuc2ZlcnMiLDU4ODJd",
+          "to": "0x2201d2400d30bfd8172104b4ad046d019ca4e7bd",
+          "txHash": "0x145c6705ffbf461e85d08b4a7f5850d6b52a7364d93a057722ca1194034f3ba4",
+          "value": "19159007520480803"
+        },
+        {
+          "blockHash": "0x8461da7a1d4b47190a01fa6eae219be40aacffab0dd64af7259b2d404572c3d9",
+          "blockNumber": "18718011",
+          "contractAddress": "0xae78736cd615f374d3085123a210448e74fc6393                        ",
+          "from": "0x882a41fd4c5d09d01900db378903c5c00cc31d64",
+          "network": "ethereum",
+          "nodeId": "WyJ0cmFuc2ZlcnMiLDU4ODNd",
+          "to": "0xc5c2dd38d29960e7bb015e77be44aefbb08f192b",
+          "txHash": "0x145c6705ffbf461e85d08b4a7f5850d6b52a7364d93a057722ca1194034f3ba4",
+          "value": "0"
+        }
+      ],
+      "pageInfo": {
+        "endCursor": "WyJibG9ja19udW1iZXJfZGVzYyIsWzE4NzE4MDExLDU4ODNdXQ==",
+        "hasNextPage": true,
+        "hasPreviousPage": false,
+        "startCursor": "WyJibG9ja19udW1iZXJfZGVzYyIsWzE4NzE4MDExLDU4NzldXQ=="
+      },
+      "totalCount": 5883
+    }
+  }
+}
+```
+
+:::
+
+### Generate graphql queries
+
+You can generate .graphql prebuilt queries to get up and running in seconds.
+These will be generated in a `queries` folder.
+
+```bash
+rindexer codegen graphql --endpoint=graphql_api
+```
+
+Direct path:
+
+```bash
+rindexer codegen --path=./location graphql --endpoint=graphql_api
+```
+
+#### TypeScript
+
+- React Apollo - https://the-guild.dev/graphql/codegen/plugins/typescript/typescript-react-apollo#with-react-hooks
+- React Query - https://the-guild.dev/graphql/codegen/plugins/typescript/typescript-react-query
+- Node app - https://the-guild.dev/graphql/codegen/plugins/typescript/typescript-urql
+
+#### .NET, Dart, Java, Flow
+
+codegen for other languages can be found [here](https://the-guild.dev/graphql/codegen)
 
 ## New Project Appendix
 
