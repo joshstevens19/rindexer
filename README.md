@@ -6,6 +6,7 @@ checklist v1.0:
 - look into deployments to make it easy to do
 - add examples in the repo + callouts in the documentation
 - investigate bringing in node binary to the repo
+- add readmes to the subprojects
 
 bugs:
 - Do not create a new postgres client each time on rust projects

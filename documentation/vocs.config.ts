@@ -2,6 +2,28 @@ import { defineConfig } from 'vocs'
 
 export default defineConfig({
   title: 'rindexer',
+  topNav: [
+    { text: 'Docs', link: '/docs/introduction/installation', match: '/docs' },
+    {
+      text: '0.1.0-beta',
+      items: [
+        {
+          text: 'Changelog',
+          link: '/docs/changelog',
+        },
+        // {
+        //   text: 'Contributing',
+        //   link: 'https://github.com/wevm/vocs/blob/main/.github/CONTRIBUTING.md',
+        // },
+      ],
+    },
+  ],
+  socials: [
+    {
+      icon: 'github',
+      link: 'https://github.com/joshstevens19/rindexer',
+    },
+  ],
   sidebar: [
     {
       text: 'Introduction',
