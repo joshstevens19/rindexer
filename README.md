@@ -1,9 +1,11 @@
 # rindexer
 
 checklist v1.0:
-- finish the documentation (note about block timestamp + coming soon with build own schemas)
+- finish the documentation
 - add a getting started guide for rust / no-code
 - look into deployments to make it easy to do
+- add examples in the repo + callouts in the documentation
+- investigate bringing in node binary to the repo
 
 bugs:
 - Do not create a new postgres client each time on rust projects
@@ -11,6 +13,7 @@ bugs:
 nice to have:
 - look at the final unwraps
 - look into PK with tx hash and tx index and log index to make it unique and not have to worry about duplicates
+- add ability to add indexes to the database
 
 future features:
 - look into setting your own schema for the database using diesel

@@ -1,5 +1,5 @@
 mod thread;
-pub use thread::{set_thread_no_logging, NullWriter};
+pub use thread::set_thread_no_logging;
 
 use rand::distributions::Alphanumeric;
 use rand::Rng;
