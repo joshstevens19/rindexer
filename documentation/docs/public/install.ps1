@@ -5,7 +5,7 @@ $RindexerBinDir = "$RindexerDir\bin"
 $RindexerUpPath = "$RindexerBinDir\rindexerup.ps1"
 $RindexerDownPath = "$RindexerBinDir\rindexerdown.ps1"
 $BinPath = "$RindexerBinDir\rindexer.exe"
-$BinUrl = "https://rindexer.io/download/rindexer-latest"
+$BinUrl = "https://rindexer.xyz/download/rindexer-latest"
 $LocalBinPath = "C:\Users\joshstevens\code\rindexer\target\debug\rindexer_cli.exe"
 
 # Ensure the bin directory exists
