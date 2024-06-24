@@ -1,0 +1,107 @@
+# rindexer CLI
+
+rindexer is a CLI first tool allowing you to do everything you need to do with rindexer.
+
+```bash
+Usage: rindexer <COMMAND>
+
+Commands:
+  new           Creates a new rindexer no-code project or rust project
+  start         Start various services like indexers, GraphQL APIs or both together
+  download-abi  Downloads ABIs from etherscan to build up your rindexer.yaml mappings
+  codegen       Generates rust code based on rindexer.yaml or graphql queries
+  delete        Delete data from the postgres database or csv files
+  help          Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version
+```
+
+## new 
+
+Creates a new rindexer no-code project or rust project. This will walk you through setting up your project by asking
+you a series of questions in the terminal.
+
+```bash
+Usage: rindexer new [OPTIONS] <COMMAND>
+
+Commands:
+  no-code  Creates a new no-code project
+  rust     Creates a new rust project
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+  -p, --path <PATH>
+          optional - The path to create the project in, default will be where the command is run
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+## start
+
+Start various services like indexers, GraphQL APIs or both together. This will start the services based on the rindexer.yaml file.
+
+```bash
+`rindexer start indexer` or `rindexer start graphql` or `rindexer start all`
+
+Usage: rindexer start [OPTIONS] <COMMAND>
+
+Commands:
+  indexer  Starts the indexing service based on the rindexer.yaml file
+  graphql  Starts the GraphQL server based on the rindexer.yaml file
+  all      Starts the indexers and the GraphQL together based on the rindexer.yaml file
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+  -p, --path <PATH>
+          optional - The path to run the command in, default will be where the command is run
+
+  -h, --help
+          Print help (see a summary with '-h')
+`rindexer start indexer` or `rindexer start graphql` or `rindexer start all`
+```
+
+## download-abi
+
+This will allow you to download ABIs from etherscan to build up your rindexer.yaml mappings. 
+It will ask you for the contract address and the network you want to download the ABI from.
+Not all networks are supported only networks with etherscan support.
+
+```bash
+Usage: rindexer download-abi
+```
+
+## codegen
+
+Generates rust code based on rindexer.yaml or graphql queries. This will generate the code based on the command you run.
+
+```bash
+Example: `rindexer codegen typings` or `rindexer codegen handlers` or `rindexer codegen graphql --endpoint=graphql_api` or `rindexer codegen rust-all`
+
+Usage: rindexer codegen [OPTIONS] <COMMAND>
+
+Commands:
+  typings  Generates the rindexer rust typings based on the rindexer.yaml file
+  indexer  Generates the rindexer rust indexers handlers based on the rindexer.yaml file
+  graphql  Generates the GraphQL queries from a GraphQL schema
+  all      Generates both typings and indexers handlers based on the rindexer.yaml file
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+  -p, --path <PATH>
+          optional - The path to run the command in, default will be where the command is run
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+## delete
+
+This can be used to delete data from the postgres database or csv files.
+It will ask you questions in the terminal to determine what you want to delete.
+
+```bash
+Usage: rindexer delete
+```

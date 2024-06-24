@@ -73,6 +73,7 @@ enum Commands {
         #[clap(subcommand)]
         subcommand: NewSubcommands,
 
+        /// optional - The path to create the project in, default will be where the command is run.
         #[clap(long, short)]
         path: Option<String>,
     },
@@ -84,6 +85,7 @@ enum Commands {
         #[clap(subcommand)]
         subcommand: StartSubcommands,
 
+        /// optional - The path to run the command in, default will be where the command is run.
         #[clap(long, short)]
         path: Option<String>,
     },
@@ -95,9 +97,10 @@ enum Commands {
     /// to be done in your rindexer.yaml file manually.
     ///
     /// Example:
-    /// `rindexer download_abi`
-    #[clap(name = "download_abi")]
+    /// `rindexer download-abi`
+    #[clap(name = "download-abi")]
     DownloadAbi {
+        /// optional - The path to run the command in, default will be where the command is run.
         #[clap(long, short)]
         path: Option<String>,
     },
@@ -111,6 +114,7 @@ enum Commands {
         #[clap(subcommand)]
         subcommand: CodegenSubcommands,
 
+        /// optional - The path to run the command in, default will be where the command is run.
         #[clap(long, short)]
         path: Option<String>,
     },
@@ -121,6 +125,7 @@ enum Commands {
     /// Example:
     /// `rindexer delete`
     Delete {
+        /// optional - The path to run the command in, default will be where the command is run.
         #[clap(long, short)]
         path: Option<String>,
     },
@@ -277,7 +282,7 @@ fn handle_new_command(
     let project_description = prompt_for_optional_input::<String>("Project Description", None);
     let repository = prompt_for_optional_input::<String>("Repository", None);
     let storage_choice = prompt_for_input_list(
-        "What Storages To Enable?",
+        "What Storages To Enable? (graphql can only be supported if postgres is enabled)",
         &[
             "postgres".to_string(),
             "csv".to_string(),
@@ -327,7 +332,7 @@ fn handle_new_command(
         networks: vec![Network {
             name: "ethereum".to_string(),
             chain_id: 1,
-            url: "https://mainnet.gateway.tenderly.co".to_string(),
+            rpc: "https://mainnet.gateway.tenderly.co".to_string(),
             max_block_range: None,
             compute_units_per_second: None,
         }],
@@ -482,7 +487,11 @@ async fn handle_download_abi_command(
             print_error_message(&format!("Failed to write ABI file: {}", e));
             e
         })?;
-        print_success_message(&format!("Downloaded ABI for: {}", item.contract_name));
+        print_success_message(&format!(
+            "Downloaded ABI for: {} in {}",
+            item.contract_name,
+            abi_path.display()
+        ));
 
         break;
     }
@@ -818,7 +827,7 @@ fn prompt_for_input(
     match current_value {
         Some(value) => value.to_string(),
         None => loop {
-            print!("{} {}: ", "Please enter the".green(), field_name.yellow());
+            print!("{}: ", field_name.yellow());
             io::stdout().flush().unwrap();
 
             let mut input = String::new();
@@ -899,7 +908,7 @@ fn prompt_for_input_list(
     loop {
         print!(
             "{} [{}]: ",
-            format!("Please enter the {}", field_name).green(),
+            field_name.to_string().green(),
             options_str.yellow()
         );
         io::stdout().flush().unwrap();

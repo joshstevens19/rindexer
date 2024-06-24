@@ -1,0 +1,77 @@
+# Codegen
+
+You can generate a few different types of code when using rindexer codegen.
+
+## GraphQL
+
+You can generate .graphql prebuilt queries to get up and running in seconds.
+These will be generated in a `queries` folder.
+
+```bash
+rindexer codegen graphql --endpoint=graphql_api
+```
+
+Direct path:
+
+```bash
+rindexer codegen --path=./location graphql --endpoint=graphql_api
+```
+
+### TypeScript
+
+- React Apollo - https://the-guild.dev/graphql/codegen/plugins/typescript/typescript-react-apollo#with-react-hooks
+- React Query - https://the-guild.dev/graphql/codegen/plugins/typescript/typescript-react-query
+- Node app - https://the-guild.dev/graphql/codegen/plugins/typescript/typescript-urql
+
+### .NET, Dart, Java, Flow
+
+codegen for other languages can be found [here](https://the-guild.dev/graphql/codegen)
+
+## Typings
+
+:::info
+This feature is only available for Rust projects.
+:::
+
+When creating a new rust project with rindexer it will create you a typings folder, this has pretty advanced
+typings for all your contracts, events and network information. This is generated from the ABIs you provide in the YAML configuration file.
+This folder is not meant to be manually edited and should always be generated using codegen.
+
+You can regenerate the typings folder by running the following command:
+
+:::info
+note if you change the ABIs in the YAML file you will need to regenerate the typings. Also if you do regenerate this
+most likely your indexer files will need to be updated to match the new typings, you can manually migrate them or
+generate them again using the below if you do not have any custom logic.
+:::
+
+```bash
+rindexer codegen typings
+```
+
+## Indexers
+
+:::info
+This feature is only available for Rust projects.
+:::
+
+When creating a new rust project with rindexer it will create you a indexers folder, this is where you will write
+your custom logic for the indexer. This is where you will do all your indexing logic, you can do anything you want
+in here, you can do http requests, on chain lookups, custom logic, custom DBs, anything you can think of. rindexer gives you
+the foundations and also baked in extendability. Rust enforces a strong type system, all logs will be streamed to you
+just focus on the logic you want.
+
+By default if you turn storage postgres on in the YAML configuration file it will also create you postgres tables,
+also write SQL for you to use and expose you a postgres client. This is a great starting point for you to build on.
+
+The tables creation can be skipped by using the [disable_create_tables](docs/start-building/yaml-config/storage#disable_create_tables)
+in the YAML configuration file.
+
+If you also enable the CSV storage it will also generate code in the handler to write to that CSV files.
+
+You can regenerate the indexers folder by running the following command, please note this will overwrite
+any custom logic you have written if you run it on an existing project.
+
+```bash
+rindexer codegen indexers
+```

@@ -26,7 +26,7 @@ pub fn run_in_child_thread(endpoint: &str) -> &str {
     let endpoint = endpoint.to_string();
     tokio::spawn(async move {
         set_thread_no_logging();
-        
+
         //let _guard = set_no_op_logger();
         run(endpoint).await;
     });
