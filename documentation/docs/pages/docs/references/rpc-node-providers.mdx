@@ -1,0 +1,36 @@
+# RPC node providers
+
+RPC providers speed has a direct link to how fast you can index data, providers who try to return data as fast as possible are the best providers to have.
+With RPC providers the fastest providers are ones which return you the to and from block ranges even if you supply an out of range block request.
+This means you can extract that data from the error message and use it to get the the biggest depth of logs out of a single request.
+The slower providers give you a max block range and this means you have to crawl through the blocks to get the logs even if no data is in the blocks, 
+this is a lot slower.
+
+## Tenderly
+
+[Tenderly](https://tenderly.co/) has some very fast nodes and in internal testing with free nodes they blew everyone out the water
+for returning the most event logs in the fastest time.
+
+check out their free nodes here - https://docs.tenderly.co/supported-networks-and-languages
+
+:::info
+Keep in mind that the public RPC are rate limited.
+
+For production use, it’s recommended use a dedicated Node RPC.
+:::
+
+## Alchemy
+
+[Alchemy](https://www.alchemy.com/) is another great provider with a free tier that is generous.
+
+## Other top providers
+
+Infura and thirdweb are also good providers. 
+
+## All other networks
+
+You can use [chainlist](https://chainlist.org/) to find all the providers which support your network.
+
+## Local nodes
+
+rindexer should work with any local nodes you run including [Anvil](https://book.getfoundry.sh/anvil/) and [Hardhat](https://hardhat.org/)

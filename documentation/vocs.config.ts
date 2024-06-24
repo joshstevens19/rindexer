@@ -30,7 +30,7 @@ export default defineConfig({
           text: 'YAML Config',
           link: '/docs/start-building/yaml-config',
           items: [
-            { text: 'Top-level fields', link: '/docs/start-building/yaml-config/top-level-fields' },
+            { text: 'Top-level Fields', link: '/docs/start-building/yaml-config/top-level-fields' },
             { text: 'Networks', link: '/docs/start-building/yaml-config/networks' },
             { text: 'Storage', link: '/docs/start-building/yaml-config/storage' },
             { text: 'Contracts', link: '/docs/start-building/yaml-config/contracts' },
@@ -59,18 +59,9 @@ export default defineConfig({
           items: [
             { text: 'Typings', link: '/docs/start-building/rust-project-deep-dive/typings' },
             { text: 'Indexers', link: '/docs/start-building/rust-project-deep-dive/indexers' },
-            { text: 'All', link: '/docs/start-building/rust-project-deep-dive/all' },
+            { text: 'Building Own DB Schema - coming soon' },
           ],
         },
-        // {
-        //   text: 'Codegen',
-        //   link: '/docs/server/api/introduction',
-        //   items: [
-        //     { text: 'Typings', link: '/docs/what-is-rrelayerr' },
-        //     { text: 'Indexer', link: '/docs/what-is-rrelayerr' },
-        //     { text: 'All', link: '/docs/what-is-rrelayerr' },
-        //   ],
-        // },
       ],
     },
     {
@@ -92,12 +83,12 @@ export default defineConfig({
       text: 'References',
       items: [
         { text: 'CLI ', link: '/docs/references/cli' },
+        { text: 'RPC Node Providers ', link: '/docs/references/rpc-node-providers' },
       ],
     },
     {
       text: 'Advanced',
       items: [
-        { text: 'Building Own DB Schema - coming soon' },
         { text: 'From A Foundry Project - coming soon' },
         { text: 'From A Hardhat Project - coming soon' },
       ],
