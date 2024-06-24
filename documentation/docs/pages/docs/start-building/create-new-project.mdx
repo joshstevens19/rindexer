@@ -5,32 +5,42 @@ Make sure you have the CLI installed before starting a new project.
 You can find the installation instructions [here](/docs/introduction/installation).
 :::
 
-## 1. Initialise a new project
+## 1. Create a new project
 
-To start a new project with rindexer, you can use the `new` command. This command will guide you through the process
-of creating a new project, allowing you to choose between a no-code project and a Rust project.
+:::code-group
+
+```bash [no-code]
+rindexer new no-code
+```
+
+```bash [rust]
+rindexer new rust
+```
+
+:::
 
 If any of the steps are unclear, you can find more information in the [New Project Appendix](#new-project-appendix).
-
-```bash
-rindexer new
-```
 
 Once completed a new boilerplate project will be created in the current directory. You can navigate to the project directory and start building your project.
 The boilerplate project is configured to index rETH transfer and approval events from ethereum mainnet between a specific block range.
 
 ## 2. Add Environment Variables
 
-:::info
+Open up the generated `.env` file and fill in the required environment variables.
+
+### DATABASE_URL
+
+:::warning
 - SKIP IF POSTGRES WAS NOT ENABLED
 - SKIP IF POSTGRES DOCKER SUPPORT WAS ENABLED
 :::
 
 Only required if postgres storage was enabled but docker support was marked as no in the project creation step.
+
 For ease of running locally we suggest you enable docker support on the rindexer project.
 
-If you have picked postgres storage but NOT picked docker support out the box you have to fill in the `.env`
-file with the correct database information.
+If you have picked postgres storage but did NOT pick docker support out the box you will have to fill in the `.env`
+file with the correct database url.
 
 ```bash
 DATABASE_URL=FILL_IN
@@ -61,8 +71,8 @@ rindexer start graphql
 :::
 
 :::warning
-The boilerplate template uses a free node which has very limited rate limits, you can change the node URL in the
-`.env` file to a node you control or have access to.
+The boilerplate template uses a free node which may get rate limited, you can change the node URL in the
+`.env` file to a paid node, we suggest alchemy or tenderly.
 :::
 
 ## 4. Query the GraphQL API
@@ -73,16 +83,13 @@ graphql can only run if you have postgres storage enabled
 
 TODO: Add instructions on how to query the GraphQL API.
 
+### Generate Typescript SDK for your dApp
+
+TODO: Add instructions on how to generate a typescript SDK for your dApp.
+
 ## New Project Appendix
 
 If you are not sure what to select this section will explain each step in more detail.
-
-### What Type Of Project?
-
-If unsure what project type to select, you can read more about each project type here:
-
-- [No-code Project](/docs/start-building/project-types/no-code-project)
-- [Rust Project](/docs/start-building/project-types/rust-project)
 
 ### What Storages To Enable?
 

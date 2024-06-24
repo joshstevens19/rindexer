@@ -1,6 +1,9 @@
+use crate::helpers::NullWriter;
+use tracing::dispatcher::DefaultGuard;
 use tracing::level_filters::LevelFilter;
+use tracing::Dispatch;
 use tracing_subscriber::fmt::format::{Format, Writer};
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 struct CustomTimer;
 
@@ -31,4 +34,12 @@ pub fn setup_logger(log_level: LevelFilter) {
 
     tracing::subscriber::set_global_default(subscriber)
         .expect("Failed to set the default subscriber");
+}
+
+pub fn set_no_op_logger() -> DefaultGuard {
+    let no_op_subscriber = FmtSubscriber::builder().with_writer(|| NullWriter).finish();
+
+    let no_op_dispatch = Dispatch::new(no_op_subscriber);
+
+    tracing::dispatcher::set_default(&no_op_dispatch)
 }

@@ -21,7 +21,7 @@ pub use simple_file_formatters::csv::AsyncCsvAppender;
 mod helpers;
 pub use helpers::{generate_random_id, write_file, WriteFileError};
 mod api;
-pub use api::{GraphQLServerDetails, GraphQLServerSettings};
+pub use api::{generate_graphql_queries, GraphQLServerDetails, GraphQLServerSettings};
 
 mod logger;
 pub mod provider;

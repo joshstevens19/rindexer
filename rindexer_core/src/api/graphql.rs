@@ -1,9 +1,13 @@
+use crate::api::playground;
 use crate::database::postgres::{connection_string, indexer_contract_schema_name};
+use crate::helpers::set_thread_no_logging;
 use crate::indexer::Indexer;
+use reqwest::Client;
+use serde_json::{json, Value};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use std::{env, thread};
-use thiserror::Error;
 use tracing::{error, info};
 
 pub struct GraphQLServerDetails {
@@ -40,7 +44,7 @@ pub struct GraphQLServer {
     pid: u32,
 }
 
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum StartGraphqlServerError {
     #[error("Can not read database environment variable: {0}")]
     UnableToReadDatabaseUrl(env::VarError),
@@ -49,7 +53,7 @@ pub enum StartGraphqlServerError {
     GraphQLServerStartupError(String),
 }
 
-pub fn start_graphql_server(
+pub async fn start_graphql_server(
     indexer: &Indexer,
     settings: GraphQLServerSettings,
 ) -> Result<GraphQLServer, StartGraphqlServerError> {
@@ -64,6 +68,7 @@ pub fn start_graphql_server(
     let connection_string =
         connection_string().map_err(StartGraphqlServerError::UnableToReadDatabaseUrl)?;
     let port = settings.port.unwrap_or(5005).to_string();
+    let graphql_endpoint = format!("http://localhost:{}/graphql", port);
 
     let child = Command::new("npx")
         .arg("postgraphile")
@@ -83,8 +88,8 @@ pub fn start_graphql_server(
         .arg("--disable-default-mutations")
         .arg("--retry-on-init-fail")
         .arg("--dynamic-json")
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .map_err(|e| StartGraphqlServerError::GraphQLServerStartupError(e.to_string()))?;
 
@@ -98,23 +103,64 @@ pub fn start_graphql_server(
     .expect("Error setting Ctrl-C handler");
 
     let child_clone_for_thread = Arc::clone(&child_arc);
-    thread::spawn(move || match child_clone_for_thread.lock() {
-        Ok(mut guard) => match guard.wait() {
-            Ok(status) => {
-                if status.success() {
-                    info!("🚀 GraphQL API ready at http://0.0.0.0:{}/", port);
-                } else {
-                    error!("GraphQL: Could not start up API: Child process exited with errors");
+    thread::spawn(move || {
+        set_thread_no_logging();
+        match child_clone_for_thread.lock() {
+            Ok(mut guard) => match guard.wait() {
+                Ok(status) => {
+                    if status.success() {
+                        info!("🚀 GraphQL API ready at http://0.0.0.0:{}/", port);
+                    } else {
+                        error!("GraphQL: Could not start up API: Child process exited with errors");
+                    }
                 }
-            }
+                Err(e) => {
+                    error!("GraphQL: Failed to wait on child process: {}", e);
+                }
+            },
             Err(e) => {
-                error!("GraphQL: Failed to wait on child process: {}", e);
+                error!("GraphQL: Failed to lock child process for waiting: {}", e);
             }
-        },
-        Err(e) => {
-            error!("GraphQL: Failed to lock child process for waiting: {}", e);
         }
     });
+
+    let playground_endpoint = playground::run_in_child_thread(&graphql_endpoint);
+
+    // Health check to ensure API is ready
+    let client = Client::new();
+    let health_check_query = json!({
+        "query": "query MyQuery { nodeId }"
+    });
+    let mut health_check_attempts = 0;
+    while health_check_attempts < 40 {
+        match client
+            .post(&graphql_endpoint)
+            .json(&health_check_query)
+            .send()
+            .await
+        {
+            Ok(response) if response.status().is_success() => {
+                let response_json: Value = response.json().await.unwrap();
+                if response_json.get("errors").is_none() {
+                    info!(
+                        "🚀 GraphQL API ready at {} Playground - {}",
+                        graphql_endpoint, playground_endpoint
+                    );
+                    break;
+                }
+            }
+            _ => {}
+        }
+        health_check_attempts += 1;
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+
+    if health_check_attempts >= 40 {
+        error!("GraphQL API did not become ready in time");
+        return Err(StartGraphqlServerError::GraphQLServerStartupError(
+            "GraphQL API did not become ready in time".to_string(),
+        ));
+    }
 
     Ok(GraphQLServer {
         child: child_arc,
