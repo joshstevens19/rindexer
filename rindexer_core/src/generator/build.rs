@@ -327,7 +327,9 @@ pub enum GenerateError {
 }
 
 /// Generates all the rindexer project typings and handlers
-pub fn generate(manifest_location: &PathBuf) -> Result<(), GenerateError> {
+pub fn generate_rindexer_typings_and_handlers(
+    manifest_location: &PathBuf,
+) -> Result<(), GenerateError> {
     let manifest = read_manifest(manifest_location).map_err(GenerateError::ReadManifestError)?;
 
     generate_rindexer_typings(manifest.clone(), manifest_location)
@@ -483,5 +485,6 @@ serde = {{ version = "1.0.194", features = ["derive"] }}
     let main_path = project_path.join("src").join("main.rs");
     write_file(&main_path, main_code).map_err(GenerateRustProjectError::WriteFileError)?;
 
-    generate(&manifest_location).map_err(GenerateRustProjectError::GenerateError)
+    generate_rindexer_typings_and_handlers(&manifest_location)
+        .map_err(GenerateRustProjectError::GenerateError)
 }

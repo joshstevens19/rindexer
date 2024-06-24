@@ -22,6 +22,8 @@ codegen_typings:
 	cargo run -- codegen typings
 codegen_indexer:
 	cargo run -- codegen indexer
+codegen_graphql:
+	cargo run -- codegen --path /Users/joshstevens/code/rindexer/examples/base_paint graphql --endpoint  http://0.0.0.0:5005/graphql
 download_abi:
 	cargo run -- download_abi --path /Users/joshstevens/code/rindexer/examples/rindexer_demo_cli
 delete:

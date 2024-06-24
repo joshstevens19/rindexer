@@ -12,7 +12,8 @@ use ethers::types::{Chain, U64};
 use ethers_etherscan::Client;
 use regex::Regex;
 use rindexer_core::generator::build::{
-    generate, generate_rindexer_handlers, generate_rindexer_typings, generate_rust_project,
+    generate_rindexer_handlers, generate_rindexer_typings, generate_rindexer_typings_and_handlers,
+    generate_rust_project,
 };
 use rindexer_core::generator::generate_docker_file;
 use rindexer_core::manifest::yaml::{
@@ -20,9 +21,9 @@ use rindexer_core::manifest::yaml::{
     Network, PostgresConnectionDetails, ProjectType, Storage, YAML_CONFIG_NAME,
 };
 use rindexer_core::{
-    drop_tables_for_indexer_sql, start_rindexer_no_code, write_file, GraphQLServerDetails,
-    GraphQLServerSettings, GraphqlNoCodeDetails, IndexerNoCodeDetails, PostgresClient,
-    StartNoCodeDetails, WriteFileError,
+    drop_tables_for_indexer_sql, generate_graphql_queries, start_rindexer_no_code, write_file,
+    GraphQLServerDetails, GraphQLServerSettings, GraphqlNoCodeDetails, IndexerNoCodeDetails,
+    PostgresClient, StartNoCodeDetails, WriteFileError,
 };
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -57,18 +58,27 @@ struct NewDetails {
 #[derive(Parser, Debug)]
 #[clap(author = "Josh Stevens", version = "1.0", about = "Blazing fast EVM indexing tool built in rust", long_about = None)]
 enum Commands {
-    /// Creates a new rust rindexer project or a rindexer no-code project
+    /// Creates a new rindexer no-code project or rust project.
+    ///
+    /// no-code = Best choice when starting, no extra code required.
+    /// rust = Customise advanced indexer by writing rust code.
     ///
     /// This command initialises a new workspace project with rindexer
     /// with everything populated to start using rindexer.
     ///
     /// Example:
-    /// `rindexer new`
+    /// `rindexer new no-code` or `rindexer new rust`
+    #[clap(name = "new")]
     New {
+        #[clap(subcommand)]
+        subcommand: NewSubcommands,
+
         #[clap(long, short)]
         path: Option<String>,
     },
     /// Start various services like indexers, GraphQL APIs or both together
+    ///
+    /// `rindexer start indexer` or `rindexer start graphql` or `rindexer start all`
     #[clap(name = "start")]
     Start {
         #[clap(subcommand)]
@@ -92,8 +102,10 @@ enum Commands {
         path: Option<String>,
     },
 
-    /// Generates rust code based on rindexer.yaml - if you are using no-code projects
-    /// you will not need to use this.
+    /// Generates rust code based on rindexer.yaml or graphql queries
+    ///
+    /// Example:
+    /// `rindexer codegen typings` or `rindexer codegen handlers` or `rindexer codegen graphql --endpoint=graphql_api` or `rindexer codegen rust-all`
     #[clap(name = "codegen")]
     Codegen {
         #[clap(subcommand)]
@@ -112,6 +124,25 @@ enum Commands {
         #[clap(long, short)]
         path: Option<String>,
     },
+}
+
+#[derive(Subcommand, Debug)]
+enum NewSubcommands {
+    /// Creates a new no-code project
+    ///
+    /// Best choice when starting, no extra code required.
+    /// Example:
+    /// `rindexer new no-code`
+    #[clap(name = "no-code")]
+    NoCode,
+
+    /// Creates a new rust project
+    ///
+    /// Customise advanced indexer by writing rust code
+    /// Example:
+    /// `rindexer new rust`
+    #[clap(name = "rust")]
+    Rust,
 }
 
 #[derive(Subcommand, Debug)]
@@ -153,6 +184,8 @@ enum CodegenSubcommands {
     ///
     /// This should not be edited manually and always generated.
     ///
+    /// This is not relevant for no-code projects.
+    ///
     /// Example:
     /// `rindexer codegen typings`
     Typings,
@@ -161,14 +194,28 @@ enum CodegenSubcommands {
     ///
     /// You can use these as the foundations to build your advanced indexers.
     ///
+    /// This is not relevant for no-code projects.
+    ///
     /// Example:
     /// `rindexer codegen indexer`
     Indexer,
 
+    /// Generates the GraphQL queries from a GraphQL schema
+    ///
+    /// You can then use this in your dApp instantly to interact with the GraphQL API
+    ///
+    /// Example:
+    /// `rindexer codegen graphql`
+    #[clap(name = "graphql")]
+    GraphQL {
+        #[clap(long, help = "The graphql endpoint")]
+        endpoint: String,
+    },
+
     /// Generates both typings and indexers handlers based on the rindexer.yaml file.
     ///
     /// Example:
-    /// `rindexer codegen all`
+    /// `rindexer codegen rust-all`
     All,
 }
 
@@ -216,14 +263,11 @@ fn generate_rindexer_rust_project(project_path: &Path) {
     }
 }
 
-fn handle_new_command(project_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn handle_new_command(
+    project_path: PathBuf,
+    project_type: ProjectType,
+) -> Result<(), Box<dyn std::error::Error>> {
     print_success_message("Initializing new rindexer project...");
-
-    let rindexer_type = prompt_for_input_list(
-        "indexer type you wish to create:\n- No code: best choice when starting, no extra code required\n- Project: customise advanced indexer as you see by writing rust code\n",
-        &["no-code".to_string(),"project".to_string()],
-        None,
-    );
 
     let project_name = prompt_for_input("Project Name", None, None, None);
     if project_path.exists() {
@@ -274,12 +318,6 @@ fn handle_new_command(project_path: PathBuf) -> Result<(), Box<dyn std::error::E
         print_error_message(&format!("Failed to write example ABI file: {}", e));
         e
     })?;
-
-    let project_type = if rindexer_type == "no-code" {
-        ProjectType::NoCode
-    } else {
-        ProjectType::Rust
-    };
 
     let manifest = Manifest {
         name: project_name,
@@ -452,10 +490,23 @@ async fn handle_download_abi_command(
     Ok(())
 }
 
-fn handle_codegen_command(
+async fn handle_codegen_command(
     project_path: PathBuf,
     subcommand: &CodegenSubcommands,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if let CodegenSubcommands::GraphQL { endpoint } = subcommand {
+        generate_graphql_queries(endpoint, &project_path)
+            .await
+            .map_err(|e| {
+                print_error_message(&format!("Failed to generate graphql queries: {}", e));
+                e
+            })?;
+
+        print_success_message("Generated graphql queries.");
+
+        return Ok(());
+    }
+
     validate_rindexer_yaml_exist();
 
     let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
@@ -488,8 +539,13 @@ fn handle_codegen_command(
             })?;
             print_success_message("Generated rindexer indexer handlers.");
         }
+        CodegenSubcommands::GraphQL {
+            endpoint: _endpoint,
+        } => {
+            unreachable!("This should not be reachable");
+        }
         CodegenSubcommands::All => {
-            generate(&rindexer_yaml_path).map_err(|e| {
+            generate_rindexer_typings_and_handlers(&rindexer_yaml_path).map_err(|e| {
                 print_error_message(&format!("Failed to generate rindexer code: {}", e));
                 e
             })?;
@@ -690,13 +746,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = CLI::parse();
 
     match &cli.command {
-        Commands::New { path } => {
+        Commands::New { subcommand, path } => {
             let resolved_path = resolve_path(path).map_err(|e| {
                 print_error_message(&e);
                 e
             })?;
             load_env_from_path(&resolved_path)?;
-            handle_new_command(resolved_path)
+
+            let project_type = match subcommand {
+                NewSubcommands::NoCode => ProjectType::NoCode,
+                NewSubcommands::Rust => ProjectType::Rust,
+            };
+
+            handle_new_command(resolved_path, project_type)
         }
         Commands::DownloadAbi { path } => {
             let resolved_path = resolve_path(path).map_err(|e| {
@@ -712,7 +774,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 e
             })?;
             load_env_from_path(&resolved_path)?;
-            handle_codegen_command(resolved_path, subcommand)
+            handle_codegen_command(resolved_path, subcommand).await
         }
         Commands::Start { subcommand, path } => {
             let resolved_path = resolve_path(path).map_err(|e| {

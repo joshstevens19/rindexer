@@ -24,36 +24,11 @@ use crate::indexer::Indexer;
 use crate::manifest::yaml::{Manifest, ProjectType};
 use crate::types::code::Code;
 
-// pub fn database_user() -> Result<String, env::VarError> {
-//     dotenv().ok();
-//     env::var("DATABASE_USER")
-// }
-
 pub fn connection_string() -> Result<String, env::VarError> {
     dotenv().ok();
     let connection = env::var("DATABASE_URL")?;
     Ok(connection)
 }
-/// Constructs a PostgresSQL connection string from environment variables,
-/// encoding the password to be URL-safe.
-///
-/// # Returns
-///
-/// Returns a `Result` containing the PostgresSQL connection string if successful,
-/// or an `env::VarError` if any of the required environment variables are not set.
-// pub fn connection_string_as_url() -> Result<String, env::VarError> {
-//     dotenv().ok();
-//     let password =
-//         utf8_percent_encode(&env::var("DATABASE_PASSWORD")?, NON_ALPHANUMERIC).to_string();
-//     Ok(format!(
-//         "postgresql://{}:{}@{}:{}/{}",
-//         database_user()?,
-//         password,
-//         env::var("DATABASE_HOST")?,
-//         env::var("DATABASE_PORT")?,
-//         env::var("DATABASE_NAME")?
-//     ))
-// }
 
 pub struct PostgresClient {
     pool: Pool<PostgresConnectionManager<NoTls>>,
@@ -364,7 +339,7 @@ pub async fn setup_postgres(manifest: &Manifest) -> Result<PostgresClient, Setup
     if !manifest.storage.postgres_disable_create_tables()
         || manifest.project_type == ProjectType::NoCode
     {
-        info!("Creating tables for indexer: {}", manifest.name);
+        info!("Creating tables for {}", manifest.name);
         let sql = create_tables_for_indexer_sql(&manifest.to_indexer())
             .map_err(SetupPostgresError::CreateTables)?;
         debug!("{}", sql);
@@ -372,7 +347,7 @@ pub async fn setup_postgres(manifest: &Manifest) -> Result<PostgresClient, Setup
             .batch_execute(sql.as_str())
             .await
             .map_err(SetupPostgresError::PostgresError)?;
-        info!("Created tables for indexer: {}", manifest.name);
+        info!("Created tables for {}", manifest.name);
     }
 
     Ok(client)
@@ -438,7 +413,7 @@ fn generate_event_table_sql(abi_inputs: &[EventInfo], schema_name: &str) -> Stri
         .iter()
         .map(|event_info| {
             let table_name = format!("{}.{}", schema_name, camel_to_snake(&event_info.name));
-            info!("Creating table: {}", table_name);
+            info!("Creating table if not exists: {}", table_name);
             format!(
                 "CREATE TABLE IF NOT EXISTS {} (\
                 rindexer_id SERIAL PRIMARY KEY NOT NULL, \

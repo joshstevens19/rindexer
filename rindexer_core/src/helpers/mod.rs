@@ -1,3 +1,6 @@
+mod thread;
+pub use thread::{set_thread_no_logging, NullWriter};
+
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use std::fs;

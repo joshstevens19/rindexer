@@ -52,6 +52,7 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
 
     if let Some(graphql_server) = details.graphql_server {
         let _ = start_graphql_server(&manifest.to_indexer(), graphql_server.settings)
+            .await
             .map_err(StartRindexerError::CouldNotStartGraphqlServer)?;
         if details.indexing_details.is_none() {
             signal::ctrl_c()
