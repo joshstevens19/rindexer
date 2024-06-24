@@ -25,3 +25,7 @@ tx index and log index which is already exposed in the logs. Most programmatic u
 That said we understand that some use cases do need the block timestamp, for example, if you are doing a time series
 analysis on the data you will need the block timestamp. We believe we can solve this problem in a much more
 efficient way than the traditional way.
+
+Note this is still possible to fetch in rindexer rust projects by fetching the block within your custom handler itself.
+All network providers can be used within the custom handler to fetch any extra data you need. This means it will only
+slow down that specific event and not the whole indexer.
