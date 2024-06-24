@@ -1,1 +1,52 @@
 # Direct SQL
+
+## DBeaver - recommended
+
+If you are wanting to access the data directly from the database you can use a tool like DBeaver to connect to the database.
+you can download it [here](https://dbeaver.io/download/) and is supported on all platforms.
+
+If wanting to connect to your docker postgres instance database you can create a new connection in DBeaver and use the following settings:
+
+- host: localhost
+- port: 5440
+- database: postgres
+- username: postgres
+- password: rindexer
+
+press test connection and you should be able to connect to the database. You can then go to `postgres` -> `schemas` and you see
+the indexer schemas and tables. From there you can run SQL queries to get the data you need inside DBeaver.
+
+## PSQL
+
+If you are wanting to use the command line you can use psql to connect to the database.
+
+These instructions run you through how to install psql - https://www.timescale.com/blog/how-to-install-psql-on-mac-ubuntu-debian-windows/
+
+### Connect
+
+```bash
+psql 'postgresql://username:password@localhost:5432/your_database'
+```
+
+### Listing all tables across all schemas
+
+rindexer uses schemas to break up the tables and by default psql only shows public
+so you need to run the following command to see all tables across all schemas.
+
+```bash
+\dt *.*
+```
+
+You can also run the following command to see all tables in a specific schema
+
+```bash
+\dn schema_name.*
+```
+
+### Query data
+
+You can now just run SQL queries to get the data you need.
+
+```sql
+SELECT * FROM my_project_rocket_pool_eth.transfer;
+```
