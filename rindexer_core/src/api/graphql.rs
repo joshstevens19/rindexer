@@ -90,6 +90,7 @@ pub async fn start_graphql_server(
         .arg("--retry-on-init-fail")
         .arg("--dynamic-json")
         .arg("--disable-graphiql")
+        .arg("--enable-query-batching")
         // .arg("--subscriptions")
         .stdout(Stdio::null())
         .stderr(Stdio::null())

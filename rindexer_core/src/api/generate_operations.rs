@@ -123,6 +123,9 @@ pub fn generate_operations(
                         }
 
                         let node_fields = extract_node_fields(singular_type_name, schema);
+                        if node_fields.is_empty() {
+                            continue;
+                        }
 
                         let query = generate_query(field_name, &node_fields);
 
