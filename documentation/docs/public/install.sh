@@ -26,7 +26,19 @@ case "$1" in
         exit 0
         ;;
     *)
-        echo "Downloading binary from $BIN_URL..."
+        echo ""
+        echo "Installing rindexer..."
+        echo "
+
+░▒▓███████▓▒░ ░▒▓█▓▒░░▒▓███████▓▒░ ░▒▓███████▓▒░ ░▒▓████████▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓████████▓▒░░▒▓███████▓▒░
+░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░
+░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░
+░▒▓███████▓▒░ ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓██████▓▒░   ░▒▓██████▓▒░ ░▒▓██████▓▒░  ░▒▓███████▓▒░
+░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░
+░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░
+░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓███████▓▒░ ░▒▓████████▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓████████▓▒░░▒▓█▓▒░░▒▓█▓▒░
+
+        "
         curl -sSf -L "$BIN_URL" -o "$BIN_PATH"
         ;;
 esac
@@ -65,7 +77,7 @@ else
     curl -sSf -L "$BIN_URL" -o "$BIN_PATH"
 fi
 chmod +x "$BIN_PATH"
-
+echo ""
 echo "rindexer has been updated to the latest version."
 EOF
 
@@ -81,11 +93,18 @@ rm -f "$BIN_PATH" "$RINDEXERUP_PATH"
 rmdir "$RINDEXER_BIN_DIR" "$RINDEXER_DIR" 2> /dev/null
 sed -i '' '/rindexerup/d' "$PROFILE"
 sed -i '' '/rindexer/d' "$PROFILE"
-echo "Uninstallation complete! Please restart your shell or source your profile to complete the process."
+echo ""
+echo "rindexer uninstallation complete!"
 EOF
 
 chmod +x "$RINDEXERDOWN_PATH"
 
-echo "Installation complete! Please run 'source $PROFILE' or start a new terminal session to use rindexer."
+echo ""
+echo "rindexer complete"
+echo ""
 echo "You can update rindexer anytime by typing 'rindexerup'."
+echo ""
 echo "To uninstall rindexer, type 'rindexerdown'."
+echo ""
+
+rindexer
