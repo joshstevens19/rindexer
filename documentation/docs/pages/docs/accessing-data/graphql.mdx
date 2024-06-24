@@ -1,1 +1,447 @@
-# Graphql
+# GraphQL
+
+GraphQL is a query language for your API, and a server-side runtime for executing queries using a type system you define for your data.
+GraphQL isn’t tied to any specific database or storage engine and is instead backed by your existing code and data.
+
+you can learn all about graphql [here](https://graphql.org)
+
+## Querying the data
+
+The GraphQL will expose a playground for you which you can get to on `http://localhost:3030`
+this uses apollo server sandbox which is a great tool for testing your queries - https://studio.apollographql.com/sandbox/explorer.
+
+Note in these examples we will put the raw parameters in the graphql query but you can pass parameters in using the $ syntax
+
+:::code-group
+
+```graphql [hardcoded parameter]
+query AllTransfers {
+  allTransfers(first: 20) {
+    nodes {
+      blockHash
+      blockNumber
+      contractAddress
+      from
+      network
+      nodeId
+      to
+      txHash
+      value
+    }
+    pageInfo {
+      endCursor
+      hasNextPage
+      hasPreviousPage
+      startCursor
+    }
+  }
+}
+```
+
+```graphql [parameter passed in]
+query AllTransfers($first: Int!) {
+  allTransfers(first: $$first) {
+    nodes {
+      blockHash
+      blockNumber
+      contractAddress
+      from
+      network
+      nodeId
+      to
+      txHash
+      value
+    }
+    pageInfo {
+      endCursor
+      hasNextPage
+      hasPreviousPage
+      startCursor
+    }
+  }
+}
+```
+
+:::
+
+
+### Query naming conventions
+
+lets say we had 2 events `Approval` and `Transfer` from the ERC20 standard, the ABI would look like the below:
+
+```json
+{
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "name": "owner",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "name": "spender",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "name": "value",
+        "type": "uint256"
+      }
+    ],
+    "name": "Approval",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "name": "from",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "name": "to",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "name": "value",
+        "type": "uint256"
+      }
+    ],
+    "name": "Transfer",
+    "type": "event"
+  }
+```
+
+with rindexer graphql you could generate the following queries to get the transfer data you need:
+
+:::code-group
+
+```graphql [list of transfers]
+query AllTransfers {
+  allTransfers {
+    nodes {
+      blockHash
+      blockNumber
+      contractAddress
+      from
+      network
+      nodeId
+      to
+      txHash
+      value
+    }
+    pageInfo {
+      endCursor
+      hasNextPage
+      hasPreviousPage
+      startCursor
+    }
+  }
+}
+```
+
+```graphql [single transfer]
+query Transfer($nodeId: ID!) {
+  transfer(nodeId: $nodeId) {
+    nodeId
+    rindexerId
+    contractAddress
+    from
+    to
+    value
+    txHash
+    blockNumber
+    blockHash
+    network
+  }
+}
+```
+
+:::
+
+The format of the query names are:
+- list items = `all{event_name}s` = `All` + `Transfer` + `s` = `AllTransfers`
+- single item = `{event_name}` (lowercase) = `transfer`
+
+For single item queries you can use the `nodeId` to query single items which is always returned as a field
+in the list results alongside the singular item query.
+
+### Result limits
+
+You can define how many you which to return using the `first` and `last` properties, you can not return more
+then 1000 in a single query but you can use offset to get the item you wish to get. We advise to always
+set a limit on the amount of items you wish to return.
+
+- first will return the first inserted x items
+- last will return the last inserted x items
+- offset will return the first/last x items after the offset
+
+:::code-group
+
+```graphql [first]
+query AllTransfers {
+  allTransfers(first: 20) {
+    nodes {
+      blockHash
+      blockNumber
+      contractAddress
+      from
+      network
+      nodeId
+      to
+      txHash
+      value
+    }
+    pageInfo {
+      endCursor
+      hasNextPage
+      hasPreviousPage
+      startCursor
+    }
+  }
+}
+```
+
+```graphql [last]
+query AllTransfers {
+  allTransfers(last: 20) {
+    nodes {
+      blockHash
+      blockNumber
+      contractAddress
+      from
+      network
+      nodeId
+      to
+      txHash
+      value
+    }
+    pageInfo {
+      endCursor
+      hasNextPage
+      hasPreviousPage
+      startCursor
+    }
+  }
+}
+```
+
+```graphql [offset]
+query AllTransfers {
+  allTransfers(first: 20, offset: 20) {
+    nodes {
+      blockHash
+      blockNumber
+      contractAddress
+      from
+      network
+      nodeId
+      to
+      txHash
+      value
+    }
+    pageInfo {
+      endCursor
+      hasNextPage
+      hasPreviousPage
+      startCursor
+    }
+  }
+}
+```
+
+:::
+
+### Filtering
+
+You can filter in every event property you want using the `condition` input fields.
+
+The example below im filtering on all transfer based on the block number, which has to be a string as its a BigFloat.
+
+```graphql
+query AllTransfers {
+  allTransfers(first: 20, condition: {
+    blockNumber: "18600181"
+  }) {
+    nodes {
+      blockHash
+      blockNumber
+      contractAddress
+      from
+      network
+      nodeId
+      to
+      txHash
+      value
+    }
+    pageInfo {
+      endCursor
+      hasNextPage
+      hasPreviousPage
+      startCursor
+    }
+  }
+}
+```
+
+You can mix the filtering in every direction with any field so you can filter `blockNumber` with `from` and `to` with `value`
+or even `network` with `contractAddress` and `txHash`, anything you wish.
+
+:::warning
+It is advised to have indexes on these fields in your database to make the queries faster.
+
+We will add a no-code way to add indexes in the future, if required do raise a github issue and we can help you with this.
+:::
+
+```graphql
+query AllTransfers {
+  allTransfers(first: 20, condition: {
+    blockNumber: "18600181",
+    value: "2000000000000000000"
+    from: "0x0338ce5020c447f7e668dc2ef778025ce398266b"
+  }) {
+    nodes {
+      blockHash
+      blockNumber
+      contractAddress
+      from
+      network
+      nodeId
+      to
+      txHash
+      value
+    }
+    pageInfo {
+      endCursor
+      hasNextPage
+      hasPreviousPage
+      startCursor
+    }
+  }
+}
+```
+
+Note we do not support advanced filtering as adding powerful generic filtering capabilities to your GraphQL API is strongly discouraged
+by Lee Byron (one of the inventors of GraphQL) and various other experts in the GraphQL ecosystem.
+
+That said we will give capabilities to define which fields you want to advanced filter on in the future.
+
+### Ordering
+
+You can order the results by any field you wish, you can also order by multiple fields the first item in the array will
+be the applied ordering first then the next will be applied after and so on.
+
+:::warning
+It is advised to have indexes on these fields in your database to make the queries faster.
+
+We will add a no-code way to add indexes in the future, if required do raise a github issue and we can help you with this.
+:::
+
+This example will get the first 20 transfers ordered by the block number ascending.
+
+```graphql
+query AllTransfers {
+  allTransfers(first: 20, orderBy: [BLOCK_NUMBER_ASC]) {
+    nodes {
+      blockHash
+      blockNumber
+      contractAddress
+      from
+      network
+      nodeId
+      to
+      txHash
+      value
+    }
+    pageInfo {
+      endCursor
+      hasNextPage
+      hasPreviousPage
+      startCursor
+    }
+  }
+}
+```
+
+### Page info
+
+The page info will give you the following information:
+
+- endCursor: The cursor to continue from
+- hasNextPage: If there is a next page
+- hasPreviousPage: If there is a previous page
+- startCursor: The cursor to start from
+
+#### Cursor based pagination
+
+Cursor-based pagination is a common approach to pagination that avoids some of the pitfalls of "classic" page-based pagination.
+The idea is to encode the current state of the query into a "cursor" that can be passed back to the server to get the next page of results.
+
+You can page through the data using `before` and `after` cursors, you can get the cursors from the `pageInfo` object.
+
+- `before` will get the items before the cursor - this is how you go back in the data so say page 2 to page 1
+- `after` will get the items after the cursor - this is how you go forward in the data so say page 1 to page 2
+
+:::code-group
+
+```graphql [next results]
+query AllTransfers {
+  allTransfers(
+      first: 1,
+      orderBy: [BLOCK_NUMBER_ASC],
+      after: "WyJibG9ja19udW1iZXJfYXNjIixbMTg2MDAxODEsMV1d"
+    ) {
+    nodes {
+      blockHash
+      blockNumber
+      contractAddress
+      from
+      network
+      nodeId
+      to
+      txHash
+      value
+    }
+    pageInfo {
+      endCursor
+      hasNextPage
+      hasPreviousPage
+      startCursor
+    }
+  }
+}
+```
+
+```graphql [preview results]
+query AllTransfers {
+  allTransfers(
+      first: 1,
+      orderBy: [BLOCK_NUMBER_ASC],
+      before: "WyJibG9ja19udW1iZXJfYXNjIixbMTg2MDAxODEsMV1d"
+    ) {
+    nodes {
+      blockHash
+      blockNumber
+      contractAddress
+      from
+      network
+      nodeId
+      to
+      txHash
+      value
+    }
+    pageInfo {
+      endCursor
+      hasNextPage
+      hasPreviousPage
+      startCursor
+    }
+  }
+}
+```
+
+:::

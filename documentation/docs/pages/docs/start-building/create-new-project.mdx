@@ -120,7 +120,6 @@ query AllTransfers($orderBy: [TransfersOrderBy!] = [BLOCK_NUMBER_DESC], $first: 
       hasPreviousPage
       startCursor
     }
-    totalCount
   }
 }
 ```
@@ -191,8 +190,7 @@ query AllTransfers($orderBy: [TransfersOrderBy!] = [BLOCK_NUMBER_DESC], $first: 
         "hasNextPage": true,
         "hasPreviousPage": false,
         "startCursor": "WyJibG9ja19udW1iZXJfZGVzYyIsWzE4NzE4MDExLDU4NzldXQ=="
-      },
-      "totalCount": 5883
+      }
     }
   }
 }
