@@ -81,6 +81,7 @@ pub async fn start_graphql_server(
         .arg("--watch")
         .arg("--schema")
         .arg(schemas.join(","))
+        .arg("--no-ignore-indexes") // seems to not work
         // .arg("--default-role")
         // .arg(database_user)
         //.arg("--enhance-graphiql")
