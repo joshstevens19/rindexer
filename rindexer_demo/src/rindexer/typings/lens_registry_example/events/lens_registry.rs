@@ -181,9 +181,9 @@ where
                     .to_string(),
             include_events: Some(vec!["HandleLinked".to_string()]),
             index_event_in_order: None,
-            reorg_safe_distance: false,
+            reorg_safe_distance: Some(false),
             dependency_events: None,
-            generate_csv: true,
+            generate_csv: Some(true),
         }
     }
 
@@ -248,7 +248,7 @@ where
                 })
                 .collect(),
             abi: contract_information.abi,
-            reorg_safe_distance: contract_information.reorg_safe_distance,
+            reorg_safe_distance: contract_information.reorg_safe_distance.unwrap_or_default(),
         };
 
         let callback: Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, ()> + Send + Sync> =

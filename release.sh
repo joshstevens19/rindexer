@@ -41,7 +41,7 @@ cp "target/release/${PROJECT_NAME}" "${TARGET_DIR}/${PROJECT_NAME}_latest"
 cp "target/release/${PROJECT_NAME}" "${TARGET_DIR}/${VERSION}/${PROJECT_NAME}"
 
 # Zip the resources directory and copy it to the target directory
-(cd rindexer_core/resources && zip -r "${TARGET_DIR}/resources.zip" .)
+(cd core/resources && zip -r "${TARGET_DIR}/resources.zip" .)
 
 # Check if the copy was successful
 if [ $? -eq 0 ]; then
