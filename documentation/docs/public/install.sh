@@ -10,6 +10,21 @@ BIN_PATH="$RINDEXER_BIN_DIR/rindexer"
 BIN_URL="https://rindexer.xyz/releases/rindexer_cli_latest"
 RESOURCES_URL="https://rindexer.xyz/releases/resources.zip"
 
+spinner() {
+    local pid=$!
+    local delay=0.1
+    local spinstr='|/-\'
+    echo -n "Loading "
+    while [ "$(ps a | awk '{print $1}' | grep $pid)" ]; do
+        local temp=${spinstr#?}
+        printf " [%c]  " "$spinstr"
+        local spinstr=$temp${spinstr%"$temp"}
+        sleep $delay
+        printf "\b\b\b\b\b\b"
+    done
+    echo ""
+}
+
 # Install or uninstall based on the command line option
 case "$1" in
     --local)
@@ -56,9 +71,10 @@ case "$1" in
 
 
         "
+        echo "This may take 20-30 seconds.."
         curl -sSf -L "$BIN_URL" -o "$BIN_PATH"
         mkdir -p "$RINDEXER_DIR/resources"
-        curl -sSf -L "$RESOURCES_URL" -o "$RINDEXER_DIR/resources.zip"
+        curl -sSf -L "$RESOURCES_URL" -o "$RINDEXER_DIR/resources.zip" & spinner
         unzip -o "$RINDEXER_DIR/resources.zip" -d "$RINDEXER_DIR/resources" > /dev/null
         rm "$RINDEXER_DIR/resources.zip"
         ;;
