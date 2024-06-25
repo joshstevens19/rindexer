@@ -400,7 +400,7 @@ POSTGRES_PASSWORD=rindexer"#;
                 e
             })?;
         } else {
-            let env = r#"DATABASE_URL=INSERT_HERE"#;
+            let env = r#"DATABASE_URL=postgresql://[user[:password]@][host][:port][/dbname]"#;
 
             write_file(&project_path.join(".env"), env).map_err(|e| {
                 print_error_message(&format!("Failed to write .env file: {}", e));
