@@ -20,30 +20,25 @@ The name of the contract, it should be unique to the YAML file.
 name: rETHIndexer
 description: My first rindexer project
 repository: https://github.com/joshstevens19/rindexer
+project_type: rust
 networks:
 - name: ethereum
-  chainId: 1
+  chain_id: 1
   rpc: https://mainnet.gateway.tenderly.co
 storage:
   postgres:
-    database_url: ${DATABASE_URL}
-  csv:
-    path: ./generated_csv
-ind exers:
-- name: MyFirstIndexerExample
-  contracts:
-    - name: RocketPoolETH
-      details:
-      - network: ethereum
-       address: 0xae78736cd615f374d3085123a210448e74fc6393
-       startBlock: 18600000
-       endBlock: 18718056
-      abi: ./abis/RocketTokenRETH.abi.json
-      include_events:
-      - Transfer
-      - Approval
-      reorg_safe_distance: true
-      generate_csv: true
+    enabled: true
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: 0xae78736cd615f374d3085123a210448e74fc6393
+    start_block: '18900000'
+    end_block: '19000000'
+  abi: ./abis/RocketTokenRETH.abi.json
+  include_events:
+  - Transfer
+  - Approval
 global: // [!code focus]
   contracts: // [!code focus]
     - name: InjectedGlobal // [!code focus]
@@ -61,30 +56,25 @@ The address of the contract.
 name: rETHIndexer
 description: My first rindexer project
 repository: https://github.com/joshstevens19/rindexer
+project_type: rust
 networks:
 - name: ethereum
-  chainId: 1
+  chain_id: 1
   rpc: https://mainnet.gateway.tenderly.co
 storage:
   postgres:
-    database_url: ${DATABASE_URL}
-  csv:
-    path: ./generated_csv
-indexers:
-- name: MyFirstIndexerExample
-  contracts:
-    - name: RocketPoolETH
-      details:
-      - network: ethereum
-       address: 0xae78736cd615f374d3085123a210448e74fc6393
-       startBlock: 18600000
-       endBlock: 18718056
-      abi: ./abis/RocketTokenRETH.abi.json
-      include_events:
-      - Transfer
-      - Approval
-      reorg_safe_distance: true
-      generate_csv: true
+    enabled: true
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: 0xae78736cd615f374d3085123a210448e74fc6393
+    start_block: '18900000'
+    end_block: '19000000'
+  abi: ./abis/RocketTokenRETH.abi.json
+  include_events:
+  - Transfer
+  - Approval
 global:
   contracts:
     - name: InjectedGlobal
@@ -100,30 +90,25 @@ The network the contract is on, this should match the network name in the networ
 name: rETHIndexer
 description: My first rindexer project
 repository: https://github.com/joshstevens19/rindexer
+project_type: rust
 networks:
 - name: ethereum
-  chainId: 1
+  chain_id: 1
   rpc: https://mainnet.gateway.tenderly.co
 storage:
   postgres:
-    database_url: ${DATABASE_URL}
-  csv:
-    path: ./generated_csv
-indexers:
-- name: MyFirstIndexerExample
-  contracts:
-    - name: RocketPoolETH
-      details:
-      - network: ethereum
-       address: 0xae78736cd615f374d3085123a210448e74fc6393
-       startBlock: 18600000
-       endBlock: 18718056
-      abi: ./abis/RocketTokenRETH.abi.json
-      include_events:
-      - Transfer
-      - Approval
-      reorg_safe_distance: true
-      generate_csv: true
+    enabled: true
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: 0xae78736cd615f374d3085123a210448e74fc6393
+    start_block: '18900000'
+    end_block: '19000000'
+  abi: ./abis/RocketTokenRETH.abi.json
+  include_events:
+  - Transfer
+  - Approval
 global:
   contracts:
     - name: InjectedGlobal
@@ -140,30 +125,25 @@ The path to the ABI file for the contract. It can be a relative or full path.
 name: rETHIndexer
 description: My first rindexer project
 repository: https://github.com/joshstevens19/rindexer
+project_type: rust
 networks:
 - name: ethereum
-  chainId: 1
+  chain_id: 1
   rpc: https://mainnet.gateway.tenderly.co
 storage:
   postgres:
-    database_url: ${DATABASE_URL}
-  csv:
-    path: ./generated_csv
-indexers:
-- name: MyFirstIndexerExample
-  contracts:
-    - name: RocketPoolETH
-      details:
-      - network: ethereum
-       address: 0xae78736cd615f374d3085123a210448e74fc6393
-       startBlock: 18600000
-       endBlock: 18718056
-      abi: ./abis/RocketTokenRETH.abi.json
-      include_events:
-      - Transfer
-      - Approval
-      reorg_safe_distance: true
-      generate_csv: true
+    enabled: true
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: 0xae78736cd615f374d3085123a210448e74fc6393
+    start_block: '18900000'
+    end_block: '19000000'
+  abi: ./abis/RocketTokenRETH.abi.json
+  include_events:
+  - Transfer
+  - Approval
 global:
   contracts:
     - name: InjectedGlobal
@@ -206,6 +186,31 @@ indexers:
       - Approval
       reorg_safe_distance: true
       generate_csv: true
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: rust
+networks:
+- name: ethereum // [!code focus]
+  chain_id: 1 // [!code focus]
+  rpc: https://mainnet.gateway.tenderly.co // [!code focus]
+- name: base // [!code focus]
+  chain_id: 8453 // [!code focus]
+  rpc: https://mainnet.base.org // [!code focus]
+storage:
+  postgres:
+    enabled: true
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: 0xae78736cd615f374d3085123a210448e74fc6393
+    start_block: '18900000'
+    end_block: '19000000'
+  abi: ./abis/RocketTokenRETH.abi.json
+  include_events:
+  - Transfer
+  - Approval
 global: // [!code focus]
   contracts: // [!code focus]
     - name: InjectedGlobal // [!code focus]
