@@ -242,8 +242,8 @@ where
             include_events: None,
             index_event_in_order: None,
             dependency_events: None,
-            reorg_safe_distance: false,
-            generate_csv: true,
+            reorg_safe_distance: Some(false),
+            generate_csv: Some(true),
         }
     }
 
@@ -307,7 +307,7 @@ where
                 })
                 .collect(),
             abi: contract_information.abi,
-            reorg_safe_distance: contract_information.reorg_safe_distance,
+            reorg_safe_distance: contract_information.reorg_safe_distance.unwrap_or_default(),
         };
 
         let callback: Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, ()> + Send + Sync> =
