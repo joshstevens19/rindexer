@@ -31,6 +31,7 @@ export default defineConfig({
         { text: 'What is rindexer?', link: '/docs/introduction/what-is-rindexer' },
         { text: 'Why rindexer?', link: '/docs/introduction/why-rindexer' },
         { text: 'Installation', link: '/docs/introduction/installation' },
+        { text: 'Other Indexing Tools', link: '/docs/introduction/other-indexing-tools' },
       ],
     },
     {
@@ -96,7 +97,7 @@ export default defineConfig({
     {
       text: 'Deploying',
       items: [
-        { text: 'Railway', link: '/docs/deploying/railway' },
+        { text: 'Railway - coming soon' },
         { text: 'AWS - coming soon' },
         { text: 'GCP - coming soon' },
       ],
