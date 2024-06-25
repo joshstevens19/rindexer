@@ -7,18 +7,20 @@ RINDEXER_BIN_DIR="$RINDEXER_DIR/bin"
 RINDEXERUP_PATH="$RINDEXER_BIN_DIR/rindexerup"
 RINDEXERDOWN_PATH="$RINDEXER_BIN_DIR/rindexerdown"
 BIN_PATH="$RINDEXER_BIN_DIR/rindexer"
-BIN_URL="https://rindexer.xyz/releases/rindexer_cli_latest"
-LOCAL_BIN_PATH="/Users/joshstevens/code/rindexer/documentation/docs/public/releases/rindexer_cli_latest"
+BIN_URL="http://localhost:5173/releases/rindexer_cli_latest"
+RESOURCES_URL="http://localhost:5173/releases/resources.zip"
 
 # Install or uninstall based on the command line option
 case "$1" in
     --local)
-        echo "Using local binary from $LOCAL_BIN_PATH..."
+        echo "Using local binary from $LOCAL_BIN_PATH and resources from $LOCAL_RESOURCES_PATH..."
         cp "$LOCAL_BIN_PATH" "$BIN_PATH"
+        unzip -o "$LOCAL_RESOURCES_PATH" -d "$RINDEXER_DIR/resources"
         ;;
     --uninstall)
         echo "Uninstalling rindexer..."
         rm -f "$BIN_PATH" "$RINDEXERUP_PATH"
+        rm -rf "$RINDEXER_DIR/resources"
         rmdir "$RINDEXER_BIN_DIR" "$RINDEXER_DIR" 2> /dev/null
         sed -i '' '/rindexerup/d' "$PROFILE"
         sed -i '' '/rindexer/d' "$PROFILE"
@@ -28,18 +30,11 @@ case "$1" in
     *)
         echo ""
         echo "Installing rindexer..."
-        echo "
-
-░▒▓███████▓▒░ ░▒▓█▓▒░░▒▓███████▓▒░ ░▒▓███████▓▒░ ░▒▓████████▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓████████▓▒░░▒▓███████▓▒░
-░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░
-░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░
-░▒▓███████▓▒░ ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓██████▓▒░   ░▒▓██████▓▒░ ░▒▓██████▓▒░  ░▒▓███████▓▒░
-░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░
-░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░
-░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓███████▓▒░ ░▒▓████████▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓████████▓▒░░▒▓█▓▒░░▒▓█▓▒░
-
-        "
         curl -sSf -L "$BIN_URL" -o "$BIN_PATH"
+        mkdir -p "$RINDEXER_DIR/resources"
+        curl -sSf -L "$RESOURCES_URL" -o "$RINDEXER_DIR/resources.zip"
+        unzip -o "$RINDEXER_DIR/resources.zip" -d "$RINDEXER_DIR/resources"
+        rm "$RINDEXER_DIR/resources.zip"
         ;;
 esac
 
@@ -69,23 +64,17 @@ cat <<EOF > "$RINDEXERUP_PATH"
 set -eo pipefail
 
 echo "Updating rindexer..."
-        echo "
-
-░▒▓███████▓▒░ ░▒▓█▓▒░░▒▓███████▓▒░ ░▒▓███████▓▒░ ░▒▓████████▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓████████▓▒░░▒▓███████▓▒░
-░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░
-░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░
-░▒▓███████▓▒░ ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓██████▓▒░   ░▒▓██████▓▒░ ░▒▓██████▓▒░  ░▒▓███████▓▒░
-░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░
-░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░
-░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓███████▓▒░ ░▒▓████████▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓████████▓▒░░▒▓█▓▒░░▒▓█▓▒░
-
-        "
 if [ "\$1" == "--local" ]; then
     echo "Using local binary for update..."
     cp "$LOCAL_BIN_PATH" "$BIN_PATH"
+    unzip -o "$LOCAL_RESOURCES_PATH" -d "$RINDEXER_DIR/resources"
 else
     echo "Downloading the latest binary from $BIN_URL..."
     curl -sSf -L "$BIN_URL" -o "$BIN_PATH"
+    mkdir -p "$RINDEXER_DIR/resources"
+    curl -sSf -L "$RESOURCES_URL" -o "$RINDEXER_DIR/resources.zip"
+    unzip -o "$RINDEXER_DIR/resources.zip" -d "$RINDEXER_DIR/resources"
+    rm "$RINDEXER_DIR/resources.zip"
 fi
 chmod +x "$BIN_PATH"
 echo ""
@@ -100,18 +89,8 @@ cat <<EOF > "$RINDEXERDOWN_PATH"
 set -eo pipefail
 
 echo "Uninstalling rindexer..."
-        echo "
-
-░▒▓███████▓▒░ ░▒▓█▓▒░░▒▓███████▓▒░ ░▒▓███████▓▒░ ░▒▓████████▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓████████▓▒░░▒▓███████▓▒░
-░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░
-░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░
-░▒▓███████▓▒░ ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓██████▓▒░   ░▒▓██████▓▒░ ░▒▓██████▓▒░  ░▒▓███████▓▒░
-░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░
-░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░       ░▒▓█▓▒░░▒▓█▓▒░
-░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓███████▓▒░ ░▒▓████████▓▒░░▒▓█▓▒░░▒▓█▓▒░░▒▓████████▓▒░░▒▓█▓▒░░▒▓█▓▒░
-
-        "
 rm -f "$BIN_PATH" "$RINDEXERUP_PATH"
+rm -rf "$RINDEXER_DIR/resources"
 rmdir "$RINDEXER_BIN_DIR" "$RINDEXER_DIR" 2> /dev/null
 sed -i '' '/rindexerup/d' "$PROFILE"
 sed -i '' '/rindexer/d' "$PROFILE"
