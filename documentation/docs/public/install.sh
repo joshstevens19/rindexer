@@ -14,7 +14,7 @@ spinner() {
     local pid=$!
     local delay=0.1
     local spinstr='|/-\'
-    echo -n "Loading "
+    echo -n "Installing rindexer"
     while [ "$(ps a | awk '{print $1}' | grep $pid)" ]; do
         local temp=${spinstr#?}
         printf " [%c]  " "$spinstr"
@@ -33,7 +33,6 @@ case "$1" in
         unzip -o "$LOCAL_RESOURCES_PATH" -d "$RINDEXER_DIR/resources"
         ;;
     --uninstall)
-        echo "Uninstalling rindexer..."
         echo "
 
 
@@ -56,8 +55,6 @@ case "$1" in
         exit 0
         ;;
     *)
-        echo ""
-        echo "Installing rindexer..."
         echo "
 
 
@@ -71,7 +68,7 @@ case "$1" in
 
 
         "
-        echo "This may take 20-30 seconds.."
+        echo "Preparing the installation..."
         curl -sSf -L "$BIN_URL" -o "$BIN_PATH"
         mkdir -p "$RINDEXER_DIR/resources"
         curl -sSf -L "$RESOURCES_URL" -o "$RINDEXER_DIR/resources.zip" & spinner
