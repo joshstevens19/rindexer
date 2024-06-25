@@ -17,8 +17,10 @@ pub async fn run(endpoint: String) {
         endpoint = endpoint
     );
 
-    let route = warp::path::end().map(move || warp::reply::html(html.clone()));
+    // Create a route that matches any path
+    let route = warp::any().map(move || warp::reply::html(html.clone()));
 
+    // Serve the route
     warp::serve(route).run(([127, 0, 0, 1], 3030)).await;
 }
 
@@ -31,5 +33,5 @@ pub fn run_in_child_thread(endpoint: &str) -> &str {
         run(endpoint).await;
     });
 
-    "http://localhost:3030"
+    "http://localhost:3030/playground"
 }
