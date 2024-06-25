@@ -12,6 +12,7 @@ bugs:
 - Do not create a new postgres client each time on rust projects
 - Fix hex string not returning properly on rindexer graphql
 - fix last TODOs in the code
+- graphql is blocking indexer starting up so making indexing slower
 
 nice to have:
 - look at the final unwraps
