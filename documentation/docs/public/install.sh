@@ -7,8 +7,8 @@ RINDEXER_BIN_DIR="$RINDEXER_DIR/bin"
 RINDEXERUP_PATH="$RINDEXER_BIN_DIR/rindexerup"
 RINDEXERDOWN_PATH="$RINDEXER_BIN_DIR/rindexerdown"
 BIN_PATH="$RINDEXER_BIN_DIR/rindexer"
-BIN_URL="http://localhost:5173/releases/rindexer_cli_latest"
-RESOURCES_URL="http://localhost:5173/releases/resources.zip"
+BIN_URL="https://rindexer.xyz/releases/rindexer_cli_latest"
+RESOURCES_URL="https://rindexer.xyz/releases/resources.zip"
 
 # Install or uninstall based on the command line option
 case "$1" in
