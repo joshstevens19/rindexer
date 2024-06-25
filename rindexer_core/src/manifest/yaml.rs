@@ -9,14 +9,10 @@ use crate::generator::event_callback_registry::{
     FactoryDetails, FilterDetails, IndexingContractSetup,
 };
 use crate::indexer::Indexer;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_yaml::Value;
 
 pub const YAML_CONFIG_NAME: &str = "rindexer.yaml";
-
-fn default_global() -> Global {
-    Global::default()
-}
 
 fn default_storage() -> Storage {
     Storage::default()
@@ -71,6 +67,16 @@ where
     }
 }
 
+fn serialize_option_u64_as_string<S>(value: &Option<U64>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match *value {
+        Some(ref u64_value) => serializer.serialize_some(&u64_value.as_u64().to_string()),
+        None => serializer.serialize_none(),
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Manifest {
     pub name: String,
@@ -92,8 +98,8 @@ pub struct Manifest {
 
     pub contracts: Vec<Contract>,
 
-    #[serde(default = "default_global")]
-    pub global: Global,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub global: Option<Global>,
 }
 
 impl Manifest {
@@ -121,14 +127,16 @@ pub struct ContractDetails {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_option_u64_from_string"
+        deserialize_with = "deserialize_option_u64_from_string",
+        serialize_with = "serialize_option_u64_as_string"
     )]
     pub start_block: Option<U64>,
 
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_option_u64_from_string"
+        deserialize_with = "deserialize_option_u64_from_string",
+        serialize_with = "serialize_option_u64_as_string"
     )]
     pub end_block: Option<U64>,
 
@@ -215,14 +223,6 @@ impl ContractDetails {
     }
 }
 
-fn default_reorg_safe_distance() -> bool {
-    false
-}
-
-fn default_generate_csv() -> bool {
-    true
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DependencyEventTree {
     pub events: Vec<String>,
@@ -262,11 +262,11 @@ pub struct Contract {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dependency_events: Option<DependencyEventTree>,
 
-    #[serde(default = "default_reorg_safe_distance")]
-    pub reorg_safe_distance: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reorg_safe_distance: Option<bool>,
 
-    #[serde(default = "default_generate_csv")]
-    pub generate_csv: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generate_csv: Option<bool>,
 }
 
 impl Contract {
@@ -291,20 +291,12 @@ pub struct Network {
     pub compute_units_per_second: Option<u64>,
 }
 
-fn default_disable_create_tables() -> bool {
-    false
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PostgresConnectionDetails {
     pub enabled: bool,
 
-    #[serde(default = "default_disable_create_tables")]
-    pub disable_create_tables: bool,
-}
-
-fn default_disable_create_headers() -> bool {
-    false
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disable_create_tables: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -313,14 +305,16 @@ pub struct CsvDetails {
 
     pub path: String,
 
-    #[serde(default = "default_disable_create_headers")]
-    pub disable_create_headers: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disable_create_headers: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct Storage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub postgres: Option<PostgresConnectionDetails>,
 
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csv: Option<CsvDetails>,
 }
 
@@ -340,7 +334,7 @@ impl Storage {
 
         self.postgres
             .as_ref()
-            .map_or(false, |details| details.disable_create_tables)
+            .map_or(false, |details| details.disable_create_tables.unwrap_or_default())
     }
 
     pub fn csv_enabled(&self) -> bool {
@@ -358,7 +352,7 @@ impl Storage {
 
         self.csv
             .as_ref()
-            .map_or(false, |details| details.disable_create_headers)
+            .map_or(false, |details| details.disable_create_headers.unwrap_or_default())
     }
 }
 

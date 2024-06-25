@@ -16,131 +16,182 @@ If you also enable the CSV storage it will also generate code in the handler to 
 
 You can regenerate the indexers folder by running the following command:
 
+:::warning
+This will overwrite any custom logic you have written in the indexers folder so be careful.
+:::
+
 ```bash
 rindexer codegen indexers
 ```
 
-## Understanding an indexer handler
-
 To help understand the interfaces and ways rindexer handlers can be extended we will look at an example.
 
-Take this YAML file - All transfer events on Ethereum from the ERC20 contract between block 18600000 and 18718056 will be indexed.
-
-CSV and Postgres are both enabled in the YAML configuration file.
+Take this YAML file - All transfer events for reth on Ethereum between block 18600000 and 18718056 will be indexed.
 
 ```yaml
 name: rETHIndexer
 description: My first rindexer project
 repository: https://github.com/joshstevens19/rindexer
-project_type: no-code
+project_type: rust
 networks:
-  - name: ethereum
-    chainId: 1
-    rpc: https://mainnet.gateway.tenderly.co
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
 storage:
   postgres:
-    database_url: ${DATABASE_URL}
-  csv:
-    path: ./generated_csv
-indexers:
-- name: MyFirstIndexerExample
-  contracts:
-  - name: ERC20
-    details:
-    - network: ethereum
-      filter:
-        event_name: Transfer
-      startBlock: 18600000
-      endBlock: 18718056
-    abi: ./abis/ERC20.abi.json
+    enabled: true
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: 0xae78736cd615f374d3085123a210448e74fc6393
+    start_block: 18900000
+    end_block: 19000000
+  abi: ./abis/RocketTokenRETH.abi.json
+  include_events:
+  - Transfer
 ```
 
-This would generate you a `erc20_filter.rs` file in the indexers folder, this file will have a handler function,
-note that the name of the file is the contract name with `_filter` appended to it. If you are using multiple
-events pointing to a contract the file it will generate will have all the handlers in a single file.
+This would generate you a `rocket_pool_eth.rs` file in the indexers folder, this file will have a handler function,
+note that the name of the file is the contract name in snake case alongside if you are doing filters `_filter` appended to it.
+If you are using multiple events to index on a contract the file it will generate will have all the handlers in the single file.
+
+## `Handlers`
+
+As you see here with this example out the box it will generate you all your indexer handlers for in this case the Transfer event.
+If you have postgres storage enabled it will have the bulk insert code written for you.
+The boilerplate code is runnable out the box.
 
 ```rs
-use super::super::super::typings::lens_registry_example::events::erc20_filter::{
-    no_extensions, ERC20FilterEventType, TransferEvent,
+use super::super::super::typings::rust::events::rocket_pool_eth::{
+    no_extensions, ApprovalEvent, RocketPoolETHEventType, TransferEvent,
 };
 use rindexer_core::{
-    generator::event_callback_registry::EventCallbackRegistry, EthereumSqlTypeWrapper,
+    generator::event_callback_registry::EventCallbackRegistry, rindexer_error, rindexer_info,
+    EthereumSqlTypeWrapper, PgType, RindexerColorize,
 };
 use std::sync::Arc;
 
 async fn transfer_handler(registry: &mut EventCallbackRegistry) {
-    ERC20FilterEventType::Transfer(
-        TransferEvent::new(
-            // results = &Vec<TransferResult>
-            // context = Arc<EventContext<NoExtensions>>
-            Arc::new(|results, context| {
-                Box::pin(async move {
-                    for result in results {
-                        context.csv.append(vec![format!("{:?}", result.tx_information.address),format!("{:?}", result.event_data.from,),format!("{:?}", result.event_data.to,),result.event_data.value.to_string(),format!("{:?}", result.tx_information.transaction_hash.unwrap()),result.tx_information.block_number.unwrap().to_string(),result.tx_information.block_hash.unwrap().to_string()]).await.unwrap();
-                        context.database.execute("INSERT INTO my_first_indexer_example_erc20_filter.transfer (contract_address, \"from\", \"to\", \"value\", \"tx_hash\", \"block_number\", \"block_hash\") VALUES($1, $2, $3, $4, $5, $6, $7)",&[&EthereumSqlTypeWrapper::Address(&result.tx_information.address),&EthereumSqlTypeWrapper::Address(&result.event_data.from),&EthereumSqlTypeWrapper::Address(&result.event_data.to),&EthereumSqlTypeWrapper::U256(&result.event_data.value),&EthereumSqlTypeWrapper::H256(&result.tx_information.transaction_hash.unwrap()),&EthereumSqlTypeWrapper::U64(&result.tx_information.block_number.unwrap()),&EthereumSqlTypeWrapper::H256(&result.tx_information.block_hash.unwrap())]).await.unwrap();
+    RocketPoolETHEventType::Transfer(
+        TransferEvent::handler(
+            |results, context| async move {
+                if results.is_empty() {
+                    return;
+                }
+
+                let mut bulk_data: Vec<Vec<EthereumSqlTypeWrapper>> = vec![];
+                for result in results.iter() {
+                    let data = vec![
+                        EthereumSqlTypeWrapper::Address(result.tx_information.address),
+                        EthereumSqlTypeWrapper::Address(result.event_data.from),
+                        EthereumSqlTypeWrapper::Address(result.event_data.to),
+                        EthereumSqlTypeWrapper::U256(result.event_data.value),
+                        EthereumSqlTypeWrapper::H256(result.tx_information.transaction_hash),
+                        EthereumSqlTypeWrapper::U64(result.tx_information.block_number),
+                        EthereumSqlTypeWrapper::H256(result.tx_information.block_hash),
+                        EthereumSqlTypeWrapper::String(result.tx_information.network.to_string()),
+                    ];
+                    bulk_data.push(data);
+                }
+
+                if bulk_data.is_empty() {
+                    return;
+                }
+
+                if bulk_data.len() > 100 {
+                    let result = context
+                        .database
+                        .bulk_insert_via_copy(
+                            "rust_rocket_pool_eth.transfer",
+                            &[
+                                "contract_address".to_string(),
+                                "from".to_string(),
+                                "to".to_string(),
+                                "value".to_string(),
+                                "tx_hash".to_string(),
+                                "block_number".to_string(),
+                                "block_hash".to_string(),
+                                "network".to_string(),
+                            ],
+                            &bulk_data
+                                .first()
+                                .unwrap()
+                                .iter()
+                                .map(|param| param.to_type())
+                                .collect::<Vec<PgType>>(),
+                            &bulk_data,
+                        )
+                        .await;
+
+                    if let Err(e) = result {
+                        rindexer_error!(
+                            "RocketPoolETHEventType::Transfer inserting bulk data: {:?}",
+                            e
+                        );
                     }
-               })
-            }),
-            no_extensions()
+                } else {
+                    let result = context
+                        .database
+                        .bulk_insert(
+                            "rust_rocket_pool_eth.transfer",
+                            &[
+                                "contract_address".to_string(),
+                                "from".to_string(),
+                                "to".to_string(),
+                                "value".to_string(),
+                                "tx_hash".to_string(),
+                                "block_number".to_string(),
+                                "block_hash".to_string(),
+                                "network".to_string(),
+                            ],
+                            &bulk_data,
+                        )
+                        .await;
+
+                    if let Err(e) = result {
+                        rindexer_error!(
+                            "RocketPoolETHEventType::Transfer inserting bulk data: {:?}",
+                            e
+                        );
+                    }
+                }
+
+                rindexer_info!(
+                    "RocketPoolETH::Transfer - {} - {} events",
+                    "INDEXED".green(),
+                    results.len(),
+                );
+            },
+            no_extensions(),
         )
         .await,
     )
     .register(registry);
 }
 
-pub async fn erc20_filter_handlers(registry: &mut EventCallbackRegistry) {
+pub async fn rocket_pool_eth_handlers(registry: &mut EventCallbackRegistry) {
     transfer_handler(registry).await;
 }
 ```
 
-## Disable CSV Create Headers
+## Event::Handler
 
-The tables creation can be skipped by using the [disable_create_tables](docs/start-building/yaml-config/storage#disable_create_tables) 
-in the YAML configuration file.
+rindexer hides all the complex rust types and abstracts everything for you so you can easily just build the logic within the handler itself.
 
-```yaml
-name: rETHIndexer
-description: My first rindexer project
-repository: https://github.com/joshstevens19/rindexer
-project_type: no-code
-networks:
-  - name: ethereum
-    chainId: 1
-    url:https://mainnet.gateway.tenderly.co
-storage:
-  postgres:
-    database_url: ${DATABASE_URL}
-    disable_create_tables: true // [!code focus]
-  csv:
-    path: ./generated_csv
-indexers:
-- name: MyFirstIndexerExample
-  contracts:
-  - name: ERC20
-    details:
-    - network: ethereum
-      filter:
-        event_name: Transfer
-      startBlock: 18600000
-      endBlock: 18718056
-    abi: ./abis/ERC20.abi.json
-```
+As you see with the below you just write the logic and `results` holds all the decoded event data and `context`
+holds the database client and any extensions you pass to it.
 
-## Why an Arc?
+The naming convention for the handler is `{AbiEventName}Event::handler` so in this case `TransferEvent::handler` this is so you can.
 
 ```rs
 async fn transfer_handler(registry: &mut EventCallbackRegistry) {
-    ERC20FilterEventType::Transfer(
-        TransferEvent::new(
-            Arc::new(|results, context| { // [!code focus]
-                Box::pin(async move {
-                    for result in results {
-                        context.csv.append(vec![format!("{:?}", result.tx_information.address),format!("{:?}", result.event_data.from,),format!("{:?}", result.event_data.to,),result.event_data.value.to_string(),format!("{:?}", result.tx_information.transaction_hash.unwrap()),result.tx_information.block_number.unwrap().to_string(),result.tx_information.block_hash.unwrap().to_string()]).await.unwrap();
-                        context.database.execute("INSERT INTO lens_registry_example_erc20_filter.transfer (contract_address, \"from\", \"to\", \"value\", \"tx_hash\", \"block_number\", \"block_hash\") VALUES($1, $2, $3, $4, $5, $6, $7)",&[&EthereumSqlTypeWrapper::Address(&result.tx_information.address),&EthereumSqlTypeWrapper::Address(&result.event_data.from),&EthereumSqlTypeWrapper::Address(&result.event_data.to),&EthereumSqlTypeWrapper::U256(&result.event_data.value),&EthereumSqlTypeWrapper::H256(&result.tx_information.transaction_hash.unwrap()),&EthereumSqlTypeWrapper::U64(&result.tx_information.block_number.unwrap()),&EthereumSqlTypeWrapper::H256(&result.tx_information.block_hash.unwrap())]).await.unwrap();
-                    }
-               })
-            }),
-            no_extensions()
+    RocketPoolETHEventType::Transfer(
+        TransferEvent::handler( // [!code focus]
+            |results, context| async move { // [!code focus]
+                // logic here // [!code focus]
+            }, // [!code focus]
+            no_extensions(),
         )
         .await,
     )
@@ -148,23 +199,25 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
 }
 ```
 
-The `Arc` is a reference counted smart pointer, this is so you can share the context across multiple threads.
+## Why an async move?
 
-## Why an Box::pin
+rindexer has abstracted all the complex types for you so you can just focus on the logic you want to write, that said
+rust demands knowing all the memory location of every element and when to drop references, this is why you need to use
+`async move` in the handler.
+
+## Results
+
+This holds the event logs decoded information and the transaction information for the events.
 
 ```rs
 async fn transfer_handler(registry: &mut EventCallbackRegistry) {
-    ERC20FilterEventType::Transfer(
-        TransferEvent::new(
-            Arc::new(|results, context| {
-                Box::pin(async move { // [!code focus]
-                    for result in results {
-                        context.csv.append(vec![format!("{:?}", result.tx_information.address),format!("{:?}", result.event_data.from,),format!("{:?}", result.event_data.to,),result.event_data.value.to_string(),format!("{:?}", result.tx_information.transaction_hash.unwrap()),result.tx_information.block_number.unwrap().to_string(),result.tx_information.block_hash.unwrap().to_string()]).await.unwrap();
-                        context.database.execute("INSERT INTO lens_registry_example_erc20_filter.transfer (contract_address, \"from\", \"to\", \"value\", \"tx_hash\", \"block_number\", \"block_hash\") VALUES($1, $2, $3, $4, $5, $6, $7)",&[&EthereumSqlTypeWrapper::Address(&result.tx_information.address),&EthereumSqlTypeWrapper::Address(&result.event_data.from),&EthereumSqlTypeWrapper::Address(&result.event_data.to),&EthereumSqlTypeWrapper::U256(&result.event_data.value),&EthereumSqlTypeWrapper::H256(&result.tx_information.transaction_hash.unwrap()),&EthereumSqlTypeWrapper::U64(&result.tx_information.block_number.unwrap()),&EthereumSqlTypeWrapper::H256(&result.tx_information.block_hash.unwrap())]).await.unwrap();
-                    }
-               })
-            }),
-            no_extensions()
+    RocketPoolETHEventType::Transfer(
+        TransferEvent::handler(
+            // results = Vec<TransferResult> // [!code focus]
+            |results, context| async move { // [!code focus]
+                // logic here
+            },
+            no_extensions(),
         )
         .await,
     )
@@ -172,30 +225,8 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
 }
 ```
 
-`Box::pin` in Rust pins a future to the heap, ensuring it remains at a fixed memory location.
-This is essential for using `async/await` safely, as it guarantees that the future's internal references stay
-valid across suspensions, allowing reliable asynchronous execution.
-
-## results
-
 ```rs
-// results = &Vec<TransferResult> // [!code focus]
-Arc::new(|results, context| { // [!code focus]
-    Box::pin(async move {
-        for result in results {
-            ...
-        }
-   })
-}),
-```
-
-Everything is typed so the `event_data` struct will be typed to the decoded event you wish to index, it will be wrapped in
-a struct which exposes you the `event_data` and the `tx_information`
-
-lets look into what this looks like
-
-```rs
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TransferResult {
     pub event_data: TransferData,
     pub tx_information: TxInformation,
@@ -232,35 +263,37 @@ The `tx_information` will be the transaction related information for the event
 pub struct TxInformation {
     pub network: String,
     pub address: Address,
-    pub block_hash: Option<H256>,
-    pub block_number: Option<U64>,
-    pub transaction_hash: Option<H256>,
-    pub transaction_index: Option<U64>,
-    pub log_index: Option<U256>,
-    pub transaction_log_index: Option<U256>,
-    pub log_type: Option<String>,
-    pub removed: Option<bool>,
+    pub block_hash: H256,
+    pub block_number: U64,
+    pub transaction_hash: H256,
+    pub log_index: U256,
+    pub transaction_index: U64,
 }
 ```
 
 As you see the `network` is always passed in the `tx_information` struct, this is so you can index multiple networks
 within the same handler if you wish.
 
-## context
+## Context
+
+The `context` is a struct that is passed to the handler which has thread safe services exposed for ease of use
+within the handler.
 
 ```rs
-// context = Arc<EventContext<NoExtensions>> // [!code focus]
-Arc::new(|results, context| { // [!code focus]
-    Box::pin(async move {
-        for result in results {
-            ...
-        }
-   })
-}),
+async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+    RocketPoolETHEventType::Transfer(
+        TransferEvent::handler(
+            // context = Arc<EventContext<NoExtensions>> // [!code focus]
+            |results, context| async move { // [!code focus]
+                // logic here
+            },
+            no_extensions(),
+        )
+        .await,
+    )
+    .register(registry);
+}
 ```
-
-The `context` is a struct that is passed to the handler which has thread safe functionality exposed for ease of use
-within the handler.
 
 ```rs
 pub struct EventContext<TExtensions>
@@ -276,26 +309,43 @@ where
 Note here that if you have postgres storage off in the YAML configuration file the `database` will not be present in
 this struct and you will not be able to use it. The same goes for the `csv` if you have csv storage off in the YAML.
 
+## Extensions
+
 You can also pass in your own custom thread safe extensions to the context if you wish, this is a way to pass in custom logic.
-For example say you wanted to use a different database or call something from outside the indexer.
+For example say you wanted to use a different database or call something from outside the indexer using an http request then
+this is the place to pass it in from.
+
+Example below uses the [reqwest](https://docs.rs/reqwest/latest/reqwest/) rust library to make a http request.
 
 ```rs
-struct PassIn {  // [!code focus]
-    extend: bool,  // [!code focus]
-}  // [!code focus]
+use reqwest::blocking::Client; // [!code focus]
+use std::error::Error;
+
+struct HttpClient { // [!code focus]
+    client: Client, // [!code focus]
+} // [!code focus]
+
+impl HttpClient { // [!code focus]
+    fn new() -> Self { // [!code focus]
+        HttpClient { // [!code focus]
+            client: Client::new(), // [!code focus]
+        } // [!code focus]
+    } // [!code focus]
+
+    fn get(&self, url: &str) -> Result<String, Box<dyn Error>> { // [!code focus]
+        let response = self.client.get(url).send()?.text()?; // [!code focus]
+        Ok(response) // [!code focus]
+    }
+}
 
 async fn transfer_handler(registry: &mut EventCallbackRegistry) {
-    ERC20FilterEventType::Transfer(
-        TransferEvent::new(
-            Arc::new(|results: context:Arc<EventContext<PassIn>>| {  // [!code focus]
-                Box::pin(async move {
-                    for result in results {
-                        // my context.extensions now has the extend bool  // [!code focus]
-                        println!("Is extend: {:?}", context.extensions.extend); // [!code focus]
-                    }
-               })
-            }),
-            PassIn { extend: false }  // [!code focus]
+    RocketPoolETHEventType::Transfer(
+        TransferEvent::handler(
+            |results, context| async move {
+                let response = context.extensions.client.get("https://example.com").unwrap(); // [!code focus]
+                println!("{}", response); // [!code focus]
+            },
+            HttpClient::new(), // [!code focus]
         )
         .await,
     )
@@ -303,22 +353,20 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
 }
 ```
 
-## postgres
+## Postgres
 
 By default if you set the postgres storage on in the YAML configuration file it will generate you a postgres connected client. This
-uses the `tokio-postgres` library. This is a great starting point for you to build on. It uses connection pools by default.
+uses the [tokio-postgres](https://docs.rs/tokio-postgres/latest/tokio_postgres/) library. This is a great starting point for you to build on. It uses connection pools by default.
 
 ```rs
 async fn transfer_handler(registry: &mut EventCallbackRegistry) {
-    ERC20FilterEventType::Transfer(
-        TransferEvent::new(
-            Arc::new(|results: context| {
-                Box::pin(async move {
-                    // database client here // [!code focus]
-                    // context.database  // [!code focus]
-               })
-            }),
-            no_extensions()
+    RocketPoolETHEventType::Transfer(
+        TransferEvent::handler(
+            |results, context| async move {
+                // database client here // [!code focus]
+                context.database  // [!code focus]
+            },
+            no_extensions(),
         )
         .await,
     )
@@ -328,35 +376,32 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
 
 ### Disable Postgres Create Tables
 
-The tables creation can be skipped by using the [disable_create_tables](docs/start-building/yaml-config/storage#disable_create_tables) 
-in the YAML configuration file.
+The tables creation can be skipped by using the [disable_create_tables](/docs/start-building/yaml-config/storage#disable_create_tables)
+in the YAML configuration file. This will generate you a blank handler with no logic inside.
 
 ```yaml
 name: rETHIndexer
 description: My first rindexer project
 repository: https://github.com/joshstevens19/rindexer
-project_type: no-code
+project_type: rust
 networks:
-  - name: ethereum
-    chainId: 1
-    rpc: https://mainnet.gateway.tenderly.co
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
 storage:
   postgres:
-    database_url: ${DATABASE_URL}
+    enabled: true
     disable_create_tables: true // [!code focus]
-  csv:
-    path: ./generated_csv
-indexers:
-- name: MyFirstIndexerExample
-  contracts:
-  - name: ERC20
-    details:
-    - network: ethereum
-      filter:
-        event_name: Transfer
-      startBlock: 18600000
-      endBlock: 18718056
-    abi: ./abis/ERC20.abi.json
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: 0xae78736cd615f374d3085123a210448e74fc6393
+    start_block: 18900000
+    end_block: 19000000
+  abi: ./abis/RocketTokenRETH.abi.json
+  include_events:
+  - Transfer
 ```
 
 You can query data from the database and write data to the database, here are the postgres methods exposed.
@@ -370,58 +415,56 @@ You can query data from the database and write data to the database, here are th
 - `context.database.query_one` - This is for querying a single row from the database.
 - `context.database.query_one_or_none` - This is for querying a single row from the database or returning None if no rows are found.#
 - `context.database.batch_insert` - This is for inserting multiple rows into the database.
+- `context.database.copy_in` - This is for inserting multiple rows into the database using the COPY command.
 
 ### EthereumSqlTypeWrapper
 
 Ethereum types are not 1 to 1 with postgres types, so rindexer has a wrapper to help you with this. This is a enum
-called EthereumSqlTypeWrapper which has all the types you need to pass into the postgres execute function.
+called EthereumSqlTypeWrapper which has all the types you need to pass into the postgres write functions.
 
 ```rs
-#[derive(Debug)]
-pub enum EthereumSqlTypeWrapper<'a> {
-    U64(&'a U64),
-    VecU64(&'a Vec<U64>),
-    U128(&'a U128),
-    VecU128(&'a Vec<U128>),
-    U256(&'a U256),
-    VecU256(&'a Vec<U256>),
-    U512(&'a U512),
+#[derive(Debug, Clone)]
+pub enum EthereumSqlTypeWrapper {
+    U64(U64),
+    VecU64(Vec<U64>),
+    U128(U128),
+    VecU128(Vec<U128>),
+    U256(U256),
+    VecU256(Vec<U256>),
+    U512(U512),
     VecU512(Vec<U512>),
-    H128(&'a H128),
-    VecH128(&'a Vec<H128>),
-    H160(&'a H160),
-    VecH160(&'a Vec<H160>),
-    H256(&'a H256),
-    VecH256(&'a Vec<H256>),
-    H512(&'a H512),
-    VecH512(&'a Vec<H512>),
-    Address(&'a Address),
-    VecAddress(&'a Vec<Address>),
-    Bool(&'a bool),
-    VecBool(&'a Vec<bool>),
-    U32(&'a u32),
-    VecU32(&'a Vec<u32>),
-    U16(&'a u16),
-    VecU16(&'a Vec<u16>),
-    U8(&'a u8),
-    VecU8(&'a Vec<u8>),
-    String(&'a String),
-    VecString(&'a Vec<String>),
-    Bytes(&'a Bytes),
-    VecBytes(&'a Vec<Bytes>),
+    H128(H128),
+    VecH128(Vec<H128>),
+    H160(H160),
+    VecH160(Vec<H160>),
+    H256(H256),
+    VecH256(Vec<H256>),
+    H512(H512),
+    VecH512(Vec<H512>),
+    Address(Address),
+    VecAddress(Vec<Address>),
+    Bool(bool),
+    VecBool(Vec<bool>),
+    U32(u32),
+    VecU32(Vec<u32>),
+    U16(u16),
+    VecU16(Vec<u16>),
+    U8(u8),
+    VecU8(Vec<u8>),
+    String(String),
+    VecString(Vec<String>),
+    Bytes(Bytes),
+    VecBytes(Vec<Bytes>),
 }
-
 
 // to use it you just pass the value in the enum
 // example
-EthereumSqlTypeWrapper::Address(&result.tx_information.address)
+EthereumSqlTypeWrapper::Address(result.tx_information.address)
 ```
 
-## csv
+## CSV
 
-By default if you set the csv storage on in the YAML configuration file it will generate you a csv appender. This
-will create headers for you automatically inline with the ABI event data. If you wish to have custom headers you can
-turn this off on the CSV storage in the YAML configuration file (TODO!!).
+csv storage is disabled by default in the YAML configuration file, if you turn it on it will generate you a csv client
 
 methods:
 
@@ -430,65 +473,65 @@ methods:
 
 ```rs
 async fn transfer_handler(registry: &mut EventCallbackRegistry) {
-    ERC20FilterEventType::Transfer(
-        TransferEvent::new(
-            Arc::new(|results: context| {
-                Box::pin(async move {
-                    // csv client here // [!code focus]
-                    context.csv  // [!code focus]
-               })
-            }),
-            no_extensions()
+    RocketPoolETHEventType::Transfer(
+        TransferEvent::handler(
+            |results, context| async move {
+                // csv client here // [!code focus]
+                context.csv  // [!code focus]
+            },
+            no_extensions(),
         )
         .await,
     )
     .register(registry);
 }
+
 ```
 
 ### Disable CSV Create Headers
 
-The CSV header creation can be skipped by using the [disable_create_headers](docs/start-building/yaml-config/storage#disable_create_headers) 
+If you turn on csv storage then by default rindexer will create headers for you automatically inline with the ABI event data. 
+The CSV header creation can be skipped by using the [disable_create_headers](/docs/start-building/yaml-config/storage#disable_create_headers) 
 in the YAML configuration file.
 
 ```yaml
 name: rETHIndexer
 description: My first rindexer project
 repository: https://github.com/joshstevens19/rindexer
-project_type: no-code
+project_type: rust
 networks:
-  - name: ethereum
-    chainId: 1
-    rpc: https://mainnet.gateway.tenderly.co
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
 storage:
   csv:
-    path: ./generated_csv
+    enabled: true
     disable_create_headers: true // [!code focus]
-indexers:
-- name: MyFirstIndexerExample
-  contracts:
-  - name: ERC20
-    details:
-    - network: ethereum
-      filter:
-        event_name: Transfer
-      startBlock: 18600000
-      endBlock: 18718056
-    abi: ./abis/ERC20.abi.json
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: 0xae78736cd615f374d3085123a210448e74fc6393
+    start_block: 18900000
+    end_block: 19000000
+  abi: ./abis/RocketTokenRETH.abi.json
+  include_events:
+  - Transfer
 ```
 
 ## register
 
+rindexer needs to know which handlers are required to be indexed so you need to register them with the `EventCallbackRegistry`.
+This passing of `&mut EventCallbackRegistry` is taken care of you by the rindexer framework, you just need to call the `register` function.
+
 ```rs
-async fn transfer_handler(registry: &mut EventCallbackRegistry) { // [!code focus]
-    ERC20FilterEventType::Transfer(
-        TransferEvent::new(
-            Arc::new(|results, context| {
-                Box::pin(async move {
-                    ...
-               })
-            }),
-            no_extensions()
+async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+    RocketPoolETHEventType::Transfer(
+        TransferEvent::handler(
+            |results, context| async move {
+                ...
+            },
+            no_extensions(),
         )
         .await,
     )
@@ -496,21 +539,17 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) { // [!code focu
 }
 ```
 
-rindexer needs to know which handlers are required to be indexed so you need to register them with the `EventCallbackRegistry`.
 
-This passing of `&mut EventCallbackRegistry` is taken care of you by the rindexer framework, you just need to call the `register` function.
-
-The `main.rs` called the `register_all_handlers` function which registered all the handlers, this code is
+The `main.rs` calls the `register_all_handlers` function which lives in `all_handlers.rs` this registers all the handlers, this code is
 all generated for you and you do not need to worry about it.
 
 ```rs
-use super::lens_registry_example::erc20_filter::erc20_filter_handlers;
-use super::lens_registry_example::lens_registry::lens_registry_handlers;
+use super::rust::rocket_pool_eth::rocket_pool_eth_handlers;
 use rindexer_core::generator::event_callback_registry::EventCallbackRegistry;
 
 pub async fn register_all_handlers() -> EventCallbackRegistry {
     let mut registry = EventCallbackRegistry::new();
-    erc20_filter_handlers(&mut registry).await;
+    rocket_pool_eth_handlers(&mut registry).await;
     registry
 }
 ```
@@ -522,8 +561,6 @@ started, you can customise this as you wish and should be if your building a cus
 
 ```rs
 use std::env;
-use std::path::PathBuf;
-use std::str::FromStr;
 
 use self::rindexer::indexers::all_handlers::register_all_handlers;
 use rindexer_core::{
@@ -557,32 +594,69 @@ async fn main() {
                     }
                 }
             }
-            _ => {}
+            _ => {
+                // default run both
+                enable_graphql = true;
+                enable_indexer = true;
+            }
         }
     }
 
-    let _ = start_rindexer(StartDetails {
-        manifest_path: env::current_dir().unwrap().join("rindexer.yaml"),
-        indexing_details: if enable_indexer {
-            Some(IndexingDetails {
-                registry: register_all_handlers().await,
-                settings: Default::default(),
-            })
-        } else {
-            None
-        },
-        graphql_server: if enable_graphql {
-            Some(GraphQLServerDetails {
-                settings: if port.is_some() {
-                    GraphQLServerSettings::port(port.unwrap())
+    let path = env::current_dir();
+    match path {
+        Ok(path) => {
+            let result = start_rindexer(StartDetails {
+                manifest_path: path.join("rindexer.yaml"),
+                indexing_details: if enable_indexer {
+                    Some(IndexingDetails {
+                        registry: register_all_handlers().await,
+                    })
                 } else {
-                    Default::default()
+                    None
+                },
+                graphql_server: if enable_graphql {
+                    Some(GraphQLServerDetails {
+                        settings: port.map_or_else(Default::default, GraphQLServerSettings::port),
+                    })
+                } else {
+                    None
                 },
             })
-        } else {
-            None
-        },
-    })
-    .await;
+            .await;
+
+            match result {
+                Ok(_) => {}
+                Err(e) => {
+                    println!("Error starting rindexer: {:?}", e);
+                }
+            }
+        }
+        Err(e) => {
+            println!("Error getting current directory: {:?}", e);
+        }
+    }
 }
+
 ```
+
+### Running 
+
+To run with the boilerplate code generated for you, you can run the following command:
+
+:::code-group
+
+```bash [everything]
+cargo run
+```
+
+```bash [indexer only]
+cargo run -- --indexer
+```
+
+```bash [graphql only]
+cargo run -- --graphql
+```
+
+:::
+
+Note if you are creating a rust rindexer project you should be wanting to change all of this logic to suit your needs.

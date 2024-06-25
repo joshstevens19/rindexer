@@ -22,8 +22,11 @@ fn main() {
         let entry = entry.expect("Failed to read directory entry");
         let path = entry.path();
         if path.is_file() {
-            fs::copy(&path, target_dir.join(path.file_name().expect("Failed to get file name")))
-                .expect("Failed to copy file");
+            fs::copy(
+                &path,
+                target_dir.join(path.file_name().expect("Failed to get file name")),
+            )
+            .expect("Failed to copy file");
         }
     }
 

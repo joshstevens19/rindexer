@@ -1,9 +1,11 @@
 new_no_code:
-	cargo run -- new --path /Users/joshstevens/code/rindexer/example no-code
+	cargo run -- new --path /Users/joshstevens/code/rindexer/examples no-code
+new_rust:
+	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- new --path /Users/joshstevens/code rust
 start:
 	cargo run -- start --path /Users/joshstevens/code/rindexer/examples/rindexer_demo_cli all
 start_prod:
-	RUSTFLAGS='-C target-cpu=native' cargo run --profile production --features jemalloc -- start all
+	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- start all
 start_indexer:
 	cargo run -- start --path /Users/joshstevens/code/rindexer/examples/rindexer_demo_cli indexer
 start_indexer_base_paint:

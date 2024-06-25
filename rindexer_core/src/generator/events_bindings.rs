@@ -502,8 +502,8 @@ fn generate_contract_type_fn_code(contract: &Contract) -> Code {
                 include_events: {},
                 index_event_in_order: {},
                 dependency_events: {},
-                reorg_safe_distance: {},
-                generate_csv: {},
+                reorg_safe_distance: Some({}),
+                generate_csv: Some({}),
             }}
         }}
         "#,
@@ -513,8 +513,8 @@ fn generate_contract_type_fn_code(contract: &Contract) -> Code {
         include_events_code,
         index_event_in_order,
         dependency_events,
-        contract.reorg_safe_distance,
-        contract.generate_csv
+        contract.reorg_safe_distance.unwrap_or_default(),
+        contract.generate_csv.unwrap_or(true)
     ))
 }
 
@@ -568,7 +568,7 @@ fn generate_csv_instance(
 ) -> Result<Code, CreateCsvFileForEvent> {
     let csv_path = csv.as_ref().map_or("./generated_csv", |c| &c.path);
 
-    if !contract.generate_csv {
+    if !contract.generate_csv.unwrap_or_default() {
         return Ok(Code::new(format!(
             r#"let csv = AsyncCsvAppender::new("{csv_path}".to_string());"#,
             csv_path = csv_path,
@@ -947,7 +947,7 @@ fn generate_event_bindings_code(
                         }})
                         .collect(),
                     abi: contract_information.abi,
-                    reorg_safe_distance: contract_information.reorg_safe_distance,
+                    reorg_safe_distance: contract_information.reorg_safe_distance.unwrap_or_default(),
                 }};
 
                 let callback: Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, ()> + Send + Sync> = match self {{

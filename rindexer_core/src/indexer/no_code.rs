@@ -390,7 +390,7 @@ pub async fn process_events(
                     .map_err(ProcessIndexersError::CreateContractInformationError)?;
 
             let mut csv: Option<Arc<AsyncCsvAppender>> = None;
-            if contract.generate_csv && manifest.storage.csv_enabled() {
+            if contract.generate_csv.unwrap_or(true) && manifest.storage.csv_enabled() {
                 let csv_path = manifest
                     .storage
                     .csv
@@ -489,6 +489,6 @@ fn create_contract_information(
         name: contract.name.clone(),
         details,
         abi: contract.abi.clone(),
-        reorg_safe_distance: contract.reorg_safe_distance,
+        reorg_safe_distance: contract.reorg_safe_distance.unwrap_or_default(),
     })
 }

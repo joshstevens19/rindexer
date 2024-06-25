@@ -17,8 +17,8 @@ use rindexer_core::generator::build::{
 };
 use rindexer_core::generator::generate_docker_file;
 use rindexer_core::manifest::yaml::{
-    read_manifest, write_manifest, Contract, ContractDetails, CsvDetails, Global, Manifest,
-    Network, PostgresConnectionDetails, ProjectType, Storage, YAML_CONFIG_NAME,
+    read_manifest, write_manifest, Contract, ContractDetails, CsvDetails, Manifest, Network,
+    PostgresConnectionDetails, ProjectType, Storage, YAML_CONFIG_NAME,
 };
 use rindexer_core::{
     drop_tables_for_indexer_sql, generate_graphql_queries, start_rindexer_no_code, write_file,
@@ -260,6 +260,7 @@ fn generate_rindexer_rust_project(project_path: &Path) {
             print_success_message("Successfully generated rindexer rust project.");
         }
         Err(err) => {
+            println!("{:?}", err);
             print_error_message(&format!(
                 "Failed to generate rindexer rust project: {}",
                 err
@@ -274,7 +275,13 @@ fn handle_new_command(
 ) -> Result<(), Box<dyn std::error::Error>> {
     print_success_message("Initializing new rindexer project...");
 
-    let project_name = prompt_for_input("Project Name", None, None, None);
+    let project_name = prompt_for_input(
+        "Project Name",
+        Some(r"^\S+$"),
+        Some("No spaces are allowed in the project name"),
+        None,
+    );
+    let project_path = project_path.join(&project_name);
     if project_path.exists() {
         print_error_message("Directory already exists. Please choose a different project name.");
         return Err("Directory already exists.".into());
@@ -325,7 +332,7 @@ fn handle_new_command(
     })?;
 
     let manifest = Manifest {
-        name: project_name,
+        name: project_name.clone(),
         description: project_description,
         repository,
         project_type: project_type.clone(),
@@ -346,18 +353,18 @@ fn handle_new_command(
                 None,
             )],
             abi: abi_example_path.display().to_string(),
-            include_events: Some(vec!["Transfer".to_string()]),
+            include_events: Some(vec!["Transfer".to_string(), "Approval".to_string()]),
             index_event_in_order: None,
             dependency_events: None,
-            generate_csv: csv_enabled,
-            reorg_safe_distance: false,
+            reorg_safe_distance: None,
+            generate_csv: None,
         }],
-        global: Global { contracts: None },
+        global: None,
         storage: Storage {
             postgres: if postgres_enabled {
                 Some(PostgresConnectionDetails {
                     enabled: true,
-                    disable_create_tables: false,
+                    disable_create_tables: None,
                 })
             } else {
                 None
@@ -366,7 +373,7 @@ fn handle_new_command(
                 Some(CsvDetails {
                     enabled: true,
                     path: "./generated_csv".to_string(),
-                    disable_create_headers: false,
+                    disable_create_headers: None,
                 })
             } else {
                 None
@@ -405,11 +412,11 @@ POSTGRES_PASSWORD=rindexer"#;
     if project_type == ProjectType::Rust {
         generate_rindexer_rust_project(&project_path);
         print_success_message(
-            "rindexer project created created with a starter manifest.\n- run rindexer codegen both to regenerate the code\n- run rindexer dev to start rindexer\n - run rindexer download-abi to download new ABIs",
+            &format!("rindexer project created with a starter manifest.\n cd ./{} \n- run rindexer codegen both to regenerate the code\n- run rindexer dev to start rindexer\n - run rindexer download-abi to download new ABIs", &project_name),
         );
     } else {
         print_success_message(
-            "rindexer no-code project created with a starter manifest.\n- run rindexer start to start rindexer\n- run rindexer download-abi to download new ABIs",
+            &format!("rindexer no-code project created with a starter manifest.\n cd ./{} \n- run rindexer start to start rindexer\n- run rindexer download-abi to download new ABIs", &project_name),
         );
     }
 
