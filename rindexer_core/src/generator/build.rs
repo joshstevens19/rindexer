@@ -188,7 +188,7 @@ pub fn generate_rindexer_typings(
 
             write_networks(&output, &manifest.networks)
                 .map_err(GenerateRindexerTypingsError::WriteNetworksError)?;
-            write_global(&output, &manifest.global, &manifest.networks)
+            write_global(&output, &manifest.global.clone().unwrap_or_default(), &manifest.networks)
                 .map_err(GenerateRindexerTypingsError::WriteGlobalError)?;
 
             write_indexer_events(
@@ -403,8 +403,6 @@ serde = {{ version = "1.0.194", features = ["derive"] }}
 
     let main_code = r#"
             use std::env;
-            use std::path::PathBuf;
-            use std::str::FromStr;
 
             use self::rindexer::indexers::all_handlers::register_all_handlers;
             use rindexer_core::{

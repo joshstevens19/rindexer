@@ -4,11 +4,11 @@ use crate::helpers::set_thread_no_logging;
 use crate::indexer::Indexer;
 use reqwest::Client;
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{env, thread};
-use std::path::PathBuf;
 use tracing::{error, info};
 
 pub struct GraphQLServerDetails {
@@ -45,7 +45,7 @@ fn get_postgraphile_path() -> PathBuf {
         "macos" => "postgraphile-macos",
         _ => "postgraphile-linux",
     };
-    
+
     let mut paths = vec![];
 
     // Assume `resources` directory is in the same directory as the executable (installed)
@@ -82,7 +82,10 @@ fn get_postgraphile_path() -> PathBuf {
     }
 
     // If none of the paths exist, return the first one with useful error message
-    paths.into_iter().next().expect("Failed to determine postgraphile path")
+    paths
+        .into_iter()
+        .next()
+        .expect("Failed to determine postgraphile path")
 }
 #[allow(dead_code)]
 pub struct GraphQLServer {
@@ -122,7 +125,7 @@ pub async fn start_graphql_server(
             "Postgraphile executable not found".to_string(),
         ));
     }
-    
+
     let child = Command::new(postgraphile_path)
         .arg("postgraphile")
         .arg("-c")
