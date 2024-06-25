@@ -8,6 +8,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{env, thread};
+use std::path::PathBuf;
 use tracing::{error, info};
 
 pub struct GraphQLServerDetails {
@@ -38,6 +39,51 @@ impl Default for GraphQLServerSettings {
     }
 }
 
+fn get_postgraphile_path() -> PathBuf {
+    let postgraphile_filename = match std::env::consts::OS {
+        "windows" => "postgraphile-win.exe",
+        "macos" => "postgraphile-macos",
+        _ => "postgraphile-linux",
+    };
+    
+    let mut paths = vec![];
+
+    // Assume `resources` directory is in the same directory as the executable (installed)
+    if let Ok(executable_path) = env::current_exe() {
+        let mut path = executable_path.clone();
+        path.pop(); // Remove the executable name
+        path.push("resources");
+        path.push(postgraphile_filename);
+        paths.push(path);
+
+        // Also consider when running from within the `rindexer_core` directory
+        let mut path = executable_path;
+        path.pop(); // Remove the executable name
+        path.pop(); // Remove the 'release' or 'debug' directory
+        path.push("resources");
+        path.push(postgraphile_filename);
+        paths.push(path);
+    }
+
+    // Check additional common paths
+    if let Ok(home_dir) = env::var("HOME") {
+        let mut path = PathBuf::from(home_dir);
+        path.push(".rindexer");
+        path.push("resources");
+        path.push(postgraphile_filename);
+        paths.push(path);
+    }
+
+    // Return the first valid path
+    for path in &paths {
+        if path.exists() {
+            return path.clone();
+        }
+    }
+
+    // If none of the paths exist, return the first one with useful error message
+    paths.into_iter().next().expect("Failed to determine postgraphile path")
+}
 #[allow(dead_code)]
 pub struct GraphQLServer {
     child: Arc<Mutex<Child>>,
@@ -70,7 +116,14 @@ pub async fn start_graphql_server(
     let port = settings.port.unwrap_or(5005).to_string();
     let graphql_endpoint = format!("http://localhost:{}/graphql", port);
 
-    let child = Command::new("npx")
+    let postgraphile_path = get_postgraphile_path();
+    if !postgraphile_path.exists() {
+        return Err(StartGraphqlServerError::GraphQLServerStartupError(
+            "Postgraphile executable not found".to_string(),
+        ));
+    }
+    
+    let child = Command::new(postgraphile_path)
         .arg("postgraphile")
         .arg("-c")
         .arg(connection_string)

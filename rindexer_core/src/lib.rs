@@ -1,10 +1,3 @@
-#[cfg(feature = "jemalloc")]
-use jemallocator::Jemalloc;
-
-#[cfg(feature = "jemalloc")]
-#[global_allocator]
-static GLOBAL: Jemalloc = Jemalloc;
-
 // public
 pub mod generator;
 pub mod indexer;
