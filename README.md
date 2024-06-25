@@ -10,15 +10,8 @@ You can get to the full rindexer [documentation](https://rindexer.xyz/docs/intro
 
 ## Install 
 
-### Mac and Linux
-
-```bash
-curl -L https://rindexer.xyz/install.sh | bash
-```
-
-### Windows
-
-TODO
+If you’re on Windows, you will need to install and use Git BASH or WSL, as your terminal,
+since rindexer installation does not support Powershell or Cmd.
 
 ## Use rindexer
 
