@@ -24,6 +24,7 @@ use crate::generator::{
     create_csv_file_for_event, csv_headers_for_event, extract_event_names_and_signatures_from_abi,
     get_abi_items, CreateCsvFileForEvent, ParamTypeError, ReadAbiError,
 };
+use crate::helpers::get_full_path;
 use crate::indexer::log_helpers::parse_log;
 use crate::manifest::yaml::{read_manifest, Contract, Manifest, ReadManifestError};
 use crate::provider::{create_client, JsonRpcCachedProvider, RetryClientError};
@@ -34,6 +35,9 @@ use crate::{
 
 #[derive(thiserror::Error, Debug)]
 pub enum SetupNoCodeError {
+    #[error("Could not work out project path from the parent of the manifest")]
+    NoProjectPathFoundUsingParentOfManifestPath,
+
     #[error("Could not read manifest: {0}")]
     CouldNotReadManifest(ReadManifestError),
 
@@ -45,50 +49,47 @@ pub enum SetupNoCodeError {
 
     #[error("Could not process indexers: {0}")]
     ProcessIndexersError(ProcessIndexersError),
-
-    #[error("Could not read manifest path parent")]
-    NoParentInManifestPath,
 }
 
 pub async fn setup_no_code(details: StartNoCodeDetails) -> Result<StartDetails, SetupNoCodeError> {
-    let mut manifest =
-        read_manifest(&details.manifest_path).map_err(SetupNoCodeError::CouldNotReadManifest)?;
-    setup_logger(LevelFilter::INFO);
+    let project_path = details.manifest_path.parent();
+    match project_path {
+        Some(project_path) => {
+            let mut manifest = read_manifest(&details.manifest_path)
+                .map_err(SetupNoCodeError::CouldNotReadManifest)?;
+            setup_logger(LevelFilter::INFO);
 
-    info!("Starting rindexer no code");
+            info!("Starting rindexer no code");
 
-    let mut postgres: Option<Arc<PostgresClient>> = None;
-    if manifest.storage.postgres_enabled() {
-        postgres = Some(Arc::new(
-            setup_postgres(&manifest)
-                .await
-                .map_err(SetupNoCodeError::SetupPostgresError)?,
-        ));
-    }
+            let mut postgres: Option<Arc<PostgresClient>> = None;
+            if manifest.storage.postgres_enabled() {
+                postgres = Some(Arc::new(
+                    setup_postgres(project_path, &manifest)
+                        .await
+                        .map_err(SetupNoCodeError::SetupPostgresError)?,
+                ));
+            }
 
-    if !details.indexing_details.enabled {
-        return Ok(StartDetails {
-            manifest_path: details.manifest_path,
-            indexing_details: None,
-            graphql_server: details.graphql_details.settings,
-        });
-    }
+            if !details.indexing_details.enabled {
+                return Ok(StartDetails {
+                    manifest_path: details.manifest_path,
+                    indexing_details: None,
+                    graphql_server: details.graphql_details.settings,
+                });
+            }
 
-    let network_providers =
-        create_network_providers(&manifest).map_err(SetupNoCodeError::RetryClientError)?;
-    info!(
-        "Networks enabled: {}",
-        network_providers
-            .iter()
-            .map(|result| result.network_name.as_str())
-            .collect::<Vec<&str>>()
-            .join(", ")
-    );
+            let network_providers =
+                create_network_providers(&manifest).map_err(SetupNoCodeError::RetryClientError)?;
+            info!(
+                "Networks enabled: {}",
+                network_providers
+                    .iter()
+                    .map(|result| result.network_name.as_str())
+                    .collect::<Vec<&str>>()
+                    .join(", ")
+            );
 
-    let parent = details.manifest_path.parent();
-    match parent {
-        Some(parent) => {
-            let events = process_events(parent, &mut manifest, postgres, &network_providers)
+            let events = process_events(project_path, &mut manifest, postgres, &network_providers)
                 .await
                 .map_err(SetupNoCodeError::ProcessIndexersError)?;
 
@@ -109,7 +110,7 @@ pub async fn setup_no_code(details: StartNoCodeDetails) -> Result<StartDetails, 
                 graphql_server: details.graphql_details.settings,
             })
         }
-        None => Err(SetupNoCodeError::NoParentInManifestPath),
+        None => Err(SetupNoCodeError::NoProjectPathFoundUsingParentOfManifestPath),
     }
 }
 
@@ -348,8 +349,10 @@ pub async fn process_events(
     let mut events: Vec<EventInformation> = vec![];
 
     for contract in &mut manifest.contracts {
-        let abi_str = fs::read_to_string(&contract.abi)
-            .map_err(ProcessIndexersError::CouldNotReadAbiString)?;
+        // TODO this could be shared with `get_abi_items`
+        let full_path = get_full_path(project_path, &contract.abi);
+        let abi_str =
+            fs::read_to_string(full_path).map_err(ProcessIndexersError::CouldNotReadAbiString)?;
 
         let abi: Abi =
             serde_json::from_str(&abi_str).map_err(ProcessIndexersError::CouldNotReadAbiJson)?;
@@ -358,7 +361,7 @@ pub async fn process_events(
         let abi_gen = EthersContract::from(abi);
 
         let is_filter = identify_and_modify_filter(contract);
-        let abi_items = get_abi_items(contract, is_filter)
+        let abi_items = get_abi_items(project_path, contract, is_filter)
             .map_err(ProcessIndexersError::CouldNotReadAbiItems)?;
         let event_names = extract_event_names_and_signatures_from_abi(&abi_items)
             .map_err(ProcessIndexersError::ParamTypeError)?;

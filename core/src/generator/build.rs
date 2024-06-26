@@ -285,6 +285,7 @@ pub fn generate_rindexer_handlers(
                 write_file(
                     &generate_file_location(&output, &handler_path),
                     generate_event_handlers(
+                        output_parent,
                         &manifest.name,
                         is_filter,
                         &contract,

@@ -25,6 +25,9 @@ pub struct StartDetails {
 
 #[derive(thiserror::Error, Debug)]
 pub enum StartRindexerError {
+    #[error("Could not work out project path from the parent of the manifest")]
+    NoProjectPathFoundUsingParentOfManifestPath,
+
     #[error("Could not read manifest: {0}")]
     CouldNotReadManifest(ReadManifestError),
 
@@ -42,56 +45,67 @@ pub enum StartRindexerError {
 }
 
 pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerError> {
-    let manifest =
-        read_manifest(&details.manifest_path).map_err(StartRindexerError::CouldNotReadManifest)?;
+    let project_path = details.manifest_path.parent();
+    match project_path {
+        Some(project_path) => {
+            let manifest = read_manifest(&details.manifest_path)
+                .map_err(StartRindexerError::CouldNotReadManifest)?;
 
-    if manifest.project_type != ProjectType::NoCode {
-        setup_logger(LevelFilter::INFO);
-        info!("Starting rindexer rust project");
-    }
+            if manifest.project_type != ProjectType::NoCode {
+                setup_logger(LevelFilter::INFO);
+                info!("Starting rindexer rust project");
+            }
 
-    if let Some(graphql_server) = details.graphql_server {
-        let _ = start_graphql_server(&manifest.to_indexer(), graphql_server.settings)
-            .await
-            .map_err(StartRindexerError::CouldNotStartGraphqlServer)?;
-        if details.indexing_details.is_none() {
-            signal::ctrl_c()
+            if let Some(graphql_server) = details.graphql_server {
+                let _ = start_graphql_server(&manifest.to_indexer(), graphql_server.settings)
+                    .await
+                    .map_err(StartRindexerError::CouldNotStartGraphqlServer)?;
+                if details.indexing_details.is_none() {
+                    signal::ctrl_c()
+                        .await
+                        .map_err(|_| StartRindexerError::FailedToListenToGraphqlSocket)?;
+                    return Ok(());
+                }
+            }
+
+            if let Some(indexing_details) = details.indexing_details {
+                // setup postgres is already called in no-code startup
+                if manifest.project_type != ProjectType::NoCode
+                    && manifest.storage.postgres_enabled()
+                {
+                    setup_postgres(project_path, &manifest)
+                        .await
+                        .map_err(StartRindexerError::SetupPostgresError)?;
+                }
+
+                let mut dependencies: Vec<ContractEventDependencies> = vec![];
+                for contract in &manifest.contracts {
+                    if let Some(dependency) = contract.dependency_events.clone() {
+                        let dependency_event_names = dependency.collect_dependency_events();
+                        let dependency_tree =
+                            EventsDependencyTree::from_dependency_event_tree(dependency);
+                        dependencies.push(ContractEventDependencies {
+                            contract_name: contract.name.clone(),
+                            event_dependencies: EventDependencies {
+                                tree: Arc::new(dependency_tree),
+                                dependency_event_names,
+                            },
+                        });
+                    }
+                }
+
+                start_indexing(
+                    &manifest,
+                    dependencies,
+                    indexing_details.registry.complete(),
+                )
                 .await
-                .map_err(|_| StartRindexerError::FailedToListenToGraphqlSocket)?;
-            return Ok(());
-        }
-    }
-
-    if let Some(indexing_details) = details.indexing_details {
-        // setup postgres is already called in no-code startup
-        if manifest.project_type != ProjectType::NoCode && manifest.storage.postgres_enabled() {
-            setup_postgres(&manifest)
-                .await
-                .map_err(StartRindexerError::SetupPostgresError)?;
-        }
-
-        let mut dependencies: Vec<ContractEventDependencies> = vec![];
-        for contract in &manifest.contracts {
-            if let Some(dependency) = contract.dependency_events.clone() {
-                let dependency_event_names = dependency.collect_dependency_events();
-                let dependency_tree = EventsDependencyTree::from_dependency_event_tree(dependency);
-                dependencies.push(ContractEventDependencies {
-                    contract_name: contract.name.clone(),
-                    event_dependencies: EventDependencies {
-                        tree: Arc::new(dependency_tree),
-                        dependency_event_names,
-                    },
-                });
+                .map_err(StartRindexerError::CouldNotStartIndexing)?;
             }
         }
-
-        start_indexing(
-            &manifest,
-            dependencies,
-            indexing_details.registry.complete(),
-        )
-        .await
-        .map_err(StartRindexerError::CouldNotStartIndexing)?;
+        None => {
+            return Err(StartRindexerError::NoProjectPathFoundUsingParentOfManifestPath);
+        }
     }
 
     Ok(())

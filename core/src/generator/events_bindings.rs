@@ -12,7 +12,7 @@ use std::fs;
 use std::iter::Map;
 use std::path::Path;
 
-use crate::helpers::camel_to_snake;
+use crate::helpers::{camel_to_snake, get_full_path};
 use crate::manifest::yaml::{Contract, ContractDetails, CsvDetails, DependencyEventTree, Storage};
 use crate::types::code::Code;
 
@@ -35,8 +35,12 @@ pub enum ReadAbiError {
     CouldNotReadAbiJson(serde_json::Error),
 }
 
-pub fn read_abi_items(contract: &Contract) -> Result<Vec<ABIItem>, ReadAbiError> {
-    let abi_str = fs::read_to_string(&contract.abi).map_err(ReadAbiError::CouldNotReadAbiString)?;
+pub fn read_abi_items(
+    project_path: &Path,
+    contract: &Contract,
+) -> Result<Vec<ABIItem>, ReadAbiError> {
+    let full_path = get_full_path(project_path, &contract.abi);
+    let abi_str = fs::read_to_string(full_path).map_err(ReadAbiError::CouldNotReadAbiString)?;
     // Deserialize the JSON string to a vector of ABI items
     let abi_items: Vec<ABIItem> =
         serde_json::from_str(&abi_str).map_err(ReadAbiError::CouldNotReadAbiJson)?;
@@ -167,9 +171,14 @@ pub enum GenerateStructsError {
     InvalidAbiJsonFormat,
 }
 
-fn generate_structs(contract: &Contract) -> Result<Code, GenerateStructsError> {
+fn generate_structs(
+    project_path: &Path,
+    contract: &Contract,
+) -> Result<Code, GenerateStructsError> {
+    // TODO this could be shared with `get_abi_items`
+    let full_path = get_full_path(project_path, &contract.abi);
     let abi_str =
-        fs::read_to_string(&contract.abi).map_err(GenerateStructsError::CouldNotReadAbiString)?;
+        fs::read_to_string(full_path).map_err(GenerateStructsError::CouldNotReadAbiString)?;
     let abi_json: Value =
         serde_json::from_str(&abi_str).map_err(GenerateStructsError::CouldNotReadAbiJson)?;
 
@@ -964,7 +973,7 @@ fn generate_event_bindings_code(
         abigen_mod_name = abigen_contract_mod_name(contract),
         abigen_file_name = abigen_contract_file_name(contract),
         abigen_name = abigen_contract_name(contract),
-        structs = generate_structs(contract)
+        structs = generate_structs(project_path, contract)
             .map_err(GenerateEventBindingCodeError::GenerateStructsError)?,
         event_type_name = &event_type_name,
         event_context_database = if storage.postgres_enabled() {
@@ -1089,8 +1098,12 @@ pub fn generate_abi_name_properties(
         .collect()
 }
 
-pub fn get_abi_items(contract: &Contract, is_filter: bool) -> Result<Vec<ABIItem>, ReadAbiError> {
-    let mut abi_items = read_abi_items(contract)?;
+pub fn get_abi_items(
+    project_path: &Path,
+    contract: &Contract,
+    is_filter: bool,
+) -> Result<Vec<ABIItem>, ReadAbiError> {
+    let mut abi_items = read_abi_items(project_path, contract)?;
     if is_filter {
         let filter_event_names: Vec<String> = contract
             .details
@@ -1133,8 +1146,8 @@ pub fn generate_event_bindings(
     is_filter: bool,
     storage: &Storage,
 ) -> Result<Code, GenerateEventBindingsError> {
-    let abi_items =
-        get_abi_items(contract, is_filter).map_err(GenerateEventBindingsError::ReadAbi)?;
+    let abi_items = get_abi_items(project_path, contract, is_filter)
+        .map_err(GenerateEventBindingsError::ReadAbi)?;
     let event_names = extract_event_names_and_signatures_from_abi(&abi_items)
         .map_err(GenerateEventBindingsError::ParamType)?;
 
@@ -1152,13 +1165,14 @@ pub enum GenerateEventHandlersError {
 }
 
 pub fn generate_event_handlers(
+    project_path: &Path,
     indexer_name: &str,
     is_filter: bool,
     contract: &Contract,
     storage: &Storage,
 ) -> Result<Code, GenerateEventHandlersError> {
-    let abi_items =
-        get_abi_items(contract, is_filter).map_err(GenerateEventHandlersError::ReadAbiError)?;
+    let abi_items = get_abi_items(project_path, contract, is_filter)
+        .map_err(GenerateEventHandlersError::ReadAbiError)?;
     let event_names = extract_event_names_and_signatures_from_abi(&abi_items)
         .map_err(GenerateEventHandlersError::ParamTypeError)?;
 

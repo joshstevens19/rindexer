@@ -947,7 +947,9 @@ fn write_example_abi(rindexer_abis_folder: &Path) -> Result<PathBuf, WriteFileEr
 
     write_file(&path, abi)?;
 
-    Ok(path)
+    let relative_path = Path::new("./abis/RocketTokenRETH.abi.json").to_path_buf();
+
+    Ok(relative_path)
 }
 
 fn write_docker_compose(path: &Path) -> Result<(), WriteFileError> {
