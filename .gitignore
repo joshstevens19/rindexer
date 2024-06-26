@@ -25,4 +25,4 @@ documentation/node_modules
 documentation/dist
 documentation/docs/dist
 documentation/vocs.config.ts*
-postgraphile/node_modules
+graphql/node_modules

@@ -1,6 +1,5 @@
-use crate::api::playground;
 use crate::database::postgres::{connection_string, indexer_contract_schema_name};
-use crate::helpers::set_thread_no_logging;
+use crate::helpers::{kill_process_on_port, set_thread_no_logging};
 use crate::indexer::Indexer;
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -41,9 +40,9 @@ impl Default for GraphQLServerSettings {
 
 fn get_postgraphile_path() -> PathBuf {
     let postgraphile_filename = match std::env::consts::OS {
-        "windows" => "postgraphile-win.exe",
-        "macos" => "postgraphile-macos",
-        _ => "postgraphile-linux",
+        "windows" => "rindexer-graphql-win.exe",
+        "macos" => "rindexer-graphql-macos",
+        _ => "rindexer-graphql-linux",
     };
 
     let mut paths = vec![];
@@ -85,7 +84,7 @@ fn get_postgraphile_path() -> PathBuf {
     paths
         .into_iter()
         .next()
-        .expect("Failed to determine postgraphile path")
+        .expect("Failed to determine rindexer graphql path")
 }
 #[allow(dead_code)]
 pub struct GraphQLServer {
@@ -116,44 +115,34 @@ pub async fn start_graphql_server(
 
     let connection_string =
         connection_string().map_err(StartGraphqlServerError::UnableToReadDatabaseUrl)?;
-    let port = settings.port.unwrap_or(5005).to_string();
-    let graphql_endpoint = format!("http://localhost:{}/graphql", port);
+    let port = settings.port.unwrap_or(5001).to_string();
+    let graphql_endpoint = format!("http://localhost:{}/graphql", &port);
+    let graphql_playground = format!("http://localhost:{}/playground", &port);
 
-    let postgraphile_path = get_postgraphile_path();
-    if !postgraphile_path.exists() {
+    let rindexer_graphql_exe = get_postgraphile_path();
+    if !rindexer_graphql_exe.exists() {
         return Err(StartGraphqlServerError::GraphQLServerStartupError(
-            "Postgraphile executable not found".to_string(),
+            "rindexer-graphql executable not found".to_string(),
         ));
     }
+    
+     // kill any existing process on the port
+     kill_process_on_port(port.parse().unwrap())
+        .map_err(StartGraphqlServerError::GraphQLServerStartupError)?;
 
-    let child = Command::new(postgraphile_path)
-        .arg("postgraphile")
-        .arg("-c")
+    let child = Command::new(rindexer_graphql_exe)
         .arg(connection_string)
-        .arg("--host")
-        .arg("0.0.0.0")
-        .arg("--port")
-        .arg(&port)
-        .arg("--watch")
-        .arg("--schema")
         .arg(schemas.join(","))
-        .arg("--no-ignore-indexes") // seems to not work
-        // .arg("--default-role")
-        // .arg(database_user)
-        //.arg("--enhance-graphiql")
-        .arg("--disable-graphiql")
-        .arg("--cors")
-        .arg("--disable-default-mutations")
-        .arg("--retry-on-init-fail")
-        .arg("--dynamic-json")
-        .arg("--disable-graphiql")
-        .arg("--enable-query-batching")
-        // .arg("--subscriptions")
+        .arg(&port)
+        // graphql_limit
+        .arg("1000")
+        // graphql_timeout
+        .arg("10000")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .map_err(|e| StartGraphqlServerError::GraphQLServerStartupError(e.to_string()))?;
-
+    
     let pid = child.id();
     let child_arc = Arc::new(Mutex::new(child));
 
@@ -184,9 +173,7 @@ pub async fn start_graphql_server(
             }
         }
     });
-
-    let playground_endpoint = playground::run_in_child_thread(&graphql_endpoint);
-
+    
     // Health check to ensure API is ready
     let client = Client::new();
     let health_check_query = json!({
@@ -205,7 +192,7 @@ pub async fn start_graphql_server(
                 if response_json.get("errors").is_none() {
                     info!(
                         "🚀 GraphQL API ready at {} Playground - {}",
-                        graphql_endpoint, playground_endpoint
+                        graphql_endpoint, graphql_playground
                     );
                     break;
                 }
