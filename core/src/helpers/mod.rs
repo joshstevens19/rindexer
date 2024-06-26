@@ -8,6 +8,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::str;
 
 /// Converts a CamelCase string to snake_case.
 pub fn camel_to_snake(s: &str) -> String {
@@ -167,6 +168,31 @@ pub fn get_full_path(project_path: &Path, file_path: &str) -> PathBuf {
         let joined_path = project_path.join(file_path);
         joined_path.canonicalize().unwrap()
     }
+}
+
+pub fn kill_process_on_port(port: u16) -> Result<(), String> {
+    // Use lsof to find the process using the port
+    let output = Command::new("lsof")
+        .arg(format!("-i:{}", port))
+        .arg("-t")
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    let pids = str::from_utf8(&output.stdout)
+        .map_err(|e| e.to_string())?
+        .lines()
+        .collect::<Vec<&str>>();
+
+    for pid in pids {
+        // Kill each process using the port
+        Command::new("kill")
+            .arg("-9")
+            .arg(pid)
+            .output()
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

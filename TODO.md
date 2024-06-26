@@ -5,7 +5,6 @@ checklist v1.0:
 - do benchmarks with a few different projects
 
 bugs:
-- Fix hex string not returning properly on rindexer graphql
 - get the pooling everytime from the network rpc
 - Do not create a new postgres client each time on rust projects
 - fix last TODOs in the code

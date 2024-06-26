@@ -69,10 +69,10 @@ This is the core of rindexer, it contains all the logic for indexing and where m
 This
 is the cli for rindexer, it contains all the logic for the cli and is how users interact with rindexer.
 
-### postgraphile
+### graphql
 
-This is the postgraphile plugin for rindexer GraphQL, we package it into a binary and run it within the rindexer
-to avoid having to have node installed on the machine running it.
+This is the express project which leverages postgraphile rindexer GraphQL, we package it into a binary and run it within the rindexer
+to avoid having to have node/postgraphile installed on the machine running it.
 
 ### documentation
 
