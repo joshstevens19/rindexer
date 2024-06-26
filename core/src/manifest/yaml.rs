@@ -332,9 +332,9 @@ impl Storage {
             return true;
         }
 
-        self.postgres
-            .as_ref()
-            .map_or(false, |details| details.disable_create_tables.unwrap_or_default())
+        self.postgres.as_ref().map_or(false, |details| {
+            details.disable_create_tables.unwrap_or_default()
+        })
     }
 
     pub fn csv_enabled(&self) -> bool {
@@ -350,9 +350,9 @@ impl Storage {
             return true;
         }
 
-        self.csv
-            .as_ref()
-            .map_or(false, |details| details.disable_create_headers.unwrap_or_default())
+        self.csv.as_ref().map_or(false, |details| {
+            details.disable_create_headers.unwrap_or_default()
+        })
     }
 }
 

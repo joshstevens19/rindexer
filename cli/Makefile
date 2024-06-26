@@ -19,7 +19,7 @@ start_indexer_lens_mirrors:
 start_graphql:
 	cargo run -- start --path /Users/joshstevens/code/rindexer/examples/rindexer_demo_cli graphql
 codegen:
-	cargo run -- codegen all
+	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path /Users/joshstevens/code/rust typings
 codegen_typings:
 	cargo run -- codegen typings
 codegen_indexer:

@@ -5,15 +5,12 @@ use std::path::PathBuf;
 fn main() {
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
 
-    // Define the path to the resources directory
     let resources_dir = PathBuf::from("resources");
 
-    // Define the path to the target directory
     let target_dir = PathBuf::from(out_dir)
         .join("../../../..") // Navigate up to the top-level target directory
         .join("resources");
 
-    // Copy the resources directory
     if target_dir.exists() {
         fs::remove_dir_all(&target_dir).expect("Failed to remove old resources directory");
     }

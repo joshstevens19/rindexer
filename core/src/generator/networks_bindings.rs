@@ -19,13 +19,6 @@ pub fn network_provider_fn_name(network: &Network) -> String {
     )
 }
 
-pub fn network_provider_fn_name_by_name(network_name: &str) -> String {
-    format!(
-        "get_{fn_name}",
-        fn_name = network_provider_name_from_name(network_name).to_lowercase()
-    )
-}
-
 fn generate_network_lazy_provider_code(network: &Network) -> Code {
     Code::new(format!(
         r#"
@@ -58,6 +51,34 @@ fn generate_network_provider_code(network: &Network) -> Code {
     ))
 }
 
+fn generate_provider_cache_for_network_fn(networks: &[Network]) -> Code {
+    let mut if_code = Code::blank();
+    for network in networks {
+        let network_if = format!(
+            r#"
+            if network == "{network_name}" {{
+                return get_{network_name}_provider_cache();
+            }}
+        "#,
+            network_name = network.name
+        );
+
+        if_code.push_str(&Code::new(network_if));
+    }
+
+    if_code.push_str(&Code::new(r#"panic!("Network not supported")"#.to_string()));
+
+    let provider_cache_for_network_fn = format!(
+        r#"
+        pub fn get_provider_cache_for_network(network: &str) -> Arc<JsonRpcCachedProvider>  {{
+            {if_code}
+        }}
+    "#
+    );
+
+    Code::new(provider_cache_for_network_fn)
+}
+
 pub fn generate_networks_code(networks: &[Network]) -> Code {
     let mut output = Code::new(r#"
             /// THIS IS A GENERATED FILE. DO NOT MODIFY MANUALLY.
@@ -83,6 +104,8 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
     for network in networks {
         output.push_str(&generate_network_provider_code(network));
     }
+
+    output.push_str(&generate_provider_cache_for_network_fn(networks));
 
     output
 }

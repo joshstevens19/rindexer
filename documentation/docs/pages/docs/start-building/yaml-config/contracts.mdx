@@ -86,6 +86,12 @@ This is optional, if you do not provide a filter `address` will be required abov
 If you wish to filter based on events only for example you want all transfer events from all contracts you can use the
 filter.
 
+:::warning
+You currently cannot mix and match address and filter within the same contract definition.
+This means if you want to index on a filter and with the same contract definition index on  
+an address you will need to do 2 different contract definitions in the yaml file.
+:::
+
 ### event_name
 
 The event name to filter on, it must match the ABI event name.
