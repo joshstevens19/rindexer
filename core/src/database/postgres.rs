@@ -6,6 +6,7 @@ use ethers::abi::{LogParam, Token};
 use ethers::types::{Address, Bytes, H128, H160, H256, H512, U128, U256, U512, U64};
 use futures::pin_mut;
 use rust_decimal::Decimal;
+use std::path::Path;
 use std::{env, str};
 use tokio_postgres::binary_copy::BinaryCopyInWriter;
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type as PgType};
@@ -329,7 +330,10 @@ pub enum SetupPostgresError {
     CreateTables(CreateTablesForIndexerSqlError),
 }
 
-pub async fn setup_postgres(manifest: &Manifest) -> Result<PostgresClient, SetupPostgresError> {
+pub async fn setup_postgres(
+    project_path: &Path,
+    manifest: &Manifest,
+) -> Result<PostgresClient, SetupPostgresError> {
     info!("Setting up postgres");
     let client = PostgresClient::new()
         .await
@@ -340,7 +344,7 @@ pub async fn setup_postgres(manifest: &Manifest) -> Result<PostgresClient, Setup
         || manifest.project_type == ProjectType::NoCode
     {
         info!("Creating tables for {}", manifest.name);
-        let sql = create_tables_for_indexer_sql(&manifest.to_indexer())
+        let sql = create_tables_for_indexer_sql(project_path, &manifest.to_indexer())
             .map_err(SetupPostgresError::CreateTables)?;
         debug!("{}", sql);
         client
@@ -482,6 +486,7 @@ pub enum CreateTablesForIndexerSqlError {
 
 /// Generates SQL queries to create tables and schemas for the given indexer.
 pub fn create_tables_for_indexer_sql(
+    project_path: &Path,
     indexer: &Indexer,
 ) -> Result<Code, CreateTablesForIndexerSqlError> {
     let mut sql = "CREATE SCHEMA IF NOT EXISTS rindexer_internal;".to_string();
@@ -492,8 +497,8 @@ pub fn create_tables_for_indexer_sql(
         } else {
             contract.name.clone()
         };
-        let abi_items =
-            read_abi_items(contract).map_err(CreateTablesForIndexerSqlError::ReadAbiError)?;
+        let abi_items = read_abi_items(project_path, contract)
+            .map_err(CreateTablesForIndexerSqlError::ReadAbiError)?;
         let event_names = extract_event_names_and_signatures_from_abi(&abi_items)
             .map_err(CreateTablesForIndexerSqlError::ParamTypeError)?;
         let schema_name = indexer_contract_schema_name(&indexer.name, &contract_name);

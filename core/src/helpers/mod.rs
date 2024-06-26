@@ -6,7 +6,7 @@ use rand::Rng;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Converts a CamelCase string to snake_case.
@@ -157,6 +157,16 @@ pub fn generate_random_id(len: usize) -> String {
         .take(len)
         .map(char::from)
         .collect()
+}
+
+pub fn get_full_path(project_path: &Path, file_path: &str) -> PathBuf {
+    let path = PathBuf::from(file_path);
+    if let Ok(canonical_path) = path.canonicalize() {
+        canonical_path
+    } else {
+        let joined_path = project_path.join(file_path);
+        joined_path.canonicalize().unwrap()
+    }
 }
 
 #[cfg(test)]
