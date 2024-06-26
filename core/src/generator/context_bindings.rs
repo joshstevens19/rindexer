@@ -18,7 +18,7 @@ fn generate_contract_code(
             r#"
             abigen!({contract_name}, "{contract_path}");
 
-            pub fn get_{contract_fn_name}() -> {contract_name}<Arc<Provider<RetryClient<Http>>>> {{
+            pub fn {contract_fn_name}_contract() -> {contract_name}<Arc<Provider<RetryClient<Http>>>> {{
                 let address: Address = "{contract_address}"
                 .parse()
                 .unwrap();

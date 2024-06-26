@@ -188,8 +188,12 @@ pub fn generate_rindexer_typings(
 
             write_networks(&output, &manifest.networks)
                 .map_err(GenerateRindexerTypingsError::WriteNetworksError)?;
-            write_global(&output, &manifest.global.clone().unwrap_or_default(), &manifest.networks)
-                .map_err(GenerateRindexerTypingsError::WriteGlobalError)?;
+            write_global(
+                &output,
+                &manifest.global.clone().unwrap_or_default(),
+                &manifest.networks,
+            )
+            .map_err(GenerateRindexerTypingsError::WriteGlobalError)?;
 
             write_indexer_events(
                 project_path,

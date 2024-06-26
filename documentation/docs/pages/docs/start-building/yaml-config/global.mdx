@@ -33,15 +33,15 @@ contracts:
   details:
   - network: ethereum
     address: 0xae78736cd615f374d3085123a210448e74fc6393
-    start_block: '18900000'
-    end_block: '19000000'
+    start_block: 18900000
+    end_block: 19000000
   abi: ./abis/RocketTokenRETH.abi.json
   include_events:
-  - Transfer
-  - Approval
+    - Transfer
+    - Approval
 global: // [!code focus]
   contracts: // [!code focus]
-    - name: InjectedGlobal // [!code focus]
+    - name: USDT // [!code focus]
 ```
 
 ### details
@@ -69,17 +69,17 @@ contracts:
   details:
   - network: ethereum
     address: 0xae78736cd615f374d3085123a210448e74fc6393
-    start_block: '18900000'
-    end_block: '19000000'
+    start_block: 18900000
+    end_block: 19000000
   abi: ./abis/RocketTokenRETH.abi.json
   include_events:
-  - Transfer
-  - Approval
+    - Transfer
+    - Approval
 global:
   contracts:
-    - name: InjectedGlobal
+    - name: USDT
       details: // [!code focus]
-        - address: 0x2E645469f354BB4F5c8a05B3b30A929361cf77eC // [!code focus]
+        - address: 0xdac17f958d2ee523a2206206994597c13d831ec7 // [!code focus]
 ```
 
 #### network
@@ -103,17 +103,17 @@ contracts:
   details:
   - network: ethereum
     address: 0xae78736cd615f374d3085123a210448e74fc6393
-    start_block: '18900000'
-    end_block: '19000000'
+    start_block: 18900000
+    end_block: 19000000
   abi: ./abis/RocketTokenRETH.abi.json
   include_events:
-  - Transfer
-  - Approval
+    - Transfer
+    - Approval
 global:
   contracts:
-    - name: InjectedGlobal
+    - name: USDT
       details:
-        - address: 0x2E645469f354BB4F5c8a05B3b30A929361cf77eC
+        - address: 0xdac17f958d2ee523a2206206994597c13d831ec7
           network: ethereum // [!code focus]
 ```
 
@@ -138,54 +138,24 @@ contracts:
   details:
   - network: ethereum
     address: 0xae78736cd615f374d3085123a210448e74fc6393
-    start_block: '18900000'
-    end_block: '19000000'
+    start_block: 18900000
+    end_block: 19000000
   abi: ./abis/RocketTokenRETH.abi.json
   include_events:
-  - Transfer
-  - Approval
+    - Transfer
+    - Approval
 global:
   contracts:
-    - name: InjectedGlobal
+    - name: USDT
       details:
-        - address: 0x2E645469f354BB4F5c8a05B3b30A929361cf77eC
+        - address: 0xdac17f958d2ee523a2206206994597c13d831ec7
           network: ethereum
-      abi: ./abis/lens-registry-events-abi.json // [!code focus]
+      abi: ./abis/erc20.abi.json // [!code focus]
 ```
 
 ## Multiple Contracts
 
 ```yaml [rindexer.yaml]
-name: rETHIndexer
-description: My first rindexer project
-repository: https://github.com/joshstevens19/rindexer
-networks: // [!code focus]
-- name: ethereum // [!code focus]
-  chainId: 1 // [!code focus]
-  rpc: https://mainnet.gateway.tenderly.co // [!code focus]
-- name: base // [!code focus]
-  chainId: 8453 // [!code focus]
-  rpc: https://mainnet.base.org // [!code focus]
-storage:
-  postgres:
-   database_url: ${DATABASE_URL}
-  csv:
-    path: ./generated_csv
-indexers:
-- name: MyFirstIndexerExample
-  contracts:
-    - name: RocketPoolETH
-      details:
-      - network: ethereum
-       address: 0xae78736cd615f374d3085123a210448e74fc6393
-       startBlock: 18600000
-       endBlock: 18718056
-      abi: ./abis/RocketTokenRETH.abi.json
-      include_events:
-      - Transfer
-      - Approval
-      reorg_safe_distance: true
-      generate_csv: true
 name: rETHIndexer
 description: My first rindexer project
 repository: https://github.com/joshstevens19/rindexer
@@ -205,19 +175,19 @@ contracts:
   details:
   - network: ethereum
     address: 0xae78736cd615f374d3085123a210448e74fc6393
-    start_block: '18900000'
-    end_block: '19000000'
+    start_block: 18900000
+    end_block: 19000000
   abi: ./abis/RocketTokenRETH.abi.json
   include_events:
-  - Transfer
-  - Approval
+    - Transfer
+    - Approval
 global: // [!code focus]
   contracts: // [!code focus]
-    - name: InjectedGlobal // [!code focus]
+    - name: USDT // [!code focus]
       details: // [!code focus]
-        - address: 0x2E645469f354BB4F5c8a05B3b30A929361cf77eC // [!code focus]
+        - address: 0xdac17f958d2ee523a2206206994597c13d831ec7 // [!code focus]
           network: ethereum // [!code focus]
-        - address: 0x1C312392f354BB4F5c8a05B3b30A929361cf66cG // [!code focus]
+        - address: 0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2 // [!code focus]
           network: base // [!code focus]
-      abi: ./abis/lens-registry-events-abi.json // [!code focus]
+      abi: ./abis/erc20.abi.json // [!code focus]
 ```

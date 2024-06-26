@@ -49,7 +49,7 @@ contracts:
     end_block: 19000000
   abi: ./abis/RocketTokenRETH.abi.json
   include_events:
-  - Transfer
+    - Transfer
 ```
 
 This would generate you a `rocket_pool_eth.rs` file in the indexers folder, this file will have a handler function,
@@ -342,10 +342,193 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
     RocketPoolETHEventType::Transfer(
         TransferEvent::handler(
             |results, context| async move {
-                let response = context.extensions.client.get("https://example.com").unwrap(); // [!code focus]
-                println!("{}", response); // [!code focus]
+                let response = context.extensions.client.get("https://example.com"); // [!code focus]
+                match response { // [!code focus]
+                    Ok(response) => println!("{}", response), // [!code focus]
+                    Err(e) => println!("Error: {:?}", e), // [!code focus]
+                } // [!code focus]
             },
             HttpClient::new(), // [!code focus]
+        )
+        .await,
+    )
+    .register(registry);
+}
+```
+
+## Network providers
+
+You get exposed to all the network thread safe json rpc providers you have defined in the network YAML configuration file, this
+allows you to do on chain lookups at indexing time.
+
+This is exposed in the `typings` folder. The naming for the provider function is the network name defined in your
+YAML configuration file in snake case with `get_` prefixed to it and `_provider` appended to it.
+
+```yaml
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: rust
+networks:
+- name: ethereum // [!code focus]
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: 0xae78736cd615f374d3085123a210448e74fc6393
+    start_block: 18900000
+    end_block: 19000000
+  abi: ./abis/RocketTokenRETH.abi.json
+  include_events:
+    - Transfer
+```
+
+for example with network `ethereum` the provider function would be `get_ethereum_provider`.
+
+```rs
+use crate::rindexer::typings::networks::get_ethereum_provider;// [!code focus]
+
+async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+    RocketPoolETHEventType::Transfer(
+        TransferEvent::handler(
+            |results, context| async move {
+                let provider = get_ethereum_provider(); // [!code focus]
+                let chain_id = provider.get_chainid().await; // [!code focus]
+                match chain_id { // [!code focus]
+                    Ok(result) => {println!("Chain id: {:?}", result)} // [!code focus]
+                    Err(e) => {println!("Error getting chain id: {:?}", e)} // [!code focus]
+                } // [!code focus]
+            },
+            no_extensions(),
+        )
+        .await,
+    )
+    .register(registry);
+}
+```
+
+:::info
+You can also pass in the provider to the extensions if you wish to use it in the handler using the context struct.
+:::
+
+
+## External Contract calls
+
+You can also make contract calls within the handler, this is useful if you want to get the current state of a contract.
+You get exposed to the contract for the event you are indexing on but you can also use the [global](docs/start-building/yaml-config/global) YAML
+to define other contracts you want to use.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: rust
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: 0xae78736cd615f374d3085123a210448e74fc6393
+    start_block: 18900000
+    end_block: 19000000
+  abi: ./abis/RocketTokenRETH.abi.json
+  include_events:
+    - Transfer
+    - Approval
+global: // [!code focus]
+  contracts: // [!code focus]
+    - name: USDT // [!code focus]
+      details: // [!code focus]
+        - address: 0xdac17f958d2ee523a2206206994597c13d831ec7 // [!code focus]
+          network: ethereum // [!code focus]
+      abi: ./abis/erc20.abi.json // [!code focus]
+```
+
+### Global contract calls
+
+It as easy as importing the contract and calling the function you want. The naming convention for the contract is the contract name defined in your
+YAML configuration file in snake case with `_contract` appended to it.
+
+```yaml
+...
+global: // [!code focus]
+  contracts:
+    - name: USDT // [!code focus]
+      details:
+        - address: 0xdac17f958d2ee523a2206206994597c13d831ec7
+          network: ethereum
+      abi: ./abis/erc20.abi.json
+```
+
+```rs
+use crate::rindexer::typings::global_contracts::usdt_contract; // [!code focus]
+
+async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+    RocketPoolETHEventType::Transfer(
+        TransferEvent::handler(
+            |results, context| async move {
+                let usdt = usdt_contract(); // [!code focus]
+                let name = usdt.name().await; // [!code focus]
+                match name { // [!code focus]
+                    Ok(result) => {println!("USDT name: {:?}", name)} // [!code focus]
+                    Err(e) => {println!("Error getting USDT name: {:?}", e)} // [!code focus]
+                } // [!code focus]
+            },
+            no_extensions(),
+        )
+        .await,
+    )
+    .register(registry);
+}
+```
+
+### Contract calls
+
+Each event to index is defined in a contract within the YAML configuration file, you can also make calls to this contract
+within the handler. The naming convention for the contract is the contract name defined in your YAML configuration file
+in snake case with `_contract` appended to it.
+
+```yaml
+contracts:
+- name: RocketPoolETH // [!code focus]
+  details:
+  - network: ethereum
+    address: 0xae78736cd615f374d3085123a210448e74fc6393
+    start_block: 18900000
+    end_block: 19000000
+  abi: ./abis/RocketTokenRETH.abi.json
+  include_events:
+    - Transfer // [!code focus]
+    - Approval
+```
+
+```rs
+use crate::rindexer::typings::rust::events::rocket_pool_eth::rocket_pool_eth_contract; // [!code focus]
+
+async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+    RocketPoolETHEventType::Transfer(
+        TransferEvent::handler(
+            |results, context| async move {
+                // have to pass in network name here // [!code focus]
+                let rocket_pool_eth = rocket_pool_eth_contract("ethereum"); // [!code focus]
+                let name = rocket_pool_eth.name().await; // [!code focus]
+                match name { // [!code focus]
+                    Ok(result) => {println!("rETH name: {:?}", name)} // [!code focus]
+                    Err(e) => {println!("Error getting rETH name: {:?}", e)} // [!code focus]
+                } // [!code focus]
+            },
+            no_extensions(),
         )
         .await,
     )
@@ -643,6 +826,11 @@ async fn main() {
 
 To run with the boilerplate code generated for you, you can run the following command:
 
+:::info
+You are creating a rust rindexer project you should be wanting to change all of this logic to suit your needs.
+Just like react create app exposes you to the boilerplate code to get you started, this is the same.
+:::
+
 :::code-group
 
 ```bash [everything]
@@ -659,4 +847,8 @@ cargo run -- --graphql
 
 :::
 
-Note if you are creating a rust rindexer project you should be wanting to change all of this logic to suit your needs.
+## Managing changes when generating typings
+
+When you start changing your YAML configuration file and regen your typings the indexer functions may break or need editing
+to match the new typings. You can regenerate the indexers folder but this will overwrite any changes you did.
+Luckily the rust compiler is very good at telling you what you need to change.

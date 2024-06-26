@@ -16,8 +16,6 @@ use crate::helpers::camel_to_snake;
 use crate::manifest::yaml::{Contract, ContractDetails, CsvDetails, DependencyEventTree, Storage};
 use crate::types::code::Code;
 
-use super::networks_bindings::network_provider_fn_name_by_name;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ABIItem {
     #[serde(default)]
@@ -38,7 +36,6 @@ pub enum ReadAbiError {
 }
 
 pub fn read_abi_items(contract: &Contract) -> Result<Vec<ABIItem>, ReadAbiError> {
-    // Read the ABI JSON string from the file
     let abi_str = fs::read_to_string(&contract.abi).map_err(ReadAbiError::CouldNotReadAbiString)?;
     // Deserialize the JSON string to a vector of ABI items
     let abi_items: Vec<ABIItem> =
@@ -738,41 +735,15 @@ fn generate_event_callback_structs_code(
     Ok(Code::new(parts.join("\n")))
 }
 
-fn build_get_provider_fn(networks: Vec<String>) -> Code {
-    let mut function = String::new();
-    function.push_str("fn get_provider(&self, network: &str) -> Arc<JsonRpcCachedProvider> {\n");
-
-    // Iterate through the networks and generate conditional branches
-    for (index, network) in networks.iter().enumerate() {
-        if index > 0 {
-            function.push_str(" else ");
-        }
-
-        function.push_str(&format!(
-            r#"
-            if network == "{network}" {{
-                super::super::super::networks::{network_provider_fn_name}_cache()
-            }}"#,
-            network = network,
-            network_provider_fn_name = network_provider_fn_name_by_name(network)
-        ));
-    }
-
-    function.push_str(
-        r#"
-        else {
-            panic!("Network not supported")
-        }
-    }"#,
-    );
-
-    Code::new(function)
-}
-
-fn build_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &str) -> Code {
+fn build_pub_contract_fn(
+    contract_name: &str,
+    contracts_details: Vec<&ContractDetails>,
+    abi_gen_name: &str,
+) -> Code {
+    let contract_name = camel_to_snake(contract_name);
     let mut function = String::new();
     function.push_str(&format!(
-        r#"fn contract(&self, network: &str) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> {{"#,
+        r#"pub fn {contract_name}_contract(network: &str) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> {{"#,
         abi_gen_name = abi_gen_name
     ));
 
@@ -797,7 +768,10 @@ fn build_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &st
                 let address: Address = "{address}"
                     .parse()
                     .unwrap();
-                {abi_gen_name}::new(address, Arc::new(self.get_provider(network).get_inner_provider().clone()))
+                {abi_gen_name}::new(
+                    address,
+                    Arc::new(get_provider_cache_for_network(network).get_inner_provider()),
+                 )
             }}"#,
             network = contract_detail.network,
             address = address,
@@ -815,6 +789,18 @@ fn build_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &st
     );
 
     Code::new(function)
+}
+
+fn build_self_contract_fn(contract_name: &str, abi_gen_name: &str) -> Code {
+    let contract_name = camel_to_snake(contract_name);
+
+    Code::new(format!(
+        r#"pub fn contract(&self, network: &str) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> 
+        {{
+            {contract_name}_contract(network)
+        }}"#,
+        abi_gen_name = abi_gen_name
+    ))
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -863,6 +849,7 @@ fn generate_event_bindings_code(
             {client_import}
             provider::JsonRpcCachedProvider
         }};
+        use super::super::super::super::typings::networks::get_provider_cache_for_network;
 
         {structs}
 
@@ -891,6 +878,8 @@ fn generate_event_bindings_code(
         pub enum {event_type_name}<TExtensions> where TExtensions: 'static + Send + Sync {{
             {event_enums}
         }}
+        
+        {build_pub_contract_fn}
 
         impl<TExtensions> {event_type_name}<TExtensions> where TExtensions: 'static + Send + Sync {{
             pub fn topic_id(&self) -> &'static str {{
@@ -913,9 +902,11 @@ fn generate_event_bindings_code(
 
             {contract_type_fn}
 
-            {build_get_provider_fn}
+            fn get_provider(&self, network: &str) -> Arc<JsonRpcCachedProvider> {{
+                get_provider_cache_for_network(network)
+            }}
 
-            {build_contract_fn}
+            {build_self_contract_fn}
 
             fn decoder(&self, network: &str) -> Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync> {{
                 let contract = self.contract(network);
@@ -994,12 +985,13 @@ fn generate_event_bindings_code(
             &contract.index_event_in_order
         ),
         contract_type_fn = generate_contract_type_fn_code(contract),
-        build_get_provider_fn =
-            build_get_provider_fn(contract.details.iter().map(|c| c.network.clone()).collect()),
-        build_contract_fn = build_contract_fn(
+        build_pub_contract_fn = build_pub_contract_fn(
+            &contract.name,
             contract.details.iter().collect(),
             &abigen_contract_name(contract)
         ),
+        build_self_contract_fn =
+            build_self_contract_fn(&contract.name, &abigen_contract_name(contract)),
         decoder_match_arms = generate_decoder_match_arms_code(&event_type_name, &event_info),
         register_match_arms = generate_register_match_arms_code(&event_type_name, &event_info)
     ));
