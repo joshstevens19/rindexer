@@ -791,7 +791,7 @@ fn map_log_token_to_ethereum_wrapper(token: &Token) -> EthereumSqlTypeWrapper {
                     unreachable!("Nested arrays are not supported by the EVM")
                 }
                 Token::Tuple(_) => {
-                    // TODO!
+                    // TODO
                     panic!("Array tuple not supported yet - please raise issue in github with ABI to recreate and we will fix")
                 }
             }

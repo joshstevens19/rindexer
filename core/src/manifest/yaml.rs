@@ -140,7 +140,7 @@ pub struct ContractDetails {
     )]
     pub end_block: Option<U64>,
 
-    // TODO! check if required
+    // TODO check if required
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub polling_every: Option<u64>,
 }
@@ -282,10 +282,6 @@ pub struct Network {
     pub chain_id: u32,
 
     pub rpc: String,
-
-    // TODO REVIEW IF NEED IT
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_block_range: Option<u64>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compute_units_per_second: Option<u64>,

@@ -340,7 +340,6 @@ fn handle_new_command(
             name: "ethereum".to_string(),
             chain_id: 1,
             rpc: "https://mainnet.gateway.tenderly.co".to_string(),
-            max_block_range: None,
             compute_units_per_second: None,
         }],
         contracts: vec![Contract {

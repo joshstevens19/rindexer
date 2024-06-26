@@ -6,8 +6,9 @@ checklist v1.0:
 
 bugs:
 - Relative paths for ABI in yaml not working
-- Do not create a new postgres client each time on rust projects
 - Fix hex string not returning properly on rindexer graphql
+- get the pooling everytime from the network rpc
+- Do not create a new postgres client each time on rust projects
 - fix last TODOs in the code
 - graphql is blocking indexer starting up so making indexing slower
 - fix the environment variables for RPC urls 
