@@ -357,7 +357,6 @@ fn generate_contract_type_fn_code(contract: &Contract) -> Code {
             Some(end_block) => format!("Some({}.into())", end_block.as_u64()),
             None => "None".to_string(),
         };
-        let polling_every = detail.polling_every.unwrap_or(1000);
 
         let item = match detail.indexing_contract_setup() {
             IndexingContractSetup::Address(address) => format!(
@@ -367,14 +366,12 @@ fn generate_contract_type_fn_code(contract: &Contract) -> Code {
                     "{address}".to_string(),
                     {start_block},
                     {end_block},
-                    Some({polling_every}),
                 ),
                 "#,
                 network = detail.network,
                 address = address,
                 start_block = start_block,
                 end_block = end_block,
-                polling_every = polling_every
             ),
             IndexingContractSetup::Filter(filter) => {
                 let indexed_1 = generate_indexed_vec_string(&filter.indexed_1);
@@ -393,7 +390,6 @@ fn generate_contract_type_fn_code(contract: &Contract) -> Code {
                         }},
                         {start_block},
                         {end_block},
-                        Some({polling_every}),
                     ),
                     "#,
                     network = detail.network,
@@ -403,7 +399,6 @@ fn generate_contract_type_fn_code(contract: &Contract) -> Code {
                     indexed_3 = indexed_3,
                     start_block = start_block,
                     end_block = end_block,
-                    polling_every = polling_every
                 )
             }
             IndexingContractSetup::Factory(factory) => format!(
@@ -418,7 +413,6 @@ fn generate_contract_type_fn_code(contract: &Contract) -> Code {
                     }},
                     {start_block},
                     {end_block},
-                    Some({polling_every}),
                 ),
                 "#,
                 network = detail.network,
@@ -428,7 +422,6 @@ fn generate_contract_type_fn_code(contract: &Contract) -> Code {
                 abi = factory.abi,
                 start_block = start_block,
                 end_block = end_block,
-                polling_every = polling_every
             ),
         };
 
@@ -943,7 +936,6 @@ fn generate_event_bindings_code(
                             indexing_contract_setup: c.indexing_contract_setup(),
                             start_block: c.start_block,
                             end_block: c.end_block,
-                            polling_every: c.polling_every,
                         }})
                         .collect(),
                     abi: contract_information.abi,

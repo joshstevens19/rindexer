@@ -482,7 +482,6 @@ fn create_contract_information(
                     indexing_contract_setup: c.indexing_contract_setup(),
                     start_block: c.start_block,
                     end_block: c.end_block,
-                    polling_every: c.polling_every,
                 });
             }
         }

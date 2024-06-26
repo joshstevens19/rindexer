@@ -205,7 +205,6 @@ where
                 },
                 Some(56399431.into()),
                 None,
-                Some(1000),
             )],
             abi: "/Users/joshstevens/code/rindexer/rindexer_demo/abis/erc20-abi.json".to_string(),
             include_events: None,
@@ -272,7 +271,6 @@ where
                     indexing_contract_setup: c.indexing_contract_setup(),
                     start_block: c.start_block,
                     end_block: c.end_block,
-                    polling_every: c.polling_every,
                 })
                 .collect(),
             abi: contract_information.abi,

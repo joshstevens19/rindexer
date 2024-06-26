@@ -174,7 +174,6 @@ where
                 "0xD4F2F33680FCCb36748FA9831851643781608844".to_string(),
                 Some(56399431.into()),
                 Some(56399432.into()),
-                Some(1000),
             )],
             abi:
                 "/Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json"
@@ -244,7 +243,6 @@ where
                     indexing_contract_setup: c.indexing_contract_setup(),
                     start_block: c.start_block,
                     end_block: c.end_block,
-                    polling_every: c.polling_every,
                 })
                 .collect(),
             abi: contract_information.abi,
