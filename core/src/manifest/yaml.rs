@@ -139,10 +139,6 @@ pub struct ContractDetails {
         serialize_with = "serialize_option_u64_as_string"
     )]
     pub end_block: Option<U64>,
-
-    // TODO check if required
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub polling_every: Option<u64>,
 }
 
 impl ContractDetails {
@@ -173,7 +169,6 @@ impl ContractDetails {
         address: String,
         start_block: Option<U64>,
         end_block: Option<U64>,
-        polling_every: Option<u64>,
     ) -> Self {
         Self {
             network,
@@ -182,7 +177,6 @@ impl ContractDetails {
             factory: None,
             start_block,
             end_block,
-            polling_every,
         }
     }
 
@@ -191,7 +185,6 @@ impl ContractDetails {
         filter: FilterDetails,
         start_block: Option<U64>,
         end_block: Option<U64>,
-        polling_every: Option<u64>,
     ) -> Self {
         Self {
             network,
@@ -200,7 +193,6 @@ impl ContractDetails {
             factory: None,
             start_block,
             end_block,
-            polling_every,
         }
     }
 
@@ -209,7 +201,6 @@ impl ContractDetails {
         factory: FactoryDetails,
         start_block: Option<U64>,
         end_block: Option<U64>,
-        polling_every: Option<u64>,
     ) -> Self {
         Self {
             network,
@@ -218,7 +209,6 @@ impl ContractDetails {
             factory: Some(factory),
             start_block,
             end_block,
-            polling_every,
         }
     }
 }
@@ -441,7 +431,6 @@ mod tests {
             factory: None,
             start_block: None,
             end_block: None,
-            polling_every: None,
         };
 
         assert_eq!(contract_details.address(), Some("0x123"));
@@ -460,7 +449,6 @@ mod tests {
             factory: Some(factory_details),
             start_block: None,
             end_block: None,
-            polling_every: None,
         };
 
         assert_eq!(contract_details.address(), Some("0xabc"));
@@ -482,7 +470,6 @@ mod tests {
             factory: None,
             start_block: None,
             end_block: None,
-            polling_every: None,
         };
 
         match contract_details.indexing_contract_setup() {

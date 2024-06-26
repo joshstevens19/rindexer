@@ -5,9 +5,7 @@ checklist v1.0:
 - do benchmarks with a few different projects
 
 bugs:
-- get the pooling everytime from the network rpc
 - Do not create a new postgres client each time on rust projects
-- fix last TODOs in the code
 - graphql is blocking indexer starting up so making indexing slower
 - fix the environment variables for RPC urls 
 

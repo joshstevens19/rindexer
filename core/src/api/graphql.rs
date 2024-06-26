@@ -125,9 +125,9 @@ pub async fn start_graphql_server(
             "rindexer-graphql executable not found".to_string(),
         ));
     }
-    
-     // kill any existing process on the port
-     kill_process_on_port(port.parse().unwrap())
+
+    // kill any existing process on the port
+    kill_process_on_port(port.parse().unwrap())
         .map_err(StartGraphqlServerError::GraphQLServerStartupError)?;
 
     let child = Command::new(rindexer_graphql_exe)
@@ -142,7 +142,7 @@ pub async fn start_graphql_server(
         .stderr(Stdio::null())
         .spawn()
         .map_err(|e| StartGraphqlServerError::GraphQLServerStartupError(e.to_string()))?;
-    
+
     let pid = child.id();
     let child_arc = Arc::new(Mutex::new(child));
 
@@ -173,7 +173,7 @@ pub async fn start_graphql_server(
             }
         }
     });
-    
+
     // Health check to ensure API is ready
     let client = Client::new();
     let health_check_query = json!({

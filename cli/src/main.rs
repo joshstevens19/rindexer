@@ -349,7 +349,6 @@ fn handle_new_command(
                 "0xae78736cd615f374d3085123a210448e74fc6393".to_string(),
                 Some(U64::from(18900000)),
                 Some(U64::from(19000000)),
-                None,
             )],
             abi: abi_example_path.display().to_string(),
             include_events: Some(vec!["Transfer".to_string(), "Approval".to_string()]),
