@@ -69,6 +69,7 @@ case "$1" in
 
         "
         echo "Preparing the installation..."
+        mkdir -p "$RINDEXER_BIN_DIR"
         curl -sSf -L "$BIN_URL" -o "$BIN_PATH"
         mkdir -p "$RINDEXER_DIR/resources"
         curl -sSf -L "$RESOURCES_URL" -o "$RINDEXER_DIR/resources.zip" & spinner
