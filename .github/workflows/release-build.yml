@@ -87,6 +87,12 @@ jobs:
             cargo build --target "$target" "${flags[@]}"
           fi
 
+      - name: List target directory contents for debugging
+        working-directory: cli
+        run: |
+          echo "Listing contents of target directory:"
+          ls -R ../target
+
       - name: Archive binaries
         working-directory: cli
         id: artifacts
