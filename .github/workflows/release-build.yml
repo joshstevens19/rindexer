@@ -12,10 +12,10 @@ jobs:
     strategy:
       matrix:
         target: [
-          x86_64-unknown-linux-gnu,
-          x86_64-unknown-linux-musl,
-          x86_64-pc-windows-gnu,
-          x86_64-pc-windows-msvc,
+          #x86_64-unknown-linux-gnu,
+          #x86_64-unknown-linux-musl,
+          #x86_64-pc-windows-gnu,
+          #x86_64-pc-windows-msvc,
           x86_64-apple-darwin
         ]
 
@@ -52,6 +52,10 @@ jobs:
       - name: Install macOS target
         if: matrix.target == 'x86_64-apple-darwin'
         run: rustup target add x86_64-apple-darwin
+
+      - name: Install MSVC target
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: rustup target add x86_64-pc-windows-msvc
 
       - name: Build with cross for non-macOS targets
         if: matrix.target != 'x86_64-apple-darwin'
