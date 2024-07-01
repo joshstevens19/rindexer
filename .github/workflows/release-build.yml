@@ -45,6 +45,9 @@ jobs:
           key: ${{ matrix.target }}
           cache-on-failure: true
 
+      - name: Rename cargo.toml to Cargo.toml
+        run: mv cli/cargo.toml cli/Cargo.toml
+
       - name: Apple M1 setup
         if: matrix.target == 'aarch64-apple-darwin'
         run: |
@@ -81,6 +84,7 @@ jobs:
           cargo build --release --target "$target" "${flags[@]}"
 
       - name: Archive binaries
+        working-directory: cli
         id: artifacts
         env:
           PLATFORM_NAME: ${{ matrix.platform }}
@@ -93,15 +97,15 @@ jobs:
           mkdir -p "$RELEASE_DIR/$VERSION_NAME"
 
           if [ "$PLATFORM_NAME" == "linux" ]; then
-            tar -czvf "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.tar.gz" -C ./target/${TARGET}/release .
-            cp ./target/${TARGET}/release/* "$RELEASE_DIR/$VERSION_NAME/"
+            tar -czvf "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.tar.gz" -C "../../target/${TARGET}/release" .
+            cp ../../target/${TARGET}/release/* "$RELEASE_DIR/$VERSION_NAME/"
             echo "file_name=${PLATFORM_NAME}_${ARCH}.tar.gz" >> $GITHUB_OUTPUT
           elif [ "$PLATFORM_NAME" == "darwin" ]; then
-            tar -czvf "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.tar.gz" -C ./target/${TARGET}/release .
-            cp ./target/${TARGET}/release/* "$RELEASE_DIR/$VERSION_NAME/"
+            tar -czvf "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.tar.gz" -C "../../target/${TARGET}/release" .
+            cp ../../target/${TARGET}/release/* "$RELEASE_DIR/$VERSION_NAME/"
             echo "file_name=${PLATFORM_NAME}_${ARCH}.tar.gz" >> $GITHUB_OUTPUT
           else
-            cd ./target/${TARGET}/release
+            cd ../../target/${TARGET}/release
             7z a -tzip "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.zip" *
             cp * "$RELEASE_DIR/$VERSION_NAME/"
             echo "file_name=${PLATFORM_NAME}_${ARCH}.zip" >> $GITHUB_OUTPUT
@@ -116,3 +120,21 @@ jobs:
           files: ${{ steps.artifacts.outputs.file_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit and push changes
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+          git add documentation/docs/public/releases
+          git commit -m "Add binaries for ${{ github.ref_name }}"
+          git push origin HEAD:refs/heads/release/${{ github.ref_name }}
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "Add binaries for ${{ github.ref_name }}"
+          branch: release/${{ github.ref_name }}
+          base: master
+          title: "Release ${{ github.ref_name }}"
+          body: "This PR merges the release binaries for ${{ github.ref_name }} into master and triggers a deploy."
