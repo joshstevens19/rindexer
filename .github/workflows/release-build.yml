@@ -86,13 +86,23 @@ jobs:
           else
             cargo build --target "$target" "${flags[@]}"
           fi
+          
+      - name: List current directory contents for debugging
+        run: |
+          echo "Listing contents of current directory:"
+          ls -R .
+
+      - name: List home directory contents for debugging 2
+        run: |
+          echo "Listing contents of home directory:"
+          ls -R /home/runner
 
       - name: List target directory contents for debugging
         working-directory: cli
         run: |
           echo "Listing contents of target directory:"
           ls -R ../target
-
+          
       - name: Archive binaries
         working-directory: cli
         id: artifacts
