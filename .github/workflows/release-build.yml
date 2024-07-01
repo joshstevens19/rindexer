@@ -11,8 +11,13 @@ jobs:
 
     strategy:
       matrix:
-        # target: [x86_64-unknown-linux-gnu, x86_64-pc-windows-gnu, x86_64-apple-darwin]
-        target: [x86_64-unknown-linux-gnu, x86_64-apple-darwin]
+        target: [
+          x86_64-unknown-linux-gnu,
+          x86_64-unknown-linux-musl,
+          x86_64-pc-windows-gnu,
+          x86_64-pc-windows-msvc,
+          x86_64-apple-darwin
+        ]
 
     steps:
       - name: Checkout repository
@@ -44,17 +49,29 @@ jobs:
       - name: Install cross
         run: cargo install cross
 
-      - name: Build with cross
+      - name: Install macOS target
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: rustup target add x86_64-apple-darwin
+
+      - name: Build with cross for non-macOS targets
+        if: matrix.target != 'x86_64-apple-darwin'
         working-directory: cli
         env:
           RUSTFLAGS: '-C target-cpu=native'
         run: cross build --release --target ${{ matrix.target }} --features jemalloc
 
+      - name: Build with cargo for macOS target
+        if: matrix.target == 'x86_64-apple-darwin'
+        working-directory: cli
+        env:
+          RUSTFLAGS: '-C target-cpu=native'
+        run: cargo build --release --target ${{ matrix.target }} --features jemalloc
+
       - name: Create release directory
         run: mkdir -p ${{ github.workspace }}/release/${{ matrix.target }}
 
       - name: Copy binary to release directory
-        run: cp target/${{ matrix.target }}/release/* ${{ github.workspace }}/release/${{ matrix.target }}/
+        run: cp cli/target/${{ matrix.target }}/release/* ${{ github.workspace }}/release/${{ matrix.target }}/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v2
@@ -78,8 +95,20 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v2
         with:
+          name: x86_64-unknown-linux-musl
+          path: ./release/x86_64-unknown-linux-musl
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v2
+        with:
           name: x86_64-pc-windows-gnu
           path: ./release/x86_64-pc-windows-gnu
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v2
+        with:
+          name: x86_64-pc-windows-msvc
+          path: ./release/x86_64-pc-windows-msvc
 
       - name: Download artifacts
         uses: actions/download-artifact@v2
@@ -98,11 +127,15 @@ jobs:
           rm -rf $TARGET_DIR/$PROJECT_NAME/$VERSION
           mkdir -p $TARGET_DIR/$PROJECT_NAME
           mkdir -p $TARGET_DIR/$PROJECT_NAME/$VERSION
-          cp ./release/x86_64-unknown-linux-gnu/* $TARGET_DIR/${PROJECT_NAME}_linux_latest
-          cp ./release/x86_64-pc-windows-gnu/* $TARGET_DIR/${PROJECT_NAME}_windows_latest.exe
+          cp ./release/x86_64-unknown-linux-gnu/* $TARGET_DIR/${PROJECT_NAME}_linux_gnu_latest
+          cp ./release/x86_64-unknown-linux-musl/* $TARGET_DIR/${PROJECT_NAME}_linux_musl_latest
+          cp ./release/x86_64-pc-windows-gnu/* $TARGET_DIR/${PROJECT_NAME}_windows_gnu_latest.exe
+          cp ./release/x86_64-pc-windows-msvc/* $TARGET_DIR/${PROJECT_NAME}_windows_msvc_latest.exe
           cp ./release/x86_64-apple-darwin/* $TARGET_DIR/${PROJECT_NAME}_macos_latest
-          cp ./release/x86_64-unknown-linux-gnu/* $TARGET_DIR/$PROJECT_NAME/$VERSION/${PROJECT_NAME}_linux
-          cp ./release/x86_64-pc-windows-gnu/* $TARGET_DIR/$PROJECT_NAME/$VERSION/${PROJECT_NAME}_windows.exe
+          cp ./release/x86_64-unknown-linux-gnu/* $TARGET_DIR/$PROJECT_NAME/$VERSION/${PROJECT_NAME}_linux_gnu
+          cp ./release/x86_64-unknown-linux-musl/* $TARGET_DIR/$PROJECT_NAME/$VERSION/${PROJECT_NAME}_linux_musl
+          cp ./release/x86_64-pc-windows-gnu/* $TARGET_DIR/$PROJECT_NAME/$VERSION/${PROJECT_NAME}_windows_gnu.exe
+          cp ./release/x86_64-pc-windows-msvc/* $TARGET_DIR/$PROJECT_NAME/$VERSION/${PROJECT_NAME}_windows_msvc.exe
           cp ./release/x86_64-apple-darwin/* $TARGET_DIR/$PROJECT_NAME/$VERSION/${PROJECT_NAME}_macos
 
       - name: Commit and push changes
