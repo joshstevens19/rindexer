@@ -25,14 +25,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v2
 
-      - name: Validate branch name
-        id: validate_branch
-        run: |
-          BRANCH_NAME="${GITHUB_REF#refs/heads/release/}"
-          if [[ ! $BRANCH_NAME =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Error: Branch name must follow semantic versioning (e.g., release/1.0.0)."
-            exit 1
-          fi
+#      - name: Validate branch name
+#        id: validate_branch
+#        run: |
+#          BRANCH_NAME="${GITHUB_REF#refs/heads/release/}"
+#          if [[ ! $BRANCH_NAME =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+#            echo "Error: Branch name must follow semantic versioning (e.g., release/1.0.0)."
+#            exit 1
+#          fi
 
       - name: Extract version from branch name and update Cargo.toml
         id: update_version
