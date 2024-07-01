@@ -77,8 +77,10 @@ jobs:
           fi
 
           [[ "$target" == *windows* ]] && exe=".exe"
-
-          cargo build --release --target "$target" "${flags[@]}"
+          
+          #cargo build --release --target "$target" "${flags[@]}"
+          
+          cargo build --target "$target"
 
       - name: Archive binaries
         working-directory: cli
@@ -95,14 +97,14 @@ jobs:
 
           if [ "$PLATFORM_NAME" == "linux" ]; then
             tar -czvf "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.tar.gz" -C "../../target/${TARGET}/release" .
-            cp ../../target/${TARGET}/release/* "$RELEASE_DIR/$VERSION_NAME/"
+            cp ../target/${TARGET}/release/* "$RELEASE_DIR/$VERSION_NAME/"
             echo "file_name=${PLATFORM_NAME}_${ARCH}.tar.gz" >> $GITHUB_OUTPUT
           elif [ "$PLATFORM_NAME" == "darwin" ]; then
             tar -czvf "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.tar.gz" -C "../../target/${TARGET}/release" .
-            cp ../../target/${TARGET}/release/* "$RELEASE_DIR/$VERSION_NAME/"
+            cp ../target/${TARGET}/release/* "$RELEASE_DIR/$VERSION_NAME/"
             echo "file_name=${PLATFORM_NAME}_${ARCH}.tar.gz" >> $GITHUB_OUTPUT
           else
-            cd ../../target/${TARGET}/release
+            cd ../target/${TARGET}/release
             7z a -tzip "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.zip" *
             cp * "$RELEASE_DIR/$VERSION_NAME/"
             echo "file_name=${PLATFORM_NAME}_${ARCH}.zip" >> $GITHUB_OUTPUT
