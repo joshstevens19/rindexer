@@ -7,156 +7,111 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-
+    name: ${{ matrix.target }} (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 240
     strategy:
+      fail-fast: false
       matrix:
-        target: [
-          #x86_64-unknown-linux-gnu,
-          #x86_64-unknown-linux-musl,
-          #x86_64-pc-windows-gnu,
-          #x86_64-pc-windows-msvc,
-          x86_64-apple-darwin
-        ]
+        include:
+#          - runner: ubuntu-latest
+#            target: x86_64-unknown-linux-gnu
+#            platform: linux
+#            arch: amd64
+#          - runner: ubuntu-latest
+#            target: aarch64-unknown-linux-gnu
+#            platform: linux
+#            arch: arm64
+#          - runner: macos-12
+#            target: x86_64-apple-darwin
+#            platform: darwin
+#            arch: amd64
+          - runner: macos-12
+            target: aarch64-apple-darwin
+            platform: darwin
+            arch: arm64
+#          - runner: windows-latest
+#            target: x86_64-pc-windows-msvc
+#            platform: win32
+#            arch: amd64
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v2
-
-      - name: Validate branch name
-        run: |
-          BRANCH_NAME="${GITHUB_REF#refs/heads/release/}"
-          if [[ ! "$BRANCH_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Error: Branch name must follow semantic versioning (e.g., release/1.0.0)."
-            exit 1
-          fi
-
-      - name: Extract version from branch name and update Cargo.toml
-        run: |
-          VERSION="${GITHUB_REF#refs/heads/release/}"
-          cd cli
-          PROJECT_NAME=$(awk -F'=' '/^name/ {gsub(/"/, "", $2); print $2}' Cargo.toml | tr -d ' ')
-          sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
-          echo "PROJECT_NAME=$PROJECT_NAME" >> $GITHUB_ENV
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-
-      - name: Install Rust
-        uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v2
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          override: true
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+          cache-on-failure: true
 
-      - name: Install cross
-        run: cargo install cross
+      - name: Apple M1 setup
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: |
+          echo "SDKROOT=$(xcrun -sdk macosx --show-sdk-path)" >> $GITHUB_ENV
+          echo "MACOSX_DEPLOYMENT_TARGET=$(xcrun -sdk macosx --show-sdk-platform-version)" >> $GITHUB_ENV
 
-      - name: Install macOS target
-        if: matrix.target == 'x86_64-apple-darwin'
-        run: rustup target add x86_64-apple-darwin
+      - name: Linux ARM setup
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
 
       - name: Install MSVC target
         if: matrix.target == 'x86_64-pc-windows-msvc'
         run: rustup target add x86_64-pc-windows-msvc
 
-      - name: Build with cross for non-macOS targets
-        if: matrix.target != 'x86_64-apple-darwin'
-        working-directory: cli
+      - name: Build binaries
         env:
           RUSTFLAGS: '-C target-cpu=native'
-        run: cross build --release --target ${{ matrix.target }} --features jemalloc
+        shell: bash
+        run: |
+          set -eo pipefail
+          target="${{ matrix.target }}"
+          flags=()
 
-      - name: Build with cargo for macOS target
-        if: matrix.target == 'x86_64-apple-darwin'
-        working-directory: cli
+          if [[ "$target" != *msvc* && "$target" != "aarch64-unknown-linux-gnu" ]]; then
+            flags+=(--features jemalloc)
+          fi
+
+          [[ "$target" == *windows* ]] && exe=".exe"
+
+          cargo build --release --target "$target" "${flags[@]}"
+
+      - name: Archive binaries
+        id: artifacts
         env:
-          RUSTFLAGS: '-C target-cpu=native'
-        run: cargo build --release --target ${{ matrix.target }} --features jemalloc
-
-      - name: Create release directory
-        run: mkdir -p ${{ github.workspace }}/release/${{ matrix.target }}
-
-      - name: Copy binary to release directory
-        run: cp cli/target/${{ matrix.target }}/release/* ${{ github.workspace }}/release/${{ matrix.target }}/
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v2
-        with:
-          name: ${{ matrix.target }}
-          path: ${{ github.workspace }}/release/${{ matrix.target }}/
-
-  create_release:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v2
-
-      - name: Download artifacts
-        uses: actions/download-artifact@v2
-        with:
-          name: x86_64-unknown-linux-gnu
-          path: ./release/x86_64-unknown-linux-gnu
-
-      - name: Download artifacts
-        uses: actions/download-artifact@v2
-        with:
-          name: x86_64-unknown-linux-musl
-          path: ./release/x86_64-unknown-linux-musl
-
-      - name: Download artifacts
-        uses: actions/download-artifact@v2
-        with:
-          name: x86_64-pc-windows-gnu
-          path: ./release/x86_64-pc-windows-gnu
-
-      - name: Download artifacts
-        uses: actions/download-artifact@v2
-        with:
-          name: x86_64-pc-windows-msvc
-          path: ./release/x86_64-pc-windows-msvc
-
-      - name: Download artifacts
-        uses: actions/download-artifact@v2
-        with:
-          name: x86_64-apple-darwin
-          path: ./release/x86_64-apple-darwin
-
-      - name: Prepare release
+          PLATFORM_NAME: ${{ matrix.platform }}
+          TARGET: ${{ matrix.target }}
+          ARCH: ${{ matrix.arch }}
+          VERSION_NAME: ${{ github.ref_name }}
+        shell: bash
         run: |
-          ROOT_DIR=$(pwd)
-          TARGET_DIR="${ROOT_DIR}/documentation/docs/public/releases"
-          VERSION=${{ env.VERSION }}
-          VERSION=${VERSION//./-}
-          PROJECT_NAME=${{ env.PROJECT_NAME }}
-          # Remove existing version directory if it exists
-          rm -rf $TARGET_DIR/$PROJECT_NAME/$VERSION
-          mkdir -p $TARGET_DIR/$PROJECT_NAME
-          mkdir -p $TARGET_DIR/$PROJECT_NAME/$VERSION
-          cp ./release/x86_64-unknown-linux-gnu/* $TARGET_DIR/${PROJECT_NAME}_linux_gnu_latest
-          cp ./release/x86_64-unknown-linux-musl/* $TARGET_DIR/${PROJECT_NAME}_linux_musl_latest
-          cp ./release/x86_64-pc-windows-gnu/* $TARGET_DIR/${PROJECT_NAME}_windows_gnu_latest.exe
-          cp ./release/x86_64-pc-windows-msvc/* $TARGET_DIR/${PROJECT_NAME}_windows_msvc_latest.exe
-          cp ./release/x86_64-apple-darwin/* $TARGET_DIR/${PROJECT_NAME}_macos_latest
-          cp ./release/x86_64-unknown-linux-gnu/* $TARGET_DIR/$PROJECT_NAME/$VERSION/${PROJECT_NAME}_linux_gnu
-          cp ./release/x86_64-unknown-linux-musl/* $TARGET_DIR/$PROJECT_NAME/$VERSION/${PROJECT_NAME}_linux_musl
-          cp ./release/x86_64-pc-windows-gnu/* $TARGET_DIR/$PROJECT_NAME/$VERSION/${PROJECT_NAME}_windows_gnu.exe
-          cp ./release/x86_64-pc-windows-msvc/* $TARGET_DIR/$PROJECT_NAME/$VERSION/${PROJECT_NAME}_windows_msvc.exe
-          cp ./release/x86_64-apple-darwin/* $TARGET_DIR/$PROJECT_NAME/$VERSION/${PROJECT_NAME}_macos
+          RELEASE_DIR="${{ github.workspace }}/documentation/docs/public/releases"
+          mkdir -p "$RELEASE_DIR/$VERSION_NAME"
 
-      - name: Commit and push changes
-        run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "github-actions@github.com"
-          git add cli/Cargo.toml
-          git add documentation/docs/public/releases
-          git commit -m "Release ${{ env.VERSION }}"
-          git push origin release/${{ env.VERSION }}
+          if [ "$PLATFORM_NAME" == "linux" ]; then
+            tar -czvf "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.tar.gz" -C ./target/${TARGET}/release .
+            cp ./target/${TARGET}/release/* "$RELEASE_DIR/$VERSION_NAME/"
+            echo "file_name=${PLATFORM_NAME}_${ARCH}.tar.gz" >> $GITHUB_OUTPUT
+          elif [ "$PLATFORM_NAME" == "darwin" ]; then
+            gtar -czvf "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.tar.gz" -C ./target/${TARGET}/release .
+            cp ./target/${TARGET}/release/* "$RELEASE_DIR/$VERSION_NAME/"
+            echo "file_name=${PLATFORM_NAME}_${ARCH}.tar.gz" >> $GITHUB_OUTPUT
+          else
+            cd ./target/${TARGET}/release
+            7z a -tzip "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.zip" *
+            cp * "$RELEASE_DIR/$VERSION_NAME/"
+            echo "file_name=${PLATFORM_NAME}_${ARCH}.zip" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Create pull request
-        uses: peter-evans/create-pull-request@v3
+      - name: Create release
+        uses: softprops/action-gh-release@v2
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "Release ${{ env.VERSION }}"
-          branch: release/${{ env.VERSION }}
-          base: master
-          title: "Release ${{ env.VERSION }}"
-          body: "This PR merges release ${{ env.VERSION }} into master and triggers a deploy."
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          body: "Release ${{ github.ref_name }}"
+          files: ${{ steps.artifacts.outputs.file_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
