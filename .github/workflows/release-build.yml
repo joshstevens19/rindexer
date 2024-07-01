@@ -1,0 +1,150 @@
+name: Build and Release Rust Project
+
+on:
+  push:
+    branches:
+      - 'release/**' # Trigger on branches matching release/{version}
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            extension: ""
+          - os: macos-latest
+            extension: ""
+          - os: windows-latest
+            extension: ".exe"
+        rust: [stable]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Validate branch name
+        id: validate_branch
+        run: |
+          BRANCH_NAME="${GITHUB_REF#refs/heads/release/}"
+          if [[ ! $BRANCH_NAME =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Error: Branch name must follow semantic versioning (e.g., release/1.0.0)."
+            exit 1
+          fi
+
+      - name: Extract version from branch name and update Cargo.toml
+        id: update_version
+        run: |
+          cd cli
+          VERSION="${GITHUB_REF#refs/heads/release/}"
+          PROJECT_NAME=$(awk -F'=' '/^name/ {gsub(/"/, "", $2); print $2}' Cargo.toml | tr -d ' ')
+          sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+          echo "PROJECT_NAME=$PROJECT_NAME" >> $GITHUB_ENV
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+          override: true
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache Cargo build
+        uses: actions/cache@v2
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-build-
+
+      - name: Build
+        run: |
+          cd cli
+          RUSTFLAGS='-C target-cpu=native' cargo build --release --features jemalloc
+
+      - name: Create release directory
+        run: mkdir -p ${{ github.workspace }}/release
+
+      - name: Copy binary to release directory
+        run: |
+          cd cli
+          cp target/release/${{ env.PROJECT_NAME }}${{ matrix.extension }} ${{ github.workspace }}/release/${{ env.PROJECT_NAME }}_${{ matrix.os }}_latest${{ matrix.extension }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: ${{ env.PROJECT_NAME }}-${{ env.VERSION }}-${{ matrix.os }}
+          path: ${{ github.workspace }}/release/${{ env.PROJECT_NAME }}_${{ matrix.os }}_latest${{ matrix.extension }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v2
+        with:
+          name: ${{ env.PROJECT_NAME }}-${{ env.VERSION }}-ubuntu-latest
+          path: ./release/ubuntu
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v2
+        with:
+          name: ${{ env.PROJECT_NAME }}-${{ env.VERSION }}-macos-latest
+          path: ./release/macos
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v2
+        with:
+          name: ${{ env.PROJECT_NAME }}-${{ env.VERSION }}-windows-latest
+          path: ./release/windows
+
+      - name: Prepare release
+        run: |
+          ROOT_DIR=$(pwd)
+          TARGET_DIR="${ROOT_DIR}/documentation/docs/public/releases"
+          VERSION=${{ env.VERSION }}
+          VERSION=${VERSION//./-}
+          PROJECT_NAME=${{ env.PROJECT_NAME }}
+          # Remove existing version directory if it exists
+          rm -rf $TARGET_DIR/$PROJECT_NAME/$VERSION
+          mkdir -p $TARGET_DIR/$PROJECT_NAME
+          mkdir -p $TARGET_DIR/$PROJECT_NAME/$VERSION
+          cp ./release/ubuntu/${PROJECT_NAME}_ubuntu_latest $TARGET_DIR/${PROJECT_NAME}_ubuntu_latest
+          cp ./release/macos/${PROJECT_NAME}_macos_latest $TARGET_DIR/${PROJECT_NAME}_macos_latest
+          cp ./release/windows/${PROJECT_NAME}_windows_latest.exe $TARGET_DIR/${PROJECT_NAME}_windows_latest.exe
+          cp ./release/ubuntu/${PROJECT_NAME}_ubuntu_latest $TARGET_DIR/$PROJECT_NAME/$VERSION/${PROJECT_NAME}_ubuntu
+          cp ./release/macos/${PROJECT_NAME}_macos_latest $TARGET_DIR/$PROJECT_NAME/$VERSION/${PROJECT_NAME}_macos
+          cp ./release/windows/${PROJECT_NAME}_windows_latest.exe $TARGET_DIR/$PROJECT_NAME/$VERSION/${PROJECT_NAME}_windows.exe
+
+      - name: Commit and push changes
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+          git add cli/Cargo.toml
+          git add documentation/docs/public/releases
+          git commit -m "Release ${{ env.VERSION }}"
+          git push origin release/${{ env.VERSION }}
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "Release ${{ env.VERSION }}"
+          branch: release/${{ env.VERSION }}
+          base: master
+          title: "Release ${{ env.VERSION }}"
+          body: "This PR merges release ${{ env.VERSION }} into master and triggers a deploy."
