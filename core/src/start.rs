@@ -2,7 +2,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::signal;
 use tracing::info;
-use tracing::level_filters::LevelFilter;
 
 use crate::api::{start_graphql_server, StartGraphqlServerError};
 use crate::database::postgres::SetupPostgresError;
@@ -11,7 +10,7 @@ use crate::indexer::no_code::{setup_no_code, SetupNoCodeError};
 use crate::indexer::start::{start_indexing, StartIndexingError};
 use crate::indexer::{ContractEventDependencies, EventDependencies, EventsDependencyTree};
 use crate::manifest::yaml::{read_manifest, ProjectType, ReadManifestError};
-use crate::{setup_logger, setup_postgres, GraphQLServerDetails};
+use crate::{setup_info_logger, setup_postgres, GraphQLServerDetails};
 
 pub struct IndexingDetails {
     pub registry: EventCallbackRegistry,
@@ -52,12 +51,12 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
                 .map_err(StartRindexerError::CouldNotReadManifest)?;
 
             if manifest.project_type != ProjectType::NoCode {
-                setup_logger(LevelFilter::INFO);
+                setup_info_logger();
                 info!("Starting rindexer rust project");
             }
 
-            if let Some(graphql_server) = details.graphql_server {
-                let _ = start_graphql_server(&manifest.to_indexer(), graphql_server.settings)
+            if let Some(graphql_server) = &details.graphql_server {
+                let _ = start_graphql_server(&manifest.to_indexer(), &graphql_server.settings)
                     .await
                     .map_err(StartRindexerError::CouldNotStartGraphqlServer)?;
                 if details.indexing_details.is_none() {
@@ -101,6 +100,13 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
                 )
                 .await
                 .map_err(StartRindexerError::CouldNotStartIndexing)?;
+
+                // keep graphql alive even if indexing has finished
+                if details.graphql_server.is_some() {
+                    signal::ctrl_c()
+                        .await
+                        .map_err(|_| StartRindexerError::FailedToListenToGraphqlSocket)?;
+                }
             }
         }
         None => {

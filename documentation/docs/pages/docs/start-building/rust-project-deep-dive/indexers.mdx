@@ -70,7 +70,6 @@ use rindexer_core::{
     generator::event_callback_registry::EventCallbackRegistry, rindexer_error, rindexer_info,
     EthereumSqlTypeWrapper, PgType, RindexerColorize,
 };
-use std::sync::Arc;
 
 async fn transfer_handler(registry: &mut EventCallbackRegistry) {
     RocketPoolETHEventType::Transfer(
@@ -824,7 +823,13 @@ async fn main() {
 
 ### Running 
 
-To run with the boilerplate code generated for you, you can run the following command:
+If you want to run this with docker support for the postgres first run:
+
+```bash
+docker-compose up -d
+```
+
+Then to run the boilerplate code generated for you, you can run the following command:
 
 :::info
 You are creating a rust rindexer project you should be wanting to change all of this logic to suit your needs.

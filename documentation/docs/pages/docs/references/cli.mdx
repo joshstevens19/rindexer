@@ -8,7 +8,7 @@ Usage: rindexer <COMMAND>
 Commands:
   new           Creates a new rindexer no-code project or rust project
   start         Start various services like indexers, GraphQL APIs or both together
-  download-abi  Downloads ABIs from etherscan to build up your rindexer.yaml mappings
+  add           Add elements such as contracts to the rindexer.yaml file
   codegen       Generates rust code based on rindexer.yaml or graphql queries
   delete        Delete data from the postgres database or csv files
   help          Print this message or the help of the given subcommand(s)
@@ -63,14 +63,23 @@ Options:
 `rindexer start indexer` or `rindexer start graphql` or `rindexer start all`
 ```
 
-## download-abi
+## add
 
-This will allow you to download ABIs from etherscan to build up your rindexer.yaml mappings. 
-It will ask you for the contract address and the network you want to download the ABI from.
-Not all networks are supported only networks with etherscan support.
+These commands allow you to through the CLI add elements to your YAML file.
 
 ```bash
-Usage: rindexer download-abi
+Usage: rindexer_cli add [OPTIONS] <COMMAND>
+
+Commands:
+  contract  Add a contract from a network to the rindexer.yaml file. It will download the ABI and add it to the abis folder and map it in the yaml file.
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+  -p, --path <PATH>
+          optional - The path to run the command in, default will be where the command is run
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ## codegen

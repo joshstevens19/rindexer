@@ -103,7 +103,7 @@ pub enum StartGraphqlServerError {
 
 pub async fn start_graphql_server(
     indexer: &Indexer,
-    settings: GraphQLServerSettings,
+    settings: &GraphQLServerSettings,
 ) -> Result<GraphQLServer, StartGraphqlServerError> {
     info!("Starting GraphQL server");
 

@@ -50,6 +50,10 @@ export default defineConfig({
           link: '/docs/start-building/create-new-project',
         },
         {
+          text: 'Live indexing vs Historic indexing',
+          link: '/docs/start-building/live-indexing-and-historic',
+        },
+        {
           text: 'YAML Config',
           link: '/docs/start-building/yaml-config',
           items: [
@@ -61,8 +65,8 @@ export default defineConfig({
           ],
         },
         {
-          text: 'Download ABI',
-          link: '/docs/start-building/download-abi',
+          text: 'Add',
+          link: '/docs/start-building/add',
         },
         {
           text: 'Codegen',

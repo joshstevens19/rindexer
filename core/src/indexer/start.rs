@@ -255,8 +255,6 @@ pub async fn start_indexing(
 
     info!("Indexing complete - time taken: {:?}", duration);
 
-    info!("Will shutdown in 30 seconds..");
-
     // to avoid the thread closing before the stream is consumed
     // lets just sit here for 30 seconds to avoid the race
     // probably a better way to handle this but hey

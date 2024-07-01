@@ -549,12 +549,12 @@ pub fn csv_headers_for_event(event_info: &EventInfo) -> Vec<String> {
     .iter()
     .map(|m| m.value.clone())
     .collect();
-
-    headers.insert(0, r#""contract_address""#.to_string());
-    headers.push(r#""tx_hash""#.to_string());
-    headers.push(r#""block_number""#.to_string());
-    headers.push(r#""block_hash""#.to_string());
-    headers.push(r#""network""#.to_string());
+    
+    headers.insert(0, r#"contract_address"#.to_string());
+    headers.push(r#"tx_hash"#.to_string());
+    headers.push(r#"block_number"#.to_string());
+    headers.push(r#"block_hash"#.to_string());
+    headers.push(r#"network"#.to_string());
 
     headers
 }

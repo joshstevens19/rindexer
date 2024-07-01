@@ -4,8 +4,8 @@ use std::{fs, path::PathBuf};
 use ethers::contract::Abigen;
 
 use crate::helpers::{
-    camel_to_snake, create_mod_file, format_all_files_for_project, write_file, CreateModFileError,
-    WriteFileError,
+    camel_to_snake, create_mod_file, format_all_files_for_project, get_full_path, write_file,
+    CreateModFileError, WriteFileError,
 };
 use crate::indexer::Indexer;
 use crate::manifest::yaml::{
@@ -135,23 +135,29 @@ fn write_indexer_events(
         )
         .map_err(WriteIndexerEvents::CouldNotWriteEventsCode)?;
 
-        let abi_gen = Abigen::new(abigen_contract_name(&contract), &contract.abi)
-            .map_err(|_| WriteIndexerEvents::CouldNotCreateAbigenInstance)?
-            .generate()
-            .map_err(|_| WriteIndexerEvents::CouldNotGenerateAbi)?;
+        let abi_full_path = get_full_path(project_path, &contract.abi);
+        match abi_full_path.to_str() {
+            None => return Err(WriteIndexerEvents::CouldNotCreateAbigenInstance),
+            Some(abi_full_path) => {
+                let abi_gen = Abigen::new(abigen_contract_name(&contract), abi_full_path)
+                    .map_err(|_| WriteIndexerEvents::CouldNotCreateAbigenInstance)?
+                    .generate()
+                    .map_err(|_| WriteIndexerEvents::CouldNotGenerateAbi)?;
 
-        write_file(
-            &generate_file_location(
-                output,
-                &format!(
-                    "{}/events/{}",
-                    camel_to_snake(&indexer.name),
-                    abigen_contract_file_name(&contract)
-                ),
-            ),
-            &abi_gen.to_string(),
-        )
-        .map_err(WriteIndexerEvents::CouldNotWriteAbigenCodeCode)?;
+                write_file(
+                    &generate_file_location(
+                        output,
+                        &format!(
+                            "{}/events/{}",
+                            camel_to_snake(&indexer.name),
+                            abigen_contract_file_name(&contract)
+                        ),
+                    ),
+                    &abi_gen.to_string(),
+                )
+                .map_err(WriteIndexerEvents::CouldNotWriteAbigenCodeCode)?;
+            }
+        }
     }
     Ok(())
 }

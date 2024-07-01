@@ -152,6 +152,12 @@ contracts: // [!code focus]
 
 The block to start indexing from, you can use the deployed block if you wish to get everything.
 
+:::info
+This is optional, if you do not provide an start block it will index the data from now and then live index as new blocks
+come in. You can read more about this [here](/docs/start-building/live-indexing-and-historic).
+:::
+
+
 ```yaml [rindexer.yaml]
 name: rETHIndexer
 description: My first rindexer project
@@ -175,7 +181,7 @@ contracts: // [!code focus]
 
 :::info
 This is optional, if you do not provide an end block it will index all the data and then live index as new blocks
-come in.
+come in. You can read more about this [here](/docs/start-building/live-indexing-and-historic).
 :::
 
 ```yaml [rindexer.yaml]

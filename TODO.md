@@ -1,18 +1,22 @@
 # rindexer
 
 checklist v1.0:
-- add examples in the repo + callouts in the documentation
+- get CSV working on rust projects
 - do benchmarks with a few different projects
+- add a favicon to the docs
 
 bugs:
 - Do not create a new postgres client each time on rust projects
 - graphql is blocking indexer starting up so making indexing slower
-- fix the environment variables for RPC urls 
+- graphql shutting down sometimes when indexer is running
+- graphql can not quit if not been running for a while
+- fix the environment variables for RPC urls
+- csv needs to have last seen block in a .rindexer folder file somewhere so it can be picked up again__~~
 
 nice to have:
+- add examples in the repo + callouts in the documentation
 - look at the final unwraps
 - look at the final clones
-- add ability to add contracts to the yaml pulling in the ABI, deploy block, and contract address
 - look into PK with tx hash and tx index and log index to make it unique and not have to worry about duplicates
 - add ability to add indexes to the database
 - ability for one-to-many relationships
