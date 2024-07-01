@@ -45,6 +45,7 @@ jobs:
         run: cargo install cross
 
       - name: Build with cross
+        working-directory: cli
         env:
           RUSTFLAGS: '-C target-cpu=native'
         run: cross build --release --target ${{ matrix.target }} --features jemalloc
