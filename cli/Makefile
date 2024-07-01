@@ -26,8 +26,8 @@ codegen_indexer:
 	cargo run -- codegen indexer
 codegen_graphql:
 	cargo run -- codegen --path /Users/joshstevens/code/rindexer/examples/base_paint graphql --endpoint  http://0.0.0.0:5005/graphql
-download_abi:
-	cargo run -- download-abi --path /Users/joshstevens/code/rindexer/examples/rindexer_demo_cli
+add_contract:
+	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- add --path /Users/joshstevens/code/rindexer/examples/rindexer_demo_cli contract
 delete:
 	cargo run -- delete --path /Users/joshstevens/code/rindexer/examples/rindexer_demo_cli
 prod_build:

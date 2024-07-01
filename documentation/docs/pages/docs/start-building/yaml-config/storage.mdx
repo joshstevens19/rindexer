@@ -15,6 +15,15 @@ If you wish to store the data in a postgres database you can enable the postgres
 This is optional if you do not wish to store the data in a postgres database you can leave this section out of your YAML.
 :::
 
+### Own connection string
+
+If you are deploying the indexer or want to point to an external database you can supply your own 
+connection string, to do this you have to change/define it the `.env` file.
+
+```bash
+DATABASE_URL=postgresql://[user[:password]@][host][:port][/dbname]
+```
+
 ### enabled
 
 If postgres is enabled or not, if you do not wish to use postgres you can set this to false or remove postgres from the storage completely.

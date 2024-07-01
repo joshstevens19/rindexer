@@ -12,8 +12,7 @@ use ethers::types::{Chain, U64};
 use ethers_etherscan::Client;
 use regex::Regex;
 use rindexer_core::generator::build::{
-    generate_rindexer_handlers, generate_rindexer_typings, generate_rindexer_typings_and_handlers,
-    generate_rust_project,
+    generate_rindexer_handlers, generate_rindexer_typings, generate_rust_project,
 };
 use rindexer_core::generator::generate_docker_file;
 use rindexer_core::manifest::yaml::{
@@ -21,15 +20,17 @@ use rindexer_core::manifest::yaml::{
     PostgresConnectionDetails, ProjectType, Storage, YAML_CONFIG_NAME,
 };
 use rindexer_core::{
-    drop_tables_for_indexer_sql, generate_graphql_queries, start_rindexer_no_code, write_file,
-    GraphQLServerDetails, GraphQLServerSettings, GraphqlNoCodeDetails, IndexerNoCodeDetails,
-    PostgresClient, StartNoCodeDetails, WriteFileError,
+    drop_tables_for_indexer_sql, format_all_files_for_project, generate_graphql_queries,
+    rindexer_info, setup_info_logger, start_rindexer_no_code, write_file, GraphQLServerDetails,
+    GraphQLServerSettings, GraphqlNoCodeDetails, IndexerNoCodeDetails, PostgresClient,
+    StartNoCodeDetails, WriteFileError,
 };
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
-use std::{fs, io};
+use std::time::Duration;
+use std::{fs, io, thread};
 use tokio::fs::remove_dir_all;
 
 #[allow(clippy::upper_case_acronyms)]
@@ -90,16 +91,17 @@ enum Commands {
         path: Option<String>,
     },
 
-    /// Downloads ABIs from etherscan to build up your rindexer.yaml mappings.
+    /// Add elements such as contracts to the rindexer.yaml file.
     ///
-    /// This command helps in fetching ABI files necessary for indexing.
-    /// It will add them to the abis folder any mappings required will need
-    /// to be done in your rindexer.yaml file manually.
+    /// This command helps you build up your yaml file.
     ///
     /// Example:
-    /// `rindexer download-abi`
-    #[clap(name = "download-abi")]
-    DownloadAbi {
+    /// `rindexer add`
+    #[clap(name = "add")]
+    Add {
+        #[clap(subcommand)]
+        subcommand: AddSubcommands,
+
         /// optional - The path to run the command in, default will be where the command is run.
         #[clap(long, short)]
         path: Option<String>,
@@ -184,6 +186,15 @@ enum StartSubcommands {
 }
 
 #[derive(Subcommand, Debug)]
+enum AddSubcommands {
+    /// Add a contract from a network to the rindexer.yaml file. It will download the ABI and add it to the abis folder and map it in the yaml file.
+    ///
+    /// Example:
+    /// `rindexer add contract`
+    Contract,
+}
+
+#[derive(Subcommand, Debug)]
 enum CodegenSubcommands {
     /// Generates the rindexer rust typings based on the rindexer.yaml file.
     ///
@@ -213,15 +224,9 @@ enum CodegenSubcommands {
     /// `rindexer codegen graphql`
     #[clap(name = "graphql")]
     GraphQL {
-        #[clap(long, help = "The graphql endpoint")]
-        endpoint: String,
+        #[clap(long, help = "The graphql endpoint - defaults to localhost:5005")]
+        endpoint: Option<String>,
     },
-
-    /// Generates both typings and indexers handlers based on the rindexer.yaml file.
-    ///
-    /// Example:
-    /// `rindexer codegen rust-all`
-    All,
 }
 
 // const VALID_URL: &str = r"^(https?:\/\/)?([\da-z\.-]+)\.([a-z\.]{2,6})(:[0-9]+)?(\/[\w \.-]*)*\/?(\\?[\w=&.+-]*)?(#[\w.-]*)?$";
@@ -407,24 +412,33 @@ POSTGRES_PASSWORD=rindexer"#;
         }
     }
 
+    // rindexer no-code project created with a rETH transfer events YAML template.
+
     if project_type == ProjectType::Rust {
         generate_rindexer_rust_project(&project_path);
         print_success_message(
-            &format!("rindexer project created with a starter manifest.\n cd ./{} \n- run rindexer codegen both to regenerate the code\n- run rindexer dev to start rindexer\n - run rindexer download-abi to download new ABIs", &project_name),
+            &format!("rindexer rust project created with a rETH transfer events YAML template.\n cd ./{} \n- use rindexer codegen commands to regenerate the code\n- run `rindexer start all` to start rindexer\n- run `rindexer add contract` to add new contracts to your project", &project_name),
         );
     } else {
         print_success_message(
-            &format!("rindexer no-code project created with a starter manifest.\n cd ./{} \n- run rindexer start to start rindexer\n- run rindexer download-abi to download new ABIs", &project_name),
+            &format!("rindexer no-code project created with a rETH transfer events YAML template.\n cd ./{} \n- run `rindexer start all` to start rindexer\n- run `rindexer add contract` to add new contracts to your project", &project_name),
         );
     }
 
     Ok(())
 }
 
-async fn handle_download_abi_command(
+async fn handle_add_contract_command(
     project_path: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
     validate_rindexer_yaml_exist();
+
+    let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
+
+    let mut manifest = read_manifest(&rindexer_yaml_path).map_err(|e| {
+        print_error_message(&format!("Could not read the rindexer.yaml file: {}", e));
+        e
+    })?;
 
     let rindexer_abis_folder = project_path.join("abis");
 
@@ -433,25 +447,46 @@ async fn handle_download_abi_command(
         return Err(err.into());
     }
 
-    let network = prompt_for_input(
-        "Enter Network Chain Id",
-        Some(r"^\d+$"),
-        Some("Invalid network chain id. Please enter a valid chain id."),
+    let networks = manifest
+        .networks
+        .iter()
+        .map(|network| (network.name.clone(), network.chain_id))
+        .collect::<Vec<_>>();
+    if networks.is_empty() {
+        print_error_message("No networks found in rindexer.yaml. Please add a networks first before downloading ABIs.");
+        return Err("No networks found in rindexer.yaml.".into());
+    }
+
+    let network_choices = networks
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
+
+    let network = if network_choices.len() > 1 {
+        prompt_for_input_list("Enter Network Name", &network_choices, None)
+    } else {
+        network_choices[0].clone()
+    };
+
+    let chain_id = networks
+        .iter()
+        .find(|(name, _)| name == &network)
+        .unwrap()
+        .1;
+
+    let chain_network = Chain::try_from(chain_id).map_err(|e| {
+        print_error_message("Network is not supported by etherscan API.");
+        e
+    })?;
+    let contract_address = prompt_for_input(
+        &format!("Enter {} Contract Address", network),
+        None,
+        None,
         None,
     );
-    let network = U64::from_dec_str(&network).map_err(|e| {
-        print_error_message("Invalid network chain id. Please enter a valid chain id.");
-        e
-    })?;
-
-    let network = Chain::try_from(network).map_err(|e| {
-        print_error_message("Chain id is not supported by etherscan API.");
-        e
-    })?;
-    let contract_address = prompt_for_input("Enter Contract Address", None, None, None);
 
     let client = Client::builder()
-        .chain(network)
+        .chain(chain_network)
         .map_err(|e| {
             print_error_message(&format!("Invalid chain id {}", e));
             e
@@ -487,15 +522,60 @@ async fn handle_download_abi_command(
             continue;
         }
 
-        let abi_path = rindexer_abis_folder.join(format!("{}.abi.json", item.contract_name));
+        let contract_name = manifest
+            .contracts
+            .iter()
+            .find(|c| c.name == item.contract_name);
+        let contract_name = if contract_name.is_some() {
+            prompt_for_input(
+                &format!("Enter a name for the contract as it is clashing with another registered contract name in the yaml: {}", item.contract_name),
+                None,
+                None,
+                None,
+            )
+        } else {
+            item.contract_name.clone()
+        };
+
+        let abi_file_name = format!("{}.abi.json", contract_name);
+
+        let abi_path = rindexer_abis_folder.join(&abi_file_name);
         write_file(&abi_path, &item.abi).map_err(|e| {
             print_error_message(&format!("Failed to write ABI file: {}", e));
             e
         })?;
+
+        let abi_path_relative = format!("./abis/{}", abi_file_name);
+
         print_success_message(&format!(
             "Downloaded ABI for: {} in {}",
-            item.contract_name,
-            abi_path.display()
+            contract_name, &abi_path_relative
+        ));
+
+        manifest.contracts.push(Contract {
+            name: contract_name.clone(),
+            details: vec![ContractDetails::new_with_address(
+                network.to_string(),
+                contract_address.clone(),
+                None,
+                None,
+            )],
+            abi: abi_path_relative.clone(),
+            include_events: None,
+            index_event_in_order: None,
+            dependency_events: None,
+            reorg_safe_distance: None,
+            generate_csv: None,
+        });
+
+        write_manifest(&manifest, &rindexer_yaml_path).map_err(|e| {
+            print_error_message(&format!("Failed to write rindexer.yaml file: {}", e));
+            e
+        })?;
+
+        print_success_message(&format!(
+            "Updated rindexer.yaml with contract: {} and ABI path: {}",
+            contract_name, abi_path_relative
         ));
 
         break;
@@ -509,7 +589,10 @@ async fn handle_codegen_command(
     subcommand: &CodegenSubcommands,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let CodegenSubcommands::GraphQL { endpoint } = subcommand {
-        generate_graphql_queries(endpoint, &project_path)
+        let url = endpoint
+            .clone()
+            .unwrap_or_else(|| "http://localhost:5005".to_string());
+        generate_graphql_queries(&url, &project_path)
             .await
             .map_err(|e| {
                 print_error_message(&format!("Failed to generate graphql queries: {}", e));
@@ -541,6 +624,7 @@ async fn handle_codegen_command(
                 print_error_message(&format!("Failed to generate rindexer typings: {}", e));
                 e
             })?;
+            format_all_files_for_project(project_path);
             print_success_message("Generated rindexer typings.");
         }
         CodegenSubcommands::Indexer => {
@@ -551,6 +635,7 @@ async fn handle_codegen_command(
                 ));
                 e
             })?;
+            format_all_files_for_project(project_path);
             print_success_message("Generated rindexer indexer handlers.");
         }
         CodegenSubcommands::GraphQL {
@@ -558,22 +643,69 @@ async fn handle_codegen_command(
         } => {
             unreachable!("This should not be reachable");
         }
-        CodegenSubcommands::All => {
-            generate_rindexer_typings_and_handlers(&rindexer_yaml_path).map_err(|e| {
-                print_error_message(&format!("Failed to generate rindexer code: {}", e));
-                e
-            })?;
-            print_success_message("Generated rindexer typings and indexer handlers");
-        }
     }
 
     Ok(())
+}
+
+fn start_docker_compose(project_path: &PathBuf) -> Result<(), String> {
+    let status = Command::new("docker-compose")
+        .args(["up", "-d"])
+        .current_dir(project_path)
+        .status()
+        .map_err(|e| {
+            let error = format!("Docker could not startup the postgres container: {}", e);
+            print_error_message(&error);
+            error
+        })?;
+
+    if !status.success() {
+        let error = format!("Docker-compose exited with status: {}", status);
+        print_error_message(&error);
+        return Err(error);
+    }
+
+    rindexer_info!("Docker starting up the postgres container..");
+
+    // Wait until all containers are up and running
+    let max_retries = 10;
+    let mut retries = 0;
+
+    while retries < max_retries {
+        let ps_status = Command::new("docker-compose")
+            .arg("ps")
+            .current_dir(project_path)
+            .output()
+            .map_err(|e| {
+                let error = format!("Failed to check docker-compose status: {}", e);
+                print_error_message(&error);
+                error
+            })?;
+
+        if ps_status.status.success() {
+            let output = String::from_utf8_lossy(&ps_status.stdout);
+            if !output.contains("Exit") && output.contains("Up") {
+                print_success_message("All containers are up and running.");
+                return Ok(());
+            }
+        } else {
+            let error = format!("docker-compose ps exited with status: {}", ps_status.status);
+            print_error_message(&error);
+        }
+
+        retries += 1;
+        thread::sleep(Duration::from_millis(200));
+    }
+
+    Err("Timed out waiting for docker-compose containers to start.".into())
 }
 
 async fn start(
     project_path: PathBuf,
     command: &StartSubcommands,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    setup_info_logger();
+
     validate_rindexer_yaml_exist();
 
     let manifest = read_manifest(&project_path.join(YAML_CONFIG_NAME)).map_err(|e| {
@@ -584,9 +716,22 @@ async fn start(
     if manifest.storage.postgres_enabled() {
         let client = PostgresClient::new().await;
         if client.is_err() {
-            let error = "Failed to connect to the postgres database.\nMake sure the database is running and the connection details are correct in the .env file and yaml file.\nIf you are running locally and using docker do not forget to run docker-compose up before you run the indexer.";
-            print_error_message(error);
-            return Err(error.into());
+            // find if docker-compose.yml is present in parent
+            let docker_compose_path = project_path.join("docker-compose.yml");
+            if !docker_compose_path.exists() {
+                return Err(
+                    "The DATABASE_URL mapped is not running please make sure it is correct".into(),
+                );
+            }
+
+            match start_docker_compose(&project_path) {
+                Ok(_) => {
+                    rindexer_info!("Docker postgres containers started up successfully");
+                }
+                Err(e) => {
+                    return Err(e.into());
+                }
+            }
         }
     }
 
@@ -774,13 +919,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             handle_new_command(resolved_path, project_type)
         }
-        Commands::DownloadAbi { path } => {
+        Commands::Add { subcommand, path } => {
             let resolved_path = resolve_path(path).map_err(|e| {
                 print_error_message(&e);
                 e
             })?;
             load_env_from_path(&resolved_path)?;
-            handle_download_abi_command(resolved_path).await
+
+            match subcommand {
+                AddSubcommands::Contract => handle_add_contract_command(resolved_path).await,
+            }
         }
         Commands::Codegen { subcommand, path } => {
             let resolved_path = resolve_path(path).map_err(|e| {
@@ -861,7 +1009,7 @@ fn prompt_for_input(
 fn prompt_for_optional_input<T: FromStr>(prompt: &str, pattern: Option<&str>) -> Option<T> {
     let regex = pattern.map(|p| Regex::new(p).unwrap());
     loop {
-        print!("{} (skip by pressing Enter): ", prompt.blue());
+        print!("{} (skip by pressing Enter): ", prompt.yellow());
         io::stdout().flush().unwrap();
 
         let mut input = String::new();

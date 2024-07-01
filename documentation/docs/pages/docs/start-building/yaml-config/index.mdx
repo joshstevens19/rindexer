@@ -7,7 +7,7 @@ This file is used to set up the project and configure the indexing tasks that wi
 **YAML is case-sensitive, so make sure to use the correct case when defining the fields in the configuration file.**
 
 :::info
-YAML files can be used to store sensitive information, you can use environment variables to store this information.
+YAML files can be mapped to environment variables to store sensitive information, such as API keys or database credentials.
 The syntax for this in the YAML is `${ENV_VARIABLE_NAME}`.
 :::
 
@@ -19,12 +19,48 @@ The syntax for this in the YAML is `${ENV_VARIABLE_NAME}`.
 - [Contracts](/docs/start-building/yaml-config/contracts) - The indexers of the project are defined in the YAML configuration file.
 - [Global](/docs/start-building/yaml-config/global) - The global events to listen for are defined in the YAML configuration file.
 
+### Environment Variables
+
+YAML files can be mapped to environment variables to store sensitive information, such as API keys or database credentials.
+Alongside different environments mappings, allowing you to store different values for different environments.
+The syntax for this in the YAML is `${ENV_VARIABLE_NAME}`.
+
+example:
+
+```yaml
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: ${RPC_URL} // [!code focus]
+storage:
+  postgres:
+    enabled: true
+indexers:
+- name: MyFirstIndexerExample
+  contracts:
+  - name: RocketPoolETH
+    details:
+    - network: ethereum
+      address: 0xae78736cd615f374d3085123a210448e74fc6393
+      start_block: 18600000
+      end_block: 18718056
+    abi: ./abis/RocketTokenRETH.abi.json
+    include_events:
+    - Transfer
+    - Approval
+```
 
 ## Example YAML no-code configuration file
 
 ### For Contract Address
 
 Filter events for a specific address.
+
+#### Historic
 
 ```yaml
 name: rETHIndexer
@@ -53,7 +89,69 @@ indexers:
     - Approval
 ```
 
+#### Live
+
+No start or end block will index from all new blocks as they are produced live.
+
+```yaml
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+indexers:
+- name: MyFirstIndexerExample
+  contracts:
+  - name: RocketPoolETH
+    details:
+    - network: ethereum
+      address: 0xae78736cd615f374d3085123a210448e74fc6393
+    abi: ./abis/RocketTokenRETH.abi.json
+    include_events:
+    - Transfer
+    - Approval
+```
+
+#### Live and historic
+
+No end block will index from the start block to the latest block then index all new blocks as they produced live.
+
+```yaml
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+indexers:
+- name: MyFirstIndexerExample
+  contracts:
+  - name: RocketPoolETH
+    details:
+    - network: ethereum
+      address: 0xae78736cd615f374d3085123a210448e74fc6393
+      start_block: 18600000
+    abi: ./abis/RocketTokenRETH.abi.json
+    include_events:
+    - Transfer
+    - Approval
+```
+
 ### Filter for an event across all contracts
+
+The historic, live and historic and live examples above can be used in every example. You can read more about
+these terms [here](/docs/start-building/live-indexing-and-historic).
 
 ```yaml
 name: rETHIndexer
@@ -81,6 +179,9 @@ indexers:
 ```
 
 ### Filter for an event across all contracts against indexed values
+
+The historic, live and historic and live examples above can be used in every example. You can read more about
+these terms [here](/docs/start-building/live-indexing-and-historic).
 
 ```yaml
 name: rETHIndexer

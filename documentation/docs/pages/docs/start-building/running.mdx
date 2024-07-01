@@ -2,6 +2,11 @@
 
 ## No-code Project
 
+:::note
+rindexer starts your postgres docker compose file up for you automatically if the DATABASE_URL is not resolvable.
+You will need to make sure you have docker running on your machine before starting the project if running locally.
+:::
+
 You can run the no-code project really easily with the CLI toolset.
 
 :::info
@@ -28,7 +33,41 @@ You can change the GraphQL port by doing --port [number] in both all and graphql
 
 ## Rust Project
 
-You can run the rust project the same way as the no-code project, note though the rust projects are meant to be
-changed and extended so what the template gives you is just a starting point. You may choice to run the indexer
-differently and compile it to production standards. Once you do that you can start using cargo builds and runs which
-we will not cover here.
+If you want to run this with docker support for the postgres first run:
+
+```bash
+docker-compose up -d
+```
+
+Then to run the the rust project you can run the following command:
+
+:::info
+You are creating a rust rindexer project you should be wanting to change all of this logic to suit your needs.
+Just like react create app exposes you to the boilerplate code to get you started, this is the same.
+If you change the main.rs some of the arguments like --indexer and --graphql may not run with these
+commands but as you would of changed it you will know how to run it.
+:::
+
+:::code-group
+
+```bash [everything]
+cargo run
+```
+
+```bash [indexer only]
+cargo run -- --indexer
+```
+
+```bash [graphql only]
+cargo run -- --graphql
+```
+
+:::
+
+We also advise you in production to run your rust projects in release mode, you can run it in release mode using
+
+```bash
+cargo run --release
+```
+
+You can also do other fancy production builds with other frameworks like jemalloc and other flags, but we will leave that to you to explore.

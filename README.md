@@ -10,6 +10,10 @@ You can get to the full rindexer [documentation](https://rindexer.xyz/docs/intro
 
 ## Install 
 
+```bash
+curl -L https://rindexer.xyz/install.sh | bash
+```
+
 If you’re on Windows, you will need to install and use Git BASH or WSL, as your terminal,
 since rindexer installation does not support Powershell or Cmd.
 
@@ -29,7 +33,7 @@ Usage: rindexer [COMMAND]
 Commands:
   new           Creates a new rindexer no-code project or rust project
   start         Start various services like indexers, GraphQL APIs or both together
-  download-abi  Downloads ABIs from etherscan to build up your rindexer.yaml mappings
+  add           Add elements such as contracts to the rindexer.yaml file
   codegen       Generates rust code based on rindexer.yaml or graphql queries
   delete        Delete data from the postgres database or csv files
   help          Print this message or the help of the given subcommand(s)

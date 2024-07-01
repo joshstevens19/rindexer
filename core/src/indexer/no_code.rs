@@ -2,13 +2,10 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
-use async_std::prelude::StreamExt;
 use colored::Colorize;
 use ethers::abi::{Abi, Contract as EthersContract, Event};
 use futures::future::BoxFuture;
-use futures::stream::FuturesUnordered;
 use tokio_postgres::types::Type as PgType;
-use tracing::level_filters::LevelFilter;
 use tracing::{debug, error, info};
 
 use crate::database::postgres::{
@@ -25,12 +22,13 @@ use crate::generator::{
     get_abi_items, CreateCsvFileForEvent, ParamTypeError, ReadAbiError,
 };
 use crate::helpers::get_full_path;
-use crate::indexer::log_helpers::parse_log;
+use crate::indexer::log_helpers::{map_log_params_to_raw_values, parse_log};
 use crate::manifest::yaml::{read_manifest, Contract, Manifest, ReadManifestError};
 use crate::provider::{create_client, JsonRpcCachedProvider, RetryClientError};
 use crate::{
-    generate_random_id, setup_logger, setup_postgres, AsyncCsvAppender, EthereumSqlTypeWrapper,
-    FutureExt, IndexingDetails, PostgresClient, StartDetails, StartNoCodeDetails,
+    generate_random_id, setup_info_logger, setup_postgres, AsyncCsvAppender,
+    EthereumSqlTypeWrapper, FutureExt, IndexingDetails, PostgresClient, StartDetails,
+    StartNoCodeDetails,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -57,7 +55,7 @@ pub async fn setup_no_code(details: StartNoCodeDetails) -> Result<StartDetails, 
         Some(project_path) => {
             let mut manifest = read_manifest(&details.manifest_path)
                 .map_err(SetupNoCodeError::CouldNotReadManifest)?;
-            setup_logger(LevelFilter::INFO);
+            setup_info_logger();
 
             info!("Starting rindexer no code");
 
@@ -180,9 +178,10 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                 }
             };
 
-            let mut bulk_data: Vec<Vec<EthereumSqlTypeWrapper>> = Vec::new();
-            let mut bulk_column_types: Vec<PgType> = Vec::new();
-            let mut csv_tasks = FuturesUnordered::new();
+            let mut indexed_count = 0;
+            let mut postgres_bulk_data: Vec<Vec<EthereumSqlTypeWrapper>> = Vec::new();
+            let mut postgres_bulk_column_types: Vec<PgType> = Vec::new();
+            let mut csv_bulk_data: Vec<Vec<String>> = Vec::new();
 
             // Collect owned results to avoid lifetime issues
             let owned_results: Vec<_> = results
@@ -238,36 +237,35 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                 all_params.extend(end_global_parameters);
 
                 // Set column types dynamically based on first result
-                if bulk_column_types.is_empty() {
-                    bulk_column_types = all_params.iter().map(|param| param.to_type()).collect();
+                if postgres_bulk_column_types.is_empty() {
+                    postgres_bulk_column_types =
+                        all_params.iter().map(|param| param.to_type()).collect();
                 }
 
-                bulk_data.push(all_params);
+                postgres_bulk_data.push(all_params);
 
-                if let Some(csv) = &params.csv {
-                    let mut csv_data: Vec<String> = vec![format!("{}", address)];
+                if params.csv.is_some() {
+                    let mut csv_data: Vec<String> = vec![format!("{:?}", address)];
 
-                    for param in &log_params {
-                        csv_data.push(format!("{:?}", param.value.to_string()));
+                    let raw_values = map_log_params_to_raw_values(&log_params);
+
+                    for param in raw_values {
+                        csv_data.push(param);
                     }
 
                     csv_data.push(format!("{:?}", transaction_hash));
                     csv_data.push(format!("{:?}", block_number));
                     csv_data.push(format!("{:?}", block_hash));
-                    csv_data.push(format!("{:?}", network));
+                    csv_data.push(network);
 
-                    let csv_writer = Arc::clone(csv);
-                    csv_tasks.push(Box::pin(async move {
-                        if let Err(e) = csv_writer.append(csv_data).await {
-                            error!("Error writing CSV to disk: {}", e);
-                        }
-                    }));
+                    csv_bulk_data.push(csv_data);
                 }
+
+                indexed_count += 1;
             }
 
-            let bulk_data_length = bulk_data.len();
-
             if let Some(postgres) = &params.postgres {
+                let bulk_data_length = postgres_bulk_data.len();
                 if bulk_data_length > 0 {
                     // anything over 100 events is considered bulk and goes the COPY route
                     if bulk_data_length > 100 {
@@ -275,8 +273,8 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                             .bulk_insert_via_copy(
                                 &params.postgres_event_table_name,
                                 &params.postgres_column_names,
-                                &bulk_column_types,
-                                &bulk_data,
+                                &postgres_bulk_column_types,
+                                &postgres_bulk_data,
                             )
                             .await
                         {
@@ -289,25 +287,29 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                         .bulk_insert(
                             &params.postgres_event_table_name,
                             &params.postgres_column_names,
-                            &bulk_data,
+                            &postgres_bulk_data,
                         )
                         .await
                     {
                         error!("Error performing bulk insert: {}", e);
                     }
-
-                    while csv_tasks.next().await.is_some() {}
-
-                    info!(
-                        "{}::{} - {} - {} events {}",
-                        params.contract_name,
-                        params.event_name,
-                        "INDEXED".green(),
-                        bulk_data_length,
-                        format!("- blocks: {} - {}", from_block, to_block)
-                    );
                 }
             }
+
+            if let Some(csv) = &params.csv {
+                if !csv_bulk_data.is_empty() {
+                    csv.append_bulk(csv_bulk_data).await.unwrap();
+                }
+            }
+
+            info!(
+                "{}::{} - {} - {} events {}",
+                params.contract_name,
+                params.event_name,
+                "INDEXED".green(),
+                indexed_count,
+                format!("- blocks: {} - {}", from_block, to_block)
+            );
         }
         .boxed()
     })
@@ -400,6 +402,7 @@ pub async fn process_events(
                     .as_ref()
                     .map_or("./generated_csv", |c| &c.path);
                 let headers: Vec<String> = csv_headers_for_event(&event_info);
+
                 let csv_path =
                     create_csv_file_for_event(project_path, contract, &event_info, csv_path)
                         .map_err(ProcessIndexersError::CreateCsvFileForEventError)?;

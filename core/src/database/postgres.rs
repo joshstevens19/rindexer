@@ -7,7 +7,10 @@ use ethers::types::{Address, Bytes, H128, H160, H256, H512, U128, U256, U512, U6
 use futures::pin_mut;
 use rust_decimal::Decimal;
 use std::path::Path;
+use std::time::Duration;
 use std::{env, str};
+use tokio::task;
+use tokio::time::timeout;
 use tokio_postgres::binary_copy::BinaryCopyInWriter;
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type as PgType};
 use tokio_postgres::{
@@ -42,6 +45,12 @@ pub enum PostgresConnectionError {
 
     #[error("Connection pool error: {0}")]
     ConnectionPoolError(tokio_postgres::Error),
+
+    #[error("Connection pool runtime error: {0}")]
+    ConnectionPoolRuntimeError(RunError<tokio_postgres::Error>),
+
+    #[error("Can not connect to the database please make sure your connection string is correct")]
+    CanNotConnectToDatabase,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -58,7 +67,7 @@ pub struct PostgresTransaction {
 }
 
 impl PostgresClient {
-    pub async fn new() -> Result<Self, PostgresConnectionError> {
+    pub async fn new2() -> Result<Self, PostgresConnectionError> {
         let manager = PostgresConnectionManager::new_from_stringlike(
             connection_string().map_err(PostgresConnectionError::DatabaseConnectionConfigWrong)?,
             NoTls,
@@ -69,6 +78,65 @@ impl PostgresClient {
             .build(manager)
             .await
             .map_err(PostgresConnectionError::ConnectionPoolError)?;
+
+        let pool_temp = pool.clone();
+
+        let conn = pool_temp
+            .get()
+            .await
+            .map_err(PostgresConnectionError::ConnectionPoolRuntimeError)?;
+
+        let connection_future = conn.query_one("SELECT 1", &[]);
+
+        match timeout(Duration::from_millis(500), connection_future).await {
+            Ok(result) => result.map_err(|_| PostgresConnectionError::CanNotConnectToDatabase)?,
+            Err(_) => return Err(PostgresConnectionError::CanNotConnectToDatabase),
+        };
+
+        Ok(Self { pool })
+    }
+
+    pub async fn new() -> Result<Self, PostgresConnectionError> {
+        let connection_str =
+            connection_string().map_err(PostgresConnectionError::DatabaseConnectionConfigWrong)?;
+
+        // Perform a direct connection test
+        let (client, connection) = match timeout(
+            Duration::from_millis(500),
+            tokio_postgres::connect(&connection_str, NoTls),
+        )
+        .await
+        {
+            Ok(Ok((client, connection))) => (client, connection),
+            Ok(Err(_)) => return Err(PostgresConnectionError::CanNotConnectToDatabase),
+            Err(_) => return Err(PostgresConnectionError::CanNotConnectToDatabase),
+        };
+
+        // Spawn the connection future to ensure the connection is established
+        let connection_handle = task::spawn(connection);
+
+        // Perform a simple query to check the connection
+        match client.query_one("SELECT 1", &[]).await {
+            Ok(_) => (),
+            Err(_) => return Err(PostgresConnectionError::CanNotConnectToDatabase),
+        };
+
+        // Drop the client and ensure the connection handle completes
+        drop(client);
+        match connection_handle.await {
+            Ok(Ok(())) => (),
+            Ok(Err(_)) => return Err(PostgresConnectionError::CanNotConnectToDatabase),
+            Err(_) => return Err(PostgresConnectionError::CanNotConnectToDatabase),
+        }
+
+        let manager = PostgresConnectionManager::new_from_stringlike(&connection_str, NoTls)
+            .map_err(PostgresConnectionError::ConnectionPoolError)?;
+
+        let pool = Pool::builder()
+            .build(manager)
+            .await
+            .map_err(PostgresConnectionError::ConnectionPoolError)?;
+
         Ok(Self { pool })
     }
 

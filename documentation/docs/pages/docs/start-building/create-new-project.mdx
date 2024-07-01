@@ -32,10 +32,7 @@ Repository (skip by pressing Enter): https://github.com/joshstevens19/rindexer
 What Storages To Enable? (graphql can only be supported if postgres is enabled) [postgres, csv, both, none]: postgres
 Postgres Docker Support Out The Box? [yes, no]: yes
 
-rindexer no-code project created with a starter manifest.
-
-- run rindexer start all to start rindexer
-- run rindexer download-abi to download new ABIs
+rindexer no-code project created with a rETH transfer events YAML template.
 ```
 
 If any of the steps are unclear, you can find more information in the [New Project Appendix](#new-project-appendix).
@@ -65,6 +62,11 @@ DATABASE_URL=postgresql://[user[:password]@][host][:port][/dbname]
 
 ## 3. Start the project
 
+:::note
+rindexer starts your postgres docker compose file up for you automatically if the DATABASE_URL is not resolvable. 
+You will need to make sure you have docker running on your machine before starting the project if running locally.
+:::
+
 To start the project you can run the following command:
 
 :::info
@@ -92,8 +94,7 @@ rindexer start graphql
 :::
 
 :::warning
-The boilerplate template uses a free node which may get rate limited, you can change the node URL in the
-`.env` file to a paid node, we suggest alchemy or tenderly.
+The boilerplate template uses a free node which may get rate limited. We recommend using a paid node for production.
 :::
 
 ## 4. Query the GraphQL API
@@ -207,13 +208,7 @@ You can generate .graphql prebuilt queries to get up and running in seconds.
 These will be generated in a `queries` folder.
 
 ```bash
-rindexer codegen graphql --endpoint=graphql_api
-```
-
-Direct path:
-
-```bash
-rindexer codegen --path=./location graphql --endpoint=graphql_api
+rindexer codegen graphql
 ```
 
 #### TypeScript

@@ -1,0 +1,42 @@
+# Add
+
+These commands allow you to through the CLI add elements to your YAML file.
+
+## Contract
+
+:::warning
+You must have networks setup in the YAML to be able to use this command. You can see how to do that [here](/docs/start-building/yaml-config/networks).
+:::
+
+This allows you download the contracts metadata alongside the ABI from an supported network using Etherscan APIs.
+This uses no API keys to try to download the ABIs, this means you will get rate limited if you use this too much
+or if many people use this at the same time.
+
+You can see all the chains you can download ABIs from [here](https://docs.etherscan.io/contract-verification/supported-chains).
+
+```bash
+rindexer add contract
+```
+
+it then ask you 2 questions:
+
+1. "Enter Network Name" - This is the network name in your YAML file.
+
+```yaml
+networks:
+  - name: ethereum // [!code focus]
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+```
+
+This will skip for you if you only have one network setup.
+
+2. "Enter Contract Address" - This is the contract address you want to add to your YAML project
+
+It will then download the ABI and put it in the `abis` folder and map it automatically in your YAML file.
+
+Some things to know:
+- If the contract is not verified on Etherscan it will not be able to download the ABI.
+- If the contract is a proxy it try to download the ABI of the implementation contract.
+
+

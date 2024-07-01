@@ -33,6 +33,25 @@ impl AsyncCsvAppender {
         .expect("Failed to run CSV write operation")
     }
 
+    pub async fn append_bulk(&self, records: Vec<Vec<String>>) -> Result<(), csv::Error> {
+        let lock = self.writer_lock.clone();
+        let path = self.path.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let _guard = lock.lock();
+            let file = File::options().create(true).append(true).open(&path)?;
+            let mut writer = Writer::from_writer(file);
+
+            for record in records {
+                writer.write_record(record)?;
+            }
+
+            Ok(())
+        })
+        .await
+        .expect("Failed to run CSV bulk write operation")
+    }
+
     pub async fn append_header(&self, header: Vec<String>) -> Result<(), csv::Error> {
         let lock = self.writer_lock.clone();
         let path = self.path.clone();

@@ -9,7 +9,6 @@ contracts:
 #          network: polygon
 #          startBlock: 56399431
 #          endBlock: 56399432
-#  # ADD COMMENT EXPLAINING ABOUT rindexer download-abi
 #      abi: /Users/joshstevens/code/rindexer/rindexer_demo/abis/lens-registry-events-abi.json
 #      include_events:
 #        - HandleLinked

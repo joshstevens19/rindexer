@@ -5,16 +5,16 @@ You can generate a few different types of code when using rindexer codegen.
 ## GraphQL
 
 You can generate .graphql prebuilt queries to get up and running in seconds.
-These will be generated in a `queries` folder.
+These will be generated in a `queries` folder in the root of where the rindexer yaml is.
 
 ```bash
-rindexer codegen graphql --endpoint=graphql_api
+rindexer codegen graphql
 ```
 
-Direct path:
+By default it will point to `http://localhost:5005` graphql endpoint, you can change this by passing the endpoint flag:
 
 ```bash
-rindexer codegen --path=./location graphql --endpoint=graphql_api
+rindexer codegen graphql --endpoint=YOUR_GRAPHQL_API_URL
 ```
 
 ### TypeScript

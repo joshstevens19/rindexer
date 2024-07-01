@@ -29,8 +29,13 @@ pub fn setup_logger(log_level: LevelFilter) {
         .event_format(format)
         .finish();
 
-    tracing::subscriber::set_global_default(subscriber)
-        .expect("Failed to set the default subscriber");
+    if tracing::subscriber::set_global_default(subscriber).is_err() {
+        eprintln!("Logger has already been set up, continuing...");
+    }
+}
+
+pub fn setup_info_logger() {
+    setup_logger(LevelFilter::INFO);
 }
 
 // pub fn set_no_op_logger() -> DefaultGuard {

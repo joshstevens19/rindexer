@@ -1,5 +1,6 @@
-use ethers::abi::{Event, Log as ParsedLog, RawLog};
+use ethers::abi::{Event, Log as ParsedLog, LogParam, RawLog, Token};
 use ethers::types::Log;
+use serde_json::Value;
 
 pub fn parse_log(event: &Event, log: &Log) -> Option<ParsedLog> {
     let raw_log = RawLog {
@@ -60,4 +61,34 @@ pub fn parse_log(event: &Event, log: &Log) -> Option<ParsedLog> {
     // with ABI - Transfer (indexed address from, indexed address to, indexed uint256 tokenId)
 
     None
+}
+
+fn map_token_to_raw_values(token: &Token) -> Vec<String> {
+    match token {
+        Token::Address(addr) => vec![format!("{:?}", addr)],
+        Token::FixedBytes(bytes) | Token::Bytes(bytes) => vec![format!("{:?}", bytes)],
+        Token::Int(int) => vec![int.to_string()],
+        Token::Uint(uint) => vec![uint.to_string()],
+        Token::Bool(b) => vec![b.to_string()],
+        Token::String(s) => vec![s.clone()],
+        Token::FixedArray(tokens) | Token::Array(tokens) => {
+            let values: Vec<String> = tokens.iter().flat_map(map_token_to_raw_values).collect();
+            vec![format!("[{}]", values.join(", "))]
+        },
+        Token::Tuple(tokens) => {
+            let mut values = vec![];
+            for token in tokens {
+                values.extend(map_token_to_raw_values(token));
+            }
+            values
+        }
+    }
+}
+
+pub fn map_log_params_to_raw_values(params: &[LogParam]) -> Vec<String> {
+    let mut raw_values = vec![];
+    for param in params {
+        raw_values.extend(map_token_to_raw_values(&param.value));
+    }
+    raw_values
 }
