@@ -45,9 +45,6 @@ jobs:
           key: ${{ matrix.target }}
           cache-on-failure: true
 
-      - name: Rename cargo.toml to Cargo.toml
-        run: mv cli/cargo.toml cli/Cargo.toml
-
       - name: Apple M1 setup
         if: matrix.target == 'aarch64-apple-darwin'
         run: |
