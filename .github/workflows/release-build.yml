@@ -7,26 +7,18 @@ on:
 
 jobs:
   build:
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
 
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        include:
-          - os: ubuntu-latest
-            extension: ""
-          - os: macos-latest
-            extension: ""
-          - os: windows-latest
-            extension: ".exe"
-        rust: [stable]
+        # target: [x86_64-unknown-linux-gnu, x86_64-pc-windows-gnu, x86_64-apple-darwin]
+        target: [x86_64-unknown-linux-gnu, x86_64-apple-darwin]
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v2
 
-      - name: Validate branch name (Linux and macOS)
-        if: runner.os != 'Windows'
+      - name: Validate branch name
         run: |
           BRANCH_NAME="${GITHUB_REF#refs/heads/release/}"
           if [[ ! "$BRANCH_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -34,79 +26,42 @@ jobs:
             exit 1
           fi
 
-      - name: Validate branch name (Windows)
-        if: runner.os == 'Windows'
+      - name: Extract version from branch name and update Cargo.toml
         run: |
-          $BRANCH_NAME = $env:GITHUB_REF -replace 'refs/heads/release/', ''
-          if ($BRANCH_NAME -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
-            Write-Error "Error: Branch name must follow semantic versioning (e.g., release/1.0.0)."
-            exit 1
-          }
-
-      - name: Extract version from branch name and update Cargo.toml (Linux and macOS)
-        if: runner.os != 'Windows'
-        run: |
-          cd cli
           VERSION="${GITHUB_REF#refs/heads/release/}"
+          cd cli
           PROJECT_NAME=$(awk -F'=' '/^name/ {gsub(/"/, "", $2); print $2}' Cargo.toml | tr -d ' ')
           sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
           echo "PROJECT_NAME=$PROJECT_NAME" >> $GITHUB_ENV
           echo "VERSION=$VERSION" >> $GITHUB_ENV
 
-      - name: Extract version from branch name and update Cargo.toml (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          cd cli
-          $VERSION = $env:GITHUB_REF -replace 'refs/heads/release/', ''
-          $PROJECT_NAME = (Select-String -Path 'Cargo.toml' -Pattern '^name' -SimpleMatch).Matches.Groups[2].Value.Trim('"')
-          (Get-Content Cargo.toml) -replace 'version = ".*"', 'version = "' + $VERSION + '"' | Set-Content Cargo.toml
-          echo "PROJECT_NAME=$PROJECT_NAME" >> $env:GITHUB_ENV
-          echo "VERSION=$VERSION" >> $env:GITHUB_ENV
-
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: ${{ matrix.rust }}
+          toolchain: stable
           override: true
 
-      - name: Cache Cargo registry
-        uses: actions/cache@v2
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-
+      - name: Install cross
+        run: cargo install cross
 
-      - name: Cache Cargo build
-        uses: actions/cache@v2
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-build-
-
-      - name: Build
-        run: |
-          cd cli
-          RUSTFLAGS='-C target-cpu=native' cargo build --release --features jemalloc
+      - name: Build with cross
+        env:
+          RUSTFLAGS: '-C target-cpu=native'
+        run: cross build --release --target ${{ matrix.target }} --features jemalloc
 
       - name: Create release directory
-        run: mkdir -p ${{ github.workspace }}/release
+        run: mkdir -p ${{ github.workspace }}/release/${{ matrix.target }}
 
       - name: Copy binary to release directory
-        run: |
-          cd cli
-          cp target/release/${{ env.PROJECT_NAME }}${{ matrix.extension }} ${{ github.workspace }}/release/${{ env.PROJECT_NAME }}_${{ matrix.os }}_latest${{ matrix.extension }}
+        run: cp target/${{ matrix.target }}/release/* ${{ github.workspace }}/release/${{ matrix.target }}/
 
-      - name: Upload artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v2
         with:
-          name: ${{ env.PROJECT_NAME }}-${{ env.VERSION }}-${{ matrix.os }}
-          path: ${{ github.workspace }}/release/${{ env.PROJECT_NAME }}_${{ matrix.os }}_latest${{ matrix.extension }}
+          name: ${{ matrix.target }}
+          path: ${{ github.workspace }}/release/${{ matrix.target }}/
 
-  release:
+  create_release:
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -116,20 +71,20 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v2
         with:
-          name: ${{ env.PROJECT_NAME }}-${{ env.VERSION }}-ubuntu-latest
-          path: ./release/ubuntu
+          name: x86_64-unknown-linux-gnu
+          path: ./release/x86_64-unknown-linux-gnu
 
       - name: Download artifacts
         uses: actions/download-artifact@v2
         with:
-          name: ${{ env.PROJECT_NAME }}-${{ env.VERSION }}-macos-latest
-          path: ./release/macos
+          name: x86_64-pc-windows-gnu
+          path: ./release/x86_64-pc-windows-gnu
 
       - name: Download artifacts
         uses: actions/download-artifact@v2
         with:
-          name: ${{ env.PROJECT_NAME }}-${{ env.VERSION }}-windows-latest
-          path: ./release/windows
+          name: x86_64-apple-darwin
+          path: ./release/x86_64-apple-darwin
 
       - name: Prepare release
         run: |
@@ -142,12 +97,12 @@ jobs:
           rm -rf $TARGET_DIR/$PROJECT_NAME/$VERSION
           mkdir -p $TARGET_DIR/$PROJECT_NAME
           mkdir -p $TARGET_DIR/$PROJECT_NAME/$VERSION
-          cp ./release/ubuntu/${PROJECT_NAME}_ubuntu_latest $TARGET_DIR/${PROJECT_NAME}_ubuntu_latest
-          cp ./release/macos/${PROJECT_NAME}_macos_latest $TARGET_DIR/${PROJECT_NAME}_macos_latest
-          cp ./release/windows/${PROJECT_NAME}_windows_latest.exe $TARGET_DIR/${PROJECT_NAME}_windows_latest.exe
-          cp ./release/ubuntu/${PROJECT_NAME}_ubuntu_latest $TARGET_DIR/$PROJECT_NAME/$VERSION/${PROJECT_NAME}_ubuntu
-          cp ./release/macos/${PROJECT_NAME}_macos_latest $TARGET_DIR/$PROJECT_NAME/$VERSION/${PROJECT_NAME}_macos
-          cp ./release/windows/${PROJECT_NAME}_windows_latest.exe $TARGET_DIR/$PROJECT_NAME/$VERSION/${PROJECT_NAME}_windows.exe
+          cp ./release/x86_64-unknown-linux-gnu/* $TARGET_DIR/${PROJECT_NAME}_linux_latest
+          cp ./release/x86_64-pc-windows-gnu/* $TARGET_DIR/${PROJECT_NAME}_windows_latest.exe
+          cp ./release/x86_64-apple-darwin/* $TARGET_DIR/${PROJECT_NAME}_macos_latest
+          cp ./release/x86_64-unknown-linux-gnu/* $TARGET_DIR/$PROJECT_NAME/$VERSION/${PROJECT_NAME}_linux
+          cp ./release/x86_64-pc-windows-gnu/* $TARGET_DIR/$PROJECT_NAME/$VERSION/${PROJECT_NAME}_windows.exe
+          cp ./release/x86_64-apple-darwin/* $TARGET_DIR/$PROJECT_NAME/$VERSION/${PROJECT_NAME}_macos
 
       - name: Commit and push changes
         run: |
