@@ -96,11 +96,11 @@ jobs:
           mkdir -p "$RELEASE_DIR/$VERSION_NAME"
 
           if [ "$PLATFORM_NAME" == "linux" ]; then
-            tar -czvf "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.tar.gz" -C "../../target/${TARGET}/release" .
+            tar -czvf "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.tar.gz" -C "../target/${TARGET}/release" .
             cp ../target/${TARGET}/release/* "$RELEASE_DIR/$VERSION_NAME/"
             echo "file_name=${PLATFORM_NAME}_${ARCH}.tar.gz" >> $GITHUB_OUTPUT
           elif [ "$PLATFORM_NAME" == "darwin" ]; then
-            tar -czvf "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.tar.gz" -C "../../target/${TARGET}/release" .
+            tar -czvf "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.tar.gz" -C "../target/${TARGET}/release" .
             cp ../target/${TARGET}/release/* "$RELEASE_DIR/$VERSION_NAME/"
             echo "file_name=${PLATFORM_NAME}_${ARCH}.tar.gz" >> $GITHUB_OUTPUT
           else
