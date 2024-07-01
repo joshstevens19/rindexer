@@ -15,56 +15,53 @@ jobs:
         include:
           - os: ubuntu-latest
             extension: ""
-            shell: bash
           - os: macos-latest
             extension: ""
-            shell: bash
           - os: windows-latest
             extension: ".exe"
-            shell: pwsh
         rust: [stable]
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v2
 
-      - name: Validate branch name
-        id: validate_branch
-        shell: ${{ matrix.shell }}
+      - name: Validate branch name (Linux and macOS)
+        if: runner.os != 'Windows'
         run: |
-          if [ "${{ matrix.os }}" == "windows-latest" ]; then
-            $BRANCH_NAME = $env:GITHUB_REF -replace 'refs/heads/release/', ''
-            if ($BRANCH_NAME -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
-              Write-Error "Error: Branch name must follow semantic versioning (e.g., release/1.0.0)."
-              exit 1
-            }
-          else
-            BRANCH_NAME="${GITHUB_REF#refs/heads/release/}"
-            if [[ ! "$BRANCH_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "Error: Branch name must follow semantic versioning (e.g., release/1.0.0)."
-              exit 1
-            fi
+          BRANCH_NAME="${GITHUB_REF#refs/heads/release/}"
+          if [[ ! "$BRANCH_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Error: Branch name must follow semantic versioning (e.g., release/1.0.0)."
+            exit 1
           fi
 
-      - name: Extract version from branch name and update Cargo.toml
-        id: update_version
-        shell: ${{ matrix.shell }}
+      - name: Validate branch name (Windows)
+        if: runner.os == 'Windows'
         run: |
-          if [ "${{ matrix.os }}" == "windows-latest" ]; then
-            cd cli
-            $VERSION = $env:GITHUB_REF -replace 'refs/heads/release/', ''
-            $PROJECT_NAME = (Select-String -Path 'Cargo.toml' -Pattern '^name' -SimpleMatch).Matches.Groups[2].Value.Trim('"')
-            (Get-Content Cargo.toml) -replace 'version = ".*"', 'version = "' + $VERSION + '"' | Set-Content Cargo.toml
-            echo "PROJECT_NAME=$PROJECT_NAME" >> $env:GITHUB_ENV
-            echo "VERSION=$VERSION" >> $env:GITHUB_ENV
-          else
-            cd cli
-            VERSION="${GITHUB_REF#refs/heads/release/}"
-            PROJECT_NAME=$(awk -F'=' '/^name/ {gsub(/"/, "", $2); print $2}' Cargo.toml | tr -d ' ')
-            sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
-            echo "PROJECT_NAME=$PROJECT_NAME" >> $GITHUB_ENV
-            echo "VERSION=$VERSION" >> $GITHUB_ENV
-          fi
+          $BRANCH_NAME = $env:GITHUB_REF -replace 'refs/heads/release/', ''
+          if ($BRANCH_NAME -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
+            Write-Error "Error: Branch name must follow semantic versioning (e.g., release/1.0.0)."
+            exit 1
+          }
+
+      - name: Extract version from branch name and update Cargo.toml (Linux and macOS)
+        if: runner.os != 'Windows'
+        run: |
+          cd cli
+          VERSION="${GITHUB_REF#refs/heads/release/}"
+          PROJECT_NAME=$(awk -F'=' '/^name/ {gsub(/"/, "", $2); print $2}' Cargo.toml | tr -d ' ')
+          sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+          echo "PROJECT_NAME=$PROJECT_NAME" >> $GITHUB_ENV
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Extract version from branch name and update Cargo.toml (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd cli
+          $VERSION = $env:GITHUB_REF -replace 'refs/heads/release/', ''
+          $PROJECT_NAME = (Select-String -Path 'Cargo.toml' -Pattern '^name' -SimpleMatch).Matches.Groups[2].Value.Trim('"')
+          (Get-Content Cargo.toml) -replace 'version = ".*"', 'version = "' + $VERSION + '"' | Set-Content Cargo.toml
+          echo "PROJECT_NAME=$PROJECT_NAME" >> $env:GITHUB_ENV
+          echo "VERSION=$VERSION" >> $env:GITHUB_ENV
 
       - name: Install Rust
         uses: actions-rs/toolchain@v1
