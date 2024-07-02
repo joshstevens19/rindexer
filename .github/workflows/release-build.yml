@@ -129,21 +129,22 @@ jobs:
           mkdir -p "$RELEASE_DIR"
           mkdir -p "$VERSION_DIR"
           if [ "$PLATFORM_NAME" == "linux" ]; then
-          BUILD_DIR="${{ github.workspace }}/cli/target/${TARGET}/${{ env.BUILD_TYPE }}"
+            BUILD_DIR="${{ github.workspace }}/cli/target/${TARGET}/${{ env.BUILD_TYPE }}"
           else
-          BUILD_DIR="${{ github.workspace }}/target/${TARGET}/${{ env.BUILD_TYPE }}"
+            BUILD_DIR="${{ github.workspace }}/target/${TARGET}/${{ env.BUILD_TYPE }}"
           fi
           FILE_NAME="rindexer_${PLATFORM_NAME}-${ARCH}.tar.gz"
+          BINARY_NAME="rindexer_cli"
           
           if [ "$PLATFORM_NAME" == "linux" ] || [ "$PLATFORM_NAME" == "darwin" ]; then
-          tar -czvf "$RELEASE_DIR/$FILE_NAME" -C "$BUILD_DIR" .
-          tar -czvf "$VERSION_DIR/$FILE_NAME" -C "$BUILD_DIR" .
-          echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
+            tar -czvf "$RELEASE_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
+            tar -czvf "$VERSION_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
+            echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
           else
-          cd $BUILD_DIR
-          7z a -tzip "$RELEASE_DIR/rindexer_${PLATFORM_NAME}-${ARCH}.zip" *
-          7z a -tzip "$VERSION_DIR/rindexer_${PLATFORM_NAME}-${ARCH}.zip" *
-          echo "file_name=rindexer_${PLATFORM_NAME}-${ARCH}.zip" >> $GITHUB_OUTPUT
+            cd $BUILD_DIR
+            7z a -tzip "$RELEASE_DIR/rindexer_${PLATFORM_NAME}-${ARCH}.zip" "$BINARY_NAME"
+            7z a -tzip "$VERSION_DIR/rindexer_${PLATFORM_NAME}-${ARCH}.zip" "$BINARY_NAME"
+            echo "file_name=rindexer_${PLATFORM_NAME}-${ARCH}.zip" >> $GITHUB_OUTPUT
           fi
 
       - name: Upload artifact
