@@ -33,6 +33,12 @@ const byteaToHex =  makeWrapResolversPlugin(
                 }
             }
 
+            // always add a limit on the amount you can bring back if last is defined
+            // then let the resolver handle it as limits has been handled above already
+            if (args['last'] === undefined) {
+                args['first'] = args['first'] ? args['first'] : graphqlPageLimit;
+            }
+
             let result = await resolver();
             if (result && typeof result === "string") {
                 // it is a bytea need to turn back to a hex
