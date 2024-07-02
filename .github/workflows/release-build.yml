@@ -20,21 +20,21 @@ jobs:
 #            svm_target_platform: linux-amd64
 #            platform: linux
 #            arch: amd64
-          - runner: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            svm_target_platform: linux-aarch64
-            platform: linux
-            arch: arm64
+#          - runner: ubuntu-latest
+#            target: aarch64-unknown-linux-gnu
+#            svm_target_platform: linux-aarch64
+#            platform: linux
+#            arch: arm64
 #          - runner: macos-12
 #            target: x86_64-apple-darwin
 #            svm_target_platform: macosx-amd64
 #            platform: darwin
 #            arch: amd64
-#          - runner: macos-latest
-#            target: aarch64-apple-darwin
-#            svm_target_platform: macosx-aarch64
-#            platform: darwin
-#            arch: arm64
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+            svm_target_platform: macosx-aarch64
+            platform: darwin
+            arch: arm64
 #          - runner: windows-latest
 #            target: x86_64-pc-windows-msvc
 #            svm_target_platform: windows-amd64
@@ -84,7 +84,6 @@ jobs:
       - name: Setup cross-compilation for pkg-config
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
-          sudo apt-get install -y pkg-config-aarch64-linux-gnu
           echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
           echo "PKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu" >> $GITHUB_ENV
           echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_ENV
@@ -117,7 +116,6 @@ jobs:
           fi
 
       - name: Archive binaries
-        #working-directory: cli
         id: artifacts
         env:
           PLATFORM_NAME: ${{ matrix.platform }}
@@ -131,32 +129,21 @@ jobs:
           mkdir -p "$RELEASE_DIR"
           mkdir -p "$VERSION_DIR"
           if [ "$PLATFORM_NAME" == "linux" ]; then
-            BUILD_DIR="${{ github.workspace }}/cli/target/${TARGET}/${{ env.BUILD_TYPE }}"
+          BUILD_DIR="${{ github.workspace }}/cli/target/${TARGET}/${{ env.BUILD_TYPE }}"
           else
-            BUILD_DIR="${{ github.workspace }}/target/${TARGET}/${{ env.BUILD_TYPE }}"
+          BUILD_DIR="${{ github.workspace }}/target/${TARGET}/${{ env.BUILD_TYPE }}"
           fi
-          BINARY_NAME="rindexer_cli"
           FILE_NAME="rindexer_${PLATFORM_NAME}-${ARCH}.tar.gz"
-
-          if [ "$PLATFORM_NAME" == "linux" ]; then
-            tar -czvf "$RELEASE_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
-            tar -czvf "$VERSION_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
-            cp "$BUILD_DIR/$BINARY_NAME" "$VERSION_DIR/"
-            cp "$BUILD_DIR/$BINARY_NAME" "$RELEASE_DIR/rindexer_cli"
-            echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
-          elif [ "$PLATFORM_NAME" == "darwin" ]; then
-            tar -czvf "$RELEASE_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
-            tar -czvf "$VERSION_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
-            cp "$BUILD_DIR/$BINARY_NAME" "$VERSION_DIR/"
-            cp "$BUILD_DIR/$BINARY_NAME" "$RELEASE_DIR/rindexer_cli"
-            echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
+          
+          if [ "$PLATFORM_NAME" == "linux" ] || [ "$PLATFORM_NAME" == "darwin" ]; then
+          tar -czvf "$RELEASE_DIR/$FILE_NAME" -C "$BUILD_DIR" .
+          tar -czvf "$VERSION_DIR/$FILE_NAME" -C "$BUILD_DIR" .
+          echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
           else
-            cd $BUILD_DIR
-            7z a -tzip "$RELEASE_DIR/rindexer_${PLATFORM_NAME}-${ARCH}.zip" "$BINARY_NAME"
-            7z a -tzip "$VERSION_DIR/rindexer_${PLATFORM_NAME}-${ARCH}.zip" "$BINARY_NAME"
-            cp "$BINARY_NAME" "$VERSION_DIR/"
-            cp "$BINARY_NAME" "$RELEASE_DIR/rindexer_cli"
-            echo "file_name=rindexer_${PLATFORM_NAME}-${ARCH}.zip" >> $GITHUB_OUTPUT
+          cd $BUILD_DIR
+          7z a -tzip "$RELEASE_DIR/rindexer_${PLATFORM_NAME}-${ARCH}.zip" *
+          7z a -tzip "$VERSION_DIR/rindexer_${PLATFORM_NAME}-${ARCH}.zip" *
+          echo "file_name=rindexer_${PLATFORM_NAME}-${ARCH}.zip" >> $GITHUB_OUTPUT
           fi
 
       - name: Upload artifact
@@ -165,18 +152,16 @@ jobs:
           name: ${{ matrix.platform }}-${{ matrix.arch }}
           path: |
             ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}-${{ matrix.arch }}/${{ env.VERSION_NAME }}
-            ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}-${{ matrix.arch }}/rindexer_${PLATFORM_NAME}-${ARCH}.tar.gz
-            ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}-${{ matrix.arch }}/rindexer_cli
+            ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}-${{ matrix.arch }}/rindexer_${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
         if: matrix.target != 'x86_64-pc-windows-msvc'
-  
+
       - name: Upload artifact for windows
         uses: actions/upload-artifact@v2
         with:
           name: ${{ matrix.platform }}-${{ matrix.arch }}
           path: |
-            ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}-${{ matrix.arch }}/${{ env.VERSION_NAME }}
-            ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}-${{ matrix.arch }}/rindexer_${PLATFORM_NAME}-${ARCH}.zip
-            ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}-${{ matrix.arch }}/rindexer_cli
+            ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}-${{ env.VERSION_NAME }}
+            ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}-${{ env.VERSION_NAME }}/rindexer_${{ matrix.platform }}-${{ matrix.arch }}.zip
         if: matrix.target == 'x86_64-pc-windows-msvc'
 
   finalize:
@@ -203,14 +188,15 @@ jobs:
           git add documentation/docs/public/releases
           git commit -m "Add release binaries for ${{ env.VERSION_NAME }}"
           git push origin HEAD:refs/heads/${{ github.ref_name }}
+          
+      - name: Clean up uploaded artifacts
+        if: matrix.target != 'x86_64-pc-windows-msvc'
+        run: |
+          rm -rf ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}-${{ env.VERSION_NAME }}/rindexer_${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
+          rm -rf ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}/rindexer_${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
 
-#      - name: Create or update pull request
-#        uses: peter-evans/create-pull-request@v3
-#        with:
-#          token: ${{ secrets.GITHUB_TOKEN }}
-#          commit-message: "Add binaries for ${{ env.VERSION_NAME }}"
-#          branch: "${{ github.ref_name }}"
-#          base: master
-#          title: "Release ${{ env.VERSION_NAME }}"
-#          body: "This PR merges the release binaries for $VERSION_NAME into master and triggers a deploy."
-#          update-existing-pr: true
+      - name: Clean up uploaded artifacts for windows
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: |
+          rm -rf ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}-${{ env.VERSION_NAME }}/rindexer_${{ matrix.platform }}-${{ matrix.arch }}.zip
+          rm -rf ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}/rindexer_${{ matrix.platform }}-${{ matrix.arch }}.zip
