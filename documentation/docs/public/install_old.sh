@@ -6,27 +6,8 @@ RINDEXER_DIR="${RINDEXER_DIR:-"$BASE_DIR/.rindexer"}"
 RINDEXER_BIN_DIR="$RINDEXER_DIR/bin"
 RINDEXERUP_PATH="$RINDEXER_BIN_DIR/rindexerup"
 RINDEXERDOWN_PATH="$RINDEXER_BIN_DIR/rindexerdown"
-OS_TYPE=$(uname)
-ARCH_TYPE=$(uname -m)
-
-if [[ "$OS_TYPE" == "Linux" ]]; then
-    BIN_PATH="$RINDEXER_BIN_DIR/rindexer"
-    PLATFORM="linux"
-    EXT="tar.gz"
-elif [[ "$OS_TYPE" == "Darwin" ]]; then
-    BIN_PATH="$RINDEXER_BIN_DIR/rindexer"
-    PLATFORM="darwin"
-    EXT="tar.gz"
-elif [[ "$OS_TYPE" == "MINGW"* ]] || [[ "$OS_TYPE" == "MSYS"* ]] || [[ "$OS_TYPE" == "CYGWIN"* ]]; then
-    PLATFORM="win32"
-    EXT="zip"
-    BIN_PATH="$RINDEXER_BIN_DIR/rindexer.exe"
-else
-    echo "Unsupported OS: $OS_TYPE"
-    exit 1
-fi
-
-BIN_URL="https://rindexer.xyz/releases/${PLATFORM}-${ARCH_TYPE}/rindexer_${PLATFORM}-${ARCH_TYPE}.${EXT}"
+BIN_PATH="$RINDEXER_BIN_DIR/rindexer"
+BIN_URL="https://rindexer.xyz/releases/rindexer_cli_latest"
 RESOURCES_URL="https://rindexer.xyz/releases/resources.zip"
 
 spinner() {
@@ -53,17 +34,17 @@ case "$1" in
         ;;
     --uninstall)
         echo "
-
-
-               _           _
-              (_)         | |
-          _ __ _ _ __   __| | _____  _____ _ __
+        
+        
+               _           _                    
+              (_)         | |                   
+          _ __ _ _ __   __| | _____  _____ _ __ 
          | '__| | '_ \ / _` |/ _ \ \/ / _ \ '__|
-         | |  | | | | | (_| |  __/>  <  __/ |
-         |_|  |_|_| |_|\__,_|\___/_/\_\___|_|
-
-
-
+         | |  | | | | | (_| |  __/>  <  __/ |   
+         |_|  |_|_| |_|\__,_|\___/_/\_\___|_|   
+                                                
+                                                
+                                                
         "
         rm -f "$BIN_PATH" "$RINDEXERUP_PATH"
         rm -rf "$RINDEXER_DIR/resources"
@@ -75,28 +56,23 @@ case "$1" in
         ;;
     *)
         echo "
-
-
-               _           _
-              (_)         | |
-          _ __ _ _ __   __| | _____  _____ _ __
+        
+        
+               _           _                    
+              (_)         | |                   
+          _ __ _ _ __   __| | _____  _____ _ __ 
          | '__| | '_ \ / _` |/ _ \ \/ / _ \ '__|
-         | |  | | | | | (_| |  __/>  <  __/ |
-         |_|  |_|_| |_|\__,_|\___/_/\_\___|_|
-
-
-
+         | |  | | | | | (_| |  __/>  <  __/ |   
+         |_|  |_|_| |_|\__,_|\___/_/\_\___|_|   
+                                                
+                                                
+                                                
         "
         echo "Preparing the installation..."
         mkdir -p "$RINDEXER_BIN_DIR"
-        curl -sSf -L "$BIN_URL" -o "$RINDEXER_DIR/rindexer.${EXT}"
-        if [[ "$EXT" == "tar.gz" ]]; then
-            tar -xzvf "$RINDEXER_DIR/rindexer.${EXT}" -C "$RINDEXER_BIN_DIR" & spinner
-        else
-            unzip -o "$RINDEXER_DIR/rindexer.${EXT}" -d "$RINDEXER_BIN_DIR" & spinner
-        fi
+        curl -sSf -L "$BIN_URL" -o "$BIN_PATH"
         mkdir -p "$RINDEXER_DIR/resources"
-        curl -sSf -L "$RESOURCES_URL" -o "$RINDEXER_DIR/resources.zip"
+        curl -sSf -L "$RESOURCES_URL" -o "$RINDEXER_DIR/resources.zip" & spinner
         unzip -o "$RINDEXER_DIR/resources.zip" -d "$RINDEXER_DIR/resources" > /dev/null
         rm "$RINDEXER_DIR/resources.zip"
         ;;
@@ -131,15 +107,15 @@ echo "Updating rindexer..."
 echo "
 
 
-       _           _
-      (_)         | |
-  _ __ _ _ __   __| | _____  _____ _ __
+       _           _                    
+      (_)         | |                   
+  _ __ _ _ __   __| | _____  _____ _ __ 
  | '__| | '_ \ / _` |/ _ \ \/ / _ \ '__|
- | |  | | | | | (_| |  __/>  <  __/ |
- |_|  |_|_| |_|\__,_|\___/_/\_\___|_|
-
-
-
+ | |  | | | | | (_| |  __/>  <  __/ |   
+ |_|  |_|_| |_|\__,_|\___/_/\_\___|_|   
+                                        
+                                        
+                                        
 "
 if [ "\$1" == "--local" ]; then
     echo "Using local binary for update..."
@@ -147,12 +123,7 @@ if [ "\$1" == "--local" ]; then
     unzip -o "$LOCAL_RESOURCES_PATH" -d "$RINDEXER_DIR/resources" > /dev/null
 else
     echo "Downloading the latest binary from $BIN_URL..."
-    curl -sSf -L "$BIN_URL" -o "$RINDEXER_DIR/rindexer.${EXT}"
-    if [[ "$EXT" == "tar.gz" ]]; then
-        tar -xzvf "$RINDEXER_DIR/rindexer.${EXT}" -C "$RINDEXER_BIN_DIR"
-    else
-        unzip -o "$RINDEXER_DIR/rindexer.${EXT}" -d "$RINDEXER_BIN_DIR"
-    fi
+    curl -sSf -L "$BIN_URL" -o "$BIN_PATH"
     mkdir -p "$RINDEXER_DIR/resources"
     curl -sSf -L "$RESOURCES_URL" -o "$RINDEXER_DIR/resources.zip"
     unzip -o "$RINDEXER_DIR/resources.zip" -d "$RINDEXER_DIR/resources" > /dev/null
@@ -174,15 +145,15 @@ echo "Uninstalling rindexer..."
 echo "
 
 
-       _           _
-      (_)         | |
-  _ __ _ _ __   __| | _____  _____ _ __
+       _           _                    
+      (_)         | |                   
+  _ __ _ _ __   __| | _____  _____ _ __ 
  | '__| | '_ \ / _` |/ _ \ \/ / _ \ '__|
- | |  | | | | | (_| |  __/>  <  __/ |
- |_|  |_|_| |_|\__,_|\___/_/\_\___|_|
-
-
-
+ | |  | | | | | (_| |  __/>  <  __/ |   
+ |_|  |_|_| |_|\__,_|\___/_/\_\___|_|   
+                                        
+                                        
+                                        
 "
 rm -f "$BIN_PATH" "$RINDEXERUP_PATH"
 rm -rf "$RINDEXER_DIR/resources"
@@ -200,4 +171,4 @@ echo "To update rindexer run 'rindexerup'."
 echo ""
 echo "To uninstall rindexer run 'rindexerdown'."
 echo ""
-echo "Open a new terminal and run rindexer to get started."
+echo "Open a new terminal and run rindexer to get started.."
