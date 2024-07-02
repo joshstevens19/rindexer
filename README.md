@@ -108,10 +108,10 @@ any new ideas or bugs you have found.
 
 To release a new rindexer you have to do a few things:
 
-1) Make sure you have update the changelog in documentation/docs/pages/docs/introduction/changelog.mdx
-2) Open up the cli folder and go to the Cargo.toml and update the version number
-3) Then run shell script ./release.sh this will prepare everything for you
-4) Then you can just push all the file changes and it will deploy it. The rindexer binary is served through the
-   documentation site.
-5) We should then tag the release on github so its all clear
+1) Checkout release/x.x.x branch depending on the next version number
+2) Update the changelog in documentation/docs/pages/docs/introduction/changelog.mdx
+3) Open up the cli folder and go to the Cargo.toml and update the version number
+4) Push the branch up to GitHub which will queue a build on the CI
+5) Once the build is successful you can open a PR merging the release branch into master
+6) Merge will auto deploy the release
 
