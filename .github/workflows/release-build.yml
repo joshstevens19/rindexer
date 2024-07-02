@@ -108,6 +108,7 @@ jobs:
         run: |
           RELEASE_DIR="${{ github.workspace }}/documentation/docs/public/releases/${PLATFORM_NAME}-${ARCH}"
           VERSION_DIR="$RELEASE_DIR/${{ env.VERSION_NAME }}"
+          mkdir -p "$RELEASE_DIR"
           mkdir -p "$VERSION_DIR"
           BUILD_DIR="./target/${TARGET}/${{ env.BUILD_TYPE }}"
           BINARY_NAME="rindexer_cli"
@@ -117,20 +118,20 @@ jobs:
             tar -czvf "$RELEASE_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
             tar -czvf "$VERSION_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
             cp "$BUILD_DIR/$BINARY_NAME" "$VERSION_DIR/"
-            cp "$BUILD_DIR/$BINARY_NAME" "$RELEASE_DIR/${BINARY_NAME}"
+            cp "$BUILD_DIR/$BINARY_NAME" "$RELEASE_DIR/rindexer_cli"
             echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
           elif [ "$PLATFORM_NAME" == "darwin" ]; then
             tar -czvf "$RELEASE_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
             tar -czvf "$VERSION_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
             cp "$BUILD_DIR/$BINARY_NAME" "$VERSION_DIR/"
-            cp "$BUILD_DIR/$BINARY_NAME" "$RELEASE_DIR/${BINARY_NAME}"
+            cp "$BUILD_DIR/$BINARY_NAME" "$RELEASE_DIR/rindexer_cli"
             echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
           else
             cd $BUILD_DIR
-            7z a -tzip "$RELEASE_DIR/${PLATFORM_NAME}-${ARCH}.zip" "$BINARY_NAME"
-            7z a -tzip "$VERSION_DIR/${PLATFORM_NAME}-${ARCH}.zip" "$BINARY_NAME"
+            7z a -tzip "$RELEASE_DIR/rindexer_${PLATFORM_NAME}-${ARCH}.zip" "$BINARY_NAME"
+            7z a -tzip "$VERSION_DIR/rindexer_${PLATFORM_NAME}-${ARCH}.zip" "$BINARY_NAME"
             cp "$BINARY_NAME" "$VERSION_DIR/"
-            cp "$BINARY_NAME" "$RELEASE_DIR/${BINARY_NAME}"
+            cp "$BINARY_NAME" "$RELEASE_DIR/rindexer_cli"
             echo "file_name=rindexer_${PLATFORM_NAME}-${ARCH}.zip" >> $GITHUB_OUTPUT
           fi
 
@@ -166,7 +167,7 @@ jobs:
           git config --global user.email "github-actions@github.com"
           git add documentation/docs/public/releases
           git commit -m "Add release binaries for ${{ env.VERSION_NAME }}"
-          git push origin ${{ github.ref_name }}
+          git push origin HEAD:refs/heads/${{ github.ref_name }}
 
 #      - name: Create or update pull request
 #        uses: peter-evans/create-pull-request@v3
