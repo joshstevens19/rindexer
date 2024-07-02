@@ -101,7 +101,7 @@ jobs:
         working-directory: cli
         run: |
           echo "Listing contents of target directory:"
-          ls -R ../target
+          ls -R ./target
           
       - name: Archive binaries
         working-directory: cli
