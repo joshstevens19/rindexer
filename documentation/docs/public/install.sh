@@ -20,6 +20,7 @@ if [[ "$OS_TYPE" == "Linux" ]]; then
 elif [[ "$OS_TYPE" == "Darwin" ]]; then
     BIN_PATH="$RINDEXER_BIN_DIR/rindexer"
     PLATFORM="darwin"
+    ARCH_TYPE="amd64"
     EXT="tar.gz"
 elif [[ "$OS_TYPE" == "MINGW"* ]] || [[ "$OS_TYPE" == "MSYS"* ]] || [[ "$OS_TYPE" == "CYGWIN"* ]]; then
     PLATFORM="win32"
