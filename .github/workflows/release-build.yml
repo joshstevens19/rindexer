@@ -1,12 +1,13 @@
-name: Build and Release Rust Project
+name: Release rindexer
 
 on:
   push:
     branches:
-      - 'release/**' # Trigger on branches matching release/{version}
+      - 'release/**'
 
 jobs:
   build:
+    if: github.event_name == 'push' && github.actor != 'github-actions[bot]'
     name: ${{ matrix.target }} (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 240
@@ -18,25 +19,26 @@ jobs:
             target: x86_64-unknown-linux-gnu
             platform: linux
             arch: amd64
-#          - runner: ubuntu-latest
-#            target: aarch64-unknown-linux-gnu
-#            platform: linux
-#            arch: arm64
-#          - runner: macos-12
-#            target: x86_64-apple-darwin
-#            platform: darwin
-#            arch: amd64
-#          - runner: macos-12
-#            target: aarch64-apple-darwin
-#            platform: darwin
-#            arch: arm64
-#          - runner: windows-latest
-#            target: x86_64-pc-windows-msvc
-#            platform: win32
-#            arch: amd64
+    #          - runner: ubuntu-latest
+    #            target: aarch64-unknown-linux-gnu
+    #            platform: linux
+    #            arch: arm64
+    #          - runner: macos-12
+    #            target: x86_64-apple-darwin
+    #            platform: darwin
+    #            arch: amd64
+    #          - runner: macos-12
+    #            target: aarch64-apple-darwin
+    #            platform: darwin
+    #            arch: arm64
+    #          - runner: windows-latest
+    #            target: x86_64-pc-windows-msvc
+    #            platform: win32
+    #            arch: amd64
 
     env:
-      BUILD_TYPE: release  # Set this to "debug" or "release" based on your requirement
+      # Set this to "debug" or "release" based on the build type
+      BUILD_TYPE: release
 
     steps:
       - uses: actions/checkout@v2
@@ -86,7 +88,7 @@ jobs:
           else
             cargo build --target "$target" "${flags[@]}"
           fi
-          
+
       - name: Archive binaries
         working-directory: cli
         id: artifacts
@@ -123,20 +125,20 @@ jobs:
             echo "file_name=rindexer_${PLATFORM_NAME}_${ARCH}.zip" >> $GITHUB_OUTPUT
           fi
 
-#      - name: Create release
-#        uses: softprops/action-gh-release@v2
-#        with:
-#          name: ${{ github.ref_name }}
-#          tag_name: ${{ github.ref_name }}
-#          body: "Release ${{ github.ref_name }}"
-#          files: ${{ steps.artifacts.outputs.file_name }}
-#        env:
-#          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
+  finalize:
+    name: Commit and push changes
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.actor != 'github-actions[bot]'
+    steps:
+      - uses: actions/checkout@v2
       - name: Commit and push changes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
           git add documentation/docs/public/releases
           git commit -m "Add release binaries for ${{ github.ref_name }}"
           git push origin HEAD:refs/heads/release/${{ github.ref_name }}
@@ -146,8 +148,8 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "Add binaries for ${{ github.ref_name }}"
-          branch: release/${{ github.ref_name }}
+          branch: "release/${{ github.ref_name }}"
           base: master
           title: "Release ${{ github.ref_name }}"
           body: "This PR merges the release binaries for ${{ github.ref_name }} into master and triggers a deploy."
-          update-existing: true
+          update-existing-pr: true
