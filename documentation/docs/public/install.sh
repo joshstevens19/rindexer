@@ -6,15 +6,43 @@ RINDEXER_DIR="${RINDEXER_DIR:-"$BASE_DIR/.rindexer"}"
 RINDEXER_BIN_DIR="$RINDEXER_DIR/bin"
 RINDEXERUP_PATH="$RINDEXER_BIN_DIR/rindexerup"
 RINDEXERDOWN_PATH="$RINDEXER_BIN_DIR/rindexerdown"
-BIN_PATH="$RINDEXER_BIN_DIR/rindexer"
-BIN_URL="https://rindexer.xyz/releases/rindexer_cli_latest"
+OS_TYPE=$(uname)
+ARCH_TYPE=$(uname -m)
+
+if [[ "$OS_TYPE" == "Linux" ]]; then
+    BIN_PATH="$RINDEXER_BIN_DIR/rindexer"
+    PLATFORM="linux"
+    EXT="tar.gz"
+elif [[ "$OS_TYPE" == "Darwin" ]]; then
+    BIN_PATH="$RINDEXER_BIN_DIR/rindexer"
+    PLATFORM="darwin"
+    EXT="tar.gz"
+elif [[ "$OS_TYPE" == "MINGW"* ]] || [[ "$OS_TYPE" == "MSYS"* ]] || [[ "$OS_TYPE" == "CYGWIN"* ]]; then
+    PLATFORM="win32"
+    EXT="zip"
+    BIN_PATH="$RINDEXER_BIN_DIR/rindexer.exe"
+else
+    echo "Unsupported OS: $OS_TYPE"
+    exit 1
+fi
+
+BIN_URL="https://rindexer.xyz/releases/${PLATFORM}-${ARCH_TYPE}/rindexer_${PLATFORM}-${ARCH_TYPE}.${EXT}"
 RESOURCES_URL="https://rindexer.xyz/releases/resources.zip"
 
+log() {
+   echo -e "\033[1;32m$1\033[0m"
+}
+
+error_log() {
+    echo -e "\033[1;31m$1\033[0m"
+}
+
 spinner() {
+    local text="$1"
     local pid=$!
     local delay=0.1
     local spinstr='|/-\'
-    echo -n "Installing rindexer"
+    log "$text"
     while [ "$(ps a | awk '{print $1}' | grep $pid)" ]; do
         local temp=${spinstr#?}
         printf " [%c]  " "$spinstr"
@@ -28,57 +56,53 @@ spinner() {
 # Install or uninstall based on the command line option
 case "$1" in
     --local)
-        echo "Using local binary from $LOCAL_BIN_PATH and resources from $LOCAL_RESOURCES_PATH..."
+        log "Using local binary from $LOCAL_BIN_PATH and resources from $LOCAL_RESOURCES_PATH..."
         cp "$LOCAL_BIN_PATH" "$BIN_PATH"
         unzip -o "$LOCAL_RESOURCES_PATH" -d "$RINDEXER_DIR/resources"
         ;;
     --uninstall)
-        echo "
-        
-        
-               _           _                    
-              (_)         | |                   
-          _ __ _ _ __   __| | _____  _____ _ __ 
-         | '__| | '_ \ / _` |/ _ \ \/ / _ \ '__|
-         | |  | | | | | (_| |  __/>  <  __/ |   
-         |_|  |_|_| |_|\__,_|\___/_/\_\___|_|   
-                                                
-                                                
-                                                
-        "
+        log "Uninstalling rindexer..."
         rm -f "$BIN_PATH" "$RINDEXERUP_PATH"
         rm -rf "$RINDEXER_DIR/resources"
         rmdir "$RINDEXER_BIN_DIR" "$RINDEXER_DIR" 2> /dev/null
         sed -i '' '/rindexerup/d' "$PROFILE"
         sed -i '' '/rindexer/d' "$PROFILE"
-        echo "Uninstallation complete! Please restart your shell or source your profile to complete the process."
+        log "Uninstallation complete! Please restart your shell or source your profile to complete the process."
         exit 0
         ;;
     *)
-        echo "
-        
-        
-               _           _                    
-              (_)         | |                   
-          _ __ _ _ __   __| | _____  _____ _ __ 
-         | '__| | '_ \ / _` |/ _ \ \/ / _ \ '__|
-         | |  | | | | | (_| |  __/>  <  __/ |   
-         |_|  |_|_| |_|\__,_|\___/_/\_\___|_|   
-                                                
-                                                
-                                                
-        "
-        echo "Preparing the installation..."
+        log "Preparing the installation..."
         mkdir -p "$RINDEXER_BIN_DIR"
-        curl -sSf -L "$BIN_URL" -o "$BIN_PATH"
+        log "Downloading binary archive from $BIN_URL..."
+        curl -sSf -L "$BIN_URL" -o "$RINDEXER_DIR/rindexer.${EXT}"
+        log "Downloaded binary archive to $RINDEXER_DIR/rindexer.${EXT}"
+
+        log "Extracting binary..."
+        if [[ "$EXT" == "tar.gz" ]]; then
+            tar -xzvf "$RINDEXER_DIR/rindexer.${EXT}" -C "$RINDEXER_BIN_DIR"
+            mv "$RINDEXER_BIN_DIR/rindexer_cli" "$BIN_PATH" || mv "$RINDEXER_BIN_DIR/rindexer" "$BIN_PATH"
+        else
+            unzip -o "$RINDEXER_DIR/rindexer.${EXT}" -d "$RINDEXER_BIN_DIR"
+            mv "$RINDEXER_BIN_DIR/rindexer_cli.exe" "$BIN_PATH" || mv "$RINDEXER_BIN_DIR/rindexer.exe" "$BIN_PATH"
+        fi
+
+        log "Extracted binary to $RINDEXER_BIN_DIR"
+
         mkdir -p "$RINDEXER_DIR/resources"
-        curl -sSf -L "$RESOURCES_URL" -o "$RINDEXER_DIR/resources.zip" & spinner
+        curl -sSf -L "$RESOURCES_URL" -o "$RINDEXER_DIR/resources.zip" & spinner "Downloading resources..."
         unzip -o "$RINDEXER_DIR/resources.zip" -d "$RINDEXER_DIR/resources" > /dev/null
         rm "$RINDEXER_DIR/resources.zip"
         ;;
 esac
 
-chmod +x "$BIN_PATH"
+# Ensure the binary exists before setting permissions
+if [ -f "$BIN_PATH" ]; then
+    chmod +x "$BIN_PATH"
+    log "Binary found and permissions set at $BIN_PATH"
+else
+    error_log "Error: Binary not found at $BIN_PATH"
+    exit 1
+fi
 
 # Update PATH in user's profile
 PROFILE="${HOME}/.profile"  # Default to .profile
@@ -90,7 +114,7 @@ esac
 
 if [[ ":$PATH:" != *":${RINDEXER_BIN_DIR}:"* ]]; then
     echo "export PATH=\"\$PATH:$RINDEXER_BIN_DIR\"" >> "$PROFILE"
-    echo "PATH updated in $PROFILE. Please log out and back in or source the profile file."
+    log "PATH updated in $PROFILE. Please log out and back in or source the profile file."
 fi
 
 # Add the rindexerup and rindexerdown commands to the profile
@@ -104,33 +128,26 @@ cat <<EOF > "$RINDEXERUP_PATH"
 set -eo pipefail
 
 echo "Updating rindexer..."
-echo "
-
-
-       _           _                    
-      (_)         | |                   
-  _ __ _ _ __   __| | _____  _____ _ __ 
- | '__| | '_ \ / _` |/ _ \ \/ / _ \ '__|
- | |  | | | | | (_| |  __/>  <  __/ |   
- |_|  |_|_| |_|\__,_|\___/_/\_\___|_|   
-                                        
-                                        
-                                        
-"
 if [ "\$1" == "--local" ]; then
     echo "Using local binary for update..."
     cp "$LOCAL_BIN_PATH" "$BIN_PATH"
     unzip -o "$LOCAL_RESOURCES_PATH" -d "$RINDEXER_DIR/resources" > /dev/null
 else
     echo "Downloading the latest binary from $BIN_URL..."
-    curl -sSf -L "$BIN_URL" -o "$BIN_PATH"
+    curl -sSf -L "$BIN_URL" -o "$RINDEXER_DIR/rindexer.${EXT}"
+    if [[ "$EXT" == "tar.gz" ]]; then
+        tar -xzvf "$RINDEXER_DIR/rindexer.${EXT}" -C "$RINDEXER_BIN_DIR"
+        mv "$RINDEXER_BIN_DIR/rindexer_cli" "$BIN_PATH" || mv "$RINDEXER_BIN_DIR/rindexer" "$BIN_PATH"
+    else
+        unzip -o "$RINDEXER_DIR/rindexer.${EXT}" -d "$RINDEXER_BIN_DIR"
+        mv "$RINDEXER_BIN_DIR/rindexer_cli.exe" "$BIN_PATH" || mv "$RINDEXER_BIN_DIR/rindexer.exe" "$BIN_PATH"
+    fi
     mkdir -p "$RINDEXER_DIR/resources"
     curl -sSf -L "$RESOURCES_URL" -o "$RINDEXER_DIR/resources.zip"
     unzip -o "$RINDEXER_DIR/resources.zip" -d "$RINDEXER_DIR/resources" > /dev/null
     rm "$RINDEXER_DIR/resources.zip"
 fi
 chmod +x "$BIN_PATH"
-echo ""
 echo "rindexer has been updated to the latest version."
 EOF
 
@@ -142,19 +159,6 @@ cat <<EOF > "$RINDEXERDOWN_PATH"
 set -eo pipefail
 
 echo "Uninstalling rindexer..."
-echo "
-
-
-       _           _                    
-      (_)         | |                   
-  _ __ _ _ __   __| | _____  _____ _ __ 
- | '__| | '_ \ / _` |/ _ \ \/ / _ \ '__|
- | |  | | | | | (_| |  __/>  <  __/ |   
- |_|  |_|_| |_|\__,_|\___/_/\_\___|_|   
-                                        
-                                        
-                                        
-"
 rm -f "$BIN_PATH" "$RINDEXERUP_PATH"
 rm -rf "$RINDEXER_DIR/resources"
 rmdir "$RINDEXER_BIN_DIR" "$RINDEXER_DIR" 2> /dev/null
@@ -165,10 +169,11 @@ EOF
 
 chmod +x "$RINDEXERDOWN_PATH"
 
-echo "rindexer has been installed successfully"
-echo ""
-echo "To update rindexer run 'rindexerup'."
-echo ""
-echo "To uninstall rindexer run 'rindexerdown'."
-echo ""
-echo "Open a new terminal and run rindexer to get started.."
+log ""
+log "rindexer has been installed successfully"
+log ""
+log "To update rindexer run 'rindexerup'."
+log ""
+log "To uninstall rindexer run 'rindexerdown'."
+log ""
+log "Open a new terminal and run 'rindexer' to get started."
