@@ -2,7 +2,6 @@
 
 checklist v1.0:
 - do benchmarks with a few different projects
-- add a favicon to the docs
 
 bugs:
 - fix the environment variables for RPC urls
