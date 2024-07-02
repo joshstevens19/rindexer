@@ -101,6 +101,20 @@ jobs:
           else
             cargo build --target "$target" "${flags[@]}"
           fi
+          
+      - name: List target directory for debugging
+        working-directory: cli
+        run: |
+          echo "Listing contents of target directory after build:"
+          ls -R ./target
+          
+      - name: Print target directory
+        working-directory: cli
+        run: |
+          echo "Printing target directory for debugging:"
+          target_dir=$(cargo metadata --format-version 1 --no-deps | jq -r '.target_directory')
+          echo "Target directory: $target_dir"
+          ls -R "$target_dir"
 
       - name: Archive binaries
         working-directory: cli
