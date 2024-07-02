@@ -117,7 +117,7 @@ jobs:
           ls -R "$target_dir"
 
       - name: Archive binaries
-        working-directory: cli
+        #working-directory: cli
         id: artifacts
         env:
           PLATFORM_NAME: ${{ matrix.platform }}
@@ -130,7 +130,11 @@ jobs:
           VERSION_DIR="$RELEASE_DIR/${{ env.VERSION_NAME }}"
           mkdir -p "$RELEASE_DIR"
           mkdir -p "$VERSION_DIR"
-          BUILD_DIR="./target/${TARGET}/${{ env.BUILD_TYPE }}"
+          if [ "$PLATFORM_NAME" == "darwin" ]; then
+            BUILD_DIR="${{ github.workspace }}/target/${TARGET}/${{ env.BUILD_TYPE }}"
+          else
+            BUILD_DIR="${{ github.workspace }}/cli/target/${TARGET}/${{ env.BUILD_TYPE }}"
+          fi
           BINARY_NAME="rindexer_cli"
           FILE_NAME="rindexer_${PLATFORM_NAME}-${ARCH}.tar.gz"
 
