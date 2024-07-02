@@ -15,23 +15,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-#          - runner: ubuntu-latest
-#            target: x86_64-unknown-linux-gnu
-#            platform: linux
-#            arch: amd64
-#          - runner: ubuntu-latest
-#            target: aarch64-unknown-linux-gnu
-#            platform: linux
-#            arch: arm64
-#           - runner: macos-12
-#             target: x86_64-apple-darwin
-#             platform: darwin
-#             arch: amd64
-           - runner: macos-latest
-             target: aarch64-apple-darwin
-             svm_target_platform: macosx-amd64
-             platform: darwin
-             arch: arm64
+          - runner: Linux-20.04
+            target: x86_64-unknown-linux-gnu
+            svm_target_platform: linux-amd64
+            platform: linux
+            arch: amd64
+          - runner: Linux-20.04
+            target: aarch64-unknown-linux-gnu
+            svm_target_platform: linux-aarch64
+            platform: linux
+            arch: arm64
+          - runner: macos-12
+            target: x86_64-apple-darwin
+            svm_target_platform: macosx-amd64
+            platform: darwin
+            arch: amd64
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+            svm_target_platform: macosx-aarch64
+            platform: darwin
+            arch: arm64
     #          - runner: windows-latest
     #            target: x86_64-pc-windows-msvc
     #            platform: win32
