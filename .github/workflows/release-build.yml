@@ -166,7 +166,7 @@ jobs:
         run: |
           git add documentation/docs/public/releases
           git commit -m "Add release binaries for ${{ github.ref_name }}"
-          git push origin HEAD:refs/heads/${{ github.ref_name }}
+          git push origin ${{ github.ref_name }}
 
       - name: Create or update pull request
         uses: peter-evans/create-pull-request@v3
