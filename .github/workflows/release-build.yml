@@ -67,6 +67,10 @@ jobs:
         if: matrix.target == 'x86_64-pc-windows-msvc'
         run: rustup target add x86_64-pc-windows-msvc
 
+      - name: Extract version name
+        id: extract_version
+        run: echo "VERSION_NAME=${GITHUB_REF#refs/heads/release/}" >> $GITHUB_ENV
+
       - name: Build binaries
         working-directory: cli
         env:
@@ -96,11 +100,11 @@ jobs:
           PLATFORM_NAME: ${{ matrix.platform }}
           TARGET: ${{ matrix.target }}
           ARCH: ${{ matrix.arch }}
-          VERSION_NAME: ${{ github.ref_name }}
+          VERSION_NAME: ${{ env.VERSION_NAME }}
         shell: bash
         run: |
           RELEASE_DIR="${{ github.workspace }}/documentation/docs/public/releases"
-          VERSION_DIR="$RELEASE_DIR/${{ github.ref_name }}"
+          VERSION_DIR="$RELEASE_DIR/${{ env.VERSION_NAME }}"
           mkdir -p "$RELEASE_DIR"
           mkdir -p "$VERSION_DIR"
           BUILD_DIR="./target/${TARGET}/${{ env.BUILD_TYPE }}"
@@ -149,7 +153,7 @@ jobs:
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
           git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
-          git pull origin release/${{ github.ref_name }} --rebase
+          git pull origin ${{ github.ref_name }} --rebase
 
       - name: Download artifacts
         uses: actions/download-artifact@v2
@@ -162,14 +166,14 @@ jobs:
         run: |
           git add documentation/docs/public/releases
           git commit -m "Add release binaries for ${{ github.ref_name }}"
-          git push origin HEAD:refs/heads/release/${{ github.ref_name }}
+          git push origin HEAD:refs/heads/${{ github.ref_name }}
 
       - name: Create or update pull request
         uses: peter-evans/create-pull-request@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "Add binaries for ${{ github.ref_name }}"
-          branch: "release/${{ github.ref_name }}"
+          branch: "${{ github.ref_name }}"
           base: master
           title: "Release ${{ github.ref_name }}"
           body: "This PR merges the release binaries for ${{ github.ref_name }} into master and triggers a deploy."
