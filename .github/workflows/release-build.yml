@@ -87,12 +87,6 @@ jobs:
             cargo build --target "$target" "${flags[@]}"
           fi
           
-      - name: List target directory contents for debugging
-        working-directory: cli
-        run: |
-          echo "Listing contents of target directory:"
-          ls -R ./target
-          
       - name: Archive binaries
         working-directory: cli
         id: artifacts
@@ -104,23 +98,29 @@ jobs:
         shell: bash
         run: |
           RELEASE_DIR="${{ github.workspace }}/documentation/docs/public/releases"
-          mkdir -p "$RELEASE_DIR/$VERSION_NAME"
+          VERSION_DIR="$RELEASE_DIR/${{ github.ref_name }}"
+          mkdir -p "$RELEASE_DIR"
+          mkdir -p "$VERSION_DIR"
           BUILD_DIR="./target/${TARGET}/${{ env.BUILD_TYPE }}"
           BINARY_NAME="rindexer_cli"
+          FILE_NAME="rindexer_${PLATFORM_NAME}_${ARCH}.tar.gz"
 
           if [ "$PLATFORM_NAME" == "linux" ]; then
-            tar -czvf "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.tar.gz" -C "$BUILD_DIR" "$BINARY_NAME"
-            cp $BUILD_DIR/$BINARY_NAME "$RELEASE_DIR/$VERSION_NAME/"
-            echo "file_name=${PLATFORM_NAME}_${ARCH}.tar.gz" >> $GITHUB_OUTPUT
+            tar -czvf "$RELEASE_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
+            tar -czvf "$VERSION_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
+            cp "$BUILD_DIR/$BINARY_NAME" "$VERSION_DIR/"
+            echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
           elif [ "$PLATFORM_NAME" == "darwin" ]; then
-            tar -czvf "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.tar.gz" -C "$BUILD_DIR" "$BINARY_NAME"
-            cp $BUILD_DIR/$BINARY_NAME "$RELEASE_DIR/$VERSION_NAME/"
-            echo "file_name=${PLATFORM_NAME}_${ARCH}.tar.gz" >> $GITHUB_OUTPUT
+            tar -czvf "$RELEASE_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
+            tar -czvf "$VERSION_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
+            cp "$BUILD_DIR/$BINARY_NAME" "$VERSION_DIR/"
+            echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
           else
             cd $BUILD_DIR
             7z a -tzip "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.zip" "$BINARY_NAME"
-            cp $BINARY_NAME "$RELEASE_DIR/$VERSION_NAME/"
-            echo "file_name=${PLATFORM_NAME}_${ARCH}.zip" >> $GITHUB_OUTPUT
+            7z a -tzip "$VERSION_DIR/${PLATFORM_NAME}_${ARCH}.zip" "$BINARY_NAME"
+            cp "$BINARY_NAME" "$VERSION_DIR/"
+            echo "file_name=rindexer_${PLATFORM_NAME}_${ARCH}.zip" >> $GITHUB_OUTPUT
           fi
 
 #      - name: Create release
@@ -138,7 +138,7 @@ jobs:
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
           git add documentation/docs/public/releases
-          git commit -m "Add binaries for ${{ github.ref_name }}"
+          git commit -m "Add release binaries for ${{ github.ref_name }}"
           git push origin HEAD:refs/heads/release/${{ github.ref_name }}
 
       - name: Create or update pull request
