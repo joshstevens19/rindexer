@@ -106,7 +106,7 @@ jobs:
           BUILD_DIR="./target/${TARGET}/${{ env.BUILD_TYPE }}"
           BINARY_NAME="rindexer_cli"
           FILE_NAME="rindexer_${PLATFORM_NAME}_${ARCH}.tar.gz"
-
+          
           if [ "$PLATFORM_NAME" == "linux" ]; then
             tar -czvf "$RELEASE_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
             tar -czvf "$VERSION_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
@@ -123,6 +123,8 @@ jobs:
             7z a -tzip "$VERSION_DIR/${PLATFORM_NAME}_${ARCH}.zip" "$BINARY_NAME"
             cp "$BINARY_NAME" "$VERSION_DIR/"
             echo "file_name=rindexer_${PLATFORM_NAME}_${ARCH}.zip" >> $GITHUB_OUTPUT
+          fi
+
 
       - name: Upload artifact
         uses: actions/upload-artifact@v2
@@ -134,6 +136,7 @@ jobs:
     name: Commit and push changes
     runs-on: ubuntu-latest
     needs: build
+    if: github.actor != 'github-actions[bot]'
     steps:
       - uses: actions/checkout@v2
 
