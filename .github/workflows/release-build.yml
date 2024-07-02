@@ -162,8 +162,8 @@ jobs:
         with:
           name: ${{ matrix.platform }}-${{ matrix.arch }}
           path: |
-            ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}-${{ env.VERSION_NAME }}
-            ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}-${{ env.VERSION_NAME }}/rindexer_${{ matrix.platform }}-${{ matrix.arch }}.zip
+            ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}-${{ matrix.arch }}
+            ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}-${{ matrix.arch }}/rindexer_${{ matrix.platform }}-${{ matrix.arch }}.zip
         if: matrix.target == 'x86_64-pc-windows-msvc'
 
   finalize:
