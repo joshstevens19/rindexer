@@ -19,10 +19,10 @@ jobs:
             target: x86_64-unknown-linux-gnu
             platform: linux
             arch: amd64
-    #          - runner: ubuntu-latest
-    #            target: aarch64-unknown-linux-gnu
-    #            platform: linux
-    #            arch: arm64
+          - runner: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            platform: linux
+            arch: arm64
     #          - runner: macos-12
     #            target: x86_64-apple-darwin
     #            platform: darwin
