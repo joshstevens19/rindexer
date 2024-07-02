@@ -42,6 +42,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v2
+        with:
+          ref: ${{ github.ref_name }}
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -103,40 +106,42 @@ jobs:
           VERSION_NAME: ${{ env.VERSION_NAME }}
         shell: bash
         run: |
-          RELEASE_DIR="${{ github.workspace }}/documentation/docs/public/releases"
+          RELEASE_DIR="${{ github.workspace }}/documentation/docs/public/releases/${PLATFORM_NAME}-${ARCH}"
           VERSION_DIR="$RELEASE_DIR/${{ env.VERSION_NAME }}"
-          mkdir -p "$RELEASE_DIR"
           mkdir -p "$VERSION_DIR"
           BUILD_DIR="./target/${TARGET}/${{ env.BUILD_TYPE }}"
           BINARY_NAME="rindexer_cli"
-          FILE_NAME="rindexer_${PLATFORM_NAME}_${ARCH}.tar.gz"
+          FILE_NAME="rindexer_${PLATFORM_NAME}-${ARCH}.tar.gz"
 
           if [ "$PLATFORM_NAME" == "linux" ]; then
             tar -czvf "$RELEASE_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
             tar -czvf "$VERSION_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
             cp "$BUILD_DIR/$BINARY_NAME" "$VERSION_DIR/"
-            cp "$BUILD_DIR/$BINARY_NAME" "$RELEASE_DIR/${BINARY_NAME}_latest"
+            cp "$BUILD_DIR/$BINARY_NAME" "$RELEASE_DIR/${BINARY_NAME}"
             echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
           elif [ "$PLATFORM_NAME" == "darwin" ]; then
             tar -czvf "$RELEASE_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
             tar -czvf "$VERSION_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
             cp "$BUILD_DIR/$BINARY_NAME" "$VERSION_DIR/"
-            cp "$BUILD_DIR/$BINARY_NAME" "$RELEASE_DIR/${BINARY_NAME}_latest"
+            cp "$BUILD_DIR/$BINARY_NAME" "$RELEASE_DIR/${BINARY_NAME}"
             echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
           else
             cd $BUILD_DIR
-            7z a -tzip "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.zip" "$BINARY_NAME"
-            7z a -tzip "$VERSION_DIR/${PLATFORM_NAME}_${ARCH}.zip" "$BINARY_NAME"
+            7z a -tzip "$RELEASE_DIR/${PLATFORM_NAME}-${ARCH}.zip" "$BINARY_NAME"
+            7z a -tzip "$VERSION_DIR/${PLATFORM_NAME}-${ARCH}.zip" "$BINARY_NAME"
             cp "$BINARY_NAME" "$VERSION_DIR/"
-            cp "$BINARY_NAME" "$RELEASE_DIR/${BINARY_NAME}_latest"
-            echo "file_name=rindexer_${PLATFORM_NAME}_${ARCH}.zip" >> $GITHUB_OUTPUT
+            cp "$BINARY_NAME" "$RELEASE_DIR/${BINARY_NAME}"
+            echo "file_name=rindexer_${PLATFORM_NAME}-${ARCH}.zip" >> $GITHUB_OUTPUT
           fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v2
         with:
           name: ${{ matrix.platform }}-${{ matrix.arch }}
-          path: ${{ github.workspace }}/documentation/docs/public/releases
+          path: |
+            ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}-${{ matrix.arch }}/${{ env.VERSION_NAME }}
+            ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}-${{ matrix.arch }}/rindexer_${PLATFORM_NAME}-${ARCH}.tar.gz
+            ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}-${{ matrix.arch }}/rindexer_cli
 
   finalize:
     name: Commit and push changes
@@ -147,15 +152,6 @@ jobs:
       - uses: actions/checkout@v2
         with:
           ref: ${{ github.ref_name }}
-
-#      - name: Pull latest changes
-#        env:
-#          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-#        run: |
-#          git config --global user.name "github-actions"
-#          git config --global user.email "github-actions@github.com"
-#          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
-#          git pull origin ${{ github.ref_name }} --rebase
 
       - name: Download artifacts
         uses: actions/download-artifact@v2
@@ -169,16 +165,16 @@ jobs:
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
           git add documentation/docs/public/releases
-          git commit -m "Add release binaries for ${{ github.ref_name }}"
+          git commit -m "Add release binaries for ${{ env.VERSION_NAME }}"
           git push origin ${{ github.ref_name }}
 
 #      - name: Create or update pull request
 #        uses: peter-evans/create-pull-request@v3
 #        with:
 #          token: ${{ secrets.GITHUB_TOKEN }}
-#          commit-message: "Add binaries for ${{ github.ref_name }}"
+#          commit-message: "Add binaries for ${{ env.VERSION_NAME }}"
 #          branch: "${{ github.ref_name }}"
 #          base: master
-#          title: "Release ${{ github.ref_name }}"
-#          body: "This PR merges the release binaries for ${{ github.ref_name }} into master and triggers a deploy."
+#          title: "Release ${{ env.VERSION_NAME }}"
+#          body: "This PR merges the release binaries for $VERSION_NAME into master and triggers a deploy."
 #          update-existing-pr: true
