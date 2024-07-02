@@ -12,10 +12,12 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 use tracing::{error, info};
 
+#[derive(Debug, Clone)]
 pub struct GraphQLServerDetails {
     pub settings: GraphQLServerSettings,
 }
 
+#[derive(Debug, Clone)]
 pub struct GraphQLServerSettings {
     port: Option<usize>,
     #[allow(dead_code)]

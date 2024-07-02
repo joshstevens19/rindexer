@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::signal;
-use tracing::info;
+use tracing::{error, info};
 
 use crate::api::{start_graphql_server, StartGraphqlServerError};
 use crate::database::postgres::SetupPostgresError;
@@ -55,17 +55,20 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
                 info!("Starting rindexer rust project");
             }
 
-            if let Some(graphql_server) = &details.graphql_server {
-                let _ = start_graphql_server(&manifest.to_indexer(), &graphql_server.settings)
-                    .await
-                    .map_err(StartRindexerError::CouldNotStartGraphqlServer)?;
-                if details.indexing_details.is_none() {
-                    signal::ctrl_c()
-                        .await
-                        .map_err(|_| StartRindexerError::FailedToListenToGraphqlSocket)?;
-                    return Ok(());
-                }
-            }
+            // Spawn a separate task for the GraphQL server if specified
+            let graphql_server_handle = if let Some(graphql_server) = &details.graphql_server {
+                let manifest_clone = manifest.clone();
+                let graphql_settings = graphql_server.settings.clone();
+                Some(tokio::spawn(async move {
+                    if let Err(e) =
+                        start_graphql_server(&manifest_clone.to_indexer(), &graphql_settings).await
+                    {
+                        error!("Failed to start GraphQL server: {:?}", e);
+                    }
+                }))
+            } else {
+                None
+            };
 
             if let Some(indexing_details) = details.indexing_details {
                 // setup postgres is already called in no-code startup
@@ -107,6 +110,13 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
                         .await
                         .map_err(|_| StartRindexerError::FailedToListenToGraphqlSocket)?;
                 }
+            }
+
+            // Await the GraphQL server task if it was started
+            if let Some(handle) = graphql_server_handle {
+                handle.await.unwrap_or_else(|e| {
+                    error!("GraphQL server task failed: {:?}", e);
+                });
             }
         }
         None => {

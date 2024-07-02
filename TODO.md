@@ -7,7 +7,6 @@ checklist v1.0:
 
 bugs:
 - Do not create a new postgres client each time on rust projects
-- graphql is blocking indexer starting up so making indexing slower
 - fix the environment variables for RPC urls
 - csv needs to have last seen block in a .rindexer folder file somewhere so it can be picked up again__~~
 
