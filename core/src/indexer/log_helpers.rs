@@ -1,6 +1,5 @@
 use ethers::abi::{Event, Log as ParsedLog, LogParam, RawLog, Token};
 use ethers::types::Log;
-use serde_json::Value;
 
 pub fn parse_log(event: &Event, log: &Log) -> Option<ParsedLog> {
     let raw_log = RawLog {
@@ -74,7 +73,7 @@ fn map_token_to_raw_values(token: &Token) -> Vec<String> {
         Token::FixedArray(tokens) | Token::Array(tokens) => {
             let values: Vec<String> = tokens.iter().flat_map(map_token_to_raw_values).collect();
             vec![format!("[{}]", values.join(", "))]
-        },
+        }
         Token::Tuple(tokens) => {
             let mut values = vec![];
             for token in tokens {
