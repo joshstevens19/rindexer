@@ -106,25 +106,27 @@ jobs:
           BUILD_DIR="./target/${TARGET}/${{ env.BUILD_TYPE }}"
           BINARY_NAME="rindexer_cli"
           FILE_NAME="rindexer_${PLATFORM_NAME}_${ARCH}.tar.gz"
-          
+
           if [ "$PLATFORM_NAME" == "linux" ]; then
             tar -czvf "$RELEASE_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
             tar -czvf "$VERSION_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
             cp "$BUILD_DIR/$BINARY_NAME" "$VERSION_DIR/"
+            cp "$BUILD_DIR/$BINARY_NAME" "$RELEASE_DIR/${BINARY_NAME}_latest"
             echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
           elif [ "$PLATFORM_NAME" == "darwin" ]; then
             tar -czvf "$RELEASE_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
             tar -czvf "$VERSION_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
             cp "$BUILD_DIR/$BINARY_NAME" "$VERSION_DIR/"
+            cp "$BUILD_DIR/$BINARY_NAME" "$RELEASE_DIR/${BINARY_NAME}_latest"
             echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
           else
             cd $BUILD_DIR
             7z a -tzip "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.zip" "$BINARY_NAME"
             7z a -tzip "$VERSION_DIR/${PLATFORM_NAME}_${ARCH}.zip" "$BINARY_NAME"
             cp "$BINARY_NAME" "$VERSION_DIR/"
+            cp "$BINARY_NAME" "$RELEASE_DIR/${BINARY_NAME}_latest"
             echo "file_name=rindexer_${PLATFORM_NAME}_${ARCH}.zip" >> $GITHUB_OUTPUT
           fi
-
 
       - name: Upload artifact
         uses: actions/upload-artifact@v2
@@ -140,6 +142,15 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
+      - name: Pull latest changes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
+          git pull origin release/${{ github.ref_name }} --rebase
+
       - name: Download artifacts
         uses: actions/download-artifact@v2
         with:
@@ -149,9 +160,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "github-actions@github.com"
-          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
           git add documentation/docs/public/releases
           git commit -m "Add release binaries for ${{ github.ref_name }}"
           git push origin HEAD:refs/heads/release/${{ github.ref_name }}
