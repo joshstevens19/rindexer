@@ -123,15 +123,15 @@ jobs:
             echo "file_name=${PLATFORM_NAME}_${ARCH}.zip" >> $GITHUB_OUTPUT
           fi
 
-      - name: Create release
-        uses: softprops/action-gh-release@v2
-        with:
-          name: ${{ github.ref_name }}
-          tag_name: ${{ github.ref_name }}
-          body: "Release ${{ github.ref_name }}"
-          files: ${{ steps.artifacts.outputs.file_name }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#      - name: Create release
+#        uses: softprops/action-gh-release@v2
+#        with:
+#          name: ${{ github.ref_name }}
+#          tag_name: ${{ github.ref_name }}
+#          body: "Release ${{ github.ref_name }}"
+#          files: ${{ steps.artifacts.outputs.file_name }}
+#        env:
+#          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Commit and push changes
         run: |
