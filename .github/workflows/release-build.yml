@@ -146,14 +146,14 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
-      - name: Pull latest changes
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "github-actions@github.com"
-          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
-          git pull origin ${{ github.ref_name }} --rebase
+#      - name: Pull latest changes
+#        env:
+#          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#        run: |
+#          git config --global user.name "github-actions"
+#          git config --global user.email "github-actions@github.com"
+#          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
+#          git pull origin ${{ github.ref_name }} --rebase
 
       - name: Download artifacts
         uses: actions/download-artifact@v2
@@ -164,9 +164,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
           git add documentation/docs/public/releases
           git commit -m "Add release binaries for ${{ github.ref_name }}"
-          git push origin ${{ github.ref_name }}
+          git push
 
       - name: Create or update pull request
         uses: peter-evans/create-pull-request@v3
