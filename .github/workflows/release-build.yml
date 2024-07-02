@@ -170,13 +170,13 @@ jobs:
           git commit -m "Add release binaries for ${{ github.ref_name }}"
           git push origin ${{ github.ref_name }}
 
-      - name: Create or update pull request
-        uses: peter-evans/create-pull-request@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "Add binaries for ${{ github.ref_name }}"
-          branch: "${{ github.ref_name }}"
-          base: master
-          title: "Release ${{ github.ref_name }}"
-          body: "This PR merges the release binaries for ${{ github.ref_name }} into master and triggers a deploy."
-          update-existing-pr: true
+#      - name: Create or update pull request
+#        uses: peter-evans/create-pull-request@v3
+#        with:
+#          token: ${{ secrets.GITHUB_TOKEN }}
+#          commit-message: "Add binaries for ${{ github.ref_name }}"
+#          branch: "${{ github.ref_name }}"
+#          base: master
+#          title: "Release ${{ github.ref_name }}"
+#          body: "This PR merges the release binaries for ${{ github.ref_name }} into master and triggers a deploy."
+#          update-existing-pr: true
