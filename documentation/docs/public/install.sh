@@ -12,7 +12,11 @@ ARCH_TYPE=$(uname -m)
 if [[ "$OS_TYPE" == "Linux" ]]; then
     BIN_PATH="$RINDEXER_BIN_DIR/rindexer"
     PLATFORM="linux"
+    ARCH_TYPE="amd64"
     EXT="tar.gz"
+    if ! command -v unzip &> /dev/null; then
+        sudo apt-get update && sudo apt-get install -y unzip
+    fi
 elif [[ "$OS_TYPE" == "Darwin" ]]; then
     BIN_PATH="$RINDEXER_BIN_DIR/rindexer"
     PLATFORM="darwin"
@@ -90,7 +94,11 @@ case "$1" in
 
         mkdir -p "$RINDEXER_DIR/resources"
         curl -sSf -L "$RESOURCES_URL" -o "$RINDEXER_DIR/resources.zip" & spinner "Downloading resources..."
-        unzip -o "$RINDEXER_DIR/resources.zip" -d "$RINDEXER_DIR/resources" > /dev/null
+        if [[ "$OS_TYPE" == "Linux" ]]; then
+            unzip -o "$RINDEXER_DIR/resources.zip" -d "$RINDEXER_DIR/resources" > /dev/null
+        else
+            tar -xzf "$RINDEXER_DIR/resources.zip" -C "$RINDEXER_DIR/resources" > /dev/null
+        fi
         rm "$RINDEXER_DIR/resources.zip"
         ;;
 esac
@@ -144,7 +152,11 @@ else
     fi
     mkdir -p "$RINDEXER_DIR/resources"
     curl -sSf -L "$RESOURCES_URL" -o "$RINDEXER_DIR/resources.zip"
-    unzip -o "$RINDEXER_DIR/resources.zip" -d "$RINDEXER_DIR/resources" > /dev/null
+    if [[ "$OS_TYPE" == "Linux" ]]; then
+        unzip -o "$RINDEXER_DIR/resources.zip" -d "$RINDEXER_DIR/resources" > /dev/null
+    else
+        tar -xzf "$RINDEXER_DIR/resources.zip" -C "$RINDEXER_DIR/resources" > /dev/null
+    fi
     rm "$RINDEXER_DIR/resources.zip"
 fi
 chmod +x "$BIN_PATH"
