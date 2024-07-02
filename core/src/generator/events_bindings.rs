@@ -567,7 +567,7 @@ fn generate_csv_instance(
 ) -> Result<Code, CreateCsvFileForEvent> {
     let csv_path = csv.as_ref().map_or("./generated_csv", |c| &c.path);
 
-    if !contract.generate_csv.unwrap_or_default() {
+    if !contract.generate_csv.unwrap_or(true) {
         return Ok(Code::new(format!(
             r#"let csv = AsyncCsvAppender::new("{csv_path}".to_string());"#,
             csv_path = csv_path,
@@ -575,7 +575,10 @@ fn generate_csv_instance(
     }
 
     let csv_path = create_csv_file_for_event(project_path, contract, event_info, csv_path)?;
-    let headers: Vec<String> = csv_headers_for_event(event_info);
+    let headers: Vec<String> = csv_headers_for_event(event_info)
+        .iter()
+        .map(|h| format!("\"{}\"", h))
+        .collect();
 
     Ok(Code::new(format!(
         r#"
@@ -1235,15 +1238,8 @@ pub fn generate_event_handlers(
             csv_data.push_str(r#"result.tx_information.network.to_string()"#);
 
             csv_write = format!(
-                r#"let csv_result = context.csv.append(vec![{csv_data}]).await;
-                
-                   if let Err(e) = csv_result {{ 
-                        rindexer_error!("{event_type_name}::{handler_name} inserting csv data: {{:?}}", e);
-                   }}
-                "#,
+                r#"csv_bulk_data.push(vec![{csv_data}]);"#,
                 csv_data = csv_data,
-                handler_name = event.name,
-                event_type_name = event_type_name,
             );
 
             if storage.postgres_disable_create_tables() {
@@ -1296,31 +1292,39 @@ pub fn generate_event_handlers(
 
             postgres_write = format!(
                 r#"
-                    let mut bulk_data: Vec<Vec<EthereumSqlTypeWrapper>> = vec![];
+                    let mut postgres_bulk_data: Vec<Vec<EthereumSqlTypeWrapper>> = vec![];
+                    {csv_bulk_data}
                     for result in results.iter() {{   
                         {csv_write}   
                                       
                         let data = {data};
-                        bulk_data.push(data);
+                        postgres_bulk_data.push(data);
                     }}
                     
-                    if bulk_data.is_empty() {{
+                    if !csv_bulk_data.is_empty() {{
+                        let csv_result = context.csv.append_bulk(csv_bulk_data).await;
+                        if let Err(e) = csv_result {{
+                            rindexer_error!("{event_type_name}::{handler_name} inserting csv data: {{:?}}", e);
+                        }}
+                    }}
+                    
+                    if postgres_bulk_data.is_empty() {{
                         return;
                     }}
                     
-                     if bulk_data.len() > 100 {{
+                     if postgres_bulk_data.len() > 100 {{
                         let result = context
                             .database
                             .bulk_insert_via_copy(
                                 "{table_name}",
                                 &[{columns_names}],
-                                &bulk_data
+                                &postgres_bulk_data
                                     .first()
                                     .unwrap()
                                     .iter()
                                     .map(|param| param.to_type())
                                     .collect::<Vec<PgType>>(),
-                                &bulk_data,
+                                &postgres_bulk_data,
                             )
                             .await;
                         
@@ -1333,7 +1337,7 @@ pub fn generate_event_handlers(
                                 .bulk_insert(
                                     "{table_name}",
                                     &[{columns_names}],
-                                    &bulk_data,
+                                    &postgres_bulk_data,
                                 )
                                 .await;
                             
@@ -1351,7 +1355,12 @@ pub fn generate_event_handlers(
                     .collect::<Vec<String>>()
                     .join(", "),
                 data = data,
-                csv_write = csv_write
+                csv_write = csv_write,
+                csv_bulk_data = if storage.csv_enabled() {
+                    "let mut csv_bulk_data: Vec<Vec<String>> = vec![];"
+                } else {
+                    ""
+                }
             );
         }
 
