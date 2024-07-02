@@ -399,7 +399,7 @@ POSTGRES_PASSWORD=rindexer"#;
             })?;
 
             write_docker_compose(&project_path).map_err(|e| {
-                print_error_message(&format!("Failed to write docker-compose file: {}", e));
+                print_error_message(&format!("Failed to write docker compose file: {}", e));
                 e
             })?;
         } else {
@@ -649,7 +649,7 @@ async fn handle_codegen_command(
 }
 
 fn start_docker_compose(project_path: &PathBuf) -> Result<(), String> {
-    let status = Command::new("docker-compose")
+    let status = Command::new("docker compose")
         .args(["up", "-d"])
         .current_dir(project_path)
         .status()
@@ -660,7 +660,7 @@ fn start_docker_compose(project_path: &PathBuf) -> Result<(), String> {
         })?;
 
     if !status.success() {
-        let error = format!("Docker-compose exited with status: {}", status);
+        let error = format!("docker compose exited with status: {}", status);
         print_error_message(&error);
         return Err(error);
     }
@@ -668,16 +668,16 @@ fn start_docker_compose(project_path: &PathBuf) -> Result<(), String> {
     rindexer_info!("Docker starting up the postgres container..");
 
     // Wait until all containers are up and running
-    let max_retries = 10;
+    let max_retries = 200;
     let mut retries = 0;
 
     while retries < max_retries {
-        let ps_status = Command::new("docker-compose")
+        let ps_status = Command::new("docker compose")
             .arg("ps")
             .current_dir(project_path)
             .output()
             .map_err(|e| {
-                let error = format!("Failed to check docker-compose status: {}", e);
+                let error = format!("Failed to check docker compose status: {}", e);
                 print_error_message(&error);
                 error
             })?;
@@ -689,15 +689,16 @@ fn start_docker_compose(project_path: &PathBuf) -> Result<(), String> {
                 return Ok(());
             }
         } else {
-            let error = format!("docker-compose ps exited with status: {}", ps_status.status);
+            let error = format!("docker compose ps exited with status: {}", ps_status.status);
             print_error_message(&error);
         }
 
         retries += 1;
         thread::sleep(Duration::from_millis(200));
+        print_success_message("Waiting for docker compose containers to start..")
     }
 
-    Err("Timed out waiting for docker-compose containers to start.".into())
+    Err("Timed out waiting for docker compose containers to start.".into())
 }
 
 async fn start(
