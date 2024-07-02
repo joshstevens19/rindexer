@@ -36,7 +36,7 @@ jobs:
 #            arch: amd64
 
     env:
-      BUILD_TYPE: debug  # Set this to "debug" or "release" based on your requirement
+      BUILD_TYPE: release  # Set this to "debug" or "release" based on your requirement
 
     steps:
       - uses: actions/checkout@v2
@@ -106,19 +106,20 @@ jobs:
           RELEASE_DIR="${{ github.workspace }}/documentation/docs/public/releases"
           mkdir -p "$RELEASE_DIR/$VERSION_NAME"
           BUILD_DIR="./target/${TARGET}/${{ env.BUILD_TYPE }}"
+          BINARY_NAME="rindexer_cli"
 
           if [ "$PLATFORM_NAME" == "linux" ]; then
-            tar -czvf "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.tar.gz" -C "$BUILD_DIR" .
-            cp $BUILD_DIR/* "$RELEASE_DIR/$VERSION_NAME/"
+            tar -czvf "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.tar.gz" -C "$BUILD_DIR" "$BINARY_NAME"
+            cp $BUILD_DIR/$BINARY_NAME "$RELEASE_DIR/$VERSION_NAME/"
             echo "file_name=${PLATFORM_NAME}_${ARCH}.tar.gz" >> $GITHUB_OUTPUT
           elif [ "$PLATFORM_NAME" == "darwin" ]; then
-            tar -czvf "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.tar.gz" -C "$BUILD_DIR" .
-            cp $BUILD_DIR/* "$RELEASE_DIR/$VERSION_NAME/"
+            tar -czvf "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.tar.gz" -C "$BUILD_DIR" "$BINARY_NAME"
+            cp $BUILD_DIR/$BINARY_NAME "$RELEASE_DIR/$VERSION_NAME/"
             echo "file_name=${PLATFORM_NAME}_${ARCH}.tar.gz" >> $GITHUB_OUTPUT
           else
             cd $BUILD_DIR
-            7z a -tzip "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.zip" *
-            cp * "$RELEASE_DIR/$VERSION_NAME/"
+            7z a -tzip "$RELEASE_DIR/${PLATFORM_NAME}_${ARCH}.zip" "$BINARY_NAME"
+            cp $BINARY_NAME "$RELEASE_DIR/$VERSION_NAME/"
             echo "file_name=${PLATFORM_NAME}_${ARCH}.zip" >> $GITHUB_OUTPUT
           fi
 
