@@ -103,13 +103,13 @@ jobs:
           fi
           
       - name: List target directory for debugging
-        working-directory: cli
+        #working-directory: cli
         run: |
           echo "Listing contents of target directory after build:"
           ls -R ./target
           
       - name: Print target directory
-        working-directory: cli
+        #working-directory: cli
         run: |
           echo "Printing target directory for debugging:"
           target_dir=$(cargo metadata --format-version 1 --no-deps | jq -r '.target_directory')
