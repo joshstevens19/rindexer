@@ -135,6 +135,7 @@ jobs:
           fi
           FILE_NAME="rindexer_${PLATFORM_NAME}-${ARCH}.tar.gz"
           BINARY_NAME="rindexer_cli"
+          [[ "$PLATFORM_NAME" == "win32" ]] && BINARY_NAME="rindexer_cli.exe"
           
           if [ "$PLATFORM_NAME" == "linux" ] || [ "$PLATFORM_NAME" == "darwin" ]; then
             tar -czvf "$RELEASE_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
