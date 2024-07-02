@@ -123,15 +123,25 @@ jobs:
             7z a -tzip "$VERSION_DIR/${PLATFORM_NAME}_${ARCH}.zip" "$BINARY_NAME"
             cp "$BINARY_NAME" "$VERSION_DIR/"
             echo "file_name=rindexer_${PLATFORM_NAME}_${ARCH}.zip" >> $GITHUB_OUTPUT
-          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: ${{ matrix.platform }}-${{ matrix.arch }}
+          path: ${{ github.workspace }}/documentation/docs/public/releases
 
   finalize:
     name: Commit and push changes
     runs-on: ubuntu-latest
     needs: build
-    if: github.actor != 'github-actions[bot]'
     steps:
       - uses: actions/checkout@v2
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v2
+        with:
+          path: ${{ github.workspace }}/documentation/docs/public/releases
+
       - name: Commit and push changes
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
