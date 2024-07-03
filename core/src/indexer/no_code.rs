@@ -351,7 +351,7 @@ pub async fn process_events(
     let mut events: Vec<EventInformation> = vec![];
 
     for contract in &mut manifest.contracts {
-        // TODO this could be shared with `get_abi_items`
+        // TODO - this could be shared with `get_abi_items`
         let full_path = get_full_path(project_path, &contract.abi);
         let abi_str =
             fs::read_to_string(full_path).map_err(ProcessIndexersError::CouldNotReadAbiString)?;

@@ -1,9 +1,9 @@
 use crate::generator::event_callback_registry::{
     EventCallbackRegistry, EventResult, IndexingContractSetup, NetworkContract,
 };
-use crate::helpers::camel_to_snake;
+use crate::helpers::{camel_to_snake, get_full_path};
 use crate::indexer::progress::{IndexingEventProgressStatus, IndexingEventsProgressState};
-use crate::manifest::yaml::DependencyEventTree;
+use crate::manifest::yaml::{CsvDetails, DependencyEventTree};
 use crate::provider::JsonRpcCachedProvider;
 use crate::{EthereumSqlTypeWrapper, PostgresClient};
 use ethers::middleware::MiddlewareError;
@@ -12,8 +12,12 @@ use ethers::types::{Address, BlockNumber, Bloom, FilteredParams, ValueOrArray, H
 use futures::future::join_all;
 use regex::Regex;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
+use tokio::fs;
+use tokio::fs::File;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, Mutex, Semaphore};
 use tokio::task::{JoinError, JoinHandle};
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -21,6 +25,7 @@ use tokio_stream::StreamExt;
 use tracing::{debug, error, info};
 
 pub struct EventProcessingConfig {
+    pub project_path: PathBuf,
     pub indexer_name: String,
     pub contract_name: String,
     pub info_log_name: String,
@@ -33,6 +38,7 @@ pub struct EventProcessingConfig {
     pub registry: Arc<EventCallbackRegistry>,
     pub progress: Arc<Mutex<IndexingEventsProgressState>>,
     pub database: Option<Arc<PostgresClient>>,
+    pub csv_details: Option<CsvDetails>,
     pub index_event_in_order: bool,
     pub live_indexing: bool,
     pub indexing_distance_from_head: U64,
@@ -442,7 +448,8 @@ async fn process_historic_logs_stream(
                     // lets just sit here for 1 seconds to avoid the race
                     // and info logs are not in the wrong order
                     // probably a better way to handle this but hey
-                    // TODO handle this nicer
+
+                    // TODO - handle this nicer
                     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
                     None
                 } else {
@@ -840,6 +847,7 @@ async fn process_events_dependency_tree(
                 .map_err(ProcessEventsWithDependenciesError::BuildFilterError)?;
 
                 let logs_params = ProcessLogsParams {
+                    project_path: event_processing_config.project_path.clone(),
                     indexer_name: event_processing_config.indexer_name.clone(),
                     contract_name: event_processing_config.contract_name.clone(),
                     info_log_name: event_processing_config.info_log_name.clone(),
@@ -850,6 +858,7 @@ async fn process_events_dependency_tree(
                     registry: event_processing_config.registry.clone(),
                     progress: event_processing_config.progress.clone(),
                     database: event_processing_config.database.clone(),
+                    csv_details: event_processing_config.csv_details.clone(),
                     execute_events_logs_in_order: event_processing_config.index_event_in_order,
                     // sync the historic ones first and live indexing is added to the stack to process after
                     live_indexing: false,
@@ -1048,6 +1057,7 @@ async fn process_events_dependency_tree(
                             });
 
                             let result = handle_logs_result(
+                                logs_params.project_path.clone(),
                                 logs_params.indexer_name.clone(),
                                 logs_params.contract_name.clone(),
                                 logs_params.event_name.clone(),
@@ -1056,6 +1066,7 @@ async fn process_events_dependency_tree(
                                 logs_params.progress.clone(),
                                 logs_params.network_contract.clone(),
                                 logs_params.database.clone(),
+                                logs_params.csv_details.clone(),
                                 logs_params.registry.clone(),
                                 fetched_logs,
                             )
@@ -1149,6 +1160,7 @@ pub async fn process_event(
     .map_err(ProcessEventError::BuildFilterError)?;
 
     process_logs(ProcessLogsParams {
+        project_path: event_processing_config.project_path,
         indexer_name: event_processing_config.indexer_name,
         contract_name: event_processing_config.contract_name,
         info_log_name: event_processing_config.info_log_name,
@@ -1159,6 +1171,7 @@ pub async fn process_event(
         registry: event_processing_config.registry,
         progress: event_processing_config.progress,
         database: event_processing_config.database,
+        csv_details: event_processing_config.csv_details,
         execute_events_logs_in_order: event_processing_config.index_event_in_order,
         live_indexing: event_processing_config.live_indexing,
         indexing_distance_from_head: event_processing_config.indexing_distance_from_head,
@@ -1173,6 +1186,7 @@ pub async fn process_event(
 /// Parameters for processing logs.
 #[derive(Clone)]
 pub struct ProcessLogsParams {
+    project_path: PathBuf,
     indexer_name: String,
     contract_name: String,
     info_log_name: String,
@@ -1183,6 +1197,7 @@ pub struct ProcessLogsParams {
     registry: Arc<EventCallbackRegistry>,
     progress: Arc<Mutex<IndexingEventsProgressState>>,
     database: Option<Arc<PostgresClient>>,
+    csv_details: Option<CsvDetails>,
     execute_events_logs_in_order: bool,
     live_indexing: bool,
     indexing_distance_from_head: U64,
@@ -1211,6 +1226,7 @@ async fn process_logs(params: ProcessLogsParams) -> Result<(), Box<ProviderError
 
     while let Some(result) = logs_stream.next().await {
         handle_logs_result(
+            params.project_path.clone(),
             params.indexer_name.clone(),
             params.contract_name.clone(),
             params.event_name.clone(),
@@ -1219,6 +1235,7 @@ async fn process_logs(params: ProcessLogsParams) -> Result<(), Box<ProviderError
             params.progress.clone(),
             params.network_contract.clone(),
             params.database.clone(),
+            params.csv_details.clone(),
             params.registry.clone(),
             result,
         )
@@ -1231,6 +1248,7 @@ async fn process_logs(params: ProcessLogsParams) -> Result<(), Box<ProviderError
 
 #[allow(clippy::too_many_arguments)]
 async fn handle_logs_result(
+    project_path: PathBuf,
     indexer_name: String,
     contract_name: String,
     event_name: String,
@@ -1239,6 +1257,7 @@ async fn handle_logs_result(
     progress: Arc<Mutex<IndexingEventsProgressState>>,
     network_contract: Arc<NetworkContract>,
     database: Option<Arc<PostgresClient>>,
+    csv_details: Option<CsvDetails>,
     registry: Arc<EventCallbackRegistry>,
     result: Result<FetchLogsResult, Box<dyn std::error::Error + Send>>,
 ) -> Result<(), Box<dyn std::error::Error + Send>> {
@@ -1260,24 +1279,28 @@ async fn handle_logs_result(
                 if execute_events_logs_in_order {
                     registry.trigger_event(&topic_id, fn_data).await;
                     update_progress_and_last_synced(
+                        project_path.clone(),
                         indexer_name.clone(),
                         contract_name,
                         event_name.clone(),
                         progress,
                         network_contract,
                         database,
+                        csv_details,
                         result.to_block,
                     );
                 } else {
                     tokio::spawn(async move {
                         registry.trigger_event(&topic_id, fn_data).await;
                         update_progress_and_last_synced(
+                            project_path,
                             indexer_name.clone(),
                             contract_name,
                             event_name.clone(),
                             progress,
                             network_contract,
                             database,
+                            csv_details,
                             result.to_block,
                         );
                     });
@@ -1293,14 +1316,93 @@ async fn handle_logs_result(
     }
 }
 
-/// Retrieves the last synced block number from the database.
+fn build_last_synced_block_number_for_csv(
+    project_path: &Path,
+    csv_details: &CsvDetails,
+    contract_name: &str,
+    network: &str,
+    event_name: &str,
+) -> String {
+    format!(
+        "{}/{}/last-synced-blocks/{}-{}-{}.txt",
+        get_full_path(project_path, &csv_details.path).display(),
+        contract_name,
+        contract_name.to_lowercase(),
+        network.to_lowercase(),
+        event_name.to_lowercase()
+    )
+}
+
+async fn get_last_synced_block_number_for_csv(
+    project_path: &Path,
+    csv_details: &CsvDetails,
+    contract_name: &str,
+    network: &str,
+    event_name: &str,
+) -> Result<Option<U64>, CsvError> {
+    let file_path = build_last_synced_block_number_for_csv(
+        project_path,
+        csv_details,
+        contract_name,
+        network,
+        event_name,
+    );
+    let path = Path::new(&file_path);
+
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let file = File::open(path).await?;
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
+
+    if reader.read_line(&mut line).await? > 0 {
+        let value = line.trim();
+        let parse = U64::from_dec_str(value);
+        return match parse {
+            Ok(value) => Ok(Some(value)),
+            Err(e) => Err(CsvError::ParseError(value.to_string(), e.to_string())),
+        };
+    }
+
+    Ok(None)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn get_last_synced_block_number(
+    project_path: &PathBuf,
     database: Option<Arc<PostgresClient>>,
+    csv_details: &Option<CsvDetails>,
+    contract_csv_enabled: bool,
     indexer_name: &str,
     contract_name: &str,
     event_name: &str,
     network: &str,
 ) -> Option<U64> {
+    // check CSV file for last seen block
+    if database.is_none() && contract_csv_enabled {
+        if let Some(csv_details) = csv_details {
+            let result = get_last_synced_block_number_for_csv(
+                project_path,
+                csv_details,
+                contract_name,
+                network,
+                event_name,
+            )
+            .await;
+
+            match result {
+                Ok(result) => return result,
+                Err(e) => {
+                    error!("Error fetching last synced block from CSV: {:?}", e);
+                }
+            }
+
+            return None;
+        }
+    }
+
     match database {
         Some(database) => {
             let query = format!(
@@ -1313,7 +1415,7 @@ pub async fn get_last_synced_block_number(
             let row = database.query_one(&query, &[&network]).await;
             match row {
                 Ok(row) => {
-                    // TODO UNCOMMENT
+                    // TODO - UNCOMMENT
                     // let result: Decimal = row.get("last_synced_block");
                     // Some(U64::from_dec_str(&result.to_string()).unwrap())
                     None
@@ -1328,14 +1430,64 @@ pub async fn get_last_synced_block_number(
     }
 }
 
-/// Updates the progress and the last synced block number.to the database
+#[derive(thiserror::Error, Debug)]
+pub enum CsvError {
+    #[error("File IO error: {0}")]
+    FileIo(#[from] std::io::Error),
+
+    #[error("Failed to parse block number: {0} err: {0}")]
+    ParseError(String, String),
+}
+
+async fn update_last_synced_block_number_for_csv_to_file(
+    project_path: &Path,
+    csv_details: &CsvDetails,
+    contract_name: &str,
+    network: &str,
+    event_name: &str,
+    to_block: U64,
+) -> Result<(), CsvError> {
+    let file_path = build_last_synced_block_number_for_csv(
+        project_path,
+        csv_details,
+        contract_name,
+        network,
+        event_name,
+    );
+
+    let last_block = get_last_synced_block_number_for_csv(
+        project_path,
+        csv_details,
+        contract_name,
+        network,
+        event_name,
+    )
+    .await?;
+
+    if last_block.is_none() || to_block > last_block.unwrap() {
+        let temp_file_path = format!("{}.tmp", file_path);
+
+        let mut file = fs::File::create(&temp_file_path).await?;
+        file.write_all(to_block.to_string().as_bytes()).await?;
+        file.sync_all().await?;
+
+        fs::rename(temp_file_path, file_path).await?;
+    }
+
+    Ok(())
+}
+
+/// Updates the progress and the last synced block number
+#[allow(clippy::too_many_arguments)]
 fn update_progress_and_last_synced(
+    project_path: PathBuf,
     indexer_name: String,
     contract_name: String,
     event_name: String,
     progress: Arc<Mutex<IndexingEventsProgressState>>,
     network_contract: Arc<NetworkContract>,
     database: Option<Arc<PostgresClient>>,
+    csv_details: Option<CsvDetails>,
     to_block: U64,
 ) {
     tokio::spawn(async move {
@@ -1362,6 +1514,19 @@ fn update_progress_and_last_synced(
 
             if let Err(e) = result {
                 error!("Error updating last synced block: {:?}", e);
+            }
+        } else if let Some(csv_details) = csv_details {
+            if let Err(e) = update_last_synced_block_number_for_csv_to_file(
+                &project_path,
+                &csv_details,
+                &contract_name,
+                &network_contract.network,
+                &event_name,
+                to_block,
+            )
+            .await
+            {
+                error!("Error updating last synced block to CSV: {:?}", e);
             }
         }
     });

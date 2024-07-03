@@ -286,10 +286,15 @@ pub struct PostgresConnectionDetails {
     pub disable_create_tables: Option<bool>,
 }
 
+fn default_csv_path() -> String {
+    "./generated_csv".to_string()
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CsvDetails {
     pub enabled: bool,
 
+    #[serde(default = "default_csv_path")]
     pub path: String,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]

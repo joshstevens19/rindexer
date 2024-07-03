@@ -15,6 +15,11 @@ If you wish to store the data in a postgres database you can enable the postgres
 This is optional if you do not wish to store the data in a postgres database you can leave this section out of your YAML.
 :::
 
+### Last synced block state
+
+When indexing with postgres rindexer keeps the network and contract last seen block in the database, this is to ensure that if the indexer goes down it can pick up where it left off.
+You can see those tables in a schema called rindexer_internal and should never be modified manually.
+
 ### Own connection string
 
 If you are deploying the indexer or want to point to an external database you can supply your own 
@@ -74,6 +79,13 @@ If you wish to store the data in a CSV files you can enable the csv storage.
 :::info
 This is optional if you do not wish to store the data in a CSV files you can leave this section out of your YAML.
 :::
+
+### Last synced block state
+
+When indexing with csv and postgres is disabled rindexer keeps the network and contract last seen block in a txt file within the
+defined path the csv files will be written to, this is to ensure that if the indexer goes down it can pick up where it left off.
+You can see those txt files under the csv path and in the contract names folder there is a folder called `last-synced-blocks`, each event will have
+a txt file with the last seen block. If you are using csv and postgres is enabled the last seen block will be stored in the database.
 
 ### enabled
 

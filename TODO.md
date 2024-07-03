@@ -4,7 +4,6 @@ checklist v1.0:
 - do benchmarks with a few different projects
 
 bugs:
-- csv needs to have last seen block in a .rindexer folder file somewhere so it can be picked up again
 
 nice to have:
 - look at the final unwraps
