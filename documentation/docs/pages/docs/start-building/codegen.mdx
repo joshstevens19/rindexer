@@ -19,6 +19,26 @@ rindexer codegen graphql --endpoint=YOUR_GRAPHQL_API_URL
 
 ### TypeScript
 
+[graphql-codegen](https://the-guild.dev/graphql/codegen) is the best tool on the market to generate TypeScript typings for your GraphQL queries, mutations, and subscriptions.
+
+learn about the `codegen.ts` config [here](https://the-guild.dev/graphql/codegen/docs/config-reference/codegen-config)
+
+the graphql API url is the `schema` in the config, you can set this to your graphql endpoint like so:
+
+```ts
+import { CodegenConfig } from '@graphql-codegen/cli'
+ 
+const config: CodegenConfig = {
+  // this is YOUR_GRAPHQL_API_URL // [!code focus]
+  schema: 'http://localhost:5005/graphql', // [!code focus]
+  ...
+}
+ 
+export default config
+```
+
+then how you hook up the config with your tool of choice, below are some links to documentation:
+
 - React Apollo - https://the-guild.dev/graphql/codegen/plugins/typescript/typescript-react-apollo#with-react-hooks
 - React Query - https://the-guild.dev/graphql/codegen/plugins/typescript/typescript-react-query
 - Node app - https://the-guild.dev/graphql/codegen/plugins/typescript/typescript-urql

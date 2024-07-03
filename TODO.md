@@ -6,7 +6,6 @@ checklist v1.0:
 bugs:
 - fix the environment variables for RPC urls
 - csv needs to have last seen block in a .rindexer folder file somewhere so it can be picked up again
-- schema.graphql needs to be generated properly
 
 nice to have:
 - look at the final unwraps

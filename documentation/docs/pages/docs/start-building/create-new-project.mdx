@@ -64,7 +64,7 @@ DATABASE_URL=postgresql://[user[:password]@][host][:port][/dbname]
 
 :::note
 rindexer starts your postgres docker compose file up for you automatically if the DATABASE_URL is not resolvable. 
-You will need to make sure you have docker running on your machine before starting the project if running locally.
+You will need to make sure you have docker running on your machine before starting the project.
 :::
 
 To start the project you can run the following command:
@@ -98,6 +98,10 @@ The boilerplate template uses a free node which may get rate limited. We recomme
 :::
 
 ## 4. Query the GraphQL API
+
+:::info
+Each page request will have a max query limit of 1000 per page to avoid memory and database issues.
+:::
 
 GraphQL will be available at http://localhost:5005/graphql and the playground at http://localhost:5123/playground.
 You can read more about rindexer GraphQL API in the [API documentation](/docs/accessing-data/graphql).
@@ -213,6 +217,26 @@ rindexer codegen graphql
 
 #### TypeScript
 
+[graphql-codegen](https://the-guild.dev/graphql/codegen) is the best tool on the market to generate TypeScript typings for your GraphQL queries, mutations, and subscriptions.
+
+learn about the `codegen.ts` config [here](https://the-guild.dev/graphql/codegen/docs/config-reference/codegen-config)
+
+the graphql API url is the `schema` in the config, you can set this to your graphql endpoint like so:
+
+```ts
+import { CodegenConfig } from '@graphql-codegen/cli'
+ 
+const config: CodegenConfig = {
+  // this is YOUR_GRAPHQL_API_URL // [!code focus]
+  schema: 'http://localhost:5005/graphql', // [!code focus]
+  ...
+}
+ 
+export default config
+```
+
+then how you hook up the config with your tool of choice, below are some links to documentation:
+
 - React Apollo - https://the-guild.dev/graphql/codegen/plugins/typescript/typescript-react-apollo#with-react-hooks
 - React Query - https://the-guild.dev/graphql/codegen/plugins/typescript/typescript-react-query
 - Node app - https://the-guild.dev/graphql/codegen/plugins/typescript/typescript-urql
@@ -234,5 +258,5 @@ If you are not sure what to select this section will explain each step in more d
 
 ### Postgres Docker
 
-- Yes - This will use docker to spin up a postgres database for you.
+- Yes - This will use docker to spin up a postgres database for you, great for local development.
 - No - This will not use docker and you will need to provide a postgres database information in the `.env` file.
