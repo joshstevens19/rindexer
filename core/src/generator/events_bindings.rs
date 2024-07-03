@@ -175,7 +175,7 @@ fn generate_structs(
     project_path: &Path,
     contract: &Contract,
 ) -> Result<Code, GenerateStructsError> {
-    // TODO this could be shared with `get_abi_items`
+    // TODO - this could be shared with `get_abi_items`
     let full_path = get_full_path(project_path, &contract.abi);
     let abi_str =
         fs::read_to_string(full_path).map_err(GenerateStructsError::CouldNotReadAbiString)?;
@@ -534,6 +534,11 @@ pub fn create_csv_file_for_event(
 
     // Create directory if it does not exist.
     if let Err(e) = fs::create_dir_all(&csv_folder) {
+        return Err(CreateCsvFileForEvent::CreateDirFailed(e));
+    }
+
+    // Create last-synced-blocks if it does not exist.
+    if let Err(e) = fs::create_dir_all(csv_folder.join("last-synced-blocks")) {
         return Err(CreateCsvFileForEvent::CreateDirFailed(e));
     }
 

@@ -98,6 +98,7 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
 
                 start_indexing(
                     &manifest,
+                    &project_path.to_path_buf(),
                     dependencies,
                     indexing_details.registry.complete(),
                 )

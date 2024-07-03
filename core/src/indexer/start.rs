@@ -1,6 +1,7 @@
 use ethers::providers::ProviderError;
 use ethers::types::U64;
 use futures::future::try_join_all;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::task::{JoinError, JoinHandle};
@@ -73,6 +74,7 @@ pub enum StartIndexingError {
 
 pub async fn start_indexing(
     manifest: &Manifest,
+    project_path: &PathBuf,
     dependencies: Vec<ContractEventDependencies>,
     registry: Arc<EventCallbackRegistry>,
 ) -> Result<(), StartIndexingError> {
@@ -114,9 +116,20 @@ pub async fn start_indexing(
                 .get_block_number()
                 .await
                 .map_err(StartIndexingError::GetBlockNumberError)?;
+
             let live_indexing = contract.end_block.is_none();
+
+            let contract_csv_enabled = manifest
+                .contracts
+                .iter()
+                .find(|c| c.name == event.contract.name)
+                .map_or(false, |c| c.generate_csv.unwrap_or(true));
+
             let last_known_start_block = get_last_synced_block_number(
+                &project_path,
                 database.clone(),
+                &manifest.storage.csv,
+                manifest.storage.csv_enabled() && contract_csv_enabled,
                 &event.indexer_name,
                 &event.contract.name,
                 &event.event_name,
@@ -163,6 +176,7 @@ pub async fn start_indexing(
             }
 
             let event_processing_config = EventProcessingConfig {
+                project_path: project_path.clone(),
                 indexer_name: event.indexer_name.clone(),
                 contract_name: event.contract.name.clone(),
                 info_log_name: event.info_log_name(),
@@ -175,6 +189,7 @@ pub async fn start_indexing(
                 registry: Arc::clone(&registry),
                 progress: Arc::clone(&event_progress_state),
                 database: database.clone(),
+                csv_details: manifest.storage.csv.clone(),
                 live_indexing,
                 index_event_in_order: event.index_event_in_order,
                 indexing_distance_from_head,
@@ -258,7 +273,7 @@ pub async fn start_indexing(
     // to avoid the thread closing before the stream is consumed
     // lets just sit here for 30 seconds to avoid the race
     // probably a better way to handle this but hey
-    // TODO handle this nicer
+    // TODO - handle this nicer
     tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
 
     Ok(())
