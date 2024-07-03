@@ -42,6 +42,13 @@ The boilerplate project is configured to index rETH transfer and approval events
 
 ## 2. Add Environment Variables
 
+If you are not using `postgres` you can move straight to [starting your project](/docs/start-building/create-new-project#3-start-the-project).
+
+If you selected `yes` to the `Postgres Docker Support Out The Box?` question, a `.env` file has be generated for you
+with the required environment variables. You can move straight to [starting your project](/docs/start-building/create-new-project#3-start-the-project).
+
+--------------------------------
+
 Open up the generated `.env` file and fill in the required environment variables.
 
 ### DATABASE_URL
@@ -56,9 +63,27 @@ For ease of running locally we suggest you enable docker support on the rindexer
 enable docker support with postgres storage you will need to provide a postgres database information in the `.env` file 
 which has been generated for you.
 
+### POSTGRES_PASSWORD
+
+:::warning
+Can skip if:
+- on question "What Storages To Enable?" you selected csv or none
+- on question "Postgres Docker Support Out The Box?" you selected yes
+:::
+
+This is injected into the `.env` for your if you selected `yes` to the `Postgres Docker Support Out The Box?` question.
+This is used for the docker to create a postgres database for you locally. You do not need this if you have your own postgres database or
+on deployed environments. It is purely for local development.
+
 ```bash
-DATABASE_URL=postgresql://[user[:password]@][host][:port][/dbname]
+POSTGRES_PASSWORD=password
 ```
+
+### Other Environment Variables
+
+Every part of the `rindexer.yaml` file can be overridden by an environment variable.
+The syntax for this in the `rindexer.yaml` is `${ENV_VARIABLE_NAME}` example `${POLYGON_RPC_URL}`. This can be used in ANY field in the YAML file.
+Read more about the environment variables in the [yaml configuration documentation](/docs/start-building/yaml-config#environment-variables).
 
 ## 3. Start the project
 
@@ -225,13 +250,13 @@ the graphql API url is the `schema` in the config, you can set this to your grap
 
 ```ts
 import { CodegenConfig } from '@graphql-codegen/cli'
- 
+
 const config: CodegenConfig = {
   // this is YOUR_GRAPHQL_API_URL // [!code focus]
   schema: 'http://localhost:5005/graphql', // [!code focus]
   ...
 }
- 
+
 export default config
 ```
 

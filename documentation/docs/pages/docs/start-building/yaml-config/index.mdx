@@ -7,7 +7,7 @@ This file is used to set up the project and configure the indexing tasks that wi
 **YAML is case-sensitive, so make sure to use the correct case when defining the fields in the configuration file.**
 
 :::info
-YAML files can be mapped to environment variables to store sensitive information, such as API keys or database credentials.
+YAML files can be mapped to environment variables to store sensitive information, such as RPC urls or other credentials.
 The syntax for this in the YAML is `${ENV_VARIABLE_NAME}`.
 :::
 
@@ -21,9 +21,9 @@ The syntax for this in the YAML is `${ENV_VARIABLE_NAME}`.
 
 ### Environment Variables
 
-YAML files can be mapped to environment variables to store sensitive information, such as API keys or database credentials.
+YAML files can be mapped to environment variables to store sensitive information, such as RPC urls or other credentials.
 Alongside different environments mappings, allowing you to store different values for different environments.
-The syntax for this in the YAML is `${ENV_VARIABLE_NAME}`.
+The syntax for this in the YAML is `${ENV_VARIABLE_NAME}`. This can be used in ANY field in the YAML file.
 
 example:
 
