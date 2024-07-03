@@ -46,12 +46,14 @@ networks:
   - name: polygon
     chain_id: 137
     # this is a free node update with your own for higher and faster indexing
-    rpc: https://polygon-mainnet.g.alchemy.com/v2/QLjF9OO90XrczIsf6Nud7RoSc8mLSyra
+    #rpc: https://polygon-mainnet.g.alchemy.com/v2/QLjF9OO90XrczIsf6Nud7RoSc8mLSyra
+    rpc: ${MAINNET_RPC}
     maxBlockRange: 100000 # optional
     maxHistoricalTaskConcurrency: 20 # optional
   - name: base
     chain_id: 8453
-    rpc: https://base-mainnet.g.alchemy.com/v2/fb_ZprvGkE5uIH6bK6BvfFVDSABpTPXk
+    #rpc: https://base-mainnet.g.alchemy.com/v2/fb_ZprvGkE5uIH6bK6BvfFVDSABpTPXk
+    rpc: ${BASE_RPC}
 #global:
 #  contracts:
 #    - name: InjectedGlobal

@@ -12,7 +12,10 @@ mod simple_file_formatters;
 pub use simple_file_formatters::csv::AsyncCsvAppender;
 
 mod helpers;
-pub use helpers::{format_all_files_for_project, generate_random_id, write_file, WriteFileError};
+pub use helpers::{
+    format_all_files_for_project, generate_random_id, public_read_env_value, write_file,
+    WriteFileError,
+};
 mod api;
 pub use api::{generate_graphql_queries, GraphQLServerDetails, GraphQLServerSettings};
 

@@ -1,14 +1,16 @@
 mod thread;
 pub use thread::set_thread_no_logging;
 
+use dotenv::dotenv;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
-use std::fs;
+use std::env::VarError;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str;
+use std::{env, fs};
 
 /// Converts a CamelCase string to snake_case.
 pub fn camel_to_snake(s: &str) -> String {
@@ -193,6 +195,19 @@ pub fn kill_process_on_port(port: u16) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+pub fn public_read_env_value(var_name: &str) -> Result<String, VarError> {
+    dotenv().ok();
+    env::var(var_name)
+}
+
+pub fn replace_env_variable_to_raw_name(rpc: &str) -> String {
+    if rpc.starts_with("${") && rpc.ends_with('}') {
+        rpc[2..rpc.len() - 1].to_string()
+    } else {
+        rpc.to_string()
+    }
 }
 
 #[cfg(test)]

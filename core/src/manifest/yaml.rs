@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use crate::generator::event_callback_registry::{
     FactoryDetails, FilterDetails, IndexingContractSetup,
 };
+use crate::helpers::replace_env_variable_to_raw_name;
 use crate::indexer::Indexer;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_yaml::Value;
@@ -384,13 +385,31 @@ pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError>
     file.read_to_string(&mut contents)
         .map_err(ReadManifestError::CouldNotReadFile)?;
 
+    let manifest_before_transform: Manifest =
+        serde_yaml::from_str(&contents).map_err(ReadManifestError::CouldNotParseManifest)?;
+
     contents = substitute_env_variables(&contents)
         .map_err(ReadManifestError::CouldNotSubstituteEnvVariables)?;
 
-    let manifest: Manifest =
+    let mut manifest_after_transform: Manifest =
         serde_yaml::from_str(&contents).map_err(ReadManifestError::CouldNotParseManifest)?;
 
-    Ok(manifest)
+    // as we don't want to inject the RPC URL in rust projects in clear text we should change
+    // the networks.rpc back to what it was before and the generated code will handle it
+    if manifest_after_transform.project_type == ProjectType::Rust {
+        for network in &mut manifest_after_transform.networks {
+            network.rpc = manifest_before_transform
+                .networks
+                .iter()
+                .find(|n| n.name == network.name)
+                .map_or_else(
+                    || replace_env_variable_to_raw_name(&network.rpc),
+                    |n| replace_env_variable_to_raw_name(&n.rpc),
+                );
+        }
+    }
+
+    Ok(manifest_after_transform)
 }
 
 #[derive(thiserror::Error, Debug)]

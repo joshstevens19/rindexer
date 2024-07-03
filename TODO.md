@@ -4,7 +4,6 @@ checklist v1.0:
 - do benchmarks with a few different projects
 
 bugs:
-- fix the environment variables for RPC urls
 - csv needs to have last seen block in a .rindexer folder file somewhere so it can be picked up again
 
 nice to have:
