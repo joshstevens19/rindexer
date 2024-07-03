@@ -1,8 +1,6 @@
 use crate::api::generate_operations::{generate_operations, GenerateOperationsError};
 use reqwest::Client;
 use serde_json::Value;
-use std::fs::File;
-use std::io::Write;
 use std::path::Path;
 
 #[derive(thiserror::Error, Debug)]
@@ -95,12 +93,6 @@ pub async fn generate_graphql_queries(
     if schema.is_null() {
         return Err(GenerateTypingsError::NoData);
     }
-
-    let schema_str = serde_json::to_string_pretty(&schema)?;
-
-    let schema_path = generate_path.join("schema.graphql");
-    let mut file = File::create(schema_path)?;
-    file.write_all(schema_str.as_bytes())?;
 
     generate_operations(&schema, generate_path)
         .map_err(GenerateTypingsError::GenerateOperationsError)?;
