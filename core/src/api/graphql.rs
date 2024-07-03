@@ -1,7 +1,7 @@
 use crate::database::postgres::{connection_string, indexer_contract_schema_name};
 use crate::helpers::{kill_process_on_port, set_thread_no_logging};
 use crate::indexer::Indexer;
-use reqwest::Client;
+use reqwest::{Client, Error};
 use serde_json::{json, Value};
 use std::env;
 use std::path::{Path, PathBuf};
@@ -258,13 +258,21 @@ pub async fn start_graphql_server(
             .await
         {
             Ok(response) if response.status().is_success() => {
-                let response_json: Value = response.json().await.unwrap();
-                if response_json.get("errors").is_none() {
-                    info!(
-                        "🚀 GraphQL API ready at {} Playground - {}",
-                        graphql_endpoint, graphql_playground
-                    );
-                    break;
+                let response_json: Result<Value, Error> = response.json().await;
+                match response_json {
+                    Ok(response_json) => {
+                        if response_json.get("errors").is_none() {
+                            info!(
+                                "🚀 GraphQL API ready at {} Playground - {}",
+                                graphql_endpoint, graphql_playground
+                            );
+                            break;
+                        }
+                    }
+                    Err(_) => {
+                        // try again
+                        continue;
+                    }
                 }
             }
             _ => {}
