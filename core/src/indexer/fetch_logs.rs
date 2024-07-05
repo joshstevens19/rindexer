@@ -112,6 +112,7 @@ fn retry_with_block_range(
         Some(data) => &data.to_string(),
         None => &String::from(""),
     };
+    debug!("Error message: {}", error_message);
 
     fn compile_regex(pattern: &str) -> Result<Regex, regex::Error> {
         Regex::new(pattern)

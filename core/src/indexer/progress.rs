@@ -34,6 +34,7 @@ pub struct IndexingEventProgress {
     pub id: String,
     pub contract_name: String,
     pub event_name: String,
+    pub starting_block: U64,
     pub last_synced_block: U64,
     pub syncing_to_block: U64,
     pub network: String,
@@ -63,6 +64,7 @@ impl IndexingEventProgress {
         id: String,
         contract_name: String,
         event_name: String,
+        starting_block: U64,
         last_synced_block: U64,
         syncing_to_block: U64,
         network: String,
@@ -73,6 +75,7 @@ impl IndexingEventProgress {
             id,
             contract_name,
             event_name,
+            starting_block,
             last_synced_block,
             syncing_to_block,
             network,
@@ -98,13 +101,15 @@ impl IndexingEventsProgressState {
                 let latest_block = network_contract.cached_provider.get_block_number().await;
                 match latest_block {
                     Ok(latest_block) => {
+                        let start_block = network_contract.start_block.unwrap_or(latest_block);
                         let end_block = network_contract.end_block.unwrap_or(latest_block);
 
                         events.push(IndexingEventProgress::running(
                             network_contract.id.to_string(),
                             event_info.contract.name.clone(),
                             event_info.event_name.to_string(),
-                            network_contract.start_block.unwrap_or(U64::zero()),
+                            start_block,
+                            start_block,
                             if latest_block > end_block {
                                 end_block
                             } else {
@@ -131,21 +136,14 @@ impl IndexingEventsProgressState {
     pub fn update_last_synced_block(&mut self, id: &str, new_last_synced_block: U64) {
         for event in &mut self.events {
             if event.id == id {
-                if event.progress != 1.0 {
+                if event.progress < 1.0 {
                     if event.syncing_to_block > event.last_synced_block {
-                        let total_blocks = event.syncing_to_block - event.last_synced_block;
-                        let blocks_synced =
-                            new_last_synced_block.saturating_sub(event.last_synced_block);
+                        let total_blocks = event.syncing_to_block - event.starting_block;
+                        let blocks_synced = new_last_synced_block - event.starting_block;
 
-                        let effective_blocks_synced =
-                            if new_last_synced_block > event.syncing_to_block {
-                                total_blocks
-                            } else {
-                                blocks_synced
-                            };
-
-                        event.progress += (effective_blocks_synced.as_u64() as f64)
-                            / (total_blocks.as_u64() as f64);
+                        // Calculate progress based on the proportion of total blocks synced so far
+                        event.progress =
+                            (blocks_synced.as_u64() as f64) / (total_blocks.as_u64() as f64);
                         event.progress = event.progress.clamp(0.0, 1.0);
                     }
 
