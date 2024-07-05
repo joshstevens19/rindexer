@@ -67,7 +67,7 @@ pub struct ABIInput {
     pub components: Option<Vec<ABIInput>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EventInfo {
     pub name: String,
     pub inputs: Vec<ABIInput>,

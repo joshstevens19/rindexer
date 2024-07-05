@@ -19,7 +19,7 @@ use crate::generator::event_callback_registry::{
 };
 use crate::generator::{
     create_csv_file_for_event, csv_headers_for_event, extract_event_names_and_signatures_from_abi,
-    get_abi_items, CreateCsvFileForEvent, ParamTypeError, ReadAbiError,
+    get_abi_items, CreateCsvFileForEvent, EventInfo, ParamTypeError, ReadAbiError,
 };
 use crate::helpers::get_full_path;
 use crate::indexer::log_helpers::{map_log_params_to_raw_values, parse_log};
@@ -135,7 +135,7 @@ fn create_network_providers(
 
 #[derive(Clone)]
 struct NoCodeCallbackParams {
-    event_name: String,
+    event_info: EventInfo,
     indexer_name: String,
     contract_name: String,
     event: Event,
@@ -158,7 +158,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                     "{} {}: {} - {}",
                     params.indexer_name,
                     params.contract_name,
-                    params.event_name,
+                    params.event_info.name,
                     "NO EVENTS".red()
                 );
                 return;
@@ -196,7 +196,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                     let network = result.tx_information.network.to_string();
 
                     let event_parameters: Vec<EthereumSqlTypeWrapper> =
-                        map_log_params_to_ethereum_wrapper(&log.params);
+                        map_log_params_to_ethereum_wrapper(&params.event_info.inputs, &log.params);
 
                     let contract_address = EthereumSqlTypeWrapper::Address(address);
                     let end_global_parameters = vec![
@@ -280,7 +280,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                         {
                             error!(
                                 "{}::{} - Error performing bulk insert: {}",
-                                params.contract_name, params.event_name, e
+                                params.contract_name, params.event_info.name, e
                             );
                         }
                     } else if let Err(e) = postgres
@@ -291,7 +291,10 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                         )
                         .await
                     {
-                        error!("Error performing bulk insert: {}", e);
+                        error!(
+                            "{}::{} - Error performing bulk insert: {}",
+                            params.contract_name, params.event_info.name, e
+                        );
                     }
                 }
             }
@@ -305,7 +308,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
             info!(
                 "{}::{} - {} - {} events {}",
                 params.contract_name,
-                params.event_name,
+                params.event_info.name,
                 "INDEXED".green(),
                 indexed_count,
                 format!("- blocks: {} - {}", from_block, to_block)
@@ -427,7 +430,7 @@ pub async fn process_events(
                 topic_id: event_info.topic_id(),
                 contract: contract_information,
                 callback: no_code_callback(Arc::new(NoCodeCallbackParams {
-                    event_name: event_info.name.clone(),
+                    event_info: event_info.clone(),
                     indexer_name: manifest.name.clone(),
                     contract_name: contract.name.clone(),
                     event: event.clone(),

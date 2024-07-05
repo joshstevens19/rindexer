@@ -126,7 +126,7 @@ pub async fn start_indexing(
                 .map_or(false, |c| c.generate_csv.unwrap_or(true));
 
             let last_known_start_block = get_last_synced_block_number(
-                &project_path,
+                project_path,
                 database.clone(),
                 &manifest.storage.csv,
                 manifest.storage.csv_enabled() && contract_csv_enabled,
