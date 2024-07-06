@@ -17,7 +17,7 @@ use rindexer_core::generator::build::{
 use rindexer_core::generator::generate_docker_file;
 use rindexer_core::manifest::yaml::{
     read_manifest, write_manifest, Contract, ContractDetails, CsvDetails, Manifest, Network,
-    PostgresConnectionDetails, ProjectType, Storage, YAML_CONFIG_NAME,
+    PostgresDetails, ProjectType, Storage, YAML_CONFIG_NAME,
 };
 use rindexer_core::{
     drop_tables_for_indexer_sql, format_all_files_for_project, generate_graphql_queries,
@@ -365,8 +365,9 @@ fn handle_new_command(
         global: None,
         storage: Storage {
             postgres: if postgres_enabled {
-                Some(PostgresConnectionDetails {
+                Some(PostgresDetails {
                     enabled: true,
+                    relationships: None,
                     disable_create_tables: None,
                 })
             } else {

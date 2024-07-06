@@ -9,7 +9,9 @@ use tokio::time::Instant;
 use tracing::{debug, error, info};
 
 use crate::database::postgres::PostgresConnectionError;
-use crate::generator::event_callback_registry::{EventCallbackRegistry, EventInformation};
+use crate::generator::event_callback_registry::{
+    EventCallbackRegistry, EventInformation,
+};
 use crate::indexer::fetch_logs::{
     get_last_synced_block_number, process_contract_events_with_dependencies, process_event,
     ContractEventDependencies, ContractEventsConfig, EventProcessingConfig,
@@ -72,12 +74,19 @@ pub enum StartIndexingError {
     CombinedError(CombinedLogEventProcessingError),
 }
 
+#[derive(Clone)]
+pub struct ProcessedNetworkContract {
+    pub id: String,
+    pub processed_up_to: U64,
+}
+
 pub async fn start_indexing(
     manifest: &Manifest,
     project_path: &PathBuf,
-    dependencies: Vec<ContractEventDependencies>,
+    dependencies: &Vec<ContractEventDependencies>,
+    no_live_indexing_forced: bool,
     registry: Arc<EventCallbackRegistry>,
-) -> Result<(), StartIndexingError> {
+) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
     let start = Instant::now();
 
     let database = if manifest.storage.postgres_enabled() {
@@ -101,6 +110,8 @@ pub async fn start_indexing(
     let mut non_blocking_process_events = Vec::new();
     let mut dependency_event_processing_configs: Vec<ContractEventsConfig> = Vec::new();
 
+    let mut processed_network_contracts: Vec<ProcessedNetworkContract> = Vec::new();
+
     for event in registry.events.clone() {
         fn event_info(event: &EventInformation, message: &str) {
             debug!("{} - {}", event.info_log_name(), message);
@@ -117,7 +128,11 @@ pub async fn start_indexing(
                 .await
                 .map_err(StartIndexingError::GetBlockNumberError)?;
 
-            let live_indexing = contract.end_block.is_none();
+            let live_indexing = if no_live_indexing_forced {
+                false
+            } else {
+                contract.end_block.is_none()
+            };
 
             let contract_csv_enabled = manifest
                 .contracts
@@ -174,6 +189,12 @@ pub async fn start_indexing(
                     &format!("Start block: {}, End Block: {}", start_block, end_block),
                 );
             }
+
+            // push status to the processed state
+            processed_network_contracts.push(ProcessedNetworkContract {
+                id: contract.id.clone(),
+                processed_up_to: end_block,
+            });
 
             let event_processing_config = EventProcessingConfig {
                 project_path: project_path.clone(),
@@ -268,13 +289,7 @@ pub async fn start_indexing(
 
     let duration = start.elapsed();
 
-    info!("Indexing complete - time taken: {:?}", duration);
+    info!("Historical indexing complete - time taken: {:?}", duration);
 
-    // to avoid the thread closing before the stream is consumed
-    // lets just sit here for 30 seconds to avoid the race
-    // probably a better way to handle this but hey
-    // TODO - handle this nicer
-    tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-
-    Ok(())
+    Ok(processed_network_contracts)
 }

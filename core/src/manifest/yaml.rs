@@ -279,8 +279,32 @@ pub struct Network {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct PostgresConnectionDetails {
+pub struct ForeignKey {
+    pub contract_name: String,
+
+    pub event: String,
+
+    pub event_input_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ForeignKeys {
+    pub contract_name: String,
+
+    pub event: String,
+
+    pub event_input_name: String,
+
+    #[serde(rename = "linked_to")]
+    pub foreign_keys: Vec<ForeignKey>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PostgresDetails {
     pub enabled: bool,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relationships: Option<Vec<ForeignKeys>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disable_create_tables: Option<bool>,
@@ -304,7 +328,7 @@ pub struct CsvDetails {
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct Storage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub postgres: Option<PostgresConnectionDetails>,
+    pub postgres: Option<PostgresDetails>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csv: Option<CsvDetails>,

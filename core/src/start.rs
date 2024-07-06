@@ -4,13 +4,16 @@ use tokio::signal;
 use tracing::{error, info};
 
 use crate::api::{start_graphql_server, StartGraphqlServerError};
-use crate::database::postgres::SetupPostgresError;
+use crate::database::postgres::{
+    create_relationships, CreateRelationshipError, PostgresConnectionError, PostgresError,
+    Relationship, SetupPostgresError,
+};
 use crate::generator::event_callback_registry::EventCallbackRegistry;
 use crate::indexer::no_code::{setup_no_code, SetupNoCodeError};
 use crate::indexer::start::{start_indexing, StartIndexingError};
 use crate::indexer::{ContractEventDependencies, EventDependencies, EventsDependencyTree};
 use crate::manifest::yaml::{read_manifest, ProjectType, ReadManifestError};
-use crate::{setup_info_logger, setup_postgres, GraphQLServerDetails};
+use crate::{setup_info_logger, setup_postgres, GraphQLServerDetails, PostgresClient};
 
 pub struct IndexingDetails {
     pub registry: EventCallbackRegistry,
@@ -41,6 +44,15 @@ pub enum StartRindexerError {
 
     #[error("Could not start indexing: {0}")]
     CouldNotStartIndexing(StartIndexingError),
+
+    #[error("Yaml relationship error: {0}")]
+    RelationshipError(CreateRelationshipError),
+
+    #[error("{0}")]
+    RelationshipPostgresConnectionError(PostgresConnectionError),
+
+    #[error("Could not apply relationship - {0}")]
+    ApplyRelationshipError(PostgresError),
 }
 
 pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerError> {
@@ -71,13 +83,40 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
             };
 
             if let Some(indexing_details) = details.indexing_details {
+                let postgres_enabled = &manifest.storage.postgres_enabled();
+
                 // setup postgres is already called in no-code startup
-                if manifest.project_type != ProjectType::NoCode
-                    && manifest.storage.postgres_enabled()
-                {
+                if manifest.project_type != ProjectType::NoCode && *postgres_enabled {
                     setup_postgres(project_path, &manifest)
                         .await
                         .map_err(StartRindexerError::SetupPostgresError)?;
+                }
+
+                // setup relationships
+                let mut relationships: Vec<Relationship> = vec![];
+                if *postgres_enabled && !manifest.storage.postgres_disable_create_tables() {
+                    if let Some(storage) = &manifest.storage.postgres {
+                        let mapped_relationships = &storage.relationships;
+                        if let Some(mapped_relationships) = mapped_relationships {
+                            info!("Temp dropping constraints relationships from the database for historic indexing for speed reasons");
+                            let relationships_result = create_relationships(
+                                project_path,
+                                &manifest.name,
+                                &manifest.contracts,
+                                mapped_relationships,
+                            )
+                            .await;
+                            match relationships_result {
+                                Ok(result) => {
+                                    // info!("Relationships created successfully - {:?}", result);
+                                    relationships = result;
+                                }
+                                Err(e) => {
+                                    return Err(StartRindexerError::RelationshipError(e));
+                                }
+                            }
+                        }
+                    }
                 }
 
                 let mut dependencies: Vec<ContractEventDependencies> = vec![];
@@ -96,20 +135,85 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
                     }
                 }
 
-                start_indexing(
+                let processed_network_contracts = start_indexing(
                     &manifest,
                     &project_path.to_path_buf(),
-                    dependencies,
+                    &dependencies,
+                    // we index all the historic data first before then applying FKs
+                    !relationships.is_empty(),
                     indexing_details.registry.complete(),
                 )
                 .await
                 .map_err(StartRindexerError::CouldNotStartIndexing)?;
+
+                if !relationships.is_empty() {
+                    // TODO if graphql isn't up yet, and we apply this on graphql wont refresh we need to handle this
+                    info!("Applying constraints relationships back to the database as historic resync is complete");
+                    let client = PostgresClient::new()
+                        .await
+                        .map_err(StartRindexerError::RelationshipPostgresConnectionError)?;
+
+                    for relationship in relationships {
+                        relationship
+                            .apply(&client)
+                            .await
+                            .map_err(StartRindexerError::ApplyRelationshipError)?;
+                    }
+
+                    let live_indexing_present = manifest
+                        .contracts
+                        .iter()
+                        .filter(|c| c.details.iter().any(|p| p.end_block.is_none()))
+                        .count()
+                        > 0;
+
+                    if live_indexing_present {
+                        info!("Starting live indexing now relationship re-applied..");
+
+                        let mut callbacks = indexing_details.registry.clone();
+                        callbacks.events.iter_mut().for_each(|e| {
+                            e.contract.details.iter_mut().for_each(|d| {
+                                if d.end_block.is_none() {
+                                    if let Some(processed_block) =
+                                        processed_network_contracts.iter().find(|c| c.id == d.id)
+                                    {
+                                        d.start_block = Some(processed_block.processed_up_to);
+                                    }
+                                }
+                            });
+                        });
+
+                        // Retain only the details with `end_block.is_none()`
+                        callbacks.events.iter_mut().for_each(|e| {
+                            e.contract.details.retain(|d| d.end_block.is_none());
+                        });
+
+                        // Retain only the events that have details with `end_block.is_none()`
+                        callbacks.events.retain(|e| !e.contract.details.is_empty());
+
+                        start_indexing(
+                            &manifest,
+                            &project_path.to_path_buf(),
+                            &dependencies,
+                            false,
+                            callbacks.complete(),
+                        )
+                        .await
+                        .map_err(StartRindexerError::CouldNotStartIndexing)?;
+                    }
+                }
 
                 // keep graphql alive even if indexing has finished
                 if details.graphql_server.is_some() {
                     signal::ctrl_c()
                         .await
                         .map_err(|_| StartRindexerError::FailedToListenToGraphqlSocket)?;
+                } else {
+                    // to avoid the thread closing before the stream is consumed
+                    // lets just sit here for 30 seconds to avoid the race
+                    // probably a better way to handle this but hey
+                    // TODO - handle this nicer
+                    tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
                 }
             }
 

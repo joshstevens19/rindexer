@@ -2,6 +2,11 @@
 
 checklist v1.0:
 - do benchmarks with a few different projects
+- review postgraphile config again
+  - cluster-workers
+  - simple-collections <omit|both|only>
+  - --sort-export
+  - enable https://github.com/graphile/pg-simplify-inflector
 
 bugs:
 
