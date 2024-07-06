@@ -19,11 +19,11 @@ use crate::types::code::Code;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ABIItem {
     #[serde(default)]
-    inputs: Vec<ABIInput>,
+    pub inputs: Vec<ABIInput>,
     #[serde(default)]
-    name: String,
+    pub name: String,
     #[serde(rename = "type", default)]
-    type_: String,
+    pub type_: String,
 }
 
 #[derive(thiserror::Error, Debug)]

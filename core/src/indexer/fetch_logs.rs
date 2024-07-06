@@ -479,12 +479,6 @@ async fn process_historic_logs_stream(
                     next_from_block
                 );
                 return if next_from_block > snapshot_to_block {
-                    // to avoid the thread closing before the stream is consumed
-                    // lets just sit here for 1 seconds to avoid the race
-                    // and info logs are not in the wrong order
-                    // probably a better way to handle this but hey
-                    // TODO handle this nicer
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
                     None
                 } else {
                     let new_to_block = calculate_process_historic_log_to_block(

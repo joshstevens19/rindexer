@@ -6,6 +6,7 @@ use ethers::abi::{Int, LogParam, Token};
 use ethers::types::{Address, Bytes, H128, H160, H256, H512, U128, U256, U512, U64};
 use futures::pin_mut;
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
@@ -22,11 +23,11 @@ use tracing::{debug, error, info};
 use crate::generator::build::{contract_name_to_filter_name, is_filter};
 use crate::generator::{
     extract_event_names_and_signatures_from_abi, generate_abi_name_properties, read_abi_items,
-    ABIInput, EventInfo, GenerateAbiPropertiesType, ParamTypeError, ReadAbiError,
+    ABIInput, ABIItem, EventInfo, GenerateAbiPropertiesType, ParamTypeError, ReadAbiError,
 };
 use crate::helpers::camel_to_snake;
 use crate::indexer::Indexer;
-use crate::manifest::yaml::{Manifest, ProjectType};
+use crate::manifest::yaml::{Contract, ForeignKeys, Manifest, ProjectType};
 use crate::types::code::Code;
 
 pub fn connection_string() -> Result<String, env::VarError> {
@@ -344,7 +345,7 @@ impl PostgresClient {
         for row in prepared_data.iter() {
             writer
                 .as_mut()
-                .write(&row)
+                .write(row)
                 .await
                 .map_err(BulkInsertPostgresError::CouldNotWriteDataToPostgres)?;
         }
@@ -1250,4 +1251,408 @@ impl ToSql for EthereumSqlTypeWrapper {
     }
 
     to_sql_checked!();
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum CreateRelationshipError {
+    #[error("{0}")]
+    PostgresConnectionError(PostgresConnectionError),
+
+    #[error("Contract missing: {0}")]
+    ContractMissing(String),
+
+    #[error("{0}")]
+    ReadAbiError(ReadAbiError),
+
+    #[error("Type mismatch: {0}")]
+    TypeMismatch(String),
+
+    #[error("Parameter not found: {0}")]
+    ParameterNotFound(String),
+
+    #[error("Dropping relationship failed: {0}")]
+    DropRelationshipError(PostgresError),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LinkTo {
+    pub contract_name: String,
+
+    pub event: String,
+
+    pub abi_input: ABIInput,
+
+    pub db_table_name: String,
+
+    pub db_table_column: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Relationship {
+    pub contract_name: String,
+
+    pub event: String,
+
+    pub abi_input: ABIInput,
+
+    pub db_table_name: String,
+
+    pub db_table_column: String,
+
+    pub linked_to: LinkTo,
+}
+
+impl Relationship {
+    fn apply_foreign_key_construct_sql(&self) -> Code {
+        Code::new(format!(
+            r#"
+                ALTER TABLE {db_table_name}
+                ADD CONSTRAINT {foreign_key_construct_name}
+                FOREIGN KEY ({db_table_column}) REFERENCES {linked_db_table_name}({linked_db_table_column});
+            "#,
+            foreign_key_construct_name = self.foreign_key_construct_name(),
+            db_table_name = self.db_table_name,
+            db_table_column = self.db_table_column,
+            linked_db_table_name = self.linked_to.db_table_name,
+            linked_db_table_column = self.linked_to.db_table_column
+        ))
+    }
+
+    fn drop_foreign_key_construct_sql(&self) -> Code {
+        Code::new(format!(
+            r#"
+                ALTER TABLE {db_table_name}
+                DROP CONSTRAINT IF EXISTS {foreign_key_construct_name};
+            "#,
+            foreign_key_construct_name = self.foreign_key_construct_name(),
+            db_table_name = self.db_table_name,
+        ))
+    }
+
+    fn foreign_key_construct_name(&self) -> String {
+        format!(
+            "fk_{linked_db_table_name}_{linked_db_table_column}",
+            linked_db_table_name = self.linked_to.db_table_name.split('.').last().unwrap(),
+            linked_db_table_column = self.linked_to.db_table_column
+        )
+    }
+
+    fn apply_unique_construct_sql(&self) -> Code {
+        Code::new(format!(
+            r#"
+                ALTER TABLE {linked_db_table_name}
+                ADD CONSTRAINT {unique_construct_name}
+                UNIQUE ({linked_db_table_column});
+            "#,
+            unique_construct_name = self.unique_construct_name(),
+            linked_db_table_name = self.linked_to.db_table_name,
+            linked_db_table_column = self.linked_to.db_table_column
+        ))
+    }
+
+    fn drop_unique_construct_sql(&self) -> Code {
+        Code::new(format!(
+            r#"
+                ALTER TABLE {linked_db_table_name}
+                DROP CONSTRAINT IF EXISTS {unique_construct_name};
+            "#,
+            unique_construct_name = self.unique_construct_name(),
+            linked_db_table_name = self.linked_to.db_table_name,
+        ))
+    }
+
+    fn unique_construct_name(&self) -> String {
+        format!(
+            "unique_{linked_db_table_column}",
+            linked_db_table_column = self.linked_to.db_table_column
+        )
+    }
+
+    fn apply_index_sql(&self) -> Code {
+        // CONCURRENTLY is used to avoid locking the table for writes
+        Code::new(format!(
+            r#"
+                CREATE INDEX CONCURRENTLY {index_name}
+                ON {db_table_name} ({db_table_column});
+            "#,
+            index_name = self.index_name(),
+            db_table_name = self.db_table_name,
+            db_table_column = self.db_table_column,
+        ))
+    }
+
+    fn drop_index_sql(&self) -> Code {
+        Code::new(format!(
+            // CONCURRENTLY is used to avoid locking the table for writes
+            "DROP INDEX CONCURRENTLY IF EXISTS {}.{};",
+            // get schema else drop won't work
+            self.db_table_name.split('.').next().unwrap(),
+            self.index_name(),
+        ))
+    }
+
+    pub fn index_name(&self) -> String {
+        format!(
+            "idx_{db_table_name}_{db_table_column}",
+            db_table_name = self.db_table_name.split('.').last().unwrap(),
+            db_table_column = self.db_table_column,
+        )
+    }
+
+    pub async fn apply(&self, client: &PostgresClient) -> Result<(), PostgresError> {
+        let sql = format!(
+            r#"
+            {}
+            {}
+          "#,
+            self.apply_unique_construct_sql(),
+            self.apply_foreign_key_construct_sql()
+        );
+
+        client.batch_execute(&sql).await?;
+
+        info!(
+            "Applied unique constraint key for relationship after historic resync complete: table - {} constraint - {}",
+            self.linked_to.db_table_name,
+            self.unique_construct_name()
+        );
+
+        info!(
+            "Applied foreign key for relationship after historic resync complete: table - {} constraint - {}",
+            self.db_table_name,
+            self.foreign_key_construct_name()
+        );
+
+        // CONCURRENTLY is used to avoid locking the table for writes
+        client
+            .execute(&self.apply_index_sql().to_string(), &[])
+            .await?;
+
+        info!(
+            "Applied index for relationship after historic resync complete: table - {} index - {}",
+            self.db_table_name,
+            self.index_name()
+        );
+
+        Ok(())
+    }
+
+    pub async fn drop(&self, client: &PostgresClient) -> Result<(), PostgresError> {
+        let sql = format!(
+            r#"
+            {}
+            {}
+          "#,
+            self.drop_foreign_key_construct_sql(),
+            self.drop_unique_construct_sql()
+        );
+
+        client.batch_execute(&sql).await?;
+
+        info!(
+            "Dropped foreign key for relationship for historic resync: table - {} constraint - {}",
+            self.db_table_name,
+            self.foreign_key_construct_name()
+        );
+
+        info!(
+            "Dropped unique constraint key for relationship for historic resync: table - {} constraint - {}",
+            self.linked_to.db_table_name,
+            self.unique_construct_name()
+        );
+
+        // CONCURRENTLY is used to avoid locking the table for writes
+        client
+            .execute(&self.drop_index_sql().to_string(), &[])
+            .await?;
+
+        info!(
+            "Dropped index for relationship for historic resync: table - {} index - {}",
+            self.db_table_name,
+            self.index_name()
+        );
+
+        Ok(())
+    }
+}
+
+pub async fn create_relationships(
+    project_path: &Path,
+    manifest_name: &str,
+    contracts: &[Contract],
+    foreign_keys: &[ForeignKeys],
+) -> Result<Vec<Relationship>, CreateRelationshipError> {
+    let client = PostgresClient::new()
+        .await
+        .map_err(CreateRelationshipError::PostgresConnectionError)?;
+
+    let mut relationships = vec![];
+    for foreign_key in foreign_keys {
+        let contract = contracts
+            .iter()
+            .find(|c| c.name == foreign_key.contract_name);
+
+        match contract {
+            None => {
+                return Err(CreateRelationshipError::ContractMissing(format!(
+                    "Contract {} not found in `contracts` make sure it is defined",
+                    foreign_key.contract_name
+                )));
+            }
+            Some(contract) => {
+                let abi_items = read_abi_items(project_path, contract)
+                    .map_err(CreateRelationshipError::ReadAbiError)?;
+
+                for linked_key in &foreign_key.foreign_keys {
+                    let parameter_mapping = foreign_key
+                        .event_input_name
+                        .split('.')
+                        .collect::<Vec<&str>>();
+                    let abi_parameter =
+                        get_abi_parameter(&abi_items, &foreign_key.event, &parameter_mapping)?;
+
+                    let linked_key_contract = contracts
+                        .iter()
+                        .find(|c| c.name == linked_key.contract_name)
+                        .ok_or_else(|| {
+                            CreateRelationshipError::ContractMissing(format!(
+                                "Contract {} not found in `contracts` and linked in relationships. Make sure it is defined.",
+                                linked_key.contract_name
+                            ))
+                        })?;
+
+                    let linked_abi_items = read_abi_items(project_path, linked_key_contract)
+                        .map_err(CreateRelationshipError::ReadAbiError)?;
+                    let linked_parameter_mapping = linked_key
+                        .event_input_name
+                        .split('.')
+                        .collect::<Vec<&str>>();
+                    let linked_abi_parameter = get_abi_parameter(
+                        &linked_abi_items,
+                        &linked_key.event,
+                        &linked_parameter_mapping,
+                    )?;
+
+                    if abi_parameter.abi_item.type_ != linked_abi_parameter.abi_item.type_ {
+                        return Err(CreateRelationshipError::TypeMismatch(format!(
+                            "Type mismatch between {}.{} ({}) and {}.{} ({})",
+                            foreign_key.contract_name,
+                            foreign_key.event_input_name,
+                            abi_parameter.abi_item.type_,
+                            linked_key.contract_name,
+                            linked_key.event_input_name,
+                            linked_abi_parameter.abi_item.type_
+                        )));
+                    }
+
+                    let relationship = Relationship {
+                        contract_name: foreign_key.contract_name.clone(),
+                        event: foreign_key.event.clone(),
+                        db_table_column: camel_to_snake(&abi_parameter.db_column_name),
+                        db_table_name: format!(
+                            "{}_{}.{}",
+                            camel_to_snake(manifest_name),
+                            camel_to_snake(&contract.name),
+                            camel_to_snake(&foreign_key.event)
+                        ),
+                        abi_input: abi_parameter.abi_item,
+                        linked_to: LinkTo {
+                            contract_name: linked_key.contract_name.clone(),
+                            event: linked_key.event.clone(),
+                            db_table_column: camel_to_snake(&linked_abi_parameter.db_column_name),
+                            db_table_name: format!(
+                                "{}_{}.{}",
+                                camel_to_snake(manifest_name),
+                                camel_to_snake(&linked_key_contract.name),
+                                camel_to_snake(&linked_key.event)
+                            ),
+                            abi_input: linked_abi_parameter.abi_item,
+                        },
+                    };
+
+                    relationship
+                        .drop(&client)
+                        .await
+                        .map_err(CreateRelationshipError::DropRelationshipError)?;
+                    relationships.push(relationship);
+                }
+            }
+        }
+    }
+
+    Ok(relationships)
+}
+
+pub struct GetAbiParameter {
+    pub abi_item: ABIInput,
+    pub db_column_name: String,
+}
+
+fn get_abi_parameter(
+    abi_items: &[ABIItem],
+    event_name: &str,
+    parameter_mapping: &[&str],
+) -> Result<GetAbiParameter, CreateRelationshipError> {
+    // Find the event in the ABI items
+    let event_item = abi_items
+        .iter()
+        .find(|item| item.name == event_name && item.type_ == "event");
+
+    match event_item {
+        Some(item) => {
+            let mut current_inputs = &item.inputs;
+            let mut db_column_name = String::new();
+
+            for param in parameter_mapping {
+                match current_inputs.iter().find(|input| input.name == *param) {
+                    Some(input) => {
+                        if !db_column_name.is_empty() {
+                            db_column_name.push('_');
+                        }
+                        db_column_name.push_str(&camel_to_snake(&input.name));
+
+                        if param == parameter_mapping.last().unwrap() {
+                            return Ok(GetAbiParameter {
+                                abi_item: input.clone(),
+                                db_column_name,
+                            });
+                        } else {
+                            current_inputs = match input.type_.as_str() {
+                                "tuple" => {
+                                    if let Some(ref components) = input.components {
+                                        components
+                                    } else {
+                                        return Err(CreateRelationshipError::ParameterNotFound(format!(
+                                            "Parameter {} is not a nested structure in event {} of contract",
+                                            param, event_name
+                                        )));
+                                    }
+                                },
+                                _ => return Err(CreateRelationshipError::ParameterNotFound(format!(
+                                    "Parameter {} is not a nested structure in event {} of contract",
+                                    param, event_name
+                                ))),
+                            };
+                        }
+                    }
+                    None => {
+                        return Err(CreateRelationshipError::ParameterNotFound(format!(
+                            "Parameter {} not found in event {} of contract",
+                            param, event_name
+                        )));
+                    }
+                }
+            }
+
+            Err(CreateRelationshipError::ParameterNotFound(format!(
+                "Parameter {} not found in event {} of contract",
+                parameter_mapping.join("."),
+                event_name
+            )))
+        }
+        None => Err(CreateRelationshipError::ParameterNotFound(format!(
+            "Event {} not found in contract ABI",
+            event_name
+        ))),
+    }
 }
