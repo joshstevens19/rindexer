@@ -1509,7 +1509,7 @@ pub async fn create_relationships(
                         .split('.')
                         .collect::<Vec<&str>>();
                     let abi_parameter =
-                        get_abi_parameter(&abi_items, &foreign_key.event, &parameter_mapping)?;
+                        get_abi_parameter(&abi_items, &foreign_key.event_name, &parameter_mapping)?;
 
                     let linked_key_contract = contracts
                         .iter()
@@ -1529,7 +1529,7 @@ pub async fn create_relationships(
                         .collect::<Vec<&str>>();
                     let linked_abi_parameter = get_abi_parameter(
                         &linked_abi_items,
-                        &linked_key.event,
+                        &linked_key.event_name,
                         &linked_parameter_mapping,
                     )?;
 
@@ -1547,24 +1547,24 @@ pub async fn create_relationships(
 
                     let relationship = Relationship {
                         contract_name: foreign_key.contract_name.clone(),
-                        event: foreign_key.event.clone(),
+                        event: foreign_key.event_name.clone(),
                         db_table_column: camel_to_snake(&abi_parameter.db_column_name),
                         db_table_name: format!(
                             "{}_{}.{}",
                             camel_to_snake(manifest_name),
                             camel_to_snake(&contract.name),
-                            camel_to_snake(&foreign_key.event)
+                            camel_to_snake(&foreign_key.event_name)
                         ),
                         abi_input: abi_parameter.abi_item,
                         linked_to: LinkTo {
                             contract_name: linked_key.contract_name.clone(),
-                            event: linked_key.event.clone(),
+                            event: linked_key.event_name.clone(),
                             db_table_column: camel_to_snake(&linked_abi_parameter.db_column_name),
                             db_table_name: format!(
                                 "{}_{}.{}",
                                 camel_to_snake(manifest_name),
                                 camel_to_snake(&linked_key_contract.name),
-                                camel_to_snake(&linked_key.event)
+                                camel_to_snake(&linked_key.event_name)
                             ),
                             abi_input: linked_abi_parameter.abi_item,
                         },

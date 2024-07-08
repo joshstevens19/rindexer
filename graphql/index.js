@@ -1,6 +1,8 @@
 const express = require('express')
 const { postgraphile } = require("postgraphile");
 const {makeWrapResolversPlugin} = require("graphile-utils");
+const PgSimplifyInflectorPlugin = require("@graphile-contrib/pg-simplify-inflector");
+const ConnectionFilterPlugin = require("postgraphile-plugin-connection-filter");
 
 const args = process.argv.slice(2);
 
@@ -56,15 +58,22 @@ const options = {
     cors: true,
     retryOnInitFail: true,
     enableQueryBatching: true,
-    noIgnoreIndexes: true,
-    ignoreIndexes: true,
+    sortExport: true,
+    // noIgnoreIndexes: true,
+    // ignoreIndexes: false,
     enhanceGraphiql: false,
     graphiql: false,
     disableQueryLog: true,
     pgSettings: {
         statement_timeout: graphqlTimeout,
     },
-    appendPlugins: [byteaToHex],
+    simpleCollections: 'omit',
+    appendPlugins: [byteaToHex, PgSimplifyInflectorPlugin, ConnectionFilterPlugin],
+    graphileBuildOptions: {
+        pgOmitListSuffix: false,
+        pgSimplifyAllRows: true,
+        pgShortPk: false,
+    },
 };
 
 

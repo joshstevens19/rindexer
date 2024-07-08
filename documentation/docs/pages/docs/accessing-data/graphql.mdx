@@ -1,16 +1,22 @@
 # GraphQL
 
 GraphQL is a query language for your API, and a server-side runtime for executing queries using a type system you define for your data.
-GraphQL isn’t tied to any specific database or storage engine and is instead backed by your existing code and data.
 
 you can learn all about graphql [here](https://graphql.org)
 
+## Hot Tip
+
+As GraphQL is a type system this means building queries can be a bit tricky, if you are not familiar with GraphQL.
+The beauty of this is using the http://localhost:3001/playground supplied for you allows you to build up all your queries
+but also understand every single filter and ordering you can do.
+
 ## Querying the data
 
-The GraphQL will expose a playground for you which you can get to on `http://localhost:3030`
-this uses apollo server sandbox which is a great tool for testing your queries - https://studio.apollographql.com/sandbox/explorer.
+The GraphQL will expose a playground for you which you can get to on http://localhost:3001/playground
+this uses apollo server sandbox which is a great tool for testing and building up your queries - https://studio.apollographql.com/sandbox/explorer.
 
-Note in these examples we will put the raw parameters in the graphql query but you can pass parameters in using the $ syntax
+Note in these examples we will put the raw parameters in the graphql query but you can pass parameters in using the `$` syntax allowing
+code to define the parameters.
 
 :::code-group
 
@@ -170,6 +176,157 @@ The format of the query names are:
 For single item queries you can use the `nodeId` to query single items which is always returned as a field
 in the list results alongside the singular item query.
 
+### Ordering
+
+:::info
+All filtering options and ordering can both be used together.
+:::
+
+You can order the results by any field you wish, you can also order by multiple fields the first item in the array will
+be the applied ordering first then the next will be applied after and so on.
+
+:::warning
+It is advised to have indexes on any fields you which to filter on in your database to make the queries faster.
+We will add a no-code way to add indexes in the future, if required do raise a github issue and we can help you with this.
+:::
+
+This example will get the first 20 transfers ordered by the block number ascending.
+
+```graphql
+query AllTransfers {
+  allTransfers(first: 20, orderBy: [BLOCK_NUMBER_ASC]) {
+    nodes {
+      blockHash
+      blockNumber
+      contractAddress
+      from
+      network
+      nodeId
+      to
+      txHash
+      value
+    }
+    pageInfo {
+      endCursor
+      hasNextPage
+      hasPreviousPage
+      startCursor
+    }
+  }
+}
+```
+
+### Filtering
+
+:::info
+All filtering options and ordering can both be used together.
+:::
+
+You can do condition filters as well as advanced filters on all the events indexed.
+
+:::warning
+It is advised to have indexes on any fields you which to filter on in your database to make the queries faster.
+We will add a no-code way to add indexes in the future, if required do raise a github issue and we can help you with this.
+:::
+
+#### Condition
+
+You can filter in every event property you want using the `condition` input fields.
+
+The example below im filtering on all transfer based on the block number, which has to be a string as its a BigFloat.
+
+```graphql
+query AllTransfers {
+  allTransfers(first: 20, condition: {
+    blockNumber: "18600181"
+  }) {
+    nodes {
+      blockHash
+      blockNumber
+      contractAddress
+      from
+      network
+      nodeId
+      to
+      txHash
+      value
+    }
+    pageInfo {
+      endCursor
+      hasNextPage
+      hasPreviousPage
+      startCursor
+    }
+  }
+}
+```
+
+You can mix the filtering in every direction with any field so you can filter `blockNumber` with `from` and `to` with `value`
+or even `network` with `contractAddress` and `txHash`, anything you wish.
+
+```graphql
+query AllTransfers {
+  allTransfers(first: 20, condition: {
+    blockNumber: "18600181",
+    value: "2000000000000000000"
+    from: "0x0338ce5020c447f7e668dc2ef778025ce398266b"
+  }) {
+    nodes {
+      blockHash
+      blockNumber
+      contractAddress
+      from
+      network
+      nodeId
+      to
+      txHash
+      value
+    }
+    pageInfo {
+      endCursor
+      hasNextPage
+      hasPreviousPage
+      startCursor
+    }
+  }
+}
+```
+
+#### Filter
+
+For more advanced filtering you can use the `filter` input field. For example if we wanted to get all transfer events
+over 1 rEth (wei would be 1000000000000000000) and after block number 18600181 we can use the following query.
+
+```graphql
+query AllTransfers {
+  allTransfers(first: 20, condition: {
+    value: "1000000000000000000",
+  }, filter: {
+    blockNumber: {
+      greaterThan: "18600181"
+    }
+  }) {
+    nodes {
+      blockHash
+      blockNumber
+      contractAddress
+      from
+      network
+      nodeId
+      to
+      txHash
+      value
+    }
+    pageInfo {
+      endCursor
+      hasNextPage
+      hasPreviousPage
+      startCursor
+    }
+  }
+}
+```
+
 ### Result limits
 
 You can define how many you which to return using the `first` and `last` properties, you can not return more
@@ -256,117 +413,6 @@ query AllTransfers {
 
 :::
 
-### Filtering
-
-You can filter in every event property you want using the `condition` input fields.
-
-The example below im filtering on all transfer based on the block number, which has to be a string as its a BigFloat.
-
-```graphql
-query AllTransfers {
-  allTransfers(first: 20, condition: {
-    blockNumber: "18600181"
-  }) {
-    nodes {
-      blockHash
-      blockNumber
-      contractAddress
-      from
-      network
-      nodeId
-      to
-      txHash
-      value
-    }
-    pageInfo {
-      endCursor
-      hasNextPage
-      hasPreviousPage
-      startCursor
-    }
-  }
-}
-```
-
-You can mix the filtering in every direction with any field so you can filter `blockNumber` with `from` and `to` with `value`
-or even `network` with `contractAddress` and `txHash`, anything you wish.
-
-:::warning
-It is advised to have indexes on these fields in your database to make the queries faster.
-
-We will add a no-code way to add indexes in the future, if required do raise a github issue and we can help you with this.
-:::
-
-```graphql
-query AllTransfers {
-  allTransfers(first: 20, condition: {
-    blockNumber: "18600181",
-    value: "2000000000000000000"
-    from: "0x0338ce5020c447f7e668dc2ef778025ce398266b"
-  }) {
-    nodes {
-      blockHash
-      blockNumber
-      contractAddress
-      from
-      network
-      nodeId
-      to
-      txHash
-      value
-    }
-    pageInfo {
-      endCursor
-      hasNextPage
-      hasPreviousPage
-      startCursor
-    }
-  }
-}
-```
-
-Note we do not support advanced filtering as adding powerful generic filtering capabilities to your GraphQL API is strongly discouraged
-by Lee Byron (one of the inventors of GraphQL) and various other experts in the GraphQL ecosystem.
-
-That said we will give capabilities to define which fields you want to advanced filter on in the future.
-
-### Ordering
-
-You can order the results by any field you wish, you can also order by multiple fields the first item in the array will
-be the applied ordering first then the next will be applied after and so on.
-
-:::warning
-It is advised to have indexes on these fields in your database to make the queries faster.
-
-We will add a no-code way to add indexes in the future, if required do raise a github issue and we can help you with this.
-:::
-
-This example will get the first 20 transfers ordered by the block number ascending.
-
-```graphql
-query AllTransfers {
-  allTransfers(first: 20, orderBy: [BLOCK_NUMBER_ASC]) {
-    nodes {
-      blockHash
-      blockNumber
-      contractAddress
-      from
-      network
-      nodeId
-      to
-      txHash
-      value
-    }
-    pageInfo {
-      endCursor
-      hasNextPage
-      hasPreviousPage
-      startCursor
-    }
-  }
-}
-```
-
 ### Page info
 
 The page info will give you the following information:
@@ -445,3 +491,92 @@ query AllTransfers {
 ```
 
 :::
+
+### Relationships
+
+When you define `relationships`(TODO DOC) between events rindexer will automatically create relationships between the events
+in the database and expose them on the `GraphQL` interface, this means you can query the relationships within a single query
+avoiding having to have multiple queries to get the data you need.
+
+Lets walk through an example imagine we were playing around with the `lens` data and we had a relationship between the
+`QuoteCreated` `quoteParams.profileId` and the `ProfileCreated` `profileId` events.
+
+You would define the relationship in the `rindexer.yaml` file like so:
+
+```yaml
+name: LensIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: polygon
+    chain_id: 137
+    rpc: https://polygon.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+    relationships: // [!code focus]
+      - contract_name: LensHub // [!code focus]
+        event_name: QuoteCreated // [!code focus]
+        event_input_name: "quoteParams.profileId" // [!code focus]
+        linked_to: // [!code focus]
+          - contract_name: LensHub // [!code focus]
+            event_name: ProfileCreated // [!code focus]
+            event_input_name: profileId // [!code focus]
+contracts:
+  - name: LensHub
+    details:
+      - network: polygon
+        address: 0xDb46d1Dc155634FbC732f92E853b10B288AD5a1d
+        start_block: 59034400
+        end_block: 59034400
+    abi: ./abis/lens-hub-events-abi.json
+    include_events:
+      - QuoteCreated
+      - ProfileCreated
+```
+
+So in this example the `allQuoteCreateds` and `quoteCreated` queries will allow you to get the `ProfileCreated` event
+in the same query. This is a basic example but you can see how you can query the relationships within the same query.
+
+```
+query AllQuoteCreateds {
+  allQuoteCreateds {
+    nodes {
+      nodeId
+      quoteParamsContentUri
+      quoteParamsPointedProfileId
+      quoteParamsPointedPubId
+      quoteParamsReferrerProfileIds
+      quoteParamsReferrerPubIds
+      quoteParamsReferenceModuleData
+      quoteParamsActionModules
+      quoteParamsActionModulesInitDatas
+      quoteParamsReferenceModule
+      quoteParamsReferenceModuleInitData
+      pubId
+      referenceModuleReturnData
+      actionModulesInitReturnDatas
+      referenceModuleInitReturnData
+      transactionExecutor
+      timestamp
+      txHash
+      blockNumber
+      blockHash
+      network
+      quoteParamsProfile { // [!code focus]
+        nodeId // [!code focus]
+        contractAddress // [!code focus]
+        profileId // [!code focus]
+        creator // [!code focus]
+        to // [!code focus]
+        timestamp // [!code focus]
+        txHash // [!code focus]
+        blockNumber // [!code focus]
+        blockHash // [!code focus]
+        network // [!code focus]
+      }
+    }
+  }
+}
+```
