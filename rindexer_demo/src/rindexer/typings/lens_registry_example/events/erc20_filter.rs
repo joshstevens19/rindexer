@@ -8,6 +8,7 @@ use ethers::{
     providers::{Http, Provider, RetryClient},
     types::{Bytes, H256},
 };
+use rindexer_core::manifest::yaml::FilterDetailsYaml;
 use rindexer_core::{
     async_trait, generate_random_id,
     generator::event_callback_registry::{
@@ -228,12 +229,10 @@ where
             name: "ERC20Filter".to_string(),
             details: vec![ContractDetails::new_with_filter(
                 "polygon".to_string(),
-                FilterDetails {
+                FilterDetailsYaml {
                     event_name: "Transfer".to_string(),
-                    indexed_1: None,
-                    indexed_2: None,
-                    indexed_3: None,
                 },
+                None,
                 Some(56399431.into()),
                 None,
             )],

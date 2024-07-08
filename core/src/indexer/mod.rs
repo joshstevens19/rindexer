@@ -9,6 +9,7 @@ pub use progress::IndexingEventProgressStatus;
 use serde::{Deserialize, Serialize};
 
 mod log_helpers;
+pub use log_helpers::parse_topic;
 pub mod no_code;
 mod reorg;
 pub mod start;

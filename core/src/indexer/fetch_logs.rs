@@ -3,7 +3,7 @@ use crate::generator::event_callback_registry::{
 };
 use crate::helpers::{camel_to_snake, get_full_path};
 use crate::indexer::progress::{IndexingEventProgressStatus, IndexingEventsProgressState};
-use crate::manifest::yaml::{CsvDetails, DependencyEventTree};
+use crate::manifest::yaml::{CsvDetails, DependencyEventTree, EventInputIndexedFilters};
 use crate::provider::JsonRpcCachedProvider;
 use crate::{EthereumSqlTypeWrapper, PostgresClient};
 use ethers::middleware::MiddlewareError;
@@ -848,6 +848,7 @@ async fn process_events_dependency_tree(
 
                 let filter = build_filter(
                     &event_processing_config.topic_id,
+                    &event_processing_config.event_name,
                     &event_processing_config
                         .network_contract
                         .indexing_contract_setup,
@@ -1161,6 +1162,7 @@ pub async fn process_event(
 
     let filter = build_filter(
         &event_processing_config.topic_id,
+        &event_processing_config.event_name,
         &event_processing_config
             .network_contract
             .indexing_contract_setup,
@@ -1553,33 +1555,61 @@ pub enum BuildFilterError {
 
 fn build_filter(
     topic_id: &str,
+    event_name: &str,
     indexing_contract_setup: &IndexingContractSetup,
     current_block: U64,
     next_block: U64,
 ) -> Result<Filter, BuildFilterError> {
     match indexing_contract_setup {
-        IndexingContractSetup::Address(address_value_or_array) => {
+        IndexingContractSetup::Address(address_details) => {
             let topic0 = topic_id
                 .parse::<H256>()
                 .map_err(|_| BuildFilterError::Topic0InvalidFormat)?;
 
-            Ok(Filter::new()
-                .address(address_value_or_array.clone())
-                .topic0(topic0)
-                .from_block(current_block)
-                .to_block(next_block))
+            match &address_details.indexed_filters {
+                Some(indexed_filters) => {
+                    if let Some(index_filters) =
+                        indexed_filters.iter().find(|&n| n.event_name == event_name)
+                    {
+                        return Ok(index_filters.extend_filter_indexed(
+                            Filter::new()
+                                .address(address_details.address.clone())
+                                .topic0(topic0)
+                                .from_block(current_block)
+                                .to_block(next_block),
+                        ));
+                    }
+
+                    Ok(Filter::new()
+                        .address(address_details.address.clone())
+                        .topic0(topic0)
+                        .from_block(current_block)
+                        .to_block(next_block))
+                }
+                None => Ok(Filter::new()
+                    .address(address_details.address.clone())
+                    .topic0(topic0)
+                    .from_block(current_block)
+                    .to_block(next_block)),
+            }
         }
         IndexingContractSetup::Filter(filter) => {
             let topic0 = topic_id
                 .parse::<H256>()
                 .map_err(|_| BuildFilterError::Topic0InvalidFormat)?;
 
-            Ok(filter.extend_filter_indexed(
-                Filter::new()
+            match &filter.indexed_filters {
+                Some(indexed_filters) => Ok(indexed_filters.extend_filter_indexed(
+                    Filter::new()
+                        .topic0(topic0)
+                        .from_block(current_block)
+                        .to_block(next_block),
+                )),
+                None => Ok(Filter::new()
                     .topic0(topic0)
                     .from_block(current_block)
-                    .to_block(next_block),
-            ))
+                    .to_block(next_block)),
+            }
         }
         IndexingContractSetup::Factory(factory) => {
             let address = factory
