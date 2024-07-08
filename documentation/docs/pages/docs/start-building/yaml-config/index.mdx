@@ -56,9 +56,9 @@ indexers:
 
 ## Example YAML no-code configuration file
 
-### For Contract Address
+### For single contract address
 
-Filter events for a specific address.
+Filter events for a specific address
 
 #### Historic
 
@@ -142,6 +142,41 @@ indexers:
     - network: ethereum
       address: 0xae78736cd615f374d3085123a210448e74fc6393
       start_block: 18600000
+    abi: ./abis/RocketTokenRETH.abi.json
+    include_events:
+    - Transfer
+    - Approval
+```
+
+### For many contract addresses
+
+Filter events for many contract addresses
+
+#### Historic
+
+```yaml
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+indexers:
+- name: MyFirstIndexerExample
+  contracts:
+  - name: RocketPoolETH
+    details:
+    - network: ethereum
+      address:
+        - 0xae78736cd615f374d3085123a210448e74fc6393 // [!code focus]
+        - 0x2FD5c1659A82E87217DF254f3D4b71A22aE43eE1 // [!code focus]
+      start_block: 18600000
+      end_block: 18718056
     abi: ./abis/RocketTokenRETH.abi.json
     include_events:
     - Transfer

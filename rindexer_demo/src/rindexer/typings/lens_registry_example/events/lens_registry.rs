@@ -5,6 +5,7 @@
 /// Any manual changes to this file will be overwritten.
 use super::lens_registry_abi_gen::rindexer_lens_registry_gen::{self, RindexerLensRegistryGen};
 use crate::rindexer::typings::lens_registry_example::events::erc20_filter_abi_gen::RindexerERC20FilterGen;
+use ethers::prelude::ValueOrArray;
 use ethers::{
     abi::Address,
     providers::{Http, Provider, RetryClient},
@@ -171,7 +172,11 @@ where
             name: "LensRegistry".to_string(),
             details: vec![ContractDetails::new_with_address(
                 "polygon".to_string(),
-                "0xD4F2F33680FCCb36748FA9831851643781608844".to_string(),
+                ValueOrArray::<Address>::Value(
+                    "0xD4F2F33680FCCb36748FA9831851643781608844"
+                        .parse::<Address>()
+                        .unwrap(),
+                ),
                 Some(56399431.into()),
                 Some(56399432.into()),
             )],

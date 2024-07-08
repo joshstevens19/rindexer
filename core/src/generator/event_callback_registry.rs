@@ -1,7 +1,7 @@
 use crate::provider::JsonRpcCachedProvider;
 use ethers::addressbook::Address;
 use ethers::contract::LogMeta;
-use ethers::prelude::Filter;
+use ethers::prelude::{Filter, ValueOrArray};
 use ethers::types::BigEndianHash;
 use ethers::types::{Bytes, Log, H256, U256, U64};
 use ethers::utils::keccak256;
@@ -80,7 +80,7 @@ impl FilterDetails {
 
 #[derive(Clone)]
 pub enum IndexingContractSetup {
-    Address(String),
+    Address(ValueOrArray<Address>),
     Filter(FilterDetails),
     Factory(FactoryDetails),
 }

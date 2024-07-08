@@ -5,6 +5,7 @@ use crate::database::postgres::{
 use crate::generator::build::is_filter;
 use crate::generator::event_callback_registry::IndexingContractSetup;
 use crate::EthereumSqlTypeWrapper;
+use ethers::types::{Address, ValueOrArray};
 use ethers::utils::keccak256;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -369,7 +370,9 @@ fn generate_contract_type_fn_code(contract: &Contract) -> Code {
                 ),
                 "#,
                 network = detail.network,
-                address = address,
+                // TODO - FIX THIS
+                //address = address,
+                address = Address::zero(),
                 start_block = start_block,
                 end_block = end_block,
             ),
@@ -764,7 +767,7 @@ fn build_pub_contract_fn(
         {
             address
         } else {
-            "0x0000000000000000000000000000000000000000".to_string()
+            ValueOrArray::<Address>::Value(Address::zero())
         };
 
         if index == 0 {
@@ -784,7 +787,9 @@ fn build_pub_contract_fn(
                  )
             }}"#,
             network = contract_detail.network,
-            address = address,
+            // TODO - FIX THIS
+            //address = address,
+            address = Address::zero(),
             abi_gen_name = abi_gen_name
         ));
     }

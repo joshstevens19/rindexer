@@ -8,7 +8,7 @@ static GLOBAL: Jemalloc = Jemalloc;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use dotenv::{dotenv, from_path};
-use ethers::types::{Chain, U64};
+use ethers::types::{Address, Chain, ValueOrArray, U64};
 use ethers_etherscan::Client;
 use regex::Regex;
 use rindexer_core::generator::build::{
@@ -351,7 +351,11 @@ fn handle_new_command(
             name: "RocketPoolETH".to_string(),
             details: vec![ContractDetails::new_with_address(
                 "ethereum".to_string(),
-                "0xae78736cd615f374d3085123a210448e74fc6393".to_string(),
+                ValueOrArray::<Address>::Value(
+                    "0xae78736cd615f374d3085123a210448e74fc6393"
+                        .parse::<Address>()
+                        .unwrap(),
+                ),
                 Some(U64::from(18900000)),
                 Some(U64::from(19000000)),
             )],
@@ -557,7 +561,7 @@ async fn handle_add_contract_command(
             name: contract_name.clone(),
             details: vec![ContractDetails::new_with_address(
                 network.to_string(),
-                contract_address.clone(),
+                ValueOrArray::<Address>::Value(contract_address.parse::<Address>().unwrap()),
                 None,
                 None,
             )],
