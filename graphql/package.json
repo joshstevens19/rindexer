@@ -6,6 +6,7 @@
     "build": "pkg index.js --output ../core/resources/rindexer-graphql --targets node16-linux-x64,node16-macos-x64,node16-win-x64"
   },
   "dependencies": {
+    "@graphile-contrib/pg-simplify-inflector": "^6.1.0",
     "body-parser": "^1.20.2",
     "cors": "^2.8.5",
     "express": "^4.19.2",
@@ -13,7 +14,8 @@
     "knex": "^3.1.0",
     "knex-migrate": "^1.7.4",
     "pg": "^8.12.0",
-    "postgraphile": "^4.13.0"
+    "postgraphile": "^4.13.0",
+    "postgraphile-plugin-connection-filter": "^2.3.0"
   },
   "devDependencies": {
     "dotenv": "^16.4.5",

@@ -2,11 +2,6 @@
 
 checklist v1.0:
 - do benchmarks with a few different projects
-- review postgraphile config again
-  - cluster-workers
-  - simple-collections <omit|both|only>
-  - --sort-export
-  - enable https://github.com/graphile/pg-simplify-inflector
 - add ability to add indexes to the database (this in turn is defining what you want to query on so will fix ordering speed)
 - add validation method into the yaml file to check certain things are mapped correctly
 

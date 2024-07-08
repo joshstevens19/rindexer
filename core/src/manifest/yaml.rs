@@ -319,7 +319,7 @@ pub struct Network {
 pub struct ForeignKey {
     pub contract_name: String,
 
-    pub event: String,
+    pub event_name: String,
 
     pub event_input_name: String,
 }
@@ -328,7 +328,7 @@ pub struct ForeignKey {
 pub struct ForeignKeys {
     pub contract_name: String,
 
-    pub event: String,
+    pub event_name: String,
 
     pub event_input_name: String,
 
