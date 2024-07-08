@@ -379,6 +379,56 @@ contracts: // [!code focus]
             - Approval // [!code focus]
 ```
 
+### Cross Contract Dependency Events
+
+You can also define dependency events blocking across contracts, this is useful if you have many contracts which emit
+data but are dependent on each other.
+
+:::info
+WrappedRocketPoolETH example below does not exist on the chain, this is just an example of how you can use dependency events.
+:::
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+contracts: // [!code focus]
+  - name: WrappedRocketPoolETH // [!code focus]
+    details:
+      - network: ethereum
+        address: 0x2FD5c1659A82E87217DF254f3D4b71A22aE43eE8
+        start_block: 18600000
+        end_block: 18718056
+    abi: ./abis/WrappedRocketTokenRETH.abi.json
+    include_events: // [!code focus]
+    - Approval // [!code focus]
+  - name: RocketPoolETH
+    details:
+      - network: ethereum
+        address: 0xae78736cd615f374d3085123a210448e74fc6393
+        start_block: 18600000
+        end_block: 18718056
+    abi: ./abis/RocketTokenRETH.abi.json
+    include_events:
+      - Transfer // [!code focus]
+    dependency_events: // [!code focus]
+      events:
+        - Transfer // [!code focus]
+      then:
+        - events:
+            - contract_name: WrappedRocketPoolETH // [!code focus]
+              event_name: Approval // [!code focus]
+```
+
+So now `WrappedRocketPoolETH` > `Approval` will not be processed until `RocketPoolETH` > `Transfer` is processed.
+
 
 ## reorg_safe_distance
 

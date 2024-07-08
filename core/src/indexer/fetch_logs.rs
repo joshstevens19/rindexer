@@ -11,6 +11,7 @@ use ethers::prelude::{Block, Filter, JsonRpcError, Log, ProviderError};
 use ethers::types::{Address, BlockNumber, Bloom, FilteredParams, ValueOrArray, H256, U64};
 use futures::future::join_all;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -44,19 +45,38 @@ pub struct EventProcessingConfig {
     pub indexing_distance_from_head: U64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct ContractEventMapping {
+    pub contract_name: String,
+    pub event_name: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct EventsDependencyTree {
-    pub events_name: Vec<String>,
+    pub contract_events: Vec<ContractEventMapping>,
     pub then: Box<Option<Arc<EventsDependencyTree>>>,
 }
 
 impl EventsDependencyTree {
-    pub fn from_dependency_event_tree(event_tree: DependencyEventTree) -> Self {
+    pub fn new(events: Vec<ContractEventMapping>) -> Self {
+        EventsDependencyTree {
+            contract_events: events,
+            then: Box::new(None),
+        }
+    }
+
+    pub fn add_then(&mut self, tree: EventsDependencyTree) {
+        self.then = Box::new(Some(Arc::new(tree)));
+    }
+}
+
+impl EventsDependencyTree {
+    pub fn from_dependency_event_tree(event_tree: &DependencyEventTree) -> Self {
         Self {
-            events_name: event_tree.events,
-            then: match event_tree.then {
-                Some(children) if !children.is_empty() => Box::new(Some(Arc::new(
-                    EventsDependencyTree::from_dependency_event_tree(children[0].clone()),
+            contract_events: event_tree.contract_events.clone(),
+            then: match event_tree.then.clone() {
+                Some(children) => Box::new(Some(Arc::new(
+                    EventsDependencyTree::from_dependency_event_tree(&children),
                 ))),
                 _ => Box::new(None),
             },
@@ -67,13 +87,12 @@ impl EventsDependencyTree {
 #[derive(Debug, Clone)]
 pub struct EventDependencies {
     pub tree: Arc<EventsDependencyTree>,
-    pub dependency_event_names: Vec<String>,
+    pub dependency_events: Vec<ContractEventMapping>,
 }
 
 impl EventDependencies {
-    pub fn has_dependency(&self, event_name: &str) -> bool {
-        self.dependency_event_names
-            .contains(&event_name.to_string())
+    pub fn has_dependency(&self, contract_event: &ContractEventMapping) -> bool {
+        self.dependency_events.contains(contract_event)
     }
 }
 
@@ -86,7 +105,7 @@ pub struct ContractEventDependencies {
 pub struct ContractEventsConfig {
     pub contract_name: String,
     pub event_dependencies: EventDependencies,
-    pub events_config: Vec<EventProcessingConfig>,
+    pub events_config: Vec<Arc<EventProcessingConfig>>,
 }
 
 #[derive(Debug)]
@@ -791,7 +810,7 @@ pub enum ProcessEventsWithDependenciesError {
 
 async fn process_events_with_dependencies(
     dependencies: EventDependencies,
-    events_processing_config: Vec<EventProcessingConfig>,
+    events_processing_config: Vec<Arc<EventProcessingConfig>>,
 ) -> Result<(), ProcessEventsWithDependenciesError> {
     process_events_dependency_tree(dependencies.tree, Arc::new(events_processing_config)).await
 }
@@ -804,7 +823,7 @@ struct OrderedLiveIndexingDetails {
 
 async fn process_events_dependency_tree(
     tree: Arc<EventsDependencyTree>,
-    events_processing_config: Arc<Vec<EventProcessingConfig>>,
+    events_processing_config: Arc<Vec<Arc<EventProcessingConfig>>>,
 ) -> Result<(), ProcessEventsWithDependenciesError> {
     let mut stack = vec![tree];
 
@@ -813,7 +832,7 @@ async fn process_events_dependency_tree(
     while let Some(current_tree) = stack.pop() {
         let mut tasks = vec![];
 
-        for dependency in &current_tree.events_name {
+        for dependency in &current_tree.contract_events {
             let event_processing_config = Arc::clone(&events_processing_config);
             let dependency = dependency.clone();
             let live_indexing_events = Arc::clone(&live_indexing_events);
@@ -821,9 +840,12 @@ async fn process_events_dependency_tree(
             let task = tokio::spawn(async move {
                 let event_processing_config = event_processing_config
                     .iter()
-                    .find(|e| e.event_name == dependency)
+                    .find(|e| {
+                        e.contract_name == dependency.contract_name
+                            && e.event_name == dependency.event_name
+                    })
                     .ok_or(ProcessEventsWithDependenciesError::EventConfigNotFound)?;
-
+                
                 let filter = build_filter(
                     &event_processing_config.topic_id,
                     &event_processing_config

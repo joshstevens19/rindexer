@@ -1,5 +1,7 @@
 mod fetch_logs;
-pub use fetch_logs::{ContractEventDependencies, EventDependencies, EventsDependencyTree};
+pub use fetch_logs::{
+    ContractEventDependencies, ContractEventMapping, EventDependencies, EventsDependencyTree,
+};
 mod progress;
 
 use crate::manifest::yaml::Contract;
