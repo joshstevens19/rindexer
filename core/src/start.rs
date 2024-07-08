@@ -122,14 +122,17 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
                 let mut dependencies: Vec<ContractEventDependencies> = vec![];
                 for contract in &manifest.contracts {
                     if let Some(dependency) = contract.dependency_events.clone() {
-                        let dependency_event_names = dependency.collect_dependency_events();
-                        let dependency_tree =
-                            EventsDependencyTree::from_dependency_event_tree(dependency);
+                        let dependency_event_tree =
+                            contract.convert_dependency_event_tree_yaml(dependency);
+                        let dependency_tree = EventsDependencyTree::from_dependency_event_tree(
+                            &dependency_event_tree,
+                        );
+                        
                         dependencies.push(ContractEventDependencies {
                             contract_name: contract.name.clone(),
                             event_dependencies: EventDependencies {
                                 tree: Arc::new(dependency_tree),
-                                dependency_event_names,
+                                dependency_events: dependency_event_tree.collect_dependency_events(),
                             },
                         });
                     }

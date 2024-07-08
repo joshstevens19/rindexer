@@ -457,18 +457,15 @@ fn generate_contract_type_fn_code(contract: &Contract) -> Code {
 
     fn format_tree(tree: &DependencyEventTree) -> String {
         let events_str = tree
-            .events
+            .contract_events
             .iter()
-            .map(|s| format!("\"{}\".to_string()", s))
+            // TODO - this is not correct
+            .map(|s| format!("\"{}\".to_string()", s.event_name))
             .collect::<Vec<_>>()
             .join(", ");
 
         let then_str = match &tree.then {
-            Some(children) => children
-                .iter()
-                .map(format_tree)
-                .collect::<Vec<_>>()
-                .join(", "),
+            Some(children) => format_tree(children),
             None => String::new(),
         };
 
@@ -486,7 +483,10 @@ fn generate_contract_type_fn_code(contract: &Contract) -> Code {
     }
 
     let dependency_events = if let Some(event_tree) = &contract.dependency_events {
-        format!("Some({})", format_tree(event_tree))
+        format!(
+            "Some({})",
+            format_tree(&contract.convert_dependency_event_tree_yaml(event_tree.clone()))
+        )
     } else {
         "None".to_string()
     };

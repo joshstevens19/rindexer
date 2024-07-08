@@ -9,9 +9,7 @@ use tokio::time::Instant;
 use tracing::{debug, error, info};
 
 use crate::database::postgres::PostgresConnectionError;
-use crate::generator::event_callback_registry::{
-    EventCallbackRegistry, EventInformation,
-};
+use crate::generator::event_callback_registry::{EventCallbackRegistry, EventInformation};
 use crate::indexer::fetch_logs::{
     get_last_synced_block_number, process_contract_events_with_dependencies, process_event,
     ContractEventDependencies, ContractEventsConfig, EventProcessingConfig,
@@ -19,6 +17,7 @@ use crate::indexer::fetch_logs::{
 };
 use crate::indexer::progress::IndexingEventsProgressState;
 use crate::indexer::reorg::reorg_safe_distance_for_chain;
+use crate::indexer::ContractEventMapping;
 use crate::manifest::yaml::Manifest;
 use crate::PostgresClient;
 
@@ -83,7 +82,7 @@ pub struct ProcessedNetworkContract {
 pub async fn start_indexing(
     manifest: &Manifest,
     project_path: &PathBuf,
-    dependencies: &Vec<ContractEventDependencies>,
+    dependencies: &[ContractEventDependencies],
     no_live_indexing_forced: bool,
     registry: Arc<EventCallbackRegistry>,
 ) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
@@ -106,9 +105,15 @@ pub async fn start_indexing(
     // we can bring this into the yaml file later if required
     let semaphore = Arc::new(Semaphore::new(100));
 
+    // need this to keep track of dependency_events cross contracts and events
+    let mut event_processing_configs: Vec<Arc<EventProcessingConfig>> = vec![];
+
     // any events which are non-blocking and can be fired in parallel
     let mut non_blocking_process_events = Vec::new();
     let mut dependency_event_processing_configs: Vec<ContractEventsConfig> = Vec::new();
+    // if you are doing advanced dependency events where other contracts depend on the processing of this contract
+    // you will need to apply the dependency after the processing of the other contract to avoid ordering issues
+    let mut apply_cross_contract_dependency_events_config_after_processing: Vec<(&String, Arc<EventProcessingConfig>)> = Vec::new();
 
     let mut processed_network_contracts: Vec<ProcessedNetworkContract> = Vec::new();
 
@@ -216,13 +221,53 @@ pub async fn start_indexing(
                 indexing_distance_from_head,
             };
 
-            if dependencies
+            let has_dependency_in_own_contract = dependencies
                 .iter()
                 .find(|d| d.contract_name == event.contract.name)
                 .map_or(false, |deps| {
-                    deps.event_dependencies.has_dependency(&event.event_name)
+                    deps.event_dependencies
+                        .has_dependency(&ContractEventMapping {
+                            contract_name: deps.contract_name.clone(),
+                            event_name: event.event_name.clone(),
+                        })
+                });
+            
+            let dependencies_in_other_contracts: Vec<&String> = dependencies
+                .iter()
+                .filter_map(|d| {
+                    if d.contract_name != event.contract.name {
+                        let has_dependency = d
+                            .event_dependencies
+                            .has_dependency(&ContractEventMapping {
+                                contract_name: event.contract.name.clone(),
+                                event_name: event.event_name.clone(),
+                            });
+
+                        if has_dependency {
+                            return Some(&d.contract_name);
+                        }
+                    }
+                    None
                 })
-            {
+                .collect();
+            
+            if dependencies_in_other_contracts.len() > 1 {
+                panic!("Multiple dependencies of the same event on different contracts not supported yet - please raise an issue if you need this feature");
+            }
+
+            if has_dependency_in_own_contract || !dependencies_in_other_contracts.is_empty() {
+                let event_processing_config_arc = Arc::new(event_processing_config);
+                event_processing_configs.push(Arc::clone(&event_processing_config_arc));
+                
+                if let Some(dependency_in_other_contract) = dependencies_in_other_contracts.first() {
+                    apply_cross_contract_dependency_events_config_after_processing.push((
+                        dependency_in_other_contract,
+                        Arc::clone(&event_processing_config_arc),
+                    ));
+                    
+                    continue;
+                }
+                
                 let contract_events_config = dependency_event_processing_configs
                     .iter_mut()
                     .find(|c| c.contract_name == event.contract.name);
@@ -231,7 +276,7 @@ pub async fn start_indexing(
                     Some(contract_events_config) => {
                         contract_events_config
                             .events_config
-                            .push(event_processing_config);
+                            .push(Arc::clone(&event_processing_config_arc));
                     }
                     None => {
                         dependency_event_processing_configs.push(ContractEventsConfig {
@@ -242,13 +287,38 @@ pub async fn start_indexing(
                                 .unwrap()
                                 .event_dependencies
                                 .clone(),
-                            events_config: vec![event_processing_config],
+                            events_config: vec![Arc::clone(&event_processing_config_arc)],
                         });
                     }
                 }
             } else {
                 let process_event = tokio::spawn(process_event(event_processing_config));
                 non_blocking_process_events.push(process_event);
+            }
+        }
+    }
+    
+    // apply dependency events config after processing to avoid ordering issues
+    for apply in apply_cross_contract_dependency_events_config_after_processing {
+        let (dependency_in_other_contract, event_processing_config_arc) = apply;
+        let event_processing_config = event_processing_config_arc.clone();
+        
+        let dependency_event_processing_config = dependency_event_processing_configs
+            .iter_mut()
+            .find(|c| &c.contract_name == dependency_in_other_contract);
+        
+        match dependency_event_processing_config {
+            Some(contract_events_config) => {
+                contract_events_config
+                    .events_config
+                    .push(Arc::clone(&event_processing_config_arc));
+            }
+            None => {
+                panic!("Contract events config not found for {} dependency event processing config make sure it registered - trying to add to it - contract {} - event {}",
+                       dependency_in_other_contract,
+                       event_processing_config.contract_name,
+                       event_processing_config.event_name
+                );
             }
         }
     }

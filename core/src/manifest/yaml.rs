@@ -9,7 +9,7 @@ use crate::generator::event_callback_registry::{
     FactoryDetails, FilterDetails, IndexingContractSetup,
 };
 use crate::helpers::replace_env_variable_to_raw_name;
-use crate::indexer::Indexer;
+use crate::indexer::{ContractEventMapping, Indexer};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_yaml::Value;
 
@@ -214,22 +214,37 @@ impl ContractDetails {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SimpleEventOrContractEvent {
+    SimpleEvent(String),
+    ContractEvent(ContractEventMapping),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DependencyEventTreeYaml {
+    pub events: Vec<SimpleEventOrContractEvent>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub then: Option<Box<DependencyEventTreeYaml>>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DependencyEventTree {
-    pub events: Vec<String>,
-    pub then: Option<Vec<DependencyEventTree>>,
+    pub contract_events: Vec<ContractEventMapping>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub then: Option<Box<DependencyEventTree>>,
 }
 
 impl DependencyEventTree {
-    pub fn collect_dependency_events(&self) -> Vec<String> {
+    pub fn collect_dependency_events(&self) -> Vec<ContractEventMapping> {
         let mut dependencies = Vec::new();
 
-        dependencies.extend(self.events.clone());
+        dependencies.extend(self.contract_events.clone());
 
         if let Some(children) = &self.then {
-            for child in children {
-                dependencies.extend(child.collect_dependency_events());
-            }
+            dependencies.extend(children.collect_dependency_events());
         }
 
         dependencies
@@ -251,7 +266,7 @@ pub struct Contract {
     pub index_event_in_order: Option<Vec<String>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dependency_events: Option<DependencyEventTree>,
+    pub dependency_events: Option<DependencyEventTreeYaml>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reorg_safe_distance: Option<bool>,
@@ -263,6 +278,28 @@ pub struct Contract {
 impl Contract {
     pub fn override_name(&mut self, name: String) {
         self.name = name;
+    }
+
+    pub fn convert_dependency_event_tree_yaml(
+        &self,
+        yaml: DependencyEventTreeYaml,
+    ) -> DependencyEventTree {
+        DependencyEventTree {
+            contract_events: yaml
+                .events
+                .into_iter()
+                .map(|event| match event {
+                    SimpleEventOrContractEvent::ContractEvent(contract_event) => contract_event,
+                    SimpleEventOrContractEvent::SimpleEvent(event_name) => ContractEventMapping {
+                        contract_name: self.name.clone(),
+                        event_name: event_name.clone(),
+                    },
+                })
+                .collect(),
+            then: yaml
+                .then
+                .map(|then_event| Box::new(self.convert_dependency_event_tree_yaml(*then_event))),
+        }
     }
 }
 
