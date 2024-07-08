@@ -3,7 +3,7 @@ use crate::database::postgres::{
     solidity_type_to_db_type, solidity_type_to_ethereum_sql_type_wrapper,
 };
 use crate::generator::build::is_filter;
-use crate::generator::event_callback_registry::IndexingContractSetup;
+use crate::generator::event_callback_registry::{AddressDetails, IndexingContractSetup};
 use crate::EthereumSqlTypeWrapper;
 use ethers::types::{Address, ValueOrArray};
 use ethers::utils::keccak256;
@@ -331,7 +331,7 @@ fn generate_decoder_match_arms_code(event_type_name: &str, event_info: &[EventIn
         .join("\n"))
 }
 
-fn generate_indexed_vec_string(indexed: &Option<Vec<String>>) -> Code {
+fn generate_indexed_vec_string(indexed: &Option<&Vec<String>>) -> Code {
     match indexed {
         Some(values) => Code::new(format!(
             "Some(vec![{}])",
@@ -377,9 +377,24 @@ fn generate_contract_type_fn_code(contract: &Contract) -> Code {
                 end_block = end_block,
             ),
             IndexingContractSetup::Filter(filter) => {
-                let indexed_1 = generate_indexed_vec_string(&filter.indexed_1);
-                let indexed_2 = generate_indexed_vec_string(&filter.indexed_2);
-                let indexed_3 = generate_indexed_vec_string(&filter.indexed_3);
+                let indexed_1 = generate_indexed_vec_string(
+                    &filter
+                        .indexed_filters
+                        .as_ref()
+                        .map_or(None, |f| f.indexed_1.as_ref()),
+                );
+                let indexed_2 = generate_indexed_vec_string(
+                    &filter
+                        .indexed_filters
+                        .as_ref()
+                        .map_or(None, |f| f.indexed_2.as_ref()),
+                );
+                let indexed_3 = generate_indexed_vec_string(
+                    &filter
+                        .indexed_filters
+                        .as_ref()
+                        .map_or(None, |f| f.indexed_3.as_ref()),
+                );
 
                 format!(
                     r#"
@@ -767,7 +782,10 @@ fn build_pub_contract_fn(
         {
             address
         } else {
-            ValueOrArray::<Address>::Value(Address::zero())
+            AddressDetails {
+                address: ValueOrArray::<Address>::Value(Address::zero()),
+                indexed_filters: None,
+            }
         };
 
         if index == 0 {

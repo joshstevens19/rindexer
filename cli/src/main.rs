@@ -356,6 +356,7 @@ fn handle_new_command(
                         .parse::<Address>()
                         .unwrap(),
                 ),
+                None,
                 Some(U64::from(18900000)),
                 Some(U64::from(19000000)),
             )],
@@ -562,6 +563,7 @@ async fn handle_add_contract_command(
             details: vec![ContractDetails::new_with_address(
                 network.to_string(),
                 ValueOrArray::<Address>::Value(contract_address.parse::<Address>().unwrap()),
+                None,
                 None,
                 None,
             )],

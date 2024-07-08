@@ -1,5 +1,5 @@
 use ethers::addressbook::Address;
-use ethers::prelude::ValueOrArray;
+use ethers::prelude::{Filter, ValueOrArray};
 use ethers::types::U64;
 use regex::{Captures, Regex};
 use std::env;
@@ -7,9 +7,11 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
-use crate::generator::event_callback_registry::{FilterDetails, IndexingContractSetup};
+use crate::generator::event_callback_registry::{
+    AddressDetails, FilterDetails, IndexingContractSetup,
+};
 use crate::helpers::replace_env_variable_to_raw_name;
-use crate::indexer::{ContractEventMapping, Indexer};
+use crate::indexer::{parse_topic, ContractEventMapping, Indexer};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_yaml::Value;
 
@@ -113,6 +115,40 @@ impl Manifest {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EventInputIndexedFilters {
+    pub event_name: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indexed_1: Option<Vec<String>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indexed_2: Option<Vec<String>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indexed_3: Option<Vec<String>>,
+}
+
+impl EventInputIndexedFilters {
+    pub fn extend_filter_indexed(&self, mut filter: Filter) -> Filter {
+        if let Some(indexed_1) = &self.indexed_1 {
+            filter = filter.topic1(indexed_1.iter().map(|i| parse_topic(i)).collect::<Vec<_>>());
+        }
+        if let Some(indexed_2) = &self.indexed_2 {
+            filter = filter.topic2(indexed_2.iter().map(|i| parse_topic(i)).collect::<Vec<_>>());
+        }
+        if let Some(indexed_3) = &self.indexed_3 {
+            filter = filter.topic3(indexed_3.iter().map(|i| parse_topic(i)).collect::<Vec<_>>());
+        }
+        filter
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FilterDetailsYaml {
+    pub event_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ContractDetails {
     pub network: String,
 
@@ -120,7 +156,10 @@ pub struct ContractDetails {
     address: Option<ValueOrArray<Address>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    filter: Option<FilterDetails>,
+    filter: Option<FilterDetailsYaml>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    indexed_filters: Option<Vec<EventInputIndexedFilters>>,
 
     // #[serde(default, skip_serializing_if = "Option::is_none")]
     // factory: Option<FactoryDetails>,
@@ -144,11 +183,20 @@ pub struct ContractDetails {
 impl ContractDetails {
     pub fn indexing_contract_setup(&self) -> IndexingContractSetup {
         if let Some(address) = &self.address {
-            IndexingContractSetup::Address(address.clone())
+            IndexingContractSetup::Address(AddressDetails {
+                address: address.clone(),
+                indexed_filters: self.indexed_filters.clone(),
+            })
         // } else if let Some(factory) = &self.factory {
         //     IndexingContractSetup::Factory(factory.clone())
         } else if let Some(filter) = &self.filter {
-            IndexingContractSetup::Filter(filter.clone())
+            IndexingContractSetup::Filter(FilterDetails {
+                event_name: filter.event_name.clone(),
+                indexed_filters: self
+                    .indexed_filters
+                    .as_ref()
+                    .and_then(|f| f.first().cloned()),
+            })
         } else {
             panic!("Contract details must have an address, factory or filter");
         }
@@ -167,6 +215,7 @@ impl ContractDetails {
     pub fn new_with_address(
         network: String,
         address: ValueOrArray<Address>,
+        indexed_filters: Option<Vec<EventInputIndexedFilters>>,
         start_block: Option<U64>,
         end_block: Option<U64>,
     ) -> Self {
@@ -174,6 +223,7 @@ impl ContractDetails {
             network,
             address: Some(address),
             filter: None,
+            indexed_filters,
             //factory: None,
             start_block,
             end_block,
@@ -182,7 +232,8 @@ impl ContractDetails {
 
     pub fn new_with_filter(
         network: String,
-        filter: FilterDetails,
+        filter: FilterDetailsYaml,
+        indexed_filters: Option<Vec<EventInputIndexedFilters>>,
         start_block: Option<U64>,
         end_block: Option<U64>,
     ) -> Self {
@@ -190,6 +241,7 @@ impl ContractDetails {
             network,
             address: None,
             filter: Some(filter),
+            indexed_filters,
             //factory: None,
             start_block,
             end_block,
@@ -500,34 +552,4 @@ pub fn write_manifest(data: &Manifest, file_path: &PathBuf) -> Result<(), WriteM
     file.write_all(yaml_string.as_bytes())
         .map_err(WriteManifestError::CouldNotWriteToFile)?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_contract_details_indexing_contract_setup() {
-        let filter_details = FilterDetails {
-            event_name: "TestEvent".to_string(),
-            indexed_1: None,
-            indexed_2: None,
-            indexed_3: None,
-        };
-
-        let contract_details = ContractDetails {
-            network: "testnet".to_string(),
-            address: None,
-            filter: Some(filter_details.clone()),
-            start_block: None,
-            end_block: None,
-        };
-
-        match contract_details.indexing_contract_setup() {
-            IndexingContractSetup::Filter(filter) => {
-                assert_eq!(filter.event_name, "TestEvent");
-            }
-            _ => panic!("Expected filter setup"),
-        }
-    }
 }

@@ -114,7 +114,7 @@ This means if you want to index on a filter and with the same contract definitio
 an address you will need to do 2 different contract definitions in the yaml file.
 :::
 
-### event_name
+#### event_name
 
 The event name to filter on, it must match the ABI event name.
 
@@ -140,14 +140,51 @@ contracts: // [!code focus]
 ### indexed_1, indexed_2, indexed_3
 
 :::info
-This is optional, if you do not provide this it will filter on the event name only.
+This is optional and can be used on both address and filter.
 :::
 
-The indexed fields to filter on, you can have up to 3 indexed fields to filter on.
-The indexed 1,2,3 are based on the order they are mapped in with the event. So if you have 3 indexed fields in the event
-you can filter on all 3 or 2 of them or 1 of them in any direction.
+Indexed means that these values will be stored in the topics field rather than the data field when the event gets fired off
+and you can filter these out on the JSONRPC side so you only get the events you want.
 
-indexed fields are arrays so you can filter many values in the indexed fields.
+In EVM you can have up to 3 indexed fields to filter on. The indexed 1,2,3 are based on the order they emitted in the event.
+So if you have 3 indexed fields in the event you can filter on all 3 or 2 or 1 of them in any direction. Indexed fields are arrays so
+you can filter many values in the indexed fields, the arrays are `OR` not `AND` filtering.
+
+example ABI:
+
+```json
+{
+    "anonymous":false,
+    "inputs":[
+      {
+        "indexed":true, // [!code focus]
+        "internalType":"address",
+        "name":"owner",
+        "type":"address"
+      },
+      {
+        "indexed":true, // [!code focus]
+        "internalType":"address",
+        "name":"spender",
+        "type":"address"
+      },
+      {
+        "indexed":false, // [!code focus]
+        "internalType":"uint256",
+        "name":"value",
+        "type":"uint256"
+      }
+    ],
+    "name":"Approval", // [!code focus]
+    "type":"event"
+}
+```
+
+So this ABI says that the inputs `owner` and `spender` are indexed and can be filtered on. `value` is not
+indexed so you can not filter on it.
+
+For example if you wanted to get all the approvals for rETH for owner `0xd87b8e0db0cf9cbf9963c035a6ad72d614e37fd5`
+and `0x0338ce5020c447f7e668dc2ef778025ce398266b` you could set the indexed filters like so:
 
 ```yaml [rindexer.yaml]
 name: rETHIndexer
@@ -164,10 +201,39 @@ contracts: // [!code focus]
    - name: RocketPoolETH
      details:
        - network: ethereum
-         filter: // [!code focus]
-           event_name: Transfer
-           indexed_1: // [!code focus]
-              - 0x4A1a2197f307222cD67A1762D9A352F64558d9Be // [!code focus]
+         address: 0xae78736cd615f374d3085123a210448e74fc6393
+         indexed_filters: // [!code focus]
+           - event_name: Approval // [!code focus]
+             indexed_1:
+               - 0xd87b8e0db0cf9cbf9963c035a6ad72d614e37fd5 // [!code focus]
+               - 0x0338ce5020c447f7e668dc2ef778025ce398266b // [!code focus]
+```
+
+Another example using filters is if you wanted to get all the approvals for any token for owner `0xd87b8e0db0cf9cbf9963c035a6ad72d614e37fd5`
+and `0x0338ce5020c447f7e668dc2ef778025ce398266b` you could set the indexed filters like so:
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+contracts: // [!code focus]
+   - name: RocketPoolETH
+     details:
+       - network: ethereum
+         filter:
+            event_name: Approval
+         indexed_filters: // [!code focus]
+           - event_name: Approval // [!code focus]
+             indexed_1:
+               - 0xd87b8e0db0cf9cbf9963c035a6ad72d614e37fd5 // [!code focus]
+               - 0x0338ce5020c447f7e668dc2ef778025ce398266b // [!code focus]
 ```
 
 ### start_block

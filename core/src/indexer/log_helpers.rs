@@ -1,5 +1,9 @@
 use ethers::abi::{Event, Log as ParsedLog, LogParam, RawLog, Token};
-use ethers::types::Log;
+use ethers::addressbook::Address;
+use ethers::prelude::{H256, U256};
+use ethers::types::{BigEndianHash, Log};
+use ethers::utils::keccak256;
+use std::str::FromStr;
 
 pub fn parse_log(event: &Event, log: &Log) -> Option<ParsedLog> {
     let raw_log = RawLog {
@@ -90,4 +94,20 @@ pub fn map_log_params_to_raw_values(params: &[LogParam]) -> Vec<String> {
         raw_values.extend(map_token_to_raw_values(&param.value));
     }
     raw_values
+}
+
+pub fn parse_topic(input: &str) -> H256 {
+    match input.to_lowercase().as_str() {
+        "true" => H256::from_low_u64_be(1),
+        "false" => H256::from_low_u64_be(0),
+        _ => {
+            if let Ok(address) = Address::from_str(input) {
+                H256::from(address)
+            } else if let Ok(num) = U256::from_dec_str(input) {
+                H256::from_uint(&num)
+            } else {
+                H256::from(keccak256(input))
+            }
+        }
+    }
 }

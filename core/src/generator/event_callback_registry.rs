@@ -1,14 +1,12 @@
+use crate::manifest::yaml::EventInputIndexedFilters;
 use crate::provider::JsonRpcCachedProvider;
 use ethers::addressbook::Address;
 use ethers::contract::LogMeta;
-use ethers::prelude::{Filter, ValueOrArray};
-use ethers::types::BigEndianHash;
+use ethers::prelude::ValueOrArray;
 use ethers::types::{Bytes, Log, H256, U256, U64};
-use ethers::utils::keccak256;
 use futures::future::BoxFuture;
 use log::info;
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
 use std::{any::Any, sync::Arc};
 use tracing::error;
 
@@ -18,6 +16,13 @@ pub fn noop_decoder() -> Decoder {
     Arc::new(move |_topics: Vec<H256>, _data: Bytes| {
         Arc::new(String::new()) as Arc<dyn Any + Send + Sync>
     }) as Decoder
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AddressDetails {
+    pub address: ValueOrArray<Address>,
+
+    pub indexed_filters: Option<Vec<EventInputIndexedFilters>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -37,50 +42,12 @@ pub struct FactoryDetails {
 pub struct FilterDetails {
     pub event_name: String,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub indexed_1: Option<Vec<String>>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub indexed_2: Option<Vec<String>>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub indexed_3: Option<Vec<String>>,
-}
-
-fn parse_topic(input: &str) -> H256 {
-    match input.to_lowercase().as_str() {
-        "true" => H256::from_low_u64_be(1),
-        "false" => H256::from_low_u64_be(0),
-        _ => {
-            if let Ok(address) = Address::from_str(input) {
-                H256::from(address)
-            } else if let Ok(num) = U256::from_dec_str(input) {
-                H256::from_uint(&num)
-            } else {
-                H256::from(keccak256(input))
-            }
-        }
-    }
-}
-
-impl FilterDetails {
-    pub fn extend_filter_indexed(&self, mut filter: Filter) -> Filter {
-        if let Some(indexed_1) = &self.indexed_1 {
-            filter = filter.topic1(indexed_1.iter().map(|i| parse_topic(i)).collect::<Vec<_>>());
-        }
-        if let Some(indexed_2) = &self.indexed_2 {
-            filter = filter.topic2(indexed_2.iter().map(|i| parse_topic(i)).collect::<Vec<_>>());
-        }
-        if let Some(indexed_3) = &self.indexed_3 {
-            filter = filter.topic3(indexed_3.iter().map(|i| parse_topic(i)).collect::<Vec<_>>());
-        }
-        filter
-    }
+    pub indexed_filters: Option<EventInputIndexedFilters>,
 }
 
 #[derive(Clone)]
 pub enum IndexingContractSetup {
-    Address(ValueOrArray<Address>),
+    Address(AddressDetails),
     Filter(FilterDetails),
     Factory(FactoryDetails),
 }

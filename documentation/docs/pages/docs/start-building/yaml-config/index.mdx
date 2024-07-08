@@ -50,8 +50,8 @@ indexers:
       end_block: 18718056
     abi: ./abis/RocketTokenRETH.abi.json
     include_events:
-    - Transfer
-    - Approval
+      - Transfer
+      - Approval
 ```
 
 ## Example YAML no-code configuration file
@@ -85,8 +85,8 @@ indexers:
       end_block: 18718056
     abi: ./abis/RocketTokenRETH.abi.json
     include_events:
-    - Transfer
-    - Approval
+      - Transfer
+      - Approval
 ```
 
 #### Live
@@ -114,8 +114,8 @@ indexers:
       address: 0xae78736cd615f374d3085123a210448e74fc6393
     abi: ./abis/RocketTokenRETH.abi.json
     include_events:
-    - Transfer
-    - Approval
+      - Transfer
+      - Approval
 ```
 
 #### Live and historic
@@ -144,8 +144,8 @@ indexers:
       start_block: 18600000
     abi: ./abis/RocketTokenRETH.abi.json
     include_events:
-    - Transfer
-    - Approval
+      - Transfer
+      - Approval
 ```
 
 ### For many contract addresses
@@ -179,8 +179,44 @@ indexers:
       end_block: 18718056
     abi: ./abis/RocketTokenRETH.abi.json
     include_events:
-    - Transfer
-    - Approval
+      - Transfer
+      - Approval
+```
+
+### For address or addresses with indexed filter
+
+Filter events for a specific address or array of addresses filtering on indexed fields.
+You can read more about indexed fields [here](/docs/start-building/yaml-config/contracts#indexed_1-indexed_2-indexed_3).
+
+```yaml
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+indexers:
+- name: MyFirstIndexerExample
+  contracts:
+  - name: RocketPoolETH
+    details:
+    - network: ethereum
+      address: 0xae78736cd615f374d3085123a210448e74fc6393
+      indexed_filters: // [!code focus]
+        - event_name: Transfer // [!code focus]
+          indexed_1: // [!code focus]
+            - 0xd87b8e0db0cf9cbf9963c035a6ad72d614e37fd5 // [!code focus]
+      start_block: 18600000
+      end_block: 18718056
+    abi: ./abis/RocketTokenRETH.abi.json
+    include_events:
+      - Transfer
+      - Approval
 ```
 
 ### Filter for an event across all contracts
@@ -238,8 +274,10 @@ indexers:
     - network: ethereum
       filter:
         event_name: Transfer
-        indexed_1:
-          - 0x4A1a2197f307222cD67A1762D9A352F64558d9Be
+      indexed_filters:
+         - event_name: Transfer
+           indexed_1:
+             - 0x4A1a2197f307222cD67A1762D9A352F64558d9Be
       start_block: 18600000
       end_block: 18718056
     abi: ./abis/ERC20.abi.json
