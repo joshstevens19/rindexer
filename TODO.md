@@ -3,7 +3,6 @@
 checklist v1.0:
 - do benchmarks with a few different projects
 - add ability to add indexes to the database (this in turn is defining what you want to query on so will fix ordering speed)
-- add validation method into the yaml file to check certain things are mapped correctly
 
 bugs:
 - RUST PROJECT ISSUE - // TODO - this is not correct (this will be fixed if we remove some repeated info from the code)

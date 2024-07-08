@@ -5,11 +5,12 @@ use regex::{Captures, Regex};
 use std::env;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::generator::event_callback_registry::{
     AddressDetails, FilterDetails, IndexingContractSetup,
 };
+use crate::generator::read_abi_items;
 use crate::helpers::replace_env_variable_to_raw_name;
 use crate::indexer::{parse_topic, ContractEventMapping, Indexer};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -481,6 +482,144 @@ fn substitute_env_variables(contents: &str) -> Result<String, regex::Error> {
 }
 
 #[derive(thiserror::Error, Debug)]
+pub enum ValidateManifestError {
+    #[error("Invalid network mapped to contract: network - {0} contract - {1}")]
+    InvalidNetworkMappedToContract(String, String),
+
+    #[error("Invalid filter event name {0} for contract {1} does not exist in ABI")]
+    InvalidFilterEventNameDoesntExistInABI(String, String),
+
+    #[error("Could not read or parse ABI for contract {0} with path {1}")]
+    InvalidABI(String, String),
+
+    #[error("Event {0} included in include_events for contract {1} not found in ABI")]
+    EventIncludedNotFoundInABI(String, String),
+
+    #[error("Event {0} not found in ABI for contract {1}")]
+    IndexedFilterEventNotFoundInABI(String, String),
+
+    #[error("Indexed filter defined more than allowed for event {0} for contract {1} - indexed expected: {2} defined: {3}")]
+    IndexedFilterDefinedMoreThanAllowed(String, String, usize, usize),
+
+    #[error("Relationship contract {0} not found")]
+    RelationshipContractNotFound(String),
+
+    #[error("Relationship foreign key contract {0} not found")]
+    RelationshipForeignKeyContractNotFound(String),
+}
+
+fn validate_manifest(
+    project_path: &Path,
+    manifest: &Manifest,
+) -> Result<(), ValidateManifestError> {
+    for contract in &manifest.contracts {
+        let events = read_abi_items(project_path, contract)
+            .map_err(|e| ValidateManifestError::InvalidABI(contract.name.clone(), e.to_string()))?;
+
+        for detail in &contract.details {
+            let has_network = manifest.networks.iter().any(|n| n.name == detail.network);
+            if !has_network {
+                return Err(ValidateManifestError::InvalidNetworkMappedToContract(
+                    detail.network.clone(),
+                    contract.name.clone(),
+                ));
+            }
+
+            if let Some(address) = &detail.filter {
+                if !events.iter().any(|e| e.name == *address.event_name) {
+                    return Err(
+                        ValidateManifestError::InvalidFilterEventNameDoesntExistInABI(
+                            address.event_name.clone(),
+                            contract.name.clone(),
+                        ),
+                    );
+                }
+            }
+
+            if let Some(indexed_filters) = &detail.indexed_filters {
+                for indexed_filter in indexed_filters.iter() {
+                    let event = events.iter().find(|e| e.name == indexed_filter.event_name);
+                    if let Some(event) = event {
+                        let indexed_allowed_length = event
+                            .inputs
+                            .iter()
+                            .filter(|i| i.indexed.unwrap_or(false))
+                            .count();
+                        let indexed_filter_defined =
+                            indexed_filter.indexed_1.as_ref().map_or(0, |_| 1)
+                                + indexed_filter.indexed_2.as_ref().map_or(0, |_| 1)
+                                + indexed_filter.indexed_3.as_ref().map_or(0, |_| 1);
+
+                        if indexed_filter_defined > indexed_allowed_length {
+                            return Err(
+                                ValidateManifestError::IndexedFilterDefinedMoreThanAllowed(
+                                    indexed_filter.event_name.clone(),
+                                    contract.name.clone(),
+                                    indexed_allowed_length,
+                                    indexed_filter_defined,
+                                ),
+                            );
+                        }
+                    } else {
+                        return Err(ValidateManifestError::IndexedFilterEventNotFoundInABI(
+                            indexed_filter.event_name.clone(),
+                            contract.name.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        if let Some(include_events) = &contract.include_events {
+            for event in include_events {
+                if !events.iter().any(|e| e.name == *event) {
+                    return Err(ValidateManifestError::EventIncludedNotFoundInABI(
+                        event.clone(),
+                        contract.name.clone(),
+                    ));
+                }
+            }
+        }
+
+        if let Some(_dependency_events) = &contract.dependency_events {
+            // TODO - validate the events all exist in the contract ABIs
+        }
+    }
+
+    if let Some(postgres) = &manifest.storage.postgres {
+        if let Some(relationships) = &postgres.relationships {
+            for relationship in relationships {
+                if !manifest
+                    .contracts
+                    .iter()
+                    .any(|c| c.name == relationship.contract_name)
+                {
+                    return Err(ValidateManifestError::RelationshipContractNotFound(
+                        relationship.contract_name.clone(),
+                    ));
+                }
+
+                if !relationship
+                    .foreign_keys
+                    .iter()
+                    .any(|fk| fk.contract_name == relationship.contract_name)
+                {
+                    return Err(
+                        ValidateManifestError::RelationshipForeignKeyContractNotFound(
+                            relationship.contract_name.clone(),
+                        ),
+                    );
+                }
+
+                // TODO - Add validation for the event names and event inputs match the ABIs
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(thiserror::Error, Debug)]
 pub enum ReadManifestError {
     #[error("Could not open file: {0}")]
     CouldNotOpenFile(std::io::Error),
@@ -493,6 +632,9 @@ pub enum ReadManifestError {
 
     #[error("Could not substitute env variables: {0}")]
     CouldNotSubstituteEnvVariables(regex::Error),
+
+    #[error("Could not validate manifest: {0}")]
+    CouldNotValidateManifest(ValidateManifestError),
 }
 
 pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError> {
@@ -525,6 +667,9 @@ pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError>
                 );
         }
     }
+
+    validate_manifest(file_path.parent().unwrap(), &manifest_after_transform)
+        .map_err(ReadManifestError::CouldNotValidateManifest)?;
 
     Ok(manifest_after_transform)
 }
