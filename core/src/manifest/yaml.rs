@@ -1,3 +1,5 @@
+use ethers::addressbook::Address;
+use ethers::prelude::ValueOrArray;
 use ethers::types::U64;
 use regex::{Captures, Regex};
 use std::env;
@@ -5,9 +7,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
-use crate::generator::event_callback_registry::{
-    FactoryDetails, FilterDetails, IndexingContractSetup,
-};
+use crate::generator::event_callback_registry::{FilterDetails, IndexingContractSetup};
 use crate::helpers::replace_env_variable_to_raw_name;
 use crate::indexer::{ContractEventMapping, Indexer};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -117,14 +117,13 @@ pub struct ContractDetails {
     pub network: String,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    address: Option<String>,
+    address: Option<ValueOrArray<Address>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     filter: Option<FilterDetails>,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    factory: Option<FactoryDetails>,
-
+    // #[serde(default, skip_serializing_if = "Option::is_none")]
+    // factory: Option<FactoryDetails>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -146,8 +145,8 @@ impl ContractDetails {
     pub fn indexing_contract_setup(&self) -> IndexingContractSetup {
         if let Some(address) = &self.address {
             IndexingContractSetup::Address(address.clone())
-        } else if let Some(factory) = &self.factory {
-            IndexingContractSetup::Factory(factory.clone())
+        // } else if let Some(factory) = &self.factory {
+        //     IndexingContractSetup::Factory(factory.clone())
         } else if let Some(filter) = &self.filter {
             IndexingContractSetup::Filter(filter.clone())
         } else {
@@ -155,19 +154,19 @@ impl ContractDetails {
         }
     }
 
-    pub fn address(&self) -> Option<&str> {
+    pub fn address(&self) -> Option<&ValueOrArray<Address>> {
         if let Some(address) = &self.address {
-            Some(address)
-        } else if let Some(factory) = &self.factory {
-            Some(&factory.address)
-        } else {
-            None
+            return Some(address);
         }
+        // } else if let Some(factory) = &self.factory {
+        //     Some(&factory.address.parse::<Address>().into())
+        // } else {
+        None
     }
 
     pub fn new_with_address(
         network: String,
-        address: String,
+        address: ValueOrArray<Address>,
         start_block: Option<U64>,
         end_block: Option<U64>,
     ) -> Self {
@@ -175,7 +174,7 @@ impl ContractDetails {
             network,
             address: Some(address),
             filter: None,
-            factory: None,
+            //factory: None,
             start_block,
             end_block,
         }
@@ -191,27 +190,27 @@ impl ContractDetails {
             network,
             address: None,
             filter: Some(filter),
-            factory: None,
+            //factory: None,
             start_block,
             end_block,
         }
     }
 
-    pub fn new_with_factory(
-        network: String,
-        factory: FactoryDetails,
-        start_block: Option<U64>,
-        end_block: Option<U64>,
-    ) -> Self {
-        Self {
-            network,
-            address: None,
-            filter: None,
-            factory: Some(factory),
-            start_block,
-            end_block,
-        }
-    }
+    // pub fn new_with_factory(
+    //     network: String,
+    //     factory: FactoryDetails,
+    //     start_block: Option<U64>,
+    //     end_block: Option<U64>,
+    // ) -> Self {
+    //     Self {
+    //         network,
+    //         address: None,
+    //         filter: None,
+    //         factory: Some(factory),
+    //         start_block,
+    //         end_block,
+    //     }
+    // }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -508,38 +507,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_contract_details_address() {
-        let contract_details = ContractDetails {
-            network: "testnet".to_string(),
-            address: Some("0x123".to_string()),
-            filter: None,
-            factory: None,
-            start_block: None,
-            end_block: None,
-        };
-
-        assert_eq!(contract_details.address(), Some("0x123"));
-
-        let factory_details = FactoryDetails {
-            address: "0xabc".to_string(),
-            event_name: "TestEvent".to_string(),
-            parameter_name: "param".to_string(),
-            abi: "[]".to_string(),
-        };
-
-        let contract_details = ContractDetails {
-            network: "testnet".to_string(),
-            address: None,
-            filter: None,
-            factory: Some(factory_details),
-            start_block: None,
-            end_block: None,
-        };
-
-        assert_eq!(contract_details.address(), Some("0xabc"));
-    }
-
-    #[test]
     fn test_contract_details_indexing_contract_setup() {
         let filter_details = FilterDetails {
             event_name: "TestEvent".to_string(),
@@ -552,7 +519,6 @@ mod tests {
             network: "testnet".to_string(),
             address: None,
             filter: Some(filter_details.clone()),
-            factory: None,
             start_block: None,
             end_block: None,
         };

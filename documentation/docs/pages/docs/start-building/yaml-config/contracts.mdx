@@ -54,7 +54,7 @@ contracts: // [!code focus]
 ### address
 
 :::info
-The address of the contract to listen for events on. If you wish to use a `filter` you can leave this blank.
+The address or addresses of the contract or contracts to listen for events on. If you wish to use a `filter` you can leave this blank.
 :::
 
 The contract address to listen for events on.
@@ -75,6 +75,28 @@ contracts: // [!code focus]
     details:
       - network: ethereum
         address: 0xae78736cd615f374d3085123a210448e74fc6393 // [!code focus]
+```
+
+To listen to many contract addresses you can provide an array of addresses.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+contracts: // [!code focus]
+  - name: RocketPoolETH
+    details:
+      - network: ethereum
+        address:
+          - 0xae78736cd615f374d3085123a210448e74fc6393 // [!code focus]
+          - 0x2FD5c1659A82E87217DF254f3D4b71A22aE43eE1 // [!code focus]
 ```
 
 ### filter

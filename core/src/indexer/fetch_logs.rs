@@ -845,7 +845,7 @@ async fn process_events_dependency_tree(
                             && e.event_name == dependency.event_name
                     })
                     .ok_or(ProcessEventsWithDependenciesError::EventConfigNotFound)?;
-                
+
                 let filter = build_filter(
                     &event_processing_config.topic_id,
                     &event_processing_config
@@ -1558,16 +1558,13 @@ fn build_filter(
     next_block: U64,
 ) -> Result<Filter, BuildFilterError> {
     match indexing_contract_setup {
-        IndexingContractSetup::Address(address) => {
-            let address = address
-                .parse::<Address>()
-                .map_err(|_| BuildFilterError::AddressInvalidFormat)?;
+        IndexingContractSetup::Address(address_value_or_array) => {
             let topic0 = topic_id
                 .parse::<H256>()
                 .map_err(|_| BuildFilterError::Topic0InvalidFormat)?;
 
             Ok(Filter::new()
-                .address(address)
+                .address(address_value_or_array.clone())
                 .topic0(topic0)
                 .from_block(current_block)
                 .to_block(next_block))

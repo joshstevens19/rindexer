@@ -438,7 +438,8 @@ pub fn solidity_type_to_db_type(abi_type: &str) -> String {
     let sql_type = match base_type {
         "address" => "CHAR(42)",
         "bool" => "BOOLEAN",
-        "int64" | "uint64" | "int128" | "uint128" | "int256" | "uint256" => "NUMERIC",
+        "int256" | "uint256" => "VARCHAR(78)",
+        "int64" | "uint64" | "int128" | "uint128" => "NUMERIC",
         "int32" | "uint32" => "INTEGER",
         "string" => "TEXT",
         t if t.starts_with("bytes") => "BYTEA",
@@ -709,10 +710,12 @@ impl EthereumSqlTypeWrapper {
             EthereumSqlTypeWrapper::VecU64(_) => PgType::INT8_ARRAY,
             EthereumSqlTypeWrapper::U128(_) => PgType::NUMERIC,
             EthereumSqlTypeWrapper::VecU128(_) => PgType::NUMERIC_ARRAY,
-            EthereumSqlTypeWrapper::U256(_) => PgType::NUMERIC,
-            EthereumSqlTypeWrapper::VecU256(_) => PgType::NUMERIC_ARRAY,
-            EthereumSqlTypeWrapper::U512(_) => PgType::NUMERIC,
-            EthereumSqlTypeWrapper::VecU512(_) => PgType::NUMERIC_ARRAY,
+            // keep as VARCHAR, so we can keep a decimal string when we return the data
+            EthereumSqlTypeWrapper::U256(_) => PgType::VARCHAR,
+            // keep as VARCHAR, so we can keep a decimal string when we return the data
+            EthereumSqlTypeWrapper::VecU256(_) => PgType::VARCHAR,
+            EthereumSqlTypeWrapper::U512(_) => PgType::TEXT,
+            EthereumSqlTypeWrapper::VecU512(_) => PgType::TEXT_ARRAY,
             EthereumSqlTypeWrapper::H128(_) => PgType::BYTEA,
             EthereumSqlTypeWrapper::VecH128(_) => PgType::BYTEA_ARRAY,
             EthereumSqlTypeWrapper::H160(_) => PgType::BYTEA,
@@ -1090,14 +1093,32 @@ impl ToSql for EthereumSqlTypeWrapper {
             EthereumSqlTypeWrapper::VecU128(values) => serialize_vec_decimal(values, _ty, out),
             EthereumSqlTypeWrapper::U256(value) => {
                 let value = value.to_string();
-                Decimal::to_sql(&value.parse::<Decimal>()?, _ty, out)
+                String::to_sql(&value, _ty, out)
             }
-            EthereumSqlTypeWrapper::VecU256(values) => serialize_vec_decimal(values, _ty, out),
+            EthereumSqlTypeWrapper::VecU256(values) => {
+                if values.is_empty() {
+                    Ok(IsNull::Yes)
+                } else {
+                    let values_strings: Vec<String> =
+                        values.iter().map(|v| v.to_string()).collect();
+                    let formatted_str = values_strings.join(",");
+                    String::to_sql(&formatted_str, _ty, out)
+                }
+            }
             EthereumSqlTypeWrapper::U512(value) => {
                 let value = value.to_string();
-                Decimal::to_sql(&value.parse::<Decimal>()?, _ty, out)
+                String::to_sql(&value, _ty, out)
             }
-            EthereumSqlTypeWrapper::VecU512(values) => serialize_vec_decimal(values, _ty, out),
+            EthereumSqlTypeWrapper::VecU512(values) => {
+                if values.is_empty() {
+                    Ok(IsNull::Yes)
+                } else {
+                    let values_strings: Vec<String> =
+                        values.iter().map(|v| v.to_string()).collect();
+                    let formatted_str = values_strings.join(",");
+                    String::to_sql(&formatted_str, _ty, out)
+                }
+            }
             EthereumSqlTypeWrapper::H128(value) => {
                 let hex = format!("{:?}", value);
                 out.extend_from_slice(hex.as_bytes());

@@ -127,12 +127,13 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
                         let dependency_tree = EventsDependencyTree::from_dependency_event_tree(
                             &dependency_event_tree,
                         );
-                        
+
                         dependencies.push(ContractEventDependencies {
                             contract_name: contract.name.clone(),
                             event_dependencies: EventDependencies {
                                 tree: Arc::new(dependency_tree),
-                                dependency_events: dependency_event_tree.collect_dependency_events(),
+                                dependency_events: dependency_event_tree
+                                    .collect_dependency_events(),
                             },
                         });
                     }

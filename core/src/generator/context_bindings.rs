@@ -4,6 +4,7 @@ use crate::{
     helpers::camel_to_snake,
     manifest::yaml::{Contract, Network},
 };
+use ethers::addressbook::Address;
 
 use super::networks_bindings::network_provider_fn_name;
 
@@ -28,7 +29,9 @@ fn generate_contract_code(
         "#,
             contract_name = contract_name,
             contract_fn_name = camel_to_snake(contract_name),
-            contract_address = address,
+            // TODO - FIX THIS
+            //contract_address = address,
+            contract_address = Address::zero(),
             network_fn_name = network_provider_fn_name(network),
             contract_path = abi_location
         );

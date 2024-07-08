@@ -6,10 +6,9 @@ checklist v1.0:
 - add validation method into the yaml file to check certain things are mapped correctly
 
 bugs:
-- details::address: 0xBa5e05cb26b78eDa3A2f8e3b3814726305dcAc83 should be able to pass in an array
 - on normal ContractDetails::address you can still filter on indexed topics so allow it
 - RUST PROJECT ISSUE - // TODO - this is not correct (this will be fixed if we remove some repeated info from the code)
-
+  - FIX - TODO - FIX THIS
 lastly:
 - update the docs to include the new features + changes
   - write relationships docs + write code to add to the dependency events
