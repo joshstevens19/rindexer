@@ -193,7 +193,7 @@ pub async fn start_graphql_server(
                                     Ok(status) => {
                                         if status.success() {
                                             info!(
-                                                "🚀 GraphQL API ready at http://0.0.0.0:{}/",
+                                                "🦀GraphQL API ready at http://0.0.0.0:{}/",
                                                 port_inner_clone
                                             );
                                         } else {
@@ -275,7 +275,7 @@ pub async fn start_graphql_server(
                     Ok(response_json) => {
                         if response_json.get("errors").is_none() {
                             info!(
-                                "🚀 GraphQL API ready at {} Playground - {}",
+                                "🦀 GraphQL API ready at {} Playground - {} 🦀",
                                 graphql_endpoint, graphql_playground
                             );
                             break;

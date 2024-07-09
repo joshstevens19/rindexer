@@ -640,18 +640,20 @@ fn validate_manifest(
                     ));
                 }
 
-                if !relationship
-                    .foreign_keys
-                    .iter()
-                    .any(|fk| fk.contract_name == relationship.contract_name)
-                {
-                    return Err(
-                        ValidateManifestError::RelationshipForeignKeyContractNotFound(
-                            relationship.contract_name.clone(),
-                        ),
-                    );
+                for foreign_key in &relationship.foreign_keys {
+                    if !manifest
+                        .contracts
+                        .iter()
+                        .any(|c| c.name == foreign_key.contract_name)
+                    {
+                        return Err(
+                            ValidateManifestError::RelationshipForeignKeyContractNotFound(
+                                foreign_key.contract_name.clone(),
+                            ),
+                        );
+                    }
                 }
-
+                
                 // TODO - Add validation for the event names and event inputs match the ABIs
             }
         }

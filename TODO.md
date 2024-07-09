@@ -5,7 +5,6 @@ bugs:
   - FIX - TODO - FIX THIS + refactor rindexer_core to rindexer
   
 lastly:
-- write code to inject into the dependency events to process correctly
 - try to handle callback failing
 - cleanup the code into smaller files and functions
 

@@ -561,6 +561,18 @@ do not worry if you do not understand this all you need to care about is that yo
 
 ### relationships
 
+:::warning
+if you are using defined [dependency_events](/docs/start-building/yaml-config/contracts#dependency_events) and using relationships
+you will need to make sure you define the relationship in the `dependency_events` manually as rindexer can not merge
+the relationship with the dependency events if custom dependency_events are defined. If you do not define it within the
+dependency_events FK constraints will be thrown.
+:::
+
+:::warning
+Also note any cross contracts relationships will not be applied automatically, you will need to define them manually in the YAML.
+if you do not rindexer will panic and let you know that you have to define the [dependency_events](/docs/start-building/yaml-config/contracts#dependency_events).
+:::
+
 You can define your relationships between events, this will add foreign keys to the database and also process them in
 the correct order. Note rindexer always optimises for speed unless told to do so, on historic data it will drop any
 foreign keys and run them concurrently, it then re-apply the relationships again before indexing the live data.

@@ -423,6 +423,17 @@ contracts: // [!code focus]
 
 ## dependency_events
 
+:::warning
+if you are using defined dependency_events and using [relationships](/docs/start-building/yaml-config/storage#relationships)
+you will need to make sure you define the relationship in the `dependency_events` manually as rindexer can not merge
+the relationship with the dependency events if custom dependency_events are defined.
+:::
+
+:::warning
+Also note any cross contracts relationships will not be applied automatically, you will need to define them manually in the YAML.
+if you do not rindexer will panic and let you know that you have to define the [dependency_events](/docs/start-building/yaml-config/contracts#dependency_events).
+:::
+
 rindexer was built to be as fast as it can so any blocking processes holds indexing up, the more concurrency the better.
 Any events which depend on each other can be put in the `dependency_events` list, this will mean that they will be processes
 in the order they are in the list.
