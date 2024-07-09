@@ -490,6 +490,8 @@ pub fn generate_column_names_only_with_base_properties(inputs: &[ABIInput]) -> V
         "block_number".to_string(),
         "block_hash".to_string(),
         "network".to_string(),
+        "tx_index".to_string(),
+        "log_index".to_string(),
     ]);
     column_names
 }
@@ -509,7 +511,9 @@ fn generate_event_table_sql(abi_inputs: &[EventInfo], schema_name: &str) -> Stri
                 tx_hash CHAR(66) NOT NULL, \
                 block_number NUMERIC NOT NULL, \
                 block_hash CHAR(66) NOT NULL, \
-                network VARCHAR(50) NOT NULL\
+                network VARCHAR(50) NOT NULL, \
+                tx_index NUMERIC NOT NULL, \
+                log_index VARCHAR(78) NOT NULL\
             );",
                 table_name,
                 generate_columns_with_data_types(&event_info.inputs).join(", ")
