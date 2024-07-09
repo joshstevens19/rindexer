@@ -156,6 +156,9 @@ pub async fn start_graphql_server(
                 &connection_string_clone,
                 &schemas_clone,
                 &port_clone,
+                // TODO - these are hardcoded for now
+                false,
+                false,
             )
             .await
             {
@@ -296,6 +299,8 @@ async fn start_server(
     connection_string: &str,
     schemas: &str,
     port: &str,
+    filter_only_on_indexed_columns: bool,
+    disable_advanced_filters: bool,
 ) -> Result<Child, String> {
     Command::new(rindexer_graphql_exe)
         .arg(connection_string)
@@ -305,6 +310,8 @@ async fn start_server(
         .arg("1000")
         // graphql_timeout
         .arg("10000")
+        .arg(filter_only_on_indexed_columns.to_string())
+        .arg(disable_advanced_filters.to_string())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
