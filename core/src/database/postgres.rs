@@ -599,6 +599,28 @@ pub fn create_tables_for_indexer_sql(
         ));
     }
 
+    // create relationship last tracked table
+    sql.push_str(&format!(
+        r#"
+        CREATE TABLE IF NOT EXISTS rindexer_internal.{indexer_name}_last_known_relationship_dropping_sql (
+            key INT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+    "#,
+        indexer_name = camel_to_snake(&indexer.name)
+    ));
+
+    // create indexers last tracked table
+    sql.push_str(&format!(
+        r#"
+        CREATE TABLE IF NOT EXISTS rindexer_internal.{indexer_name}_last_known_indexes_dropping_sql (
+            key INT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+    "#,
+        indexer_name = camel_to_snake(&indexer.name)
+    ));
+
     Ok(Code::new(sql))
 }
 
@@ -1281,7 +1303,7 @@ impl ToSql for EthereumSqlTypeWrapper {
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum CreateAndDropRelationshipError {
+pub enum CreateRelationshipError {
     #[error("{0}")]
     PostgresConnectionError(PostgresConnectionError),
 
@@ -1299,6 +1321,12 @@ pub enum CreateAndDropRelationshipError {
 
     #[error("Dropping relationship failed: {0}")]
     DropRelationshipError(PostgresError),
+
+    #[error("Could not save relationships to postgres: {0}")]
+    SaveRelationshipsError(PostgresError),
+
+    #[error("Could not serialize foreign keys: {0}")]
+    CouldNotParseRelationshipToJson(serde_json::Error),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1372,9 +1400,9 @@ impl Relationship {
             DO $$
             BEGIN
                 IF NOT EXISTS (
-                    SELECT 1 
-                    FROM pg_constraint 
-                    WHERE conname = '{unique_construct_name}' 
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conname = '{unique_construct_name}'
                     AND conrelid = '{linked_db_table_name}'::regclass
                 ) THEN
                     ALTER TABLE {linked_db_table_name}
@@ -1441,15 +1469,19 @@ impl Relationship {
 
     pub async fn apply(&self, client: &PostgresClient) -> Result<(), PostgresError> {
         // apply on its own as it's in a DO block
-        client.execute(self.apply_unique_construct_sql().as_str(), &[]).await?;
+        client
+            .execute(self.apply_unique_construct_sql().as_str(), &[])
+            .await?;
         info!(
             "Applied unique constraint key for relationship after historic resync complete: table - {} constraint - {}",
             self.linked_to.db_table_name,
             self.unique_construct_name()
         );
 
-        client.execute(self.apply_foreign_key_construct_sql().as_str(), &[]).await?;
-        
+        client
+            .execute(self.apply_foreign_key_construct_sql().as_str(), &[])
+            .await?;
+
         info!(
             "Applied foreign key for relationship after historic resync complete: table - {} constraint - {}",
             self.db_table_name,
@@ -1470,7 +1502,8 @@ impl Relationship {
         Ok(())
     }
 
-    pub async fn drop(&self, client: &PostgresClient) -> Result<(), PostgresError> {
+    pub async fn drop_sql(&self) -> Result<Vec<Code>, PostgresError> {
+        let mut codes = vec![];
         let sql = format!(
             r#"
             {}
@@ -1480,7 +1513,7 @@ impl Relationship {
             self.drop_unique_construct_sql()
         );
 
-        client.batch_execute(&sql).await?;
+        codes.push(Code::new(sql));
 
         info!(
             "Dropped foreign key for relationship for historic resync: table - {} constraint - {}",
@@ -1494,10 +1527,9 @@ impl Relationship {
             self.unique_construct_name()
         );
 
-        // CONCURRENTLY is used to avoid locking the table for writes
-        client
-            .execute(&self.drop_index_sql().to_string(), &[])
-            .await?;
+        let drop_index_sql = self.drop_index_sql();
+
+        codes.push(drop_index_sql);
 
         info!(
             "Dropped index for relationship for historic resync: table - {} index - {}",
@@ -1505,21 +1537,93 @@ impl Relationship {
             self.index_name()
         );
 
-        Ok(())
+        Ok(codes)
     }
 }
 
-pub async fn create_and_drop_relationships(
+#[derive(thiserror::Error, Debug)]
+pub enum GetLastKnownRelationshipsDroppingSqlError {
+    #[error("Could not read last known relationship: {0}")]
+    CouldNotReadLastKnownRelationship(PostgresError),
+
+    #[error("Could not serialize foreign keys: {0}")]
+    CouldNotParseRelationshipToJson(serde_json::Error),
+}
+
+async fn get_last_known_relationships_dropping_sql(
+    client: &PostgresClient,
+    manifest_name: &str,
+) -> Result<Vec<Code>, GetLastKnownRelationshipsDroppingSqlError> {
+    let row_opt = client
+        .query_one_or_none(
+            &format!(
+                r#"
+                    SELECT value FROM rindexer_internal.{}_last_known_relationship_dropping_sql WHERE key = 1
+                "#,
+                camel_to_snake(manifest_name)
+            ),
+            &[],
+        )
+        .await
+        .map_err(GetLastKnownRelationshipsDroppingSqlError::CouldNotReadLastKnownRelationship)?;
+
+    if let Some(row) = row_opt {
+        let value: &str = row.get(0);
+        let foreign_keys: Vec<String> = serde_json::from_str(value)
+            .map_err(GetLastKnownRelationshipsDroppingSqlError::CouldNotParseRelationshipToJson)?;
+        Ok(foreign_keys
+            .iter()
+            .map(|foreign_key| Code::new(foreign_key.to_string()))
+            .collect())
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum DropLastKnownRelationshipsError {
+    #[error("Could not connect to Postgres: {0}")]
+    PostgresConnection(PostgresConnectionError),
+
+    #[error("{0}")]
+    GetLastKnownRelationshipsDroppingSql(GetLastKnownRelationshipsDroppingSqlError),
+
+    #[error("Could not execute dropping sql: {0}")]
+    PostgresError(PostgresError),
+}
+
+pub async fn drop_last_known_relationships(
+    manifest_name: &str,
+) -> Result<(), DropLastKnownRelationshipsError> {
+    let client = PostgresClient::new()
+        .await
+        .map_err(DropLastKnownRelationshipsError::PostgresConnection)?;
+
+    // people can edit the relationships, so we have to drop old stuff
+    // we save all drops in the database, so we can drop them all at once
+    // even if old stuff has been changed
+    let last_known_relationships_dropping_sql =
+        get_last_known_relationships_dropping_sql(&client, manifest_name)
+            .await
+            .map_err(DropLastKnownRelationshipsError::GetLastKnownRelationshipsDroppingSql)?;
+    for drop_sql in last_known_relationships_dropping_sql {
+        client
+            .batch_execute(drop_sql.as_str())
+            .await
+            .map_err(DropLastKnownRelationshipsError::PostgresError)?;
+    }
+
+    Ok(())
+}
+
+pub async fn create_relationships(
     project_path: &Path,
     manifest_name: &str,
     contracts: &[Contract],
     foreign_keys: &[ForeignKeys],
-) -> Result<Vec<Relationship>, CreateAndDropRelationshipError> {
-    let client = PostgresClient::new()
-        .await
-        .map_err(CreateAndDropRelationshipError::PostgresConnectionError)?;
-
+) -> Result<Vec<Relationship>, CreateRelationshipError> {
     let mut relationships = vec![];
+    let mut dropping_sql: Vec<Code> = vec![];
     for foreign_key in foreign_keys {
         let contract = contracts
             .iter()
@@ -1527,14 +1631,14 @@ pub async fn create_and_drop_relationships(
 
         match contract {
             None => {
-                return Err(CreateAndDropRelationshipError::ContractMissing(format!(
+                return Err(CreateRelationshipError::ContractMissing(format!(
                     "Contract {} not found in `contracts` make sure it is defined",
                     foreign_key.contract_name
                 )));
             }
             Some(contract) => {
                 let abi_items = read_abi_items(project_path, contract)
-                    .map_err(CreateAndDropRelationshipError::ReadAbiError)?;
+                    .map_err(CreateRelationshipError::ReadAbiError)?;
 
                 for linked_key in &foreign_key.foreign_keys {
                     let parameter_mapping = foreign_key
@@ -1543,20 +1647,20 @@ pub async fn create_and_drop_relationships(
                         .collect::<Vec<&str>>();
                     let abi_parameter =
                         get_abi_parameter(&abi_items, &foreign_key.event_name, &parameter_mapping)
-                            .map_err(CreateAndDropRelationshipError::GetAbiParameterError)?;
+                            .map_err(CreateRelationshipError::GetAbiParameterError)?;
 
                     let linked_key_contract = contracts
                         .iter()
                         .find(|c| c.name == linked_key.contract_name)
                         .ok_or_else(|| {
-                            CreateAndDropRelationshipError::ContractMissing(format!(
+                            CreateRelationshipError::ContractMissing(format!(
                                 "Contract {} not found in `contracts` and linked in relationships. Make sure it is defined.",
                                 linked_key.contract_name
                             ))
                         })?;
 
                     let linked_abi_items = read_abi_items(project_path, linked_key_contract)
-                        .map_err(CreateAndDropRelationshipError::ReadAbiError)?;
+                        .map_err(CreateRelationshipError::ReadAbiError)?;
                     let linked_parameter_mapping = linked_key
                         .event_input_name
                         .split('.')
@@ -1566,10 +1670,10 @@ pub async fn create_and_drop_relationships(
                         &linked_key.event_name,
                         &linked_parameter_mapping,
                     )
-                    .map_err(CreateAndDropRelationshipError::GetAbiParameterError)?;
+                    .map_err(CreateRelationshipError::GetAbiParameterError)?;
 
                     if abi_parameter.abi_item.type_ != linked_abi_parameter.abi_item.type_ {
-                        return Err(CreateAndDropRelationshipError::TypeMismatch(format!(
+                        return Err(CreateRelationshipError::TypeMismatch(format!(
                             "Type mismatch between {}.{} ({}) and {}.{} ({})",
                             foreign_key.contract_name,
                             foreign_key.event_input_name,
@@ -1605,15 +1709,42 @@ pub async fn create_and_drop_relationships(
                         },
                     };
 
-                    relationship
-                        .drop(&client)
+                    let sql = relationship
+                        .drop_sql()
                         .await
-                        .map_err(CreateAndDropRelationshipError::DropRelationshipError)?;
+                        .map_err(CreateRelationshipError::DropRelationshipError)?;
+                    dropping_sql.extend(sql);
                     relationships.push(relationship);
                 }
             }
         }
     }
+
+    let relationships_dropping_sql_json = serde_json::to_string(
+        &dropping_sql
+            .iter()
+            .map(|code| code.as_str())
+            .collect::<Vec<&str>>(),
+    )
+    .map_err(CreateRelationshipError::CouldNotParseRelationshipToJson)?;
+
+    // save relationships in postgres
+    let client = PostgresClient::new()
+        .await
+        .map_err(CreateRelationshipError::PostgresConnectionError)?;
+
+    client
+        .execute(
+            &format!(r#"
+                INSERT INTO rindexer_internal.{manifest_name}_last_known_relationship_dropping_sql (key, value) VALUES (1, $1)
+                ON CONFLICT (key) DO NOTHING;
+            "#,
+                manifest_name = camel_to_snake(manifest_name)
+            ),
+            &[&relationships_dropping_sql_json],
+        )
+        .await
+        .map_err(CreateRelationshipError::SaveRelationshipsError)?;
 
     Ok(relationships)
 }
@@ -1670,7 +1801,94 @@ impl PostgresIndexResult {
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum PrepareAndDropIndexesError {
+pub enum GetLastKnownIndexesDroppingSqlError {
+    #[error("Could not read last known indexes: {0}")]
+    CouldNotReadLastKnownIndexes(PostgresError),
+
+    #[error("Could not serialize indexes: {0}")]
+    CouldNotParseIndexesToJson(serde_json::Error),
+}
+
+async fn get_last_known_indexes_dropping_sql(
+    client: &PostgresClient,
+    manifest_name: &str,
+) -> Result<Vec<Code>, GetLastKnownIndexesDroppingSqlError> {
+    let row_opt = client
+        .query_one_or_none(
+            &format!(
+                r#"
+                    SELECT value FROM rindexer_internal.{}_last_known_indexes_dropping_sql WHERE key = 1
+                "#,
+                camel_to_snake(manifest_name)
+            ),
+            &[],
+        )
+        .await
+        .map_err(GetLastKnownIndexesDroppingSqlError::CouldNotReadLastKnownIndexes)?;
+
+    if let Some(row) = row_opt {
+        let value: &str = row.get(0);
+        let foreign_keys: Vec<String> = serde_json::from_str(value)
+            .map_err(GetLastKnownIndexesDroppingSqlError::CouldNotParseIndexesToJson)?;
+        Ok(foreign_keys
+            .iter()
+            .map(|foreign_key| Code::new(foreign_key.to_string()))
+            .collect())
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum DropLastKnownIndexesError {
+    #[error("Could not connect to Postgres: {0}")]
+    PostgresConnection(PostgresConnectionError),
+
+    #[error("{0}")]
+    GetLastKnownIndexesDroppingSql(GetLastKnownIndexesDroppingSqlError),
+
+    #[error("Could not execute dropping sql: {0}")]
+    PostgresError(PostgresError),
+
+    #[error("Could not drop indexes: {0}")]
+    CouldNotDropIndexes(PostgresError),
+}
+
+pub async fn drop_last_known_indexes(manifest_name: &str) -> Result<(), DropLastKnownIndexesError> {
+    let client = Arc::new(
+        PostgresClient::new()
+            .await
+            .map_err(DropLastKnownIndexesError::PostgresConnection)?,
+    );
+
+    // people can edit the indexes, so we have to drop old stuff
+    // we save all drops in the database, so we can drop them all at once
+    // even if old stuff has been changed
+    let last_known_indexes_dropping_sql =
+        get_last_known_indexes_dropping_sql(&client, manifest_name)
+            .await
+            .map_err(DropLastKnownIndexesError::GetLastKnownIndexesDroppingSql)?;
+    
+    let futures = last_known_indexes_dropping_sql.into_iter().map(|sql| {
+        let client = Arc::clone(&client);
+        async move {
+            client
+                .execute(sql.as_str(), &[])
+                .await
+                .map_err(DropLastKnownIndexesError::CouldNotDropIndexes)
+        }
+    });
+
+    let results = join_all(futures).await;
+    for result in results {
+        result?;
+    }
+
+    Ok(())
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum PrepareIndexesError {
     #[error("{0}")]
     PostgresConnectionError(PostgresConnectionError),
 
@@ -1683,28 +1901,32 @@ pub enum PrepareAndDropIndexesError {
     #[error("{0}")]
     ReadAbiError(ReadAbiError),
 
-    #[error("Could not drop indexes: {0}")]
-    CouldNotDropIndexes(PostgresError),
+    #[error("Could not serialize foreign keys: {0}")]
+    CouldNotParseIndexToJson(serde_json::Error),
+
+    #[error("Could not save indexes to postgres: {0}")]
+    SaveIndexesError(PostgresError),
 }
 
-pub async fn prepare_and_drop_indexes(
+pub async fn prepare_indexes(
     project_path: &Path,
     manifest_name: &str,
     postgres_indexes: &PostgresIndexes,
     contracts: &[Contract],
-) -> Result<Vec<PostgresIndexResult>, PrepareAndDropIndexesError> {
+) -> Result<Vec<PostgresIndexResult>, PrepareIndexesError> {
     let mut index_results: Vec<PostgresIndexResult> = vec![];
+    let mut dropping_sql: Vec<Code> = vec![];
     let client = Arc::new(
         PostgresClient::new()
             .await
-            .map_err(PrepareAndDropIndexesError::PostgresConnectionError)?,
+            .map_err(PrepareIndexesError::PostgresConnectionError)?,
     );
 
     // global first
     if let Some(global_injected_parameters) = &postgres_indexes.global_injected_parameters {
         for contract in contracts {
             let abi_items = read_abi_items(project_path, contract)
-                .map_err(PrepareAndDropIndexesError::ReadAbiError)?;
+                .map_err(PrepareIndexesError::ReadAbiError)?;
 
             for abi_item in abi_items {
                 let db_table_name = format!(
@@ -1715,10 +1937,12 @@ pub async fn prepare_and_drop_indexes(
                 );
 
                 for global_parameter_column_name in global_injected_parameters {
-                    index_results.push(PostgresIndexResult {
+                    let index_result = PostgresIndexResult {
                         db_table_name: db_table_name.clone(),
                         db_table_columns: vec![global_parameter_column_name.clone()],
-                    });
+                    };
+                    dropping_sql.push(index_result.drop_index_sql());
+                    index_results.push(index_result);
                 }
             }
         }
@@ -1733,13 +1957,13 @@ pub async fn prepare_and_drop_indexes(
 
             match contract {
                 None => {
-                    return Err(PrepareAndDropIndexesError::ContractMissing(
+                    return Err(PrepareIndexesError::ContractMissing(
                         contract_event_indexes.name.clone(),
                     ));
                 }
                 Some(contract) => {
                     let abi_items = read_abi_items(project_path, contract)
-                        .map_err(PrepareAndDropIndexesError::ReadAbiError)?;
+                        .map_err(PrepareIndexesError::ReadAbiError)?;
 
                     if let Some(injected_parameters) = &contract_event_indexes.injected_parameters {
                         for abi_item in &abi_items {
@@ -1751,10 +1975,12 @@ pub async fn prepare_and_drop_indexes(
                             );
 
                             for injected_parameter in injected_parameters {
-                                index_results.push(PostgresIndexResult {
+                                let index_result = PostgresIndexResult {
                                     db_table_name: db_table_name.clone(),
                                     db_table_columns: vec![injected_parameter.clone()],
-                                });
+                                };
+                                dropping_sql.push(index_result.drop_index_sql());
+                                index_results.push(index_result);
                             }
                         }
                     }
@@ -1769,10 +1995,12 @@ pub async fn prepare_and_drop_indexes(
 
                         if let Some(injected_parameters) = &event_indexes.injected_parameters {
                             for injected_parameter in injected_parameters {
-                                index_results.push(PostgresIndexResult {
+                                let index_result = PostgresIndexResult {
                                     db_table_name: db_table_name.clone(),
                                     db_table_columns: vec![injected_parameter.clone()],
-                                });
+                                };
+                                dropping_sql.push(index_result.drop_index_sql());
+                                index_results.push(index_result);
                             }
                         }
 
@@ -1784,14 +2012,16 @@ pub async fn prepare_and_drop_indexes(
                                     &event_indexes.name,
                                     &parameter.split('.').collect::<Vec<&str>>(),
                                 )
-                                .map_err(PrepareAndDropIndexesError::GetAbiParameterError)?;
+                                .map_err(PrepareIndexesError::GetAbiParameterError)?;
                                 db_table_columns.push(abi_parameter.db_column_name);
                             }
 
-                            index_results.push(PostgresIndexResult {
+                            let index_result = PostgresIndexResult {
                                 db_table_name: db_table_name.clone(),
                                 db_table_columns,
-                            });
+                            };
+                            dropping_sql.push(index_result.drop_index_sql());
+                            index_results.push(index_result);
                         }
                     }
                 }
@@ -1799,21 +2029,26 @@ pub async fn prepare_and_drop_indexes(
         }
     }
 
-    let futures = index_results.clone().into_iter().map(|index_results| {
-        let sql = index_results.drop_index_sql();
-        let client = Arc::clone(&client);
-        async move {
-            client
-                .execute(sql.as_str(), &[])
-                .await
-                .map_err(PrepareAndDropIndexesError::CouldNotDropIndexes)
-        }
-    });
-
-    let results = join_all(futures).await;
-    for result in results {
-        result?;
-    }
+    let indexes_dropping_sql_json = serde_json::to_string(
+        &dropping_sql
+            .iter()
+            .map(|code| code.as_str())
+            .collect::<Vec<&str>>(),
+    )
+    .map_err(PrepareIndexesError::CouldNotParseIndexToJson)?;
+    
+    client
+        .execute(
+            &format!(r#"
+                INSERT INTO rindexer_internal.{manifest_name}_last_known_indexes_dropping_sql (key, value) VALUES (1, $1)
+                ON CONFLICT (key) DO NOTHING;
+            "#,
+                     manifest_name = camel_to_snake(manifest_name)
+            ),
+            &[&indexes_dropping_sql_json],
+        )
+        .await
+        .map_err(PrepareIndexesError::SaveIndexesError)?;
 
     Ok(index_results)
 }

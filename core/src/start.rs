@@ -5,9 +5,10 @@ use tracing::{error, info};
 
 use crate::api::{start_graphql_server, GraphqlOverrideSettings, StartGraphqlServerError};
 use crate::database::postgres::{
-    create_and_drop_relationships, prepare_and_drop_indexes, CreateAndDropRelationshipError,
-    PostgresConnectionError, PostgresError, PostgresIndexResult, PrepareAndDropIndexesError,
-    Relationship, SetupPostgresError,
+    create_relationships, drop_last_known_indexes, drop_last_known_relationships, prepare_indexes,
+    CreateRelationshipError, DropLastKnownIndexesError, DropLastKnownRelationshipsError,
+    PostgresConnectionError, PostgresError, PostgresIndexResult, PrepareIndexesError, Relationship,
+    SetupPostgresError,
 };
 use crate::generator::event_callback_registry::EventCallbackRegistry;
 use crate::indexer::no_code::{setup_no_code, SetupNoCodeError};
@@ -47,7 +48,7 @@ pub enum StartRindexerError {
     CouldNotStartIndexing(StartIndexingError),
 
     #[error("Yaml relationship error: {0}")]
-    RelationshipError(CreateAndDropRelationshipError),
+    RelationshipError(CreateRelationshipError),
 
     #[error("{0}")]
     PostgresConnectionError(PostgresConnectionError),
@@ -56,10 +57,16 @@ pub enum StartRindexerError {
     ApplyRelationshipError(PostgresError),
 
     #[error("Could not prepare and drop indexes: {0}")]
-    FailedToPrepareAndDropIndexes(PrepareAndDropIndexesError),
+    FailedToPrepareAndDropIndexes(PrepareIndexesError),
 
     #[error("Could not apply indexes: {0}")]
     ApplyIndexesError(PostgresError),
+
+    #[error("{0}")]
+    DropLastKnownRelationshipsError(DropLastKnownRelationshipsError),
+
+    #[error("{0}")]
+    DropLastKnownIndexesError(DropLastKnownIndexesError),
 }
 
 pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerError> {
@@ -107,10 +114,14 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
                 let mut postgres_indexes: Vec<PostgresIndexResult> = vec![];
                 if *postgres_enabled && !manifest.storage.postgres_disable_create_tables() {
                     if let Some(storage) = &manifest.storage.postgres {
+                        info!("Temp dropping constraints relationships from the database for historic indexing for speed reasons");
+                        drop_last_known_relationships(&manifest.name)
+                            .await
+                            .map_err(StartRindexerError::DropLastKnownRelationshipsError)?;
+
                         let mapped_relationships = &storage.relationships;
                         if let Some(mapped_relationships) = mapped_relationships {
-                            info!("Temp dropping constraints relationships from the database for historic indexing for speed reasons");
-                            let relationships_result = create_and_drop_relationships(
+                            let relationships_result = create_relationships(
                                 project_path,
                                 &manifest.name,
                                 &manifest.contracts,
@@ -126,10 +137,14 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
                                 }
                             }
                         }
+                        
+                        info!("Temp dropping indexes from the database for historic indexing for speed reasons");
+                        drop_last_known_indexes(&manifest.name)
+                            .await
+                            .map_err(StartRindexerError::DropLastKnownIndexesError)?;
 
                         if let Some(indexes) = &storage.indexes {
-                            info!("Temp dropping indexes from the database for historic indexing for speed reasons");
-                            let indexes_result = prepare_and_drop_indexes(
+                            let indexes_result = prepare_indexes(
                                 project_path,
                                 &manifest.name,
                                 indexes,

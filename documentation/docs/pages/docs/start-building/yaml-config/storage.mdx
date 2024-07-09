@@ -15,10 +15,11 @@ If you wish to store the data in a postgres database you can enable the postgres
 This is optional if you do not wish to store the data in a postgres database you can leave this section out of your YAML.
 :::
 
-### Last synced block state
+### Internal tables
 
-When indexing with postgres rindexer keeps the network and contract last seen block in the database, this is to ensure that if the indexer goes down it can pick up where it left off.
-You can see those tables in a schema called rindexer_internal and should never be modified manually.
+When rindexer is running with postgres it uses the database to manage some internal state including the network and contract last seen block
+and cached records of the yaml so it can remove old indexes and foreign keys in the database. You can see those tables in a schema called `rindexer_internal`
+and should never be modified manually.
 
 ### Own connection string
 
@@ -82,7 +83,7 @@ rindexer sees the ABIs as the source of truth and allows you to map against the 
 rindexer will generate all the SQL for you and naming based on this.
 
 :::info
-When you start up rindexer it will drop the indexes and resync the historic data then apply them again before indexing the live data.
+When you start up rindexer it will drop any old and new indexes and resync the historic data then apply them again before indexing the live data.
 Having indexes in place when you writing data to the database can drastically slowdown indexing speed and writing speed to
 the database.
 :::
