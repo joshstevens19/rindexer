@@ -1,10 +1,9 @@
-use futures::future::join_all;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::signal;
 use tracing::{error, info};
 
-use crate::api::{start_graphql_server, StartGraphqlServerError};
+use crate::api::{start_graphql_server, GraphqlOverrideSettings, StartGraphqlServerError};
 use crate::database::postgres::{
     create_and_drop_relationships, prepare_and_drop_indexes, CreateAndDropRelationshipError,
     PostgresConnectionError, PostgresError, PostgresIndexResult, PrepareAndDropIndexesError,
@@ -15,7 +14,7 @@ use crate::indexer::no_code::{setup_no_code, SetupNoCodeError};
 use crate::indexer::start::{start_indexing, StartIndexingError};
 use crate::indexer::{ContractEventDependencies, EventDependencies, EventsDependencyTree};
 use crate::manifest::yaml::{read_manifest, ProjectType, ReadManifestError};
-use crate::{setup_info_logger, setup_postgres, GraphQLServerDetails, PostgresClient};
+use crate::{setup_info_logger, setup_postgres, PostgresClient};
 
 pub struct IndexingDetails {
     pub registry: EventCallbackRegistry,
@@ -24,7 +23,7 @@ pub struct IndexingDetails {
 pub struct StartDetails {
     pub manifest_path: PathBuf,
     pub indexing_details: Option<IndexingDetails>,
-    pub graphql_server: Option<GraphQLServerDetails>,
+    pub graphql_details: GraphqlOverrideSettings,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -76,13 +75,15 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
             }
 
             // Spawn a separate task for the GraphQL server if specified
-            let graphql_server_handle = if let Some(graphql_server) = &details.graphql_server {
+            let graphql_server_handle = if details.graphql_details.enabled {
                 let manifest_clone = manifest.clone();
-                let graphql_settings = graphql_server.settings.clone();
+                let indexer = manifest_clone.to_indexer();
+                let mut graphql_settings = manifest_clone.graphql.unwrap_or_default();
+                if let Some(override_port) = &details.graphql_details.override_port {
+                    graphql_settings.set_port(*override_port);
+                }
                 Some(tokio::spawn(async move {
-                    if let Err(e) =
-                        start_graphql_server(&manifest_clone.to_indexer(), &graphql_settings).await
-                    {
+                    if let Err(e) = start_graphql_server(&indexer, &graphql_settings).await {
                         error!("Failed to start GraphQL server: {:?}", e);
                     }
                 }))
@@ -256,7 +257,7 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
                 }
 
                 // keep graphql alive even if indexing has finished
-                if details.graphql_server.is_some() {
+                if details.graphql_details.enabled {
                     signal::ctrl_c()
                         .await
                         .map_err(|_| StartRindexerError::FailedToListenToGraphqlSocket)?;
@@ -289,15 +290,10 @@ pub struct IndexerNoCodeDetails {
     pub enabled: bool,
 }
 
-pub struct GraphqlNoCodeDetails {
-    pub enabled: bool,
-    pub settings: Option<GraphQLServerDetails>,
-}
-
 pub struct StartNoCodeDetails {
     pub manifest_path: PathBuf,
     pub indexing_details: IndexerNoCodeDetails,
-    pub graphql_details: GraphqlNoCodeDetails,
+    pub graphql_details: GraphqlOverrideSettings,
 }
 
 #[derive(thiserror::Error, Debug)]

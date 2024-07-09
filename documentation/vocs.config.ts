@@ -62,6 +62,7 @@ export default defineConfig({
             { text: 'Networks', link: '/docs/start-building/yaml-config/networks' },
             { text: 'Storage', link: '/docs/start-building/yaml-config/storage' },
             { text: 'Contracts', link: '/docs/start-building/yaml-config/contracts' },
+            { text: 'GraphQL', link: '/docs/start-building/yaml-config/graphql' },
             { text: 'Global', link: '/docs/start-building/yaml-config/global' },
           ],
         },
@@ -119,6 +120,7 @@ export default defineConfig({
       items: [
         { text: 'From A Foundry Project - coming soon' },
         { text: 'From A Hardhat Project - coming soon' },
+        { text: 'Using Reth ExExes - coming soon' },
       ],
     },
     {

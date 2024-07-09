@@ -226,7 +226,7 @@ You can do condition filters as well as advanced filters on all the events index
 
 :::warning
 It is advised to have indexes on any fields you which to filter on in your database to make the queries faster.
-We will add a no-code way to add indexes in the future, if required do raise a github issue and we can help you with this.
+You can define your own indexes in the [storage](/docs/start-building/yaml-config/storage#indexes) section of the YAML configuration file.
 :::
 
 #### Condition
@@ -293,6 +293,11 @@ query AllTransfers {
 ```
 
 #### Filter
+
+:::info
+Advanced filtering is enabled by default but these filters easily be abused and cause performance issues, if you wish to disable
+it you can set `disable_advanced_filters` to true in the [graphql](/docs/start-building/yaml-config/graphql#disable_advanced_filters) section of the YAML configuration file.
+:::
 
 For more advanced filtering you can use the `filter` input field. For example if we wanted to get all transfer events
 over 1 rEth (wei would be 1000000000000000000) and after block number 18600181 we can use the following query.
@@ -494,14 +499,15 @@ query AllTransfers {
 
 ### Relationships
 
-When you define `relationships`(TODO DOC) between events rindexer will automatically create relationships between the events
-in the database and expose them on the `GraphQL` interface, this means you can query the relationships within a single query
-avoiding having to have multiple queries to get the data you need.
+When you define [relationships](/docs/start-building/yaml-config/storage#relationships) between events rindexer will
+automatically create relationships between the events in the database and expose them on the `GraphQL` interface, this
+means you can query the relationships within a single query avoiding having to have multiple queries to get the data you need.
 
-Lets walk through an example imagine we were playing around with the `lens` data and we had a relationship between the
-`QuoteCreated` `quoteParams.profileId` and the `ProfileCreated` `profileId` events.
+Lets walk through an example imagine we were playing around with the `lens` data and we want to get the profile metadata back
+when we get quotes created. we can create a relationship between the `QuoteCreated` `quoteParams.profileId` and the `ProfileMetadataSet`
+`profileId` events, note you should read about [relationships config](/docs/start-building/yaml-config/storage#relationships) first.
 
-You would define the relationship in the `rindexer.yaml` file like so:
+Your `rindexer.yaml` would look like:
 
 ```yaml
 name: LensIndexer
@@ -521,22 +527,22 @@ storage:
         event_input_name: "quoteParams.profileId" // [!code focus]
         linked_to: // [!code focus]
           - contract_name: LensHub // [!code focus]
-            event_name: ProfileCreated // [!code focus]
+            event_name: ProfileMetadataSet // [!code focus]
             event_input_name: profileId // [!code focus]
 contracts:
-  - name: LensHub
+  - name: LensHub // [!code focus]
     details:
       - network: polygon
         address: 0xDb46d1Dc155634FbC732f92E853b10B288AD5a1d
         start_block: 59034400
         end_block: 59034400
     abi: ./abis/lens-hub-events-abi.json
-    include_events:
-      - QuoteCreated
-      - ProfileCreated
+    include_events: // [!code focus]
+      - QuoteCreated // [!code focus]
+      - ProfileMetadataSet // [!code focus]
 ```
 
-So in this example the `allQuoteCreateds` and `quoteCreated` queries will allow you to get the `ProfileCreated` event
+So in this example the `allQuoteCreateds` and `quoteCreated` queries will allow you to get the `ProfileMetadataSet` event
 in the same query. This is a basic example but you can see how you can query the relationships within the same query.
 
 ```
@@ -547,36 +553,24 @@ query AllQuoteCreateds {
       quoteParamsContentUri
       quoteParamsPointedProfileId
       quoteParamsPointedPubId
-      quoteParamsReferrerProfileIds
-      quoteParamsReferrerPubIds
-      quoteParamsReferenceModuleData
-      quoteParamsActionModules
-      quoteParamsActionModulesInitDatas
-      quoteParamsReferenceModule
-      quoteParamsReferenceModuleInitData
-      pubId
-      referenceModuleReturnData
-      actionModulesInitReturnDatas
-      referenceModuleInitReturnData
-      transactionExecutor
+      by: profileMetadataSetByQuoteParamsProfileId {
+        profileId
+        metadata
+        transactionExecutor
+        timestamp
+        txHash
+        blockNumber
+        blockHash
+        network
+      }
       timestamp
       txHash
-      blockNumber
-      blockHash
-      network
-      quoteParamsProfile { // [!code focus]
-        nodeId // [!code focus]
-        contractAddress // [!code focus]
-        profileId // [!code focus]
-        creator // [!code focus]
-        to // [!code focus]
-        timestamp // [!code focus]
-        txHash // [!code focus]
-        blockNumber // [!code focus]
-        blockHash // [!code focus]
-        network // [!code focus]
-      }
     }
   }
 }
 ```
+
+:::info
+GraphQL supports aliases to make your queries read even nicer, you can read more about them [here](https://graphql.org/learn/queries/#aliases).
+People may not like the event input names and can easily alias them to something more readable.
+:::

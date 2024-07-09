@@ -13,6 +13,7 @@ use crate::generator::event_callback_registry::{
 use crate::generator::read_abi_items;
 use crate::helpers::replace_env_variable_to_raw_name;
 use crate::indexer::{parse_topic, ContractEventMapping, Indexer};
+use crate::GraphQLSettings;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_yaml::Value;
 
@@ -102,8 +103,11 @@ pub struct Manifest {
 
     pub contracts: Vec<Contract>,
 
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub global: Option<Global>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graphql: Option<GraphQLSettings>,
 }
 
 impl Manifest {
@@ -395,7 +399,7 @@ pub struct EventIndex {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ContractEventsIndexes {
-    pub contract_name: String,
+    pub name: String,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub injected_parameters: Option<Vec<String>>,
@@ -405,7 +409,7 @@ pub struct ContractEventsIndexes {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EventIndexes {
-    pub event_name: String,
+    pub name: String,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub injected_parameters: Option<Vec<String>>,

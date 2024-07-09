@@ -2,6 +2,7 @@ use crate::database::postgres::{connection_string, indexer_contract_schema_name}
 use crate::helpers::{kill_process_on_port, set_thread_no_logging};
 use crate::indexer::Indexer;
 use reqwest::{Client, Error};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::env;
 use std::path::{Path, PathBuf};
@@ -12,38 +13,45 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 use tracing::{error, info};
 
-#[derive(Debug, Clone)]
-pub struct GraphQLServerDetails {
-    pub settings: GraphQLServerSettings,
+fn default_port() -> u16 {
+    3001
 }
 
-#[derive(Debug, Clone)]
-pub struct GraphQLServerSettings {
-    port: Option<usize>,
-    #[allow(dead_code)]
-    watch: Option<bool>,
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct GraphQLSettings {
+    #[serde(default = "default_port")]
+    pub port: u16,
+
+    #[serde(default)]
+    pub disable_advanced_filters: bool,
+
+    #[serde(default)]
+    pub filter_only_on_indexed_columns: bool,
 }
 
-impl GraphQLServerSettings {
-    pub fn port(port: usize) -> Self {
-        Self {
-            port: Some(port),
-            watch: Some(false),
-        }
+impl GraphQLSettings {
+    pub fn set_port(&mut self, port: u16) {
+        self.port = port;
     }
 }
 
-impl Default for GraphQLServerSettings {
-    fn default() -> Self {
-        Self {
-            port: Some(5005),
-            watch: Some(false),
-        }
-    }
+// impl Default for GraphQLSettings {
+//     fn default() -> Self {
+//         GraphQLSettings {
+//             port: default_port(),
+//             disable_advanced_filters: false,
+//             filter_only_on_indexed_columns: false,
+//         }
+//     }
+// }
+
+pub struct GraphqlOverrideSettings {
+    pub enabled: bool,
+    pub override_port: Option<u16>,
 }
 
 fn get_postgraphile_path() -> PathBuf {
-    let postgraphile_filename = match std::env::consts::OS {
+    let postgraphile_filename = match env::consts::OS {
         "windows" => "rindexer-graphql-win.exe",
         "macos" => "rindexer-graphql-macos",
         _ => "rindexer-graphql-linux",
@@ -108,7 +116,7 @@ static MANUAL_STOP: AtomicBool = AtomicBool::new(false);
 
 pub async fn start_graphql_server(
     indexer: &Indexer,
-    settings: &GraphQLServerSettings,
+    settings: &GraphQLSettings,
 ) -> Result<GraphQLServer, StartGraphqlServerError> {
     info!("Starting GraphQL server");
 
@@ -120,7 +128,7 @@ pub async fn start_graphql_server(
 
     let connection_string =
         connection_string().map_err(StartGraphqlServerError::UnableToReadDatabaseUrl)?;
-    let port = settings.port.unwrap_or(5001).to_string();
+    let port = settings.port;
     let graphql_endpoint = format!("http://localhost:{}/graphql", &port);
     let graphql_playground = format!("http://localhost:{}/playground", &port);
 
@@ -132,8 +140,7 @@ pub async fn start_graphql_server(
     }
 
     // kill any existing process on the port
-    kill_process_on_port(port.parse().unwrap())
-        .map_err(StartGraphqlServerError::GraphQLServerStartupError)?;
+    kill_process_on_port(port).map_err(StartGraphqlServerError::GraphQLServerStartupError)?;
 
     let (tx, rx) = oneshot::channel();
     let tx_arc = Arc::new(Mutex::new(Some(tx)));
@@ -143,6 +150,8 @@ pub async fn start_graphql_server(
 
     let schemas_clone = schemas.join(",");
     let port_clone = Arc::new(port.clone());
+    let filter_only_on_indexed_columns_clone = settings.filter_only_on_indexed_columns;
+    let disable_advanced_filters_clone = settings.disable_advanced_filters;
     let child_arc = Arc::new(Mutex::new(None::<Child>));
 
     tokio::spawn(async move {
@@ -157,8 +166,8 @@ pub async fn start_graphql_server(
                 &schemas_clone,
                 &port_clone,
                 // TODO - these are hardcoded for now
-                false,
-                false,
+                filter_only_on_indexed_columns_clone,
+                disable_advanced_filters_clone,
             )
             .await
             {
@@ -298,14 +307,14 @@ async fn start_server(
     rindexer_graphql_exe: &Path,
     connection_string: &str,
     schemas: &str,
-    port: &str,
+    port: &u16,
     filter_only_on_indexed_columns: bool,
     disable_advanced_filters: bool,
 ) -> Result<Child, String> {
     Command::new(rindexer_graphql_exe)
         .arg(connection_string)
         .arg(schemas)
-        .arg(port)
+        .arg(port.to_string())
         // graphql_limit
         .arg("1000")
         // graphql_timeout

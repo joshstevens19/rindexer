@@ -5,5 +5,5 @@ mod graphql;
 pub use generate_schema::generate_graphql_queries;
 
 pub use graphql::{
-    start_graphql_server, GraphQLServerDetails, GraphQLServerSettings, StartGraphqlServerError,
+    start_graphql_server, GraphQLSettings, GraphqlOverrideSettings, StartGraphqlServerError,
 };

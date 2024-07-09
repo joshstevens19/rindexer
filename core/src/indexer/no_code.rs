@@ -47,9 +47,15 @@ pub enum SetupNoCodeError {
 
     #[error("Could not process indexers: {0}")]
     ProcessIndexersError(ProcessIndexersError),
+
+    #[error("You have graphql disabled as well as indexer so nothing can startup")]
+    NothingToStartNoCode,
 }
 
 pub async fn setup_no_code(details: StartNoCodeDetails) -> Result<StartDetails, SetupNoCodeError> {
+    if !details.indexing_details.enabled && !details.graphql_details.enabled {
+        return Err(SetupNoCodeError::NothingToStartNoCode);
+    }
     let project_path = details.manifest_path.parent();
     match project_path {
         Some(project_path) => {
@@ -72,7 +78,7 @@ pub async fn setup_no_code(details: StartNoCodeDetails) -> Result<StartDetails, 
                 return Ok(StartDetails {
                     manifest_path: details.manifest_path,
                     indexing_details: None,
-                    graphql_server: details.graphql_details.settings,
+                    graphql_details: details.graphql_details,
                 });
             }
 
@@ -105,7 +111,7 @@ pub async fn setup_no_code(details: StartNoCodeDetails) -> Result<StartDetails, 
             Ok(StartDetails {
                 manifest_path: details.manifest_path,
                 indexing_details: Some(IndexingDetails { registry }),
-                graphql_server: details.graphql_details.settings,
+                graphql_details: details.graphql_details,
             })
         }
         None => Err(SetupNoCodeError::NoProjectPathFoundUsingParentOfManifestPath),

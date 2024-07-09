@@ -72,6 +72,881 @@ storage:
     disable_create_tables: true // [!code focus]
 ```
 
+### indexes
+
+When you end up having a database which has a lot of data querying that can become slow, indexes can help speed up the
+queries and critical for the performance of the GraphQL server. By default rindexer lets you filter on any column even
+if it is not indexed but here you can define the common filtering you are going to use in your application.
+
+rindexer sees the ABIs as the source of truth and allows you to map against the information you should know about,
+rindexer will generate all the SQL for you and naming based on this.
+
+:::info
+When you start up rindexer it will drop the indexes and resync the historic data then apply them again before indexing the live data.
+Having indexes in place when you writing data to the database can drastically slowdown indexing speed and writing speed to
+the database.
+:::
+
+#### global_injected_parameters
+
+:::info
+This is optional
+:::
+
+rindexer will inject common parameters into the event tables for you:
+
+- `contract_address` - The contract address of the event
+- `tx_hash` - The transaction hash of the event
+- `block_number` - The block number of the event
+- `block_hash` - The block hash of the event
+- `network` - The network of the event
+- `tx_index` - The transaction index of the event
+- `log_index` - The log index of the event
+
+If you start seeing your queries being slow when using any of these to filter you can add them to the `global_injected_parameters`
+and rindexer will apply on all tables it generates.
+
+For example below I want to filter on the block number and network and my queries are slow so i can add this index:
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+    indexes: // [!code focus]
+      global_injected_parameters: // [!code focus]
+         - block_number // [!code focus]
+         - network // [!code focus]
+```
+
+#### contracts
+
+You can then define indexes for your contracts
+
+##### name
+
+As you can have multiple contracts in your project you have to map its name to the contracts so it can read the ABIs.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+    indexes: // [!code focus]
+        contracts: // [!code focus]
+          - name: LensHub // [!code focus]
+```
+
+##### injected_parameters
+
+:::info
+This is optional
+:::
+
+This is the same as [the global injected parameters](/docs/start-building/yaml-config/storage#global_injected_parameters)
+but will only apply to the events of this contract.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+    indexes: // [!code focus]
+        contracts: // [!code focus]
+          - name: LensHub
+            injected_parameters: // [!code focus]
+                   - block_number // [!code focus]
+                   - network // [!code focus]
+```
+
+##### events
+
+You can define indexes for specific events in the contract. Events are tables and you can make this with the values
+of the ABI and rindexer will transform them into the SQL queries you need. An event can have multiple indexes.
+
+###### name
+
+The name of the event to apply the indexes to.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+    indexes: // [!code focus]
+        contracts: // [!code focus]
+          - name: LensHub
+            events: // [!code focus]
+              - name: QuoteCreated // [!code focus]
+```
+
+###### injected_parameters
+
+:::info
+This is optional
+:::
+
+This is the same as [the global injected parameters](/docs/start-building/yaml-config/storage#global_injected_parameters)
+but will only apply the single event.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+    indexes: // [!code focus]
+        contracts: // [!code focus]
+          - name: LensHub
+            events: // [!code focus]
+              - name: QuoteCreated
+                injected_parameters: // [!code focus]
+                  - tx_hash // [!code focus]
+```
+
+###### indexes
+
+You can define your indexes here - this allows you to define many indexes for the same event.
+
+We will use this ABI as an example as it has tuples as well as route inputs.
+
+```json
+{
+    "anonymous": false,
+    "inputs": [
+      {
+        "components": [
+          {
+            "internalType": "uint256",
+            "name": "profileId",
+            "type": "uint256"
+          },
+          {
+            "internalType": "string",
+            "name": "contentURI",
+            "type": "string"
+          },
+          {
+            "internalType": "uint256",
+            "name": "pointedProfileId",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "pointedPubId",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256[]",
+            "name": "referrerProfileIds",
+            "type": "uint256[]"
+          },
+          {
+            "internalType": "uint256[]",
+            "name": "referrerPubIds",
+            "type": "uint256[]"
+          },
+          {
+            "internalType": "bytes",
+            "name": "referenceModuleData",
+            "type": "bytes"
+          },
+          {
+            "internalType": "address[]",
+            "name": "actionModules",
+            "type": "address[]"
+          },
+          {
+            "internalType": "bytes[]",
+            "name": "actionModulesInitDatas",
+            "type": "bytes[]"
+          },
+          {
+            "internalType": "address",
+            "name": "referenceModule",
+            "type": "address"
+          },
+          {
+            "internalType": "bytes",
+            "name": "referenceModuleInitData",
+            "type": "bytes"
+          }
+        ],
+        "indexed": false,
+        "internalType": "struct Types.QuoteParams",
+        "name": "quoteParams",
+        "type": "tuple"
+      },
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "pubId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes",
+        "name": "referenceModuleReturnData",
+        "type": "bytes"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes[]",
+        "name": "actionModulesInitReturnDatas",
+        "type": "bytes[]"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes",
+        "name": "referenceModuleInitReturnData",
+        "type": "bytes"
+      },
+      {
+        "indexed": false,
+        "internalType": "address",
+        "name": "transactionExecutor",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "timestamp",
+        "type": "uint256"
+      }
+    ],
+    "name": "QuoteCreated",
+    "type": "event"
+}
+```
+
+###### event_input_names
+
+You may want to index one field or you may which to use a composite that filter or sort by multiple columns.
+
+###### single root field
+
+Lets say i want to add an index for `transactionExecutor` I look in the ABI for that field and i see its not in a tuple
+and directly on the root of inputs so i take the input name and apply it to the yaml file.
+
+```json
+ {
+     ...
+     "inputs": [
+     ...
+     {
+        "indexed": false,
+        "internalType": "address",
+        "name": "transactionExecutor", // [!code focus]
+        "type": "address"
+      },
+      ...
+    ],
+    "name": "QuoteCreated", // [!code focus]
+    "type": "event"
+  },
+```
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+    indexes: // [!code focus]
+        contracts: // [!code focus]
+          - name: LensHub
+            events: // [!code focus]
+              - name: QuoteCreated
+            indexes: // [!code focus]
+                - event_input_names: // [!code focus]
+                    - transactionExecutor // [!code focus]
+```
+
+This will create a SQL index like the below:
+
+```sql
+CREATE INDEX idx_quote_created_transaction_executor
+ON lens_indexer_lens_hub_quote_created (transaction_executor);
+```
+
+:::info
+do not worry if you do not understand this all you need to care about is that you can now filter on `transaction_executor`) faster.
+:::
+
+###### tuple field
+
+If you want to add an index in a field which is within a tuple you can do this easily by just mapping the object location.
+
+Lets say i want to add an index on the `quoteParams` `referenceModule` field.
+
+```json
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "components": [
+          ...
+          {
+            "internalType": "address",
+            "name": "referenceModule", // [!code focus]
+            "type": "address"
+          },
+          ...
+        ],
+        "indexed": false,
+        "internalType": "struct Types.QuoteParams",
+        "name": "quoteParams", // [!code focus]
+        "type": "tuple"
+      },
+      ...
+    ],
+    "name": "QuoteCreated",
+    "type": "event"
+  },
+```
+
+I would just map this in the yaml file:
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+    indexes: // [!code focus]
+        contracts: // [!code focus]
+          - name: LensHub
+            events: // [!code focus]
+              - name: QuoteCreated
+            indexes: // [!code focus]
+                - event_input_names: // [!code focus]
+                    - "quoteParams.referenceModule" // [!code focus]
+```
+
+This will create a SQL index like the below:
+
+```sql
+CREATE INDEX idx_quote_created_quote_params_reference_module
+ON lens_indexer_lens_hub_quote_created (quote_params_reference_module);
+```
+
+:::info
+do not worry if you do not understand this all you need to care about is that you can now filter on `transaction_executor`) faster.
+:::
+
+###### multiple indexed fields
+
+You may want to index multiple fields if you are doing a filter or ordering on many fields. Composite indexes are supported
+in the SQL database and you can do this easily by just mapping the object location.
+
+:::info
+Composite indexes are very powerful and can have very high performance on the SQL queries if you are filtering on many fields.
+:::
+
+Lets say i want to add an index on the `quoteParams` `referenceModule` field alongside the `transactionExecutor`.
+
+```json
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "components": [
+          ...
+          {
+            "internalType": "address",
+            "name": "referenceModule", // [!code focus]
+            "type": "address"
+          },
+          ...
+        ],
+        "indexed": false,
+        "internalType": "struct Types.QuoteParams",
+        "name": "quoteParams", // [!code focus]
+        "type": "tuple"
+      },
+      {
+        "indexed": false,
+        "internalType": "address",
+        "name": "transactionExecutor", // [!code focus]
+        "type": "address"
+      },
+    ],
+    "name": "QuoteCreated",
+    "type": "event"
+  },
+```
+
+I would just map this in the yaml file:
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+    indexes: // [!code focus]
+        contracts: // [!code focus]
+          - name: LensHub
+            events: // [!code focus]
+              - name: QuoteCreated
+            indexes: // [!code focus]
+                - event_input_names: // [!code focus]
+                    - transactionExecutor
+                    - "quoteParams.referenceModule" // [!code focus]
+```
+
+This will create a SQL index like the below:
+
+```sql
+CREATE INDEX idx_quote_created_transaction_executor_quote_params_reference_module
+ON lens_indexer_lens_hub_quote_created (transaction_executor, quote_params_reference_module);
+```
+
+:::info
+do not worry if you do not understand this all you need to care about is that you can now filter on `transaction_executor`) faster.
+:::
+
+### relationships
+
+You can define your relationships between events, this will add foreign keys to the database and also process them in
+the correct order. Note rindexer always optimises for speed unless told to do so, on historic data it will drop any
+foreign keys and run them concurrently, it then re-apply the relationships again before indexing the live data.
+If still want to only run once the other one has run you can look into the [dependency events](/docs/start-building/yaml-config/contracts#dependency_events).
+
+You can define many relationships in the same YAML file.
+
+We will use these ABIs as an example as it has tuples as well as route inputs.
+
+:::code-group
+
+```json [QuoteCreated ABI]
+ {
+    "anonymous": false,
+    "inputs": [
+      {
+        "components": [
+          {
+            "internalType": "uint256",
+            "name": "profileId",
+            "type": "uint256"
+          },
+          {
+            "internalType": "string",
+            "name": "contentURI",
+            "type": "string"
+          },
+          {
+            "internalType": "uint256",
+            "name": "pointedProfileId",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "pointedPubId",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256[]",
+            "name": "referrerProfileIds",
+            "type": "uint256[]"
+          },
+          {
+            "internalType": "uint256[]",
+            "name": "referrerPubIds",
+            "type": "uint256[]"
+          },
+          {
+            "internalType": "bytes",
+            "name": "referenceModuleData",
+            "type": "bytes"
+          },
+          {
+            "internalType": "address[]",
+            "name": "actionModules",
+            "type": "address[]"
+          },
+          {
+            "internalType": "bytes[]",
+            "name": "actionModulesInitDatas",
+            "type": "bytes[]"
+          },
+          {
+            "internalType": "address",
+            "name": "referenceModule",
+            "type": "address"
+          },
+          {
+            "internalType": "bytes",
+            "name": "referenceModuleInitData",
+            "type": "bytes"
+          }
+        ],
+        "indexed": false,
+        "internalType": "struct Types.QuoteParams",
+        "name": "quoteParams",
+        "type": "tuple"
+      },
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "pubId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes",
+        "name": "referenceModuleReturnData",
+        "type": "bytes"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes[]",
+        "name": "actionModulesInitReturnDatas",
+        "type": "bytes[]"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes",
+        "name": "referenceModuleInitReturnData",
+        "type": "bytes"
+      },
+      {
+        "indexed": false,
+        "internalType": "address",
+        "name": "transactionExecutor",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "timestamp",
+        "type": "uint256"
+      }
+    ],
+    "name": "QuoteCreated",
+    "type": "event"
+}
+```
+
+```json [ProfileMetadataSet ABI]
+{
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "profileId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "metadata",
+        "type": "string"
+      },
+      {
+        "indexed": false,
+        "internalType": "address",
+        "name": "transactionExecutor",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "timestamp",
+        "type": "uint256"
+      }
+    ],
+    "name": "ProfileMetadataSet",
+    "type": "event"
+}
+```
+
+:::
+
+#### contract_name
+
+As you can have multiple contracts in your project you have to map its name to the contracts so it can read the ABIs.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+    relationships: // [!code focus]
+      - contract_name: LensHub // [!code focus]
+```
+
+#### event_name
+
+The name of the event to apply the indexes to.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+    relationships: // [!code focus]
+      - contract_name: LensHub
+        event_name: QuoteCreated // [!code focus]
+```
+
+#### event_input_name
+
+This can be a tuple object mapping or a single field which we explained both explained above.
+
+Lets say we want to make `QuoteCreated` events `quoteParams.profileId` linked to something other profile id event.
+
+```json [QuoteCreated ABI]
+{
+     "anonymous": false,
+     "inputs": [
+       {
+         "components": [
+           {
+             "internalType": "uint256",
+             "name": "profileId", // [!code focus]
+             "type": "uint256"
+           },
+           ...
+         ],
+         "indexed": false,
+         "internalType": "struct Types.QuoteParams",
+         "name": "quoteParams", // [!code focus]
+         "type": "tuple"
+       },
+       ...
+     ],
+     "name": "QuoteCreated",
+     "type": "event"
+}
+```
+
+Lets add that field to the `event_input_name`:
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+    relationships: // [!code focus]
+      - contract_name: LensHub
+        event_name: QuoteCreated
+        event_input_name: "quoteParams.profileId" // [!code focus]
+```
+
+#### linked_to
+
+Now we have to map what this referenced to.
+
+#### contract_name
+
+Define the contract name to link to.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+    relationships:
+      - contract_name: LensHub
+        event_name: QuoteCreated
+        event_input_name: "quoteParams.profileId"
+        linked_to: // [!code focus]
+          - contract_name: LensHub // [!code focus]
+```
+
+#### event_name
+
+Define the event name to link to.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+    relationships:
+      - contract_name: LensHub
+        event_name: QuoteCreated
+        event_input_name: "quoteParams.profileId"
+        linked_to: // [!code focus]
+          - contract_name: LensHub // [!code focus]
+            event_name: ProfileMetadataSet // [!code focus]
+```
+
+#### event_input_name
+
+Map the event input name for it, this MUST match the same ABI type as the event_input_name type above.
+
+```json [ProfileMetadataSet ABI]
+{
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "profileId", // [!code focus]
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "metadata",
+        "type": "string"
+      },
+      {
+        "indexed": false,
+        "internalType": "address",
+        "name": "transactionExecutor",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "timestamp",
+        "type": "uint256"
+      }
+    ],
+    "name": "ProfileMetadataSet",
+    "type": "event"
+}
+```
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+    relationships: // [!code focus]
+      - contract_name: LensHub
+        event_name: QuoteCreated
+        event_input_name: "quoteParams.profileId"
+        linked_to: // [!code focus]
+          - contract_name: LensHub
+            event_name: ProfileMetadataSet
+            event_input_name: profileId // [!code focus]
+```
+
+That is it we have now linked the `QuoteCreated` events `quoteParams.profileId` to the `ProfileMetadataSet` events `profileId`.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+    relationships: // [!code focus]
+      - contract_name: LensHub // [!code focus]
+        event_name: QuoteCreated // [!code focus]
+        event_input_name: "quoteParams.profileId" // [!code focus]
+        linked_to: // [!code focus]
+          - contract_name: LensHub // [!code focus]
+            event_name: ProfileMetadataSet // [!code focus]
+            event_input_name: profileId // [!code focus]
+```
+
+You can read more about how this changes the GraphQL ability to query the data [here](/docs/accessing-data/graphql#relationships).
+
 ## csv
 
 If you wish to store the data in a CSV files you can enable the csv storage.

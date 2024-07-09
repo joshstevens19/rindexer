@@ -21,9 +21,8 @@ use rindexer_core::manifest::yaml::{
 };
 use rindexer_core::{
     drop_tables_for_indexer_sql, format_all_files_for_project, generate_graphql_queries,
-    rindexer_info, setup_info_logger, start_rindexer_no_code, write_file, GraphQLServerDetails,
-    GraphQLServerSettings, GraphqlNoCodeDetails, IndexerNoCodeDetails, PostgresClient,
-    StartNoCodeDetails, WriteFileError,
+    rindexer_info, setup_info_logger, start_rindexer_no_code, write_file, GraphqlOverrideSettings,
+    IndexerNoCodeDetails, PostgresClient, StartNoCodeDetails, WriteFileError,
 };
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -389,6 +388,7 @@ fn handle_new_command(
                 None
             },
         },
+        graphql: None,
     };
 
     // Write the rindexer.yaml file
@@ -774,9 +774,9 @@ async fn start(
                 let details = StartNoCodeDetails {
                     manifest_path: project_path.join(YAML_CONFIG_NAME),
                     indexing_details: IndexerNoCodeDetails { enabled: true },
-                    graphql_details: GraphqlNoCodeDetails {
+                    graphql_details: GraphqlOverrideSettings {
                         enabled: false,
-                        settings: None,
+                        override_port: None,
                     },
                 };
 
@@ -789,14 +789,12 @@ async fn start(
                 let details = StartNoCodeDetails {
                     manifest_path: project_path.join(YAML_CONFIG_NAME),
                     indexing_details: IndexerNoCodeDetails { enabled: false },
-                    graphql_details: GraphqlNoCodeDetails {
+                    graphql_details: GraphqlOverrideSettings {
                         enabled: true,
-                        settings: Some(GraphQLServerDetails {
-                            settings: match port {
-                                Some(port) => GraphQLServerSettings::port(port.parse().unwrap()),
-                                None => Default::default(),
-                            },
-                        }),
+                        override_port: match port {
+                            Some(port) => Some(port.parse().unwrap()),
+                            None => None,
+                        },
                     },
                 };
 
@@ -809,14 +807,12 @@ async fn start(
                 let details = StartNoCodeDetails {
                     manifest_path: project_path.join(YAML_CONFIG_NAME),
                     indexing_details: IndexerNoCodeDetails { enabled: true },
-                    graphql_details: GraphqlNoCodeDetails {
-                        enabled: false,
-                        settings: Some(GraphQLServerDetails {
-                            settings: match port {
-                                Some(port) => GraphQLServerSettings::port(port.parse().unwrap()),
-                                None => Default::default(),
-                            },
-                        }),
+                    graphql_details: GraphqlOverrideSettings {
+                        enabled: true,
+                        override_port: match port {
+                            Some(port) => Some(port.parse().unwrap()),
+                            None => None,
+                        },
                     },
                 };
 

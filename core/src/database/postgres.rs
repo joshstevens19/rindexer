@@ -5,7 +5,6 @@ use dotenv::dotenv;
 use ethers::abi::{Int, LogParam, Token};
 use ethers::types::{Address, Bytes, H128, H160, H256, H512, U128, U256, U512, U64};
 use futures::future::join_all;
-use futures::future::TryFutureExt;
 use futures::pin_mut;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -1365,13 +1364,25 @@ impl Relationship {
         )
     }
 
+    // IF NOT EXISTS does not work on unique constraints, so we only want to
+    // apply if it's not already applied
     fn apply_unique_construct_sql(&self) -> Code {
         Code::new(format!(
             r#"
-                ALTER TABLE {linked_db_table_name}
-                ADD CONSTRAINT {unique_construct_name}
-                UNIQUE ({linked_db_table_column});
-            "#,
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 
+                    FROM pg_constraint 
+                    WHERE conname = '{unique_construct_name}' 
+                    AND conrelid = '{linked_db_table_name}'::regclass
+                ) THEN
+                    ALTER TABLE {linked_db_table_name}
+                    ADD CONSTRAINT {unique_construct_name}
+                    UNIQUE ({linked_db_table_column});
+                END IF;
+            END $$;
+        "#,
             unique_construct_name = self.unique_construct_name(),
             linked_db_table_name = self.linked_to.db_table_name,
             linked_db_table_column = self.linked_to.db_table_column
@@ -1391,7 +1402,8 @@ impl Relationship {
 
     fn unique_construct_name(&self) -> String {
         format!(
-            "unique_{linked_db_table_column}",
+            "unique_{linked_db_table_name}_{linked_db_table_column}",
+            linked_db_table_name = self.linked_to.db_table_name.split('.').last().unwrap(),
             linked_db_table_column = self.linked_to.db_table_column
         )
     }
@@ -1428,23 +1440,16 @@ impl Relationship {
     }
 
     pub async fn apply(&self, client: &PostgresClient) -> Result<(), PostgresError> {
-        let sql = format!(
-            r#"
-            {}
-            {}
-          "#,
-            self.apply_unique_construct_sql(),
-            self.apply_foreign_key_construct_sql()
-        );
-
-        client.batch_execute(&sql).await?;
-
+        // apply on its own as it's in a DO block
+        client.execute(self.apply_unique_construct_sql().as_str(), &[]).await?;
         info!(
             "Applied unique constraint key for relationship after historic resync complete: table - {} constraint - {}",
             self.linked_to.db_table_name,
             self.unique_construct_name()
         );
 
+        client.execute(self.apply_foreign_key_construct_sql().as_str(), &[]).await?;
+        
         info!(
             "Applied foreign key for relationship after historic resync complete: table - {} constraint - {}",
             self.db_table_name,
@@ -1724,12 +1729,12 @@ pub async fn prepare_and_drop_indexes(
         for contract_event_indexes in contract_events_indexes.iter() {
             let contract = contracts
                 .iter()
-                .find(|c| c.name == contract_event_indexes.contract_name);
+                .find(|c| c.name == contract_event_indexes.name);
 
             match contract {
                 None => {
                     return Err(PrepareAndDropIndexesError::ContractMissing(
-                        contract_event_indexes.contract_name.clone(),
+                        contract_event_indexes.name.clone(),
                     ));
                 }
                 Some(contract) => {
@@ -1759,7 +1764,7 @@ pub async fn prepare_and_drop_indexes(
                             "{}_{}.{}",
                             camel_to_snake(manifest_name),
                             camel_to_snake(&contract.name),
-                            camel_to_snake(&event_indexes.event_name)
+                            camel_to_snake(&event_indexes.name)
                         );
 
                         if let Some(injected_parameters) = &event_indexes.injected_parameters {
@@ -1776,7 +1781,7 @@ pub async fn prepare_and_drop_indexes(
                             for parameter in &index.event_input_names {
                                 let abi_parameter = get_abi_parameter(
                                     &abi_items,
-                                    &event_indexes.event_name,
+                                    &event_indexes.name,
                                     &parameter.split('.').collect::<Vec<&str>>(),
                                 )
                                 .map_err(PrepareAndDropIndexesError::GetAbiParameterError)?;
