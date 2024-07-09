@@ -578,6 +578,8 @@ pub fn csv_headers_for_event(event_info: &EventInfo) -> Vec<String> {
     headers.push(r#"block_number"#.to_string());
     headers.push(r#"block_hash"#.to_string());
     headers.push(r#"network"#.to_string());
+    headers.push(r#"tx_index"#.to_string());
+    headers.push(r#"log_index"#.to_string());
 
     headers
 }
@@ -1264,6 +1266,8 @@ pub fn generate_event_handlers(
             csv_data.push_str(r#"result.tx_information.block_number.to_string(),"#);
             csv_data.push_str(r#"result.tx_information.block_hash.to_string(),"#);
             csv_data.push_str(r#"result.tx_information.network.to_string()"#);
+            csv_data.push_str(r#"result.tx_information.transaction_index.to_string(),"#);
+            csv_data.push_str(r#"result.tx_information.log_index.to_string()"#);
 
             csv_write = format!(
                 r#"csv_bulk_data.push(vec![{csv_data}]);"#,
@@ -1314,8 +1318,10 @@ pub fn generate_event_handlers(
             data.push_str("EthereumSqlTypeWrapper::U64(result.tx_information.block_number),");
             data.push_str("EthereumSqlTypeWrapper::H256(result.tx_information.block_hash),");
             data.push_str(
-                "EthereumSqlTypeWrapper::String(result.tx_information.network.to_string())",
+                "EthereumSqlTypeWrapper::String(result.tx_information.network.to_string()),",
             );
+            data.push_str("EthereumSqlTypeWrapper::U64(result.tx_information.transaction_index),");
+            data.push_str("EthereumSqlTypeWrapper::U256(result.tx_information.log_index)");
             data.push_str("];");
 
             postgres_write = format!(

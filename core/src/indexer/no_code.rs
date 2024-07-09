@@ -194,6 +194,8 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                     let block_number = result.tx_information.block_number;
                     let block_hash = result.tx_information.block_hash;
                     let network = result.tx_information.network.to_string();
+                    let tx_index = result.tx_information.transaction_index;
+                    let log_index = result.tx_information.log_index;
 
                     let event_parameters: Vec<EthereumSqlTypeWrapper> =
                         map_log_params_to_ethereum_wrapper(&params.event_info.inputs, &log.params);
@@ -204,6 +206,8 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                         EthereumSqlTypeWrapper::U64(block_number),
                         EthereumSqlTypeWrapper::H256(block_hash),
                         EthereumSqlTypeWrapper::String(network.to_string()),
+                        EthereumSqlTypeWrapper::U64(tx_index),
+                        EthereumSqlTypeWrapper::U256(log_index),
                     ];
 
                     Some((
