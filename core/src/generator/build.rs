@@ -417,7 +417,7 @@ serde = {{ version = "1.0.194", features = ["derive"] }}
 
             use self::rindexer::indexers::all_handlers::register_all_handlers;
             use rindexer_core::{
-                start_rindexer, GraphQLServerDetails, GraphQLServerSettings, IndexingDetails, StartDetails,
+                start_rindexer, GraphqlOverrideSettings, IndexingDetails, StartDetails,
             };
 
             mod rindexer;
@@ -429,7 +429,7 @@ serde = {{ version = "1.0.194", features = ["derive"] }}
                 let mut enable_graphql = false;
                 let mut enable_indexer = false;
                 
-                let mut port: Option<usize> = None;
+                let mut port: Option<u16> = None;
 
                 for arg in args.iter() {
                     match arg.as_str() {
@@ -437,7 +437,7 @@ serde = {{ version = "1.0.194", features = ["derive"] }}
                         "--indexer" => enable_indexer = true,
                         _ if arg.starts_with("--port=") || arg.starts_with("--p") => {
                             if let Some(value) = arg.split('=').nth(1) {
-                                let overridden_port = value.parse::<usize>();
+                                let overridden_port = value.parse::<u16>();
                                 match overridden_port {
                                     Ok(overridden_port) => port = Some(overridden_port),
                                     Err(_) => {
@@ -467,13 +467,10 @@ serde = {{ version = "1.0.194", features = ["derive"] }}
                             } else {
                                 None
                             },
-                            graphql_server: if enable_graphql {
-                                Some(GraphQLServerDetails {
-                                    settings: port.map_or_else(Default::default, GraphQLServerSettings::port),
-                                })
-                            } else {
-                                None
-                            },
+                            graphql_details: GraphqlOverrideSettings {
+                                enabled: enable_graphql,
+                                override_port: port,
+                            }
                         })
                         .await;
                         

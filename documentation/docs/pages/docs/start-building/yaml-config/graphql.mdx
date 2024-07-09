@@ -1,0 +1,104 @@
+# graphql
+
+To define some graphql settings you can use the `graphql` section of the YAML configuration file.
+
+:::info
+This is optional if you are happy with the default settings but worth knowing what you can configure.
+:::
+
+## port
+
+You can use the `--port` flag when running to override the port number you want to use for the GraphQL server
+but this yaml config allows you to set a default port number. By default if not set it will use port 3001.
+
+```yaml
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+contracts:
+  - name: RocketPoolETH
+    details:
+      - network: ethereum
+        address: 0xae78736cd615f374d3085123a210448e74fc6393
+        start_block: 18600000
+        end_block: 18718056
+    abi: ./abis/RocketTokenRETH.abi.json
+    include_events:
+      - Transfer
+      - Approval
+graphql:
+  port: 3001 // [!code focus]
+```
+
+## disable_advanced_filters
+
+rindexer GraphQL supports [advanced filtering](/docs/accessing-data/graphql#filter) but these filters easily be abused and cause performance issues.
+If you wish to disable advanced filtering you can set this to true. By default it is enabled so set as false.
+
+```yaml
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+contracts:
+  - name: RocketPoolETH
+    details:
+      - network: ethereum
+        address: 0xae78736cd615f374d3085123a210448e74fc6393
+        start_block: 18600000
+        end_block: 18718056
+    abi: ./abis/RocketTokenRETH.abi.json
+    include_events:
+      - Transfer
+      - Approval
+graphql:
+  disable_advanced_filters: true // [!code focus]
+```
+
+## filter_only_on_indexed_columns
+
+When you end up having a database which has a lot of data querying that can become slow, indexes can help speed up the queries
+and critical for the performance of the GraphQL server. By default rindexer lets you filter on any column even if it is
+not indexed but this setting allows you to only exposed the ability to filter via GraphQL on the indexed columns.
+
+You can define your own indexes in the [storage](/docs/start-building/yaml-config/storage#indexes) section of the YAML configuration file.
+
+```yaml
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+contracts:
+  - name: RocketPoolETH
+    details:
+      - network: ethereum
+        address: 0xae78736cd615f374d3085123a210448e74fc6393
+        start_block: 18600000
+        end_block: 18718056
+    abi: ./abis/RocketTokenRETH.abi.json
+    include_events:
+      - Transfer
+      - Approval
+graphql:
+  filter_only_on_indexed_columns: true // [!code focus]
+```
+

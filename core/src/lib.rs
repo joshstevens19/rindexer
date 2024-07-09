@@ -17,7 +17,7 @@ pub use helpers::{
     WriteFileError,
 };
 mod api;
-pub use api::{generate_graphql_queries, GraphQLServerDetails, GraphQLServerSettings};
+pub use api::{generate_graphql_queries, GraphQLSettings, GraphqlOverrideSettings};
 
 mod logger;
 pub use logger::setup_info_logger;
@@ -26,8 +26,8 @@ mod start;
 mod types;
 
 pub use start::{
-    start_rindexer, start_rindexer_no_code, GraphqlNoCodeDetails, IndexerNoCodeDetails,
-    IndexingDetails, StartDetails, StartNoCodeDetails,
+    start_rindexer, start_rindexer_no_code, IndexerNoCodeDetails, IndexingDetails, StartDetails,
+    StartNoCodeDetails,
 };
 
 // export 3rd party dependencies

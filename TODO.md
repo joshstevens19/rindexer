@@ -5,8 +5,8 @@ bugs:
   - FIX - TODO - FIX THIS
   
 lastly:
-- write indexes docs + exposes graphql settings including filter only on indexed columns and disable advanced filters
-- write relationships docs + write code to inject into the dependency events to process correctly
+- write code to inject into the dependency events to process correctly
+- try to handle callback failing
 - cleanup the code into smaller files and functions
 - open repo and install from GitHub for rust projects
 
