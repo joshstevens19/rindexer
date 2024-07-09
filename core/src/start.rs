@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::signal;
@@ -13,7 +14,9 @@ use crate::database::postgres::{
 use crate::generator::event_callback_registry::EventCallbackRegistry;
 use crate::indexer::no_code::{setup_no_code, SetupNoCodeError};
 use crate::indexer::start::{start_indexing, StartIndexingError};
-use crate::indexer::{ContractEventDependencies, EventDependencies, EventsDependencyTree};
+use crate::indexer::{
+    ContractEventDependencies, ContractEventMapping, EventDependencies, EventsDependencyTree,
+};
 use crate::manifest::yaml::{read_manifest, ProjectType, ReadManifestError};
 use crate::{setup_info_logger, setup_postgres, PostgresClient};
 
@@ -67,6 +70,9 @@ pub enum StartRindexerError {
 
     #[error("{0}")]
     DropLastKnownIndexesError(DropLastKnownIndexesError),
+    
+    #[error("Cross contract relationships are need manually mapping in the dependency_events, https://rindexer.xyz/docs/start-building/yaml-config/contracts#dependency_events")]
+    CrossContractRelationshipsNotDefinedInDependencyEvents,
 }
 
 pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerError> {
@@ -137,7 +143,7 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
                                 }
                             }
                         }
-                        
+
                         info!("Temp dropping indexes from the database for historic indexing for speed reasons");
                         drop_last_known_indexes(&manifest.name)
                             .await
@@ -221,7 +227,7 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
                         .await
                         .map_err(StartRindexerError::PostgresConnectionError)?;
 
-                    for relationship in relationships {
+                    for relationship in &relationships {
                         relationship
                             .apply(&client)
                             .await
@@ -258,6 +264,15 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
 
                         // Retain only the events that have details with `end_block.is_none()`
                         callbacks.events.retain(|e| !e.contract.details.is_empty());
+
+                        if dependencies.is_empty() {
+                            if has_cross_contract_dependency(&relationships) {
+                                return Err(StartRindexerError::CrossContractRelationshipsNotDefinedInDependencyEvents);
+                            }
+                            dependencies = map_all_dependencies(&relationships);
+                        } else {
+                            info!("Manual dependency_events found, skipping auto-applying the dependency_events with the relationships");
+                        }
 
                         start_indexing(
                             &manifest,
@@ -330,4 +345,120 @@ pub async fn start_rindexer_no_code(
     start_rindexer(start_details)
         .await
         .map_err(StartRindexerNoCode::StartRindexerError)
+}
+
+fn has_cross_contract_dependency(relationships: &[Relationship]) -> bool {
+    for relationship in relationships {
+        if relationship.linked_to.contract_name != relationship.contract_name {
+            return true;
+        }
+    }
+    false
+}
+
+fn generate_relationships_map(relationships: &[Relationship]) -> HashMap<ContractEventMapping, Vec<ContractEventMapping>> {
+    let mut relationships_map = HashMap::new();
+
+    for relationship in relationships {
+        let event = ContractEventMapping {
+            contract_name: relationship.contract_name.clone(),
+            event_name: relationship.event.clone(),
+        };
+
+        let linked_event = ContractEventMapping {
+            contract_name: relationship.linked_to.contract_name.clone(),
+            event_name: relationship.linked_to.event.clone(),
+        };
+
+        relationships_map.entry(linked_event).or_insert_with(Vec::new).push(event);
+    }
+
+    relationships_map
+}
+
+fn build_dependency_tree(
+    event: &ContractEventMapping,
+    relationships_map: &HashMap<ContractEventMapping, Vec<ContractEventMapping>>,
+    visited: &mut HashSet<ContractEventMapping>,
+) -> Arc<EventsDependencyTree> {
+    if visited.contains(event) {
+        return Arc::new(EventsDependencyTree {
+            contract_events: vec![],
+            then: Box::new(None),
+        });
+    }
+
+    visited.insert(event.clone());
+
+    let contract_events = vec![event.clone()];
+    let mut next_tree: Option<Arc<EventsDependencyTree>> = None;
+
+    if let Some(linked_events) = relationships_map.get(event) {
+        for linked_event in linked_events {
+            let tree = build_dependency_tree(linked_event, relationships_map, visited);
+            if next_tree.is_none() {
+                next_tree = Some(tree);
+            } else {
+                next_tree = Some(Arc::new(merge_trees(&next_tree.unwrap(), &tree)));
+            }
+        }
+    }
+
+    Arc::new(EventsDependencyTree {
+        contract_events,
+        then: Box::new(next_tree),
+    })
+}
+
+fn merge_trees(tree1: &EventsDependencyTree, tree2: &EventsDependencyTree) -> EventsDependencyTree {
+    let mut contract_events = tree1.contract_events.clone();
+    contract_events.extend(tree2.contract_events.clone());
+    contract_events.sort_by(|a, b| a.event_name.cmp(&b.event_name));
+    contract_events.dedup();
+
+    EventsDependencyTree {
+        contract_events,
+        then: if tree1.then.is_none() && tree2.then.is_none() {
+            Box::new(None)
+        } else {
+            Box::new(Some(Arc::new(merge_trees(
+                tree1.then.as_ref().as_ref().unwrap_or(&Arc::new(EventsDependencyTree { contract_events: vec![], then: Box::new(None) })),
+                tree2.then.as_ref().as_ref().unwrap_or(&Arc::new(EventsDependencyTree { contract_events: vec![], then: Box::new(None) })),
+            ))))
+        }
+    }
+}
+
+fn map_all_dependencies(relationships: &[Relationship]) -> Vec<ContractEventDependencies> {
+    let relationships_map = generate_relationships_map(relationships);
+    let mut result_map = HashMap::new();
+    let mut visited = HashSet::new();
+
+    for event in relationships_map.keys() {
+        let tree = build_dependency_tree(event, &relationships_map, &mut visited);
+        let dependency_events = collect_dependency_events(&tree);
+
+        result_map.entry(event.contract_name.clone())
+            .and_modify(|e: &mut EventDependencies| {
+                e.tree = Arc::new(merge_trees(&e.tree, &tree));
+                e.dependency_events.extend(dependency_events.clone());
+            })
+            .or_insert(EventDependencies {
+                tree: tree.clone(),
+                dependency_events,
+            });
+    }
+
+    result_map.into_iter().map(|(contract_name, event_dependencies)| ContractEventDependencies {
+        contract_name,
+        event_dependencies,
+    }).collect()
+}
+
+fn collect_dependency_events(tree: &EventsDependencyTree) -> Vec<ContractEventMapping> {
+    let mut events = tree.contract_events.clone();
+    if let Some(ref then_tree) = *tree.then {
+        events.extend(collect_dependency_events(then_tree));
+    }
+    events
 }

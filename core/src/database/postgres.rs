@@ -1868,7 +1868,7 @@ pub async fn drop_last_known_indexes(manifest_name: &str) -> Result<(), DropLast
         get_last_known_indexes_dropping_sql(&client, manifest_name)
             .await
             .map_err(DropLastKnownIndexesError::GetLastKnownIndexesDroppingSql)?;
-    
+
     let futures = last_known_indexes_dropping_sql.into_iter().map(|sql| {
         let client = Arc::clone(&client);
         async move {
