@@ -398,7 +398,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-rindexer_core = {{ path = "../../rindexer_core" }}
+rindexer = {{ git = "https://github.com/joshstevens19/rindexer", branch = "master", package = "core"}}
 tokio = {{ version = "1", features = ["full"] }}
 ethers = {{ version = "2.0", features = ["rustls", "openssl"] }}
 serde = {{ version = "1.0.194", features = ["derive"] }}
