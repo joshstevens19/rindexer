@@ -389,11 +389,48 @@ pub struct ForeignKeys {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EventIndex {
+    pub event_input_names: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ContractEventsIndexes {
+    pub contract_name: String,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub injected_parameters: Option<Vec<String>>,
+
+    pub events: Vec<EventIndexes>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EventIndexes {
+    pub event_name: String,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub injected_parameters: Option<Vec<String>>,
+
+    pub indexes: Vec<EventIndex>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PostgresIndexes {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global_injected_parameters: Option<Vec<String>>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contracts: Option<Vec<ContractEventsIndexes>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PostgresDetails {
     pub enabled: bool,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relationships: Option<Vec<ForeignKeys>>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexes: Option<PostgresIndexes>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disable_create_tables: Option<bool>,

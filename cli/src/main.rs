@@ -373,6 +373,7 @@ fn handle_new_command(
                 Some(PostgresDetails {
                     enabled: true,
                     relationships: None,
+                    indexes: None,
                     disable_create_tables: None,
                 })
             } else {

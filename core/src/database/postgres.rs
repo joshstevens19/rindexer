@@ -4,11 +4,14 @@ use bytes::{Buf, BytesMut};
 use dotenv::dotenv;
 use ethers::abi::{Int, LogParam, Token};
 use ethers::types::{Address, Bytes, H128, H160, H256, H512, U128, U256, U512, U64};
+use futures::future::join_all;
+use futures::future::TryFutureExt;
 use futures::pin_mut;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 use std::{env, str};
 use tokio::task;
@@ -27,7 +30,7 @@ use crate::generator::{
 };
 use crate::helpers::camel_to_snake;
 use crate::indexer::Indexer;
-use crate::manifest::yaml::{Contract, ForeignKeys, Manifest, ProjectType};
+use crate::manifest::yaml::{Contract, ForeignKeys, Manifest, PostgresIndexes, ProjectType};
 use crate::types::code::Code;
 
 pub fn connection_string() -> Result<String, env::VarError> {
@@ -1275,7 +1278,7 @@ impl ToSql for EthereumSqlTypeWrapper {
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum CreateRelationshipError {
+pub enum CreateAndDropRelationshipError {
     #[error("{0}")]
     PostgresConnectionError(PostgresConnectionError),
 
@@ -1288,8 +1291,8 @@ pub enum CreateRelationshipError {
     #[error("Type mismatch: {0}")]
     TypeMismatch(String),
 
-    #[error("Parameter not found: {0}")]
-    ParameterNotFound(String),
+    #[error("{0}")]
+    GetAbiParameterError(GetAbiParameterError),
 
     #[error("Dropping relationship failed: {0}")]
     DropRelationshipError(PostgresError),
@@ -1497,15 +1500,15 @@ impl Relationship {
     }
 }
 
-pub async fn create_relationships(
+pub async fn create_and_drop_relationships(
     project_path: &Path,
     manifest_name: &str,
     contracts: &[Contract],
     foreign_keys: &[ForeignKeys],
-) -> Result<Vec<Relationship>, CreateRelationshipError> {
+) -> Result<Vec<Relationship>, CreateAndDropRelationshipError> {
     let client = PostgresClient::new()
         .await
-        .map_err(CreateRelationshipError::PostgresConnectionError)?;
+        .map_err(CreateAndDropRelationshipError::PostgresConnectionError)?;
 
     let mut relationships = vec![];
     for foreign_key in foreign_keys {
@@ -1515,14 +1518,14 @@ pub async fn create_relationships(
 
         match contract {
             None => {
-                return Err(CreateRelationshipError::ContractMissing(format!(
+                return Err(CreateAndDropRelationshipError::ContractMissing(format!(
                     "Contract {} not found in `contracts` make sure it is defined",
                     foreign_key.contract_name
                 )));
             }
             Some(contract) => {
                 let abi_items = read_abi_items(project_path, contract)
-                    .map_err(CreateRelationshipError::ReadAbiError)?;
+                    .map_err(CreateAndDropRelationshipError::ReadAbiError)?;
 
                 for linked_key in &foreign_key.foreign_keys {
                     let parameter_mapping = foreign_key
@@ -1530,20 +1533,21 @@ pub async fn create_relationships(
                         .split('.')
                         .collect::<Vec<&str>>();
                     let abi_parameter =
-                        get_abi_parameter(&abi_items, &foreign_key.event_name, &parameter_mapping)?;
+                        get_abi_parameter(&abi_items, &foreign_key.event_name, &parameter_mapping)
+                            .map_err(CreateAndDropRelationshipError::GetAbiParameterError)?;
 
                     let linked_key_contract = contracts
                         .iter()
                         .find(|c| c.name == linked_key.contract_name)
                         .ok_or_else(|| {
-                            CreateRelationshipError::ContractMissing(format!(
+                            CreateAndDropRelationshipError::ContractMissing(format!(
                                 "Contract {} not found in `contracts` and linked in relationships. Make sure it is defined.",
                                 linked_key.contract_name
                             ))
                         })?;
 
                     let linked_abi_items = read_abi_items(project_path, linked_key_contract)
-                        .map_err(CreateRelationshipError::ReadAbiError)?;
+                        .map_err(CreateAndDropRelationshipError::ReadAbiError)?;
                     let linked_parameter_mapping = linked_key
                         .event_input_name
                         .split('.')
@@ -1552,10 +1556,11 @@ pub async fn create_relationships(
                         &linked_abi_items,
                         &linked_key.event_name,
                         &linked_parameter_mapping,
-                    )?;
+                    )
+                    .map_err(CreateAndDropRelationshipError::GetAbiParameterError)?;
 
                     if abi_parameter.abi_item.type_ != linked_abi_parameter.abi_item.type_ {
-                        return Err(CreateRelationshipError::TypeMismatch(format!(
+                        return Err(CreateAndDropRelationshipError::TypeMismatch(format!(
                             "Type mismatch between {}.{} ({}) and {}.{} ({})",
                             foreign_key.contract_name,
                             foreign_key.event_input_name,
@@ -1594,7 +1599,7 @@ pub async fn create_relationships(
                     relationship
                         .drop(&client)
                         .await
-                        .map_err(CreateRelationshipError::DropRelationshipError)?;
+                        .map_err(CreateAndDropRelationshipError::DropRelationshipError)?;
                     relationships.push(relationship);
                 }
             }
@@ -1604,16 +1609,222 @@ pub async fn create_relationships(
     Ok(relationships)
 }
 
+#[derive(Debug, Clone)]
+pub struct PostgresIndexResult {
+    db_table_name: String,
+    db_table_columns: Vec<String>,
+}
+
+impl PostgresIndexResult {
+    pub fn apply_index_sql(&self) -> Code {
+        info!(
+            "Applying index after historic resync complete: table - {} constraint - {}",
+            self.db_table_name,
+            self.index_name()
+        );
+
+        // CONCURRENTLY is used to avoid locking the table for writes
+        Code::new(format!(
+            r#"
+                CREATE INDEX CONCURRENTLY {index_name}
+                ON {db_table_name} ({db_table_columns});
+            "#,
+            index_name = self.index_name(),
+            db_table_name = self.db_table_name,
+            db_table_columns = self.db_table_columns.join(", "),
+        ))
+    }
+
+    fn drop_index_sql(&self) -> Code {
+        info!(
+            "Dropping index for historic resync: table - {} index - {}",
+            self.db_table_name,
+            self.index_name()
+        );
+
+        Code::new(format!(
+            // CONCURRENTLY is used to avoid locking the table for writes
+            "DROP INDEX CONCURRENTLY IF EXISTS {}.{};",
+            // get schema else drop won't work
+            self.db_table_name.split('.').next().unwrap(),
+            self.index_name(),
+        ))
+    }
+
+    pub fn index_name(&self) -> String {
+        format!(
+            "idx_{db_table_name}_{db_table_columns}",
+            db_table_name = self.db_table_name.split('.').last().unwrap(),
+            db_table_columns = self.db_table_columns.join("_"),
+        )
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum PrepareAndDropIndexesError {
+    #[error("{0}")]
+    PostgresConnectionError(PostgresConnectionError),
+
+    #[error("{0}")]
+    GetAbiParameterError(GetAbiParameterError),
+
+    #[error("Contract {0} not found in `contracts` make sure it is defined")]
+    ContractMissing(String),
+
+    #[error("{0}")]
+    ReadAbiError(ReadAbiError),
+
+    #[error("Could not drop indexes: {0}")]
+    CouldNotDropIndexes(PostgresError),
+}
+
+pub async fn prepare_and_drop_indexes(
+    project_path: &Path,
+    manifest_name: &str,
+    postgres_indexes: &PostgresIndexes,
+    contracts: &[Contract],
+) -> Result<Vec<PostgresIndexResult>, PrepareAndDropIndexesError> {
+    let mut index_results: Vec<PostgresIndexResult> = vec![];
+    let client = Arc::new(
+        PostgresClient::new()
+            .await
+            .map_err(PrepareAndDropIndexesError::PostgresConnectionError)?,
+    );
+
+    // global first
+    if let Some(global_injected_parameters) = &postgres_indexes.global_injected_parameters {
+        for contract in contracts {
+            let abi_items = read_abi_items(project_path, contract)
+                .map_err(PrepareAndDropIndexesError::ReadAbiError)?;
+
+            for abi_item in abi_items {
+                let db_table_name = format!(
+                    "{}_{}.{}",
+                    camel_to_snake(manifest_name),
+                    camel_to_snake(&contract.name),
+                    camel_to_snake(&abi_item.name)
+                );
+
+                for global_parameter_column_name in global_injected_parameters {
+                    index_results.push(PostgresIndexResult {
+                        db_table_name: db_table_name.clone(),
+                        db_table_columns: vec![global_parameter_column_name.clone()],
+                    });
+                }
+            }
+        }
+    }
+
+    // then contracts
+    if let Some(contract_events_indexes) = &postgres_indexes.contracts {
+        for contract_event_indexes in contract_events_indexes.iter() {
+            let contract = contracts
+                .iter()
+                .find(|c| c.name == contract_event_indexes.contract_name);
+
+            match contract {
+                None => {
+                    return Err(PrepareAndDropIndexesError::ContractMissing(
+                        contract_event_indexes.contract_name.clone(),
+                    ));
+                }
+                Some(contract) => {
+                    let abi_items = read_abi_items(project_path, contract)
+                        .map_err(PrepareAndDropIndexesError::ReadAbiError)?;
+
+                    if let Some(injected_parameters) = &contract_event_indexes.injected_parameters {
+                        for abi_item in &abi_items {
+                            let db_table_name = format!(
+                                "{}_{}.{}",
+                                camel_to_snake(manifest_name),
+                                camel_to_snake(&contract.name),
+                                camel_to_snake(&abi_item.name)
+                            );
+
+                            for injected_parameter in injected_parameters {
+                                index_results.push(PostgresIndexResult {
+                                    db_table_name: db_table_name.clone(),
+                                    db_table_columns: vec![injected_parameter.clone()],
+                                });
+                            }
+                        }
+                    }
+
+                    for event_indexes in &contract_event_indexes.events {
+                        let db_table_name = format!(
+                            "{}_{}.{}",
+                            camel_to_snake(manifest_name),
+                            camel_to_snake(&contract.name),
+                            camel_to_snake(&event_indexes.event_name)
+                        );
+
+                        if let Some(injected_parameters) = &event_indexes.injected_parameters {
+                            for injected_parameter in injected_parameters {
+                                index_results.push(PostgresIndexResult {
+                                    db_table_name: db_table_name.clone(),
+                                    db_table_columns: vec![injected_parameter.clone()],
+                                });
+                            }
+                        }
+
+                        for index in &event_indexes.indexes {
+                            let mut db_table_columns = vec![];
+                            for parameter in &index.event_input_names {
+                                let abi_parameter = get_abi_parameter(
+                                    &abi_items,
+                                    &event_indexes.event_name,
+                                    &parameter.split('.').collect::<Vec<&str>>(),
+                                )
+                                .map_err(PrepareAndDropIndexesError::GetAbiParameterError)?;
+                                db_table_columns.push(abi_parameter.db_column_name);
+                            }
+
+                            index_results.push(PostgresIndexResult {
+                                db_table_name: db_table_name.clone(),
+                                db_table_columns,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let futures = index_results.clone().into_iter().map(|index_results| {
+        let sql = index_results.drop_index_sql();
+        let client = Arc::clone(&client);
+        async move {
+            client
+                .execute(sql.as_str(), &[])
+                .await
+                .map_err(PrepareAndDropIndexesError::CouldNotDropIndexes)
+        }
+    });
+
+    let results = join_all(futures).await;
+    for result in results {
+        result?;
+    }
+
+    Ok(index_results)
+}
+
 pub struct GetAbiParameter {
     pub abi_item: ABIInput,
     pub db_column_name: String,
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum GetAbiParameterError {
+    #[error("Parameter not found: {0}")]
+    ParameterNotFound(String),
 }
 
 fn get_abi_parameter(
     abi_items: &[ABIItem],
     event_name: &str,
     parameter_mapping: &[&str],
-) -> Result<GetAbiParameter, CreateRelationshipError> {
+) -> Result<GetAbiParameter, GetAbiParameterError> {
     // Find the event in the ABI items
     let event_item = abi_items
         .iter()
@@ -1643,13 +1854,13 @@ fn get_abi_parameter(
                                     if let Some(ref components) = input.components {
                                         components
                                     } else {
-                                        return Err(CreateRelationshipError::ParameterNotFound(format!(
+                                        return Err(GetAbiParameterError::ParameterNotFound(format!(
                                             "Parameter {} is not a nested structure in event {} of contract",
                                             param, event_name
                                         )));
                                     }
                                 },
-                                _ => return Err(CreateRelationshipError::ParameterNotFound(format!(
+                                _ => return Err(GetAbiParameterError::ParameterNotFound(format!(
                                     "Parameter {} is not a nested structure in event {} of contract",
                                     param, event_name
                                 ))),
@@ -1657,7 +1868,7 @@ fn get_abi_parameter(
                         }
                     }
                     None => {
-                        return Err(CreateRelationshipError::ParameterNotFound(format!(
+                        return Err(GetAbiParameterError::ParameterNotFound(format!(
                             "Parameter {} not found in event {} of contract",
                             param, event_name
                         )));
@@ -1665,13 +1876,13 @@ fn get_abi_parameter(
                 }
             }
 
-            Err(CreateRelationshipError::ParameterNotFound(format!(
+            Err(GetAbiParameterError::ParameterNotFound(format!(
                 "Parameter {} not found in event {} of contract",
                 parameter_mapping.join("."),
                 event_name
             )))
         }
-        None => Err(CreateRelationshipError::ParameterNotFound(format!(
+        None => Err(GetAbiParameterError::ParameterNotFound(format!(
             "Event {} not found in contract ABI",
             event_name
         ))),

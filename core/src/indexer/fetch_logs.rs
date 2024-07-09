@@ -3,7 +3,7 @@ use crate::generator::event_callback_registry::{
 };
 use crate::helpers::{camel_to_snake, get_full_path};
 use crate::indexer::progress::{IndexingEventProgressStatus, IndexingEventsProgressState};
-use crate::manifest::yaml::{CsvDetails, DependencyEventTree, EventInputIndexedFilters};
+use crate::manifest::yaml::{CsvDetails, DependencyEventTree};
 use crate::provider::JsonRpcCachedProvider;
 use crate::{EthereumSqlTypeWrapper, PostgresClient};
 use ethers::middleware::MiddlewareError;

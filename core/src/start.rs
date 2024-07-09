@@ -1,3 +1,4 @@
+use futures::future::join_all;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::signal;
@@ -5,7 +6,8 @@ use tracing::{error, info};
 
 use crate::api::{start_graphql_server, StartGraphqlServerError};
 use crate::database::postgres::{
-    create_relationships, CreateRelationshipError, PostgresConnectionError, PostgresError,
+    create_and_drop_relationships, prepare_and_drop_indexes, CreateAndDropRelationshipError,
+    PostgresConnectionError, PostgresError, PostgresIndexResult, PrepareAndDropIndexesError,
     Relationship, SetupPostgresError,
 };
 use crate::generator::event_callback_registry::EventCallbackRegistry;
@@ -46,13 +48,19 @@ pub enum StartRindexerError {
     CouldNotStartIndexing(StartIndexingError),
 
     #[error("Yaml relationship error: {0}")]
-    RelationshipError(CreateRelationshipError),
+    RelationshipError(CreateAndDropRelationshipError),
 
     #[error("{0}")]
-    RelationshipPostgresConnectionError(PostgresConnectionError),
+    PostgresConnectionError(PostgresConnectionError),
 
     #[error("Could not apply relationship - {0}")]
     ApplyRelationshipError(PostgresError),
+
+    #[error("Could not prepare and drop indexes: {0}")]
+    FailedToPrepareAndDropIndexes(PrepareAndDropIndexesError),
+
+    #[error("Could not apply indexes: {0}")]
+    ApplyIndexesError(PostgresError),
 }
 
 pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerError> {
@@ -94,12 +102,14 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
 
                 // setup relationships
                 let mut relationships: Vec<Relationship> = vec![];
+                // setup postgres indexes
+                let mut postgres_indexes: Vec<PostgresIndexResult> = vec![];
                 if *postgres_enabled && !manifest.storage.postgres_disable_create_tables() {
                     if let Some(storage) = &manifest.storage.postgres {
                         let mapped_relationships = &storage.relationships;
                         if let Some(mapped_relationships) = mapped_relationships {
                             info!("Temp dropping constraints relationships from the database for historic indexing for speed reasons");
-                            let relationships_result = create_relationships(
+                            let relationships_result = create_and_drop_relationships(
                                 project_path,
                                 &manifest.name,
                                 &manifest.contracts,
@@ -108,11 +118,32 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
                             .await;
                             match relationships_result {
                                 Ok(result) => {
-                                    // info!("Relationships created successfully - {:?}", result);
                                     relationships = result;
                                 }
                                 Err(e) => {
                                     return Err(StartRindexerError::RelationshipError(e));
+                                }
+                            }
+                        }
+
+                        if let Some(indexes) = &storage.indexes {
+                            info!("Temp dropping indexes from the database for historic indexing for speed reasons");
+                            let indexes_result = prepare_and_drop_indexes(
+                                project_path,
+                                &manifest.name,
+                                indexes,
+                                &manifest.contracts,
+                            )
+                            .await;
+
+                            match indexes_result {
+                                Ok(result) => {
+                                    postgres_indexes = result;
+                                }
+                                Err(e) => {
+                                    return Err(StartRindexerError::FailedToPrepareAndDropIndexes(
+                                        e,
+                                    ));
                                 }
                             }
                         }
@@ -150,12 +181,29 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
                 .await
                 .map_err(StartRindexerError::CouldNotStartIndexing)?;
 
+                if !postgres_indexes.is_empty() {
+                    // TODO if graphql isn't up yet, and we apply this on graphql wont refresh we need to handle this
+                    info!("Applying indexes back to the database as historic resync is complete");
+                    let client = PostgresClient::new()
+                        .await
+                        .map_err(StartRindexerError::PostgresConnectionError)?;
+
+                    // do a loop due to deadlocks on concurrent execution
+                    for postgres_index in &postgres_indexes {
+                        let sql = postgres_index.apply_index_sql();
+                        client
+                            .execute(sql.as_str(), &[])
+                            .await
+                            .map_err(StartRindexerError::ApplyIndexesError)?;
+                    }
+                }
+
                 if !relationships.is_empty() {
                     // TODO if graphql isn't up yet, and we apply this on graphql wont refresh we need to handle this
                     info!("Applying constraints relationships back to the database as historic resync is complete");
                     let client = PostgresClient::new()
                         .await
-                        .map_err(StartRindexerError::RelationshipPostgresConnectionError)?;
+                        .map_err(StartRindexerError::PostgresConnectionError)?;
 
                     for relationship in relationships {
                         relationship
@@ -213,6 +261,7 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
                         .await
                         .map_err(|_| StartRindexerError::FailedToListenToGraphqlSocket)?;
                 } else {
+                    info!("rindexer resync is complete");
                     // to avoid the thread closing before the stream is consumed
                     // lets just sit here for 30 seconds to avoid the race
                     // probably a better way to handle this but hey

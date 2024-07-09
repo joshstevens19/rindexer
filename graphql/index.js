@@ -7,7 +7,7 @@ const ConnectionFilterPlugin = require("postgraphile-plugin-connection-filter");
 const args = process.argv.slice(2);
 
 if (args.length < 5) {
-    console.error("Usage: postgraphile <connectionString> <schemas> <port> <page_limit> <timeout>>");
+    console.error("Usage: postgraphile <connectionString> <schemas> <port> <page_limit> <timeout> <filterOnlyOnIndexedColumns> <disableAdvancedFilters>");
     process.exit(1);
 }
 
@@ -16,6 +16,8 @@ const schemas = args[1].split(",");
 const port = parseInt(args[2]);
 let graphqlPageLimit = parseInt(args[3]);
 let graphqlTimeout = parseInt(args[4]);
+let filterOnlyOnIndexedColumns = args[5] === "true";
+let disableAdvancedFilters = args[6] === "true";
 
 const byteaToHex =  makeWrapResolversPlugin(
     (context) => {
@@ -50,6 +52,11 @@ const byteaToHex =  makeWrapResolversPlugin(
         },
 );
 
+let appendPlugins = [byteaToHex, PgSimplifyInflectorPlugin];
+if (!disableAdvancedFilters) {
+    appendPlugins.push(ConnectionFilterPlugin);
+}
+
 const options = {
     watchPg: true,
     host: "localhost",
@@ -59,8 +66,7 @@ const options = {
     retryOnInitFail: true,
     enableQueryBatching: true,
     sortExport: true,
-    // noIgnoreIndexes: true,
-    // ignoreIndexes: false,
+    ignoreIndexes: !filterOnlyOnIndexedColumns,
     enhanceGraphiql: false,
     graphiql: false,
     disableQueryLog: true,
@@ -68,11 +74,24 @@ const options = {
         statement_timeout: graphqlTimeout,
     },
     simpleCollections: 'omit',
-    appendPlugins: [byteaToHex, PgSimplifyInflectorPlugin, ConnectionFilterPlugin],
+    appendPlugins,
     graphileBuildOptions: {
         pgOmitListSuffix: false,
         pgSimplifyAllRows: true,
         pgShortPk: false,
+        connectionFilterAllowedOperators: [
+            "isNull",
+            "equalTo",
+            "notEqualTo",
+            "distinctFrom",
+            "notDistinctFrom",
+            "lessThan",
+            "lessThanOrEqualTo",
+            "greaterThan",
+            "greaterThanOrEqualTo",
+            "in",
+            "notIn",
+        ],
     },
 };
 
