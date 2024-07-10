@@ -5,10 +5,12 @@ use ethers::contract::LogMeta;
 use ethers::prelude::ValueOrArray;
 use ethers::types::{Bytes, Log, H256, U256, U64};
 use futures::future::BoxFuture;
-use log::info;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use std::{any::Any, sync::Arc};
-use tracing::error;
+use tokio::time::sleep;
+use tracing::{debug, error};
 
 pub type Decoder = Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync>;
 
@@ -121,13 +123,17 @@ impl EventResult {
     }
 }
 
+pub type EventCallbackResult<T> = Result<T, String>;
+pub type EventCallbackType =
+    Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync>;
+
 pub struct EventInformation {
     pub indexer_name: String,
     pub topic_id: String,
     pub event_name: String,
     pub index_event_in_order: bool,
     pub contract: ContractInformation,
-    pub callback: Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, ()> + Send + Sync>,
+    pub callback: EventCallbackType,
 }
 
 impl EventInformation {
@@ -174,13 +180,39 @@ impl EventCallbackRegistry {
     }
 
     pub async fn trigger_event(&self, topic_id: &str, data: Vec<EventResult>) {
+        let mut attempts = 0;
+        let mut delay = Duration::from_millis(100);
+
         if let Some(event_information) = self.find_event(topic_id) {
-            info!(
+            debug!(
                 "{} - Pushed {} events",
                 data.len(),
                 event_information.info_log_name()
             );
-            (event_information.callback)(data).await;
+
+            loop {
+                match (event_information.callback)(data.clone()).await {
+                    Ok(_) => {
+                        debug!("Event processing succeeded for topic_id: {}", topic_id);
+                        break;
+                    }
+                    Err(e) => {
+                        attempts += 1;
+                        error!(
+                            "{} Event processing failed - topic_id: {}. Retrying... (attempt {}). Error: {}",
+                            event_information.info_log_name(), topic_id, attempts, e
+                        );
+
+                        // Exponential backoff logic
+                        sleep(delay).await;
+                        delay = (delay * 2).min(Duration::from_secs(15)); // Max delay of 15 seconds
+
+                        // add some jitter to the delay to avoid thundering herd problem
+                        let jitter = Duration::from_millis(rand::thread_rng().gen_range(0..1000));
+                        sleep(delay + jitter).await;
+                    }
+                }
+            }
         } else {
             error!(
                 "EventCallbackRegistry: No event found for topic_id: {}",

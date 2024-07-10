@@ -13,13 +13,14 @@ use ethers::{
 use rindexer::{
     async_trait, generate_random_id,
     generator::event_callback_registry::{
-        ContractInformation, EventCallbackRegistry, EventInformation, EventResult, FactoryDetails,
-        FilterDetails, NetworkContract, TxInformation,
+        ContractInformation, EventCallbackRegistry, EventCallbackResult, EventInformation,
+        EventResult, FactoryDetails, FilterDetails, NetworkContract, TxInformation,
     },
     manifest::yaml::{read_manifest, Contract, ContractDetails},
     provider::JsonRpcCachedProvider,
     AsyncCsvAppender, FutureExt, PostgresClient,
 };
+use std::error::Error;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -45,7 +46,7 @@ type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 #[async_trait]
 trait EventCallback {
-    async fn call(&self, events: Vec<EventResult>);
+    async fn call(&self, events: Vec<EventResult>) -> EventCallbackResult<()>;
 }
 
 pub struct EventContext<TExtensions>
@@ -66,11 +67,7 @@ pub fn no_extensions() -> NoExtensions {
 
 pub fn transfer_handler<TExtensions, F, Fut>(
     custom_logic: F,
-) -> Arc<
-    dyn for<'a> Fn(&'a Vec<TransferResult>, Arc<EventContext<TExtensions>>) -> BoxFuture<'a, ()>
-        + Send
-        + Sync,
->
+) -> TransferEventCallbackType<TExtensions>
 where
     TransferResult: Clone + 'static,
     F: for<'a> Fn(Vec<TransferResult>, Arc<EventContext<TExtensions>>) -> Fut
@@ -78,7 +75,7 @@ where
         + Sync
         + 'static
         + Clone,
-    Fut: Future<Output = ()> + Send + 'static,
+    Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
     TExtensions: Send + Sync + 'static,
 {
     Arc::new(move |results, context| {
@@ -90,7 +87,10 @@ where
 }
 
 type TransferEventCallbackType<TExtensions> = Arc<
-    dyn for<'a> Fn(&'a Vec<TransferResult>, Arc<EventContext<TExtensions>>) -> BoxFuture<'a, ()>
+    dyn for<'a> Fn(
+            &'a Vec<TransferResult>,
+            Arc<EventContext<TExtensions>>,
+        ) -> BoxFuture<'a, EventCallbackResult<()>>
         + Send
         + Sync,
 >;
@@ -115,7 +115,7 @@ where
             + Sync
             + 'static
             + Clone,
-        Fut: Future<Output = ()> + Send + 'static,
+        Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
     {
         let csv = AsyncCsvAppender::new("/Users/joshstevens/code/rindexer/rindexer_demo/./generated_csv/ERC20Filter/erc20filter-transfer.csv".to_string());
         if !Path::new("/Users/joshstevens/code/rindexer/rindexer_demo/./generated_csv/ERC20Filter/erc20filter-transfer.csv").exists() {
@@ -140,7 +140,7 @@ impl<TExtensions> EventCallback for TransferEvent<TExtensions>
 where
     TExtensions: Send + Sync,
 {
-    async fn call(&self, events: Vec<EventResult>) {
+    async fn call(&self, events: Vec<EventResult>) -> EventCallbackResult<()> {
         // note some can not downcast because it cant decode
         // this happens on events which failed decoding due to
         // not having the right abi for example
@@ -159,7 +159,7 @@ where
             })
             .collect();
 
-        (self.callback)(&result, self.context.clone()).await;
+        (self.callback)(&result, self.context.clone()).await
     }
 }
 
@@ -275,16 +275,17 @@ where
             reorg_safe_distance: contract_details.reorg_safe_distance.unwrap_or_default(),
         };
 
-        let callback: Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, ()> + Send + Sync> =
-            match self {
-                ERC20FilterEventType::Transfer(event) => {
-                    let event = Arc::new(event);
-                    Arc::new(move |result| {
-                        let event = event.clone();
-                        async move { event.call(result).await }.boxed()
-                    })
-                }
-            };
+        let callback: Arc<
+            dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync,
+        > = match self {
+            ERC20FilterEventType::Transfer(event) => {
+                let event = Arc::new(event);
+                Arc::new(move |result| {
+                    let event = event.clone();
+                    async move { event.call(result).await }.boxed()
+                })
+            }
+        };
 
         registry.register_event(EventInformation {
             indexer_name: "BlahBaby".to_string(),

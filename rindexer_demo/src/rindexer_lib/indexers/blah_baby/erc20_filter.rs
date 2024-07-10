@@ -14,7 +14,7 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
         TransferEvent::handler(
             |results, context| async move {
                 if results.is_empty() {
-                    return;
+                    return Ok(());
                 }
 
                 let mut postgres_bulk_data: Vec<Vec<EthereumSqlTypeWrapper>> = vec![];
@@ -55,11 +55,12 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                             "ERC20FilterEventType::Transfer inserting csv data: {:?}",
                             e
                         );
+                        return Err(e.to_string());
                     }
                 }
 
                 if postgres_bulk_data.is_empty() {
-                    return;
+                    return Ok(());
                 }
 
                 if postgres_bulk_data.len() > 100 {
@@ -91,9 +92,10 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
 
                     if let Err(e) = result {
                         rindexer_error!(
-                            "ERC20FilterEventType::Transfer inserting bulk data: {:?}",
+                            "ERC20FilterEventType::Transfer inserting bulk data via COPY: {:?}",
                             e
                         );
+                        return Err(e.to_string());
                     }
                 } else {
                     let result = context
@@ -118,9 +120,10 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
 
                     if let Err(e) = result {
                         rindexer_error!(
-                            "ERC20FilterEventType::Transfer inserting bulk data: {:?}",
+                            "ERC20FilterEventType::Transfer inserting bulk data via INSERT: {:?}",
                             e
                         );
+                        return Err(e.to_string());
                     }
                 }
 
@@ -129,6 +132,8 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                     "INDEXED".green(),
                     results.len(),
                 );
+
+                Ok(())
             },
             no_extensions(),
         )

@@ -76,7 +76,7 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
         TransferEvent::handler(
             |results, context| async move {
                 if results.is_empty() {
-                    return;
+                   return Ok(());
                 }
 
                 let mut bulk_data: Vec<Vec<EthereumSqlTypeWrapper>> = vec![];
@@ -95,7 +95,7 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
                 }
 
                 if bulk_data.is_empty() {
-                    return;
+                   return Ok(());
                 }
 
                 if bulk_data.len() > 100 {
@@ -128,6 +128,8 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
                             "RocketPoolETHEventType::Transfer inserting bulk data: {:?}",
                             e
                         );
+
+                        return Err(e.to_string());
                     }
                 } else {
                     let result = context
@@ -153,6 +155,8 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
                             "RocketPoolETHEventType::Transfer inserting bulk data: {:?}",
                             e
                         );
+
+                        return Err(e.to_string());
                     }
                 }
 
@@ -161,6 +165,8 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
                     "INDEXED".green(),
                     results.len(),
                 );
+
+                 Ok(())
             },
             no_extensions(),
         )
@@ -189,6 +195,7 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
         TransferEvent::handler( // [!code focus]
             |results, context| async move { // [!code focus]
                 // logic here // [!code focus]
+                return Ok(());
             }, // [!code focus]
             no_extensions(),
         )
@@ -215,6 +222,7 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
             // results = Vec<TransferResult> // [!code focus]
             |results, context| async move { // [!code focus]
                 // logic here
+                return Ok(());
             },
             no_extensions(),
         )
@@ -285,6 +293,7 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
             // context = Arc<EventContext<NoExtensions>> // [!code focus]
             |results, context| async move { // [!code focus]
                 // logic here
+                return Ok(());
             },
             no_extensions(),
         )
@@ -307,6 +316,50 @@ where
 
 Note here that if you have postgres storage off in the YAML configuration file the `database` will not be present in
 this struct and you will not be able to use it. The same goes for the `csv` if you have csv storage off in the YAML.
+
+## Event Callback Result
+
+The callback has to return a `Result<(), String>` so it can be handled by rindexer, rindexer by default will keep
+retrying the event if it fails with exponential backoff.
+
+### Success
+
+```rs
+async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+    RocketPoolETHEventType::Transfer(
+        TransferEvent::handler(
+            |results, context| async move {
+                // logic here
+                return Ok(()); // [!code focus]
+            },
+            no_extensions(),
+        )
+        .await,
+    )
+    .register(registry);
+}
+```
+
+### Error
+
+Error takes in a string which then is logged in the rindexer console to help debugging traces.
+
+```rs
+async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+    RocketPoolETHEventType::Transfer(
+        TransferEvent::handler(
+            |results, context| async move {
+                // logic here
+                return Err("this is an error".to_string()); // [!code focus]
+            },
+            no_extensions(),
+        )
+        .await,
+    )
+    .register(registry);
+}
+```
+
 
 ## Extensions
 
@@ -343,8 +396,14 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
             |results, context| async move {
                 let response = context.extensions.client.get("https://example.com"); // [!code focus]
                 match response { // [!code focus]
-                    Ok(response) => println!("{}", response), // [!code focus]
-                    Err(e) => println!("Error: {:?}", e), // [!code focus]
+                    Ok(response) => {
+                        println!("{}", response), // [!code focus]
+                        return Ok(()); // [!code focus]
+                    }
+                    Err(e) => {
+                        println!("Error: {:?}", e) // [!code focus]
+                        return Err(e.to_string()); // [!code focus]
+                    }, // [!code focus]
                 } // [!code focus]
             },
             HttpClient::new(), // [!code focus]
@@ -399,8 +458,14 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
                 let provider = get_ethereum_provider(); // [!code focus]
                 let chain_id = provider.get_chainid().await; // [!code focus]
                 match chain_id { // [!code focus]
-                    Ok(result) => {println!("Chain id: {:?}", result)} // [!code focus]
-                    Err(e) => {println!("Error getting chain id: {:?}", e)} // [!code focus]
+                    Ok(result) => {
+                        println!("Chain id: {:?}", result) // [!code focus]
+                        return Ok(()); // [!code focus]
+                    }
+                    Err(e) => {
+                        println!("Error getting chain id: {:?}", e) // [!code focus]
+                        return Err(e.to_string()); // [!code focus]
+                    }
                 } // [!code focus]
             },
             no_extensions(),
@@ -480,8 +545,14 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
                 let usdt = usdt_contract(); // [!code focus]
                 let name = usdt.name().await; // [!code focus]
                 match name { // [!code focus]
-                    Ok(result) => {println!("USDT name: {:?}", name)} // [!code focus]
-                    Err(e) => {println!("Error getting USDT name: {:?}", e)} // [!code focus]
+                    Ok(result) => {
+                        println!("USDT name: {:?}", name) // [!code focus]
+                        return Ok(()); // [!code focus]
+                    }
+                    Err(e) => {
+                        println!("Error getting USDT name: {:?}", e)  // [!code focus]
+                        return Err(e.to_string()); // [!code focus]
+                    }
                 } // [!code focus]
             },
             no_extensions(),
@@ -523,8 +594,14 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
                 let rocket_pool_eth = rocket_pool_eth_contract("ethereum"); // [!code focus]
                 let name = rocket_pool_eth.name().await; // [!code focus]
                 match name { // [!code focus]
-                    Ok(result) => {println!("rETH name: {:?}", name)} // [!code focus]
-                    Err(e) => {println!("Error getting rETH name: {:?}", e)} // [!code focus]
+                    Ok(result) => {
+                        println!("rETH name: {:?}", name) // [!code focus]
+                        return Ok(()); // [!code focus]
+                    }
+                    Err(e) => {
+                        println!("Error getting rETH name: {:?}", e) // [!code focus]
+                        return Err(e.to_string()); // [!code focus]
+                    }
                 } // [!code focus]
             },
             no_extensions(),
@@ -547,6 +624,8 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
             |results, context| async move {
                 // database client here // [!code focus]
                 context.database  // [!code focus]
+
+                return Ok(());
             },
             no_extensions(),
         )
@@ -660,6 +739,8 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
             |results, context| async move {
                 // csv client here // [!code focus]
                 context.csv  // [!code focus]
+
+                return Ok(());
             },
             no_extensions(),
         )
@@ -712,6 +793,7 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
         TransferEvent::handler(
             |results, context| async move {
                 ...
+                return Ok(());
             },
             no_extensions(),
         )
@@ -758,7 +840,7 @@ async fn main() {
     let mut enable_graphql = false;
     let mut enable_indexer = false;
 
-    let mut port: Option<usize> = None;
+    let mut port: Option<u16> = None;
 
     for arg in args.iter() {
         match arg.as_str() {
@@ -766,7 +848,7 @@ async fn main() {
             "--indexer" => enable_indexer = true,
             _ if arg.starts_with("--port=") || arg.starts_with("--p") => {
                 if let Some(value) = arg.split('=').nth(1) {
-                    let overridden_port = value.parse::<usize>();
+                    let overridden_port = value.parse::<u16>();
                     match overridden_port {
                         Ok(overridden_port) => port = Some(overridden_port),
                         Err(_) => {
@@ -776,32 +858,26 @@ async fn main() {
                     }
                 }
             }
-            _ => {
-                // default run both
-                enable_graphql = true;
-                enable_indexer = true;
-            }
+            _ => {}
         }
     }
 
     let path = env::current_dir();
     match path {
         Ok(path) => {
+            let manifest_path = path.join("rindexer.yaml");
             let result = start_rindexer(StartDetails {
-                manifest_path: path.join("rindexer.yaml"),
+                manifest_path: manifest_path.clone(),
                 indexing_details: if enable_indexer {
                     Some(IndexingDetails {
-                        registry: register_all_handlers().await,
+                        registry: register_all_handlers(manifest_path).await,
                     })
                 } else {
                     None
                 },
-                graphql_server: if enable_graphql {
-                    Some(GraphQLServerDetails {
-                        settings: port.map_or_else(Default::default, GraphQLServerSettings::port),
-                    })
-                } else {
-                    None
+                graphql_details: GraphqlOverrideSettings {
+                    enabled: enable_graphql,
+                    override_port: port,
                 },
             })
             .await;
@@ -854,6 +930,6 @@ cargo run -- --graphql
 
 ## Managing changes when generating typings
 
-When you start changing your YAML configuration file and regen your typings the indexer functions may break or need editing
+When you start changing your YAML configuration file and regenerating your typings the indexer functions may break or need editing
 to match the new typings. You can regenerate the indexers folder but this will overwrite any changes you did.
 Luckily the rust compiler is very good at telling you what you need to change.
