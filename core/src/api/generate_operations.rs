@@ -98,17 +98,12 @@ pub fn generate_operations(
     let queries_path = generate_path.join("queries");
     fs::create_dir_all(&queries_path)?;
 
-    // we do not have mutations atm
-    // let mutations_path = generate_path.join("mutations");
-    // fs::create_dir_all(&mutations_path)?;
-
     let types = schema["types"].as_array().ok_or_else(|| {
         GenerateOperationsError::SchemaGeneration("Invalid schema format".to_string())
     })?;
 
     for type_obj in types {
         if let Some(type_name) = type_obj["name"].as_str() {
-            // || type_name == "Mutation"
             if type_name == "Query" {
                 let fields = type_obj["fields"].as_array().ok_or_else(|| {
                     GenerateOperationsError::SchemaGeneration("Invalid fields format".to_string())
@@ -130,7 +125,6 @@ pub fn generate_operations(
                         let query = generate_query(field_name, &node_fields);
 
                         let file_path = queries_path.join(format!("{}.graphql", field_name));
-                        //  else { mutations_path.join(format!("{}.graphql", field_name)) }
 
                         let mut file = File::create(file_path)?;
                         file.write_all(query.as_bytes())?;
