@@ -190,7 +190,7 @@ pub fn generate_rindexer_typings(
     let project_path = manifest_location.parent();
     match project_path {
         Some(project_path) => {
-            let output = project_path.join("./src/rindexer/typings");
+            let output = project_path.join("./src/rindexer_lib/typings");
 
             write_networks(&output, &manifest.networks)
                 .map_err(GenerateRindexerTypingsError::WriteNetworksError)?;
@@ -260,12 +260,12 @@ pub fn generate_rindexer_handlers(
     match output_parent {
         None => Err(GenerateRindexerHandlersError::ManifestLocationDoesNotHaveAParent),
         Some(output_parent) => {
-            let output = output_parent.join("./src/rindexer");
+            let output = output_parent.join("./src/rindexer_lib");
 
             let mut handlers = String::new();
             handlers.push_str(
                 r#"
-        use rindexer_core::generator::event_callback_registry::EventCallbackRegistry;
+        use rindexer::generator::event_callback_registry::EventCallbackRegistry;
         
         pub async fn register_all_handlers() -> EventCallbackRegistry {
              let mut registry = EventCallbackRegistry::new();
@@ -415,12 +415,12 @@ serde = {{ version = "1.0.194", features = ["derive"] }}
     let main_code = r#"
             use std::env;
 
-            use self::rindexer::indexers::all_handlers::register_all_handlers;
-            use rindexer_core::{
+            use self::rindexer_lib::indexers::all_handlers::register_all_handlers;
+            use rindexer::{
                 start_rindexer, GraphqlOverrideSettings, IndexingDetails, StartDetails,
             };
 
-            mod rindexer;
+            mod rindexer_lib;
 
             #[tokio::main]
             async fn main() {

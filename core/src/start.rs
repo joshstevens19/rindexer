@@ -356,7 +356,9 @@ fn has_cross_contract_dependency(relationships: &[Relationship]) -> bool {
     false
 }
 
-fn generate_relationships_map(relationships: &[Relationship]) -> HashMap<ContractEventMapping, Vec<ContractEventMapping>> {
+fn generate_relationships_map(
+    relationships: &[Relationship],
+) -> HashMap<ContractEventMapping, Vec<ContractEventMapping>> {
     let mut relationships_map = HashMap::new();
 
     for relationship in relationships {
@@ -370,7 +372,10 @@ fn generate_relationships_map(relationships: &[Relationship]) -> HashMap<Contrac
             event_name: relationship.linked_to.event.clone(),
         };
 
-        relationships_map.entry(linked_event).or_insert_with(Vec::new).push(event);
+        relationships_map
+            .entry(linked_event)
+            .or_insert_with(Vec::new)
+            .push(event);
     }
 
     relationships_map
@@ -422,10 +427,24 @@ fn merge_trees(tree1: &EventsDependencyTree, tree2: &EventsDependencyTree) -> Ev
             Box::new(None)
         } else {
             Box::new(Some(Arc::new(merge_trees(
-                tree1.then.as_ref().as_ref().unwrap_or(&Arc::new(EventsDependencyTree { contract_events: vec![], then: Box::new(None) })),
-                tree2.then.as_ref().as_ref().unwrap_or(&Arc::new(EventsDependencyTree { contract_events: vec![], then: Box::new(None) })),
+                tree1
+                    .then
+                    .as_ref()
+                    .as_ref()
+                    .unwrap_or(&Arc::new(EventsDependencyTree {
+                        contract_events: vec![],
+                        then: Box::new(None),
+                    })),
+                tree2
+                    .then
+                    .as_ref()
+                    .as_ref()
+                    .unwrap_or(&Arc::new(EventsDependencyTree {
+                        contract_events: vec![],
+                        then: Box::new(None),
+                    })),
             ))))
-        }
+        },
     }
 }
 
@@ -438,7 +457,8 @@ fn map_all_dependencies(relationships: &[Relationship]) -> Vec<ContractEventDepe
         let tree = build_dependency_tree(event, &relationships_map, &mut visited);
         let dependency_events = collect_dependency_events(&tree);
 
-        result_map.entry(event.contract_name.clone())
+        result_map
+            .entry(event.contract_name.clone())
             .and_modify(|e: &mut EventDependencies| {
                 e.tree = Arc::new(merge_trees(&e.tree, &tree));
                 e.dependency_events.extend(dependency_events.clone());
@@ -449,10 +469,15 @@ fn map_all_dependencies(relationships: &[Relationship]) -> Vec<ContractEventDepe
             });
     }
 
-    result_map.into_iter().map(|(contract_name, event_dependencies)| ContractEventDependencies {
-        contract_name,
-        event_dependencies,
-    }).collect()
+    result_map
+        .into_iter()
+        .map(
+            |(contract_name, event_dependencies)| ContractEventDependencies {
+                contract_name,
+                event_dependencies,
+            },
+        )
+        .collect()
 }
 
 fn collect_dependency_events(tree: &EventsDependencyTree) -> Vec<ContractEventMapping> {

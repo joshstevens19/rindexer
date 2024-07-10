@@ -6,7 +6,7 @@ resolver = "2"
 
 [dependencies]
 # internal dependencies
-rindexer_core = { path = "../core" }
+rindexer = { path = "../core" }
 
 # external dependencies
 tokio = { version = "1", features = ["full"] }

@@ -1,9 +1,7 @@
 use super::super::super::typings::lens_registry_example::events::erc20_filter::{
     no_extensions, ERC20FilterEventType, TransferEvent,
 };
-use rindexer_core::{
-    generator::event_callback_registry::EventCallbackRegistry, EthereumSqlTypeWrapper,
-};
+use rindexer::{generator::event_callback_registry::EventCallbackRegistry, EthereumSqlTypeWrapper};
 use std::sync::Arc;
 
 async fn transfer_handler(registry: &mut EventCallbackRegistry) {

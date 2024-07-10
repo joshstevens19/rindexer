@@ -2,11 +2,11 @@ use std::env;
 // use std::path::PathBuf;
 // use std::str::FromStr;
 
-use self::rindexer::indexers::all_handlers::register_all_handlers;
-// use rindexer_core::manifest::yaml::read_manifest;
-use rindexer_core::{start_rindexer, GraphqlOverrideSettings, IndexingDetails, StartDetails};
+use self::rindexer_lib::indexers::all_handlers::register_all_handlers;
+// use rindexer::manifest::yaml::read_manifest;
+use rindexer::{start_rindexer, GraphqlOverrideSettings, IndexingDetails, StartDetails};
 
-mod rindexer;
+mod rindexer_lib;
 
 #[tokio::main]
 async fn main() {
@@ -73,7 +73,7 @@ async fn main() {
 //     let path =
 //         PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap();
 //     let manifest = read_manifest(&path).unwrap();
-//     rindexer_core::generator::build::generate_rindexer_typings(manifest, &path).unwrap();
+//     rindexer::generator::build::generate_rindexer_typings(manifest, &path).unwrap();
 // }
 //
 // fn generate_code_test() {
@@ -81,13 +81,13 @@ async fn main() {
 //         PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap();
 //     let manifest = read_manifest(&path).unwrap();
 //
-//     rindexer_core::generator::build::generate_rindexer_handlers(manifest, &path).unwrap();
+//     rindexer::generator::build::generate_rindexer_handlers(manifest, &path).unwrap();
 // }
 //
 // fn generate_all() {
 //     let path =
 //         PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap();
-//     rindexer_core::generator::build::generate_rindexer_typings_and_handlers(&path).unwrap();
+//     rindexer::generator::build::generate_rindexer_typings_and_handlers(&path).unwrap();
 // }
 
 // #[cfg(test)]

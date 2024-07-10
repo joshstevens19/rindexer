@@ -2036,7 +2036,7 @@ pub async fn prepare_indexes(
             .collect::<Vec<&str>>(),
     )
     .map_err(PrepareIndexesError::CouldNotParseIndexToJson)?;
-    
+
     client
         .execute(
             &format!(r#"

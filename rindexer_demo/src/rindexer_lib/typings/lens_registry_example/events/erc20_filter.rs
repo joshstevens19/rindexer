@@ -8,8 +8,8 @@ use ethers::{
     providers::{Http, Provider, RetryClient},
     types::{Bytes, H256},
 };
-use rindexer_core::manifest::yaml::FilterDetailsYaml;
-use rindexer_core::{
+use rindexer::manifest::yaml::FilterDetailsYaml;
+use rindexer::{
     async_trait, generate_random_id,
     generator::event_callback_registry::{
         ContractInformation, EventCallbackRegistry, EventInformation, EventResult, FactoryDetails,

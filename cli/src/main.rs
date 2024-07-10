@@ -11,16 +11,16 @@ use dotenv::{dotenv, from_path};
 use ethers::types::{Address, Chain, ValueOrArray, U64};
 use ethers_etherscan::Client;
 use regex::Regex;
-use rindexer_core::generator::build::{
-    generate_rindexer_handlers, generate_rindexer_typings, generate_rust_project,
-};
-use rindexer_core::generator::generate_docker_file;
-use rindexer_core::manifest::yaml::{
-    read_manifest, write_manifest, Contract, ContractDetails, CsvDetails, Manifest, Network,
-    PostgresDetails, ProjectType, Storage, YAML_CONFIG_NAME,
-};
-use rindexer_core::{
+use rindexer::{
     drop_tables_for_indexer_sql, format_all_files_for_project, generate_graphql_queries,
+    generator::{
+        build::{generate_rindexer_handlers, generate_rindexer_typings, generate_rust_project},
+        generate_docker_file,
+    },
+    manifest::yaml::{
+        read_manifest, write_manifest, Contract, ContractDetails, CsvDetails, Manifest, Network,
+        PostgresDetails, ProjectType, Storage, YAML_CONFIG_NAME,
+    },
     rindexer_info, setup_info_logger, start_rindexer_no_code, write_file, GraphqlOverrideSettings,
     IndexerNoCodeDetails, PostgresClient, StartNoCodeDetails, WriteFileError,
 };
@@ -791,10 +791,7 @@ async fn start(
                     indexing_details: IndexerNoCodeDetails { enabled: false },
                     graphql_details: GraphqlOverrideSettings {
                         enabled: true,
-                        override_port: match port {
-                            Some(port) => Some(port.parse().unwrap()),
-                            None => None,
-                        },
+                        override_port: port.as_ref().map(|port| port.parse().unwrap()),
                     },
                 };
 
@@ -809,10 +806,7 @@ async fn start(
                     indexing_details: IndexerNoCodeDetails { enabled: true },
                     graphql_details: GraphqlOverrideSettings {
                         enabled: true,
-                        override_port: match port {
-                            Some(port) => Some(port.parse().unwrap()),
-                            None => None,
-                        },
+                        override_port: port.as_ref().map(|port| port.parse().unwrap()),
                     },
                 };
 
