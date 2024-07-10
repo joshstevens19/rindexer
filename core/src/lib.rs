@@ -24,6 +24,7 @@ pub use logger::setup_info_logger;
 pub mod provider;
 mod start;
 mod types;
+mod abi;
 
 pub use start::{
     start_rindexer, start_rindexer_no_code, IndexerNoCodeDetails, IndexingDetails, StartDetails,

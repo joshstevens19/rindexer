@@ -1,11 +1,11 @@
 use crate::database::postgres::{
     event_table_full_name, generate_column_names_only_with_base_properties,
     solidity_type_to_db_type, solidity_type_to_ethereum_sql_type_wrapper,
+    EthereumSqlTypeWrapper
 };
 use crate::generator::build::is_filter;
-use crate::generator::event_callback_registry::{AddressDetails, IndexingContractSetup};
-use crate::EthereumSqlTypeWrapper;
-use ethers::types::{Address, ValueOrArray};
+use crate::generator::event_callback_registry::IndexingContractSetup;
+use ethers::types::ValueOrArray;
 use ethers::utils::keccak256;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -17,6 +17,7 @@ use crate::helpers::{camel_to_snake, get_full_path};
 use crate::manifest::yaml::{Contract, ContractDetails, CsvDetails, Storage};
 use crate::types::code::Code;
 
+// TODO - think about moving
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ABIItem {
     #[serde(default)]
@@ -27,6 +28,7 @@ pub struct ABIItem {
     pub type_: String,
 }
 
+// TODO - think about moving
 #[derive(thiserror::Error, Debug)]
 pub enum ReadAbiError {
     #[error("Could not read ABI string: {0}")]
@@ -36,6 +38,7 @@ pub enum ReadAbiError {
     CouldNotReadAbiJson(serde_json::Error),
 }
 
+// TODO - think about moving
 pub fn read_abi_items(
     project_path: &Path,
     contract: &Contract,
@@ -59,6 +62,7 @@ pub fn read_abi_items(
     Ok(filtered_abi_items)
 }
 
+// TODO - think about moving
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ABIInput {
     pub indexed: Option<bool>,
@@ -68,6 +72,7 @@ pub struct ABIInput {
     pub components: Option<Vec<ABIInput>>,
 }
 
+// TODO - think about moving
 #[derive(Debug, Clone)]
 pub struct EventInfo {
     pub name: String,
@@ -77,6 +82,7 @@ pub struct EventInfo {
     struct_data: String,
 }
 
+// TODO - think about moving
 impl EventInfo {
     pub fn new(item: &ABIItem, signature: String) -> Self {
         EventInfo {
@@ -118,6 +124,7 @@ fn format_param_type(input: &ABIInput) -> Result<String, ParamTypeError> {
     }
 }
 
+// TODO - think about moving
 fn compute_topic_id(event_signature: &str) -> String {
     Map::collect(
         keccak256(event_signature)
@@ -126,6 +133,7 @@ fn compute_topic_id(event_signature: &str) -> String {
     )
 }
 
+// TODO - think about moving
 fn format_event_signature(item: &ABIItem) -> Result<String, ParamTypeError> {
     let formatted_inputs = item
         .inputs
@@ -147,6 +155,7 @@ pub fn abigen_contract_file_name(contract: &Contract) -> String {
     format!("{}_abi_gen", camel_to_snake(&contract.name))
 }
 
+// TODO - think about moving
 pub fn extract_event_names_and_signatures_from_abi(
     abi_json: &[ABIItem],
 ) -> Result<Vec<EventInfo>, ParamTypeError> {
@@ -314,6 +323,7 @@ pub enum CreateCsvFileForEvent {
     CreateDirFailed(std::io::Error),
 }
 
+// TODO - think about moving
 pub fn create_csv_file_for_event(
     project_path: &Path,
     contract: &Contract,
@@ -928,6 +938,7 @@ pub fn generate_abi_name_properties(
         .collect()
 }
 
+// TODO - think about moving
 pub fn get_abi_items(
     project_path: &Path,
     contract: &Contract,

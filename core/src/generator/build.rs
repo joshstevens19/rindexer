@@ -61,7 +61,6 @@ fn write_global(
     Ok(())
 }
 
-/// Identifies if the contract uses a filter
 pub fn is_filter(contract: &Contract) -> bool {
     let filter_count = contract
         .details
@@ -81,7 +80,6 @@ pub fn contract_name_to_filter_name(contract_name: &str) -> String {
     format!("{}Filter", contract_name)
 }
 
-/// Identifies if the contract uses a filter and updates its name if necessary.
 pub fn identify_and_modify_filter(contract: &mut Contract) -> bool {
     if is_filter(contract) {
         contract.override_name(contract_name_to_filter_name(&contract.name));
