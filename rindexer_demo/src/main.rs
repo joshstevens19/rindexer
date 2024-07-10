@@ -1,9 +1,9 @@
 use std::env;
-// use std::path::PathBuf;
-// use std::str::FromStr;
+use std::path::PathBuf;
+use std::str::FromStr;
 
 use self::rindexer_lib::indexers::all_handlers::register_all_handlers;
-// use rindexer::manifest::yaml::read_manifest;
+use rindexer::manifest::yaml::read_manifest;
 use rindexer::{start_rindexer, GraphqlOverrideSettings, IndexingDetails, StartDetails};
 
 mod rindexer_lib;
@@ -40,11 +40,12 @@ async fn main() {
     let path = env::current_dir();
     match path {
         Ok(path) => {
+            let manifest_path = path.join("rindexer.yaml");
             let result = start_rindexer(StartDetails {
-                manifest_path: path.join("rindexer.yaml"),
+                manifest_path: manifest_path.clone(),
                 indexing_details: if enable_indexer {
                     Some(IndexingDetails {
-                        registry: register_all_handlers().await,
+                        registry: register_all_handlers(manifest_path).await,
                     })
                 } else {
                     None
@@ -69,43 +70,43 @@ async fn main() {
     }
 }
 
-// fn generate() {
-//     let path =
-//         PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap();
-//     let manifest = read_manifest(&path).unwrap();
-//     rindexer::generator::build::generate_rindexer_typings(manifest, &path).unwrap();
-// }
-//
-// fn generate_code_test() {
-//     let path =
-//         PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap();
-//     let manifest = read_manifest(&path).unwrap();
-//
-//     rindexer::generator::build::generate_rindexer_handlers(manifest, &path).unwrap();
-// }
-//
-// fn generate_all() {
-//     let path =
-//         PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap();
-//     rindexer::generator::build::generate_rindexer_typings_and_handlers(&path).unwrap();
-// }
+fn generate() {
+    let path =
+        PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap();
+    let manifest = read_manifest(&path).unwrap();
+    rindexer::generator::build::generate_rindexer_typings(manifest, &path).unwrap();
+}
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//
-//     #[test]
-//     fn test_generate() {
-//         generate();
-//     }
+fn generate_code_test() {
+    let path =
+        PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap();
+    let manifest = read_manifest(&path).unwrap();
 
-// #[test]
-// fn test_code_generate() {
-//     generate_code_test();
-// }
-//
-// #[test]
-// fn test_generate_all() {
-//     generate_all();
-// }
-// }
+    rindexer::generator::build::generate_rindexer_handlers(manifest, &path).unwrap();
+}
+
+fn generate_all() {
+    let path =
+        PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap();
+    rindexer::generator::build::generate_rindexer_typings_and_handlers(&path).unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_generate() {
+        generate();
+    }
+
+    #[test]
+    fn test_code_generate() {
+        generate_code_test();
+    }
+
+    #[test]
+    fn test_generate_all() {
+        generate_all();
+    }
+}

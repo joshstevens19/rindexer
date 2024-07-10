@@ -1,3 +1,4 @@
+
 use super::super::super::super::typings::networks::get_provider_cache_for_network;
 /// THIS IS A GENERATED FILE. DO NOT MODIFY MANUALLY.
 ///
@@ -9,19 +10,18 @@ use ethers::{
     providers::{Http, Provider, RetryClient},
     types::{Bytes, H256},
 };
-use rindexer::manifest::yaml::FilterDetailsYaml;
 use rindexer::{
     async_trait, generate_random_id,
     generator::event_callback_registry::{
         ContractInformation, EventCallbackRegistry, EventInformation, EventResult, FactoryDetails,
         FilterDetails, NetworkContract, TxInformation,
     },
-    manifest::yaml::{Contract, ContractDetails},
+    manifest::yaml::{read_manifest, Contract, ContractDetails},
     provider::JsonRpcCachedProvider,
     AsyncCsvAppender, FutureExt, PostgresClient,
 };
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::{any::Any, sync::Arc};
 
@@ -119,7 +119,7 @@ where
     {
         let csv = AsyncCsvAppender::new("/Users/joshstevens/code/rindexer/rindexer_demo/./generated_csv/ERC20Filter/erc20filter-transfer.csv".to_string());
         if !Path::new("/Users/joshstevens/code/rindexer/rindexer_demo/./generated_csv/ERC20Filter/erc20filter-transfer.csv").exists() {
-            csv.append_header(vec!["contract_address".into(), "from".into(), "to".into(), "value".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into()])
+            csv.append_header(vec!["contract_address".into(), "from".into(), "to".into(), "value".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()])
                 .await
                 .unwrap();
         }
@@ -174,9 +174,7 @@ pub fn erc20_filter_contract(
     network: &str,
 ) -> RindexerERC20FilterGen<Arc<Provider<RetryClient<Http>>>> {
     if network == "polygon" {
-        let address: Address = "0x0000000000000000000000000000000000000000"
-            .parse()
-            .unwrap();
+        let address: Address = "0x0000…0000".parse().unwrap();
         RindexerERC20FilterGen::new(
             address,
             Arc::new(get_provider_cache_for_network(network).get_inner_provider()),
@@ -204,31 +202,8 @@ where
         }
     }
 
-    pub fn index_event_in_order(&self) -> bool {
-        match self {
-            ERC20FilterEventType::Transfer(_) => false,
-        }
-    }
-
-    pub fn contract_information(&self) -> Contract {
-        Contract {
-            name: "ERC20Filter".to_string(),
-            details: vec![ContractDetails::new_with_filter(
-                "polygon".to_string(),
-                FilterDetailsYaml {
-                    event_name: "Transfer".to_string(),
-                },
-                None,
-                Some(56399431.into()),
-                None,
-            )],
-            abi: "/Users/joshstevens/code/rindexer/rindexer_demo/abis/erc20-abi.json".to_string(),
-            include_events: None,
-            index_event_in_order: None,
-            dependency_events: None,
-            reorg_safe_distance: Some(false),
-            generate_csv: Some(true),
-        }
+    pub fn contract_name(&self) -> String {
+        "ERC20Filter".to_string()
     }
 
     fn get_provider(&self, network: &str) -> Arc<JsonRpcCachedProvider> {
@@ -258,14 +233,32 @@ where
         }
     }
 
-    pub fn register(self, registry: &mut EventCallbackRegistry) {
+    pub fn register(self, manifest_path: &PathBuf, registry: &mut EventCallbackRegistry) {
+        let rindexer_yaml = read_manifest(manifest_path).expect("Failed to read rindexer.yaml");
         let topic_id = self.topic_id();
+        let contract_name = self.contract_name();
         let event_name = self.event_name();
-        let index_event_in_order = self.index_event_in_order();
-        let contract_information = self.contract_information();
+
+        let contract_details = rindexer_yaml
+            .contracts
+            .iter()
+            .find(|c| c.name == contract_name)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Contract {} not found please make sure its defined in the rindexer.yaml",
+                    contract_name
+                )
+            })
+            .clone();
+
+        let index_event_in_order = contract_details
+            .index_event_in_order
+            .as_ref()
+            .map_or(false, |vec| vec.contains(&event_name.to_string()));
+
         let contract = ContractInformation {
-            name: contract_information.name,
-            details: contract_information
+            name: contract_details.name,
+            details: contract_details
                 .details
                 .iter()
                 .map(|c| NetworkContract {
@@ -278,8 +271,8 @@ where
                     end_block: c.end_block,
                 })
                 .collect(),
-            abi: contract_information.abi,
-            reorg_safe_distance: contract_information.reorg_safe_distance.unwrap_or_default(),
+            abi: contract_details.abi,
+            reorg_safe_distance: contract_details.reorg_safe_distance.unwrap_or_default(),
         };
 
         let callback: Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, ()> + Send + Sync> =

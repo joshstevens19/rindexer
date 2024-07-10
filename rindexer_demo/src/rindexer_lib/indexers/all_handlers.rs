@@ -1,8 +1,9 @@
 use super::blah_baby::erc20_filter::erc20_filter_handlers;
 use rindexer::generator::event_callback_registry::EventCallbackRegistry;
+use std::path::PathBuf;
 
-pub async fn register_all_handlers() -> EventCallbackRegistry {
+pub async fn register_all_handlers(manifest_path: PathBuf) -> EventCallbackRegistry {
     let mut registry = EventCallbackRegistry::new();
-    erc20_filter_handlers(&mut registry).await;
+    erc20_filter_handlers(&manifest_path, &mut registry).await;
     registry
 }
