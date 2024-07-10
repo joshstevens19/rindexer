@@ -7,6 +7,7 @@ use ethers::abi::{Abi, Contract as EthersContract, Event};
 use tokio_postgres::types::Type as PgType;
 use tracing::{debug, error, info};
 
+use crate::abi::{ABIItem, CreateCsvFileForEvent, EventInfo, ParamTypeError, ReadAbiError};
 use crate::database::postgres::{
     event_table_full_name, generate_column_names_only_with_base_properties,
     map_log_params_to_ethereum_wrapper, SetupPostgresError,
@@ -15,10 +16,6 @@ use crate::generator::build::identify_and_modify_filter;
 use crate::generator::event_callback_registry::{
     noop_decoder, ContractInformation, Decoder, EventCallbackRegistry, EventCallbackType,
     EventInformation, NetworkContract,
-};
-use crate::generator::{
-    create_csv_file_for_event, csv_headers_for_event, extract_event_names_and_signatures_from_abi,
-    get_abi_items, CreateCsvFileForEvent, EventInfo, ParamTypeError, ReadAbiError,
 };
 use crate::helpers::get_full_path;
 use crate::indexer::log_helpers::{map_log_params_to_raw_values, parse_log};
@@ -383,9 +380,9 @@ pub async fn process_events(
         let abi_gen = EthersContract::from(abi);
 
         let is_filter = identify_and_modify_filter(contract);
-        let abi_items = get_abi_items(project_path, contract, is_filter)
+        let abi_items = ABIItem::get_abi_items(project_path, contract, is_filter)
             .map_err(ProcessIndexersError::CouldNotReadAbiItems)?;
-        let event_names = extract_event_names_and_signatures_from_abi(&abi_items)
+        let event_names = ABIItem::extract_event_names_and_signatures_from_abi(&abi_items)
             .map_err(ProcessIndexersError::ParamTypeError)?;
 
         for event_info in event_names {
@@ -421,11 +418,11 @@ pub async fn process_events(
                     .csv
                     .as_ref()
                     .map_or("./generated_csv", |c| &c.path);
-                let headers: Vec<String> = csv_headers_for_event(&event_info);
+                let headers: Vec<String> = event_info.csv_headers_for_event();
 
-                let csv_path =
-                    create_csv_file_for_event(project_path, contract, &event_info, csv_path)
-                        .map_err(ProcessIndexersError::CreateCsvFileForEventError)?;
+                let csv_path = event_info
+                    .create_csv_file_for_event(project_path, contract, csv_path)
+                    .map_err(ProcessIndexersError::CreateCsvFileForEventError)?;
                 let csv_appender = AsyncCsvAppender::new(csv_path.clone());
                 if !Path::new(&csv_path).exists() {
                     csv_appender

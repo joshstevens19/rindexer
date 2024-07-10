@@ -1,147 +1,19 @@
+use crate::abi::{
+    ABIInput, ABIItem, CreateCsvFileForEvent, EventInfo, GenerateAbiPropertiesType, ParamTypeError,
+    ReadAbiError,
+};
 use crate::database::postgres::{
     event_table_full_name, generate_column_names_only_with_base_properties,
-    solidity_type_to_db_type, solidity_type_to_ethereum_sql_type_wrapper,
-    EthereumSqlTypeWrapper
 };
 use crate::generator::build::is_filter;
-use crate::generator::event_callback_registry::IndexingContractSetup;
 use ethers::types::ValueOrArray;
-use ethers::utils::keccak256;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
-use std::iter::Map;
 use std::path::Path;
 
 use crate::helpers::{camel_to_snake, get_full_path};
 use crate::manifest::yaml::{Contract, ContractDetails, CsvDetails, Storage};
 use crate::types::code::Code;
-
-// TODO - think about moving
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ABIItem {
-    #[serde(default)]
-    pub inputs: Vec<ABIInput>,
-    #[serde(default)]
-    pub name: String,
-    #[serde(rename = "type", default)]
-    pub type_: String,
-}
-
-// TODO - think about moving
-#[derive(thiserror::Error, Debug)]
-pub enum ReadAbiError {
-    #[error("Could not read ABI string: {0}")]
-    CouldNotReadAbiString(std::io::Error),
-
-    #[error("Could not read ABI JSON: {0}")]
-    CouldNotReadAbiJson(serde_json::Error),
-}
-
-// TODO - think about moving
-pub fn read_abi_items(
-    project_path: &Path,
-    contract: &Contract,
-) -> Result<Vec<ABIItem>, ReadAbiError> {
-    let full_path = get_full_path(project_path, &contract.abi);
-    let abi_str = fs::read_to_string(full_path).map_err(ReadAbiError::CouldNotReadAbiString)?;
-    // Deserialize the JSON string to a vector of ABI items
-    let abi_items: Vec<ABIItem> =
-        serde_json::from_str(&abi_str).map_err(ReadAbiError::CouldNotReadAbiJson)?;
-
-    // Filter the ABI items
-    let filtered_abi_items = match &contract.include_events {
-        Some(events) => abi_items
-            .into_iter()
-            .filter(|item| item.type_ != "event" || events.contains(&item.name))
-            .collect(),
-        None => abi_items,
-    };
-
-    // Return the filtered ABI items
-    Ok(filtered_abi_items)
-}
-
-// TODO - think about moving
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ABIInput {
-    pub indexed: Option<bool>,
-    pub name: String,
-    #[serde(rename = "type")]
-    pub type_: String,
-    pub components: Option<Vec<ABIInput>>,
-}
-
-// TODO - think about moving
-#[derive(Debug, Clone)]
-pub struct EventInfo {
-    pub name: String,
-    pub inputs: Vec<ABIInput>,
-    signature: String,
-    struct_result: String,
-    struct_data: String,
-}
-
-// TODO - think about moving
-impl EventInfo {
-    pub fn new(item: &ABIItem, signature: String) -> Self {
-        EventInfo {
-            name: item.name.clone(),
-            inputs: item.inputs.clone(),
-            signature,
-            struct_result: format!("{}Result", item.name),
-            struct_data: format!("{}Data", item.name),
-        }
-    }
-
-    pub fn topic_id(&self) -> String {
-        let event_signature = format!("{}({})", self.name, self.signature);
-        compute_topic_id(&event_signature)
-    }
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum ParamTypeError {
-    #[error("tuple type specified but no components found")]
-    MissingComponents,
-}
-
-fn format_param_type(input: &ABIInput) -> Result<String, ParamTypeError> {
-    match input.type_.as_str() {
-        "tuple" => {
-            let components = input
-                .components
-                .as_ref()
-                .ok_or(ParamTypeError::MissingComponents)?;
-            let formatted_components = components
-                .iter()
-                .map(format_param_type)
-                .collect::<Result<Vec<_>, ParamTypeError>>()?
-                .join(",");
-            Ok(format!("({})", formatted_components))
-        }
-        _ => Ok(input.type_.to_string()),
-    }
-}
-
-// TODO - think about moving
-fn compute_topic_id(event_signature: &str) -> String {
-    Map::collect(
-        keccak256(event_signature)
-            .iter()
-            .map(|byte| format!("{:02x}", byte)),
-    )
-}
-
-// TODO - think about moving
-fn format_event_signature(item: &ABIItem) -> Result<String, ParamTypeError> {
-    let formatted_inputs = item
-        .inputs
-        .iter()
-        .map(format_param_type)
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(formatted_inputs.join(","))
-}
 
 pub fn abigen_contract_name(contract: &Contract) -> String {
     format!("Rindexer{}Gen", contract.name)
@@ -153,20 +25,6 @@ fn abigen_contract_mod_name(contract: &Contract) -> String {
 
 pub fn abigen_contract_file_name(contract: &Contract) -> String {
     format!("{}_abi_gen", camel_to_snake(&contract.name))
-}
-
-// TODO - think about moving
-pub fn extract_event_names_and_signatures_from_abi(
-    abi_json: &[ABIItem],
-) -> Result<Vec<EventInfo>, ParamTypeError> {
-    let mut events = Vec::new();
-    for item in abi_json.iter() {
-        if item.type_ == "event" {
-            let signature = format_event_signature(item)?;
-            events.push(EventInfo::new(item, signature));
-        }
-    }
-    Ok(events)
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -317,56 +175,6 @@ fn generate_decoder_match_arms_code(event_type_name: &str, event_info: &[EventIn
         .join("\n"))
 }
 
-#[derive(thiserror::Error, Debug)]
-pub enum CreateCsvFileForEvent {
-    #[error("Could not create the dir {0}")]
-    CreateDirFailed(std::io::Error),
-}
-
-// TODO - think about moving
-pub fn create_csv_file_for_event(
-    project_path: &Path,
-    contract: &Contract,
-    event_info: &EventInfo,
-    csv_path: &str,
-) -> Result<String, CreateCsvFileForEvent> {
-    let csv_file_name = format!("{}-{}.csv", contract.name, event_info.name).to_lowercase();
-    let csv_folder = project_path.join(format!("{}/{}", csv_path, contract.name));
-
-    // Create directory if it does not exist.
-    if let Err(e) = fs::create_dir_all(&csv_folder) {
-        return Err(CreateCsvFileForEvent::CreateDirFailed(e));
-    }
-
-    // Create last-synced-blocks if it does not exist.
-    if let Err(e) = fs::create_dir_all(csv_folder.join("last-synced-blocks")) {
-        return Err(CreateCsvFileForEvent::CreateDirFailed(e));
-    }
-
-    Ok(format!("{}/{}", csv_folder.display(), csv_file_name))
-}
-
-pub fn csv_headers_for_event(event_info: &EventInfo) -> Vec<String> {
-    let mut headers: Vec<String> = generate_abi_name_properties(
-        &event_info.inputs,
-        &GenerateAbiPropertiesType::CsvHeaderNames,
-        None,
-    )
-    .iter()
-    .map(|m| m.value.clone())
-    .collect();
-
-    headers.insert(0, r#"contract_address"#.to_string());
-    headers.push(r#"tx_hash"#.to_string());
-    headers.push(r#"block_number"#.to_string());
-    headers.push(r#"block_hash"#.to_string());
-    headers.push(r#"network"#.to_string());
-    headers.push(r#"tx_index"#.to_string());
-    headers.push(r#"log_index"#.to_string());
-
-    headers
-}
-
 fn generate_csv_instance(
     project_path: &Path,
     contract: &Contract,
@@ -382,8 +190,9 @@ fn generate_csv_instance(
         )));
     }
 
-    let csv_path = create_csv_file_for_event(project_path, contract, event_info, csv_path)?;
-    let headers: Vec<String> = csv_headers_for_event(event_info)
+    let csv_path = event_info.create_csv_file_for_event(project_path, contract, csv_path)?;
+    let headers: Vec<String> = event_info
+        .csv_headers_for_event()
         .iter()
         .map(|h| format!("\"{}\"", h))
         .collect();
@@ -508,8 +317,8 @@ fn generate_event_callback_structs_code(
             "#,
             name = info.name,
             lower_name = info.name.to_lowercase(),
-            struct_result = info.struct_result,
-            struct_data = info.struct_data,
+            struct_result = info.struct_result(),
+            struct_data = info.struct_data(),
             database = if databases_enabled {
                 "database: Arc::new(PostgresClient::new().await.unwrap()),"
             } else {
@@ -531,7 +340,7 @@ fn generate_event_callback_structs_code(
                     }}
                     "#,
                     name = info.name,
-                    struct_data = info.struct_data
+                    struct_data = info.struct_data()
                 )
             } else {
                 "(self.callback)(&result, self.context.clone()).await".to_string()
@@ -848,126 +657,6 @@ fn generate_event_bindings_code(
     Ok(code)
 }
 
-#[derive(PartialEq)]
-pub enum GenerateAbiPropertiesType {
-    PostgresWithDataTypes,
-    PostgresColumnsNamesOnly,
-    CsvHeaderNames,
-    Object,
-}
-
-#[derive(Debug)]
-pub struct GenerateAbiNamePropertiesResult {
-    pub value: String,
-    pub abi_type: String,
-    pub abi_name: String,
-    pub ethereum_sql_type_wrapper: Option<EthereumSqlTypeWrapper>,
-}
-
-impl GenerateAbiNamePropertiesResult {
-    pub fn new(value: String, name: &str, abi_type: &str) -> Self {
-        Self {
-            value,
-            ethereum_sql_type_wrapper: solidity_type_to_ethereum_sql_type_wrapper(abi_type),
-            abi_type: abi_type.to_string(),
-            abi_name: name.to_string(),
-        }
-    }
-}
-
-pub fn generate_abi_name_properties(
-    inputs: &[ABIInput],
-    properties_type: &GenerateAbiPropertiesType,
-    prefix: Option<&str>,
-) -> Vec<GenerateAbiNamePropertiesResult> {
-    inputs
-        .iter()
-        .flat_map(|input| {
-            if let Some(components) = &input.components {
-                generate_abi_name_properties(
-                    components,
-                    properties_type,
-                    Some(&camel_to_snake(&input.name)),
-                )
-            } else {
-                match properties_type {
-                    GenerateAbiPropertiesType::PostgresWithDataTypes => {
-                        let value = format!(
-                            "\"{}{}\" {}",
-                            prefix.map_or_else(|| "".to_string(), |p| format!("{}_", p)),
-                            camel_to_snake(&input.name),
-                            solidity_type_to_db_type(&input.type_)
-                        );
-
-                        vec![GenerateAbiNamePropertiesResult::new(
-                            value,
-                            &input.name,
-                            &input.type_,
-                        )]
-                    }
-                    GenerateAbiPropertiesType::PostgresColumnsNamesOnly
-                    | GenerateAbiPropertiesType::CsvHeaderNames => {
-                        let value = format!(
-                            "{}{}",
-                            prefix.map_or_else(|| "".to_string(), |p| format!("{}_", p)),
-                            camel_to_snake(&input.name),
-                        );
-
-                        vec![GenerateAbiNamePropertiesResult::new(
-                            value,
-                            &input.name,
-                            &input.type_,
-                        )]
-                    }
-                    GenerateAbiPropertiesType::Object => {
-                        let value = format!(
-                            "{}{}",
-                            prefix.map_or_else(|| "".to_string(), |p| format!("{}.", p)),
-                            camel_to_snake(&input.name),
-                        );
-
-                        vec![GenerateAbiNamePropertiesResult::new(
-                            value,
-                            &input.name,
-                            &input.type_,
-                        )]
-                    }
-                }
-            }
-        })
-        .collect()
-}
-
-// TODO - think about moving
-pub fn get_abi_items(
-    project_path: &Path,
-    contract: &Contract,
-    is_filter: bool,
-) -> Result<Vec<ABIItem>, ReadAbiError> {
-    let mut abi_items = read_abi_items(project_path, contract)?;
-    if is_filter {
-        let filter_event_names: Vec<String> = contract
-            .details
-            .iter()
-            .filter_map(|detail| {
-                if let IndexingContractSetup::Filter(filter) = &detail.indexing_contract_setup() {
-                    Some(filter.event_name.clone())
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        abi_items = abi_items
-            .iter()
-            .filter(|item| item.type_ == "event" && filter_event_names.contains(&item.name))
-            .cloned()
-            .collect();
-    }
-
-    Ok(abi_items)
-}
-
 #[derive(thiserror::Error, Debug)]
 pub enum GenerateEventBindingsError {
     #[error("{0}")]
@@ -987,9 +676,9 @@ pub fn generate_event_bindings(
     is_filter: bool,
     storage: &Storage,
 ) -> Result<Code, GenerateEventBindingsError> {
-    let abi_items = get_abi_items(project_path, contract, is_filter)
+    let abi_items = ABIItem::get_abi_items(project_path, contract, is_filter)
         .map_err(GenerateEventBindingsError::ReadAbi)?;
-    let event_names = extract_event_names_and_signatures_from_abi(&abi_items)
+    let event_names = ABIItem::extract_event_names_and_signatures_from_abi(&abi_items)
         .map_err(GenerateEventBindingsError::ParamType)?;
 
     generate_event_bindings_code(project_path, indexer_name, contract, storage, event_names)
@@ -1012,9 +701,9 @@ pub fn generate_event_handlers(
     contract: &Contract,
     storage: &Storage,
 ) -> Result<Code, GenerateEventHandlersError> {
-    let abi_items = get_abi_items(project_path, contract, is_filter)
+    let abi_items = ABIItem::get_abi_items(project_path, contract, is_filter)
         .map_err(GenerateEventHandlersError::ReadAbiError)?;
-    let event_names = extract_event_names_and_signatures_from_abi(&abi_items)
+    let event_names = ABIItem::extract_event_names_and_signatures_from_abi(&abi_items)
         .map_err(GenerateEventHandlersError::ParamTypeError)?;
 
     let mut imports = String::new();
@@ -1051,8 +740,11 @@ pub fn generate_event_handlers(
             handler_name = event.name,
         ));
 
-        let abi_name_properties =
-            generate_abi_name_properties(&event.inputs, &GenerateAbiPropertiesType::Object, None);
+        let abi_name_properties = ABIInput::generate_abi_name_properties(
+            &event.inputs,
+            &GenerateAbiPropertiesType::Object,
+            None,
+        );
 
         let mut csv_write = String::new();
         // this checks storage enabled as well

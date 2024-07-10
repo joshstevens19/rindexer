@@ -7,10 +7,10 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+use crate::abi::ABIItem;
 use crate::generator::event_callback_registry::{
     AddressDetails, FilterDetails, IndexingContractSetup,
 };
-use crate::generator::read_abi_items;
 use crate::helpers::replace_env_variable_to_raw_name;
 use crate::indexer::{parse_topic, ContractEventMapping, Indexer};
 use crate::GraphQLSettings;
@@ -50,7 +50,7 @@ where
 
 fn serialize_project_type<S>(value: &ProjectType, serializer: S) -> Result<S::Ok, S::Error>
 where
-    S: serde::Serializer,
+    S: Serializer,
 {
     let string_value = match value {
         ProjectType::Rust => "rust",
@@ -554,7 +554,7 @@ fn validate_manifest(
     manifest: &Manifest,
 ) -> Result<(), ValidateManifestError> {
     for contract in &manifest.contracts {
-        let events = read_abi_items(project_path, contract)
+        let events = ABIItem::read_abi_items(project_path, contract)
             .map_err(|e| ValidateManifestError::InvalidABI(contract.name.clone(), e.to_string()))?;
 
         for detail in &contract.details {

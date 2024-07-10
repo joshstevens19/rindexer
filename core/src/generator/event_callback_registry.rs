@@ -202,7 +202,7 @@ impl EventCallbackRegistry {
                             "{} Event processing failed - topic_id: {}. Retrying... (attempt {}). Error: {}",
                             event_information.info_log_name(), topic_id, attempts, e
                         );
-                        
+
                         sleep(delay).await;
                         delay = (delay * 2).min(Duration::from_secs(15)); // Max delay of 15 seconds
 

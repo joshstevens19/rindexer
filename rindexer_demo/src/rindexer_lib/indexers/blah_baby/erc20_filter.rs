@@ -1,3 +1,4 @@
+
 use super::super::super::typings::blah_baby::events::erc20_filter::{
     no_extensions, ERC20FilterEventType, TransferEvent,
 };
