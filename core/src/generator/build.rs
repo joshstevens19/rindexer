@@ -265,9 +265,10 @@ pub fn generate_rindexer_handlers(
             let mut handlers = String::new();
             handlers.push_str(
                 r#"
+        use std::path::PathBuf;
         use rindexer::generator::event_callback_registry::EventCallbackRegistry;
         
-        pub async fn register_all_handlers() -> EventCallbackRegistry {
+        pub async fn register_all_handlers(manifest_path: PathBuf) -> EventCallbackRegistry {
              let mut registry = EventCallbackRegistry::new();
         "#,
             );
@@ -284,7 +285,9 @@ pub fn generate_rindexer_handlers(
                     &format!(r#"use super::{indexer_name}::{contract_name}::{handler_fn_name};"#,),
                 );
 
-                handlers.push_str(&format!(r#"{handler_fn_name}(&mut registry).await;"#));
+                handlers.push_str(&format!(
+                    r#"{handler_fn_name}(&manifest_path, &mut registry).await;"#
+                ));
 
                 let handler_path = format!("indexers/{}/{}", indexer_name, contract_name);
 
@@ -458,11 +461,12 @@ serde = {{ version = "1.0.194", features = ["derive"] }}
                 let path = env::current_dir();
                 match path {
                     Ok(path) => {
+                        let manifest_path = path.join("rindexer.yaml");
                         let result = start_rindexer(StartDetails {
-                            manifest_path: path.join("rindexer.yaml"),
+                            manifest_path: manifest_path.clone(),
                             indexing_details: if enable_indexer {
                                 Some(IndexingDetails {
-                                    registry: register_all_handlers().await,
+                                    registry: register_all_handlers(manifest_path).await,
                                 })
                             } else {
                                 None

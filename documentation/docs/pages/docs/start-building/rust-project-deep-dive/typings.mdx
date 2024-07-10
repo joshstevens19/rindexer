@@ -7,9 +7,23 @@ This folder is not meant to be manually edited and should always be generated us
 You can regenerate the typings folder by running the following command:
 
 :::info
-note if you change anything in the YAML file you will need to regenerate the typings. Also if you do regenerate this
-most likely your indexer files will need to be updated to match the new typings, you can manually migrate them or
-generate them again using the below if you do not have any custom logic.
+rindexer tries to be as smart as possible when it comes to updating the typings based on the `rindexer.yaml`,
+it will resolves as much as it can without needing a regenerate but like any codegen tool if you
+change certain aspects it does need to be regenerated.
+
+if you change any of these properties in the `rindexer.yaml` file it will need to be regenerated:
+
+- [indexer name](/docs/start-building/yaml-config/top-level-fields#name)
+- anything in the [network](/docs/start-building/yaml-config/networks) section including adding and removing networks
+- enabling or disabling a new [storage provider](/docs/start-building/yaml-config/storage)
+- changing the [contract name](/docs/start-building/yaml-config/contracts#name)
+- changing from [address](/docs/start-building/yaml-config/contracts#address)
+contract indexing to [filter](/docs/start-building/yaml-config/contracts#filter) indexing or vice versa
+- changing the contract [ABI](/docs/start-building/yaml-config/contracts#abi)
+- anything in the [global](/docs/start-building/yaml-config/global) section
+
+Also if you do regenerate your indexer files may need to be updated to match the new typings, you can manually migrate them or
+generate them again using [indexer codegen command](/docs/start-building/codegen#indexers)
 :::
 
 ```bash

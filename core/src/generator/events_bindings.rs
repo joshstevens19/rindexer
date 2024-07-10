@@ -14,7 +14,7 @@ use std::iter::Map;
 use std::path::Path;
 
 use crate::helpers::{camel_to_snake, get_full_path};
-use crate::manifest::yaml::{Contract, ContractDetails, CsvDetails, DependencyEventTree, Storage};
+use crate::manifest::yaml::{Contract, ContractDetails, CsvDetails, Storage};
 use crate::types::code::Code;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -262,29 +262,6 @@ fn generate_event_names_match_arms_code(event_type_name: &str, event_info: &[Eve
     )
 }
 
-fn generate_index_event_in_order_arms_code(
-    event_type_name: &str,
-    event_info: &[EventInfo],
-    index_event_in_order: &Option<Vec<String>>,
-) -> Code {
-    Code::new(
-        event_info
-            .iter()
-            .map(|info| {
-                format!(
-                    "{}::{}(_) => {},",
-                    event_type_name,
-                    info.name,
-                    index_event_in_order
-                        .as_ref()
-                        .map_or(false, |vec| vec.contains(&info.name)),
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-    )
-}
-
 fn generate_register_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> Code {
     Code::new(
         event_info
@@ -329,210 +306,6 @@ fn generate_decoder_match_arms_code(event_type_name: &str, event_info: &[EventIn
         })
         .collect::<Vec<_>>()
         .join("\n"))
-}
-
-fn generate_indexed_vec_string(indexed: &Option<&Vec<String>>) -> Code {
-    match indexed {
-        Some(values) => Code::new(format!(
-            "Some(vec![{}])",
-            values
-                .iter()
-                .map(|s| format!("\"{}\".to_string()", s))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )),
-        None => Code::new("None".to_string()),
-    }
-}
-
-fn generate_contract_type_fn_code(contract: &Contract) -> Code {
-    let mut details = String::new();
-    details.push_str("vec![");
-
-    for detail in &contract.details {
-        let start_block = match detail.start_block {
-            Some(start_block) => format!("Some({}.into())", start_block.as_u64()),
-            None => "None".to_string(),
-        };
-        let end_block = match detail.end_block {
-            Some(end_block) => format!("Some({}.into())", end_block.as_u64()),
-            None => "None".to_string(),
-        };
-
-        let item = match detail.indexing_contract_setup() {
-            IndexingContractSetup::Address(address) => format!(
-                r#"
-                ContractDetails::new_with_address(
-                    "{network}".to_string(),
-                    "{address}".to_string(),
-                    {start_block},
-                    {end_block},
-                ),
-                "#,
-                network = detail.network,
-                // TODO - FIX THIS
-                //address = address,
-                address = Address::zero(),
-                start_block = start_block,
-                end_block = end_block,
-            ),
-            IndexingContractSetup::Filter(filter) => {
-                let indexed_1 = generate_indexed_vec_string(
-                    &filter
-                        .indexed_filters
-                        .as_ref()
-                        .map_or(None, |f| f.indexed_1.as_ref()),
-                );
-                let indexed_2 = generate_indexed_vec_string(
-                    &filter
-                        .indexed_filters
-                        .as_ref()
-                        .map_or(None, |f| f.indexed_2.as_ref()),
-                );
-                let indexed_3 = generate_indexed_vec_string(
-                    &filter
-                        .indexed_filters
-                        .as_ref()
-                        .map_or(None, |f| f.indexed_3.as_ref()),
-                );
-
-                format!(
-                    r#"
-                    ContractDetails::new_with_filter(
-                        "{network}".to_string(),
-                        FilterDetails {{
-                            event_name: "{event_name}".to_string(),
-                            indexed_1: {indexed_1},
-                            indexed_2: {indexed_2},
-                            indexed_3: {indexed_3},
-                        }},
-                        {start_block},
-                        {end_block},
-                    ),
-                    "#,
-                    network = detail.network,
-                    event_name = filter.event_name,
-                    indexed_1 = indexed_1,
-                    indexed_2 = indexed_2,
-                    indexed_3 = indexed_3,
-                    start_block = start_block,
-                    end_block = end_block,
-                )
-            }
-            IndexingContractSetup::Factory(factory) => format!(
-                r#"
-                ContractDetails::new_with_factory(
-                    "{network}".to_string(),
-                    FactoryDetails {{
-                        address: "{address}".to_string(),
-                        event_name: "{event_name}".to_string(),
-                        parameter_name: "{parameter_name}".to_string(),
-                        abi: "{abi}".to_string(),
-                    }},
-                    {start_block},
-                    {end_block},
-                ),
-                "#,
-                network = detail.network,
-                address = factory.address,
-                event_name = factory.event_name,
-                parameter_name = factory.parameter_name,
-                abi = factory.abi,
-                start_block = start_block,
-                end_block = end_block,
-            ),
-        };
-
-        details.push_str(&item);
-    }
-
-    details.push(']');
-
-    let include_events_code = if let Some(include_events) = &contract.include_events {
-        format!(
-            "Some(vec![{}])",
-            include_events
-                .iter()
-                .map(|s| format!("\"{}\".to_string()", s))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    } else {
-        "None".to_string()
-    };
-    let index_event_in_order = if let Some(include_events) = &contract.index_event_in_order {
-        format!(
-            "Some(vec![{}])",
-            include_events
-                .iter()
-                .map(|s| format!("\"{}\".to_string()", s))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    } else {
-        "None".to_string()
-    };
-
-    fn format_tree(tree: &DependencyEventTree) -> String {
-        let events_str = tree
-            .contract_events
-            .iter()
-            // TODO - this is not correct
-            .map(|s| format!("\"{}\".to_string()", s.event_name))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let then_str = match &tree.then {
-            Some(children) => format_tree(children),
-            None => String::new(),
-        };
-
-        if then_str.is_empty() {
-            format!(
-                "DependencyEventTree {{ events: vec![{}], then: None }}",
-                events_str
-            )
-        } else {
-            format!(
-                "DependencyEventTree {{ events: vec![{}], then: Some(vec![{}]) }}",
-                events_str, then_str
-            )
-        }
-    }
-
-    let dependency_events = if let Some(event_tree) = &contract.dependency_events {
-        format!(
-            "Some({})",
-            format_tree(&contract.convert_dependency_event_tree_yaml(event_tree.clone()))
-        )
-    } else {
-        "None".to_string()
-    };
-
-    Code::new(format!(
-        r#"
-        pub fn contract_information(&self) -> Contract {{
-            Contract {{
-                name: "{}".to_string(),
-                details: {},
-                abi: "{}".to_string(),
-                include_events: {},
-                index_event_in_order: {},
-                dependency_events: {},
-                reorg_safe_distance: Some({}),
-                generate_csv: Some({}),
-            }}
-        }}
-        "#,
-        contract.name,
-        details,
-        contract.abi,
-        include_events_code,
-        index_event_in_order,
-        dependency_events,
-        contract.reorg_safe_distance.unwrap_or_default(),
-        contract.generate_csv.unwrap_or(true)
-    ))
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -872,7 +645,7 @@ fn generate_event_bindings_code(
         use std::{{any::Any, sync::Arc}};
         use std::future::Future;
         use std::pin::Pin;
-        use std::path::Path;
+        use std::path::{{Path, PathBuf}};
         use ethers::{{providers::{{Http, Provider, RetryClient}}, abi::Address, types::{{Bytes, H256}}}};
         use rindexer::{{
             async_trait,
@@ -880,7 +653,7 @@ fn generate_event_bindings_code(
             generate_random_id,
             FutureExt,
             generator::event_callback_registry::{{EventCallbackRegistry, EventInformation, ContractInformation, NetworkContract, EventResult, TxInformation, FilterDetails, FactoryDetails}},
-            manifest::yaml::{{Contract, ContractDetails}},
+            manifest::yaml::{{Contract, ContractDetails, read_manifest}},
             {client_import}
             provider::JsonRpcCachedProvider
         }};
@@ -928,14 +701,10 @@ fn generate_event_bindings_code(
                     {event_names_match_arms}
                 }}
             }}
-
-            pub fn index_event_in_order(&self) -> bool {{
-                 match self {{
-                    {index_event_in_order_match_arms}
-                }}
+            
+            pub fn contract_name(&self) -> String {{
+                "{contract_name}".to_string()
             }}
-
-            {contract_type_fn}
 
             fn get_provider(&self, network: &str) -> Arc<JsonRpcCachedProvider> {{
                 get_provider_cache_for_network(network)
@@ -951,14 +720,28 @@ fn generate_event_bindings_code(
                 }}
             }}
 
-            pub fn register(self, registry: &mut EventCallbackRegistry) {{
+            pub fn register(self, manifest_path: &PathBuf, registry: &mut EventCallbackRegistry) {{
+                let rindexer_yaml = read_manifest(manifest_path).expect("Failed to read rindexer.yaml");
                 let topic_id = self.topic_id();
+                let contract_name = self.contract_name();
                 let event_name = self.event_name();
-                let index_event_in_order = self.index_event_in_order();
-                let contract_information = self.contract_information();
+                
+                let contract_details = rindexer_yaml
+                    .contracts
+                    .iter()
+                    .find(|c| c.name == contract_name)
+                    .unwrap_or_else(|| panic!("Contract {{}} not found please make sure its defined in the rindexer.yaml",
+                        contract_name))
+                    .clone();
+                
+                  let index_event_in_order = contract_details
+                    .index_event_in_order
+                    .as_ref()
+                    .map_or(false, |vec| vec.contains(&event_name.to_string()));
+            
                 let contract = ContractInformation {{
-                    name: contract_information.name,
-                    details: contract_information
+                    name: contract_details.name,
+                    details: contract_details
                         .details
                         .iter()
                         .map(|c| NetworkContract {{
@@ -971,8 +754,8 @@ fn generate_event_bindings_code(
                             end_block: c.end_block,
                         }})
                         .collect(),
-                    abi: contract_information.abi,
-                    reorg_safe_distance: contract_information.reorg_safe_distance.unwrap_or_default(),
+                    abi: contract_details.abi,
+                    reorg_safe_distance: contract_details.reorg_safe_distance.unwrap_or_default(),
                 }};
 
                 let callback: Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, ()> + Send + Sync> = match self {{
@@ -1013,12 +796,7 @@ fn generate_event_bindings_code(
         topic_ids_match_arms = generate_topic_ids_match_arms_code(&event_type_name, &event_info),
         event_names_match_arms =
             generate_event_names_match_arms_code(&event_type_name, &event_info),
-        index_event_in_order_match_arms = generate_index_event_in_order_arms_code(
-            &event_type_name,
-            &event_info,
-            &contract.index_event_in_order
-        ),
-        contract_type_fn = generate_contract_type_fn_code(contract),
+        contract_name = contract.name.clone(),
         build_pub_contract_fn = build_pub_contract_fn(
             &contract.name,
             contract.details.iter().collect(),
@@ -1212,7 +990,8 @@ pub fn generate_event_handlers(
     );
     imports.push_str("use std::sync::Arc;\n");
     imports.push_str(&format!(
-        r#"use super::super::super::typings::{indexer_name_formatted}::events::{handler_registry_name}::{{no_extensions, {event_type_name}"#,
+        r#"use std::path::PathBuf;
+        use super::super::super::typings::{indexer_name_formatted}::events::{handler_registry_name}::{{no_extensions, {event_type_name}"#,
         indexer_name_formatted = camel_to_snake(indexer_name),
         handler_registry_name = camel_to_snake(&contract.name),
         event_type_name = generate_event_type_name(&contract.name)
@@ -1222,7 +1001,7 @@ pub fn generate_event_handlers(
 
     let mut registry_fn = String::new();
     registry_fn.push_str(&format!(
-        r#"pub async fn {handler_registry_fn_name}_handlers(registry: &mut EventCallbackRegistry) {{"#,
+        r#"pub async fn {handler_registry_fn_name}_handlers(manifest_path: &PathBuf, registry: &mut EventCallbackRegistry) {{"#,
         handler_registry_fn_name = camel_to_snake(&contract.name),
     ));
 
@@ -1265,7 +1044,7 @@ pub fn generate_event_handlers(
             csv_data.push_str(r#"format!("{:?}", result.tx_information.transaction_hash),"#);
             csv_data.push_str(r#"result.tx_information.block_number.to_string(),"#);
             csv_data.push_str(r#"result.tx_information.block_hash.to_string(),"#);
-            csv_data.push_str(r#"result.tx_information.network.to_string()"#);
+            csv_data.push_str(r#"result.tx_information.network.to_string(),"#);
             csv_data.push_str(r#"result.tx_information.transaction_index.to_string(),"#);
             csv_data.push_str(r#"result.tx_information.log_index.to_string()"#);
 
@@ -1400,7 +1179,7 @@ pub fn generate_event_handlers(
 
         let handler = format!(
             r#"
-            async fn {handler_fn_name}_handler(registry: &mut EventCallbackRegistry) {{
+            async fn {handler_fn_name}_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegistry) {{
                 {event_type_name}::{handler_name}(
                     {handler_name}Event::handler(|results, context| async move {{
                             if results.is_empty() {{
@@ -1420,7 +1199,7 @@ pub fn generate_event_handlers(
                       )
                       .await,
                 )
-                .register(registry);
+                .register(manifest_path, registry);
             }}
         "#,
             handler_fn_name = camel_to_snake(&event.name),
@@ -1439,7 +1218,7 @@ pub fn generate_event_handlers(
 
         registry_fn.push_str(&format!(
             r#"
-                {handler_fn_name}_handler(registry).await;
+                {handler_fn_name}_handler(manifest_path, registry).await;
             "#,
             handler_fn_name = camel_to_snake(&event.name)
         ));
