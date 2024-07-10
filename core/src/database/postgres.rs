@@ -1737,7 +1737,7 @@ pub async fn create_relationships(
         .execute(
             &format!(r#"
                 INSERT INTO rindexer_internal.{manifest_name}_last_known_relationship_dropping_sql (key, value) VALUES (1, $1)
-                ON CONFLICT (key) DO NOTHING;
+                ON CONFLICT (key) DO UPDATE SET value = $1;
             "#,
                 manifest_name = camel_to_snake(manifest_name)
             ),
@@ -2041,7 +2041,7 @@ pub async fn prepare_indexes(
         .execute(
             &format!(r#"
                 INSERT INTO rindexer_internal.{manifest_name}_last_known_indexes_dropping_sql (key, value) VALUES (1, $1)
-                ON CONFLICT (key) DO NOTHING;
+                ON CONFLICT (key) DO UPDATE SET value = $1;
             "#,
                      manifest_name = camel_to_snake(manifest_name)
             ),
