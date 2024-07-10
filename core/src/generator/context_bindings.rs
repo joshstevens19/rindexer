@@ -4,7 +4,7 @@ use crate::{
     helpers::camel_to_snake,
     manifest::yaml::{Contract, Network},
 };
-use ethers::addressbook::Address;
+use ethers::prelude::ValueOrArray;
 
 use super::networks_bindings::network_provider_fn_name;
 
@@ -15,27 +15,46 @@ fn generate_contract_code(
     network: &Network,
 ) -> Code {
     if let Some(address) = contract_details.address() {
-        let code = format!(
-            r#"
-            abigen!({contract_name}, "{contract_path}");
-
-            pub fn {contract_fn_name}_contract() -> {contract_name}<Arc<Provider<RetryClient<Http>>>> {{
-                let address: Address = "{contract_address}"
-                .parse()
-                .unwrap();
-
-                {contract_name}::new(address, Arc::new({network_fn_name}().clone()))
-            }}
-        "#,
-            contract_name = contract_name,
-            contract_fn_name = camel_to_snake(contract_name),
-            // TODO - FIX THIS
-            //contract_address = address,
-            contract_address = Address::zero(),
-            network_fn_name = network_provider_fn_name(network),
-            contract_path = abi_location
-        );
-        Code::new(code)
+        match address {
+            ValueOrArray::Value(address) => {
+                let code = format!(
+                    r#"
+                        abigen!({contract_name}, "{contract_path}");
+            
+                        pub fn {contract_fn_name}_contract() -> {contract_name}<Arc<Provider<RetryClient<Http>>>> {{
+                            let address: Address = "{contract_address}"
+                            .parse()
+                            .unwrap();
+            
+                            {contract_name}::new(address, Arc::new({network_fn_name}().clone()))
+                        }}
+                    "#,
+                    contract_name = contract_name,
+                    contract_fn_name = camel_to_snake(contract_name),
+                    contract_address = address,
+                    network_fn_name = network_provider_fn_name(network),
+                    contract_path = abi_location
+                );
+                Code::new(code)
+            }
+            // let them pass in the address
+            ValueOrArray::Array(_) => {
+                let code = format!(
+                    r#"
+                        abigen!({contract_name}, "{contract_path}");
+            
+                        pub fn {contract_fn_name}_contract(address: Address) -> {contract_name}<Arc<Provider<RetryClient<Http>>>> {{
+                            {contract_name}::new(address, Arc::new({network_fn_name}().clone()))
+                        }}
+                    "#,
+                    contract_name = contract_name,
+                    contract_fn_name = camel_to_snake(contract_name),
+                    network_fn_name = network_provider_fn_name(network),
+                    contract_path = abi_location
+                );
+                Code::new(code)
+            }
+        }
     } else {
         Code::blank()
     }
