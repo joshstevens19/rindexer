@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::oneshot;
+use tokio::sync::oneshot::Sender;
 use tracing::{error, info};
 
 fn default_port() -> u16 {
@@ -35,22 +36,12 @@ impl GraphQLSettings {
     }
 }
 
-// impl Default for GraphQLSettings {
-//     fn default() -> Self {
-//         GraphQLSettings {
-//             port: default_port(),
-//             disable_advanced_filters: false,
-//             filter_only_on_indexed_columns: false,
-//         }
-//     }
-// }
-
 pub struct GraphqlOverrideSettings {
     pub enabled: bool,
     pub override_port: Option<u16>,
 }
 
-fn get_postgraphile_path() -> PathBuf {
+fn get_graphql_exe() -> Result<PathBuf, ()> {
     let postgraphile_filename = match env::consts::OS {
         "windows" => "rindexer-graphql-win.exe",
         "macos" => "rindexer-graphql-macos",
@@ -88,15 +79,21 @@ fn get_postgraphile_path() -> PathBuf {
     // Return the first valid path
     for path in &paths {
         if path.exists() {
-            return path.clone();
+            return Ok(path.clone());
         }
     }
 
     // If none of the paths exist, return the first one with useful error message
-    paths
+    let extra_looking = paths
         .into_iter()
         .next()
-        .expect("Failed to determine rindexer graphql path")
+        .expect("Failed to determine rindexer graphql path");
+
+    if !extra_looking.exists() {
+        return Err(());
+    }
+
+    Ok(extra_looking)
 }
 #[allow(dead_code)]
 pub struct GraphQLServer {
@@ -111,8 +108,6 @@ pub enum StartGraphqlServerError {
     #[error("Could not start up GraphQL server {0}")]
     GraphQLServerStartupError(String),
 }
-
-static MANUAL_STOP: AtomicBool = AtomicBool::new(false);
 
 pub async fn start_graphql_server(
     indexer: &Indexer,
@@ -132,12 +127,11 @@ pub async fn start_graphql_server(
     let graphql_endpoint = format!("http://localhost:{}/graphql", &port);
     let graphql_playground = format!("http://localhost:{}/playground", &port);
 
-    let rindexer_graphql_exe = get_postgraphile_path();
-    if !rindexer_graphql_exe.exists() {
-        return Err(StartGraphqlServerError::GraphQLServerStartupError(
+    let rindexer_graphql_exe = get_graphql_exe().map_err(|_| {
+        StartGraphqlServerError::GraphQLServerStartupError(
             "rindexer-graphql executable not found".to_string(),
-        ));
-    }
+        )
+    })?;
 
     // kill any existing process on the port
     kill_process_on_port(port).map_err(StartGraphqlServerError::GraphQLServerStartupError)?;
@@ -145,15 +139,42 @@ pub async fn start_graphql_server(
     let (tx, rx) = oneshot::channel();
     let tx_arc = Arc::new(Mutex::new(Some(tx)));
 
-    let rindexer_graphql_exe_clone = rindexer_graphql_exe.clone();
-    let connection_string_clone = connection_string.clone();
+    spawn_start_server(
+        tx_arc,
+        rindexer_graphql_exe.clone(),
+        connection_string.clone(),
+        schemas.join(","),
+        Arc::new(port),
+        settings.filter_only_on_indexed_columns,
+        settings.disable_advanced_filters,
+    );
 
-    let schemas_clone = schemas.join(",");
-    let port_clone = Arc::new(port.clone());
-    let filter_only_on_indexed_columns_clone = settings.filter_only_on_indexed_columns;
-    let disable_advanced_filters_clone = settings.disable_advanced_filters;
-    let child_arc = Arc::new(Mutex::new(None::<Child>));
+    setup_ctrlc_handler(Arc::new(Mutex::new(None::<Child>)));
 
+    // Wait for the initial server startup
+    let pid = rx.await.map_err(|e| {
+        StartGraphqlServerError::GraphQLServerStartupError(format!(
+            "Failed to receive initial PID: {}",
+            e
+        ))
+    })?;
+
+    perform_health_check(&graphql_endpoint, &graphql_playground).await?;
+
+    Ok(GraphQLServer { pid })
+}
+
+static MANUAL_STOP: AtomicBool = AtomicBool::new(false);
+
+fn spawn_start_server(
+    tx_arc: Arc<Mutex<Option<Sender<u32>>>>,
+    rindexer_graphql_exe: PathBuf,
+    connection_string: String,
+    schemas: String,
+    port: Arc<u16>,
+    filter_only_on_indexed_columns: bool,
+    disable_advanced_filters: bool,
+) {
     tokio::spawn(async move {
         loop {
             if MANUAL_STOP.load(Ordering::SeqCst) {
@@ -161,12 +182,12 @@ pub async fn start_graphql_server(
             }
 
             match start_server(
-                &rindexer_graphql_exe_clone,
-                &connection_string_clone,
-                &schemas_clone,
-                &port_clone,
-                filter_only_on_indexed_columns_clone,
-                disable_advanced_filters_clone,
+                &rindexer_graphql_exe,
+                &connection_string,
+                &schemas,
+                &port,
+                filter_only_on_indexed_columns,
+                disable_advanced_filters,
             )
             .await
             {
@@ -182,7 +203,7 @@ pub async fn start_graphql_server(
                         }
                     }
 
-                    let port_inner_clone = Arc::clone(&port_clone);
+                    let port_inner_clone = Arc::clone(&port);
 
                     tokio::spawn(async move {
                         set_thread_no_logging();
@@ -230,8 +251,33 @@ pub async fn start_graphql_server(
             }
         }
     });
+}
 
-    // Set up Ctrl-C handler
+async fn start_server(
+    rindexer_graphql_exe: &Path,
+    connection_string: &str,
+    schemas: &str,
+    port: &u16,
+    filter_only_on_indexed_columns: bool,
+    disable_advanced_filters: bool,
+) -> Result<Child, String> {
+    Command::new(rindexer_graphql_exe)
+        .arg(connection_string)
+        .arg(schemas)
+        .arg(port.to_string())
+        // graphql_limit
+        .arg("1000")
+        // graphql_timeout
+        .arg("10000")
+        .arg(filter_only_on_indexed_columns.to_string())
+        .arg(disable_advanced_filters.to_string())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| e.to_string())
+}
+
+fn setup_ctrlc_handler(child_arc: Arc<Mutex<Option<Child>>>) {
     ctrlc::set_handler(move || {
         MANUAL_STOP.store(true, Ordering::SeqCst);
         if let Ok(mut guard) = child_arc.lock() {
@@ -246,16 +292,12 @@ pub async fn start_graphql_server(
         std::process::exit(0);
     })
     .expect("Error setting Ctrl-C handler");
+}
 
-    // Wait for the initial server startup
-    let pid = rx.await.map_err(|e| {
-        StartGraphqlServerError::GraphQLServerStartupError(format!(
-            "Failed to receive initial PID: {}",
-            e
-        ))
-    })?;
-
-    // Health check to ensure API is ready
+async fn perform_health_check(
+    graphql_endpoint: &str,
+    graphql_playground: &str,
+) -> Result<(), StartGraphqlServerError> {
     let client = Client::new();
     let health_check_query = json!({
         "query": "query MyQuery { nodeId }"
@@ -263,7 +305,7 @@ pub async fn start_graphql_server(
     let mut health_check_attempts = 0;
     while health_check_attempts < 40 {
         match client
-            .post(&graphql_endpoint)
+            .post(graphql_endpoint)
             .json(&health_check_query)
             .send()
             .await
@@ -299,31 +341,7 @@ pub async fn start_graphql_server(
         ));
     }
 
-    Ok(GraphQLServer { pid })
-}
-
-async fn start_server(
-    rindexer_graphql_exe: &Path,
-    connection_string: &str,
-    schemas: &str,
-    port: &u16,
-    filter_only_on_indexed_columns: bool,
-    disable_advanced_filters: bool,
-) -> Result<Child, String> {
-    Command::new(rindexer_graphql_exe)
-        .arg(connection_string)
-        .arg(schemas)
-        .arg(port.to_string())
-        // graphql_limit
-        .arg("1000")
-        // graphql_timeout
-        .arg("10000")
-        .arg(filter_only_on_indexed_columns.to_string())
-        .arg(disable_advanced_filters.to_string())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| e.to_string())
+    Ok(())
 }
 
 fn kill_process_tree(pid: u32) -> Result<(), String> {

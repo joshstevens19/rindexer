@@ -4,7 +4,7 @@ use serde_json::Value;
 use std::path::Path;
 
 #[derive(thiserror::Error, Debug)]
-pub enum GenerateTypingsError {
+pub enum GenerateGraphqlQueriesError {
     #[error("Network request failed: {0}")]
     Network(#[from] reqwest::Error),
 
@@ -24,7 +24,7 @@ pub enum GenerateTypingsError {
 pub async fn generate_graphql_queries(
     endpoint: &str,
     generate_path: &Path,
-) -> Result<(), GenerateTypingsError> {
+) -> Result<(), GenerateGraphqlQueriesError> {
     let client = Client::new();
     let introspection_query = r#"
     {
@@ -91,11 +91,11 @@ pub async fn generate_graphql_queries(
 
     let schema = res["data"]["__schema"].clone();
     if schema.is_null() {
-        return Err(GenerateTypingsError::NoData);
+        return Err(GenerateGraphqlQueriesError::NoData);
     }
 
     generate_operations(&schema, generate_path)
-        .map_err(GenerateTypingsError::GenerateOperationsError)?;
+        .map_err(GenerateGraphqlQueriesError::GenerateOperationsError)?;
 
     Ok(())
 }
