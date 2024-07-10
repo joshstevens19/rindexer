@@ -70,7 +70,7 @@ pub enum StartRindexerError {
 
     #[error("{0}")]
     DropLastKnownIndexesError(DropLastKnownIndexesError),
-    
+
     #[error("Cross contract relationships are need manually mapping in the dependency_events, https://rindexer.xyz/docs/start-building/yaml-config/contracts#dependency_events")]
     CrossContractRelationshipsNotDefinedInDependencyEvents,
 }
