@@ -294,10 +294,10 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
                 } else {
                     info!("rindexer resync is complete");
                     // to avoid the thread closing before the stream is consumed
-                    // lets just sit here for 30 seconds to avoid the race
-                    // probably a better way to handle this but hey
+                    // lets just sit here for 5 seconds to avoid the race
+                    // 100% a better way to handle this
                     // TODO - handle this nicer
-                    tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 }
             }
 
