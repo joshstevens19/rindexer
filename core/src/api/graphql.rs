@@ -165,7 +165,6 @@ pub async fn start_graphql_server(
                 &connection_string_clone,
                 &schemas_clone,
                 &port_clone,
-                // TODO - these are hardcoded for now
                 filter_only_on_indexed_columns_clone,
                 disable_advanced_filters_clone,
             )
