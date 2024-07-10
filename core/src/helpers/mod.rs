@@ -10,11 +10,11 @@ pub use file::{
 use dotenv::dotenv;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
+use std::env;
 use std::env::VarError;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str;
-use std::env;
 
 pub fn camel_to_snake(s: &str) -> String {
     let mut snake_case = String::new();

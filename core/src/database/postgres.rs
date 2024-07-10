@@ -1,3 +1,6 @@
+use crate::abi::{
+    ABIInput, ABIItem, EventInfo, GenerateAbiPropertiesType, ParamTypeError, ReadAbiError,
+};
 use bb8::{Pool, RunError};
 use bb8_postgres::PostgresConnectionManager;
 use bytes::{Buf, BytesMut};
@@ -23,10 +26,6 @@ use tokio_postgres::{
 use tracing::{debug, error, info};
 
 use crate::generator::build::{contract_name_to_filter_name, is_filter};
-use crate::generator::{
-    extract_event_names_and_signatures_from_abi, generate_abi_name_properties, read_abi_items,
-    ABIInput, ABIItem, EventInfo, GenerateAbiPropertiesType, ParamTypeError, ReadAbiError,
-};
 use crate::helpers::camel_to_snake;
 use crate::indexer::Indexer;
 use crate::manifest::yaml::{Contract, ForeignKeys, Manifest, PostgresIndexes, ProjectType};
@@ -465,7 +464,7 @@ pub fn solidity_type_to_db_type(abi_type: &str) -> String {
 
 /// Generates an array of strings based on ABI input properties and a specified property type.
 fn generate_columns(inputs: &[ABIInput], property_type: &GenerateAbiPropertiesType) -> Vec<String> {
-    generate_abi_name_properties(inputs, property_type, None)
+    ABIInput::generate_abi_name_properties(inputs, property_type, None)
         .iter()
         .map(|m| m.value.clone())
         .collect()
@@ -582,9 +581,9 @@ pub fn create_tables_for_indexer_sql(
         } else {
             contract.name.clone()
         };
-        let abi_items = read_abi_items(project_path, contract)
+        let abi_items = ABIItem::read_abi_items(project_path, contract)
             .map_err(CreateTablesForIndexerSqlError::ReadAbiError)?;
-        let event_names = extract_event_names_and_signatures_from_abi(&abi_items)
+        let event_names = ABIItem::extract_event_names_and_signatures_from_abi(&abi_items)
             .map_err(CreateTablesForIndexerSqlError::ParamTypeError)?;
         let schema_name = indexer_contract_schema_name(&indexer.name, &contract_name);
         sql.push_str(format!("CREATE SCHEMA IF NOT EXISTS {};", schema_name).as_str());
@@ -1637,7 +1636,7 @@ pub async fn create_relationships(
                 )));
             }
             Some(contract) => {
-                let abi_items = read_abi_items(project_path, contract)
+                let abi_items = ABIItem::read_abi_items(project_path, contract)
                     .map_err(CreateRelationshipError::ReadAbiError)?;
 
                 for linked_key in &foreign_key.foreign_keys {
@@ -1659,8 +1658,9 @@ pub async fn create_relationships(
                             ))
                         })?;
 
-                    let linked_abi_items = read_abi_items(project_path, linked_key_contract)
-                        .map_err(CreateRelationshipError::ReadAbiError)?;
+                    let linked_abi_items =
+                        ABIItem::read_abi_items(project_path, linked_key_contract)
+                            .map_err(CreateRelationshipError::ReadAbiError)?;
                     let linked_parameter_mapping = linked_key
                         .event_input_name
                         .split('.')
@@ -1925,7 +1925,7 @@ pub async fn prepare_indexes(
     // global first
     if let Some(global_injected_parameters) = &postgres_indexes.global_injected_parameters {
         for contract in contracts {
-            let abi_items = read_abi_items(project_path, contract)
+            let abi_items = ABIItem::read_abi_items(project_path, contract)
                 .map_err(PrepareIndexesError::ReadAbiError)?;
 
             for abi_item in abi_items {
@@ -1962,7 +1962,7 @@ pub async fn prepare_indexes(
                     ));
                 }
                 Some(contract) => {
-                    let abi_items = read_abi_items(project_path, contract)
+                    let abi_items = ABIItem::read_abi_items(project_path, contract)
                         .map_err(PrepareIndexesError::ReadAbiError)?;
 
                     if let Some(injected_parameters) = &contract_event_indexes.injected_parameters {
