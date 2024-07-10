@@ -1,7 +1,6 @@
 # rindexer
 
 lastly:
-- try to handle callback failing
 - cleanup the code into smaller files and functions
 
 nice to have:

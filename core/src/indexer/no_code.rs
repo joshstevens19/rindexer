@@ -1,10 +1,9 @@
-use std::fs;
 use std::path::Path;
 use std::sync::Arc;
+use std::{fs, io};
 
 use colored::Colorize;
 use ethers::abi::{Abi, Contract as EthersContract, Event};
-use futures::future::BoxFuture;
 use tokio_postgres::types::Type as PgType;
 use tracing::{debug, error, info};
 
@@ -14,8 +13,8 @@ use crate::database::postgres::{
 };
 use crate::generator::build::identify_and_modify_filter;
 use crate::generator::event_callback_registry::{
-    noop_decoder, ContractInformation, Decoder, EventCallbackRegistry, EventInformation,
-    EventResult, NetworkContract,
+    noop_decoder, ContractInformation, Decoder, EventCallbackRegistry, EventCallbackType,
+    EventInformation, NetworkContract,
 };
 use crate::generator::{
     create_csv_file_for_event, csv_headers_for_event, extract_event_names_and_signatures_from_abi,
@@ -151,9 +150,7 @@ struct NoCodeCallbackParams {
     postgres_column_names: Vec<String>,
 }
 
-type NoCodeCallbackResult = Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, ()> + Send + Sync>;
-
-fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
+fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
     Arc::new(move |results| {
         let params = Arc::clone(&params);
 
@@ -167,20 +164,24 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                     params.event_info.name,
                     "NO EVENTS".red()
                 );
-                return;
+                return Ok(());
             }
+
             let from_block = match results.first() {
                 Some(first) => first.tx_information.block_number,
                 None => {
-                    error!("Unexpected error: no first event despite non-zero length.");
-                    return;
+                    let error_message = "Unexpected error: no first event despite non-zero length.";
+                    error!("{}", error_message);
+                    return Err(error_message.to_string());
                 }
             };
+
             let to_block = match results.last() {
                 Some(last) => last.tx_information.block_number,
                 None => {
-                    error!("Unexpected error: no last event despite non-zero length.");
-                    return;
+                    let error_message = "Unexpected error: no last event despite non-zero length.";
+                    error!("{}", error_message);
+                    return Err(error_message.to_string());
                 }
             };
 
@@ -292,6 +293,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                                 "{}::{} - Error performing bulk insert: {}",
                                 params.contract_name, params.event_info.name, e
                             );
+                            return Err(e.to_string());
                         }
                     } else if let Err(e) = postgres
                         .bulk_insert(
@@ -305,13 +307,16 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                             "{}::{} - Error performing bulk insert: {}",
                             params.contract_name, params.event_info.name, e
                         );
+                        return Err(e.to_string());
                     }
                 }
             }
 
             if let Some(csv) = &params.csv {
                 if !csv_bulk_data.is_empty() {
-                    csv.append_bulk(csv_bulk_data).await.unwrap();
+                    if let Err(e) = csv.append_bulk(csv_bulk_data).await {
+                        return Err(e.to_string());
+                    }
                 }
             }
 
@@ -323,6 +328,8 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
                 indexed_count,
                 format!("- blocks: {} - {}", from_block, to_block)
             );
+
+            Ok(())
         }
         .boxed()
     })
@@ -331,7 +338,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> NoCodeCallbackResult {
 #[derive(thiserror::Error, Debug)]
 pub enum ProcessIndexersError {
     #[error("Could not read ABI string: {0}")]
-    CouldNotReadAbiString(std::io::Error),
+    CouldNotReadAbiString(io::Error),
 
     #[error("Could not read ABI JSON: {0}")]
     CouldNotReadAbiJson(serde_json::Error),

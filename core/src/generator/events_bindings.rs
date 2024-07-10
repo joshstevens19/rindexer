@@ -417,11 +417,7 @@ fn generate_event_callback_structs_code(
             r#"
             pub fn {lower_name}_handler<TExtensions, F, Fut>(
                 custom_logic: F,
-            ) -> Arc<
-                dyn for<'a> Fn(&'a Vec<{struct_result}>, Arc<EventContext<TExtensions>>) -> BoxFuture<'a, ()>
-                    + Send
-                    + Sync,
-            >
+            ) -> TransferEventCallbackType<TExtensions>
             where
                 TransferResult: Clone + 'static,
                 F: for<'a> Fn(Vec<{struct_result}>, Arc<EventContext<TExtensions>>) -> Fut
@@ -429,7 +425,7 @@ fn generate_event_callback_structs_code(
                     + Sync
                     + 'static
                     + Clone,
-                Fut: Future<Output = ()> + Send + 'static,
+                Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
                 TExtensions: Send + Sync + 'static,
             {{
                 Arc::new(move |results, context| {{
@@ -441,7 +437,7 @@ fn generate_event_callback_structs_code(
             }}
             
             type {name}EventCallbackType<TExtensions> = Arc<
-                dyn for<'a> Fn(&'a Vec<{struct_result}>, Arc<EventContext<TExtensions>>) -> BoxFuture<'a, ()>
+                dyn for<'a> Fn(&'a Vec<{struct_result}>, Arc<EventContext<TExtensions>>) -> BoxFuture<'a, EventCallbackResult<()>>
                     + Send
                     + Sync,
                 >;
@@ -460,7 +456,7 @@ fn generate_event_callback_structs_code(
                         + Sync
                         + 'static
                         + Clone,
-                    Fut: Future<Output = ()> + Send + 'static,
+                    Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
                 {{
                     {csv_generator}
             
@@ -477,7 +473,7 @@ fn generate_event_callback_structs_code(
 
             #[async_trait]
             impl<TExtensions> EventCallback for {name}Event<TExtensions> where TExtensions: Send + Sync {{
-                async fn call(&self, events: Vec<EventResult>) {{
+                async fn call(&self, events: Vec<EventResult>) -> EventCallbackResult<()> {{
                     {event_callback_events_len}
 
                     // note some can not downcast because it cant decode
@@ -528,7 +524,7 @@ fn generate_event_callback_structs_code(
                     struct_data = info.struct_data
                 )
             } else {
-                "(self.callback)(&result, self.context.clone()).await;".to_string()
+                "(self.callback)(&result, self.context.clone()).await".to_string()
             }
         );
 
@@ -643,6 +639,7 @@ fn generate_event_bindings_code(
         
         use super::{abigen_file_name}::{abigen_mod_name}::{{self, {abigen_name}}};
         use std::{{any::Any, sync::Arc}};
+        use std::error::Error;
         use std::future::Future;
         use std::pin::Pin;
         use std::path::{{Path, PathBuf}};
@@ -652,7 +649,7 @@ fn generate_event_bindings_code(
             AsyncCsvAppender,
             generate_random_id,
             FutureExt,
-            generator::event_callback_registry::{{EventCallbackRegistry, EventInformation, ContractInformation, NetworkContract, EventResult, TxInformation, FilterDetails, FactoryDetails}},
+            generator::event_callback_registry::{{EventCallbackRegistry, EventCallbackResult, EventInformation, ContractInformation, NetworkContract, EventResult, TxInformation, FilterDetails, FactoryDetails}},
             manifest::yaml::{{Contract, ContractDetails, read_manifest}},
             {client_import}
             provider::JsonRpcCachedProvider
@@ -665,7 +662,7 @@ fn generate_event_bindings_code(
 
         #[async_trait]
         trait EventCallback {{
-            async fn call(&self, events: Vec<EventResult>);
+            async fn call(&self, events: Vec<EventResult>) -> EventCallbackResult<()>;
         }}
 
         pub struct EventContext<TExtensions> where TExtensions: Send + Sync {{
@@ -758,7 +755,7 @@ fn generate_event_bindings_code(
                     reorg_safe_distance: contract_details.reorg_safe_distance.unwrap_or_default(),
                 }};
 
-                let callback: Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, ()> + Send + Sync> = match self {{
+                let callback: Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync> = match self {{
                     {register_match_arms}
                 }};
 
@@ -1118,11 +1115,12 @@ pub fn generate_event_handlers(
                         let csv_result = context.csv.append_bulk(csv_bulk_data).await;
                         if let Err(e) = csv_result {{
                             rindexer_error!("{event_type_name}::{handler_name} inserting csv data: {{:?}}", e);
+                            return Err(e.to_string());
                         }}
                     }}
                     
                     if postgres_bulk_data.is_empty() {{
-                        return;
+                        return Ok(());
                     }}
                     
                      if postgres_bulk_data.len() > 100 {{
@@ -1142,7 +1140,8 @@ pub fn generate_event_handlers(
                             .await;
                         
                         if let Err(e) = result {{
-                            rindexer_error!("{event_type_name}::{handler_name} inserting bulk data: {{:?}}", e);
+                            rindexer_error!("{event_type_name}::{handler_name} inserting bulk data via COPY: {{:?}}", e);
+                            return Err(e.to_string());
                         }}
                         }} else {{
                             let result = context
@@ -1155,7 +1154,8 @@ pub fn generate_event_handlers(
                                 .await;
                             
                             if let Err(e) = result {{
-                                rindexer_error!("{event_type_name}::{handler_name} inserting bulk data: {{:?}}", e);
+                                rindexer_error!("{event_type_name}::{handler_name} inserting bulk data via INSERT: {{:?}}", e);
+                                return Err(e.to_string());
                             }}
                     }}
                 "#,
@@ -1183,7 +1183,7 @@ pub fn generate_event_handlers(
                 {event_type_name}::{handler_name}(
                     {handler_name}Event::handler(|results, context| async move {{
                             if results.is_empty() {{
-                                return;
+                                return Ok(());
                             }}
 
                             {csv_write}
@@ -1194,6 +1194,8 @@ pub fn generate_event_handlers(
                                 "INDEXED".green(),
                                 results.len(),
                             );
+                            
+                            Ok(())
                         }},
                         no_extensions(),
                       )
