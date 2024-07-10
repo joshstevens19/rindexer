@@ -172,11 +172,19 @@ where
 
 pub fn erc20_filter_contract(
     network: &str,
+    address: Address,
 ) -> RindexerERC20FilterGen<Arc<Provider<RetryClient<Http>>>> {
+    RindexerERC20FilterGen::new(
+        address,
+        Arc::new(get_provider_cache_for_network(network).get_inner_provider()),
+    )
+}
+
+pub fn decoder_contract(network: &str) -> RindexerERC20FilterGen<Arc<Provider<RetryClient<Http>>>> {
     if network == "polygon" {
-        let address: Address = "0x0000…0000".parse().unwrap();
         RindexerERC20FilterGen::new(
-            address,
+            // do not care about address here its decoding makes it easier to handle ValueOrArray
+            Address::zero(),
             Arc::new(get_provider_cache_for_network(network).get_inner_provider()),
         )
     } else {
@@ -210,22 +218,15 @@ where
         get_provider_cache_for_network(network)
     }
 
-    pub fn contract(
-        &self,
-        network: &str,
-    ) -> RindexerERC20FilterGen<Arc<Provider<RetryClient<Http>>>> {
-        erc20_filter_contract(network)
-    }
-
     fn decoder(
         &self,
         network: &str,
     ) -> Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync> {
-        let contract = self.contract(network);
+        let decoder_contract = decoder_contract(network);
 
         match self {
             ERC20FilterEventType::Transfer(_) => Arc::new(move |topics: Vec<H256>, data: Bytes| {
-                match contract.decode_event::<TransferData>("Transfer", topics, data) {
+                match decoder_contract.decode_event::<TransferData>("Transfer", topics, data) {
                     Ok(filter) => Arc::new(filter) as Arc<dyn Any + Send + Sync>,
                     Err(error) => Arc::new(error) as Arc<dyn Any + Send + Sync>,
                 }

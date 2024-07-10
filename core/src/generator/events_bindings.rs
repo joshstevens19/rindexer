@@ -293,7 +293,7 @@ fn generate_decoder_match_arms_code(event_type_name: &str, event_info: &[EventIn
                 r#"
                     {event_type_name}::{event_info_name}(_) => {{
                         Arc::new(move |topics: Vec<H256>, data: Bytes| {{
-                            match contract.decode_event::<{event_info_name}Data>("{event_info_name}", topics, data) {{
+                            match decoder_contract.decode_event::<{event_info_name}Data>("{event_info_name}", topics, data) {{
                                 Ok(filter) => Arc::new(filter) as Arc<dyn Any + Send + Sync>,
                                 Err(error) => Arc::new(error) as Arc<dyn Any + Send + Sync>,
                             }}
@@ -534,31 +534,18 @@ fn generate_event_callback_structs_code(
     Ok(Code::new(parts.join("\n")))
 }
 
-fn build_pub_contract_fn(
-    contract_name: &str,
-    contracts_details: Vec<&ContractDetails>,
-    abi_gen_name: &str,
-) -> Code {
-    let contract_name = camel_to_snake(contract_name);
+fn decoder_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &str) -> Code {
     let mut function = String::new();
     function.push_str(&format!(
-        r#"pub fn {contract_name}_contract(network: &str) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> {{"#,
+        r#"pub fn decoder_contract(network: &str) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> {{"#,
         abi_gen_name = abi_gen_name
     ));
 
-    // Handling each contract detail with an `if` or `else if`
-    for (index, contract_detail) in contracts_details.iter().enumerate() {
-        let address = if let IndexingContractSetup::Address(address) =
-            contract_detail.indexing_contract_setup()
-        {
-            address
-        } else {
-            AddressDetails {
-                address: ValueOrArray::<Address>::Value(Address::zero()),
-                indexed_filters: None,
-            }
-        };
-
+    let networks = contracts_details
+        .iter()
+        .map(|c| c.network.clone())
+        .collect::<Vec<String>>();
+    for (index, network) in networks.iter().enumerate() {
         if index == 0 {
             function.push_str("    if ");
         } else {
@@ -567,18 +554,13 @@ fn build_pub_contract_fn(
 
         function.push_str(&format!(
             r#"network == "{network}" {{
-                let address: Address = "{address}"
-                    .parse()
-                    .unwrap();
                 {abi_gen_name}::new(
-                    address,
+                    // do not care about address here its decoding makes it easier to handle ValueOrArray
+                    Address::zero(),
                     Arc::new(get_provider_cache_for_network(network).get_inner_provider()),
                  )
             }}"#,
-            network = contract_detail.network,
-            // TODO - FIX THIS
-            //address = address,
-            address = Address::zero(),
+            network = network,
             abi_gen_name = abi_gen_name
         ));
     }
@@ -595,16 +577,62 @@ fn build_pub_contract_fn(
     Code::new(function)
 }
 
-fn build_self_contract_fn(contract_name: &str, abi_gen_name: &str) -> Code {
+fn build_pub_contract_fn(
+    contract_name: &str,
+    contracts_details: Vec<&ContractDetails>,
+    abi_gen_name: &str,
+) -> Code {
     let contract_name = camel_to_snake(contract_name);
 
-    Code::new(format!(
-        r#"pub fn contract(&self, network: &str) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> 
-        {{
-            {contract_name}_contract(network)
-        }}"#,
-        abi_gen_name = abi_gen_name
-    ))
+    let has_array_addresses = contracts_details
+        .iter()
+        .any(|c| matches!(c.address(), Some(ValueOrArray::Array(_))));
+
+    let no_address = contracts_details.iter().any(|c| c.address().is_none());
+
+    if contracts_details.len() > 1 || has_array_addresses || no_address {
+        Code::new(format!(
+            r#"pub fn {contract_name}_contract(network: &str, address: Address) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> {{
+                {abi_gen_name}::new(
+                    address,
+                    Arc::new(get_provider_cache_for_network(network).get_inner_provider()),
+                 )
+               }}
+            "#,
+            abi_gen_name = abi_gen_name
+        ))
+    } else {
+        let contract = contracts_details
+            .first()
+            .expect("Contract details should have at least one contract detail");
+
+        match contract.address() {
+            None => {
+                panic!("Contract details should have an address");
+            }
+            Some(value) => match value {
+                ValueOrArray::Value(address) => {
+                    let address = format!("{}", address);
+                    Code::new(format!(
+                        r#"pub fn {contract_name}_contract(network: &str) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> {{
+                                let address: Address = "{address}".parse().unwrap();
+                                {abi_gen_name}::new(
+                                    address,
+                                    Arc::new(get_provider_cache_for_network(network).get_inner_provider()),
+                                 )
+                               }}
+                            "#,
+                        abi_gen_name = abi_gen_name,
+                        contract_name = contract_name,
+                        address = address,
+                    ))
+                }
+                ValueOrArray::Array(_) => {
+                    unreachable!("Contract details should always be an single address");
+                }
+            },
+        }
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -685,6 +713,8 @@ fn generate_event_bindings_code(
         }}
         
         {build_pub_contract_fn}
+        
+        {decoder_contract_fn}
 
         impl<TExtensions> {event_type_name}<TExtensions> where TExtensions: 'static + Send + Sync {{
             pub fn topic_id(&self) -> &'static str {{
@@ -698,7 +728,7 @@ fn generate_event_bindings_code(
                     {event_names_match_arms}
                 }}
             }}
-            
+
             pub fn contract_name(&self) -> String {{
                 "{contract_name}".to_string()
             }}
@@ -707,10 +737,8 @@ fn generate_event_bindings_code(
                 get_provider_cache_for_network(network)
             }}
 
-            {build_self_contract_fn}
-
             fn decoder(&self, network: &str) -> Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync> {{
-                let contract = self.contract(network);
+                let decoder_contract = decoder_contract(network);
 
                 match self {{
                     {decoder_match_arms}
@@ -722,7 +750,7 @@ fn generate_event_bindings_code(
                 let topic_id = self.topic_id();
                 let contract_name = self.contract_name();
                 let event_name = self.event_name();
-                
+
                 let contract_details = rindexer_yaml
                     .contracts
                     .iter()
@@ -730,12 +758,12 @@ fn generate_event_bindings_code(
                     .unwrap_or_else(|| panic!("Contract {{}} not found please make sure its defined in the rindexer.yaml",
                         contract_name))
                     .clone();
-                
+
                   let index_event_in_order = contract_details
                     .index_event_in_order
                     .as_ref()
                     .map_or(false, |vec| vec.contains(&event_name.to_string()));
-            
+
                 let contract = ContractInformation {{
                     name: contract_details.name,
                     details: contract_details
@@ -794,13 +822,15 @@ fn generate_event_bindings_code(
         event_names_match_arms =
             generate_event_names_match_arms_code(&event_type_name, &event_info),
         contract_name = contract.name.clone(),
+        decoder_contract_fn = decoder_contract_fn(
+            contract.details.iter().collect(),
+            &abigen_contract_name(contract)
+        ),
         build_pub_contract_fn = build_pub_contract_fn(
             &contract.name,
             contract.details.iter().collect(),
             &abigen_contract_name(contract)
         ),
-        build_self_contract_fn =
-            build_self_contract_fn(&contract.name, &abigen_contract_name(contract)),
         decoder_match_arms = generate_decoder_match_arms_code(&event_type_name, &event_info),
         register_match_arms = generate_register_match_arms_code(&event_type_name, &event_info)
     ));
@@ -1194,7 +1224,7 @@ pub fn generate_event_handlers(
                                 "INDEXED".green(),
                                 results.len(),
                             );
-                            
+
                             Ok(())
                         }},
                         no_extensions(),

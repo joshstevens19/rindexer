@@ -563,6 +563,43 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
 }
 ```
 
+#### Multiple addresses
+
+If you have defined [multiple addresses](/docs/start-building/yaml-config/contracts#address) for a contract in the YAML configuration file
+you have to pass in the address into the contract function.
+
+
+```rs
+use crate::rindexer_lib::typings::global_contracts::usdt_contract; // [!code focus]
+
+async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+    RocketPoolETHEventType::Transfer(
+        TransferEvent::handler(
+            |results, context| async move {
+                let address: Address = "0xdac17f958d2ee523a2206206994597c13d831ec7" // [!code focus]
+                                        .parse() // [!code focus]
+                                        .unwrap(); // [!code focus]
+                let usdt = usdt_contract(address); // [!code focus]
+                let name = usdt.name().await; // [!code focus]
+                match name { // [!code focus]
+                    Ok(result) => {
+                        println!("USDT name: {:?}", name) // [!code focus]
+                        return Ok(()); // [!code focus]
+                    }
+                    Err(e) => {
+                        println!("Error getting USDT name: {:?}", e)  // [!code focus]
+                        return Err(e.to_string()); // [!code focus]
+                    }
+                } // [!code focus]
+            },
+            no_extensions(),
+        )
+        .await,
+    )
+    .register(registry);
+}
+```
+
 ### Contract calls
 
 Each event to index is defined in a contract within the YAML configuration file, you can also make calls to this contract
@@ -592,6 +629,43 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
             |results, context| async move {
                 // have to pass in network name here // [!code focus]
                 let rocket_pool_eth = rocket_pool_eth_contract("ethereum"); // [!code focus]
+                let name = rocket_pool_eth.name().await; // [!code focus]
+                match name { // [!code focus]
+                    Ok(result) => {
+                        println!("rETH name: {:?}", name) // [!code focus]
+                        return Ok(()); // [!code focus]
+                    }
+                    Err(e) => {
+                        println!("Error getting rETH name: {:?}", e) // [!code focus]
+                        return Err(e.to_string()); // [!code focus]
+                    }
+                } // [!code focus]
+            },
+            no_extensions(),
+        )
+        .await,
+    )
+    .register(registry);
+}
+```
+
+#### Multiple addresses
+
+If you have defined [multiple addresses](/docs/start-building/yaml-config/contracts#address) or you have a [filter](/docs/start-building/yaml-config/contracts#filter) 
+for a contract in the YAML configuration file you will have to pass in the address into the contract function.
+
+```rs
+use crate::rindexer_lib::typings::rust::events::rocket_pool_eth::rocket_pool_eth_contract; // [!code focus]
+
+async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+    RocketPoolETHEventType::Transfer(
+        TransferEvent::handler(
+            |results, context| async move {
+                let address: Address = "0xdac17f958d2ee523a2206206994597c13d831ec7" // [!code focus]
+                                                    .parse() // [!code focus]
+                                                    .unwrap(); // [!code focus]
+                // have to pass in network name here // [!code focus]
+                let rocket_pool_eth = rocket_pool_eth_contract("ethereum", address); // [!code focus]
                 let name = rocket_pool_eth.name().await; // [!code focus]
                 match name { // [!code focus]
                     Ok(result) => {
