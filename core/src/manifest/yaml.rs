@@ -653,7 +653,7 @@ fn validate_manifest(
                         );
                     }
                 }
-                
+
                 // TODO - Add validation for the event names and event inputs match the ABIs
             }
         }

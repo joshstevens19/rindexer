@@ -66,7 +66,7 @@ The boilerplate code is runnable out the box.
 use super::super::super::typings::rust::events::rocket_pool_eth::{
     no_extensions, ApprovalEvent, RocketPoolETHEventType, TransferEvent,
 };
-use rindexer_core::{
+use rindexer::{
     generator::event_callback_registry::EventCallbackRegistry, rindexer_error, rindexer_info,
     EthereumSqlTypeWrapper, PgType, RindexerColorize,
 };
@@ -390,7 +390,7 @@ contracts:
 for example with network `ethereum` the provider function would be `get_ethereum_provider`.
 
 ```rs
-use crate::rindexer::typings::networks::get_ethereum_provider;// [!code focus]
+use crate::rindexer_lib::typings::networks::get_ethereum_provider;// [!code focus]
 
 async fn transfer_handler(registry: &mut EventCallbackRegistry) {
     RocketPoolETHEventType::Transfer(
@@ -471,7 +471,7 @@ global: // [!code focus]
 ```
 
 ```rs
-use crate::rindexer::typings::global_contracts::usdt_contract; // [!code focus]
+use crate::rindexer_lib::typings::global_contracts::usdt_contract; // [!code focus]
 
 async fn transfer_handler(registry: &mut EventCallbackRegistry) {
     RocketPoolETHEventType::Transfer(
@@ -513,7 +513,7 @@ contracts:
 ```
 
 ```rs
-use crate::rindexer::typings::rust::events::rocket_pool_eth::rocket_pool_eth_contract; // [!code focus]
+use crate::rindexer_lib::typings::rust::events::rocket_pool_eth::rocket_pool_eth_contract; // [!code focus]
 
 async fn transfer_handler(registry: &mut EventCallbackRegistry) {
     RocketPoolETHEventType::Transfer(
@@ -727,7 +727,7 @@ all generated for you and you do not need to worry about it.
 
 ```rs
 use super::rust::rocket_pool_eth::rocket_pool_eth_handlers;
-use rindexer_core::generator::event_callback_registry::EventCallbackRegistry;
+use rindexer::generator::event_callback_registry::EventCallbackRegistry;
 
 pub async fn register_all_handlers() -> EventCallbackRegistry {
     let mut registry = EventCallbackRegistry::new();
@@ -744,12 +744,12 @@ started, you can customise this as you wish and should be if your building a cus
 ```rs
 use std::env;
 
-use self::rindexer::indexers::all_handlers::register_all_handlers;
-use rindexer_core::{
+use self::rindexer_lib::indexers::all_handlers::register_all_handlers;
+use rindexer::{
     start_rindexer, GraphQLServerDetails, GraphQLServerSettings, IndexingDetails, StartDetails,
 };
 
-mod rindexer;
+mod rindexer_lib;
 
 #[tokio::main]
 async fn main() {

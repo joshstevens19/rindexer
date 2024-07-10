@@ -67,7 +67,7 @@ fn get_postgraphile_path() -> PathBuf {
         path.push(postgraphile_filename);
         paths.push(path);
 
-        // Also consider when running from within the `rindexer_core` directory
+        // Also consider when running from within the `rindexer` directory
         let mut path = executable_path;
         path.pop(); // Remove the executable name
         path.pop(); // Remove the 'release' or 'debug' directory

@@ -2,7 +2,7 @@
 
 bugs:
 - RUST PROJECT ISSUE - // TODO - this is not correct (this will be fixed if we remove some repeated info from the code)
-  - FIX - TODO - FIX THIS + refactor rindexer_core to rindexer
+  - FIX - TODO - FIX THIS
   
 lastly:
 - try to handle callback failing

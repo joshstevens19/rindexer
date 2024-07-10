@@ -874,7 +874,7 @@ fn generate_event_bindings_code(
         use std::pin::Pin;
         use std::path::Path;
         use ethers::{{providers::{{Http, Provider, RetryClient}}, abi::Address, types::{{Bytes, H256}}}};
-        use rindexer_core::{{
+        use rindexer::{{
             async_trait,
             AsyncCsvAppender,
             generate_random_id,
@@ -1204,7 +1204,7 @@ pub fn generate_event_handlers(
     let mut imports = String::new();
     imports.push_str(
         r#"
-            use rindexer_core::{
+            use rindexer::{
                 generator::event_callback_registry::{EventCallbackRegistry},
                 EthereumSqlTypeWrapper, PgType, RindexerColorize, rindexer_error, rindexer_info
             };

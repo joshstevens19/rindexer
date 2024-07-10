@@ -87,7 +87,7 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
             /// Any manual changes to this file will be overwritten.
             
             use ethers::providers::{Provider, Http, RetryClient};
-            use rindexer_core::{
+            use rindexer::{
                 lazy_static,
                 provider::{create_client, JsonRpcCachedProvider},
                 public_read_env_value,

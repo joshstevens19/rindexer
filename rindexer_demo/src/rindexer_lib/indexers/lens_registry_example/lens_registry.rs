@@ -1,9 +1,7 @@
 use super::super::super::typings::lens_registry_example::events::lens_registry::{
     no_extensions, HandleLinkedEvent, LensRegistryEventType,
 };
-use rindexer_core::{
-    generator::event_callback_registry::EventCallbackRegistry, EthereumSqlTypeWrapper,
-};
+use rindexer::{generator::event_callback_registry::EventCallbackRegistry, EthereumSqlTypeWrapper};
 use std::sync::Arc;
 
 async fn handle_linked_handler(registry: &mut EventCallbackRegistry) {
