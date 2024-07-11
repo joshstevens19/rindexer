@@ -1,4 +1,4 @@
-use crate::manifest::yaml::Network;
+use crate::manifest::network::Network;
 use crate::types::code::Code;
 
 fn network_provider_name(network: &Network) -> String {

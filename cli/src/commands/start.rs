@@ -1,7 +1,8 @@
 use crate::cli_interface::StartSubcommands;
 use crate::console::{print_error_message, print_success_message};
 use crate::rindexer_yaml::validate_rindexer_yaml_exist;
-use rindexer::manifest::yaml::{read_manifest, ProjectType, YAML_CONFIG_NAME};
+use rindexer::manifest::core::ProjectType;
+use rindexer::manifest::yaml::{read_manifest, YAML_CONFIG_NAME};
 use rindexer::{
     rindexer_info, setup_info_logger, start_rindexer_no_code, GraphqlOverrideSettings,
     IndexerNoCodeDetails, PostgresClient, StartNoCodeDetails,

@@ -8,10 +8,12 @@ use crate::helpers::{
     CreateModFileError, WriteFileError,
 };
 use crate::indexer::Indexer;
-use crate::manifest::yaml::{
-    read_manifest, Contract, Global, Manifest, Network, ReadManifestError, Storage,
-    YAML_CONFIG_NAME,
-};
+use crate::manifest::contract::Contract;
+use crate::manifest::core::Manifest;
+use crate::manifest::global::Global;
+use crate::manifest::network::Network;
+use crate::manifest::storage::Storage;
+use crate::manifest::yaml::{read_manifest, ReadManifestError, YAML_CONFIG_NAME};
 
 use super::events_bindings::{
     abigen_contract_file_name, abigen_contract_name, generate_event_bindings,
@@ -264,7 +266,7 @@ pub fn generate_rindexer_handlers(
             handlers.push_str(
                 r#"
         use std::path::PathBuf;
-        use rindexer::generator::event_callback_registry::EventCallbackRegistry;
+        use rindexer::event::callback_registry::EventCallbackRegistry;
         
         pub async fn register_all_handlers(manifest_path: PathBuf) -> EventCallbackRegistry {
              let mut registry = EventCallbackRegistry::new();

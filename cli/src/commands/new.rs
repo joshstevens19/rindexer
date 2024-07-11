@@ -6,10 +6,11 @@ use ethers::addressbook::Address;
 use ethers::prelude::{ValueOrArray, U64};
 use rindexer::generator::build::generate_rust_project;
 use rindexer::generator::generate_docker_file;
-use rindexer::manifest::yaml::{
-    write_manifest, Contract, ContractDetails, CsvDetails, Manifest, Network, PostgresDetails,
-    ProjectType, Storage, YAML_CONFIG_NAME,
-};
+use rindexer::manifest::contract::{Contract, ContractDetails};
+use rindexer::manifest::core::{Manifest, ProjectType};
+use rindexer::manifest::network::Network;
+use rindexer::manifest::storage::{CsvDetails, PostgresDetails, Storage};
+use rindexer::manifest::yaml::{write_manifest, YAML_CONFIG_NAME};
 use rindexer::{write_file, WriteFileError};
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -1,3 +1,4 @@
+use crate::manifest::core::Manifest;
 use ethers::middleware::Middleware;
 use ethers::prelude::{Filter, Log};
 use ethers::providers::{Http, Provider, ProviderError, RetryClient, RetryClientBuilder};
@@ -94,6 +95,27 @@ pub async fn get_chain_id(rpc_url: &str) -> Result<U256, ProviderError> {
     let provider = Provider::new(Http::new(url));
 
     provider.get_chainid().await
+}
+
+#[derive(Debug)]
+pub struct CreateNetworkProvider {
+    pub network_name: String,
+    pub client: Arc<JsonRpcCachedProvider>,
+}
+
+impl CreateNetworkProvider {
+    pub fn create(manifest: &Manifest) -> Result<Vec<CreateNetworkProvider>, RetryClientError> {
+        let mut result: Vec<CreateNetworkProvider> = vec![];
+        for network in &manifest.networks {
+            let provider = create_client(&network.rpc, network.compute_units_per_second)?;
+            result.push(CreateNetworkProvider {
+                network_name: network.name.clone(),
+                client: provider,
+            });
+        }
+
+        Ok(result)
+    }
 }
 
 #[cfg(test)]

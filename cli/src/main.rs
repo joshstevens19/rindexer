@@ -18,7 +18,7 @@ use crate::commands::{
 use crate::console::print_error_message;
 use clap::Parser;
 use dotenv::{dotenv, from_path};
-use rindexer::manifest::yaml::ProjectType;
+use rindexer::manifest::core::ProjectType;
 use std::path::PathBuf;
 use std::str::FromStr;
 

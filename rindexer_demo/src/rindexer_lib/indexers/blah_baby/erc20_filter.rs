@@ -3,7 +3,7 @@ use super::super::super::typings::blah_baby::events::erc20_filter::{
     no_extensions, ERC20FilterEventType, TransferEvent,
 };
 use rindexer::{
-    generator::event_callback_registry::EventCallbackRegistry, rindexer_error, rindexer_info,
+    event::callback_registry::EventCallbackRegistry, rindexer_error, rindexer_info,
     EthereumSqlTypeWrapper, PgType, RindexerColorize,
 };
 use std::path::PathBuf;

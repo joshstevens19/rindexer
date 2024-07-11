@@ -1,6 +1,5 @@
 // Public modules
 pub mod build;
-pub mod event_callback_registry;
 
 mod context_bindings;
 mod docker;

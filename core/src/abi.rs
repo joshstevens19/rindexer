@@ -1,10 +1,10 @@
-use crate::database::postgres::{
-    solidity_type_to_db_type, solidity_type_to_ethereum_sql_type_wrapper,
+use crate::database::postgres::generate::solidity_type_to_db_type;
+use crate::database::postgres::sql_type_wrapper::{
+    solidity_type_to_ethereum_sql_type_wrapper, EthereumSqlTypeWrapper,
 };
-use crate::generator::event_callback_registry::IndexingContractSetup;
+use crate::event::contract_setup::IndexingContractSetup;
 use crate::helpers::{camel_to_snake, get_full_path};
-use crate::manifest::yaml::Contract;
-use crate::EthereumSqlTypeWrapper;
+use crate::manifest::contract::Contract;
 use ethers::utils::keccak256;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -314,5 +314,85 @@ impl EventInfo {
         }
 
         Ok(format!("{}/{}", csv_folder.display(), csv_file_name))
+    }
+}
+
+pub struct GetAbiItemWithDbMap {
+    pub abi_item: ABIInput,
+    pub db_column_name: String,
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum GetAbiItemWithDbMapError {
+    #[error("Parameter not found: {0}")]
+    ParameterNotFound(String),
+}
+
+pub fn get_abi_item_with_db_map(
+    abi_items: &[ABIItem],
+    event_name: &str,
+    parameter_mapping: &[&str],
+) -> Result<GetAbiItemWithDbMap, GetAbiItemWithDbMapError> {
+    // Find the event in the ABI items
+    let event_item = abi_items
+        .iter()
+        .find(|item| item.name == event_name && item.type_ == "event");
+
+    match event_item {
+        Some(item) => {
+            let mut current_inputs = &item.inputs;
+            let mut db_column_name = String::new();
+
+            for param in parameter_mapping {
+                match current_inputs.iter().find(|input| input.name == *param) {
+                    Some(input) => {
+                        if !db_column_name.is_empty() {
+                            db_column_name.push('_');
+                        }
+                        db_column_name.push_str(&camel_to_snake(&input.name));
+
+                        if param == parameter_mapping.last().unwrap() {
+                            return Ok(GetAbiItemWithDbMap {
+                                abi_item: input.clone(),
+                                db_column_name,
+                            });
+                        } else {
+                            current_inputs = match input.type_.as_str() {
+                                "tuple" => {
+                                    if let Some(ref components) = input.components {
+                                        components
+                                    } else {
+                                        return Err(GetAbiItemWithDbMapError::ParameterNotFound(format!(
+                                            "Parameter {} is not a nested structure in event {} of contract",
+                                            param, event_name
+                                        )));
+                                    }
+                                },
+                                _ => return Err(GetAbiItemWithDbMapError::ParameterNotFound(format!(
+                                    "Parameter {} is not a nested structure in event {} of contract",
+                                    param, event_name
+                                ))),
+                            };
+                        }
+                    }
+                    None => {
+                        return Err(GetAbiItemWithDbMapError::ParameterNotFound(format!(
+                            "Parameter {} not found in event {} of contract",
+                            param, event_name
+                        )));
+                    }
+                }
+            }
+
+            Err(GetAbiItemWithDbMapError::ParameterNotFound(format!(
+                "Parameter {} not found in event {} of contract",
+                parameter_mapping.join("."),
+                event_name
+            )))
+        }
+        None => Err(GetAbiItemWithDbMapError::ParameterNotFound(format!(
+            "Event {} not found in contract ABI",
+            event_name
+        ))),
     }
 }

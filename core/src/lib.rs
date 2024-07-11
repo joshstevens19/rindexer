@@ -5,7 +5,8 @@ pub mod manifest;
 
 mod database;
 pub use database::postgres::{
-    drop_tables_for_indexer_sql, setup_postgres, EthereumSqlTypeWrapper, PostgresClient,
+    client::PostgresClient, generate::drop_tables_for_indexer_sql, setup::setup_postgres,
+    sql_type_wrapper::EthereumSqlTypeWrapper,
 };
 
 mod simple_file_formatters;
@@ -17,11 +18,12 @@ pub use helpers::{
     WriteFileError,
 };
 mod api;
-pub use api::{generate_graphql_queries, GraphQLSettings, GraphqlOverrideSettings};
+pub use api::{generate_graphql_queries, GraphqlOverrideSettings};
 
 mod logger;
 pub use logger::setup_info_logger;
 mod abi;
+pub mod event;
 pub mod provider;
 mod start;
 mod types;
