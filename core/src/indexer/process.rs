@@ -77,6 +77,9 @@ pub enum ProcessEventsWithDependenciesError {
 
     #[error("Could not run all the logs processes {0}")]
     JoinError(JoinError),
+
+    #[error("Could not parse topic id: {0}")]
+    CouldNotParseTopicId(String),
 }
 
 async fn process_events_with_dependencies(
@@ -154,7 +157,15 @@ async fn process_events_dependency_tree(
                     .map_err(ProcessEventsWithDependenciesError::ProcessLogs)?;
 
                 if event_processing_config.live_indexing {
-                    let topic_id = event_processing_config.topic_id.parse::<H256>().unwrap();
+                    let topic_id =
+                        event_processing_config
+                            .topic_id
+                            .parse::<H256>()
+                            .map_err(|e| {
+                                ProcessEventsWithDependenciesError::CouldNotParseTopicId(
+                                    e.to_string(),
+                                )
+                            })?;
                     live_indexing_events
                         .lock()
                         .await

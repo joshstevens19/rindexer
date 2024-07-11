@@ -147,7 +147,7 @@ pub async fn start(
                     indexing_details: IndexerNoCodeDetails { enabled: false },
                     graphql_details: GraphqlOverrideSettings {
                         enabled: true,
-                        override_port: port.as_ref().map(|port| port.parse().unwrap()),
+                        override_port: port.as_ref().and_then(|port| port.parse().ok()),
                     },
                 };
 
@@ -162,7 +162,7 @@ pub async fn start(
                     indexing_details: IndexerNoCodeDetails { enabled: true },
                     graphql_details: GraphqlOverrideSettings {
                         enabled: true,
-                        override_port: port.as_ref().map(|port| port.parse().unwrap()),
+                        override_port: port.as_ref().and_then(|port| port.parse().ok()),
                     },
                 };
 

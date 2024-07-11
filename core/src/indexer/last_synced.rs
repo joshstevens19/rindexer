@@ -35,7 +35,7 @@ async fn get_last_synced_block_number_for_csv(
     contract_name: &str,
     network: &str,
     event_name: &str,
-) -> Result<Option<U64>, CsvError> {
+) -> Result<Option<U64>, UpdateLastSyncedBlockNumberCsv> {
     let file_path = build_last_synced_block_number_for_csv(
         project_path,
         csv_details,
@@ -58,7 +58,10 @@ async fn get_last_synced_block_number_for_csv(
         let parse = U64::from_dec_str(value);
         return match parse {
             Ok(value) => Ok(Some(value)),
-            Err(e) => Err(CsvError::ParseError(value.to_string(), e.to_string())),
+            Err(e) => Err(UpdateLastSyncedBlockNumberCsv::ParseError(
+                value.to_string(),
+                e.to_string(),
+            )),
         };
     }
 
@@ -127,7 +130,7 @@ pub async fn get_last_synced_block_number(
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum CsvError {
+pub enum UpdateLastSyncedBlockNumberCsv {
     #[error("File IO error: {0}")]
     FileIo(#[from] std::io::Error),
 
@@ -142,7 +145,7 @@ async fn update_last_synced_block_number_for_csv_to_file(
     network: &str,
     event_name: &str,
     to_block: U64,
-) -> Result<(), CsvError> {
+) -> Result<(), UpdateLastSyncedBlockNumberCsv> {
     let file_path = build_last_synced_block_number_for_csv(
         project_path,
         csv_details,
@@ -160,7 +163,13 @@ async fn update_last_synced_block_number_for_csv_to_file(
     )
     .await?;
 
-    if last_block.is_none() || to_block > last_block.unwrap() {
+    let to_block_higher_then_last_block = if let Some(last_block_value) = last_block {
+        to_block > last_block_value
+    } else {
+        true
+    };
+
+    if last_block.is_none() || to_block_higher_then_last_block {
         let temp_file_path = format!("{}.tmp", file_path);
 
         let mut file = File::create(&temp_file_path).await?;

@@ -134,7 +134,11 @@ where
         Self {
             callback: transfer_handler(closure),
             context: Arc::new(EventContext {
-                database: Arc::new(PostgresClient::new().await.unwrap()),
+                database: Arc::new(
+                    PostgresClient::new()
+                        .await
+                        .expect("Failed to connect to Postgres"),
+                ),
                 csv: Arc::new(csv),
                 extensions: Arc::new(extensions),
             }),

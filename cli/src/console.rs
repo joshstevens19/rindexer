@@ -17,10 +17,10 @@ pub fn print_success_message(success_message: &str) {
 }
 
 pub fn prompt_for_optional_input<T: FromStr>(prompt: &str, pattern: Option<&str>) -> Option<T> {
-    let regex = pattern.map(|p| Regex::new(p).unwrap());
+    let regex = pattern.map(|p| Regex::new(p).expect("Invalid regex pattern"));
     loop {
         print!("{} (skip by pressing Enter): ", prompt.yellow());
-        io::stdout().flush().unwrap();
+        io::stdout().flush().expect("Failed to flush stdout");
 
         let mut input = String::new();
         io::stdin()
@@ -74,7 +74,7 @@ pub fn prompt_for_input_list(
             field_name.to_string().green(),
             options_str.yellow()
         );
-        io::stdout().flush().unwrap();
+        io::stdout().flush().expect("Failed to flush stdout");
 
         let mut input = String::new();
         io::stdin()
@@ -103,12 +103,12 @@ pub fn prompt_for_input(
     pattern_failure_message: Option<&str>,
     current_value: Option<&str>,
 ) -> String {
-    let regex = pattern.map(|p| Regex::new(p).unwrap());
+    let regex = pattern.map(|p| Regex::new(p).expect("Invalid regex pattern"));
     match current_value {
         Some(value) => value.to_string(),
         None => loop {
             print!("{}: ", field_name.yellow());
-            io::stdout().flush().unwrap();
+            io::stdout().flush().expect("Failed to flush stdout");
 
             let mut input = String::new();
             io::stdin()

@@ -71,24 +71,27 @@ async fn main() {
 }
 
 fn generate() {
-    let path =
-        PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap();
-    let manifest = read_manifest(&path).unwrap();
-    rindexer::generator::build::generate_rindexer_typings(manifest, &path).unwrap();
+    let path = PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml")
+        .expect("Invalid path");
+    let manifest = read_manifest(&path).expect("Failed to read manifest");
+    rindexer::generator::build::generate_rindexer_typings(manifest, &path)
+        .expect("Failed to generate typings");
 }
 
 fn generate_code_test() {
-    let path =
-        PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap();
-    let manifest = read_manifest(&path).unwrap();
+    let path = PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml")
+        .expect("Invalid path");
+    let manifest = read_manifest(&path).expect("Failed to read manifest");
 
-    rindexer::generator::build::generate_rindexer_handlers(manifest, &path).unwrap();
+    rindexer::generator::build::generate_rindexer_handlers(manifest, &path)
+        .expect("Failed to generate handlers");
 }
 
 fn generate_all() {
-    let path =
-        PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml").unwrap();
-    rindexer::generator::build::generate_rindexer_typings_and_handlers(&path).unwrap();
+    let path = PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml")
+        .expect("Invalid path");
+    rindexer::generator::build::generate_rindexer_typings_and_handlers(&path)
+        .expect("Failed to generate typings and handlers");
 }
 
 #[cfg(test)]

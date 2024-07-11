@@ -333,7 +333,6 @@ pub fn get_abi_item_with_db_map(
     event_name: &str,
     parameter_mapping: &[&str],
 ) -> Result<GetAbiItemWithDbMap, GetAbiItemWithDbMapError> {
-    // Find the event in the ABI items
     let event_item = abi_items
         .iter()
         .find(|item| item.name == event_name && item.type_ == "event");
@@ -351,11 +350,13 @@ pub fn get_abi_item_with_db_map(
                         }
                         db_column_name.push_str(&camel_to_snake(&input.name));
 
-                        if param == parameter_mapping.last().unwrap() {
-                            return Ok(GetAbiItemWithDbMap {
-                                abi_item: input.clone(),
-                                db_column_name,
-                            });
+                        if let Some(result_param) = parameter_mapping.last() {
+                            if result_param == param {
+                                return Ok(GetAbiItemWithDbMap {
+                                    abi_item: input.clone(),
+                                    db_column_name,
+                                });
+                            }
                         } else {
                             current_inputs = match input.type_.as_str() {
                                 "tuple" => {

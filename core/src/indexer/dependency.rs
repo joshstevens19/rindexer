@@ -174,13 +174,16 @@ impl ContractEventDependencies {
                     relationships_map,
                     visited,
                 );
-                if next_tree.is_none() {
-                    next_tree = Some(tree);
-                } else {
-                    next_tree = Some(Arc::new(ContractEventDependencies::merge_trees(
-                        &next_tree.unwrap(),
-                        &tree,
-                    )));
+                match next_tree {
+                    None => {
+                        next_tree = Some(tree);
+                    }
+                    Some(next_tree_value) => {
+                        next_tree = Some(Arc::new(ContractEventDependencies::merge_trees(
+                            &next_tree_value,
+                            &tree,
+                        )));
+                    }
                 }
             }
         }
@@ -340,7 +343,7 @@ impl ContractEventsDependenciesConfig {
                     event_dependencies: dependencies
                         .iter()
                         .find(|d| d.contract_name == contract_name)
-                        .unwrap()
+                        .expect("Failed to find contract dependencies")
                         .event_dependencies
                         .clone(),
                     events_config: vec![event_processing_config],

@@ -175,7 +175,7 @@ fn spawn_start_server(
                     let child_arc = Arc::new(Mutex::new(Some(child)));
                     let child_clone_for_thread = Arc::clone(&child_arc);
 
-                    if let Some(tx) = tx_arc.lock().unwrap().take() {
+                    if let Some(tx) = tx_arc.lock().expect("Failed to lock tx arc").take() {
                         if let Err(e) = tx.send(pid) {
                             error!("Failed to send PID: {}", e);
                             break;
@@ -211,12 +211,16 @@ fn spawn_start_server(
                         }
                     });
 
-                    // Wait for child process to finish
-                    if let Err(e) = child_arc.lock().unwrap().as_mut().unwrap().wait() {
+                    if let Err(e) = child_arc
+                        .lock()
+                        .expect("Failed to lock child arc")
+                        .as_mut()
+                        .expect("Failed to get child")
+                        .wait()
+                    {
                         error!("Failed to wait on child process: {}", e);
                     }
 
-                    // Restart the server if not manually stopped
                     if !MANUAL_STOP.load(Ordering::SeqCst) {
                         tokio::time::sleep(Duration::from_secs(1)).await;
                     } else {

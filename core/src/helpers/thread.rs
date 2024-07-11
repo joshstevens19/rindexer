@@ -39,7 +39,7 @@ mod tests {
         let data = b"hello";
         let result = writer.write(data);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), data.len());
+        assert_eq!(result.expect("Failed to write"), data.len());
     }
 
     #[test]
@@ -54,11 +54,11 @@ mod tests {
         set_thread_no_logging();
         THREAD_STDOUT.with(|thread_stdout| {
             let mut thread_stdout = thread_stdout.borrow_mut();
-            let writer = thread_stdout.as_mut().unwrap();
+            let writer = thread_stdout.as_mut().expect("Failed to get thread stdout");
             let data = b"hello";
             let result = writer.write(data);
             assert!(result.is_ok());
-            assert_eq!(result.unwrap(), data.len());
+            assert_eq!(result.expect("Failed to write"), data.len());
         });
     }
 
@@ -67,11 +67,11 @@ mod tests {
         set_thread_no_logging();
         THREAD_STDERR.with(|thread_stderr| {
             let mut thread_stderr = thread_stderr.borrow_mut();
-            let writer = thread_stderr.as_mut().unwrap();
+            let writer = thread_stderr.as_mut().expect("Failed to get thread stderr");
             let data = b"error";
             let result = writer.write(data);
             assert!(result.is_ok());
-            assert_eq!(result.unwrap(), data.len());
+            assert_eq!(result.expect("Failed to write"), data.len());
         });
     }
 }

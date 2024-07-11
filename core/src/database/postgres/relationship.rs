@@ -113,7 +113,15 @@ impl Relationship {
     fn foreign_key_construct_name(&self) -> String {
         format!(
             "fk_{linked_db_table_name}_{linked_db_table_column}",
-            linked_db_table_name = self.linked_to.db_table_name.split('.').last().unwrap(),
+            linked_db_table_name = self
+                .linked_to
+                .db_table_name
+                .split('.')
+                .last()
+                .unwrap_or_else(|| panic!(
+                    "Failed to split and then get schema for table: {}",
+                    self.linked_to.db_table_column
+                )),
             linked_db_table_column = self.linked_to.db_table_column
         )
     }
@@ -157,7 +165,15 @@ impl Relationship {
     fn unique_construct_name(&self) -> String {
         format!(
             "unique_{linked_db_table_name}_{linked_db_table_column}",
-            linked_db_table_name = self.linked_to.db_table_name.split('.').last().unwrap(),
+            linked_db_table_name = self
+                .linked_to
+                .db_table_name
+                .split('.')
+                .last()
+                .unwrap_or_else(|| panic!(
+                    "Failed to split and then get schema for table: {}",
+                    self.linked_to.db_table_column
+                )),
             linked_db_table_column = self.linked_to.db_table_column
         )
     }
@@ -180,7 +196,13 @@ impl Relationship {
             // CONCURRENTLY is used to avoid locking the table for writes
             "DROP INDEX CONCURRENTLY IF EXISTS {}.{};",
             // get schema else drop won't work
-            self.db_table_name.split('.').next().unwrap(),
+            self.db_table_name
+                .split('.')
+                .next()
+                .unwrap_or_else(|| panic!(
+                    "Failed to split and then get schema for table: {}",
+                    self.db_table_column
+                )),
             self.index_name(),
         ))
     }
@@ -226,7 +248,14 @@ impl Relationship {
     pub fn index_name(&self) -> String {
         format!(
             "idx_{db_table_name}_{db_table_column}",
-            db_table_name = self.db_table_name.split('.').last().unwrap(),
+            db_table_name = self
+                .db_table_name
+                .split('.')
+                .last()
+                .unwrap_or_else(|| panic!(
+                    "Failed to split and then get schema for table: {}",
+                    self.db_table_column
+                )),
             db_table_column = self.db_table_column,
         )
     }

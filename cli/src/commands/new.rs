@@ -127,7 +127,7 @@ pub fn handle_new_command(
                 ValueOrArray::<Address>::Value(
                     "0xae78736cd615f374d3085123a210448e74fc6393"
                         .parse::<Address>()
-                        .unwrap(),
+                        .expect("Invalid address"),
                 ),
                 None,
                 Some(U64::from(18900000)),

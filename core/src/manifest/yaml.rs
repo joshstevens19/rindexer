@@ -180,6 +180,9 @@ pub enum ReadManifestError {
 
     #[error("Could not validate manifest: {0}")]
     CouldNotValidateManifest(ValidateManifestError),
+
+    #[error("No project path found using parent of manifest path")]
+    NoProjectPathFoundUsingParentOfManifestPath,
 }
 
 pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError> {
@@ -213,10 +216,15 @@ pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError>
         }
     }
 
-    validate_manifest(file_path.parent().unwrap(), &manifest_after_transform)
-        .map_err(ReadManifestError::CouldNotValidateManifest)?;
-
-    Ok(manifest_after_transform)
+    let project_path = file_path.parent();
+    match project_path {
+        None => Err(ReadManifestError::NoProjectPathFoundUsingParentOfManifestPath),
+        Some(project_path) => {
+            validate_manifest(project_path, &manifest_after_transform)
+                .map_err(ReadManifestError::CouldNotValidateManifest)?;
+            Ok(manifest_after_transform)
+        }
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
