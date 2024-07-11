@@ -77,7 +77,7 @@ const options = {
     appendPlugins,
     graphileBuildOptions: {
         pgOmitListSuffix: false,
-        pgSimplifyAllRows: true,
+        pgSimplifyAllRows: false,
         pgShortPk: false,
         connectionFilterAllowedOperators: [
             "isNull",
