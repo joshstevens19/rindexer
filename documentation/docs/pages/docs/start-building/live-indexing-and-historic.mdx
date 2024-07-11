@@ -37,6 +37,10 @@ If you want to index live data you can just remove the [start_block](/docs/start
 and [end_block](/docs/start-building/yaml-config/contracts#end_block) from the YAML configuration file. This will index
 from the latest block and then index all new blocks as they come in.
 
+:::info
+Important to know this will NOT track last synced block and when you start and stop the indexer it will start from the latest block.
+:::
+
 ```yaml
 name: rETHIndexer
 description: My first rindexer project

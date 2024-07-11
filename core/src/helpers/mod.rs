@@ -3,6 +3,7 @@ mod thread;
 pub use thread::set_thread_no_logging;
 
 mod file;
+
 pub use file::{
     create_mod_file, format_all_files_for_project, write_file, CreateModFileError, WriteFileError,
 };

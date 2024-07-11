@@ -327,7 +327,7 @@ impl PostgresClient {
             })
             .collect();
 
-        debug!("Prepared data: {:?}", prepared_data);
+        //debug!("Prepared data: {:?}", prepared_data);
 
         let sink = self
             .copy_in(&stmt)

@@ -91,6 +91,18 @@ pub struct IndexingEventsProgressState {
     pub events: Vec<IndexingEventProgress>,
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum SyncError {
+    #[error("Event with id {0} not found")]
+    EventNotFound(String),
+
+    #[error("Block number conversion error for total blocks: from {0} to {1}")]
+    BlockNumberConversionTotalBlocksError(U64, U64),
+
+    #[error("Block number conversion error for synced blocks: from {0} to {1}")]
+    BlockNumberConversionSyncedBlocksError(U64, U64),
+}
+
 impl IndexingEventsProgressState {
     pub async fn monitor(
         event_information: Vec<EventCallbackRegistryInformation>,
@@ -133,17 +145,46 @@ impl IndexingEventsProgressState {
         Arc::new(Mutex::new(Self { events }))
     }
 
-    pub fn update_last_synced_block(&mut self, id: &str, new_last_synced_block: U64) {
+    pub fn update_last_synced_block(
+        &mut self,
+        id: &str,
+        new_last_synced_block: U64,
+    ) -> Result<(), SyncError> {
         for event in &mut self.events {
             if event.id == id {
                 if event.progress < 1.0 {
                     if event.syncing_to_block > event.last_synced_block {
-                        let total_blocks = event.syncing_to_block - event.starting_block;
-                        let blocks_synced = new_last_synced_block - event.starting_block;
+                        let total_blocks: u64 = event
+                            .syncing_to_block
+                            .checked_sub(event.starting_block)
+                            .ok_or(SyncError::BlockNumberConversionTotalBlocksError(
+                                event.syncing_to_block,
+                                event.starting_block,
+                            ))?
+                            .try_into()
+                            .map_err(|_| {
+                                SyncError::BlockNumberConversionTotalBlocksError(
+                                    event.syncing_to_block,
+                                    event.starting_block,
+                                )
+                            })?;
+
+                        let blocks_synced: u64 = new_last_synced_block
+                            .checked_sub(event.starting_block)
+                            .ok_or(SyncError::BlockNumberConversionSyncedBlocksError(
+                                new_last_synced_block,
+                                event.starting_block,
+                            ))?
+                            .try_into()
+                            .map_err(|_| {
+                                SyncError::BlockNumberConversionSyncedBlocksError(
+                                    new_last_synced_block,
+                                    event.starting_block,
+                                )
+                            })?;
 
                         // Calculate progress based on the proportion of total blocks synced so far
-                        event.progress =
-                            (blocks_synced.as_u64() as f64) / (total_blocks.as_u64() as f64);
+                        event.progress = (blocks_synced as f64) / (total_blocks as f64);
                         event.progress = event.progress.clamp(0.0, 1.0);
                     }
 
@@ -165,8 +206,10 @@ impl IndexingEventsProgressState {
                 }
 
                 event.last_synced_block = new_last_synced_block;
-                break;
+                return Ok(());
             }
         }
+
+        Err(SyncError::EventNotFound(id.to_string()))
     }
 }
