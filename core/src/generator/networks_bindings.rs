@@ -39,7 +39,7 @@ fn generate_network_provider_code(network: &Network) -> Code {
     Code::new(format!(
         r#"
             pub fn {fn_name}_cache() -> Arc<JsonRpcCachedProvider> {{
-                {provider_lazy_name}.clone()
+                Arc::clone(&{provider_lazy_name})
             }}
             
             pub fn {fn_name}() -> Arc<Provider<RetryClient<Http>>> {{

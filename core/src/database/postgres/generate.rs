@@ -1,7 +1,6 @@
 use crate::abi::{
     ABIInput, ABIItem, EventInfo, GenerateAbiPropertiesType, ParamTypeError, ReadAbiError,
 };
-use crate::generator::build::{contract_name_to_filter_name, is_filter};
 use crate::helpers::camel_to_snake;
 use crate::indexer::Indexer;
 use crate::types::code::Code;
@@ -66,7 +65,7 @@ fn generate_event_table_sql(abi_inputs: &[EventInfo], schema_name: &str) -> Stri
 fn generate_internal_event_table_sql(
     abi_inputs: &[EventInfo],
     schema_name: &str,
-    networks: Vec<String>,
+    networks: Vec<&str>,
 ) -> String {
     abi_inputs.iter().map(|event_info| {
         let table_name = format!(
@@ -108,20 +107,21 @@ pub fn generate_tables_for_indexer_sql(
     let mut sql = "CREATE SCHEMA IF NOT EXISTS rindexer_internal;".to_string();
 
     for contract in &indexer.contracts {
-        let contract_name = if is_filter(contract) {
-            contract_name_to_filter_name(&contract.name)
-        } else {
-            contract.name.clone()
-        };
+        let contract_name = contract.before_modify_name_if_filter_readonly();
         let abi_items = ABIItem::read_abi_items(project_path, contract)
             .map_err(GenerateTablesForIndexerSqlError::ReadAbiError)?;
-        let event_names = ABIItem::extract_event_names_and_signatures_from_abi(&abi_items)
+        let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)
             .map_err(GenerateTablesForIndexerSqlError::ParamTypeError)?;
         let schema_name = generate_indexer_contract_schema_name(&indexer.name, &contract_name);
         sql.push_str(format!("CREATE SCHEMA IF NOT EXISTS {};", schema_name).as_str());
         info!("Creating schema if not exists: {}", schema_name);
 
-        let networks: Vec<String> = contract.details.iter().map(|d| d.network.clone()).collect();
+        let networks: Vec<&str> = contract
+            .details
+            .iter()
+            .map(|d| d.network.as_str())
+            .collect();
+
         sql.push_str(&generate_event_table_sql(&event_names, &schema_name));
         sql.push_str(&generate_internal_event_table_sql(
             &event_names,
@@ -182,11 +182,7 @@ pub fn drop_tables_for_indexer_sql(indexer: &Indexer) -> Code {
     let mut sql = "DROP SCHEMA IF EXISTS rindexer_internal CASCADE;".to_string();
 
     for contract in &indexer.contracts {
-        let contract_name = if is_filter(contract) {
-            contract_name_to_filter_name(&contract.name)
-        } else {
-            contract.name.clone()
-        };
+        let contract_name = contract.before_modify_name_if_filter_readonly();
         let schema_name = generate_indexer_contract_schema_name(&indexer.name, &contract_name);
         sql.push_str(format!("DROP SCHEMA IF EXISTS {} CASCADE;", schema_name).as_str());
     }

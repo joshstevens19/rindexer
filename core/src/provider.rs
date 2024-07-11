@@ -29,7 +29,7 @@ impl JsonRpcCachedProvider {
 
         if let Some((timestamp, block)) = &*cache_guard {
             if timestamp.elapsed() < Duration::from_millis(300) {
-                return Ok(Some(block.clone()));
+                return Ok(Some(Arc::clone(block)));
             }
         }
 
@@ -37,7 +37,7 @@ impl JsonRpcCachedProvider {
 
         if let Some(block) = latest_block {
             let arc_block = Arc::new(block);
-            *cache_guard = Some((Instant::now(), arc_block.clone()));
+            *cache_guard = Some((Instant::now(), Arc::clone(&arc_block)));
             return Ok(Some(arc_block));
         } else {
             *cache_guard = None;
@@ -59,7 +59,7 @@ impl JsonRpcCachedProvider {
     }
 
     pub fn get_inner_provider(&self) -> Arc<Provider<RetryClient<Http>>> {
-        self.provider.clone()
+        Arc::clone(&self.provider)
     }
 }
 #[derive(Error, Debug)]

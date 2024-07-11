@@ -23,7 +23,7 @@ lazy_static! {
     .expect("Error creating provider");
 }
 pub fn get_polygon_provider_cache() -> Arc<JsonRpcCachedProvider> {
-    POLYGON_PROVIDER.clone()
+    Arc::clone(&POLYGON_PROVIDER)
 }
 
 pub fn get_polygon_provider() -> Arc<Provider<RetryClient<Http>>> {
@@ -31,7 +31,7 @@ pub fn get_polygon_provider() -> Arc<Provider<RetryClient<Http>>> {
 }
 
 pub fn get_base_provider_cache() -> Arc<JsonRpcCachedProvider> {
-    BASE_PROVIDER.clone()
+    Arc::clone(&BASE_PROVIDER)
 }
 
 pub fn get_base_provider() -> Arc<Provider<RetryClient<Http>>> {

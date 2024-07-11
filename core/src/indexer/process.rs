@@ -139,10 +139,10 @@ async fn process_events_dependency_tree(
                     info_log_name: event_processing_config.info_log_name.clone(),
                     topic_id: event_processing_config.topic_id.clone(),
                     event_name: event_processing_config.event_name.clone(),
-                    network_contract: event_processing_config.network_contract.clone(),
+                    network_contract: Arc::clone(&event_processing_config.network_contract),
                     filter,
-                    registry: event_processing_config.registry.clone(),
-                    progress: event_processing_config.progress.clone(),
+                    registry: Arc::clone(&event_processing_config.registry),
+                    progress: Arc::clone(&event_processing_config.progress),
                     database: event_processing_config.database.clone(),
                     csv_details: event_processing_config.csv_details.clone(),
                     execute_events_logs_in_order: event_processing_config.index_event_in_order,
@@ -189,7 +189,7 @@ async fn process_events_dependency_tree(
 
         // If there are more dependencies to process, push the next level onto the stack
         if let Some(next_tree) = &*current_tree.then {
-            stack.push(next_tree.clone());
+            stack.push(Arc::clone(next_tree));
         }
     }
 
@@ -364,11 +364,11 @@ async fn process_events_dependency_tree(
                                             logs_params.event_name.clone(),
                                             logs_params.topic_id.clone(),
                                             logs_params.execute_events_logs_in_order,
-                                            logs_params.progress.clone(),
-                                            logs_params.network_contract.clone(),
+                                            Arc::clone(&logs_params.progress),
+                                            Arc::clone(&logs_params.network_contract),
                                             logs_params.database.clone(),
                                             logs_params.csv_details.clone(),
-                                            logs_params.registry.clone(),
+                                            Arc::clone(&logs_params.registry),
                                             fetched_logs,
                                         )
                                         .await;
@@ -555,11 +555,11 @@ async fn process_logs(params: ProcessLogsParams) -> Result<(), Box<ProviderError
             params.event_name.clone(),
             params.topic_id.clone(),
             params.execute_events_logs_in_order,
-            params.progress.clone(),
-            params.network_contract.clone(),
+            Arc::clone(&params.progress),
+            Arc::clone(&params.network_contract),
             params.database.clone(),
             params.csv_details.clone(),
-            params.registry.clone(),
+            Arc::clone(&params.registry),
             result,
         )
         .await
@@ -589,7 +589,7 @@ async fn handle_logs_result(
             let fn_data = result
                 .logs
                 .iter()
-                .map(|log| EventResult::new(network_contract.clone(), log))
+                .map(|log| EventResult::new(Arc::clone(&network_contract), log))
                 .collect::<Vec<_>>();
 
             debug!(

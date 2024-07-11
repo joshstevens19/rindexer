@@ -98,7 +98,7 @@ impl ContractEventDependencies {
                     e.dependency_events.extend(dependency_events.clone());
                 })
                 .or_insert(EventDependencies {
-                    tree: tree.clone(),
+                    tree: Arc::clone(&tree),
                     dependency_events,
                 });
         }

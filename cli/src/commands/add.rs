@@ -8,6 +8,7 @@ use ethers_etherscan::Client;
 use rindexer::manifest::contract::{Contract, ContractDetails};
 use rindexer::manifest::yaml::{read_manifest, write_manifest, YAML_CONFIG_NAME};
 use rindexer::write_file;
+use std::borrow::Cow;
 use std::fs;
 use std::path::PathBuf;
 
@@ -30,30 +31,32 @@ pub async fn handle_add_contract_command(
         return Err(err.into());
     }
 
-    let networks = manifest
+    let networks: Vec<(&str, u32)> = manifest
         .networks
         .iter()
-        .map(|network| (network.name.clone(), network.chain_id))
-        .collect::<Vec<_>>();
+        .map(|network| (network.name.as_str(), network.chain_id))
+        .collect();
+
     if networks.is_empty() {
-        print_error_message("No networks found in rindexer.yaml. Please add a networks first before downloading ABIs.");
+        print_error_message("No networks found in rindexer.yaml. Please add a network first before downloading ABIs.");
         return Err("No networks found in rindexer.yaml.".into());
     }
 
-    let network_choices = networks
-        .iter()
-        .map(|(name, _)| name.clone())
-        .collect::<Vec<_>>();
+    let network_choices: Vec<String> = networks.iter().map(|(name, _)| name.to_string()).collect();
 
     let network = if network_choices.len() > 1 {
-        prompt_for_input_list("Enter Network Name", &network_choices, None)
+        Cow::Owned(prompt_for_input_list(
+            "Enter Network Name",
+            &network_choices,
+            None,
+        ))
     } else {
-        network_choices[0].clone()
+        Cow::Borrowed(&network_choices[0])
     };
 
     let chain_id = networks
         .iter()
-        .find(|(name, _)| name == &network)
+        .find(|(name, _)| *name == network.as_ref())
         .expect("Unreachable: Network not found in networks")
         .1;
 
@@ -110,14 +113,14 @@ pub async fn handle_add_contract_command(
             .iter()
             .find(|c| c.name == item.contract_name);
         let contract_name = if contract_name.is_some() {
-            prompt_for_input(
+            Cow::Owned(prompt_for_input(
                 &format!("Enter a name for the contract as it is clashing with another registered contract name in the yaml: {}", item.contract_name),
                 None,
                 None,
                 None,
-            )
+            ))
         } else {
-            item.contract_name.clone()
+            Cow::Borrowed(&item.contract_name)
         };
 
         let abi_file_name = format!("{}.abi.json", contract_name);
@@ -135,8 +138,13 @@ pub async fn handle_add_contract_command(
             contract_name, &abi_path_relative
         ));
 
+        let success_message = format!(
+            "Updated rindexer.yaml with contract: {} and ABI path: {}",
+            contract_name, abi_path_relative
+        );
+
         manifest.contracts.push(Contract {
-            name: contract_name.clone(),
+            name: contract_name.into_owned(),
             details: vec![ContractDetails::new_with_address(
                 network.to_string(),
                 ValueOrArray::<Address>::Value(address),
@@ -144,7 +152,7 @@ pub async fn handle_add_contract_command(
                 None,
                 None,
             )],
-            abi: abi_path_relative.clone(),
+            abi: abi_path_relative,
             include_events: None,
             index_event_in_order: None,
             dependency_events: None,
@@ -157,10 +165,7 @@ pub async fn handle_add_contract_command(
             e
         })?;
 
-        print_success_message(&format!(
-            "Updated rindexer.yaml with contract: {} and ABI path: {}",
-            contract_name, abi_path_relative
-        ));
+        print_success_message(&success_message);
 
         break;
     }

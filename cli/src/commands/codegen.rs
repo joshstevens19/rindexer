@@ -12,10 +12,8 @@ pub async fn handle_codegen_command(
     subcommand: &CodegenSubcommands,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let CodegenSubcommands::GraphQL { endpoint } = subcommand {
-        let url = endpoint
-            .clone()
-            .unwrap_or_else(|| "http://localhost:3001".to_string());
-        generate_graphql_queries(&url, &project_path)
+        let url = endpoint.as_deref().unwrap_or("http://localhost:3001");
+        generate_graphql_queries(url, &project_path)
             .await
             .map_err(|e| {
                 print_error_message(&format!("Failed to generate graphql queries: {}", e));
@@ -43,7 +41,7 @@ pub async fn handle_codegen_command(
 
     match subcommand {
         CodegenSubcommands::Typings => {
-            generate_rindexer_typings(manifest, &rindexer_yaml_path).map_err(|e| {
+            generate_rindexer_typings(&manifest, &rindexer_yaml_path).map_err(|e| {
                 print_error_message(&format!("Failed to generate rindexer typings: {}", e));
                 e
             })?;

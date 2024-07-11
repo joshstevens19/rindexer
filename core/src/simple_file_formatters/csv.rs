@@ -1,28 +1,29 @@
 use csv::Writer;
 use std::fs::File;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub struct AsyncCsvAppender {
-    path: String,
+    path: Arc<Path>,
     writer_lock: Arc<Mutex<()>>,
 }
 
 impl AsyncCsvAppender {
-    pub fn new(file_path: String) -> Self {
+    pub fn new(file_path: &str) -> Self {
         AsyncCsvAppender {
-            path: file_path,
+            path: Arc::from(PathBuf::from(file_path)),
             writer_lock: Arc::new(Mutex::new(())),
         }
     }
 
     pub async fn append(&self, data: Vec<String>) -> Result<(), csv::Error> {
-        let lock = self.writer_lock.clone();
-        let path = self.path.clone();
+        let lock = Arc::clone(&self.writer_lock);
+        let path = Arc::clone(&self.path);
 
         tokio::task::spawn_blocking(move || {
             let _guard = lock.lock();
-            let file = File::options().create(true).append(true).open(&path)?;
+            let file = File::options().create(true).append(true).open(path)?;
             let mut writer = Writer::from_writer(file);
 
             writer.write_record(data)?;
@@ -34,8 +35,8 @@ impl AsyncCsvAppender {
     }
 
     pub async fn append_bulk(&self, records: Vec<Vec<String>>) -> Result<(), csv::Error> {
-        let lock = self.writer_lock.clone();
-        let path = self.path.clone();
+        let lock = Arc::clone(&self.writer_lock);
+        let path = Arc::clone(&self.path);
 
         tokio::task::spawn_blocking(move || {
             let _guard = lock.lock();
@@ -53,8 +54,8 @@ impl AsyncCsvAppender {
     }
 
     pub async fn append_header(&self, header: Vec<String>) -> Result<(), csv::Error> {
-        let lock = self.writer_lock.clone();
-        let path = self.path.clone();
+        let lock = Arc::clone(&self.writer_lock);
+        let path = Arc::clone(&self.path);
 
         tokio::task::spawn_blocking(move || {
             let _guard = lock.lock();

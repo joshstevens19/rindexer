@@ -8,7 +8,6 @@ use crate::helpers::{
     CreateModFileError, WriteFileError,
 };
 use crate::indexer::Indexer;
-use crate::manifest::contract::Contract;
 use crate::manifest::core::Manifest;
 use crate::manifest::global::Global;
 use crate::manifest::network::Network;
@@ -63,34 +62,6 @@ fn write_global(
     Ok(())
 }
 
-pub fn is_filter(contract: &Contract) -> bool {
-    let filter_count = contract
-        .details
-        .iter()
-        .filter(|details| details.indexing_contract_setup().is_filter())
-        .count();
-
-    if filter_count > 0 && filter_count != contract.details.len() {
-        // panic as this should never happen as validation has already happened
-        panic!("Cannot mix and match address and filter for the same contract definition.");
-    }
-
-    filter_count > 0
-}
-
-pub fn contract_name_to_filter_name(contract_name: &str) -> String {
-    format!("{}Filter", contract_name)
-}
-
-pub fn identify_and_modify_filter(contract: &mut Contract) -> bool {
-    if is_filter(contract) {
-        contract.override_name(contract_name_to_filter_name(&contract.name));
-        true
-    } else {
-        false
-    }
-}
-
 #[derive(thiserror::Error, Debug)]
 pub enum WriteIndexerEvents {
     #[error("Could not write events code: {0}")]
@@ -119,7 +90,7 @@ fn write_indexer_events(
     storage: &Storage,
 ) -> Result<(), WriteIndexerEvents> {
     for mut contract in indexer.contracts {
-        let is_filter = identify_and_modify_filter(&mut contract);
+        let is_filter = contract.identify_and_modify_filter();
         let events_code =
             generate_event_bindings(project_path, &indexer.name, &contract, is_filter, storage)
                 .map_err(WriteIndexerEvents::GenerateEventBindingCodeError)?;
@@ -184,7 +155,7 @@ pub enum GenerateRindexerTypingsError {
 }
 
 pub fn generate_rindexer_typings(
-    manifest: Manifest,
+    manifest: &Manifest,
     manifest_location: &Path,
 ) -> Result<(), GenerateRindexerTypingsError> {
     let project_path = manifest_location.parent();
@@ -194,12 +165,10 @@ pub fn generate_rindexer_typings(
 
             write_networks(&output, &manifest.networks)
                 .map_err(GenerateRindexerTypingsError::WriteNetworksError)?;
-            write_global(
-                &output,
-                &manifest.global.clone().unwrap_or_default(),
-                &manifest.networks,
-            )
-            .map_err(GenerateRindexerTypingsError::WriteGlobalError)?;
+            if let Some(global) = &manifest.global {
+                write_global(&output, global, &manifest.networks)
+                    .map_err(GenerateRindexerTypingsError::WriteGlobalError)?;
+            }
 
             write_indexer_events(
                 project_path,
@@ -268,13 +237,13 @@ pub fn generate_rindexer_handlers(
         use std::path::PathBuf;
         use rindexer::event::callback_registry::EventCallbackRegistry;
         
-        pub async fn register_all_handlers(manifest_path: PathBuf) -> EventCallbackRegistry {
+        pub async fn register_all_handlers(manifest_path: &PathBuf) -> EventCallbackRegistry {
              let mut registry = EventCallbackRegistry::new();
         "#,
             );
 
             for mut contract in manifest.contracts {
-                let is_filter = identify_and_modify_filter(&mut contract);
+                let is_filter = contract.identify_and_modify_filter();
 
                 let indexer_name = camel_to_snake(&manifest.name);
                 let contract_name = camel_to_snake(&contract.name);
@@ -346,9 +315,9 @@ pub fn generate_rindexer_typings_and_handlers(
 ) -> Result<(), GenerateError> {
     let manifest = read_manifest(manifest_location).map_err(GenerateError::ReadManifestError)?;
 
-    generate_rindexer_typings(manifest.clone(), manifest_location)
+    generate_rindexer_typings(&manifest, manifest_location)
         .map_err(GenerateError::GenerateRindexerTypingsError)?;
-    generate_rindexer_handlers(manifest.clone(), manifest_location)
+    generate_rindexer_handlers(manifest, manifest_location)
         .map_err(GenerateError::GenerateRindexerHandlersError)?;
 
     let parent = manifest_location.parent();
@@ -463,10 +432,10 @@ serde = {{ version = "1.0.194", features = ["derive"] }}
                     Ok(path) => {
                         let manifest_path = path.join("rindexer.yaml");
                         let result = start_rindexer(StartDetails {
-                            manifest_path: manifest_path.clone(),
+                            manifest_path: &manifest_path,
                             indexing_details: if enable_indexer {
                                 Some(IndexingDetails {
-                                    registry: register_all_handlers(manifest_path).await,
+                                    registry: register_all_handlers(&manifest_path).await,
                                 })
                             } else {
                                 None

@@ -5,6 +5,7 @@ use crate::indexer::parse_topic;
 use ethers::addressbook::Address;
 use ethers::prelude::{Filter, ValueOrArray, U64};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::borrow::Cow;
 
 fn deserialize_option_u64_from_string<'de, D>(deserializer: D) -> Result<Option<U64>, D::Error>
 where
@@ -258,13 +259,49 @@ impl Contract {
                     SimpleEventOrContractEvent::ContractEvent(contract_event) => contract_event,
                     SimpleEventOrContractEvent::SimpleEvent(event_name) => ContractEventMapping {
                         contract_name: self.name.clone(),
-                        event_name: event_name.clone(),
+                        event_name,
                     },
                 })
                 .collect(),
             then: yaml
                 .then
                 .map(|then_event| Box::new(self.convert_dependency_event_tree_yaml(*then_event))),
+        }
+    }
+
+    pub fn is_filter(&self) -> bool {
+        let filter_count = self
+            .details
+            .iter()
+            .filter(|details| details.indexing_contract_setup().is_filter())
+            .count();
+
+        if filter_count > 0 && filter_count != self.details.len() {
+            // panic as this should never happen as validation has already happened
+            panic!("Cannot mix and match address and filter for the same contract definition.");
+        }
+
+        filter_count > 0
+    }
+
+    fn contract_name_to_filter_name(&self) -> String {
+        format!("{}Filter", self.name)
+    }
+
+    pub fn before_modify_name_if_filter_readonly(&self) -> Cow<str> {
+        if self.is_filter() {
+            Cow::Owned(self.contract_name_to_filter_name())
+        } else {
+            Cow::Borrowed(&self.name)
+        }
+    }
+
+    pub fn identify_and_modify_filter(&mut self) -> bool {
+        if self.is_filter() {
+            self.override_name(self.contract_name_to_filter_name());
+            true
+        } else {
+            false
         }
     }
 }

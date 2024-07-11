@@ -72,7 +72,7 @@ async fn get_last_synced_block_number_for_csv(
 #[allow(clippy::too_many_arguments)]
 pub async fn get_last_synced_block_number(
     project_path: &Path,
-    database: Option<Arc<PostgresClient>>,
+    database: &Option<Arc<PostgresClient>>,
     csv_details: &Option<CsvDetails>,
     contract_csv_enabled: bool,
     indexer_name: &str,

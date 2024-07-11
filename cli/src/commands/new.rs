@@ -108,11 +108,21 @@ pub fn handle_new_command(
         e
     })?;
 
+    // for later to avoid cloning
+    let success_message = if project_type == ProjectType::Rust {
+        format!("rindexer rust project created with a rETH transfer events YAML template.\n cd ./{} \n- use rindexer codegen commands to regenerate the code\n- run `rindexer start all` to start rindexer\n- run `rindexer add contract` to add new contracts to your project", &project_name)
+    } else {
+        format!("rindexer no-code project created with a rETH transfer events YAML template.\n cd ./{} \n- run `rindexer start all` to start rindexer\n- run `rindexer add contract` to add new contracts to your project", &project_name)
+    };
+
+    // for later to avoid cloning
+    let is_rust_project = project_type == ProjectType::Rust;
+
     let manifest = Manifest {
-        name: project_name.clone(),
+        name: project_name,
         description: project_description,
         repository,
-        project_type: project_type.clone(),
+        project_type,
         networks: vec![Network {
             name: "ethereum".to_string(),
             chain_id: 1,
@@ -192,18 +202,11 @@ POSTGRES_PASSWORD=rindexer"#;
         }
     }
 
-    // rindexer no-code project created with a rETH transfer events YAML template.
-
-    if project_type == ProjectType::Rust {
+    if is_rust_project {
         generate_rindexer_rust_project(&project_path);
-        print_success_message(
-            &format!("rindexer rust project created with a rETH transfer events YAML template.\n cd ./{} \n- use rindexer codegen commands to regenerate the code\n- run `rindexer start all` to start rindexer\n- run `rindexer add contract` to add new contracts to your project", &project_name),
-        );
-    } else {
-        print_success_message(
-            &format!("rindexer no-code project created with a rETH transfer events YAML template.\n cd ./{} \n- run `rindexer start all` to start rindexer\n- run `rindexer add contract` to add new contracts to your project", &project_name),
-        );
     }
+
+    print_success_message(&success_message);
 
     Ok(())
 }
