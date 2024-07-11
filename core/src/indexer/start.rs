@@ -142,17 +142,22 @@ pub async fn start_indexing(
                 .find(|c| c.name == event.contract.name)
                 .map_or(false, |c| c.generate_csv.unwrap_or(true));
 
-            let last_known_start_block = get_last_synced_block_number(
-                project_path,
-                database.clone(),
-                &manifest.storage.csv,
-                manifest.storage.csv_enabled() && contract_csv_enabled,
-                &event.indexer_name,
-                &event.contract.name,
-                &event.event_name,
-                &contract.network,
-            )
-            .await;
+            // if they are doing live indexing we just always go from the latest block
+            let last_known_start_block = if contract.start_block.is_some() {
+                get_last_synced_block_number(
+                    project_path,
+                    database.clone(),
+                    &manifest.storage.csv,
+                    manifest.storage.csv_enabled() && contract_csv_enabled,
+                    &event.indexer_name,
+                    &event.contract.name,
+                    &event.event_name,
+                    &contract.network,
+                )
+                .await
+            } else {
+                None
+            };
 
             let start_block =
                 last_known_start_block.unwrap_or(contract.start_block.unwrap_or(latest_block));
