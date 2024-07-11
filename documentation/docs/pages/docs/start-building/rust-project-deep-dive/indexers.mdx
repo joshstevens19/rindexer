@@ -67,7 +67,7 @@ use super::super::super::typings::rust::events::rocket_pool_eth::{
     no_extensions, ApprovalEvent, RocketPoolETHEventType, TransferEvent,
 };
 use rindexer::{
-    generator::event_callback_registry::EventCallbackRegistry, rindexer_error, rindexer_info,
+    event::callback_registry::EventCallbackRegistry, rindexer_error, rindexer_info,
     EthereumSqlTypeWrapper, PgType, RindexerColorize,
 };
 
@@ -748,7 +748,7 @@ You can query data from the database and write data to the database, here are th
 - `context.database.transaction` - This is for starting a transaction.
 - `context.database.query` - This is for querying data from the database.
 - `context.database.query_one` - This is for querying a single row from the database.
-- `context.database.query_one_or_none` - This is for querying a single row from the database or returning None if no rows are found.#
+- `context.database.query_one_or_none` - This is for querying a single row from the database or returning None if no rows are found.
 - `context.database.batch_insert` - This is for inserting multiple rows into the database.
 - `context.database.copy_in` - This is for inserting multiple rows into the database using the COPY command.
 
@@ -883,7 +883,7 @@ all generated for you and you do not need to worry about it.
 
 ```rs
 use super::rust::rocket_pool_eth::rocket_pool_eth_handlers;
-use rindexer::generator::event_callback_registry::EventCallbackRegistry;
+use rindexer::event::callback_registry::EventCallbackRegistry;
 
 pub async fn register_all_handlers() -> EventCallbackRegistry {
     let mut registry = EventCallbackRegistry::new();
