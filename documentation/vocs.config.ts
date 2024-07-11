@@ -126,8 +126,7 @@ export default defineConfig({
     {
       text: 'Coming soon',
       items: [
-        { text: 'log block timestamps', link: '/docs/coming-soon/log-block-timestamps' },
-        { text: 'no-code table relationships', link: '/docs/coming-soon/no-code-table-relationships' },
+        { text: 'log block timestamps', link: '/docs/coming-soon/log-block-timestamps' }
       ],
     },
     { text: 'Changelog', link: '/docs/changelog' },
