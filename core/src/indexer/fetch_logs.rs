@@ -1,9 +1,10 @@
+use crate::event::RindexerEventFilter;
 use crate::indexer::log_helpers::is_relevant_block;
 use crate::indexer::IndexingEventProgressStatus;
 use crate::provider::JsonRpcCachedProvider;
 use ethers::addressbook::Address;
 use ethers::middleware::MiddlewareError;
-use ethers::prelude::{BlockNumber, Filter, JsonRpcError, Log, ValueOrArray, H256, U64};
+use ethers::prelude::{BlockNumber, JsonRpcError, Log, ValueOrArray, H256, U64};
 use regex::Regex;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -25,7 +26,7 @@ pub struct FetchLogsResult {
 pub fn fetch_logs_stream(
     cached_provider: Arc<JsonRpcCachedProvider>,
     topic_id: H256,
-    initial_filter: Filter,
+    initial_filter: RindexerEventFilter,
     info_log_name: String,
     live_indexing_details: Option<LiveIndexingDetails>,
     semaphore: Arc<Semaphore>,
@@ -34,17 +35,17 @@ pub fn fetch_logs_stream(
        + Unpin {
     let (tx, rx) = mpsc::unbounded_channel();
     let live_indexing = live_indexing_details.is_some();
-    let contract_address = initial_filter.address.clone();
+    let contract_address = initial_filter.contract_address();
     let reorg_safe_distance =
         live_indexing_details.map_or(U64::from(0), |details| details.indexing_distance_from_head);
 
     tokio::spawn(async move {
-        let snapshot_to_block = initial_filter.get_to_block().unwrap();
-        let mut current_filter = initial_filter.clone();
+        let snapshot_to_block = initial_filter.get_to_block();
+        let mut current_filter = initial_filter;
 
         // Process historical logs first
         let mut max_block_range_limitation = None;
-        while current_filter.get_from_block().unwrap() <= snapshot_to_block {
+        while current_filter.get_from_block() <= snapshot_to_block {
             let semaphore_client = Arc::clone(&semaphore);
             let permit = semaphore_client.acquire_owned().await;
 
@@ -117,7 +118,7 @@ pub fn fetch_logs_stream(
 }
 
 struct ProcessHistoricLogsStreamResult {
-    pub next: Filter,
+    pub next: RindexerEventFilter,
     pub max_block_range_limitation: Option<U64>,
 }
 
@@ -125,13 +126,13 @@ async fn fetch_historic_logs_stream(
     cached_provider: &Arc<JsonRpcCachedProvider>,
     tx: &mpsc::UnboundedSender<Result<FetchLogsResult, Box<dyn std::error::Error + Send>>>,
     topic_id: &H256,
-    current_filter: Filter,
+    current_filter: RindexerEventFilter,
     max_block_range_limitation: Option<U64>,
     snapshot_to_block: U64,
     info_log_name: &str,
 ) -> Option<ProcessHistoricLogsStreamResult> {
-    let from_block = current_filter.get_from_block().unwrap();
-    let to_block = current_filter.get_to_block().unwrap_or(snapshot_to_block);
+    let from_block = current_filter.get_from_block();
+    let to_block = current_filter.get_to_block();
     debug!(
         "{} - {} - Process historic events - blocks: {} - {}",
         info_log_name,
@@ -148,8 +149,9 @@ async fn fetch_historic_logs_stream(
             from_block,
             to_block
         );
+
         return Some(ProcessHistoricLogsStreamResult {
-            next: current_filter.from_block(to_block),
+            next: current_filter.set_from_block(to_block),
             max_block_range_limitation: None,
         });
     }
@@ -219,8 +221,8 @@ async fn fetch_historic_logs_stream(
 
                     Some(ProcessHistoricLogsStreamResult {
                         next: current_filter
-                            .from_block(next_from_block)
-                            .to_block(new_to_block),
+                            .set_from_block(next_from_block)
+                            .set_to_block(new_to_block),
                         max_block_range_limitation,
                     })
                 };
@@ -253,8 +255,8 @@ async fn fetch_historic_logs_stream(
 
                     Some(ProcessHistoricLogsStreamResult {
                         next: current_filter
-                            .from_block(next_from_block)
-                            .to_block(new_to_block),
+                            .set_from_block(next_from_block)
+                            .set_to_block(new_to_block),
                         max_block_range_limitation,
                     })
                 };
@@ -273,8 +275,8 @@ async fn fetch_historic_logs_stream(
                     );
                     return Some(ProcessHistoricLogsStreamResult {
                         next: current_filter
-                            .from_block(retry_result.from)
-                            .to_block(retry_result.to),
+                            .set_from_block(retry_result.from)
+                            .set_to_block(retry_result.to),
                         max_block_range_limitation: retry_result.max_block_range,
                     });
                 }
@@ -304,7 +306,7 @@ async fn live_indexing_stream(
     contract_address: &Option<ValueOrArray<Address>>,
     topic_id: &H256,
     reorg_safe_distance: U64,
-    mut current_filter: Filter,
+    mut current_filter: RindexerEventFilter,
     info_log_name: &str,
     semaphore: Arc<Semaphore>,
 ) {
@@ -331,7 +333,7 @@ async fn live_indexing_stream(
             );
             let safe_block_number = latest_block_number - reorg_safe_distance;
 
-            let from_block = current_filter.get_from_block().unwrap();
+            let from_block = current_filter.get_from_block();
             // check reorg distance and skip if not safe
             if from_block > safe_block_number {
                 info!(
@@ -361,12 +363,12 @@ async fn live_indexing_stream(
                     IndexingEventProgressStatus::Live.log(),
                     from_block
                 );
-                current_filter = current_filter.from_block(to_block + 1);
+                current_filter = current_filter.set_from_block(to_block + 1);
                 last_seen_block_number = to_block;
                 continue;
             }
 
-            current_filter = current_filter.to_block(to_block);
+            current_filter = current_filter.set_to_block(to_block);
 
             debug!(
                 "{} - {} - Processing live filter: {:?}",
@@ -420,7 +422,7 @@ async fn live_indexing_stream(
                         }
 
                         if logs.is_empty() {
-                            current_filter = current_filter.from_block(to_block + 1);
+                            current_filter = current_filter.set_from_block(to_block + 1);
                             info!(
                                 "{} - {} - No events found between blocks {} - {}",
                                 info_log_name,
@@ -430,7 +432,7 @@ async fn live_indexing_stream(
                             );
                         } else if let Some(last_log) = logs.last() {
                             current_filter = current_filter
-                                .from_block(last_log.block_number.unwrap() + U64::from(1));
+                                .set_from_block(last_log.block_number.unwrap() + U64::from(1));
                         }
 
                         drop(permit);

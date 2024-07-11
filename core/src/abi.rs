@@ -349,14 +349,12 @@ pub fn get_abi_item_with_db_map(
                             db_column_name.push('_');
                         }
                         db_column_name.push_str(&camel_to_snake(&input.name));
-
-                        if let Some(result_param) = parameter_mapping.last() {
-                            if result_param == param {
-                                return Ok(GetAbiItemWithDbMap {
-                                    abi_item: input.clone(),
-                                    db_column_name,
-                                });
-                            }
+                        
+                        if param == parameter_mapping.last().expect("Parameter mapping should have at least one element") {
+                            return Ok(GetAbiItemWithDbMap {
+                                abi_item: input.clone(),
+                                db_column_name,
+                            });
                         } else {
                             current_inputs = match input.type_.as_str() {
                                 "tuple" => {

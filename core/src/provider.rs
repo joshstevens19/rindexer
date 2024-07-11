@@ -1,6 +1,7 @@
+use crate::event::RindexerEventFilter;
 use crate::manifest::core::Manifest;
 use ethers::middleware::Middleware;
-use ethers::prelude::{Filter, Log};
+use ethers::prelude::Log;
 use ethers::providers::{Http, Provider, ProviderError, RetryClient, RetryClientBuilder};
 use ethers::types::{Block, BlockNumber, H256, U256, U64};
 use std::sync::Arc;
@@ -49,8 +50,8 @@ impl JsonRpcCachedProvider {
         self.provider.get_block_number().await
     }
 
-    pub async fn get_logs(&self, filter: &Filter) -> Result<Vec<Log>, ProviderError> {
-        self.provider.get_logs(filter).await
+    pub async fn get_logs(&self, filter: &RindexerEventFilter) -> Result<Vec<Log>, ProviderError> {
+        self.provider.get_logs(filter.raw_filter()).await
     }
 
     pub async fn get_chain_id(&self) -> Result<U256, ProviderError> {

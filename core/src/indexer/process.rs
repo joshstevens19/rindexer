@@ -1,17 +1,18 @@
 use crate::event::callback_registry::{EventCallbackRegistry, EventResult};
 use crate::event::config::EventProcessingConfig;
 use crate::event::contract_setup::NetworkContract;
+use crate::event::{BuildRindexerFilterError, RindexerEventFilter};
 use crate::indexer::dependency::{
     ContractEventsDependenciesConfig, EventDependencies, EventsDependencyTree,
 };
 use crate::indexer::fetch_logs::{fetch_logs_stream, FetchLogsResult, LiveIndexingDetails};
 use crate::indexer::last_synced::update_progress_and_last_synced;
-use crate::indexer::log_helpers::{build_filter, is_relevant_block, BuildFilterError};
+use crate::indexer::log_helpers::is_relevant_block;
 use crate::indexer::progress::{IndexingEventProgressStatus, IndexingEventsProgressState};
 use crate::manifest::storage::CsvDetails;
 use crate::PostgresClient;
 use async_std::prelude::StreamExt;
-use ethers::prelude::{Filter, ProviderError};
+use ethers::prelude::ProviderError;
 use ethers::types::{H256, U64};
 use futures::future::join_all;
 use std::collections::HashMap;
@@ -70,7 +71,7 @@ pub enum ProcessEventsWithDependenciesError {
     ProcessLogs(Box<ProviderError>),
 
     #[error("Could not build filter: {0}")]
-    BuildFilterError(BuildFilterError),
+    BuildFilterError(BuildRindexerFilterError),
 
     #[error("Event config not found")]
     EventConfigNotFound,
@@ -91,7 +92,7 @@ async fn process_events_with_dependencies(
 
 #[derive(Debug, Clone)]
 struct OrderedLiveIndexingDetails {
-    pub filter: Filter,
+    pub filter: RindexerEventFilter,
     pub last_seen_block_number: U64,
 }
 
@@ -120,7 +121,7 @@ async fn process_events_dependency_tree(
                     })
                     .ok_or(ProcessEventsWithDependenciesError::EventConfigNotFound)?;
 
-                let filter = build_filter(
+                let filter = RindexerEventFilter::new(
                     &event_processing_config.topic_id,
                     &event_processing_config.event_name,
                     &event_processing_config
@@ -199,11 +200,13 @@ async fn process_events_dependency_tree(
     let live_indexing_events = live_indexing_events.lock().await;
     for (log, topic) in live_indexing_events.iter() {
         let mut filter = log.filter.clone();
-        let last_seen_block_number = filter.get_to_block().unwrap();
+        let last_seen_block_number = filter.get_to_block();
         let next_block_number = last_seen_block_number + 1;
+
         filter = filter
-            .from_block(next_block_number)
-            .to_block(next_block_number);
+            .set_from_block(next_block_number)
+            .set_to_block(next_block_number);
+
         ordering_live_indexing_details_map.insert(
             *topic,
             Arc::new(Mutex::new(OrderedLiveIndexingDetails {
@@ -254,10 +257,8 @@ async fn process_events_dependency_tree(
                 );
                 let safe_block_number = latest_block_number - reorg_safe_distance;
 
-                let from_block = ordering_live_indexing_details
-                    .filter
-                    .get_from_block()
-                    .unwrap();
+                let from_block = ordering_live_indexing_details.filter.get_from_block();
+
                 // check reorg distance and skip if not safe
                 if from_block > safe_block_number {
                     info!(
@@ -274,7 +275,7 @@ async fn process_events_dependency_tree(
 
                 if from_block == to_block
                     && !is_relevant_block(
-                        &ordering_live_indexing_details.filter.address,
+                        &ordering_live_indexing_details.filter.raw_filter().address,
                         parsed_topic_id,
                         &latest_block,
                     )
@@ -291,9 +292,11 @@ async fn process_events_dependency_tree(
                         IndexingEventProgressStatus::Live.log(),
                         from_block
                     );
+
                     ordering_live_indexing_details.filter = ordering_live_indexing_details
                         .filter
-                        .from_block(to_block + 1);
+                        .set_from_block(to_block + 1);
+
                     ordering_live_indexing_details.last_seen_block_number = to_block;
                     *ordering_live_indexing_details_map
                         .get(parsed_topic_id)
@@ -304,7 +307,7 @@ async fn process_events_dependency_tree(
                 }
 
                 ordering_live_indexing_details.filter =
-                    ordering_live_indexing_details.filter.to_block(to_block);
+                    ordering_live_indexing_details.filter.set_to_block(to_block);
 
                 debug!(
                     "{} - {} - Processing live filter: {:?}",
@@ -373,7 +376,7 @@ async fn process_events_dependency_tree(
                                         ordering_live_indexing_details.filter =
                                             ordering_live_indexing_details
                                                 .filter
-                                                .from_block(to_block + 1);
+                                                .set_from_block(to_block + 1);
                                         info!(
                                             "{} - {} - No events found between blocks {} - {}",
                                             logs_params.info_log_name,
@@ -383,7 +386,7 @@ async fn process_events_dependency_tree(
                                         );
                                     } else if let Some(last_log) = logs.last() {
                                         ordering_live_indexing_details.filter =
-                                            ordering_live_indexing_details.filter.from_block(
+                                            ordering_live_indexing_details.filter.set_from_block(
                                                 last_log.block_number.unwrap() + U64::from(1),
                                             );
                                     }
@@ -431,7 +434,7 @@ pub enum ProcessEventError {
     ProcessLogs(Box<ProviderError>),
 
     #[error("Could not build filter: {0}")]
-    BuildFilterError(BuildFilterError),
+    BuildFilterError(BuildRindexerFilterError),
 }
 
 pub async fn process_event(
@@ -442,7 +445,7 @@ pub async fn process_event(
         event_processing_config.info_log_name
     );
 
-    let filter = build_filter(
+    let filter = RindexerEventFilter::new(
         &event_processing_config.topic_id,
         &event_processing_config.event_name,
         &event_processing_config
@@ -486,7 +489,7 @@ pub struct ProcessLogsParams {
     topic_id: String,
     event_name: String,
     network_contract: Arc<NetworkContract>,
-    filter: Filter,
+    filter: RindexerEventFilter,
     registry: Arc<EventCallbackRegistry>,
     progress: Arc<Mutex<IndexingEventsProgressState>>,
     database: Option<Arc<PostgresClient>>,
