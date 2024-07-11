@@ -64,35 +64,6 @@ pub enum BulkInsertPostgresError {
 }
 
 impl PostgresClient {
-    pub async fn new2() -> Result<Self, PostgresConnectionError> {
-        let manager = PostgresConnectionManager::new_from_stringlike(
-            connection_string().map_err(PostgresConnectionError::DatabaseConnectionConfigWrong)?,
-            NoTls,
-        )
-        .map_err(PostgresConnectionError::ConnectionPoolError)?;
-
-        let pool = Pool::builder()
-            .build(manager)
-            .await
-            .map_err(PostgresConnectionError::ConnectionPoolError)?;
-
-        let pool_temp = pool.clone();
-
-        let conn = pool_temp
-            .get()
-            .await
-            .map_err(PostgresConnectionError::ConnectionPoolRuntimeError)?;
-
-        let connection_future = conn.query_one("SELECT 1", &[]);
-
-        match timeout(Duration::from_millis(500), connection_future).await {
-            Ok(result) => result.map_err(|_| PostgresConnectionError::CanNotConnectToDatabase)?,
-            Err(_) => return Err(PostgresConnectionError::CanNotConnectToDatabase),
-        };
-
-        Ok(Self { pool })
-    }
-
     pub async fn new() -> Result<Self, PostgresConnectionError> {
         let connection_str =
             connection_string().map_err(PostgresConnectionError::DatabaseConnectionConfigWrong)?;

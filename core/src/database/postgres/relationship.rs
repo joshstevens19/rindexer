@@ -453,12 +453,12 @@ pub async fn create_relationships(
                     if abi_parameter.abi_item.type_ != linked_abi_parameter.abi_item.type_ {
                         return Err(CreateRelationshipError::TypeMismatch(format!(
                             "Type mismatch between {}.{} ({}) and {}.{} ({})",
-                            foreign_key.contract_name,
-                            foreign_key.event_input_name,
-                            abi_parameter.abi_item.type_,
-                            linked_key.contract_name,
-                            linked_key.event_input_name,
-                            linked_abi_parameter.abi_item.type_
+                            &foreign_key.contract_name,
+                            &foreign_key.event_input_name,
+                            &abi_parameter.abi_item.type_,
+                            &linked_key.contract_name,
+                            &linked_key.event_input_name,
+                            &linked_abi_parameter.abi_item.type_
                         )));
                     }
 

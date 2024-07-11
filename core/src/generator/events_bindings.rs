@@ -5,7 +5,6 @@ use crate::abi::{
 use crate::database::postgres::generate::{
     generate_column_names_only_with_base_properties, generate_event_table_full_name,
 };
-use crate::generator::build::is_filter;
 use ethers::types::ValueOrArray;
 use serde_json::Value;
 use std::fs;
@@ -140,7 +139,7 @@ fn generate_register_match_arms_code(event_type_name: &str, event_info: &[EventI
                     {}::{}(event) => {{
                         let event = Arc::new(event);
                         Arc::new(move |result| {{
-                            let event = event.clone();
+                            let event = Arc::clone(&event);
                             async move {{ event.call(result).await }}.boxed()
                         }})
                     }},
@@ -186,7 +185,7 @@ fn generate_csv_instance(
 
     if !contract.generate_csv.unwrap_or(true) {
         return Ok(Code::new(format!(
-            r#"let csv = AsyncCsvAppender::new("{csv_path}".to_string());"#,
+            r#"let csv = AsyncCsvAppender::new("{csv_path}");"#,
             csv_path = csv_path,
         )));
     }
@@ -200,7 +199,7 @@ fn generate_csv_instance(
 
     Ok(Code::new(format!(
         r#"
-        let csv = AsyncCsvAppender::new("{csv_path}".to_string());
+        let csv = AsyncCsvAppender::new("{csv_path}");
         if !Path::new("{csv_path}").exists() {{
             csv.append_header(vec![{headers}.into()])
                 .await
@@ -225,7 +224,7 @@ fn generate_event_callback_structs_code(
     storage: &Storage,
 ) -> Result<Code, GenerateEventCallbackStructsError> {
     let databases_enabled = storage.postgres_enabled();
-    let is_filter = is_filter(contract);
+    let is_filter = contract.is_filter();
 
     let mut parts = Vec::new();
 
@@ -335,7 +334,7 @@ fn generate_event_callback_structs_code(
                 format!(
                     r#"
                     if result.len() == events_len {{
-                        (self.callback)(&result, self.context.clone()).await;
+                        (self.callback)(&result, Arc::clone(&self.context)).await;
                     }} else {{
                         panic!("{name}Event: Unexpected data type - expected: {struct_data}")
                     }}
@@ -344,7 +343,7 @@ fn generate_event_callback_structs_code(
                     struct_data = info.struct_data()
                 )
             } else {
-                "(self.callback)(&result, self.context.clone()).await".to_string()
+                "(self.callback)(&result, Arc::clone(&self.context)).await".to_string()
             }
         );
 
@@ -361,10 +360,7 @@ fn decoder_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &
         abi_gen_name = abi_gen_name
     ));
 
-    let networks = contracts_details
-        .iter()
-        .map(|c| c.network.clone())
-        .collect::<Vec<String>>();
+    let networks: Vec<&String> = contracts_details.iter().map(|c| &c.network).collect();
     for (index, network) in networks.iter().enumerate() {
         if index == 0 {
             function.push_str("    if ");
@@ -650,7 +646,7 @@ fn generate_event_bindings_code(
         topic_ids_match_arms = generate_topic_ids_match_arms_code(&event_type_name, &event_info),
         event_names_match_arms =
             generate_event_names_match_arms_code(&event_type_name, &event_info),
-        contract_name = contract.name.clone(),
+        contract_name = contract.name,
         decoder_contract_fn = decoder_contract_fn(
             contract.details.iter().collect(),
             &abigen_contract_name(contract)
@@ -688,7 +684,7 @@ pub fn generate_event_bindings(
 ) -> Result<Code, GenerateEventBindingsError> {
     let abi_items = ABIItem::get_abi_items(project_path, contract, is_filter)
         .map_err(GenerateEventBindingsError::ReadAbi)?;
-    let event_names = ABIItem::extract_event_names_and_signatures_from_abi(&abi_items)
+    let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)
         .map_err(GenerateEventBindingsError::ParamType)?;
 
     generate_event_bindings_code(project_path, indexer_name, contract, storage, event_names)
@@ -713,7 +709,7 @@ pub fn generate_event_handlers(
 ) -> Result<Code, GenerateEventHandlersError> {
     let abi_items = ABIItem::get_abi_items(project_path, contract, is_filter)
         .map_err(GenerateEventHandlersError::ReadAbiError)?;
-    let event_names = ABIItem::extract_event_names_and_signatures_from_abi(&abi_items)
+    let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)
         .map_err(GenerateEventHandlersError::ParamTypeError)?;
 
     let mut imports = String::new();

@@ -64,7 +64,7 @@ impl ContractInformation {
                         id: generate_random_id(10),
                         network: c.network.clone(),
                         cached_provider: Arc::clone(&provider.client),
-                        decoder: decoder.clone(),
+                        decoder: Arc::clone(&decoder),
                         indexing_contract_setup: c.indexing_contract_setup(),
                         start_block: c.start_block,
                         end_block: c.end_block,

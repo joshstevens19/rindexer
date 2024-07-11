@@ -167,39 +167,32 @@ fn validate_manifest(
 #[derive(thiserror::Error, Debug)]
 pub enum ReadManifestError {
     #[error("Could not open file: {0}")]
-    CouldNotOpenFile(std::io::Error),
-
-    #[error("Could not read file: {0}")]
-    CouldNotReadFile(std::io::Error),
+    CouldNotOpenFile(#[from] std::io::Error),
 
     #[error("Could not parse manifest: {0}")]
-    CouldNotParseManifest(serde_yaml::Error),
+    CouldNotParseManifest(#[from] serde_yaml::Error),
 
     #[error("Could not substitute env variables: {0}")]
-    CouldNotSubstituteEnvVariables(regex::Error),
+    CouldNotSubstituteEnvVariables(#[from] regex::Error),
 
     #[error("Could not validate manifest: {0}")]
-    CouldNotValidateManifest(ValidateManifestError),
+    CouldNotValidateManifest(#[from] ValidateManifestError),
 
     #[error("No project path found using parent of manifest path")]
     NoProjectPathFoundUsingParentOfManifestPath,
 }
 
 pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError> {
-    let mut file = File::open(file_path).map_err(ReadManifestError::CouldNotOpenFile)?;
+    let mut file = File::open(file_path)?;
     let mut contents = String::new();
 
-    file.read_to_string(&mut contents)
-        .map_err(ReadManifestError::CouldNotReadFile)?;
+    file.read_to_string(&mut contents)?;
 
-    let manifest_before_transform: Manifest =
-        serde_yaml::from_str(&contents).map_err(ReadManifestError::CouldNotParseManifest)?;
+    let manifest_before_transform: Manifest = serde_yaml::from_str(&contents)?;
 
-    contents = substitute_env_variables(&contents)
-        .map_err(ReadManifestError::CouldNotSubstituteEnvVariables)?;
+    contents = substitute_env_variables(&contents)?;
 
-    let mut manifest_after_transform: Manifest =
-        serde_yaml::from_str(&contents).map_err(ReadManifestError::CouldNotParseManifest)?;
+    let mut manifest_after_transform: Manifest = serde_yaml::from_str(&contents)?;
 
     // as we don't want to inject the RPC URL in rust projects in clear text we should change
     // the networks.rpc back to what it was before and the generated code will handle it
@@ -220,8 +213,7 @@ pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError>
     match project_path {
         None => Err(ReadManifestError::NoProjectPathFoundUsingParentOfManifestPath),
         Some(project_path) => {
-            validate_manifest(project_path, &manifest_after_transform)
-                .map_err(ReadManifestError::CouldNotValidateManifest)?;
+            validate_manifest(project_path, &manifest_after_transform)?;
             Ok(manifest_after_transform)
         }
     }

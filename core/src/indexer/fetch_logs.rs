@@ -184,9 +184,13 @@ async fn fetch_historic_logs_stream(
                 to_block
             );
 
+            let logs_empty = logs.is_empty();
+            // clone here over the full logs way less overhead
+            let last_log = logs.last().cloned();
+
             if tx
                 .send(Ok(FetchLogsResult {
-                    logs: logs.clone(),
+                    logs,
                     from_block,
                     to_block,
                 }))
@@ -200,7 +204,7 @@ async fn fetch_historic_logs_stream(
                 return None;
             }
 
-            if logs.is_empty() {
+            if logs_empty {
                 let next_from_block = to_block + 1;
                 return if next_from_block > snapshot_to_block {
                     None
@@ -228,7 +232,7 @@ async fn fetch_historic_logs_stream(
                 };
             }
 
-            if let Some(last_log) = logs.last() {
+            if let Some(last_log) = last_log {
                 let next_from_block = last_log
                     .block_number
                     .expect("block number should always be present in a log")
@@ -410,9 +414,13 @@ async fn live_indexing_stream(
 
                                     last_seen_block_number = to_block;
 
+                                    let logs_empty = logs.is_empty();
+                                    // clone here over the full logs way less overhead
+                                    let last_log = logs.last().cloned();
+
                                     if tx
                                         .send(Ok(FetchLogsResult {
-                                            logs: logs.clone(),
+                                            logs,
                                             from_block,
                                             to_block,
                                         }))
@@ -427,7 +435,7 @@ async fn live_indexing_stream(
                                         break;
                                     }
 
-                                    if logs.is_empty() {
+                                    if logs_empty {
                                         current_filter =
                                             current_filter.set_from_block(to_block + 1);
                                         info!(
@@ -437,7 +445,7 @@ async fn live_indexing_stream(
                                             from_block,
                                             to_block
                                         );
-                                    } else if let Some(last_log) = logs.last() {
+                                    } else if let Some(last_log) = last_log {
                                         if let Some(last_log_block_number) = last_log.block_number {
                                             current_filter = current_filter.set_from_block(
                                                 last_log_block_number + U64::from(1),

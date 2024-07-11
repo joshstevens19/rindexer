@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::signal;
 use tracing::{error, info};
 
@@ -22,8 +23,8 @@ pub struct IndexingDetails {
     pub registry: EventCallbackRegistry,
 }
 
-pub struct StartDetails {
-    pub manifest_path: PathBuf,
+pub struct StartDetails<'a> {
+    pub manifest_path: &'a PathBuf,
     pub indexing_details: Option<IndexingDetails>,
     pub graphql_details: GraphqlOverrideSettings,
 }
@@ -66,12 +67,14 @@ pub enum StartRindexerError {
     RelationshipsAndIndexersError(RelationshipsAndIndexersError),
 }
 
-pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerError> {
+pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindexerError> {
     let project_path = details.manifest_path.parent();
     match project_path {
         Some(project_path) => {
-            let manifest = read_manifest(&details.manifest_path)
-                .map_err(StartRindexerError::CouldNotReadManifest)?;
+            let manifest = Arc::new(
+                read_manifest(details.manifest_path)
+                    .map_err(StartRindexerError::CouldNotReadManifest)?,
+            );
 
             if manifest.project_type != ProjectType::NoCode {
                 setup_info_logger();
@@ -80,9 +83,9 @@ pub async fn start_rindexer(details: StartDetails) -> Result<(), StartRindexerEr
 
             // Spawn a separate task for the GraphQL server if specified
             let graphql_server_handle = if details.graphql_details.enabled {
-                let manifest_clone = manifest.clone();
+                let manifest_clone = Arc::clone(&manifest);
                 let indexer = manifest_clone.to_indexer();
-                let mut graphql_settings = manifest_clone.graphql.unwrap_or_default();
+                let mut graphql_settings = manifest.graphql.clone().unwrap_or_default();
                 if let Some(override_port) = &details.graphql_details.override_port {
                     graphql_settings.set_port(*override_port);
                 }
@@ -201,8 +204,8 @@ pub struct IndexerNoCodeDetails {
     pub enabled: bool,
 }
 
-pub struct StartNoCodeDetails {
-    pub manifest_path: PathBuf,
+pub struct StartNoCodeDetails<'a> {
+    pub manifest_path: &'a PathBuf,
     pub indexing_details: IndexerNoCodeDetails,
     pub graphql_details: GraphqlOverrideSettings,
 }
@@ -217,7 +220,7 @@ pub enum StartRindexerNoCode {
 }
 
 pub async fn start_rindexer_no_code(
-    details: StartNoCodeDetails,
+    details: StartNoCodeDetails<'_>,
 ) -> Result<(), StartRindexerNoCode> {
     let start_details = setup_no_code(details)
         .await

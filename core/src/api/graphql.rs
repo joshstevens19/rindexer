@@ -58,7 +58,7 @@ fn get_graphql_exe() -> Result<PathBuf, ()> {
     // Return the first valid path
     for path in &paths {
         if path.exists() {
-            return Ok(path.clone());
+            return Ok(path.to_path_buf());
         }
     }
 
@@ -120,8 +120,8 @@ pub async fn start_graphql_server(
 
     spawn_start_server(
         tx_arc,
-        rindexer_graphql_exe.clone(),
-        connection_string.clone(),
+        rindexer_graphql_exe,
+        connection_string,
         schemas.join(","),
         Arc::new(port),
         settings.filter_only_on_indexed_columns,
@@ -173,7 +173,7 @@ fn spawn_start_server(
                 Ok(child) => {
                     let pid = child.id();
                     let child_arc = Arc::new(Mutex::new(Some(child)));
-                    let child_clone_for_thread = Arc::clone(&child_arc);
+                    let child_inner_for_thread = Arc::clone(&child_arc);
 
                     if let Some(tx) = tx_arc.lock().expect("Failed to lock tx arc").take() {
                         if let Err(e) = tx.send(pid) {
@@ -182,18 +182,18 @@ fn spawn_start_server(
                         }
                     }
 
-                    let port_inner_clone = Arc::clone(&port);
+                    let port_inner = Arc::clone(&port);
 
                     tokio::spawn(async move {
                         set_thread_no_logging();
-                        match child_clone_for_thread.lock() {
+                        match child_inner_for_thread.lock() {
                             Ok(mut guard) => match guard.as_mut() {
                                 Some(ref mut child) => match child.wait() {
                                     Ok(status) => {
                                         if status.success() {
                                             info!(
                                                 "🦀GraphQL API ready at http://0.0.0.0:{}/",
-                                                port_inner_clone
+                                                port_inner
                                             );
                                         } else {
                                             error!("GraphQL: Could not start up API: Child process exited with errors");
