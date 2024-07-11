@@ -1,5 +1,7 @@
 #[cfg(feature = "jemalloc")]
 use jemallocator::Jemalloc;
+use std::backtrace::Backtrace;
+use std::{env, panic};
 
 #[cfg(feature = "jemalloc")]
 #[global_allocator]
@@ -21,6 +23,37 @@ use dotenv::{dotenv, from_path};
 use rindexer::manifest::core::ProjectType;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Once;
+
+static INIT: Once = Once::new();
+
+fn set_panic_hook() {
+    INIT.call_once(|| {
+        panic::set_hook(Box::new(|info| {
+            eprintln!("=== Start Of Custom rindexer unhandled panic hook - please supply this information on the github issue if it happens ===");
+
+            if let Some(location) = info.location() {
+                eprintln!(
+                    "Panic occurred in file '{}' at line {}",
+                    location.file(),
+                    location.line()
+                );
+            } else {
+                eprintln!("Panic occurred but can't get location information...");
+            }
+
+            if let Some(s) = info.payload().downcast_ref::<&str>() {
+                eprintln!("Panic message: {}", s);
+            } else {
+                eprintln!("Panic occurred but can't get the panic message...");
+            }
+
+            let backtrace = Backtrace::capture();
+            eprintln!("{:?}", backtrace);
+            eprintln!("=== End Of Custom rindexer unhandled panic hook - please supply this information on the github issue if it happens ===");
+        }));
+    });
+}
 
 fn load_env_from_path(project_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     if from_path(project_path).is_err() {
@@ -44,6 +77,8 @@ fn resolve_path(override_path: &Option<String>) -> Result<PathBuf, String> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env::set_var("RUST_BACKTRACE", "full");
+    set_panic_hook();
     let cli = CLI::parse();
 
     match &cli.command {
