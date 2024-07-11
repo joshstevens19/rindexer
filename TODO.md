@@ -1,5 +1,4 @@
 # rindexer
 
 nice to have:
-- look at the final unwraps
 - add unit tests as much as possible (time box 3 hours)
