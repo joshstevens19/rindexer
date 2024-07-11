@@ -8,22 +8,26 @@ use tokio_postgres::types::Type as PgType;
 use tracing::{debug, error, info};
 
 use crate::abi::{ABIItem, CreateCsvFileForEvent, EventInfo, ParamTypeError, ReadAbiError};
-use crate::database::postgres::{
-    event_table_full_name, generate_column_names_only_with_base_properties,
-    map_log_params_to_ethereum_wrapper, SetupPostgresError,
+use crate::database::postgres::client::PostgresClient;
+use crate::database::postgres::generate::{
+    generate_column_names_only_with_base_properties, generate_event_table_full_name,
 };
+use crate::database::postgres::setup::{setup_postgres, SetupPostgresError};
+use crate::database::postgres::sql_type_wrapper::{
+    map_log_params_to_ethereum_wrapper, EthereumSqlTypeWrapper,
+};
+use crate::event::callback_registry::{
+    noop_decoder, EventCallbackRegistry, EventCallbackRegistryInformation, EventCallbackType,
+};
+use crate::event::contract_setup::{ContractInformation, CreateContractInformationError};
 use crate::generator::build::identify_and_modify_filter;
-use crate::generator::event_callback_registry::{
-    noop_decoder, ContractInformation, Decoder, EventCallbackRegistry, EventCallbackType,
-    EventInformation, NetworkContract,
-};
 use crate::helpers::get_full_path;
 use crate::indexer::log_helpers::{map_log_params_to_raw_values, parse_log};
-use crate::manifest::yaml::{read_manifest, Contract, Manifest, ReadManifestError};
-use crate::provider::{create_client, JsonRpcCachedProvider, RetryClientError};
+use crate::manifest::core::Manifest;
+use crate::manifest::yaml::{read_manifest, ReadManifestError};
+use crate::provider::{CreateNetworkProvider, RetryClientError};
 use crate::{
-    generate_random_id, setup_info_logger, setup_postgres, AsyncCsvAppender,
-    EthereumSqlTypeWrapper, FutureExt, IndexingDetails, PostgresClient, StartDetails,
+    setup_info_logger, AsyncCsvAppender, FutureExt, IndexingDetails, StartDetails,
     StartNoCodeDetails,
 };
 
@@ -78,8 +82,8 @@ pub async fn setup_no_code(details: StartNoCodeDetails) -> Result<StartDetails, 
                 });
             }
 
-            let network_providers =
-                create_network_providers(&manifest).map_err(SetupNoCodeError::RetryClientError)?;
+            let network_providers = CreateNetworkProvider::create(&manifest)
+                .map_err(SetupNoCodeError::RetryClientError)?;
             info!(
                 "Networks enabled: {}",
                 network_providers
@@ -112,27 +116,6 @@ pub async fn setup_no_code(details: StartNoCodeDetails) -> Result<StartDetails, 
         }
         None => Err(SetupNoCodeError::NoProjectPathFoundUsingParentOfManifestPath),
     }
-}
-
-#[derive(Debug)]
-pub struct CreateNetworkProvider {
-    pub network_name: String,
-    pub client: Arc<JsonRpcCachedProvider>,
-}
-
-fn create_network_providers(
-    manifest: &Manifest,
-) -> Result<Vec<CreateNetworkProvider>, RetryClientError> {
-    let mut result: Vec<CreateNetworkProvider> = vec![];
-    for network in &manifest.networks {
-        let provider = create_client(&network.rpc, network.compute_units_per_second)?;
-        result.push(CreateNetworkProvider {
-            network_name: network.name.clone(),
-            client: provider,
-        });
-    }
-
-    Ok(result)
 }
 
 #[derive(Clone)]
@@ -364,8 +347,8 @@ pub async fn process_events(
     manifest: &mut Manifest,
     postgres: Option<Arc<PostgresClient>>,
     network_providers: &[CreateNetworkProvider],
-) -> Result<Vec<EventInformation>, ProcessIndexersError> {
-    let mut events: Vec<EventInformation> = vec![];
+) -> Result<Vec<EventCallbackRegistryInformation>, ProcessIndexersError> {
+    let mut events: Vec<EventCallbackRegistryInformation> = vec![];
 
     for contract in &mut manifest.contracts {
         // TODO - this could be shared with `get_abi_items`
@@ -408,7 +391,7 @@ pub async fn process_events(
                 .clone();
 
             let contract_information =
-                create_contract_information(contract, network_providers, noop_decoder())
+                ContractInformation::create(contract, network_providers, noop_decoder())
                     .map_err(ProcessIndexersError::CreateContractInformationError)?;
 
             let mut csv: Option<Arc<AsyncCsvAppender>> = None;
@@ -434,7 +417,7 @@ pub async fn process_events(
                 csv = Some(Arc::new(csv_appender));
             }
 
-            let event = EventInformation {
+            let event = EventCallbackRegistryInformation {
                 indexer_name: manifest.name.clone(),
                 event_name: event_info.name.clone(),
                 index_event_in_order: contract
@@ -450,7 +433,7 @@ pub async fn process_events(
                     event: event.clone(),
                     csv: csv.clone(),
                     postgres: postgres.clone(),
-                    postgres_event_table_name: event_table_full_name(
+                    postgres_event_table_name: generate_event_table_full_name(
                         &manifest.name,
                         &contract.name,
                         &event_info.name,
@@ -466,51 +449,4 @@ pub async fn process_events(
     }
 
     Ok(events)
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum CreateContractInformationError {
-    #[error("Can not find network {0} from providers")]
-    CanNotFindNetworkFromProviders(String),
-}
-
-fn create_contract_information(
-    contract: &Contract,
-    network_providers: &[CreateNetworkProvider],
-    decoder: Decoder,
-) -> Result<ContractInformation, CreateContractInformationError> {
-    let mut details = vec![];
-    for c in &contract.details {
-        let provider = network_providers
-            .iter()
-            .find(|item| item.network_name == *c.network);
-
-        match provider {
-            None => {
-                return Err(
-                    CreateContractInformationError::CanNotFindNetworkFromProviders(
-                        c.network.clone(),
-                    ),
-                );
-            }
-            Some(provider) => {
-                details.push(NetworkContract {
-                    id: generate_random_id(10),
-                    network: c.network.clone(),
-                    cached_provider: Arc::clone(&provider.client),
-                    decoder: decoder.clone(),
-                    indexing_contract_setup: c.indexing_contract_setup(),
-                    start_block: c.start_block,
-                    end_block: c.end_block,
-                });
-            }
-        }
-    }
-
-    Ok(ContractInformation {
-        name: contract.name.clone(),
-        details,
-        abi: contract.abi.clone(),
-        reorg_safe_distance: contract.reorg_safe_distance.unwrap_or_default(),
-    })
 }

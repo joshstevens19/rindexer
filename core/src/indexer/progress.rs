@@ -1,4 +1,4 @@
-use crate::generator::event_callback_registry::EventInformation;
+use crate::event::callback_registry::EventCallbackRegistryInformation;
 use colored::{ColoredString, Colorize};
 use ethers::types::U64;
 use std::hash::{Hash, Hasher};
@@ -93,7 +93,7 @@ pub struct IndexingEventsProgressState {
 
 impl IndexingEventsProgressState {
     pub async fn monitor(
-        event_information: Vec<EventInformation>,
+        event_information: Vec<EventCallbackRegistryInformation>,
     ) -> Arc<Mutex<IndexingEventsProgressState>> {
         let mut events = Vec::new();
         for event_info in &event_information {

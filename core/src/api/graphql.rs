@@ -1,8 +1,9 @@
-use crate::database::postgres::{connection_string, indexer_contract_schema_name};
+use crate::database::postgres::client::connection_string;
+use crate::database::postgres::generate::generate_indexer_contract_schema_name;
 use crate::helpers::{kill_process_on_port, set_thread_no_logging};
 use crate::indexer::Indexer;
+use crate::manifest::graphql::GraphQLSettings;
 use reqwest::{Client, Error};
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::env;
 use std::path::{Path, PathBuf};
@@ -13,28 +14,6 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::Sender;
 use tracing::{error, info};
-
-fn default_port() -> u16 {
-    3001
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-pub struct GraphQLSettings {
-    #[serde(default = "default_port")]
-    pub port: u16,
-
-    #[serde(default)]
-    pub disable_advanced_filters: bool,
-
-    #[serde(default)]
-    pub filter_only_on_indexed_columns: bool,
-}
-
-impl GraphQLSettings {
-    pub fn set_port(&mut self, port: u16) {
-        self.port = port;
-    }
-}
 
 pub struct GraphqlOverrideSettings {
     pub enabled: bool,
@@ -118,7 +97,7 @@ pub async fn start_graphql_server(
     let schemas: Vec<String> = indexer
         .contracts
         .iter()
-        .map(move |contract| indexer_contract_schema_name(&indexer.name, &contract.name))
+        .map(move |contract| generate_indexer_contract_schema_name(&indexer.name, &contract.name))
         .collect();
 
     let connection_string =

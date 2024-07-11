@@ -2,7 +2,8 @@ use crate::cli_interface::CodegenSubcommands;
 use crate::console::{print_error_message, print_success_message};
 use crate::rindexer_yaml::validate_rindexer_yaml_exist;
 use rindexer::generator::build::{generate_rindexer_handlers, generate_rindexer_typings};
-use rindexer::manifest::yaml::{read_manifest, ProjectType, YAML_CONFIG_NAME};
+use rindexer::manifest::core::ProjectType;
+use rindexer::manifest::yaml::{read_manifest, YAML_CONFIG_NAME};
 use rindexer::{format_all_files_for_project, generate_graphql_queries};
 use std::path::PathBuf;
 

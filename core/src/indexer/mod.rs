@@ -1,18 +1,20 @@
-mod fetch_logs;
-pub use fetch_logs::{
-    ContractEventDependencies, ContractEventMapping, EventDependencies, EventsDependencyTree,
-};
+mod process;
 mod progress;
 
-use crate::manifest::yaml::Contract;
-pub use progress::IndexingEventProgressStatus;
+pub use progress::{IndexingEventProgressStatus, IndexingEventsProgressState};
 use serde::{Deserialize, Serialize};
 
 mod log_helpers;
 pub use log_helpers::parse_topic;
+mod dependency;
+pub use dependency::ContractEventDependenciesMapFromRelationshipsError;
+mod fetch_logs;
+mod last_synced;
 pub mod no_code;
 mod reorg;
 pub mod start;
+use crate::manifest::contract::Contract;
+pub use dependency::{ContractEventDependencies, EventDependencies, EventsDependencyTree};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Indexer {

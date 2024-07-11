@@ -2,8 +2,8 @@ use crate::abi::{
     ABIInput, ABIItem, CreateCsvFileForEvent, EventInfo, GenerateAbiPropertiesType, ParamTypeError,
     ReadAbiError,
 };
-use crate::database::postgres::{
-    event_table_full_name, generate_column_names_only_with_base_properties,
+use crate::database::postgres::generate::{
+    generate_column_names_only_with_base_properties, generate_event_table_full_name,
 };
 use crate::generator::build::is_filter;
 use ethers::types::ValueOrArray;
@@ -12,7 +12,8 @@ use std::fs;
 use std::path::Path;
 
 use crate::helpers::{camel_to_snake, get_full_path};
-use crate::manifest::yaml::{Contract, ContractDetails, CsvDetails, Storage};
+use crate::manifest::contract::{Contract, ContractDetails};
+use crate::manifest::storage::{CsvDetails, Storage};
 use crate::types::code::Code;
 
 pub fn abigen_contract_name(contract: &Contract) -> String {
@@ -496,8 +497,17 @@ fn generate_event_bindings_code(
             AsyncCsvAppender,
             generate_random_id,
             FutureExt,
-            generator::event_callback_registry::{{EventCallbackRegistry, EventCallbackResult, EventInformation, ContractInformation, NetworkContract, EventResult, TxInformation, FilterDetails, FactoryDetails}},
-            manifest::yaml::{{Contract, ContractDetails, read_manifest}},
+            event::{{
+                callback_registry::{{
+                    EventCallbackRegistry, EventCallbackRegistryInformation, EventCallbackResult,
+                    EventResult, TxInformation,
+                }},
+                contract_setup::{{ContractInformation, NetworkContract}},
+            }},
+            manifest::{{
+                contract::{{Contract, ContractDetails}},
+                yaml::read_manifest,
+            }},
             {client_import}
             provider::JsonRpcCachedProvider
         }};
@@ -606,7 +616,7 @@ fn generate_event_bindings_code(
                     {register_match_arms}
                 }};
 
-               registry.register_event(EventInformation {{
+               registry.register_event(EventCallbackRegistryInformation {{
                     indexer_name: "{indexer_name}".to_string(),
                     event_name: event_name.to_string(),
                     index_event_in_order,
@@ -710,7 +720,7 @@ pub fn generate_event_handlers(
     imports.push_str(
         r#"
             use rindexer::{
-                generator::event_callback_registry::{EventCallbackRegistry},
+                event::callback_registry::EventCallbackRegistry,
                 EthereumSqlTypeWrapper, PgType, RindexerColorize, rindexer_error, rindexer_info
             };
         "#,
@@ -892,7 +902,8 @@ pub fn generate_event_handlers(
                             }}
                     }}
                 "#,
-                table_name = event_table_full_name(indexer_name, &contract.name, &event.name),
+                table_name =
+                    generate_event_table_full_name(indexer_name, &contract.name, &event.name),
                 handler_name = event.name,
                 event_type_name = event_type_name,
                 columns_names = generate_column_names_only_with_base_properties(&event.inputs)

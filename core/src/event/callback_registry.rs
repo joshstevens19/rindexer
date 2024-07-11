@@ -1,12 +1,10 @@
-use crate::manifest::yaml::EventInputIndexedFilters;
-use crate::provider::JsonRpcCachedProvider;
+use crate::event::contract_setup::{ContractInformation, NetworkContract};
+use crate::indexer::start::ProcessedNetworkContract;
 use ethers::addressbook::Address;
 use ethers::contract::LogMeta;
-use ethers::prelude::ValueOrArray;
 use ethers::types::{Bytes, Log, H256, U256, U64};
 use futures::future::BoxFuture;
 use rand::Rng;
-use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use std::{any::Any, sync::Arc};
 use tokio::time::sleep;
@@ -18,72 +16,6 @@ pub fn noop_decoder() -> Decoder {
     Arc::new(move |_topics: Vec<H256>, _data: Bytes| {
         Arc::new(String::new()) as Arc<dyn Any + Send + Sync>
     }) as Decoder
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct AddressDetails {
-    pub address: ValueOrArray<Address>,
-
-    pub indexed_filters: Option<Vec<EventInputIndexedFilters>>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct FactoryDetails {
-    pub address: String,
-
-    #[serde(rename = "eventName")]
-    pub event_name: String,
-
-    #[serde(rename = "parameterName")]
-    pub parameter_name: String,
-
-    pub abi: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct FilterDetails {
-    pub event_name: String,
-
-    pub indexed_filters: Option<EventInputIndexedFilters>,
-}
-
-#[derive(Clone)]
-pub enum IndexingContractSetup {
-    Address(AddressDetails),
-    Filter(FilterDetails),
-    Factory(FactoryDetails),
-}
-
-impl IndexingContractSetup {
-    pub fn is_filter(&self) -> bool {
-        matches!(self, IndexingContractSetup::Filter(_))
-    }
-}
-
-/// Represents a contract on a specific network with its setup and associated provider.
-#[derive(Clone)]
-pub struct NetworkContract {
-    pub id: String,
-    pub network: String,
-    pub indexing_contract_setup: IndexingContractSetup,
-    pub cached_provider: Arc<JsonRpcCachedProvider>,
-    pub decoder: Decoder,
-    pub start_block: Option<U64>,
-    pub end_block: Option<U64>,
-}
-
-impl NetworkContract {
-    pub fn decode_log(&self, log: Log) -> Arc<dyn Any + Send + Sync> {
-        (self.decoder)(log.topics, log.data)
-    }
-}
-
-#[derive(Clone)]
-pub struct ContractInformation {
-    pub name: String,
-    pub details: Vec<NetworkContract>,
-    pub abi: String,
-    pub reorg_safe_distance: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -127,7 +59,7 @@ pub type EventCallbackResult<T> = Result<T, String>;
 pub type EventCallbackType =
     Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync>;
 
-pub struct EventInformation {
+pub struct EventCallbackRegistryInformation {
     pub indexer_name: String,
     pub topic_id: String,
     pub event_name: String,
@@ -136,15 +68,15 @@ pub struct EventInformation {
     pub callback: EventCallbackType,
 }
 
-impl EventInformation {
+impl EventCallbackRegistryInformation {
     pub fn info_log_name(&self) -> String {
         format!("{}::{}", self.contract.name, self.event_name)
     }
 }
 
-impl Clone for EventInformation {
+impl Clone for EventCallbackRegistryInformation {
     fn clone(&self) -> Self {
-        EventInformation {
+        EventCallbackRegistryInformation {
             indexer_name: self.indexer_name.clone(),
             topic_id: self.topic_id.clone(),
             event_name: self.event_name.clone(),
@@ -157,7 +89,7 @@ impl Clone for EventInformation {
 
 #[derive(Clone)]
 pub struct EventCallbackRegistry {
-    pub events: Vec<EventInformation>,
+    pub events: Vec<EventCallbackRegistryInformation>,
 }
 
 impl Default for EventCallbackRegistry {
@@ -171,11 +103,11 @@ impl EventCallbackRegistry {
         EventCallbackRegistry { events: Vec::new() }
     }
 
-    pub fn find_event(&self, topic_id: &str) -> Option<&EventInformation> {
+    pub fn find_event(&self, topic_id: &str) -> Option<&EventCallbackRegistryInformation> {
         self.events.iter().find(|e| e.topic_id == topic_id)
     }
 
-    pub fn register_event(&mut self, event: EventInformation) {
+    pub fn register_event(&mut self, event: EventCallbackRegistryInformation) {
         self.events.push(event);
     }
 
@@ -222,5 +154,32 @@ impl EventCallbackRegistry {
 
     pub fn complete(&self) -> Arc<Self> {
         Arc::new(self.clone())
+    }
+
+    pub fn reapply_after_historic(
+        &mut self,
+        processed_network_contracts: Vec<ProcessedNetworkContract>,
+    ) -> Arc<EventCallbackRegistry> {
+        self.events.iter_mut().for_each(|e| {
+            e.contract.details.iter_mut().for_each(|d| {
+                if d.end_block.is_none() {
+                    if let Some(processed_block) =
+                        processed_network_contracts.iter().find(|c| c.id == d.id)
+                    {
+                        d.start_block = Some(processed_block.processed_up_to);
+                    }
+                }
+            });
+        });
+
+        // Retain only the details with `end_block.is_none()`
+        self.events.iter_mut().for_each(|e| {
+            e.contract.details.retain(|d| d.end_block.is_none());
+        });
+
+        // Retain only the events that have details with `end_block.is_none()`
+        self.events.retain(|e| !e.contract.details.is_empty());
+
+        self.complete()
     }
 }

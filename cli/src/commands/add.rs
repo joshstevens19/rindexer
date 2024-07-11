@@ -5,9 +5,8 @@ use crate::rindexer_yaml::validate_rindexer_yaml_exist;
 use ethers::addressbook::{Address, Chain};
 use ethers::prelude::ValueOrArray;
 use ethers_etherscan::Client;
-use rindexer::manifest::yaml::{
-    read_manifest, write_manifest, Contract, ContractDetails, YAML_CONFIG_NAME,
-};
+use rindexer::manifest::contract::{Contract, ContractDetails};
+use rindexer::manifest::yaml::{read_manifest, write_manifest, YAML_CONFIG_NAME};
 use rindexer::write_file;
 use std::fs;
 use std::path::PathBuf;

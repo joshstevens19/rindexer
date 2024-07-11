@@ -1,4 +1,3 @@
-
 use super::super::super::super::typings::networks::get_provider_cache_for_network;
 /// THIS IS A GENERATED FILE. DO NOT MODIFY MANUALLY.
 ///
@@ -10,13 +9,21 @@ use ethers::{
     providers::{Http, Provider, RetryClient},
     types::{Bytes, H256},
 };
+
 use rindexer::{
-    async_trait, generate_random_id,
-    generator::event_callback_registry::{
-        ContractInformation, EventCallbackRegistry, EventCallbackResult, EventInformation,
-        EventResult, FactoryDetails, FilterDetails, NetworkContract, TxInformation,
+    async_trait,
+    event::{
+        callback_registry::{
+            EventCallbackRegistry, EventCallbackRegistryInformation, EventCallbackResult,
+            EventResult, TxInformation,
+        },
+        contract_setup::{ContractInformation, NetworkContract},
     },
-    manifest::yaml::{read_manifest, Contract, ContractDetails},
+    generate_random_id,
+    manifest::{
+        contract::{Contract, ContractDetails},
+        yaml::read_manifest,
+    },
     provider::JsonRpcCachedProvider,
     AsyncCsvAppender, FutureExt, PostgresClient,
 };
@@ -288,7 +295,7 @@ where
             }
         };
 
-        registry.register_event(EventInformation {
+        registry.register_event(EventCallbackRegistryInformation {
             indexer_name: "BlahBaby".to_string(),
             event_name: event_name.to_string(),
             index_event_in_order,

@@ -1,6 +1,7 @@
+use crate::event::contract_setup::IndexingContractSetup;
 use ethers::abi::{Event, Log as ParsedLog, LogParam, RawLog, Token};
 use ethers::addressbook::Address;
-use ethers::prelude::{H256, U256};
+use ethers::prelude::{Block, Bloom, Filter, FilteredParams, ValueOrArray, H256, U256, U64};
 use ethers::types::{BigEndianHash, Log};
 use ethers::utils::keccak256;
 use std::str::FromStr;
@@ -24,44 +25,6 @@ pub fn parse_log(event: &Event, log: &Log) -> Option<ParsedLog> {
 
         return log;
     }
-
-    // Was exploring advanced log parsing to handle cases where the indexed parameters are a bit different
-    // not sure i see a use case for this yet
-    // let mut modified_event = event.clone();
-    //
-    // // try to adjust the log to match an event where the indexed parameters are a bit different
-    // // aka - Transfer (indexed address from, indexed address to, indexed uint256 tokenId)
-    // // vs - Transfer (indexed address from, indexed address to, uint256 tokenId)
-    // // both topic_id = 0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef
-    // // but ABI will not be able to debug with index mismatch
-    //
-    // // see if data has been moved to topics
-    // // Log - Transfer (indexed address from, indexed address to, indexed uint256 tokenId)
-    // // with ABI - Transfer (indexed address from, indexed address to, uint256 tokenId)
-    // if data_length == 0 && data_inputs_abi_length > 0 {
-    //     // modify the event to have the data classed as a topic
-    //     modified_event.inputs = modified_event.inputs.iter().map(|input| {
-    //         let mut input = input.clone();
-    //         input.indexed = true;
-    //         input
-    //     }).collect();
-    //
-    //     let log = match modified_event.parse_log(raw_log) {
-    //         Ok(log) => Some(log),
-    //         Err(_) => None
-    //     };
-    //
-    //     return log;
-    // }
-
-    // println!("topics_length: {:?}", topics_length);
-    // println!("indexed_inputs_abi_length: {:?}", indexed_inputs_abi_length);
-    // println!("event: {:?}", event);
-    // println!("log: {:?}", log);
-
-    // see if value is in data but ABI expects it in topics
-    // Log - Transfer (indexed address from, indexed address to, indexed uint256 tokenId)
-    // with ABI - Transfer (indexed address from, indexed address to, indexed uint256 tokenId)
 
     None
 }
@@ -108,6 +71,138 @@ pub fn parse_topic(input: &str) -> H256 {
             } else {
                 H256::from(keccak256(input))
             }
+        }
+    }
+}
+
+pub fn contract_in_bloom(contract_address: Address, logs_bloom: Bloom) -> bool {
+    let address_filter =
+        FilteredParams::address_filter(&Some(ValueOrArray::Value(contract_address)));
+    FilteredParams::matches_address(logs_bloom, &address_filter)
+}
+
+pub fn topic_in_bloom(topic_id: H256, logs_bloom: Bloom) -> bool {
+    let topic_filter =
+        FilteredParams::topics_filter(&Some(vec![ValueOrArray::Value(Some(topic_id))]));
+    FilteredParams::matches_topics(logs_bloom, &topic_filter)
+}
+
+pub fn is_relevant_block(
+    contract_address: &Option<ValueOrArray<Address>>,
+    topic_id: &H256,
+    latest_block: &Block<H256>,
+) -> bool {
+    match latest_block.logs_bloom {
+        None => false,
+        Some(logs_bloom) => {
+            if let Some(contract_address) = contract_address {
+                match contract_address {
+                    ValueOrArray::Value(address) => {
+                        if !contract_in_bloom(*address, logs_bloom) {
+                            return false;
+                        }
+                    }
+                    ValueOrArray::Array(addresses) => {
+                        if addresses
+                            .iter()
+                            .all(|addr| !contract_in_bloom(*addr, logs_bloom))
+                        {
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            if !topic_in_bloom(*topic_id, logs_bloom) {
+                return false;
+            }
+
+            true
+        }
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum BuildFilterError {
+    #[error("Address is valid format")]
+    AddressInvalidFormat,
+
+    #[error("Topic0 is valid format")]
+    Topic0InvalidFormat,
+}
+
+pub fn build_filter(
+    topic_id: &str,
+    event_name: &str,
+    indexing_contract_setup: &IndexingContractSetup,
+    current_block: U64,
+    next_block: U64,
+) -> Result<Filter, BuildFilterError> {
+    match indexing_contract_setup {
+        IndexingContractSetup::Address(address_details) => {
+            let topic0 = topic_id
+                .parse::<H256>()
+                .map_err(|_| BuildFilterError::Topic0InvalidFormat)?;
+
+            match &address_details.indexed_filters {
+                Some(indexed_filters) => {
+                    if let Some(index_filters) =
+                        indexed_filters.iter().find(|&n| n.event_name == event_name)
+                    {
+                        return Ok(index_filters.extend_filter_indexed(
+                            Filter::new()
+                                .address(address_details.address.clone())
+                                .topic0(topic0)
+                                .from_block(current_block)
+                                .to_block(next_block),
+                        ));
+                    }
+
+                    Ok(Filter::new()
+                        .address(address_details.address.clone())
+                        .topic0(topic0)
+                        .from_block(current_block)
+                        .to_block(next_block))
+                }
+                None => Ok(Filter::new()
+                    .address(address_details.address.clone())
+                    .topic0(topic0)
+                    .from_block(current_block)
+                    .to_block(next_block)),
+            }
+        }
+        IndexingContractSetup::Filter(filter) => {
+            let topic0 = topic_id
+                .parse::<H256>()
+                .map_err(|_| BuildFilterError::Topic0InvalidFormat)?;
+
+            match &filter.indexed_filters {
+                Some(indexed_filters) => Ok(indexed_filters.extend_filter_indexed(
+                    Filter::new()
+                        .topic0(topic0)
+                        .from_block(current_block)
+                        .to_block(next_block),
+                )),
+                None => Ok(Filter::new()
+                    .topic0(topic0)
+                    .from_block(current_block)
+                    .to_block(next_block)),
+            }
+        }
+        IndexingContractSetup::Factory(factory) => {
+            let address = factory
+                .address
+                .parse::<Address>()
+                .map_err(|_| BuildFilterError::AddressInvalidFormat)?;
+            let topic0 = topic_id
+                .parse::<H256>()
+                .map_err(|_| BuildFilterError::Topic0InvalidFormat)?;
+
+            Ok(Filter::new()
+                .address(address)
+                .topic0(topic0)
+                .from_block(current_block)
+                .to_block(next_block))
         }
     }
 }
