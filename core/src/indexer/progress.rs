@@ -105,10 +105,10 @@ pub enum SyncError {
 
 impl IndexingEventsProgressState {
     pub async fn monitor(
-        event_information: Vec<EventCallbackRegistryInformation>,
+        event_information: &Vec<EventCallbackRegistryInformation>,
     ) -> Arc<Mutex<IndexingEventsProgressState>> {
         let mut events = Vec::new();
-        for event_info in &event_information {
+        for event_info in event_information {
             for network_contract in &event_info.contract.details {
                 let latest_block = network_contract.cached_provider.get_block_number().await;
                 match latest_block {

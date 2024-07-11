@@ -167,10 +167,10 @@ impl ABIItem {
     }
 
     pub fn extract_event_names_and_signatures_from_abi(
-        abi_json: &[ABIItem],
+        abi_json: Vec<ABIItem>,
     ) -> Result<Vec<EventInfo>, ParamTypeError> {
         let mut events = Vec::new();
-        for item in abi_json.iter() {
+        for item in abi_json.into_iter() {
             if item.type_ == "event" {
                 let signature = item.format_event_signature()?;
                 events.push(EventInfo::new(item, signature));
@@ -246,13 +246,15 @@ pub enum CreateCsvFileForEvent {
 }
 
 impl EventInfo {
-    pub fn new(item: &ABIItem, signature: String) -> Self {
+    pub fn new(item: ABIItem, signature: String) -> Self {
+        let struct_result = format!("{}Result", item.name);
+        let struct_data = format!("{}Data", item.name);
         EventInfo {
-            name: item.name.clone(),
-            inputs: item.inputs.clone(),
+            name: item.name,
+            inputs: item.inputs,
             signature,
-            struct_result: format!("{}Result", item.name),
-            struct_data: format!("{}Data", item.name),
+            struct_result,
+            struct_data,
         }
     }
 
@@ -279,8 +281,8 @@ impl EventInfo {
             &GenerateAbiPropertiesType::CsvHeaderNames,
             None,
         )
-        .iter()
-        .map(|m| m.value.clone())
+        .into_iter()
+        .map(|m| m.value)
         .collect();
 
         headers.insert(0, r#"contract_address"#.to_string());

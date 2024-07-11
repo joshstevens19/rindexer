@@ -42,10 +42,10 @@ async fn main() {
         Ok(path) => {
             let manifest_path = path.join("rindexer.yaml");
             let result = start_rindexer(StartDetails {
-                manifest_path: manifest_path.clone(),
+                manifest_path: &manifest_path,
                 indexing_details: if enable_indexer {
                     Some(IndexingDetails {
-                        registry: register_all_handlers(manifest_path).await,
+                        registry: register_all_handlers(&manifest_path).await,
                     })
                 } else {
                     None
@@ -74,7 +74,7 @@ fn generate() {
     let path = PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml")
         .expect("Invalid path");
     let manifest = read_manifest(&path).expect("Failed to read manifest");
-    rindexer::generator::build::generate_rindexer_typings(manifest, &path)
+    rindexer::generator::build::generate_rindexer_typings(&manifest, &path)
         .expect("Failed to generate typings");
 }
 

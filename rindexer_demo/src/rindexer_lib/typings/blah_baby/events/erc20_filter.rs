@@ -124,7 +124,7 @@ where
             + Clone,
         Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
     {
-        let csv = AsyncCsvAppender::new("/Users/joshstevens/code/rindexer/rindexer_demo/./generated_csv/ERC20Filter/erc20filter-transfer.csv".to_string());
+        let csv = AsyncCsvAppender::new("/Users/joshstevens/code/rindexer/rindexer_demo/./generated_csv/ERC20Filter/erc20filter-transfer.csv");
         if !Path::new("/Users/joshstevens/code/rindexer/rindexer_demo/./generated_csv/ERC20Filter/erc20filter-transfer.csv").exists() {
             csv.append_header(vec!["contract_address".into(), "from".into(), "to".into(), "value".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()])
                 .await
@@ -170,7 +170,7 @@ where
             })
             .collect();
 
-        (self.callback)(&result, self.context.clone()).await
+        (self.callback)(&result, Arc::clone(&self.context)).await
     }
 }
 
@@ -293,7 +293,7 @@ where
             ERC20FilterEventType::Transfer(event) => {
                 let event = Arc::new(event);
                 Arc::new(move |result| {
-                    let event = event.clone();
+                    let event = Arc::clone(&event);
                     async move { event.call(result).await }.boxed()
                 })
             }

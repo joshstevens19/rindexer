@@ -128,7 +128,7 @@ pub async fn start(
         ProjectType::NoCode => match command {
             StartSubcommands::Indexer => {
                 let details = StartNoCodeDetails {
-                    manifest_path: project_path.join(YAML_CONFIG_NAME),
+                    manifest_path: &project_path.join(YAML_CONFIG_NAME),
                     indexing_details: IndexerNoCodeDetails { enabled: true },
                     graphql_details: GraphqlOverrideSettings {
                         enabled: false,
@@ -143,7 +143,7 @@ pub async fn start(
             }
             StartSubcommands::Graphql { port } => {
                 let details = StartNoCodeDetails {
-                    manifest_path: project_path.join(YAML_CONFIG_NAME),
+                    manifest_path: &project_path.join(YAML_CONFIG_NAME),
                     indexing_details: IndexerNoCodeDetails { enabled: false },
                     graphql_details: GraphqlOverrideSettings {
                         enabled: true,
@@ -158,7 +158,7 @@ pub async fn start(
             }
             StartSubcommands::All { port } => {
                 let details = StartNoCodeDetails {
-                    manifest_path: project_path.join(YAML_CONFIG_NAME),
+                    manifest_path: &project_path.join(YAML_CONFIG_NAME),
                     indexing_details: IndexerNoCodeDetails { enabled: true },
                     graphql_details: GraphqlOverrideSettings {
                         enabled: true,

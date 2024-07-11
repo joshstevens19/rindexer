@@ -75,7 +75,6 @@ pub enum StartIndexingError {
     CombinedError(CombinedLogEventProcessingError),
 }
 
-#[derive(Clone)]
 pub struct ProcessedNetworkContract {
     pub id: String,
     pub processed_up_to: U64,
@@ -102,7 +101,7 @@ pub async fn start_indexing(
     } else {
         None
     };
-    let event_progress_state = IndexingEventsProgressState::monitor(registry.events.clone()).await;
+    let event_progress_state = IndexingEventsProgressState::monitor(&registry.events).await;
 
     // we can bring this into the yaml file later if required
     let semaphore = Arc::new(Semaphore::new(100));
@@ -122,9 +121,9 @@ pub async fn start_indexing(
 
     let mut processed_network_contracts: Vec<ProcessedNetworkContract> = Vec::new();
 
-    for event in registry.events.clone() {
-        for contract in event.contract.details.clone() {
-            let latest_block = contract
+    for event in registry.events.iter() {
+        for network_contract in event.contract.details.iter() {
+            let latest_block = network_contract
                 .cached_provider
                 .get_block_number()
                 .await
@@ -133,7 +132,7 @@ pub async fn start_indexing(
             let live_indexing = if no_live_indexing_forced {
                 false
             } else {
-                contract.end_block.is_none()
+                network_contract.end_block.is_none()
             };
 
             let contract_csv_enabled = manifest
@@ -143,36 +142,38 @@ pub async fn start_indexing(
                 .map_or(false, |c| c.generate_csv.unwrap_or(true));
 
             // if they are doing live indexing we just always go from the latest block
-            let last_known_start_block = if contract.start_block.is_some() {
+            let last_known_start_block = if network_contract.start_block.is_some() {
                 get_last_synced_block_number(
                     project_path,
-                    database.clone(),
+                    &database,
                     &manifest.storage.csv,
                     manifest.storage.csv_enabled() && contract_csv_enabled,
                     &event.indexer_name,
                     &event.contract.name,
                     &event.event_name,
-                    &contract.network,
+                    &network_contract.network,
                 )
                 .await
             } else {
                 None
             };
 
-            let start_block =
-                last_known_start_block.unwrap_or(contract.start_block.unwrap_or(latest_block));
+            let start_block = last_known_start_block
+                .unwrap_or(network_contract.start_block.unwrap_or(latest_block));
             let mut indexing_distance_from_head = U64::zero();
-            let mut end_block =
-                std::cmp::min(contract.end_block.unwrap_or(latest_block), latest_block);
+            let mut end_block = std::cmp::min(
+                network_contract.end_block.unwrap_or(latest_block),
+                latest_block,
+            );
 
-            if let Some(end_block) = contract.end_block {
+            if let Some(end_block) = network_contract.end_block {
                 if end_block > latest_block {
                     error!("{} - end_block supplied in yaml - {} is higher then latest - {} - end_block now will be {}", event.info_log_name(), end_block, latest_block, latest_block);
                 }
             }
 
             if event.contract.reorg_safe_distance {
-                let chain_id = contract
+                let chain_id = network_contract
                     .cached_provider
                     .get_chain_id()
                     .await
@@ -187,7 +188,7 @@ pub async fn start_indexing(
 
             // push status to the processed state
             processed_network_contracts.push(ProcessedNetworkContract {
-                id: contract.id.clone(),
+                id: network_contract.id.clone(),
                 processed_up_to: end_block,
             });
 
@@ -198,7 +199,7 @@ pub async fn start_indexing(
                 info_log_name: event.info_log_name(),
                 topic_id: event.topic_id.clone(),
                 event_name: event.event_name.clone(),
-                network_contract: Arc::new(contract),
+                network_contract: Arc::new(network_contract.clone()),
                 start_block,
                 end_block,
                 semaphore: Arc::clone(&semaphore),

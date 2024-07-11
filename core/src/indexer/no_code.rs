@@ -20,7 +20,6 @@ use crate::event::callback_registry::{
     noop_decoder, EventCallbackRegistry, EventCallbackRegistryInformation, EventCallbackType,
 };
 use crate::event::contract_setup::{ContractInformation, CreateContractInformationError};
-use crate::generator::build::identify_and_modify_filter;
 use crate::helpers::get_full_path;
 use crate::indexer::log_helpers::{map_log_params_to_raw_values, parse_log};
 use crate::manifest::core::Manifest;
@@ -52,14 +51,16 @@ pub enum SetupNoCodeError {
     NothingToStartNoCode,
 }
 
-pub async fn setup_no_code(details: StartNoCodeDetails) -> Result<StartDetails, SetupNoCodeError> {
+pub async fn setup_no_code(
+    details: StartNoCodeDetails<'_>,
+) -> Result<StartDetails<'_>, SetupNoCodeError> {
     if !details.indexing_details.enabled && !details.graphql_details.enabled {
         return Err(SetupNoCodeError::NothingToStartNoCode);
     }
     let project_path = details.manifest_path.parent();
     match project_path {
         Some(project_path) => {
-            let mut manifest = read_manifest(&details.manifest_path)
+            let mut manifest = read_manifest(details.manifest_path)
                 .map_err(SetupNoCodeError::CouldNotReadManifest)?;
             setup_info_logger();
 
@@ -362,10 +363,10 @@ pub async fn process_events(
         #[allow(clippy::useless_conversion)]
         let abi_gen = EthersContract::from(abi);
 
-        let is_filter = identify_and_modify_filter(contract);
+        let is_filter = contract.identify_and_modify_filter();
         let abi_items = ABIItem::get_abi_items(project_path, contract, is_filter)
             .map_err(ProcessIndexersError::CouldNotReadAbiItems)?;
-        let event_names = ABIItem::extract_event_names_and_signatures_from_abi(&abi_items)
+        let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)
             .map_err(ProcessIndexersError::ParamTypeError)?;
 
         for event_info in event_names {
@@ -406,7 +407,7 @@ pub async fn process_events(
                 let csv_path = event_info
                     .create_csv_file_for_event(project_path, contract, csv_path)
                     .map_err(ProcessIndexersError::CreateCsvFileForEventError)?;
-                let csv_appender = AsyncCsvAppender::new(csv_path.clone());
+                let csv_appender = AsyncCsvAppender::new(&csv_path);
                 if !Path::new(&csv_path).exists() {
                     csv_appender
                         .append_header(headers)
@@ -416,6 +417,11 @@ pub async fn process_events(
 
                 csv = Some(Arc::new(csv_appender));
             }
+
+            let postgres_column_names =
+                generate_column_names_only_with_base_properties(&event_info.inputs);
+            let postgres_event_table_name =
+                generate_event_table_full_name(&manifest.name, &contract.name, &event_info.name);
 
             let event = EventCallbackRegistryInformation {
                 indexer_name: manifest.name.clone(),
@@ -427,20 +433,14 @@ pub async fn process_events(
                 topic_id: event_info.topic_id(),
                 contract: contract_information,
                 callback: no_code_callback(Arc::new(NoCodeCallbackParams {
-                    event_info: event_info.clone(),
+                    event_info,
                     indexer_name: manifest.name.clone(),
                     contract_name: contract.name.clone(),
                     event: event.clone(),
-                    csv: csv.clone(),
+                    csv,
                     postgres: postgres.clone(),
-                    postgres_event_table_name: generate_event_table_full_name(
-                        &manifest.name,
-                        &contract.name,
-                        &event_info.name,
-                    ),
-                    postgres_column_names: generate_column_names_only_with_base_properties(
-                        &event_info.inputs,
-                    ),
+                    postgres_event_table_name,
+                    postgres_column_names,
                 })),
             };
 
