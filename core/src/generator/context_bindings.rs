@@ -21,8 +21,8 @@ fn generate_contract_code(
 
                         pub fn {contract_fn_name}_contract() -> {contract_name}<Arc<Provider<RetryClient<Http>>>> {{
                             let address: Address = "{contract_address}"
-                            .parse()
-                            .unwrap();
+                                .parse()
+                                .expect("Invalid address");
 
                             {contract_name}::new(address, Arc::new({network_fn_name}().clone()))
                         }}

@@ -54,7 +54,7 @@ pub async fn handle_add_contract_command(
     let chain_id = networks
         .iter()
         .find(|(name, _)| name == &network)
-        .unwrap()
+        .expect("Unreachable: Network not found in networks")
         .1;
 
     let chain_network = Chain::try_from(chain_id).map_err(|e| {
@@ -139,7 +139,7 @@ pub async fn handle_add_contract_command(
             name: contract_name.clone(),
             details: vec![ContractDetails::new_with_address(
                 network.to_string(),
-                ValueOrArray::<Address>::Value(contract_address.parse::<Address>().unwrap()),
+                ValueOrArray::<Address>::Value(address),
                 None,
                 None,
                 None,

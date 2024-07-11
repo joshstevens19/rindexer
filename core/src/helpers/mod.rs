@@ -26,7 +26,11 @@ pub fn camel_to_snake(s: &str) -> String {
                 // Insert an underscore if it's not the first character and the previous character wasn't uppercase
                 if i > 0
                     && (!previous_was_uppercase
-                        || (i + 1 < s.len() && s.chars().nth(i + 1).unwrap().is_lowercase()))
+                        || (i + 1 < s.len()
+                            && s.chars()
+                                .nth(i + 1)
+                                .expect("Failed to get char")
+                                .is_lowercase()))
                 {
                     snake_case.push('_');
                 }
@@ -56,7 +60,9 @@ pub fn get_full_path(project_path: &Path, file_path: &str) -> PathBuf {
         canonical_path
     } else {
         let joined_path = project_path.join(file_path);
-        joined_path.canonicalize().unwrap()
+        joined_path
+            .canonicalize()
+            .expect("Failed to canonicalize path")
     }
 }
 

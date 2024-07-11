@@ -435,7 +435,7 @@ fn build_pub_contract_fn(
                     let address = format!("{}", address);
                     Code::new(format!(
                         r#"pub fn {contract_name}_contract(network: &str) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> {{
-                                let address: Address = "{address}".parse().unwrap();
+                                let address: Address = "{address}".parse().expect("Invalid address");
                                 {abi_gen_name}::new(
                                     address,
                                     Arc::new(get_provider_cache_for_network(network).get_inner_provider()),

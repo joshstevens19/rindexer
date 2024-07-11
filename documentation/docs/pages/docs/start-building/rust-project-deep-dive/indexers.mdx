@@ -578,7 +578,7 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
             |results, context| async move {
                 let address: Address = "0xdac17f958d2ee523a2206206994597c13d831ec7" // [!code focus]
                                         .parse() // [!code focus]
-                                        .unwrap(); // [!code focus]
+                                        .expect("Invalid address"); // [!code focus]
                 let usdt = usdt_contract(address); // [!code focus]
                 let name = usdt.name().await; // [!code focus]
                 match name { // [!code focus]
@@ -663,7 +663,7 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
             |results, context| async move {
                 let address: Address = "0xdac17f958d2ee523a2206206994597c13d831ec7" // [!code focus]
                                                     .parse() // [!code focus]
-                                                    .unwrap(); // [!code focus]
+                                                    .expect("Invalid address"); // [!code focus]
                 // have to pass in network name here // [!code focus]
                 let rocket_pool_eth = rocket_pool_eth_contract("ethereum", address); // [!code focus]
                 let name = rocket_pool_eth.name().await; // [!code focus]

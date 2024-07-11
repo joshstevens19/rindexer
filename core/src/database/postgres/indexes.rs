@@ -55,7 +55,13 @@ impl PostgresIndexResult {
             // CONCURRENTLY is used to avoid locking the table for writes
             "DROP INDEX CONCURRENTLY IF EXISTS {}.{};",
             // get schema else drop won't work
-            self.db_table_name.split('.').next().unwrap(),
+            self.db_table_name
+                .split('.')
+                .next()
+                .unwrap_or_else(|| panic!(
+                    "Failed to split and then get schema for table: {}",
+                    self.db_table_name
+                )),
             self.index_name(),
         ))
     }
@@ -63,7 +69,14 @@ impl PostgresIndexResult {
     pub fn index_name(&self) -> String {
         format!(
             "idx_{db_table_name}_{db_table_columns}",
-            db_table_name = self.db_table_name.split('.').last().unwrap(),
+            db_table_name = self
+                .db_table_name
+                .split('.')
+                .last()
+                .unwrap_or_else(|| panic!(
+                    "Failed to split and then get schema for table: {}",
+                    self.db_table_name
+                )),
             db_table_columns = self.db_table_columns.join("_"),
         )
     }

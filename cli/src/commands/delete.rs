@@ -62,18 +62,25 @@ pub async fn handle_delete_command(
         );
 
         if csv_delete == "yes" {
-            let path = &project_path.join(manifest.storage.csv.unwrap().path);
-            // if no csv exist we will just look like it cleared it
-            if path.exists() {
-                remove_dir_all(&project_path.join(path))
-                    .await
-                    .map_err(|e| {
-                        print_error_message(&format!("Could not delete csv files: trace: {}", e));
-                        e
-                    })?;
-            }
+            if let Some(csv) = &manifest.storage.csv {
+                let path = &project_path.join(&csv.path);
+                // if no csv exist we will just look like it cleared it
+                if path.exists() {
+                    remove_dir_all(&project_path.join(path))
+                        .await
+                        .map_err(|e| {
+                            print_error_message(&format!(
+                                "Could not delete csv files: trace: {}",
+                                e
+                            ));
+                            e
+                        })?;
+                }
 
-            print_success_message("\n\nSuccessfully deleted all csv files.\n\n");
+                print_success_message("\n\nSuccessfully deleted all csv files.\n\n");
+            } else {
+                print_error_message("CSV storage is not enabled so no storage can be deleted. Please enable it in the YAML configuration file.");
+            }
         }
     }
 
