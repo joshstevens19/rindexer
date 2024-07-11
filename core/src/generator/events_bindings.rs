@@ -204,7 +204,7 @@ fn generate_csv_instance(
         if !Path::new("{csv_path}").exists() {{
             csv.append_header(vec![{headers}.into()])
                 .await
-                .unwrap();
+                .expect("Failed to write CSV header");
         }}
     "#,
         csv_path = csv_path,
@@ -321,7 +321,7 @@ fn generate_event_callback_structs_code(
             struct_result = info.struct_result(),
             struct_data = info.struct_data(),
             database = if databases_enabled {
-                "database: Arc::new(PostgresClient::new().await.unwrap()),"
+                r#"database: Arc::new(PostgresClient::new().await.expect("Failed to connect to Postgres")),"#
             } else {
                 ""
             },
@@ -874,7 +874,7 @@ pub fn generate_event_handlers(
                                 &[{columns_names}],
                                 &postgres_bulk_data
                                     .first()
-                                    .unwrap()
+                                    .ok_or("No first element in bulk data, impossible")?
                                     .iter()
                                     .map(|param| param.to_type())
                                     .collect::<Vec<PgType>>(),

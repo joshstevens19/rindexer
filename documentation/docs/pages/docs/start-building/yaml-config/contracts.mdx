@@ -241,8 +241,9 @@ contracts: // [!code focus]
 The block to start indexing from, you can use the deployed block if you wish to get everything.
 
 :::info
-This is optional, if you do not provide an start block it will index the data from now and then live index as new blocks
-come in. You can read more about this [here](/docs/start-building/live-indexing-and-historic).
+This is optional but most people will want to use this, if you do not provide an start block it will index the data from now and then live index as new blocks
+come in. Important to know this will NOT track last synced block and when you start and stop the indexer it will start from the latest block.
+You can read more about this [here](/docs/start-building/live-indexing-and-historic).
 :::
 
 

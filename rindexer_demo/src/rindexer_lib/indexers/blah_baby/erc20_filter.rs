@@ -81,7 +81,7 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                             ],
                             &postgres_bulk_data
                                 .first()
-                                .unwrap()
+                                .ok_or("No first element in bulk data, impossible")?
                                 .iter()
                                 .map(|param| param.to_type())
                                 .collect::<Vec<PgType>>(),

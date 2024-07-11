@@ -4,6 +4,7 @@ use crate::indexer::progress::IndexingEventsProgressState;
 use crate::manifest::storage::CsvDetails;
 use crate::{EthereumSqlTypeWrapper, PostgresClient};
 use ethers::prelude::U64;
+use rust_decimal::Decimal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
@@ -114,10 +115,11 @@ pub async fn get_last_synced_block_number(
             let row = database.query_one(&query, &[&network]).await;
             match row {
                 Ok(row) => {
-                    // TODO - UNCOMMENT
-                    // let result: Decimal = row.get("last_synced_block");
-                    // Some(U64::from_dec_str(&result.to_string()).unwrap())
-                    None
+                    let result: Decimal = row.get("last_synced_block");
+                    Some(
+                        U64::from_dec_str(&result.to_string())
+                            .expect("Failed to parse last_synced_block"),
+                    )
                 }
                 Err(e) => {
                     error!("Error fetching last synced block: {:?}", e);
@@ -196,10 +198,14 @@ pub fn update_progress_and_last_synced(
     to_block: U64,
 ) {
     tokio::spawn(async move {
-        progress
+        let update_last_synced_block_result = progress
             .lock()
             .await
             .update_last_synced_block(&network_contract.id, to_block);
+
+        if let Err(e) = update_last_synced_block_result {
+            error!("Error updating last synced block: {:?}", e);
+        }
 
         if let Some(database) = database {
             let result = database

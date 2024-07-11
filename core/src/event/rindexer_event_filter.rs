@@ -128,7 +128,7 @@ impl RindexerEventFilter {
             .get_from_block()
             .expect("impossible to not have a from block in RindexerEventFilter")
     }
-    
+
     pub fn set_from_block<T: Into<BlockNumber>>(mut self, block: T) -> Self {
         self.filter = self.filter.from_block(block);
         self

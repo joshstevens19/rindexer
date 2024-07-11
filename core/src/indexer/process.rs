@@ -226,202 +226,229 @@ async fn process_events_dependency_tree(
         for (logs_params, parsed_topic_id) in live_indexing_events.iter() {
             let mut ordering_live_indexing_details = ordering_live_indexing_details_map
                 .get(parsed_topic_id)
-                .unwrap()
+                .expect("Failed to get ordering_live_indexing_details_map")
                 .lock()
                 .await
                 .clone();
 
-            let reorg_safe_distance = logs_params.indexing_distance_from_head;
-            if let Some(latest_block) = logs_params
+            let latest_block = logs_params
                 .network_contract
                 .cached_provider
                 .get_latest_block()
-                .await
-                .unwrap()
-            {
-                let latest_block_number = latest_block.number.unwrap();
-                if ordering_live_indexing_details.last_seen_block_number == latest_block_number {
-                    debug!(
-                        "{} - {} - No new blocks to process...",
-                        logs_params.info_log_name,
-                        IndexingEventProgressStatus::Live.log()
-                    );
-                    continue;
-                }
-                info!(
-                    "{} - {} - New block seen {} - Last seen block {}",
-                    logs_params.info_log_name,
-                    IndexingEventProgressStatus::Live.log(),
-                    latest_block_number,
-                    ordering_live_indexing_details.last_seen_block_number
-                );
-                let safe_block_number = latest_block_number - reorg_safe_distance;
+                .await;
 
-                let from_block = ordering_live_indexing_details.filter.get_from_block();
-
-                // check reorg distance and skip if not safe
-                if from_block > safe_block_number {
-                    info!(
-                        "{} - {} - not in safe reorg block range yet block: {} > range: {}",
-                        logs_params.info_log_name,
-                        IndexingEventProgressStatus::Live.log(),
-                        from_block,
-                        safe_block_number
-                    );
-                    continue;
-                }
-
-                let to_block = safe_block_number;
-
-                if from_block == to_block
-                    && !is_relevant_block(
-                        &ordering_live_indexing_details.filter.raw_filter().address,
-                        parsed_topic_id,
-                        &latest_block,
-                    )
-                {
-                    debug!(
-                        "{} - {} - Skipping block {} as it's not relevant",
-                        logs_params.info_log_name,
-                        IndexingEventProgressStatus::Live.log(),
-                        from_block
-                    );
-                    info!(
-                        "{} - {} - LogsBloom check - No events found in the block {}",
-                        logs_params.info_log_name,
-                        IndexingEventProgressStatus::Live.log(),
-                        from_block
-                    );
-
-                    ordering_live_indexing_details.filter = ordering_live_indexing_details
-                        .filter
-                        .set_from_block(to_block + 1);
-
-                    ordering_live_indexing_details.last_seen_block_number = to_block;
-                    *ordering_live_indexing_details_map
-                        .get(parsed_topic_id)
-                        .unwrap()
-                        .lock()
-                        .await = ordering_live_indexing_details;
-                    continue;
-                }
-
-                ordering_live_indexing_details.filter =
-                    ordering_live_indexing_details.filter.set_to_block(to_block);
-
-                debug!(
-                    "{} - {} - Processing live filter: {:?}",
-                    logs_params.info_log_name,
-                    IndexingEventProgressStatus::Live.log(),
-                    ordering_live_indexing_details.filter
-                );
-
-                let semaphore_client = Arc::clone(&logs_params.semaphore);
-                let permit = semaphore_client.acquire_owned().await;
-
-                if let Ok(permit) = permit {
-                    match logs_params
-                        .network_contract
-                        .cached_provider
-                        .get_logs(&ordering_live_indexing_details.filter)
-                        .await
-                    {
-                        Ok(logs) => {
-                            debug!(
-                                "{} - {} - Live topic_id {}, Logs: {} from {} to {}",
+            match latest_block {
+                Ok(latest_block) => {
+                    if let Some(latest_block) = latest_block {
+                        if let Some(latest_block_number) = latest_block.number {
+                            let reorg_safe_distance = logs_params.indexing_distance_from_head;
+                            if ordering_live_indexing_details.last_seen_block_number
+                                == latest_block_number
+                            {
+                                debug!(
+                                    "{} - {} - No new blocks to process...",
+                                    logs_params.info_log_name,
+                                    IndexingEventProgressStatus::Live.log()
+                                );
+                                continue;
+                            }
+                            info!(
+                                "{} - {} - New block seen {} - Last seen block {}",
                                 logs_params.info_log_name,
                                 IndexingEventProgressStatus::Live.log(),
-                                logs_params.topic_id,
-                                logs.len(),
-                                from_block,
-                                to_block
+                                latest_block_number,
+                                ordering_live_indexing_details.last_seen_block_number
                             );
+                            let safe_block_number = latest_block_number - reorg_safe_distance;
+
+                            let from_block = ordering_live_indexing_details.filter.get_from_block();
+
+                            // check reorg distance and skip if not safe
+                            if from_block > safe_block_number {
+                                info!(
+                                    "{} - {} - not in safe reorg block range yet block: {} > range: {}",
+                                    logs_params.info_log_name,
+                                    IndexingEventProgressStatus::Live.log(),
+                                    from_block,
+                                    safe_block_number
+                                );
+                                continue;
+                            }
+
+                            let to_block = safe_block_number;
+
+                            if from_block == to_block
+                                && !is_relevant_block(
+                                    &ordering_live_indexing_details.filter.raw_filter().address,
+                                    parsed_topic_id,
+                                    &latest_block,
+                                )
+                            {
+                                debug!(
+                                    "{} - {} - Skipping block {} as it's not relevant",
+                                    logs_params.info_log_name,
+                                    IndexingEventProgressStatus::Live.log(),
+                                    from_block
+                                );
+                                info!(
+                                    "{} - {} - LogsBloom check - No events found in the block {}",
+                                    logs_params.info_log_name,
+                                    IndexingEventProgressStatus::Live.log(),
+                                    from_block
+                                );
+
+                                ordering_live_indexing_details.filter =
+                                    ordering_live_indexing_details
+                                        .filter
+                                        .set_from_block(to_block + 1);
+
+                                ordering_live_indexing_details.last_seen_block_number = to_block;
+                                *ordering_live_indexing_details_map
+                                    .get(parsed_topic_id)
+                                    .expect("Failed to get ordering_live_indexing_details_map")
+                                    .lock()
+                                    .await = ordering_live_indexing_details;
+                                continue;
+                            }
+
+                            ordering_live_indexing_details.filter =
+                                ordering_live_indexing_details.filter.set_to_block(to_block);
 
                             debug!(
-                                "{} - {} - Fetched {} event logs - blocks: {} - {}",
+                                "{} - {} - Processing live filter: {:?}",
                                 logs_params.info_log_name,
                                 IndexingEventProgressStatus::Live.log(),
-                                logs.len(),
-                                from_block,
-                                to_block
+                                ordering_live_indexing_details.filter
                             );
 
-                            let fetched_logs = Ok(FetchLogsResult {
-                                logs: logs.clone(),
-                                from_block,
-                                to_block,
-                            });
+                            let semaphore_client = Arc::clone(&logs_params.semaphore);
+                            let permit = semaphore_client.acquire_owned().await;
 
-                            let result = handle_logs_result(
-                                logs_params.project_path.clone(),
-                                logs_params.indexer_name.clone(),
-                                logs_params.contract_name.clone(),
-                                logs_params.event_name.clone(),
-                                logs_params.topic_id.clone(),
-                                logs_params.execute_events_logs_in_order,
-                                logs_params.progress.clone(),
-                                logs_params.network_contract.clone(),
-                                logs_params.database.clone(),
-                                logs_params.csv_details.clone(),
-                                logs_params.registry.clone(),
-                                fetched_logs,
-                            )
-                            .await;
-
-                            match result {
-                                Ok(_) => {
-                                    ordering_live_indexing_details.last_seen_block_number =
-                                        to_block;
-                                    if logs.is_empty() {
-                                        ordering_live_indexing_details.filter =
-                                            ordering_live_indexing_details
-                                                .filter
-                                                .set_from_block(to_block + 1);
-                                        info!(
-                                            "{} - {} - No events found between blocks {} - {}",
+                            if let Ok(permit) = permit {
+                                match logs_params
+                                    .network_contract
+                                    .cached_provider
+                                    .get_logs(&ordering_live_indexing_details.filter)
+                                    .await
+                                {
+                                    Ok(logs) => {
+                                        debug!(
+                                            "{} - {} - Live topic_id {}, Logs: {} from {} to {}",
                                             logs_params.info_log_name,
                                             IndexingEventProgressStatus::Live.log(),
+                                            logs_params.topic_id,
+                                            logs.len(),
                                             from_block,
                                             to_block
                                         );
-                                    } else if let Some(last_log) = logs.last() {
-                                        ordering_live_indexing_details.filter =
-                                            ordering_live_indexing_details.filter.set_from_block(
-                                                last_log.block_number.unwrap() + U64::from(1),
-                                            );
+
+                                        debug!(
+                                            "{} - {} - Fetched {} event logs - blocks: {} - {}",
+                                            logs_params.info_log_name,
+                                            IndexingEventProgressStatus::Live.log(),
+                                            logs.len(),
+                                            from_block,
+                                            to_block
+                                        );
+
+                                        let fetched_logs = Ok(FetchLogsResult {
+                                            logs: logs.clone(),
+                                            from_block,
+                                            to_block,
+                                        });
+
+                                        let result = handle_logs_result(
+                                            logs_params.project_path.clone(),
+                                            logs_params.indexer_name.clone(),
+                                            logs_params.contract_name.clone(),
+                                            logs_params.event_name.clone(),
+                                            logs_params.topic_id.clone(),
+                                            logs_params.execute_events_logs_in_order,
+                                            logs_params.progress.clone(),
+                                            logs_params.network_contract.clone(),
+                                            logs_params.database.clone(),
+                                            logs_params.csv_details.clone(),
+                                            logs_params.registry.clone(),
+                                            fetched_logs,
+                                        )
+                                        .await;
+
+                                        match result {
+                                            Ok(_) => {
+                                                ordering_live_indexing_details
+                                                    .last_seen_block_number = to_block;
+                                                if logs.is_empty() {
+                                                    ordering_live_indexing_details.filter =
+                                                        ordering_live_indexing_details
+                                                            .filter
+                                                            .set_from_block(to_block + 1);
+                                                    info!(
+                                                        "{} - {} - No events found between blocks {} - {}",
+                                                        logs_params.info_log_name,
+                                                        IndexingEventProgressStatus::Live.log(),
+                                                        from_block,
+                                                        to_block
+                                                    );
+                                                } else if let Some(last_log) = logs.last() {
+                                                    if let Some(last_log_block_number) =
+                                                        last_log.block_number
+                                                    {
+                                                        ordering_live_indexing_details.filter =
+                                                            ordering_live_indexing_details
+                                                                .filter
+                                                                .set_from_block(
+                                                                    last_log_block_number
+                                                                        + U64::from(1),
+                                                                );
+                                                    } else {
+                                                        error!("Failed to get last log block number the provider returned null (should never happen) - try again in 200ms");
+                                                    }
+                                                }
+
+                                                *ordering_live_indexing_details_map
+                                                    .get(parsed_topic_id)
+                                                    .expect("Failed to get ordering_live_indexing_details_map")
+                                                    .lock()
+                                                    .await = ordering_live_indexing_details;
+
+                                                drop(permit);
+                                            }
+                                            Err(err) => {
+                                                error!(
+                                                    "{} - {} - Error fetching logs: {} - will try again in 200ms",
+                                                    logs_params.info_log_name,
+                                                    IndexingEventProgressStatus::Live.log(),
+                                                    err
+                                                );
+                                                drop(permit);
+                                                break;
+                                            }
+                                        }
                                     }
-
-                                    *ordering_live_indexing_details_map
-                                        .get(parsed_topic_id)
-                                        .unwrap()
-                                        .lock()
-                                        .await = ordering_live_indexing_details;
-
-                                    drop(permit);
-                                }
-                                Err(err) => {
-                                    error!(
-                                "{} - {} - Error fetching logs: {} - will try again in 200ms",
-                                logs_params.info_log_name,
-                                IndexingEventProgressStatus::Live.log(),
-                                err
-                            );
-                                    drop(permit);
-                                    break;
+                                    Err(err) => {
+                                        error!(
+                                            "{} - {} - Error fetching logs: {} - will try again in 200ms",
+                                            logs_params.info_log_name,
+                                            IndexingEventProgressStatus::Live.log(),
+                                            err
+                                        );
+                                        drop(permit);
+                                        break;
+                                    }
                                 }
                             }
+                        } else {
+                            info!("WARNING - empty latest block returned from provider, will try again in 200ms");
                         }
-                        Err(err) => {
-                            error!(
-                                "{} - {} - Error fetching logs: {} - will try again in 200ms",
-                                logs_params.info_log_name,
-                                IndexingEventProgressStatus::Live.log(),
-                                err
-                            );
-                            drop(permit);
-                            break;
-                        }
+                    } else {
+                        info!("WARNING - empty latest block returned from provider, will try again in 200ms");
                     }
+                }
+                Err(error) => {
+                    error!(
+                        "Failed to get latest block, will try again in 200ms - error: {}",
+                        error.to_string()
+                    );
                 }
             }
         }

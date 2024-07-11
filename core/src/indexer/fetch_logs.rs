@@ -229,7 +229,10 @@ async fn fetch_historic_logs_stream(
             }
 
             if let Some(last_log) = logs.last() {
-                let next_from_block = last_log.block_number.unwrap() + U64::from(1);
+                let next_from_block = last_log
+                    .block_number
+                    .expect("block number should always be present in a log")
+                    + U64::from(1);
                 debug!(
                     "{} - {} - next_block {:?}",
                     info_log_name,
@@ -314,139 +317,162 @@ async fn live_indexing_stream(
     loop {
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
-        if let Some(latest_block) = cached_provider.get_latest_block().await.unwrap() {
-            let latest_block_number = latest_block.number.unwrap();
-            if last_seen_block_number == latest_block_number {
-                debug!(
-                    "{} - {} - No new blocks to process...",
-                    info_log_name,
-                    IndexingEventProgressStatus::Live.log()
-                );
-                continue;
-            }
-            info!(
-                "{} - {} - New block seen {} - Last seen block {}",
-                info_log_name,
-                IndexingEventProgressStatus::Live.log(),
-                latest_block_number,
-                last_seen_block_number
-            );
-            let safe_block_number = latest_block_number - reorg_safe_distance;
-
-            let from_block = current_filter.get_from_block();
-            // check reorg distance and skip if not safe
-            if from_block > safe_block_number {
-                info!(
-                    "{} - {} - not in safe reorg block range yet block: {} > range: {}",
-                    info_log_name,
-                    IndexingEventProgressStatus::Live.log(),
-                    from_block,
-                    safe_block_number
-                );
-                continue;
-            }
-
-            let to_block = safe_block_number;
-
-            if from_block == to_block
-                && !is_relevant_block(contract_address, topic_id, &latest_block)
-            {
-                debug!(
-                    "{} - {} - Skipping block {} as it's not relevant",
-                    info_log_name,
-                    IndexingEventProgressStatus::Live.log(),
-                    from_block
-                );
-                info!(
-                    "{} - {} - LogsBloom check - No events found in the block {}",
-                    info_log_name,
-                    IndexingEventProgressStatus::Live.log(),
-                    from_block
-                );
-                current_filter = current_filter.set_from_block(to_block + 1);
-                last_seen_block_number = to_block;
-                continue;
-            }
-
-            current_filter = current_filter.set_to_block(to_block);
-
-            debug!(
-                "{} - {} - Processing live filter: {:?}",
-                info_log_name,
-                IndexingEventProgressStatus::Live.log(),
-                current_filter
-            );
-
-            let semaphore_client = Arc::clone(&semaphore);
-            let permit = semaphore_client.acquire_owned().await;
-
-            if let Ok(permit) = permit {
-                match cached_provider.get_logs(&current_filter).await {
-                    Ok(logs) => {
-                        debug!(
-                            "{} - {} - Live topic_id {}, Logs: {} from {} to {}",
-                            info_log_name,
-                            IndexingEventProgressStatus::Live.log(),
-                            topic_id,
-                            logs.len(),
-                            from_block,
-                            to_block
-                        );
-
-                        debug!(
-                            "{} - {} - Fetched {} event logs - blocks: {} - {}",
-                            info_log_name,
-                            IndexingEventProgressStatus::Live.log(),
-                            logs.len(),
-                            from_block,
-                            to_block
-                        );
-
-                        last_seen_block_number = to_block;
-
-                        if tx
-                            .send(Ok(FetchLogsResult {
-                                logs: logs.clone(),
-                                from_block,
-                                to_block,
-                            }))
-                            .is_err()
-                        {
-                            error!(
-                                "{} - {} - Failed to send logs to stream consumer!",
+        let latest_block = cached_provider.get_latest_block().await;
+        match latest_block {
+            Ok(latest_block) => {
+                if let Some(latest_block) = latest_block {
+                    if let Some(latest_block_number) = latest_block.number {
+                        if last_seen_block_number == latest_block_number {
+                            debug!(
+                                "{} - {} - No new blocks to process...",
                                 info_log_name,
                                 IndexingEventProgressStatus::Live.log()
                             );
-                            drop(permit);
-                            break;
+                            continue;
                         }
+                        info!(
+                            "{} - {} - New block seen {} - Last seen block {}",
+                            info_log_name,
+                            IndexingEventProgressStatus::Live.log(),
+                            latest_block_number,
+                            last_seen_block_number
+                        );
+                        let safe_block_number = latest_block_number - reorg_safe_distance;
 
-                        if logs.is_empty() {
-                            current_filter = current_filter.set_from_block(to_block + 1);
+                        let from_block = current_filter.get_from_block();
+                        // check reorg distance and skip if not safe
+                        if from_block > safe_block_number {
                             info!(
-                                "{} - {} - No events found between blocks {} - {}",
+                                "{} - {} - not in safe reorg block range yet block: {} > range: {}",
                                 info_log_name,
                                 IndexingEventProgressStatus::Live.log(),
                                 from_block,
-                                to_block
+                                safe_block_number
                             );
-                        } else if let Some(last_log) = logs.last() {
-                            current_filter = current_filter
-                                .set_from_block(last_log.block_number.unwrap() + U64::from(1));
+                            continue;
                         }
 
-                        drop(permit);
-                    }
-                    Err(err) => {
-                        error!(
-                            "{} - {} - Error fetching logs: {}",
+                        let to_block = safe_block_number;
+
+                        if from_block == to_block
+                            && !is_relevant_block(contract_address, topic_id, &latest_block)
+                        {
+                            debug!(
+                                "{} - {} - Skipping block {} as it's not relevant",
+                                info_log_name,
+                                IndexingEventProgressStatus::Live.log(),
+                                from_block
+                            );
+                            info!(
+                                "{} - {} - LogsBloom check - No events found in the block {}",
+                                info_log_name,
+                                IndexingEventProgressStatus::Live.log(),
+                                from_block
+                            );
+                            current_filter = current_filter.set_from_block(to_block + 1);
+                            last_seen_block_number = to_block;
+                            continue;
+                        }
+
+                        current_filter = current_filter.set_to_block(to_block);
+
+                        debug!(
+                            "{} - {} - Processing live filter: {:?}",
                             info_log_name,
                             IndexingEventProgressStatus::Live.log(),
-                            err
+                            current_filter
                         );
-                        drop(permit);
+
+                        let semaphore_client = Arc::clone(&semaphore);
+                        let permit = semaphore_client.acquire_owned().await;
+
+                        if let Ok(permit) = permit {
+                            match cached_provider.get_logs(&current_filter).await {
+                                Ok(logs) => {
+                                    debug!(
+                                        "{} - {} - Live topic_id {}, Logs: {} from {} to {}",
+                                        info_log_name,
+                                        IndexingEventProgressStatus::Live.log(),
+                                        topic_id,
+                                        logs.len(),
+                                        from_block,
+                                        to_block
+                                    );
+
+                                    debug!(
+                                        "{} - {} - Fetched {} event logs - blocks: {} - {}",
+                                        info_log_name,
+                                        IndexingEventProgressStatus::Live.log(),
+                                        logs.len(),
+                                        from_block,
+                                        to_block
+                                    );
+
+                                    last_seen_block_number = to_block;
+
+                                    if tx
+                                        .send(Ok(FetchLogsResult {
+                                            logs: logs.clone(),
+                                            from_block,
+                                            to_block,
+                                        }))
+                                        .is_err()
+                                    {
+                                        error!(
+                                            "{} - {} - Failed to send logs to stream consumer!",
+                                            info_log_name,
+                                            IndexingEventProgressStatus::Live.log()
+                                        );
+                                        drop(permit);
+                                        break;
+                                    }
+
+                                    if logs.is_empty() {
+                                        current_filter =
+                                            current_filter.set_from_block(to_block + 1);
+                                        info!(
+                                            "{} - {} - No events found between blocks {} - {}",
+                                            info_log_name,
+                                            IndexingEventProgressStatus::Live.log(),
+                                            from_block,
+                                            to_block
+                                        );
+                                    } else if let Some(last_log) = logs.last() {
+                                        if let Some(last_log_block_number) = last_log.block_number {
+                                            current_filter = current_filter.set_from_block(
+                                                last_log_block_number + U64::from(1),
+                                            );
+                                        } else {
+                                            error!("Failed to get last log block number the provider returned null (should never happen) - try again in 200ms");
+                                        }
+                                    }
+
+                                    drop(permit);
+                                }
+                                Err(err) => {
+                                    error!(
+                                        "{} - {} - Error fetching logs: {}",
+                                        info_log_name,
+                                        IndexingEventProgressStatus::Live.log(),
+                                        err
+                                    );
+                                    drop(permit);
+                                }
+                            }
+                        }
+                    } else {
+                        info!("WARNING - empty latest block returned from provider, will try again in 200ms");
                     }
+                } else {
+                    info!("WARNING - empty latest block returned from provider, will try again in 200ms");
                 }
+            }
+            Err(e) => {
+                error!(
+                    "Error getting latest block, will try again in 1 seconds - err: {}",
+                    e.to_string()
+                );
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             }
         }
     }
@@ -475,7 +501,6 @@ fn retry_with_block_range(
         Some(data) => &data.to_string(),
         None => &String::from(""),
     };
-    debug!("Error message: {}", error_message);
 
     fn compile_regex(pattern: &str) -> Result<Regex, regex::Error> {
         Regex::new(pattern)
@@ -512,10 +537,10 @@ fn retry_with_block_range(
     if let Ok(re) =
         compile_regex(r"Try with this block range \[0x([0-9a-fA-F]+),\s*0x([0-9a-fA-F]+)\]")
     {
-        if let Some(captures) = re
-            .captures(error_message)
-            .or_else(|| re.captures(error_data))
-        {
+        if let Some(captures) = re.captures(error_message).or_else(|| {
+            let blah = re.captures(error_data);
+            blah
+        }) {
             if let (Some(start_block), Some(end_block)) = (captures.get(1), captures.get(2)) {
                 let start_block_str = format!("0x{}", start_block.as_str());
                 let end_block_str = format!("0x{}", end_block.as_str());
