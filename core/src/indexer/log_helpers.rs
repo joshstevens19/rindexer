@@ -1,7 +1,6 @@
-use crate::event::contract_setup::IndexingContractSetup;
 use ethers::abi::{Event, Log as ParsedLog, LogParam, RawLog, Token};
 use ethers::addressbook::Address;
-use ethers::prelude::{Block, Bloom, Filter, FilteredParams, ValueOrArray, H256, U256, U64};
+use ethers::prelude::{Block, Bloom, FilteredParams, ValueOrArray, H256, U256};
 use ethers::types::{BigEndianHash, Log};
 use ethers::utils::keccak256;
 use std::str::FromStr;
@@ -118,91 +117,6 @@ pub fn is_relevant_block(
             }
 
             true
-        }
-    }
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum BuildFilterError {
-    #[error("Address is valid format")]
-    AddressInvalidFormat,
-
-    #[error("Topic0 is valid format")]
-    Topic0InvalidFormat,
-}
-
-pub fn build_filter(
-    topic_id: &str,
-    event_name: &str,
-    indexing_contract_setup: &IndexingContractSetup,
-    current_block: U64,
-    next_block: U64,
-) -> Result<Filter, BuildFilterError> {
-    match indexing_contract_setup {
-        IndexingContractSetup::Address(address_details) => {
-            let topic0 = topic_id
-                .parse::<H256>()
-                .map_err(|_| BuildFilterError::Topic0InvalidFormat)?;
-
-            match &address_details.indexed_filters {
-                Some(indexed_filters) => {
-                    if let Some(index_filters) =
-                        indexed_filters.iter().find(|&n| n.event_name == event_name)
-                    {
-                        return Ok(index_filters.extend_filter_indexed(
-                            Filter::new()
-                                .address(address_details.address.clone())
-                                .topic0(topic0)
-                                .from_block(current_block)
-                                .to_block(next_block),
-                        ));
-                    }
-
-                    Ok(Filter::new()
-                        .address(address_details.address.clone())
-                        .topic0(topic0)
-                        .from_block(current_block)
-                        .to_block(next_block))
-                }
-                None => Ok(Filter::new()
-                    .address(address_details.address.clone())
-                    .topic0(topic0)
-                    .from_block(current_block)
-                    .to_block(next_block)),
-            }
-        }
-        IndexingContractSetup::Filter(filter) => {
-            let topic0 = topic_id
-                .parse::<H256>()
-                .map_err(|_| BuildFilterError::Topic0InvalidFormat)?;
-
-            match &filter.indexed_filters {
-                Some(indexed_filters) => Ok(indexed_filters.extend_filter_indexed(
-                    Filter::new()
-                        .topic0(topic0)
-                        .from_block(current_block)
-                        .to_block(next_block),
-                )),
-                None => Ok(Filter::new()
-                    .topic0(topic0)
-                    .from_block(current_block)
-                    .to_block(next_block)),
-            }
-        }
-        IndexingContractSetup::Factory(factory) => {
-            let address = factory
-                .address
-                .parse::<Address>()
-                .map_err(|_| BuildFilterError::AddressInvalidFormat)?;
-            let topic0 = topic_id
-                .parse::<H256>()
-                .map_err(|_| BuildFilterError::Topic0InvalidFormat)?;
-
-            Ok(Filter::new()
-                .address(address)
-                .topic0(topic0)
-                .from_block(current_block)
-                .to_block(next_block))
         }
     }
 }
