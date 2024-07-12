@@ -83,4 +83,14 @@ impl Manifest {
         self.contracts.iter().filter(|c| c.details.iter().any(|p| p.end_block.is_none())).count() >
             0
     }
+
+    pub fn contract_csv_enabled(&self, contract_name: &str) -> bool {
+        let contract_csv_enabled = self
+            .contracts
+            .iter()
+            .find(|c| c.name == contract_name)
+            .map_or(false, |c| c.generate_csv.unwrap_or(true));
+
+        self.storage.csv_enabled() && contract_csv_enabled
+    }
 }

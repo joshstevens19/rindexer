@@ -1,7 +1,4 @@
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{path::Path, sync::Arc};
 
 use ethers::prelude::U64;
 use rust_decimal::Decimal;
@@ -9,14 +6,12 @@ use tokio::{
     fs,
     fs::File,
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    sync::Mutex,
 };
 use tracing::error;
 
 use crate::{
-    event::contract_setup::NetworkContract,
+    event::config::EventProcessingConfig,
     helpers::{camel_to_snake, get_full_path},
-    indexer::progress::IndexingEventsProgressState,
     manifest::storage::CsvDetails,
     EthereumSqlTypeWrapper, PostgresClient,
 };
@@ -76,65 +71,62 @@ async fn get_last_synced_block_number_for_csv(
     Ok(None)
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn get_last_synced_block_number(
-    project_path: &Path,
-    database: &Option<Arc<PostgresClient>>,
-    csv_details: &Option<CsvDetails>,
-    contract_csv_enabled: bool,
-    indexer_name: &str,
-    contract_name: &str,
-    event_name: &str,
-    network: &str,
-) -> Option<U64> {
-    // check CSV file for last seen block
-    if database.is_none() && contract_csv_enabled {
-        if let Some(csv_details) = csv_details {
-            let result = get_last_synced_block_number_for_csv(
-                project_path,
+pub struct SyncConfig<'a> {
+    pub project_path: &'a Path,
+    pub database: &'a Option<Arc<PostgresClient>>,
+    pub csv_details: &'a Option<CsvDetails>,
+    pub contract_csv_enabled: bool,
+    pub indexer_name: &'a str,
+    pub contract_name: &'a str,
+    pub event_name: &'a str,
+    pub network: &'a str,
+}
+
+pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64> {
+    // Check CSV file for last seen block
+    if config.database.is_none() && config.contract_csv_enabled {
+        if let Some(csv_details) = config.csv_details {
+            return if let Ok(result) = get_last_synced_block_number_for_csv(
+                config.project_path,
                 csv_details,
-                contract_name,
-                network,
-                event_name,
+                config.contract_name,
+                config.network,
+                config.event_name,
             )
-            .await;
-
-            match result {
-                Ok(result) => return result,
-                Err(e) => {
-                    error!("Error fetching last synced block from CSV: {:?}", e);
-                }
+            .await
+            {
+                result
+            } else {
+                error!("Error fetching last synced block from CSV");
+                None
             }
-
-            return None;
         }
     }
 
-    match database {
-        Some(database) => {
-            let query = format!(
-                "SELECT last_synced_block FROM rindexer_internal.{}_{}_{} WHERE network = $1",
-                camel_to_snake(indexer_name),
-                camel_to_snake(contract_name),
-                camel_to_snake(event_name)
-            );
+    // Query database for last synced block
+    if let Some(database) = config.database {
+        let query = format!(
+            "SELECT last_synced_block FROM rindexer_internal.{}_{}_{} WHERE network = $1",
+            camel_to_snake(config.indexer_name),
+            camel_to_snake(config.contract_name),
+            camel_to_snake(config.event_name)
+        );
 
-            let row = database.query_one(&query, &[&network]).await;
-            match row {
-                Ok(row) => {
-                    let result: Decimal = row.get("last_synced_block");
-                    Some(
-                        U64::from_dec_str(&result.to_string())
-                            .expect("Failed to parse last_synced_block"),
-                    )
-                }
-                Err(e) => {
-                    error!("Error fetching last synced block: {:?}", e);
-                    None
-                }
+        match database.query_one(&query, &[&config.network]).await {
+            Ok(row) => {
+                let result: Decimal = row.get("last_synced_block");
+                Some(
+                    U64::from_dec_str(&result.to_string())
+                        .expect("Failed to parse last_synced_block"),
+                )
+            }
+            Err(e) => {
+                error!("Error fetching last synced block: {:?}", e);
+                None
             }
         }
-        None => None,
+    } else {
+        None
     }
 }
 
@@ -148,27 +140,24 @@ pub enum UpdateLastSyncedBlockNumberCsv {
 }
 
 async fn update_last_synced_block_number_for_csv_to_file(
-    project_path: &Path,
+    config: &Arc<EventProcessingConfig>,
     csv_details: &CsvDetails,
-    contract_name: &str,
-    network: &str,
-    event_name: &str,
     to_block: U64,
 ) -> Result<(), UpdateLastSyncedBlockNumberCsv> {
     let file_path = build_last_synced_block_number_for_csv(
-        project_path,
+        &config.project_path,
         csv_details,
-        contract_name,
-        network,
-        event_name,
+        &config.contract_name,
+        &config.network_contract.network,
+        &config.event_name,
     );
 
     let last_block = get_last_synced_block_number_for_csv(
-        project_path,
+        &config.project_path,
         csv_details,
-        contract_name,
-        network,
-        event_name,
+        &config.contract_name,
+        &config.network_contract.network,
+        &config.event_name,
     )
     .await?;
 
@@ -188,39 +177,30 @@ async fn update_last_synced_block_number_for_csv_to_file(
     Ok(())
 }
 
-/// Updates the progress and the last synced block number
-#[allow(clippy::too_many_arguments)]
-pub fn update_progress_and_last_synced(
-    project_path: PathBuf,
-    indexer_name: String,
-    contract_name: String,
-    event_name: String,
-    progress: Arc<Mutex<IndexingEventsProgressState>>,
-    network_contract: Arc<NetworkContract>,
-    database: Option<Arc<PostgresClient>>,
-    csv_details: Option<CsvDetails>,
-    to_block: U64,
-) {
+pub fn update_progress_and_last_synced(config: Arc<EventProcessingConfig>, to_block: U64) {
     tokio::spawn(async move {
-        let update_last_synced_block_result =
-            progress.lock().await.update_last_synced_block(&network_contract.id, to_block);
+        let update_last_synced_block_result = config
+            .progress
+            .lock()
+            .await
+            .update_last_synced_block(&config.network_contract.id, to_block);
 
         if let Err(e) = update_last_synced_block_result {
             error!("Error updating last synced block: {:?}", e);
         }
 
-        if let Some(database) = database {
+        if let Some(database) = &config.database {
             let result = database
                 .execute(
                     &format!(
                         "UPDATE rindexer_internal.{}_{}_{} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block",
-                        camel_to_snake(&indexer_name),
-                        camel_to_snake(&contract_name),
-                        camel_to_snake(&event_name)
+                        camel_to_snake(&config.indexer_name),
+                        camel_to_snake(&config.contract_name),
+                        camel_to_snake(&config.event_name)
                     ),
                     &[
                         &EthereumSqlTypeWrapper::U64(to_block),
-                        &network_contract.network,
+                        &config.network_contract.network,
                     ],
                 )
                 .await;
@@ -228,16 +208,10 @@ pub fn update_progress_and_last_synced(
             if let Err(e) = result {
                 error!("Error updating last synced block: {:?}", e);
             }
-        } else if let Some(csv_details) = csv_details {
-            if let Err(e) = update_last_synced_block_number_for_csv_to_file(
-                &project_path,
-                &csv_details,
-                &contract_name,
-                &network_contract.network,
-                &event_name,
-                to_block,
-            )
-            .await
+        } else if let Some(csv_details) = &config.csv_details {
+            if let Err(e) =
+                update_last_synced_block_number_for_csv_to_file(&config, csv_details, to_block)
+                    .await
             {
                 error!("Error updating last synced block to CSV: {:?}", e);
             }

@@ -302,7 +302,7 @@ where
             indexer_name: "BlahBaby".to_string(),
             event_name: event_name.to_string(),
             index_event_in_order,
-            topic_id: topic_id.to_string(),
+            topic_id: topic_id.parse::<H256>().unwrap(),
             contract,
             callback,
         });

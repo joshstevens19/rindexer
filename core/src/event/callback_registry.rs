@@ -67,7 +67,7 @@ pub type EventCallbackType =
 
 pub struct EventCallbackRegistryInformation {
     pub indexer_name: String,
-    pub topic_id: String,
+    pub topic_id: H256,
     pub event_name: String,
     pub index_event_in_order: bool,
     pub contract: ContractInformation,
@@ -84,7 +84,7 @@ impl Clone for EventCallbackRegistryInformation {
     fn clone(&self) -> Self {
         EventCallbackRegistryInformation {
             indexer_name: self.indexer_name.clone(),
-            topic_id: self.topic_id.clone(),
+            topic_id: self.topic_id,
             event_name: self.event_name.clone(),
             index_event_in_order: self.index_event_in_order,
             contract: self.contract.clone(),
@@ -109,15 +109,15 @@ impl EventCallbackRegistry {
         EventCallbackRegistry { events: Vec::new() }
     }
 
-    pub fn find_event(&self, topic_id: &str) -> Option<&EventCallbackRegistryInformation> {
-        self.events.iter().find(|e| e.topic_id == topic_id)
+    pub fn find_event(&self, topic_id: &H256) -> Option<&EventCallbackRegistryInformation> {
+        self.events.iter().find(|e| e.topic_id == *topic_id)
     }
 
     pub fn register_event(&mut self, event: EventCallbackRegistryInformation) {
         self.events.push(event);
     }
 
-    pub async fn trigger_event(&self, topic_id: &str, data: Vec<EventResult>) {
+    pub async fn trigger_event(&self, topic_id: &H256, data: Vec<EventResult>) {
         let mut attempts = 0;
         let mut delay = Duration::from_millis(100);
 
