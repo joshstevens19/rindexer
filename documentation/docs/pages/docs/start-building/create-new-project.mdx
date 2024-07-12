@@ -5,6 +5,9 @@ Make sure you have the CLI installed before starting a new project.
 You can find the installation instructions [here](/docs/introduction/installation).
 :::
 
+We advise anyone using rindexer to install docker which makes running locally with postgres storage a lot easier.
+If you not got docker you can install it [here](https://docs.docker.com/get-docker/).
+
 ## 1. Create a new project
 
 This will walk you through setting up your project by asking you a series of questions in the terminal.
@@ -122,20 +125,18 @@ indexers:
 
 ## 4. Start the project
 
-:::note
-rindexer starts your postgres docker compose file up for you automatically if the DATABASE_URL is not resolvable. 
-You will need to make sure you have docker running on your machine before starting the project.
-:::
-
-To start the project you can run the following command:
-
 :::info
 graphql can only run if you have postgres storage enabled
 :::
 
-It is worth noting that the graphql API is here for convenience as it works out the box with the postgres storage,
-if your building an advance indexer you may want to build your own API on top of the data you have indexed.
-If that's the case it is fine just to use rindexer as the indexing tool and build your own API on top of it.
+If you are using postgres storage with docker support you will need to make sure you have docker running on your machine
+before starting the project then you can run the following command:
+
+```bash
+docker compose up -d
+```
+
+If you not got docker you can install it [here](https://docs.docker.com/get-docker/).
 
 :::code-group
 
@@ -158,6 +159,12 @@ The boilerplate template uses a free node which may get rate limited. We recomme
 :::
 
 ## 5. Query the GraphQL API
+
+:::info
+It is worth noting that the graphql API is here for convenience as it works out the box with the postgres storage,
+if your building an advance indexer you may want to build your own API on top of the data you have indexed.
+If that's the case it is fine just to use rindexer as the indexing tool and build your own API on top of it.
+:::
 
 :::info
 Each page request will have a max query limit of 1000 per page to avoid memory and database issues.
