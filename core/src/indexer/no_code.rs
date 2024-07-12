@@ -36,16 +36,16 @@ pub enum SetupNoCodeError {
     NoProjectPathFoundUsingParentOfManifestPath,
 
     #[error("Could not read manifest: {0}")]
-    CouldNotReadManifest(ReadManifestError),
+    CouldNotReadManifest(#[from] ReadManifestError),
 
     #[error("Could not setup postgres: {0}")]
-    SetupPostgresError(SetupPostgresError),
+    SetupPostgresError(#[from] SetupPostgresError),
 
     #[error("{0}")]
-    RetryClientError(RetryClientError),
+    RetryClientError(#[from] RetryClientError),
 
     #[error("Could not process indexers: {0}")]
-    ProcessIndexersError(ProcessIndexersError),
+    ProcessIndexersError(#[from] ProcessIndexersError),
 
     #[error("You have graphql disabled as well as indexer so nothing can startup")]
     NothingToStartNoCode,
@@ -60,19 +60,14 @@ pub async fn setup_no_code(
     let project_path = details.manifest_path.parent();
     match project_path {
         Some(project_path) => {
-            let mut manifest = read_manifest(details.manifest_path)
-                .map_err(SetupNoCodeError::CouldNotReadManifest)?;
+            let mut manifest = read_manifest(details.manifest_path)?;
             setup_info_logger();
 
             info!("Starting rindexer no code");
 
             let mut postgres: Option<Arc<PostgresClient>> = None;
             if manifest.storage.postgres_enabled() {
-                postgres = Some(Arc::new(
-                    setup_postgres(project_path, &manifest)
-                        .await
-                        .map_err(SetupNoCodeError::SetupPostgresError)?,
-                ));
+                postgres = Some(Arc::new(setup_postgres(project_path, &manifest).await?));
             }
 
             if !details.indexing_details.enabled {
@@ -83,8 +78,7 @@ pub async fn setup_no_code(
                 });
             }
 
-            let network_providers = CreateNetworkProvider::create(&manifest)
-                .map_err(SetupNoCodeError::RetryClientError)?;
+            let network_providers = CreateNetworkProvider::create(&manifest)?;
             info!(
                 "Networks enabled: {}",
                 network_providers
@@ -94,9 +88,8 @@ pub async fn setup_no_code(
                     .join(", ")
             );
 
-            let events = process_events(project_path, &mut manifest, postgres, &network_providers)
-                .await
-                .map_err(SetupNoCodeError::ProcessIndexersError)?;
+            let events =
+                process_events(project_path, &mut manifest, postgres, &network_providers).await?;
 
             let registry = EventCallbackRegistry { events };
             info!(
@@ -319,25 +312,25 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
 #[derive(thiserror::Error, Debug)]
 pub enum ProcessIndexersError {
     #[error("Could not read ABI string: {0}")]
-    CouldNotReadAbiString(io::Error),
+    CouldNotReadAbiString(#[from] io::Error),
 
     #[error("Could not read ABI JSON: {0}")]
-    CouldNotReadAbiJson(serde_json::Error),
+    CouldNotReadAbiJson(#[from] serde_json::Error),
 
     #[error("Could not read ABI items: {0}")]
-    CouldNotReadAbiItems(ReadAbiError),
+    CouldNotReadAbiItems(#[from] ReadAbiError),
 
     #[error("Could not append headers to csv: {0}")]
-    CsvHeadersAppendError(csv::Error),
+    CsvHeadersAppendError(#[from] csv::Error),
 
     #[error("{0}")]
-    CreateContractInformationError(CreateContractInformationError),
+    CreateContractInformationError(#[from] CreateContractInformationError),
 
     #[error("{0}")]
-    CreateCsvFileForEventError(CreateCsvFileForEvent),
+    CreateCsvFileForEventError(#[from] CreateCsvFileForEvent),
 
     #[error("{0}")]
-    ParamTypeError(ParamTypeError),
+    ParamTypeError(#[from] ParamTypeError),
 
     #[error("Event name not found in ABI for contract: {0} - event: {1}")]
     EventNameNotFoundInAbi(String, String),
@@ -354,20 +347,16 @@ pub async fn process_events(
     for contract in &mut manifest.contracts {
         // TODO - this could be shared with `get_abi_items`
         let full_path = get_full_path(project_path, &contract.abi);
-        let abi_str =
-            fs::read_to_string(full_path).map_err(ProcessIndexersError::CouldNotReadAbiString)?;
+        let abi_str = fs::read_to_string(full_path)?;
 
-        let abi: Abi =
-            serde_json::from_str(&abi_str).map_err(ProcessIndexersError::CouldNotReadAbiJson)?;
+        let abi: Abi = serde_json::from_str(&abi_str)?;
 
         #[allow(clippy::useless_conversion)]
         let abi_gen = EthersContract::from(abi);
 
         let is_filter = contract.identify_and_modify_filter();
-        let abi_items = ABIItem::get_abi_items(project_path, contract, is_filter)
-            .map_err(ProcessIndexersError::CouldNotReadAbiItems)?;
-        let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)
-            .map_err(ProcessIndexersError::ParamTypeError)?;
+        let abi_items = ABIItem::get_abi_items(project_path, contract, is_filter)?;
+        let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
 
         for event_info in event_names {
             let event_name = event_info.name.clone();
@@ -392,8 +381,7 @@ pub async fn process_events(
                 .clone();
 
             let contract_information =
-                ContractInformation::create(contract, network_providers, noop_decoder())
-                    .map_err(ProcessIndexersError::CreateContractInformationError)?;
+                ContractInformation::create(contract, network_providers, noop_decoder())?;
 
             let mut csv: Option<Arc<AsyncCsvAppender>> = None;
             if contract.generate_csv.unwrap_or(true) && manifest.storage.csv_enabled() {
@@ -404,15 +392,11 @@ pub async fn process_events(
                     .map_or("./generated_csv", |c| &c.path);
                 let headers: Vec<String> = event_info.csv_headers_for_event();
 
-                let csv_path = event_info
-                    .create_csv_file_for_event(project_path, contract, csv_path)
-                    .map_err(ProcessIndexersError::CreateCsvFileForEventError)?;
+                let csv_path =
+                    event_info.create_csv_file_for_event(project_path, contract, csv_path)?;
                 let csv_appender = AsyncCsvAppender::new(&csv_path);
                 if !Path::new(&csv_path).exists() {
-                    csv_appender
-                        .append_header(headers)
-                        .await
-                        .map_err(ProcessIndexersError::CsvHeadersAppendError)?;
+                    csv_appender.append_header(headers).await?;
                 }
 
                 csv = Some(Arc::new(csv_appender));

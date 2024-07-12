@@ -150,10 +150,10 @@ pub struct ABIItem {
 #[derive(thiserror::Error, Debug)]
 pub enum ReadAbiError {
     #[error("Could not read ABI string: {0}")]
-    CouldNotReadAbiString(std::io::Error),
+    CouldNotReadAbiString(#[from] std::io::Error),
 
     #[error("Could not read ABI JSON: {0}")]
-    CouldNotReadAbiJson(serde_json::Error),
+    CouldNotReadAbiJson(#[from] serde_json::Error),
 }
 
 impl ABIItem {
@@ -184,9 +184,8 @@ impl ABIItem {
         contract: &Contract,
     ) -> Result<Vec<ABIItem>, ReadAbiError> {
         let full_path = get_full_path(project_path, &contract.abi);
-        let abi_str = fs::read_to_string(full_path).map_err(ReadAbiError::CouldNotReadAbiString)?;
-        let abi_items: Vec<ABIItem> =
-            serde_json::from_str(&abi_str).map_err(ReadAbiError::CouldNotReadAbiJson)?;
+        let abi_str = fs::read_to_string(full_path)?;
+        let abi_items: Vec<ABIItem> = serde_json::from_str(&abi_str)?;
 
         let filtered_abi_items = match &contract.include_events {
             Some(events) => abi_items

@@ -94,10 +94,10 @@ fn generate_internal_event_table_sql(
 #[derive(thiserror::Error, Debug)]
 pub enum GenerateTablesForIndexerSqlError {
     #[error("{0}")]
-    ReadAbiError(ReadAbiError),
+    ReadAbiError(#[from] ReadAbiError),
 
     #[error("{0}")]
-    ParamTypeError(ParamTypeError),
+    ParamTypeError(#[from] ParamTypeError),
 }
 
 pub fn generate_tables_for_indexer_sql(
@@ -108,10 +108,8 @@ pub fn generate_tables_for_indexer_sql(
 
     for contract in &indexer.contracts {
         let contract_name = contract.before_modify_name_if_filter_readonly();
-        let abi_items = ABIItem::read_abi_items(project_path, contract)
-            .map_err(GenerateTablesForIndexerSqlError::ReadAbiError)?;
-        let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)
-            .map_err(GenerateTablesForIndexerSqlError::ParamTypeError)?;
+        let abi_items = ABIItem::read_abi_items(project_path, contract)?;
+        let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
         let schema_name = generate_indexer_contract_schema_name(&indexer.name, &contract_name);
         sql.push_str(format!("CREATE SCHEMA IF NOT EXISTS {};", schema_name).as_str());
         info!("Creating schema if not exists: {}", schema_name);

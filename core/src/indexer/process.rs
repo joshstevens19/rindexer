@@ -25,10 +25,10 @@ use tracing::{debug, error, info};
 #[derive(thiserror::Error, Debug)]
 pub enum ProcessContractEventsWithDependenciesError {
     #[error("{0}")]
-    ProcessEventsWithDependenciesError(ProcessEventsWithDependenciesError),
+    ProcessEventsWithDependenciesError(#[from] ProcessEventsWithDependenciesError),
 
     #[error("{0}")]
-    JoinError(JoinError),
+    JoinError(#[from] JoinError),
 }
 
 pub async fn process_contract_events_with_dependencies(
@@ -68,16 +68,16 @@ pub async fn process_contract_events_with_dependencies(
 #[derive(thiserror::Error, Debug)]
 pub enum ProcessEventsWithDependenciesError {
     #[error("Could not process logs: {0}")]
-    ProcessLogs(Box<ProviderError>),
+    ProcessLogs(#[from] Box<ProviderError>),
 
     #[error("Could not build filter: {0}")]
-    BuildFilterError(BuildRindexerFilterError),
+    BuildFilterError(#[from] BuildRindexerFilterError),
 
     #[error("Event config not found")]
     EventConfigNotFound,
 
     #[error("Could not run all the logs processes {0}")]
-    JoinError(JoinError),
+    JoinError(#[from] JoinError),
 
     #[error("Could not parse topic id: {0}")]
     CouldNotParseTopicId(String),
@@ -129,8 +129,7 @@ async fn process_events_dependency_tree(
                         .indexing_contract_setup,
                     event_processing_config.start_block,
                     event_processing_config.end_block,
-                )
-                .map_err(ProcessEventsWithDependenciesError::BuildFilterError)?;
+                )?;
 
                 let logs_params = ProcessLogsParams {
                     project_path: event_processing_config.project_path.clone(),
@@ -153,9 +152,7 @@ async fn process_events_dependency_tree(
                     semaphore: Arc::clone(&event_processing_config.semaphore),
                 };
 
-                process_logs(logs_params.clone())
-                    .await
-                    .map_err(ProcessEventsWithDependenciesError::ProcessLogs)?;
+                process_logs(logs_params.clone()).await?;
 
                 if event_processing_config.live_indexing {
                     let topic_id =
@@ -458,10 +455,10 @@ async fn process_events_dependency_tree(
 #[derive(thiserror::Error, Debug)]
 pub enum ProcessEventError {
     #[error("Could not process logs: {0}")]
-    ProcessLogs(Box<ProviderError>),
+    ProcessLogs(#[from] Box<ProviderError>),
 
     #[error("Could not build filter: {0}")]
-    BuildFilterError(BuildRindexerFilterError),
+    BuildFilterError(#[from] BuildRindexerFilterError),
 }
 
 pub async fn process_event(
@@ -480,8 +477,7 @@ pub async fn process_event(
             .indexing_contract_setup,
         event_processing_config.start_block,
         event_processing_config.end_block,
-    )
-    .map_err(ProcessEventError::BuildFilterError)?;
+    )?;
 
     process_logs(ProcessLogsParams {
         project_path: event_processing_config.project_path,
@@ -501,8 +497,7 @@ pub async fn process_event(
         indexing_distance_from_head: event_processing_config.indexing_distance_from_head,
         semaphore: event_processing_config.semaphore,
     })
-    .await
-    .map_err(ProcessEventError::ProcessLogs)?;
+    .await?;
 
     Ok(())
 }

@@ -82,7 +82,7 @@ pub struct GraphQLServer {
 #[derive(thiserror::Error, Debug)]
 pub enum StartGraphqlServerError {
     #[error("Can not read database environment variable: {0}")]
-    UnableToReadDatabaseUrl(env::VarError),
+    UnableToReadDatabaseUrl(#[from] env::VarError),
 
     #[error("Could not start up GraphQL server {0}")]
     GraphQLServerStartupError(String),
@@ -100,8 +100,7 @@ pub async fn start_graphql_server(
         .map(move |contract| generate_indexer_contract_schema_name(&indexer.name, &contract.name))
         .collect();
 
-    let connection_string =
-        connection_string().map_err(StartGraphqlServerError::UnableToReadDatabaseUrl)?;
+    let connection_string = connection_string()?;
     let port = settings.port;
     let graphql_endpoint = format!("http://localhost:{}/graphql", &port);
     let graphql_playground = format!("http://localhost:{}/playground", &port);
