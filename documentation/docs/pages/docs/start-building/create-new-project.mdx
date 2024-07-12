@@ -126,17 +126,14 @@ indexers:
 ## 4. Start the project
 
 :::info
-graphql can only run if you have postgres storage enabled
+rindexer starts your postgres docker compose file up for you automatically if the DATABASE_URL can not connect to the database and docker-compose.yml is present in the parent directory.
+You will need to make sure you have docker running on your machine before starting the project. If you have not got docker you can install it [here](https://docs.docker.com/get-docker/).
+You can also run docker manually by using `docker compose up -d`.
 :::
 
-If you are using postgres storage with docker support you will need to make sure you have docker running on your machine
-before starting the project then you can run the following command:
-
-```bash
-docker compose up -d
-```
-
-If you not got docker you can install it [here](https://docs.docker.com/get-docker/).
+:::info
+graphql can only run if you have postgres storage enabled
+:::
 
 :::code-group
 
