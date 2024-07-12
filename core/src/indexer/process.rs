@@ -565,14 +565,14 @@ async fn handle_logs_result(
 ) -> Result<(), Box<dyn std::error::Error + Send>> {
     match result {
         Ok(result) => {
+            debug!("Processing logs {} - length {}", event_name, result.logs.len());
+            
             let fn_data = result
                 .logs
-                .iter()
+                .into_iter()
                 .map(|log| EventResult::new(Arc::clone(&network_contract), log))
                 .collect::<Vec<_>>();
-
-            debug!("Processing logs {} - length {}", event_name, result.logs.len());
-
+            
             if !fn_data.is_empty() {
                 if execute_events_logs_in_order {
                     registry.trigger_event(&topic_id, fn_data).await;

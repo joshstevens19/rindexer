@@ -42,14 +42,15 @@ pub struct EventResult {
 }
 
 impl EventResult {
-    pub fn new(network_contract: Arc<NetworkContract>, log: &Log) -> Self {
-        let log_meta = LogMeta::from(log);
+    pub fn new(network_contract: Arc<NetworkContract>, log: Log) -> Self {
+        let log_meta = LogMeta::from(&log);
+        let log_address = log.address;
         Self {
             log: log.clone(),
-            decoded_data: network_contract.decode_log(log.clone()),
+            decoded_data: network_contract.decode_log(log),
             tx_information: TxInformation {
                 network: network_contract.network.to_string(),
-                address: log.address,
+                address: log_address,
                 block_hash: log_meta.block_hash,
                 block_number: log_meta.block_number,
                 transaction_hash: log_meta.transaction_hash,
