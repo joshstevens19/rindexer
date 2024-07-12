@@ -35,46 +35,43 @@ pub enum StartRindexerError {
     NoProjectPathFoundUsingParentOfManifestPath,
 
     #[error("Could not read manifest: {0}")]
-    CouldNotReadManifest(ReadManifestError),
+    CouldNotReadManifest(#[from] ReadManifestError),
 
     #[error("Could not start graphql error {0}")]
-    CouldNotStartGraphqlServer(StartGraphqlServerError),
+    CouldNotStartGraphqlServer(#[from] StartGraphqlServerError),
 
     #[error("Failed to listen to graphql socket")]
     FailedToListenToGraphqlSocket,
 
     #[error("Could not setup postgres: {0}")]
-    SetupPostgresError(SetupPostgresError),
+    SetupPostgresError(#[from] SetupPostgresError),
 
     #[error("Could not start indexing: {0}")]
-    CouldNotStartIndexing(StartIndexingError),
+    CouldNotStartIndexing(#[from] StartIndexingError),
 
     #[error("{0}")]
-    PostgresConnectionError(PostgresConnectionError),
+    PostgresConnectionError(#[from] PostgresConnectionError),
 
     #[error("{0}")]
-    ApplyRelationshipError(ApplyAllRelationships),
+    ApplyRelationshipError(#[from] ApplyAllRelationships),
 
     #[error("Could not apply indexes: {0}")]
-    ApplyPostgresIndexesError(ApplyPostgresIndexesError),
+    ApplyPostgresIndexesError(#[from] ApplyPostgresIndexesError),
 
     #[error("{0}")]
     ContractEventDependenciesMapFromRelationshipsError(
-        ContractEventDependenciesMapFromRelationshipsError,
+        #[from] ContractEventDependenciesMapFromRelationshipsError,
     ),
 
     #[error("{0}")]
-    RelationshipsAndIndexersError(RelationshipsAndIndexersError),
+    RelationshipsAndIndexersError(#[from] RelationshipsAndIndexersError),
 }
 
 pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindexerError> {
     let project_path = details.manifest_path.parent();
     match project_path {
         Some(project_path) => {
-            let manifest = Arc::new(
-                read_manifest(details.manifest_path)
-                    .map_err(StartRindexerError::CouldNotReadManifest)?,
-            );
+            let manifest = Arc::new(read_manifest(details.manifest_path)?);
 
             if manifest.project_type != ProjectType::NoCode {
                 setup_info_logger();
@@ -103,9 +100,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
 
                 // setup postgres is already called in no-code startup
                 if manifest.project_type != ProjectType::NoCode && *postgres_enabled {
-                    setup_postgres(project_path, &manifest)
-                        .await
-                        .map_err(StartRindexerError::SetupPostgresError)?;
+                    setup_postgres(project_path, &manifest).await?;
                 }
 
                 let (relationships, postgres_indexes) = manifest
@@ -115,8 +110,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                         &manifest.name,
                         &manifest.contracts,
                     )
-                    .await
-                    .map_err(StartRindexerError::RelationshipsAndIndexersError)?;
+                    .await?;
 
                 let mut dependencies: Vec<ContractEventDependencies> =
                     ContractEventDependencies::parse(&manifest);
@@ -129,29 +123,25 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     !relationships.is_empty(),
                     indexing_details.registry.complete(),
                 )
-                .await
-                .map_err(StartRindexerError::CouldNotStartIndexing)?;
+                .await?;
 
                 // TODO if graphql isn't up yet, and we apply this on graphql wont refresh we need to handle this
                 info!(
                     "Applying indexes if any back to the database as historic resync is complete"
                 );
-                PostgresIndexResult::apply_indexes(postgres_indexes)
-                    .await
-                    .map_err(StartRindexerError::ApplyPostgresIndexesError)?;
+                PostgresIndexResult::apply_indexes(postgres_indexes).await?;
 
                 if !relationships.is_empty() {
                     // TODO if graphql isn't up yet, and we apply this on graphql wont refresh we need to handle this
                     info!("Applying constraints relationships back to the database as historic resync is complete");
-                    Relationship::apply_all(&relationships)
-                        .await
-                        .map_err(StartRindexerError::ApplyRelationshipError)?;
+                    Relationship::apply_all(&relationships).await?;
 
                     if manifest.has_any_contracts_live_indexing() {
                         info!("Starting live indexing now relationship re-applied..");
 
                         if dependencies.is_empty() {
-                            dependencies = ContractEventDependencies::map_from_relationships(&relationships).map_err(StartRindexerError::ContractEventDependenciesMapFromRelationshipsError)?;
+                            dependencies =
+                                ContractEventDependencies::map_from_relationships(&relationships)?;
                         } else {
                             info!("Manual dependency_events found, skipping auto-applying the dependency_events with the relationships");
                         }
@@ -213,18 +203,16 @@ pub struct StartNoCodeDetails<'a> {
 #[derive(thiserror::Error, Debug)]
 pub enum StartRindexerNoCode {
     #[error("{0}")]
-    StartRindexerError(StartRindexerError),
+    StartRindexerError(#[from] StartRindexerError),
 
     #[error("{0}")]
-    SetupNoCodeError(SetupNoCodeError),
+    SetupNoCodeError(#[from] SetupNoCodeError),
 }
 
 pub async fn start_rindexer_no_code(
     details: StartNoCodeDetails<'_>,
 ) -> Result<(), StartRindexerNoCode> {
-    let start_details = setup_no_code(details)
-        .await
-        .map_err(StartRindexerNoCode::SetupNoCodeError)?;
+    let start_details = setup_no_code(details).await?;
 
     start_rindexer(start_details)
         .await

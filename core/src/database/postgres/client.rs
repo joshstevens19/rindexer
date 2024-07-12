@@ -29,13 +29,13 @@ pub struct PostgresClient {
 #[derive(thiserror::Error, Debug)]
 pub enum PostgresConnectionError {
     #[error("The database connection string is wrong please check your environment: {0}")]
-    DatabaseConnectionConfigWrong(env::VarError),
+    DatabaseConnectionConfigWrong(#[from] env::VarError),
 
     #[error("Connection pool error: {0}")]
-    ConnectionPoolError(tokio_postgres::Error),
+    ConnectionPoolError(#[from] tokio_postgres::Error),
 
     #[error("Connection pool runtime error: {0}")]
-    ConnectionPoolRuntimeError(RunError<tokio_postgres::Error>),
+    ConnectionPoolRuntimeError(#[from] RunError<tokio_postgres::Error>),
 
     #[error("Can not connect to the database please make sure your connection string is correct")]
     CanNotConnectToDatabase,
@@ -44,10 +44,10 @@ pub enum PostgresConnectionError {
 #[derive(thiserror::Error, Debug)]
 pub enum PostgresError {
     #[error("PgError {0}")]
-    PgError(PgError),
+    PgError(#[from] PgError),
 
     #[error("Connection pool error: {0}")]
-    ConnectionPoolError(RunError<tokio_postgres::Error>),
+    ConnectionPoolError(#[from] RunError<tokio_postgres::Error>),
 }
 
 pub struct PostgresTransaction {
@@ -57,16 +57,15 @@ pub struct PostgresTransaction {
 #[derive(thiserror::Error, Debug)]
 pub enum BulkInsertPostgresError {
     #[error("{0}")]
-    PostgresError(PostgresError),
+    PostgresError(#[from] PostgresError),
 
     #[error("{0}")]
-    CouldNotWriteDataToPostgres(tokio_postgres::Error),
+    CouldNotWriteDataToPostgres(#[from] tokio_postgres::Error),
 }
 
 impl PostgresClient {
     pub async fn new() -> Result<Self, PostgresConnectionError> {
-        let connection_str =
-            connection_string().map_err(PostgresConnectionError::DatabaseConnectionConfigWrong)?;
+        let connection_str = connection_string()?;
 
         // Perform a direct connection test
         let (client, connection) = match timeout(
@@ -97,23 +96,15 @@ impl PostgresClient {
             Err(_) => return Err(PostgresConnectionError::CanNotConnectToDatabase),
         }
 
-        let manager = PostgresConnectionManager::new_from_stringlike(&connection_str, NoTls)
-            .map_err(PostgresConnectionError::ConnectionPoolError)?;
+        let manager = PostgresConnectionManager::new_from_stringlike(&connection_str, NoTls)?;
 
-        let pool = Pool::builder()
-            .build(manager)
-            .await
-            .map_err(PostgresConnectionError::ConnectionPoolError)?;
+        let pool = Pool::builder().build(manager).await?;
 
         Ok(Self { pool })
     }
 
     pub async fn batch_execute(&self, sql: &str) -> Result<(), PostgresError> {
-        let conn = self
-            .pool
-            .get()
-            .await
-            .map_err(PostgresError::ConnectionPoolError)?;
+        let conn = self.pool.get().await?;
         conn.batch_execute(sql)
             .await
             .map_err(PostgresError::PgError)
@@ -127,11 +118,7 @@ impl PostgresClient {
     where
         T: ?Sized + ToStatement,
     {
-        let conn = self
-            .pool
-            .get()
-            .await
-            .map_err(PostgresError::ConnectionPoolError)?;
+        let conn = self.pool.get().await?;
         conn.execute(query, params)
             .await
             .map_err(PostgresError::PgError)
@@ -142,22 +129,14 @@ impl PostgresClient {
         query: &str,
         parameter_types: &[PgType],
     ) -> Result<Statement, PostgresError> {
-        let conn = self
-            .pool
-            .get()
-            .await
-            .map_err(PostgresError::ConnectionPoolError)?;
+        let conn = self.pool.get().await?;
         conn.prepare_typed(query, parameter_types)
             .await
             .map_err(PostgresError::PgError)
     }
 
     pub async fn transaction(&self) -> Result<PostgresTransaction, PostgresError> {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(PostgresError::ConnectionPoolError)?;
+        let mut conn = self.pool.get().await?;
         let transaction = conn.transaction().await.map_err(PostgresError::PgError)?;
 
         // Wrap the transaction in a static lifetime
@@ -176,11 +155,7 @@ impl PostgresClient {
     where
         T: ?Sized + ToStatement,
     {
-        let conn = self
-            .pool
-            .get()
-            .await
-            .map_err(PostgresError::ConnectionPoolError)?;
+        let conn = self.pool.get().await?;
         let rows = conn
             .query(query, params)
             .await
@@ -196,11 +171,7 @@ impl PostgresClient {
     where
         T: ?Sized + ToStatement,
     {
-        let conn = self
-            .pool
-            .get()
-            .await
-            .map_err(PostgresError::ConnectionPoolError)?;
+        let conn = self.pool.get().await?;
         let row = conn
             .query_one(query, params)
             .await
@@ -216,11 +187,7 @@ impl PostgresClient {
     where
         T: ?Sized + ToStatement,
     {
-        let conn = self
-            .pool
-            .get()
-            .await
-            .map_err(PostgresError::ConnectionPoolError)?;
+        let conn = self.pool.get().await?;
         let row = conn
             .query_opt(query, params)
             .await
@@ -236,11 +203,7 @@ impl PostgresClient {
     where
         T: ?Sized + ToStatement,
     {
-        let mut conn = self
-            .pool
-            .get()
-            .await
-            .map_err(PostgresError::ConnectionPoolError)?;
+        let mut conn = self.pool.get().await?;
         let transaction = conn.transaction().await.map_err(PostgresError::PgError)?;
 
         for params in params_list {
@@ -263,11 +226,7 @@ impl PostgresClient {
         T: ?Sized + ToStatement,
         U: Buf + 'static + Send,
     {
-        let conn = self
-            .pool
-            .get()
-            .await
-            .map_err(PostgresError::ConnectionPoolError)?;
+        let conn = self.pool.get().await?;
 
         conn.copy_in(statement)
             .await
@@ -300,26 +259,16 @@ impl PostgresClient {
 
         //debug!("Prepared data: {:?}", prepared_data);
 
-        let sink = self
-            .copy_in(&stmt)
-            .await
-            .map_err(BulkInsertPostgresError::PostgresError)?;
+        let sink = self.copy_in(&stmt).await?;
 
         let writer = BinaryCopyInWriter::new(sink, column_types);
         pin_mut!(writer);
 
         for row in prepared_data.iter() {
-            writer
-                .as_mut()
-                .write(row)
-                .await
-                .map_err(BulkInsertPostgresError::CouldNotWriteDataToPostgres)?;
+            writer.as_mut().write(row).await?;
         }
 
-        writer
-            .finish()
-            .await
-            .map_err(BulkInsertPostgresError::CouldNotWriteDataToPostgres)?;
+        writer.finish().await?;
 
         Ok(())
     }

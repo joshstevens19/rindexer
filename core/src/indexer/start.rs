@@ -26,44 +26,26 @@ use crate::PostgresClient;
 #[derive(thiserror::Error, Debug)]
 pub enum CombinedLogEventProcessingError {
     #[error("{0}")]
-    DependencyError(ProcessContractEventsWithDependenciesError),
+    DependencyError(#[from] ProcessContractEventsWithDependenciesError),
     #[error("{0}")]
-    NonBlockingError(ProcessEventError),
+    NonBlockingError(#[from] ProcessEventError),
     #[error("{0}")]
-    JoinError(JoinError),
-}
-
-impl From<ProcessContractEventsWithDependenciesError> for CombinedLogEventProcessingError {
-    fn from(err: ProcessContractEventsWithDependenciesError) -> CombinedLogEventProcessingError {
-        CombinedLogEventProcessingError::DependencyError(err)
-    }
-}
-
-impl From<ProcessEventError> for CombinedLogEventProcessingError {
-    fn from(err: ProcessEventError) -> CombinedLogEventProcessingError {
-        CombinedLogEventProcessingError::NonBlockingError(err)
-    }
-}
-
-impl From<JoinError> for CombinedLogEventProcessingError {
-    fn from(err: JoinError) -> CombinedLogEventProcessingError {
-        CombinedLogEventProcessingError::JoinError(err)
-    }
+    JoinError(#[from] JoinError),
 }
 
 #[derive(thiserror::Error, Debug)]
 pub enum StartIndexingError {
     #[error("Could not run all index handlers join error: {0}")]
-    CouldNotRunAllIndexHandlersJoin(JoinError),
+    CouldNotRunAllIndexHandlersJoin(#[from] JoinError),
 
     #[error("Could not run all index handlers {0}")]
-    CouldNotRunAllIndexHandlers(ProcessEventError),
+    CouldNotRunAllIndexHandlers(#[from] ProcessEventError),
 
     #[error("{0}")]
-    PostgresConnectionError(PostgresConnectionError),
+    PostgresConnectionError(#[from] PostgresConnectionError),
 
     #[error("Could not get block number from provider: {0}")]
-    GetBlockNumberError(ProviderError),
+    GetBlockNumberError(#[from] ProviderError),
 
     #[error("Could not get chain id from provider: {0}")]
     GetChainIdError(ProviderError),
@@ -72,7 +54,7 @@ pub enum StartIndexingError {
     ProcessEventSequentiallyError(ProcessEventError),
 
     #[error("{0}")]
-    CombinedError(CombinedLogEventProcessingError),
+    CombinedError(#[from] CombinedLogEventProcessingError),
 }
 
 pub struct ProcessedNetworkContract {
@@ -123,11 +105,7 @@ pub async fn start_indexing(
 
     for event in registry.events.iter() {
         for network_contract in event.contract.details.iter() {
-            let latest_block = network_contract
-                .cached_provider
-                .get_block_number()
-                .await
-                .map_err(StartIndexingError::GetBlockNumberError)?;
+            let latest_block = network_contract.cached_provider.get_block_number().await?;
 
             let live_indexing = if no_live_indexing_forced {
                 false
@@ -282,9 +260,7 @@ pub async fn start_indexing(
         }));
     }
 
-    let results = try_join_all(handles)
-        .await
-        .map_err(StartIndexingError::CouldNotRunAllIndexHandlersJoin)?;
+    let results = try_join_all(handles).await?;
 
     for result in results {
         match result {

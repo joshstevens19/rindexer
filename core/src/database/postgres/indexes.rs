@@ -18,10 +18,10 @@ pub struct PostgresIndexResult {
 #[derive(thiserror::Error, Debug)]
 pub enum ApplyPostgresIndexesError {
     #[error("{0}")]
-    PostgresConnectionError(PostgresConnectionError),
+    PostgresConnectionError(#[from] PostgresConnectionError),
 
     #[error("Could not apply indexes: {0}")]
-    ApplyIndexesError(PostgresError),
+    ApplyIndexesError(#[from] PostgresError),
 }
 
 impl PostgresIndexResult {
@@ -88,17 +88,12 @@ impl PostgresIndexResult {
             return Ok(());
         }
 
-        let client = PostgresClient::new()
-            .await
-            .map_err(ApplyPostgresIndexesError::PostgresConnectionError)?;
+        let client = PostgresClient::new().await?;
 
         // do a loop due to deadlocks on concurrent execution
         for postgres_index in indexes {
             let sql = postgres_index.apply_index_sql();
-            client
-                .execute(sql.as_str(), &[])
-                .await
-                .map_err(ApplyPostgresIndexesError::ApplyIndexesError)?;
+            client.execute(sql.as_str(), &[]).await?;
         }
 
         Ok(())
@@ -108,10 +103,10 @@ impl PostgresIndexResult {
 #[derive(thiserror::Error, Debug)]
 pub enum GetLastKnownIndexesDroppingSqlError {
     #[error("Could not read last known indexes: {0}")]
-    CouldNotReadLastKnownIndexes(PostgresError),
+    CouldNotReadLastKnownIndexes(#[from] PostgresError),
 
     #[error("Could not serialize indexes: {0}")]
-    CouldNotParseIndexesToJson(serde_json::Error),
+    CouldNotParseIndexesToJson(#[from] serde_json::Error),
 }
 
 async fn get_last_known_indexes_dropping_sql(
@@ -128,13 +123,11 @@ async fn get_last_known_indexes_dropping_sql(
             ),
             &[],
         )
-        .await
-        .map_err(GetLastKnownIndexesDroppingSqlError::CouldNotReadLastKnownIndexes)?;
+        .await?;
 
     if let Some(row) = row_opt {
         let value: &str = row.get(0);
-        let foreign_keys: Vec<String> = serde_json::from_str(value)
-            .map_err(GetLastKnownIndexesDroppingSqlError::CouldNotParseIndexesToJson)?;
+        let foreign_keys: Vec<String> = serde_json::from_str(value)?;
         Ok(foreign_keys
             .iter()
             .map(|foreign_key| Code::new(foreign_key.to_string()))
@@ -147,32 +140,26 @@ async fn get_last_known_indexes_dropping_sql(
 #[derive(thiserror::Error, Debug)]
 pub enum DropLastKnownIndexesError {
     #[error("Could not connect to Postgres: {0}")]
-    PostgresConnection(PostgresConnectionError),
+    PostgresConnection(#[from] PostgresConnectionError),
 
     #[error("{0}")]
-    GetLastKnownIndexesDroppingSql(GetLastKnownIndexesDroppingSqlError),
+    GetLastKnownIndexesDroppingSql(#[from] GetLastKnownIndexesDroppingSqlError),
 
     #[error("Could not execute dropping sql: {0}")]
-    PostgresError(PostgresError),
+    PostgresError(#[from] PostgresError),
 
     #[error("Could not drop indexes: {0}")]
     CouldNotDropIndexes(PostgresError),
 }
 
 pub async fn drop_last_known_indexes(manifest_name: &str) -> Result<(), DropLastKnownIndexesError> {
-    let client = Arc::new(
-        PostgresClient::new()
-            .await
-            .map_err(DropLastKnownIndexesError::PostgresConnection)?,
-    );
+    let client = Arc::new(PostgresClient::new().await?);
 
     // people can edit the indexes, so we have to drop old stuff
     // we save all drops in the database, so we can drop them all at once
     // even if old stuff has been changed
     let last_known_indexes_dropping_sql =
-        get_last_known_indexes_dropping_sql(&client, manifest_name)
-            .await
-            .map_err(DropLastKnownIndexesError::GetLastKnownIndexesDroppingSql)?;
+        get_last_known_indexes_dropping_sql(&client, manifest_name).await?;
 
     let futures = last_known_indexes_dropping_sql.into_iter().map(|sql| {
         let client = Arc::clone(&client);
@@ -195,22 +182,22 @@ pub async fn drop_last_known_indexes(manifest_name: &str) -> Result<(), DropLast
 #[derive(thiserror::Error, Debug)]
 pub enum PrepareIndexesError {
     #[error("{0}")]
-    PostgresConnectionError(PostgresConnectionError),
+    PostgresConnectionError(#[from] PostgresConnectionError),
 
     #[error("{0}")]
-    GetAbiParameterError(GetAbiItemWithDbMapError),
+    GetAbiParameterError(#[from] GetAbiItemWithDbMapError),
 
     #[error("Contract {0} not found in `contracts` make sure it is defined")]
     ContractMissing(String),
 
     #[error("{0}")]
-    ReadAbiError(ReadAbiError),
+    ReadAbiError(#[from] ReadAbiError),
 
     #[error("Could not serialize foreign keys: {0}")]
-    CouldNotParseIndexToJson(serde_json::Error),
+    CouldNotParseIndexToJson(#[from] serde_json::Error),
 
     #[error("Could not save indexes to postgres: {0}")]
-    SaveIndexesError(PostgresError),
+    SaveIndexesError(#[from] PostgresError),
 }
 
 pub async fn prepare_indexes(
@@ -221,17 +208,12 @@ pub async fn prepare_indexes(
 ) -> Result<Vec<PostgresIndexResult>, PrepareIndexesError> {
     let mut index_results: Vec<PostgresIndexResult> = vec![];
     let mut dropping_sql: Vec<Code> = vec![];
-    let client = Arc::new(
-        PostgresClient::new()
-            .await
-            .map_err(PrepareIndexesError::PostgresConnectionError)?,
-    );
+    let client = Arc::new(PostgresClient::new().await?);
 
     // global first
     if let Some(global_injected_parameters) = &postgres_indexes.global_injected_parameters {
         for contract in contracts {
-            let abi_items = ABIItem::read_abi_items(project_path, contract)
-                .map_err(PrepareIndexesError::ReadAbiError)?;
+            let abi_items = ABIItem::read_abi_items(project_path, contract)?;
 
             for abi_item in abi_items {
                 let db_table_name = format!(
@@ -267,8 +249,7 @@ pub async fn prepare_indexes(
                     ));
                 }
                 Some(contract) => {
-                    let abi_items = ABIItem::read_abi_items(project_path, contract)
-                        .map_err(PrepareIndexesError::ReadAbiError)?;
+                    let abi_items = ABIItem::read_abi_items(project_path, contract)?;
 
                     if let Some(injected_parameters) = &contract_event_indexes.injected_parameters {
                         for abi_item in &abi_items {
@@ -316,8 +297,7 @@ pub async fn prepare_indexes(
                                     &abi_items,
                                     &event_indexes.name,
                                     &parameter.split('.').collect::<Vec<&str>>(),
-                                )
-                                .map_err(PrepareIndexesError::GetAbiParameterError)?;
+                                )?;
                                 db_table_columns.push(abi_parameter.db_column_name);
                             }
 
@@ -339,8 +319,7 @@ pub async fn prepare_indexes(
             .iter()
             .map(|code| code.as_str())
             .collect::<Vec<&str>>(),
-    )
-    .map_err(PrepareIndexesError::CouldNotParseIndexToJson)?;
+    )?;
 
     client
         .execute(
@@ -352,8 +331,7 @@ pub async fn prepare_indexes(
             ),
             &[&indexes_dropping_sql_json],
         )
-        .await
-        .map_err(PrepareIndexesError::SaveIndexesError)?;
+        .await?;
 
     Ok(index_results)
 }

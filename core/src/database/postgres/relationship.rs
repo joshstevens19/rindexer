@@ -13,28 +13,28 @@ use tracing::info;
 #[derive(thiserror::Error, Debug)]
 pub enum CreateRelationshipError {
     #[error("{0}")]
-    PostgresConnectionError(PostgresConnectionError),
+    PostgresConnectionError(#[from] PostgresConnectionError),
 
     #[error("Contract missing: {0}")]
     ContractMissing(String),
 
     #[error("{0}")]
-    ReadAbiError(ReadAbiError),
+    ReadAbiError(#[from] ReadAbiError),
 
     #[error("Type mismatch: {0}")]
     TypeMismatch(String),
 
     #[error("{0}")]
-    GetAbiParameterError(GetAbiItemWithDbMapError),
+    GetAbiParameterError(#[from] GetAbiItemWithDbMapError),
 
     #[error("Dropping relationship failed: {0}")]
-    DropRelationshipError(PostgresError),
+    DropRelationshipError(#[from] PostgresError),
 
     #[error("Could not save relationships to postgres: {0}")]
     SaveRelationshipsError(PostgresError),
 
     #[error("Could not serialize foreign keys: {0}")]
-    CouldNotParseRelationshipToJson(serde_json::Error),
+    CouldNotParseRelationshipToJson(#[from] serde_json::Error),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -68,10 +68,10 @@ pub struct Relationship {
 #[derive(thiserror::Error, Debug)]
 pub enum ApplyAllRelationships {
     #[error("{0}")]
-    PostgresConnectionError(PostgresConnectionError),
+    PostgresConnectionError(#[from] PostgresConnectionError),
 
     #[error("Could not apply relationship - {0}")]
-    ApplyRelationshipError(PostgresError),
+    ApplyRelationshipError(#[from] PostgresError),
 }
 
 impl Relationship {
@@ -300,15 +300,10 @@ impl Relationship {
             return Ok(());
         }
 
-        let client = PostgresClient::new()
-            .await
-            .map_err(ApplyAllRelationships::PostgresConnectionError)?;
+        let client = PostgresClient::new().await?;
 
         for relationship in relationships {
-            relationship
-                .apply(&client)
-                .await
-                .map_err(ApplyAllRelationships::ApplyRelationshipError)?;
+            relationship.apply(&client).await?;
         }
 
         Ok(())
@@ -318,10 +313,10 @@ impl Relationship {
 #[derive(thiserror::Error, Debug)]
 pub enum GetLastKnownRelationshipsDroppingSqlError {
     #[error("Could not read last known relationship: {0}")]
-    CouldNotReadLastKnownRelationship(PostgresError),
+    CouldNotReadLastKnownRelationship(#[from] PostgresError),
 
     #[error("Could not serialize foreign keys: {0}")]
-    CouldNotParseRelationshipToJson(serde_json::Error),
+    CouldNotParseRelationshipToJson(#[from] serde_json::Error),
 }
 
 async fn get_last_known_relationships_dropping_sql(
@@ -338,13 +333,11 @@ async fn get_last_known_relationships_dropping_sql(
             ),
             &[],
         )
-        .await
-        .map_err(GetLastKnownRelationshipsDroppingSqlError::CouldNotReadLastKnownRelationship)?;
+        .await?;
 
     if let Some(row) = row_opt {
         let value: &str = row.get(0);
-        let foreign_keys: Vec<String> = serde_json::from_str(value)
-            .map_err(GetLastKnownRelationshipsDroppingSqlError::CouldNotParseRelationshipToJson)?;
+        let foreign_keys: Vec<String> = serde_json::from_str(value)?;
         Ok(foreign_keys
             .iter()
             .map(|foreign_key| Code::new(foreign_key.to_string()))
@@ -357,34 +350,27 @@ async fn get_last_known_relationships_dropping_sql(
 #[derive(thiserror::Error, Debug)]
 pub enum DropLastKnownRelationshipsError {
     #[error("Could not connect to Postgres: {0}")]
-    PostgresConnection(PostgresConnectionError),
+    PostgresConnection(#[from] PostgresConnectionError),
 
     #[error("{0}")]
-    GetLastKnownRelationshipsDroppingSql(GetLastKnownRelationshipsDroppingSqlError),
+    GetLastKnownRelationshipsDroppingSql(#[from] GetLastKnownRelationshipsDroppingSqlError),
 
     #[error("Could not execute dropping sql: {0}")]
-    PostgresError(PostgresError),
+    PostgresError(#[from] PostgresError),
 }
 
 pub async fn drop_last_known_relationships(
     manifest_name: &str,
 ) -> Result<(), DropLastKnownRelationshipsError> {
-    let client = PostgresClient::new()
-        .await
-        .map_err(DropLastKnownRelationshipsError::PostgresConnection)?;
+    let client = PostgresClient::new().await?;
 
     // people can edit the relationships, so we have to drop old stuff
     // we save all drops in the database, so we can drop them all at once
     // even if old stuff has been changed
     let last_known_relationships_dropping_sql =
-        get_last_known_relationships_dropping_sql(&client, manifest_name)
-            .await
-            .map_err(DropLastKnownRelationshipsError::GetLastKnownRelationshipsDroppingSql)?;
+        get_last_known_relationships_dropping_sql(&client, manifest_name).await?;
     for drop_sql in last_known_relationships_dropping_sql {
-        client
-            .batch_execute(drop_sql.as_str())
-            .await
-            .map_err(DropLastKnownRelationshipsError::PostgresError)?;
+        client.batch_execute(drop_sql.as_str()).await?;
     }
 
     Ok(())
@@ -411,8 +397,7 @@ pub async fn create_relationships(
                 )));
             }
             Some(contract) => {
-                let abi_items = ABIItem::read_abi_items(project_path, contract)
-                    .map_err(CreateRelationshipError::ReadAbiError)?;
+                let abi_items = ABIItem::read_abi_items(project_path, contract)?;
 
                 for linked_key in &foreign_key.foreign_keys {
                     let parameter_mapping = foreign_key
@@ -423,8 +408,7 @@ pub async fn create_relationships(
                         &abi_items,
                         &foreign_key.event_name,
                         &parameter_mapping,
-                    )
-                    .map_err(CreateRelationshipError::GetAbiParameterError)?;
+                    )?;
 
                     let linked_key_contract = contracts
                         .iter()
@@ -437,8 +421,7 @@ pub async fn create_relationships(
                         })?;
 
                     let linked_abi_items =
-                        ABIItem::read_abi_items(project_path, linked_key_contract)
-                            .map_err(CreateRelationshipError::ReadAbiError)?;
+                        ABIItem::read_abi_items(project_path, linked_key_contract)?;
                     let linked_parameter_mapping = linked_key
                         .event_input_name
                         .split('.')
@@ -447,8 +430,7 @@ pub async fn create_relationships(
                         &linked_abi_items,
                         &linked_key.event_name,
                         &linked_parameter_mapping,
-                    )
-                    .map_err(CreateRelationshipError::GetAbiParameterError)?;
+                    )?;
 
                     if abi_parameter.abi_item.type_ != linked_abi_parameter.abi_item.type_ {
                         return Err(CreateRelationshipError::TypeMismatch(format!(
@@ -487,10 +469,7 @@ pub async fn create_relationships(
                         },
                     };
 
-                    let sql = relationship
-                        .drop_sql()
-                        .await
-                        .map_err(CreateRelationshipError::DropRelationshipError)?;
+                    let sql = relationship.drop_sql().await?;
                     dropping_sql.extend(sql);
                     relationships.push(relationship);
                 }
@@ -503,13 +482,10 @@ pub async fn create_relationships(
             .iter()
             .map(|code| code.as_str())
             .collect::<Vec<&str>>(),
-    )
-    .map_err(CreateRelationshipError::CouldNotParseRelationshipToJson)?;
+    )?;
 
     // save relationships in postgres
-    let client = PostgresClient::new()
-        .await
-        .map_err(CreateRelationshipError::PostgresConnectionError)?;
+    let client = PostgresClient::new().await?;
 
     client
         .execute(

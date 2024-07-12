@@ -107,16 +107,16 @@ pub struct Storage {
 #[derive(thiserror::Error, Debug)]
 pub enum RelationshipsAndIndexersError {
     #[error("{0}")]
-    DropLastKnownRelationshipsError(DropLastKnownRelationshipsError),
+    DropLastKnownRelationshipsError(#[from] DropLastKnownRelationshipsError),
 
     #[error("Yaml relationship error: {0}")]
-    RelationshipError(CreateRelationshipError),
+    RelationshipError(#[from] CreateRelationshipError),
 
     #[error("{0}")]
-    DropLastKnownIndexesError(DropLastKnownIndexesError),
+    DropLastKnownIndexesError(#[from] DropLastKnownIndexesError),
 
     #[error("Could not prepare and drop indexes: {0}")]
-    FailedToPrepareAndDropIndexes(PrepareIndexesError),
+    FailedToPrepareAndDropIndexes(#[from] PrepareIndexesError),
 }
 
 impl Storage {
@@ -170,9 +170,7 @@ impl Storage {
                 let mut postgres_indexes: Vec<PostgresIndexResult> = vec![];
 
                 info!("Temp dropping constraints relationships from the database for historic indexing for speed reasons");
-                drop_last_known_relationships(manifest_name)
-                    .await
-                    .map_err(RelationshipsAndIndexersError::DropLastKnownRelationshipsError)?;
+                drop_last_known_relationships(manifest_name).await?;
 
                 let mapped_relationships = &storage.relationships;
                 if let Some(mapped_relationships) = mapped_relationships {
@@ -194,9 +192,7 @@ impl Storage {
                 }
 
                 info!("Temp dropping indexes from the database for historic indexing for speed reasons");
-                drop_last_known_indexes(manifest_name)
-                    .await
-                    .map_err(RelationshipsAndIndexersError::DropLastKnownIndexesError)?;
+                drop_last_known_indexes(manifest_name).await?;
 
                 if let Some(indexes) = &storage.indexes {
                     let indexes_result =
