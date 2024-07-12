@@ -85,10 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match &cli.command {
         Commands::New { subcommand, path } => {
-            let resolved_path = resolve_path(path).map_err(|e| {
-                print_error_message(&e);
-                e
-            })?;
+            let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;
             load_env_from_path(&resolved_path)?;
 
             let project_type = match subcommand {
@@ -99,10 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             handle_new_command(resolved_path, project_type)
         }
         Commands::Add { subcommand, path } => {
-            let resolved_path = resolve_path(path).map_err(|e| {
-                print_error_message(&e);
-                e
-            })?;
+            let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;
             load_env_from_path(&resolved_path)?;
 
             match subcommand {
@@ -110,26 +104,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Codegen { subcommand, path } => {
-            let resolved_path = resolve_path(path).map_err(|e| {
-                print_error_message(&e);
-                e
-            })?;
+            let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;
             load_env_from_path(&resolved_path)?;
             handle_codegen_command(resolved_path, subcommand).await
         }
         Commands::Start { subcommand, path } => {
-            let resolved_path = resolve_path(path).map_err(|e| {
-                print_error_message(&e);
-                e
-            })?;
+            let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;
             load_env_from_path(&resolved_path)?;
             start(resolved_path, subcommand).await
         }
         Commands::Delete { path } => {
-            let resolved_path = resolve_path(path).map_err(|e| {
-                print_error_message(&e);
-                e
-            })?;
+            let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;
             load_env_from_path(&resolved_path)?;
             handle_delete_command(resolved_path).await
         }

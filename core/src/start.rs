@@ -123,7 +123,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
 
                 let processed_network_contracts = start_indexing(
                     &manifest,
-                    &project_path.to_path_buf(),
+                    project_path,
                     &dependencies,
                     // we index all the historic data first before then applying FKs
                     !relationships.is_empty(),
@@ -156,7 +156,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
 
                         start_indexing(
                             &manifest,
-                            &project_path.to_path_buf(),
+                            project_path,
                             &dependencies,
                             false,
                             indexing_details

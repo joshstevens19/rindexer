@@ -27,9 +27,8 @@ pub async fn handle_add_contract_command(
 
     let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
 
-    let mut manifest = read_manifest(&rindexer_yaml_path).map_err(|e| {
-        print_error_message(&format!("Could not read the rindexer.yaml file: {}", e));
-        e
+    let mut manifest = read_manifest(&rindexer_yaml_path).inspect_err(|e| {
+        print_error_message(&format!("Could not read the rindexer.yaml file: {}", e))
     })?;
 
     let rindexer_abis_folder = project_path.join("abis");
@@ -61,10 +60,8 @@ pub async fn handle_add_contract_command(
         .expect("Unreachable: Network not found in networks")
         .1;
 
-    let chain_network = Chain::try_from(chain_id).map_err(|e| {
-        print_error_message("Network is not supported by etherscan API.");
-        e
-    })?;
+    let chain_network = Chain::try_from(chain_id)
+        .inspect_err(|_| print_error_message("Network is not supported by etherscan API"))?;
     let contract_address =
         prompt_for_input(&format!("Enter {} Contract Address", network), None, None, None);
 
@@ -80,15 +77,13 @@ pub async fn handle_add_contract_command(
             e
         })?;
 
-    let address = contract_address.parse().map_err(|e| {
-        print_error_message(&format!("Invalid contract address: {}", e));
-        e
-    })?;
+    let address = contract_address
+        .parse()
+        .inspect_err(|e| print_error_message(&format!("Invalid contract address: {}", e)))?;
 
     loop {
-        let metadata = client.contract_source_code(address).await.map_err(|e| {
-            print_error_message(&format!("Failed to fetch contract metadata: {}", e));
-            e
+        let metadata = client.contract_source_code(address).await.inspect_err(|e| {
+            print_error_message(&format!("Failed to fetch contract metadata: {}", e))
         })?;
 
         if metadata.items.is_empty() {
