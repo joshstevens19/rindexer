@@ -1,4 +1,7 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::Path,
+    sync::Arc,
+};
 
 use ethers::{providers::ProviderError, types::U64};
 use futures::future::try_join_all;
@@ -68,7 +71,7 @@ pub struct ProcessedNetworkContract {
 
 pub async fn start_indexing(
     manifest: &Manifest,
-    project_path: &PathBuf,
+    project_path: &Path,
     dependencies: &[ContractEventDependencies],
     no_live_indexing_forced: bool,
     registry: Arc<EventCallbackRegistry>,
@@ -171,7 +174,7 @@ pub async fn start_indexing(
             });
 
             let event_processing_config = EventProcessingConfig {
-                project_path: project_path.clone(),
+                project_path: project_path.to_path_buf(),
                 indexer_name: event.indexer_name.clone(),
                 contract_name: event.contract.name.clone(),
                 info_log_name: event.info_log_name(),
