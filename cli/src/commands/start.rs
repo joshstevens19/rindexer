@@ -1,71 +1,72 @@
-use std::{path::PathBuf, process::Command, thread, time::Duration};
+use std::{path::PathBuf, process::Command};
 
 use rindexer::{
     manifest::{
         core::ProjectType,
         yaml::{read_manifest, YAML_CONFIG_NAME},
     },
-    rindexer_info, setup_info_logger, start_rindexer_no_code, GraphqlOverrideSettings,
+    setup_info_logger, start_rindexer_no_code, GraphqlOverrideSettings,
     IndexerNoCodeDetails, PostgresClient, StartNoCodeDetails,
 };
 
 use crate::{
     cli_interface::StartSubcommands,
-    console::{print_error_message, print_success_message},
+    console::{print_error_message},
     rindexer_yaml::validate_rindexer_yaml_exist,
 };
 
-fn start_docker_compose(project_path: &PathBuf) -> Result<(), String> {
-    let status = Command::new("docker compose")
-        .args(["up", "-d"])
-        .current_dir(project_path)
-        .status()
-        .map_err(|e| {
-            let error = format!("Docker could not startup the postgres container: {}", e);
-            print_error_message(&error);
-            error
-        })?;
-
-    if !status.success() {
-        let error = format!("docker compose exited with status: {}", status);
-        print_error_message(&error);
-        return Err(error);
-    }
-
-    rindexer_info!("Docker starting up the postgres container..");
-
-    // Wait until all containers are up and running
-    let max_retries = 200;
-    let mut retries = 0;
-
-    while retries < max_retries {
-        let ps_status =
-            Command::new("docker compose").arg("ps").current_dir(project_path).output().map_err(
-                |e| {
-                    let error = format!("Failed to check docker compose status: {}", e);
-                    print_error_message(&error);
-                    error
-                },
-            )?;
-
-        if ps_status.status.success() {
-            let output = String::from_utf8_lossy(&ps_status.stdout);
-            if !output.contains("Exit") && output.contains("Up") {
-                print_success_message("All containers are up and running.");
-                return Ok(());
-            }
-        } else {
-            let error = format!("docker compose ps exited with status: {}", ps_status.status);
-            print_error_message(&error);
-        }
-
-        retries += 1;
-        thread::sleep(Duration::from_millis(200));
-        print_success_message("Waiting for docker compose containers to start..")
-    }
-
-    Err("Timed out waiting for docker compose containers to start.".into())
-}
+// This messed up some people using it so make it a manual step for people
+// fn start_docker_compose(project_path: &PathBuf) -> Result<(), String> {
+//     let status = Command::new("docker compose")
+//         .args(["up", "-d"])
+//         .current_dir(project_path)
+//         .status()
+//         .map_err(|e| {
+//             let error = format!("Docker could not startup the postgres container: {}", e);
+//             print_error_message(&error);
+//             error
+//         })?;
+// 
+//     if !status.success() {
+//         let error = format!("docker compose exited with status: {}", status);
+//         print_error_message(&error);
+//         return Err(error);
+//     }
+// 
+//     rindexer_info!("Docker starting up the postgres container..");
+// 
+//     // Wait until all containers are up and running
+//     let max_retries = 200;
+//     let mut retries = 0;
+// 
+//     while retries < max_retries {
+//         let ps_status =
+//             Command::new("docker compose").arg("ps").current_dir(project_path).output().map_err(
+//                 |e| {
+//                     let error = format!("Failed to check docker compose status: {}", e);
+//                     print_error_message(&error);
+//                     error
+//                 },
+//             )?;
+// 
+//         if ps_status.status.success() {
+//             let output = String::from_utf8_lossy(&ps_status.stdout);
+//             if !output.contains("Exit") && output.contains("Up") {
+//                 print_success_message("All containers are up and running.");
+//                 return Ok(());
+//             }
+//         } else {
+//             let error = format!("docker compose ps exited with status: {}", ps_status.status);
+//             print_error_message(&error);
+//         }
+// 
+//         retries += 1;
+//         thread::sleep(Duration::from_millis(200));
+//         print_success_message("Waiting for docker compose containers to start..")
+//     }
+// 
+//     Err("Timed out waiting for docker compose containers to start.".into())
+// }
 
 pub async fn start(
     project_path: PathBuf,
@@ -83,22 +84,24 @@ pub async fn start(
     if manifest.storage.postgres_enabled() {
         let client = PostgresClient::new().await;
         if client.is_err() {
+            // This messed up some people using it so make it a manual step for people
             // find if docker-compose.yml is present in parent
-            let docker_compose_path = project_path.join("docker-compose.yml");
-            if !docker_compose_path.exists() {
-                return Err(
-                    "The DATABASE_URL mapped is not running please make sure it is correct".into()
-                );
-            }
-
-            match start_docker_compose(&project_path) {
-                Ok(_) => {
-                    rindexer_info!("Docker postgres containers started up successfully");
-                }
-                Err(e) => {
-                    return Err(e.into());
-                }
-            }
+            // let docker_compose_path = project_path.join("docker-compose.yml");
+            // if !docker_compose_path.exists() {
+            //     return Err(
+            //         "The DATABASE_URL mapped is not running please make sure it is correct".into()
+            //     );
+            // }
+            // 
+            // match start_docker_compose(&project_path) {
+            //     Ok(_) => {
+            //         rindexer_info!("Docker postgres containers started up successfully");
+            //     }
+            //     Err(e) => {
+            //         return Err(e.into());
+            //     }
+            // }
+            print_error_message("Could not connect to the postgres database, please make sure it is running. If running locally you can run docker compose up -d");
         }
     }
 
