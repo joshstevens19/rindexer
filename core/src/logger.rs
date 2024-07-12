@@ -1,5 +1,4 @@
-use tracing::debug;
-use tracing::level_filters::LevelFilter;
+use tracing::{debug, level_filters::LevelFilter};
 use tracing_subscriber::{
     fmt::format::{Format, Writer},
     EnvFilter,
