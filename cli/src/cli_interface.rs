@@ -193,7 +193,7 @@ pub enum CodegenSubcommands {
     /// `rindexer codegen graphql`
     #[clap(name = "graphql")]
     GraphQL {
-        #[clap(long, help = "The graphql endpoint - defaults to localhost:5005")]
+        #[clap(long, help = "The graphql endpoint - defaults to localhost:3001")]
         endpoint: Option<String>,
     },
 }
