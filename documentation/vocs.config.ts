@@ -1,8 +1,8 @@
 import { defineConfig } from 'vocs'
 
 export default defineConfig({
-  title: 'rindexer',
-  iconUrl: '/favicon-32x32.png',
+  title: '🦀 rindexer 🦀',
+  iconUrl: '/favicon.png',
   topNav: [
     { text: 'Docs', link: '/docs/introduction/installation', match: '/docs' },
     {
