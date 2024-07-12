@@ -32,7 +32,10 @@ fn get_graphql_exe() -> Result<PathBuf, ()> {
     let postgraphile_filename = match env::consts::OS {
         "windows" => "rindexer-graphql-win.exe",
         "macos" => "rindexer-graphql-macos",
-        _ => "rindexer-graphql-linux",
+        "linux" => "rindexer-graphql-linux",
+        _ => {
+            panic!("Unsupported OS: {}", env::consts::OS);
+        }
     };
 
     let mut paths = vec![];
