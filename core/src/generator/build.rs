@@ -1,24 +1,32 @@
-use std::path::Path;
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use ethers::contract::Abigen;
 
-use crate::helpers::{
-    camel_to_snake, create_mod_file, format_all_files_for_project, get_full_path, write_file,
-    CreateModFileError, WriteFileError,
+use super::{
+    context_bindings::generate_context_code,
+    events_bindings::{
+        abigen_contract_file_name, abigen_contract_name, generate_event_bindings,
+        generate_event_handlers, GenerateEventBindingsError, GenerateEventHandlersError,
+    },
+    networks_bindings::generate_networks_code,
 };
-use crate::indexer::Indexer;
-use crate::manifest::core::Manifest;
-use crate::manifest::global::Global;
-use crate::manifest::network::Network;
-use crate::manifest::storage::Storage;
-use crate::manifest::yaml::{read_manifest, ReadManifestError, YAML_CONFIG_NAME};
-
-use super::events_bindings::{
-    abigen_contract_file_name, abigen_contract_name, generate_event_bindings,
-    generate_event_handlers, GenerateEventBindingsError, GenerateEventHandlersError,
+use crate::{
+    helpers::{
+        camel_to_snake, create_mod_file, format_all_files_for_project, get_full_path, write_file,
+        CreateModFileError, WriteFileError,
+    },
+    indexer::Indexer,
+    manifest::{
+        core::Manifest,
+        global::Global,
+        network::Network,
+        storage::Storage,
+        yaml::{read_manifest, ReadManifestError, YAML_CONFIG_NAME},
+    },
 };
-use super::{context_bindings::generate_context_code, networks_bindings::generate_networks_code};
 
 fn generate_file_location(output: &Path, location: &str) -> PathBuf {
     let mut path = PathBuf::from(output);
@@ -34,10 +42,7 @@ pub enum WriteNetworksError {
 
 fn write_networks(output: &Path, networks: &[Network]) -> Result<(), WriteNetworksError> {
     let networks_code = generate_networks_code(networks);
-    write_file(
-        &generate_file_location(output, "networks"),
-        networks_code.as_str(),
-    )?;
+    write_file(&generate_file_location(output, "networks"), networks_code.as_str())?;
 
     Ok(())
 }
@@ -54,10 +59,7 @@ fn write_global(
     networks: &[Network],
 ) -> Result<(), WriteGlobalError> {
     let context_code = generate_context_code(&global.contracts, networks);
-    write_file(
-        &generate_file_location(output, "global_contracts"),
-        context_code.as_str(),
-    )?;
+    write_file(&generate_file_location(output, "global_contracts"), context_code.as_str())?;
 
     Ok(())
 }
@@ -94,15 +96,9 @@ fn write_indexer_events(
         let events_code =
             generate_event_bindings(project_path, &indexer.name, &contract, is_filter, storage)?;
 
-        let event_path = format!(
-            "{}/events/{}",
-            camel_to_snake(&indexer.name),
-            camel_to_snake(&contract.name)
-        );
-        write_file(
-            &generate_file_location(output, &event_path),
-            events_code.as_str(),
-        )?;
+        let event_path =
+            format!("{}/events/{}", camel_to_snake(&indexer.name), camel_to_snake(&contract.name));
+        write_file(&generate_file_location(output, &event_path), events_code.as_str())?;
 
         let abi_full_path = get_full_path(project_path, &contract.abi);
         match abi_full_path.to_str() {
@@ -166,12 +162,7 @@ pub fn generate_rindexer_typings(
                 write_global(&output, global, &manifest.networks)?;
             }
 
-            write_indexer_events(
-                project_path,
-                &output,
-                manifest.to_indexer(),
-                &manifest.storage,
-            )?;
+            write_indexer_events(project_path, &output, manifest.to_indexer(), &manifest.storage)?;
 
             create_mod_file(output.as_path(), true)?;
 
@@ -180,11 +171,11 @@ pub fn generate_rindexer_typings(
         None => {
             let manifest_location = manifest_location.to_str();
             match manifest_location {
-                Some(manifest_location) => Err(
-                    GenerateRindexerTypingsError::ManifestLocationDoesNotHaveAParent(
+                Some(manifest_location) => {
+                    Err(GenerateRindexerTypingsError::ManifestLocationDoesNotHaveAParent(
                         manifest_location.to_string(),
-                    ),
-                ),
+                    ))
+                }
                 None => Err(GenerateRindexerTypingsError::ManifestLocationCanNotBeResolved),
             }
         }
@@ -269,11 +260,8 @@ pub fn generate_rindexer_handlers(
 
             handlers.push_str("registry");
             handlers.push('}');
-            write_file(
-                &generate_file_location(&output, "indexers/all_handlers"),
-                &handlers,
-            )
-            .map_err(GenerateRindexerHandlersError::CouldNotWriteEventHandlersCode)?;
+            write_file(&generate_file_location(&output, "indexers/all_handlers"), &handlers)
+                .map_err(GenerateRindexerHandlersError::CouldNotWriteEventHandlersCode)?;
 
             create_mod_file(output.as_path(), false)?;
 

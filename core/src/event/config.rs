@@ -1,12 +1,14 @@
-use crate::event::callback_registry::EventCallbackRegistry;
-use crate::event::contract_setup::NetworkContract;
-use crate::indexer::IndexingEventsProgressState;
-use crate::manifest::storage::CsvDetails;
-use crate::PostgresClient;
+use std::{path::PathBuf, sync::Arc};
+
 use ethers::prelude::U64;
-use std::path::PathBuf;
-use std::sync::Arc;
 use tokio::sync::{Mutex, Semaphore};
+
+use crate::{
+    event::{callback_registry::EventCallbackRegistry, contract_setup::NetworkContract},
+    indexer::IndexingEventsProgressState,
+    manifest::storage::CsvDetails,
+    PostgresClient,
+};
 
 pub struct EventProcessingConfig {
     pub project_path: PathBuf,

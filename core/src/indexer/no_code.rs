@@ -1,31 +1,34 @@
-use std::path::Path;
-use std::sync::Arc;
-use std::{fs, io};
+use std::{fs, io, path::Path, sync::Arc};
 
 use colored::Colorize;
 use ethers::abi::{Abi, Contract as EthersContract, Event};
 use tokio_postgres::types::Type as PgType;
 use tracing::{debug, error, info};
 
-use crate::abi::{ABIItem, CreateCsvFileForEvent, EventInfo, ParamTypeError, ReadAbiError};
-use crate::database::postgres::client::PostgresClient;
-use crate::database::postgres::generate::{
-    generate_column_names_only_with_base_properties, generate_event_table_full_name,
-};
-use crate::database::postgres::setup::{setup_postgres, SetupPostgresError};
-use crate::database::postgres::sql_type_wrapper::{
-    map_log_params_to_ethereum_wrapper, EthereumSqlTypeWrapper,
-};
-use crate::event::callback_registry::{
-    noop_decoder, EventCallbackRegistry, EventCallbackRegistryInformation, EventCallbackType,
-};
-use crate::event::contract_setup::{ContractInformation, CreateContractInformationError};
-use crate::helpers::get_full_path;
-use crate::indexer::log_helpers::{map_log_params_to_raw_values, parse_log};
-use crate::manifest::core::Manifest;
-use crate::manifest::yaml::{read_manifest, ReadManifestError};
-use crate::provider::{CreateNetworkProvider, RetryClientError};
 use crate::{
+    abi::{ABIItem, CreateCsvFileForEvent, EventInfo, ParamTypeError, ReadAbiError},
+    database::postgres::{
+        client::PostgresClient,
+        generate::{
+            generate_column_names_only_with_base_properties, generate_event_table_full_name,
+        },
+        setup::{setup_postgres, SetupPostgresError},
+        sql_type_wrapper::{map_log_params_to_ethereum_wrapper, EthereumSqlTypeWrapper},
+    },
+    event::{
+        callback_registry::{
+            noop_decoder, EventCallbackRegistry, EventCallbackRegistryInformation,
+            EventCallbackType,
+        },
+        contract_setup::{ContractInformation, CreateContractInformationError},
+    },
+    helpers::get_full_path,
+    indexer::log_helpers::{map_log_params_to_raw_values, parse_log},
+    manifest::{
+        core::Manifest,
+        yaml::{read_manifest, ReadManifestError},
+    },
+    provider::{CreateNetworkProvider, RetryClientError},
     setup_info_logger, AsyncCsvAppender, FutureExt, IndexingDetails, StartDetails,
     StartNoCodeDetails,
 };
@@ -385,11 +388,7 @@ pub async fn process_events(
 
             let mut csv: Option<Arc<AsyncCsvAppender>> = None;
             if contract.generate_csv.unwrap_or(true) && manifest.storage.csv_enabled() {
-                let csv_path = manifest
-                    .storage
-                    .csv
-                    .as_ref()
-                    .map_or("./generated_csv", |c| &c.path);
+                let csv_path = manifest.storage.csv.as_ref().map_or("./generated_csv", |c| &c.path);
                 let headers: Vec<String> = event_info.csv_headers_for_event();
 
                 let csv_path =

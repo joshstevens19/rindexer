@@ -1,15 +1,15 @@
-use ethers::abi::{Event, Log as ParsedLog, LogParam, RawLog, Token};
-use ethers::addressbook::Address;
-use ethers::prelude::{Block, Bloom, FilteredParams, ValueOrArray, H256, U256};
-use ethers::types::{BigEndianHash, Log};
-use ethers::utils::keccak256;
 use std::str::FromStr;
 
+use ethers::{
+    abi::{Event, Log as ParsedLog, LogParam, RawLog, Token},
+    addressbook::Address,
+    prelude::{Block, Bloom, FilteredParams, ValueOrArray, H256, U256},
+    types::{BigEndianHash, Log},
+    utils::keccak256,
+};
+
 pub fn parse_log(event: &Event, log: &Log) -> Option<ParsedLog> {
-    let raw_log = RawLog {
-        topics: log.topics.clone(),
-        data: log.data.to_vec(),
-    };
+    let raw_log = RawLog { topics: log.topics.clone(), data: log.data.to_vec() };
 
     // as topic[0] is the event signature
     let topics_length = log.topics.len() - 1;
@@ -102,10 +102,7 @@ pub fn is_relevant_block(
                         }
                     }
                     ValueOrArray::Array(addresses) => {
-                        if addresses
-                            .iter()
-                            .all(|addr| !contract_in_bloom(*addr, logs_bloom))
-                        {
+                        if addresses.iter().all(|addr| !contract_in_bloom(*addr, logs_bloom)) {
                             return false;
                         }
                     }

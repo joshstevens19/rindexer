@@ -1,14 +1,19 @@
-use crate::event::RindexerEventFilter;
-use crate::manifest::core::Manifest;
-use ethers::middleware::Middleware;
-use ethers::prelude::Log;
-use ethers::providers::{Http, Provider, ProviderError, RetryClient, RetryClientBuilder};
-use ethers::types::{Block, BlockNumber, H256, U256, U64};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
+use ethers::{
+    middleware::Middleware,
+    prelude::Log,
+    providers::{Http, Provider, ProviderError, RetryClient, RetryClientBuilder},
+    types::{Block, BlockNumber, H256, U256, U64},
+};
 use thiserror::Error;
 use tokio::sync::Mutex;
 use url::Url;
+
+use crate::{event::RindexerEventFilter, manifest::core::Manifest};
 
 #[derive(Debug)]
 pub struct JsonRpcCachedProvider {
@@ -18,10 +23,7 @@ pub struct JsonRpcCachedProvider {
 
 impl JsonRpcCachedProvider {
     pub fn new(provider: Provider<RetryClient<Http>>) -> Self {
-        JsonRpcCachedProvider {
-            provider: Arc::new(provider),
-            cache: Mutex::new(None),
-        }
+        JsonRpcCachedProvider { provider: Arc::new(provider), cache: Mutex::new(None) }
     }
 
     pub async fn get_latest_block(&self) -> Result<Option<Arc<Block<H256>>>, ProviderError> {
@@ -83,10 +85,7 @@ pub fn create_client(
             .rate_limit_retries(5000)
             .timeout_retries(1000)
             .initial_backoff(Duration::from_millis(500))
-            .build(
-                provider,
-                Box::<ethers::providers::HttpRateLimitRetryPolicy>::default(),
-            ),
+            .build(provider, Box::<ethers::providers::HttpRateLimitRetryPolicy>::default()),
     );
     Ok(Arc::new(JsonRpcCachedProvider::new(instance)))
 }

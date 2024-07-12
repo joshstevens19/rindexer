@@ -1,11 +1,19 @@
-use crate::cli_interface::CodegenSubcommands;
-use crate::console::{print_error_message, print_success_message};
-use crate::rindexer_yaml::validate_rindexer_yaml_exist;
-use rindexer::generator::build::{generate_rindexer_handlers, generate_rindexer_typings};
-use rindexer::manifest::core::ProjectType;
-use rindexer::manifest::yaml::{read_manifest, YAML_CONFIG_NAME};
-use rindexer::{format_all_files_for_project, generate_graphql_queries};
 use std::path::PathBuf;
+
+use rindexer::{
+    format_all_files_for_project, generate_graphql_queries,
+    generator::build::{generate_rindexer_handlers, generate_rindexer_typings},
+    manifest::{
+        core::ProjectType,
+        yaml::{read_manifest, YAML_CONFIG_NAME},
+    },
+};
+
+use crate::{
+    cli_interface::CodegenSubcommands,
+    console::{print_error_message, print_success_message},
+    rindexer_yaml::validate_rindexer_yaml_exist,
+};
 
 pub async fn handle_codegen_command(
     project_path: PathBuf,
@@ -13,12 +21,10 @@ pub async fn handle_codegen_command(
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let CodegenSubcommands::GraphQL { endpoint } = subcommand {
         let url = endpoint.as_deref().unwrap_or("http://localhost:3001");
-        generate_graphql_queries(url, &project_path)
-            .await
-            .map_err(|e| {
-                print_error_message(&format!("Failed to generate graphql queries: {}", e));
-                e
-            })?;
+        generate_graphql_queries(url, &project_path).await.map_err(|e| {
+            print_error_message(&format!("Failed to generate graphql queries: {}", e));
+            e
+        })?;
 
         print_success_message("Generated graphql queries.");
 
@@ -59,9 +65,7 @@ pub async fn handle_codegen_command(
             format_all_files_for_project(project_path);
             print_success_message("Generated rindexer indexer handlers.");
         }
-        CodegenSubcommands::GraphQL {
-            endpoint: _endpoint,
-        } => {
+        CodegenSubcommands::GraphQL { endpoint: _endpoint } => {
             unreachable!("This should not be reachable");
         }
     }

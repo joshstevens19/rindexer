@@ -1,19 +1,23 @@
-use crate::abi::{
-    ABIInput, ABIItem, CreateCsvFileForEvent, EventInfo, GenerateAbiPropertiesType, ParamTypeError,
-    ReadAbiError,
-};
-use crate::database::postgres::generate::{
-    generate_column_names_only_with_base_properties, generate_event_table_full_name,
-};
+use std::{fs, path::Path};
+
 use ethers::types::ValueOrArray;
 use serde_json::Value;
-use std::fs;
-use std::path::Path;
 
-use crate::helpers::{camel_to_snake, get_full_path};
-use crate::manifest::contract::{Contract, ContractDetails};
-use crate::manifest::storage::{CsvDetails, Storage};
-use crate::types::code::Code;
+use crate::{
+    abi::{
+        ABIInput, ABIItem, CreateCsvFileForEvent, EventInfo, GenerateAbiPropertiesType,
+        ParamTypeError, ReadAbiError,
+    },
+    database::postgres::generate::{
+        generate_column_names_only_with_base_properties, generate_event_table_full_name,
+    },
+    helpers::{camel_to_snake, get_full_path},
+    manifest::{
+        contract::{Contract, ContractDetails},
+        storage::{CsvDetails, Storage},
+    },
+    types::code::Code,
+};
 
 pub fn abigen_contract_name(contract: &Contract) -> String {
     format!("Rindexer{}Gen", contract.name)
@@ -50,11 +54,7 @@ fn generate_structs(
 
     let mut structs = Code::blank();
 
-    for item in abi_json
-        .as_array()
-        .ok_or(GenerateStructsError::InvalidAbiJsonFormat)?
-        .iter()
-    {
+    for item in abi_json.as_array().ok_or(GenerateStructsError::InvalidAbiJsonFormat)?.iter() {
         if item["type"] == "event" {
             let event_name = item["name"].as_str().unwrap_or_default();
             let struct_result = format!("{}Result", event_name);
@@ -100,12 +100,7 @@ fn generate_topic_ids_match_arms_code(event_type_name: &str, event_info: &[Event
         event_info
             .iter()
             .map(|info| {
-                format!(
-                    "{}::{}(_) => \"0x{}\",",
-                    event_type_name,
-                    info.name,
-                    info.topic_id()
-                )
+                format!("{}::{}(_) => \"0x{}\",", event_type_name, info.name, info.topic_id())
             })
             .collect::<Vec<_>>()
             .join("\n"),
@@ -116,12 +111,7 @@ fn generate_event_names_match_arms_code(event_type_name: &str, event_info: &[Eve
     Code::new(
         event_info
             .iter()
-            .map(|info| {
-                format!(
-                    "{}::{}(_) => \"{}\",",
-                    event_type_name, info.name, info.name
-                )
-            })
+            .map(|info| format!("{}::{}(_) => \"{}\",", event_type_name, info.name, info.name))
             .collect::<Vec<_>>()
             .join("\n"),
     )
@@ -189,11 +179,8 @@ fn generate_csv_instance(
     }
 
     let csv_path = event_info.create_csv_file_for_event(project_path, contract, csv_path)?;
-    let headers: Vec<String> = event_info
-        .csv_headers_for_event()
-        .iter()
-        .map(|h| format!("\"{}\"", h))
-        .collect();
+    let headers: Vec<String> =
+        event_info.csv_headers_for_event().iter().map(|h| format!("\"{}\"", h)).collect();
 
     Ok(Code::new(format!(
         r#"
@@ -322,11 +309,8 @@ fn generate_event_callback_structs_code(
                 ""
             },
             csv_generator = csv_generator,
-            event_callback_events_len = if !is_filter {
-                "let events_len = events.len();"
-            } else {
-                ""
-            },
+            event_callback_events_len =
+                if !is_filter { "let events_len = events.len();" } else { "" },
             event_callback_return = if !is_filter {
                 format!(
                     r#"
@@ -397,9 +381,8 @@ fn build_pub_contract_fn(
 ) -> Code {
     let contract_name = camel_to_snake(contract_name);
 
-    let has_array_addresses = contracts_details
-        .iter()
-        .any(|c| matches!(c.address(), Some(ValueOrArray::Array(_))));
+    let has_array_addresses =
+        contracts_details.iter().any(|c| matches!(c.address(), Some(ValueOrArray::Array(_))));
 
     let no_address = contracts_details.iter().any(|c| c.address().is_none());
 
@@ -620,21 +603,14 @@ fn generate_event_bindings_code(
             }}
         }}
         "#,
-        client_import = if storage.postgres_enabled() {
-            "PostgresClient,"
-        } else {
-            ""
-        },
+        client_import = if storage.postgres_enabled() { "PostgresClient," } else { "" },
         abigen_mod_name = abigen_contract_mod_name(contract),
         abigen_file_name = abigen_contract_file_name(contract),
         abigen_name = abigen_contract_name(contract),
         structs = generate_structs(project_path, contract)?,
         event_type_name = &event_type_name,
-        event_context_database = if storage.postgres_enabled() {
-            "pub database: Arc<PostgresClient>,"
-        } else {
-            ""
-        },
+        event_context_database =
+            if storage.postgres_enabled() { "pub database: Arc<PostgresClient>," } else { "" },
         event_callback_structs =
             generate_event_callback_structs_code(project_path, &event_info, contract, storage)?,
         event_enums = generate_event_enums_code(&event_info),
@@ -642,10 +618,8 @@ fn generate_event_bindings_code(
         event_names_match_arms =
             generate_event_names_match_arms_code(&event_type_name, &event_info),
         contract_name = contract.name,
-        decoder_contract_fn = decoder_contract_fn(
-            contract.details.iter().collect(),
-            &abigen_contract_name(contract)
-        ),
+        decoder_contract_fn =
+            decoder_contract_fn(contract.details.iter().collect(), &abigen_contract_name(contract)),
         build_pub_contract_fn = build_pub_contract_fn(
             &contract.name,
             contract.details.iter().collect(),
@@ -732,10 +706,7 @@ pub fn generate_event_handlers(
     for event in event_names {
         let event_type_name = generate_event_type_name(&contract.name);
 
-        imports.push_str(&format!(
-            r#",{handler_name}Event"#,
-            handler_name = event.name,
-        ));
+        imports.push_str(&format!(r#",{handler_name}Event"#, handler_name = event.name,));
 
         let abi_name_properties = ABIInput::generate_abi_name_properties(
             &event.inputs,
@@ -775,10 +746,7 @@ pub fn generate_event_handlers(
             csv_data.push_str(r#"result.tx_information.transaction_index.to_string(),"#);
             csv_data.push_str(r#"result.tx_information.log_index.to_string()"#);
 
-            csv_write = format!(
-                r#"csv_bulk_data.push(vec![{csv_data}]);"#,
-                csv_data = csv_data,
-            );
+            csv_write = format!(r#"csv_bulk_data.push(vec![{csv_data}]);"#, csv_data = csv_data,);
 
             if storage.postgres_disable_create_tables() {
                 csv_write = format!(
@@ -939,11 +907,7 @@ pub fn generate_event_handlers(
             handler_name = event.name,
             event_type_name = event_type_name,
             contract_name = contract.name,
-            csv_write = if !postgres_write.is_empty() {
-                String::new()
-            } else {
-                csv_write
-            },
+            csv_write = if !postgres_write.is_empty() { String::new() } else { csv_write },
             postgres_write = postgres_write,
         );
 

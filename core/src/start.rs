@@ -1,23 +1,29 @@
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
+
 use tokio::signal;
 use tracing::{error, info};
 
-use crate::api::{start_graphql_server, GraphqlOverrideSettings, StartGraphqlServerError};
-use crate::database::postgres::client::PostgresConnectionError;
-use crate::database::postgres::indexes::{ApplyPostgresIndexesError, PostgresIndexResult};
-use crate::database::postgres::relationship::{ApplyAllRelationships, Relationship};
-use crate::database::postgres::setup::{setup_postgres, SetupPostgresError};
-use crate::event::callback_registry::EventCallbackRegistry;
-use crate::indexer::no_code::{setup_no_code, SetupNoCodeError};
-use crate::indexer::start::{start_indexing, StartIndexingError};
-use crate::indexer::{
-    ContractEventDependencies, ContractEventDependenciesMapFromRelationshipsError,
+use crate::{
+    api::{start_graphql_server, GraphqlOverrideSettings, StartGraphqlServerError},
+    database::postgres::{
+        client::PostgresConnectionError,
+        indexes::{ApplyPostgresIndexesError, PostgresIndexResult},
+        relationship::{ApplyAllRelationships, Relationship},
+        setup::{setup_postgres, SetupPostgresError},
+    },
+    event::callback_registry::EventCallbackRegistry,
+    indexer::{
+        no_code::{setup_no_code, SetupNoCodeError},
+        start::{start_indexing, StartIndexingError},
+        ContractEventDependencies, ContractEventDependenciesMapFromRelationshipsError,
+    },
+    manifest::{
+        core::ProjectType,
+        storage::RelationshipsAndIndexersError,
+        yaml::{read_manifest, ReadManifestError},
+    },
+    setup_info_logger,
 };
-use crate::manifest::core::ProjectType;
-use crate::manifest::storage::RelationshipsAndIndexersError;
-use crate::manifest::yaml::{read_manifest, ReadManifestError};
-use crate::setup_info_logger;
 
 pub struct IndexingDetails {
     pub registry: EventCallbackRegistry,
@@ -125,14 +131,16 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                 )
                 .await?;
 
-                // TODO if graphql isn't up yet, and we apply this on graphql wont refresh we need to handle this
+                // TODO if graphql isn't up yet, and we apply this on graphql wont refresh we need
+                // to handle this
                 info!(
                     "Applying indexes if any back to the database as historic resync is complete"
                 );
                 PostgresIndexResult::apply_indexes(postgres_indexes).await?;
 
                 if !relationships.is_empty() {
-                    // TODO if graphql isn't up yet, and we apply this on graphql wont refresh we need to handle this
+                    // TODO if graphql isn't up yet, and we apply this on graphql wont refresh we
+                    // need to handle this
                     info!("Applying constraints relationships back to the database as historic resync is complete");
                     Relationship::apply_all(&relationships).await?;
 
@@ -214,7 +222,5 @@ pub async fn start_rindexer_no_code(
 ) -> Result<(), StartRindexerNoCode> {
     let start_details = setup_no_code(details).await?;
 
-    start_rindexer(start_details)
-        .await
-        .map_err(StartRindexerNoCode::StartRindexerError)
+    start_rindexer(start_details).await.map_err(StartRindexerNoCode::StartRindexerError)
 }

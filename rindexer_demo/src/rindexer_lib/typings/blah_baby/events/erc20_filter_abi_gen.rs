@@ -390,8 +390,7 @@ pub mod rindexer_erc20_filter_gen {
             &self,
         ) -> ::ethers::contract::builders::Event<::std::sync::Arc<M>, M, RindexerERC20FilterGenEvents>
         {
-            self.0
-                .event_with_filter(::core::default::Default::default())
+            self.0.event_with_filter(::core::default::Default::default())
         }
     }
     impl<M: ::ethers::providers::Middleware> From<::ethers::contract::Contract<M>>
@@ -474,7 +473,8 @@ pub mod rindexer_erc20_filter_gen {
             Self::TransferFilter(value)
         }
     }
-    ///Container type for all input parameters for the `allowance` function with signature `allowance(address,address)` and selector `0xdd62ed3e`
+    ///Container type for all input parameters for the `allowance` function with signature
+    /// `allowance(address,address)` and selector `0xdd62ed3e`
     #[derive(
         Clone,
         ::ethers::contract::EthCall,
@@ -490,7 +490,8 @@ pub mod rindexer_erc20_filter_gen {
         pub owner: ::ethers::core::types::Address,
         pub spender: ::ethers::core::types::Address,
     }
-    ///Container type for all input parameters for the `approve` function with signature `approve(address,uint256)` and selector `0x095ea7b3`
+    ///Container type for all input parameters for the `approve` function with signature
+    /// `approve(address,uint256)` and selector `0x095ea7b3`
     #[derive(
         Clone,
         ::ethers::contract::EthCall,
@@ -506,7 +507,8 @@ pub mod rindexer_erc20_filter_gen {
         pub spender: ::ethers::core::types::Address,
         pub value: ::ethers::core::types::U256,
     }
-    ///Container type for all input parameters for the `balanceOf` function with signature `balanceOf(address)` and selector `0x70a08231`
+    ///Container type for all input parameters for the `balanceOf` function with signature
+    /// `balanceOf(address)` and selector `0x70a08231`
     #[derive(
         Clone,
         ::ethers::contract::EthCall,
@@ -521,7 +523,8 @@ pub mod rindexer_erc20_filter_gen {
     pub struct BalanceOfCall {
         pub owner: ::ethers::core::types::Address,
     }
-    ///Container type for all input parameters for the `decimals` function with signature `decimals()` and selector `0x313ce567`
+    ///Container type for all input parameters for the `decimals` function with signature
+    /// `decimals()` and selector `0x313ce567`
     #[derive(
         Clone,
         ::ethers::contract::EthCall,
@@ -534,7 +537,8 @@ pub mod rindexer_erc20_filter_gen {
     )]
     #[ethcall(name = "decimals", abi = "decimals()")]
     pub struct DecimalsCall;
-    ///Container type for all input parameters for the `name` function with signature `name()` and selector `0x06fdde03`
+    ///Container type for all input parameters for the `name` function with signature `name()` and
+    /// selector `0x06fdde03`
     #[derive(
         Clone,
         ::ethers::contract::EthCall,
@@ -547,7 +551,8 @@ pub mod rindexer_erc20_filter_gen {
     )]
     #[ethcall(name = "name", abi = "name()")]
     pub struct NameCall;
-    ///Container type for all input parameters for the `symbol` function with signature `symbol()` and selector `0x95d89b41`
+    ///Container type for all input parameters for the `symbol` function with signature `symbol()`
+    /// and selector `0x95d89b41`
     #[derive(
         Clone,
         ::ethers::contract::EthCall,
@@ -560,7 +565,8 @@ pub mod rindexer_erc20_filter_gen {
     )]
     #[ethcall(name = "symbol", abi = "symbol()")]
     pub struct SymbolCall;
-    ///Container type for all input parameters for the `totalSupply` function with signature `totalSupply()` and selector `0x18160ddd`
+    ///Container type for all input parameters for the `totalSupply` function with signature
+    /// `totalSupply()` and selector `0x18160ddd`
     #[derive(
         Clone,
         ::ethers::contract::EthCall,
@@ -573,7 +579,8 @@ pub mod rindexer_erc20_filter_gen {
     )]
     #[ethcall(name = "totalSupply", abi = "totalSupply()")]
     pub struct TotalSupplyCall;
-    ///Container type for all input parameters for the `transfer` function with signature `transfer(address,uint256)` and selector `0xa9059cbb`
+    ///Container type for all input parameters for the `transfer` function with signature
+    /// `transfer(address,uint256)` and selector `0xa9059cbb`
     #[derive(
         Clone,
         ::ethers::contract::EthCall,
@@ -589,7 +596,8 @@ pub mod rindexer_erc20_filter_gen {
         pub to: ::ethers::core::types::Address,
         pub value: ::ethers::core::types::U256,
     }
-    ///Container type for all input parameters for the `transferFrom` function with signature `transferFrom(address,address,uint256)` and selector `0x23b872dd`
+    ///Container type for all input parameters for the `transferFrom` function with signature
+    /// `transferFrom(address,address,uint256)` and selector `0x23b872dd`
     #[derive(
         Clone,
         ::ethers::contract::EthCall,
@@ -730,7 +738,8 @@ pub mod rindexer_erc20_filter_gen {
             Self::TransferFrom(value)
         }
     }
-    ///Container type for all return fields from the `allowance` function with signature `allowance(address,address)` and selector `0xdd62ed3e`
+    ///Container type for all return fields from the `allowance` function with signature
+    /// `allowance(address,address)` and selector `0xdd62ed3e`
     #[derive(
         Clone,
         ::ethers::contract::EthAbiType,
@@ -742,7 +751,8 @@ pub mod rindexer_erc20_filter_gen {
         Hash,
     )]
     pub struct AllowanceReturn(pub ::ethers::core::types::U256);
-    ///Container type for all return fields from the `approve` function with signature `approve(address,uint256)` and selector `0x095ea7b3`
+    ///Container type for all return fields from the `approve` function with signature
+    /// `approve(address,uint256)` and selector `0x095ea7b3`
     #[derive(
         Clone,
         ::ethers::contract::EthAbiType,
@@ -754,7 +764,8 @@ pub mod rindexer_erc20_filter_gen {
         Hash,
     )]
     pub struct ApproveReturn(pub bool);
-    ///Container type for all return fields from the `balanceOf` function with signature `balanceOf(address)` and selector `0x70a08231`
+    ///Container type for all return fields from the `balanceOf` function with signature
+    /// `balanceOf(address)` and selector `0x70a08231`
     #[derive(
         Clone,
         ::ethers::contract::EthAbiType,
@@ -768,7 +779,8 @@ pub mod rindexer_erc20_filter_gen {
     pub struct BalanceOfReturn {
         pub balance: ::ethers::core::types::U256,
     }
-    ///Container type for all return fields from the `decimals` function with signature `decimals()` and selector `0x313ce567`
+    ///Container type for all return fields from the `decimals` function with signature
+    /// `decimals()` and selector `0x313ce567`
     #[derive(
         Clone,
         ::ethers::contract::EthAbiType,
@@ -780,7 +792,8 @@ pub mod rindexer_erc20_filter_gen {
         Hash,
     )]
     pub struct DecimalsReturn(pub u8);
-    ///Container type for all return fields from the `name` function with signature `name()` and selector `0x06fdde03`
+    ///Container type for all return fields from the `name` function with signature `name()` and
+    /// selector `0x06fdde03`
     #[derive(
         Clone,
         ::ethers::contract::EthAbiType,
@@ -792,7 +805,8 @@ pub mod rindexer_erc20_filter_gen {
         Hash,
     )]
     pub struct NameReturn(pub ::std::string::String);
-    ///Container type for all return fields from the `symbol` function with signature `symbol()` and selector `0x95d89b41`
+    ///Container type for all return fields from the `symbol` function with signature `symbol()`
+    /// and selector `0x95d89b41`
     #[derive(
         Clone,
         ::ethers::contract::EthAbiType,
@@ -804,7 +818,8 @@ pub mod rindexer_erc20_filter_gen {
         Hash,
     )]
     pub struct SymbolReturn(pub ::std::string::String);
-    ///Container type for all return fields from the `totalSupply` function with signature `totalSupply()` and selector `0x18160ddd`
+    ///Container type for all return fields from the `totalSupply` function with signature
+    /// `totalSupply()` and selector `0x18160ddd`
     #[derive(
         Clone,
         ::ethers::contract::EthAbiType,
@@ -816,7 +831,8 @@ pub mod rindexer_erc20_filter_gen {
         Hash,
     )]
     pub struct TotalSupplyReturn(pub ::ethers::core::types::U256);
-    ///Container type for all return fields from the `transfer` function with signature `transfer(address,uint256)` and selector `0xa9059cbb`
+    ///Container type for all return fields from the `transfer` function with signature
+    /// `transfer(address,uint256)` and selector `0xa9059cbb`
     #[derive(
         Clone,
         ::ethers::contract::EthAbiType,
@@ -828,7 +844,8 @@ pub mod rindexer_erc20_filter_gen {
         Hash,
     )]
     pub struct TransferReturn(pub bool);
-    ///Container type for all return fields from the `transferFrom` function with signature `transferFrom(address,address,uint256)` and selector `0x23b872dd`
+    ///Container type for all return fields from the `transferFrom` function with signature
+    /// `transferFrom(address,address,uint256)` and selector `0x23b872dd`
     #[derive(
         Clone,
         ::ethers::contract::EthAbiType,

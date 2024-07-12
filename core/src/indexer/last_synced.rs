@@ -1,17 +1,25 @@
-use crate::event::contract_setup::NetworkContract;
-use crate::helpers::{camel_to_snake, get_full_path};
-use crate::indexer::progress::IndexingEventsProgressState;
-use crate::manifest::storage::CsvDetails;
-use crate::{EthereumSqlTypeWrapper, PostgresClient};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
 use ethers::prelude::U64;
 use rust_decimal::Decimal;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use tokio::fs;
-use tokio::fs::File;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::Mutex;
+use tokio::{
+    fs,
+    fs::File,
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    sync::Mutex,
+};
 use tracing::error;
+
+use crate::{
+    event::contract_setup::NetworkContract,
+    helpers::{camel_to_snake, get_full_path},
+    indexer::progress::IndexingEventsProgressState,
+    manifest::storage::CsvDetails,
+    EthereumSqlTypeWrapper, PostgresClient,
+};
 
 fn build_last_synced_block_number_for_csv(
     project_path: &Path,
@@ -59,10 +67,9 @@ async fn get_last_synced_block_number_for_csv(
         let parse = U64::from_dec_str(value);
         return match parse {
             Ok(value) => Ok(Some(value)),
-            Err(e) => Err(UpdateLastSyncedBlockNumberCsv::ParseError(
-                value.to_string(),
-                e.to_string(),
-            )),
+            Err(e) => {
+                Err(UpdateLastSyncedBlockNumberCsv::ParseError(value.to_string(), e.to_string()))
+            }
         };
     }
 
@@ -165,11 +172,8 @@ async fn update_last_synced_block_number_for_csv_to_file(
     )
     .await?;
 
-    let to_block_higher_then_last_block = if let Some(last_block_value) = last_block {
-        to_block > last_block_value
-    } else {
-        true
-    };
+    let to_block_higher_then_last_block =
+        if let Some(last_block_value) = last_block { to_block > last_block_value } else { true };
 
     if last_block.is_none() || to_block_higher_then_last_block {
         let temp_file_path = format!("{}.tmp", file_path);
@@ -198,10 +202,8 @@ pub fn update_progress_and_last_synced(
     to_block: U64,
 ) {
     tokio::spawn(async move {
-        let update_last_synced_block_result = progress
-            .lock()
-            .await
-            .update_last_synced_block(&network_contract.id, to_block);
+        let update_last_synced_block_result =
+            progress.lock().await.update_last_synced_block(&network_contract.id, to_block);
 
         if let Err(e) = update_last_synced_block_result {
             error!("Error updating last synced block: {:?}", e);

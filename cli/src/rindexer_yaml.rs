@@ -1,6 +1,8 @@
-use crate::console::print_error_message;
-use rindexer::manifest::yaml::YAML_CONFIG_NAME;
 use std::fs;
+
+use rindexer::manifest::yaml::YAML_CONFIG_NAME;
+
+use crate::console::print_error_message;
 
 pub fn rindexer_yaml_exists() -> bool {
     fs::metadata(YAML_CONFIG_NAME).is_ok()

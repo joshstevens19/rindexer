@@ -1,10 +1,14 @@
-use crate::helpers::camel_to_snake;
-use crate::manifest::contract::{Contract, ContractDetails};
-use crate::manifest::network::Network;
-use crate::types::code::Code;
 use ethers::prelude::ValueOrArray;
 
 use super::networks_bindings::network_provider_fn_name;
+use crate::{
+    helpers::camel_to_snake,
+    manifest::{
+        contract::{Contract, ContractDetails},
+        network::Network,
+    },
+    types::code::Code,
+};
 
 fn generate_contract_code(
     contract_name: &str,

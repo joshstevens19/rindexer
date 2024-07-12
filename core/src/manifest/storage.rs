@@ -1,15 +1,21 @@
-use crate::database::postgres::indexes::{
-    drop_last_known_indexes, prepare_indexes, DropLastKnownIndexesError, PostgresIndexResult,
-    PrepareIndexesError,
-};
-use crate::database::postgres::relationship::{
-    create_relationships, drop_last_known_relationships, CreateRelationshipError,
-    DropLastKnownRelationshipsError, Relationship,
-};
-use crate::manifest::contract::Contract;
-use serde::{Deserialize, Serialize};
 use std::path::Path;
+
+use serde::{Deserialize, Serialize};
 use tracing::info;
+
+use crate::{
+    database::postgres::{
+        indexes::{
+            drop_last_known_indexes, prepare_indexes, DropLastKnownIndexesError,
+            PostgresIndexResult, PrepareIndexesError,
+        },
+        relationship::{
+            create_relationships, drop_last_known_relationships, CreateRelationshipError,
+            DropLastKnownRelationshipsError, Relationship,
+        },
+    },
+    manifest::contract::Contract,
+};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ForeignKey {
@@ -133,9 +139,9 @@ impl Storage {
             return true;
         }
 
-        self.postgres.as_ref().map_or(false, |details| {
-            details.disable_create_tables.unwrap_or_default()
-        })
+        self.postgres
+            .as_ref()
+            .map_or(false, |details| details.disable_create_tables.unwrap_or_default())
     }
 
     pub fn csv_enabled(&self) -> bool {
@@ -151,9 +157,9 @@ impl Storage {
             return true;
         }
 
-        self.csv.as_ref().map_or(false, |details| {
-            details.disable_create_headers.unwrap_or_default()
-        })
+        self.csv
+            .as_ref()
+            .map_or(false, |details| details.disable_create_headers.unwrap_or_default())
     }
 
     pub async fn create_relationships_and_indexes(

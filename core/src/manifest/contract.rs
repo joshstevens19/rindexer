@@ -1,11 +1,17 @@
-use crate::event::contract_setup::{
-    AddressDetails, ContractEventMapping, FilterDetails, IndexingContractSetup,
-};
-use crate::indexer::parse_topic;
-use ethers::addressbook::Address;
-use ethers::prelude::{Filter, ValueOrArray, U64};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::borrow::Cow;
+
+use ethers::{
+    addressbook::Address,
+    prelude::{Filter, ValueOrArray, U64},
+};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use crate::{
+    event::contract_setup::{
+        AddressDetails, ContractEventMapping, FilterDetails, IndexingContractSetup,
+    },
+    indexer::parse_topic,
+};
 
 fn deserialize_option_u64_from_string<'de, D>(deserializer: D) -> Result<Option<U64>, D::Error>
 where
@@ -13,9 +19,7 @@ where
 {
     let s: Option<String> = Option::deserialize(deserializer)?;
     match s {
-        Some(string) => U64::from_dec_str(&string)
-            .map(Some)
-            .map_err(serde::de::Error::custom),
+        Some(string) => U64::from_dec_str(&string).map(Some).map_err(serde::de::Error::custom),
         None => Ok(None),
     }
 }
@@ -108,10 +112,7 @@ impl ContractDetails {
         } else if let Some(filter) = &self.filter {
             IndexingContractSetup::Filter(FilterDetails {
                 event_name: filter.event_name.clone(),
-                indexed_filters: self
-                    .indexed_filters
-                    .as_ref()
-                    .and_then(|f| f.first().cloned()),
+                indexed_filters: self.indexed_filters.as_ref().and_then(|f| f.first().cloned()),
             })
         } else {
             panic!("Contract details must have an address, factory or filter");
@@ -257,10 +258,9 @@ impl Contract {
                 .into_iter()
                 .map(|event| match event {
                     SimpleEventOrContractEvent::ContractEvent(contract_event) => contract_event,
-                    SimpleEventOrContractEvent::SimpleEvent(event_name) => ContractEventMapping {
-                        contract_name: self.name.clone(),
-                        event_name,
-                    },
+                    SimpleEventOrContractEvent::SimpleEvent(event_name) => {
+                        ContractEventMapping { contract_name: self.name.clone(), event_name }
+                    }
                 })
                 .collect(),
             then: yaml

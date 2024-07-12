@@ -1,27 +1,31 @@
-use crate::database::postgres::client::PostgresConnectionError;
-use ethers::providers::ProviderError;
-use ethers::types::U64;
+use std::{path::PathBuf, sync::Arc};
+
+use ethers::{providers::ProviderError, types::U64};
 use futures::future::try_join_all;
-use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::Semaphore;
-use tokio::task::{JoinError, JoinHandle};
-use tokio::time::Instant;
+use tokio::{
+    sync::Semaphore,
+    task::{JoinError, JoinHandle},
+    time::Instant,
+};
 use tracing::{error, info};
 
-use crate::event::callback_registry::EventCallbackRegistry;
-use crate::event::config::EventProcessingConfig;
-use crate::indexer::dependency::ContractEventsDependenciesConfig;
-use crate::indexer::last_synced::get_last_synced_block_number;
-use crate::indexer::process::{
-    process_contract_events_with_dependencies, process_event,
-    ProcessContractEventsWithDependenciesError, ProcessEventError,
+use crate::{
+    database::postgres::client::PostgresConnectionError,
+    event::{callback_registry::EventCallbackRegistry, config::EventProcessingConfig},
+    indexer::{
+        dependency::ContractEventsDependenciesConfig,
+        last_synced::get_last_synced_block_number,
+        process::{
+            process_contract_events_with_dependencies, process_event,
+            ProcessContractEventsWithDependenciesError, ProcessEventError,
+        },
+        progress::IndexingEventsProgressState,
+        reorg::reorg_safe_distance_for_chain,
+        ContractEventDependencies,
+    },
+    manifest::core::Manifest,
+    PostgresClient,
 };
-use crate::indexer::progress::IndexingEventsProgressState;
-use crate::indexer::reorg::reorg_safe_distance_for_chain;
-use crate::indexer::ContractEventDependencies;
-use crate::manifest::core::Manifest;
-use crate::PostgresClient;
 
 #[derive(thiserror::Error, Debug)]
 pub enum CombinedLogEventProcessingError {
@@ -94,8 +98,9 @@ pub async fn start_indexing(
     // any events which are non-blocking and can be fired in parallel
     let mut non_blocking_process_events = Vec::new();
     let mut dependency_event_processing_configs: Vec<ContractEventsDependenciesConfig> = Vec::new();
-    // if you are doing advanced dependency events where other contracts depend on the processing of this contract
-    // you will need to apply the dependency after the processing of the other contract to avoid ordering issues
+    // if you are doing advanced dependency events where other contracts depend on the processing of
+    // this contract you will need to apply the dependency after the processing of the other
+    // contract to avoid ordering issues
     let mut apply_cross_contract_dependency_events_config_after_processing: Vec<(
         String,
         Arc<EventProcessingConfig>,
@@ -107,11 +112,8 @@ pub async fn start_indexing(
         for network_contract in event.contract.details.iter() {
             let latest_block = network_contract.cached_provider.get_block_number().await?;
 
-            let live_indexing = if no_live_indexing_forced {
-                false
-            } else {
-                network_contract.end_block.is_none()
-            };
+            let live_indexing =
+                if no_live_indexing_forced { false } else { network_contract.end_block.is_none() };
 
             let contract_csv_enabled = manifest
                 .contracts
@@ -139,10 +141,8 @@ pub async fn start_indexing(
             let start_block = last_known_start_block
                 .unwrap_or(network_contract.start_block.unwrap_or(latest_block));
             let mut indexing_distance_from_head = U64::zero();
-            let mut end_block = std::cmp::min(
-                network_contract.end_block.unwrap_or(latest_block),
-                latest_block,
-            );
+            let mut end_block =
+                std::cmp::min(network_contract.end_block.unwrap_or(latest_block), latest_block);
 
             if let Some(end_block) = network_contract.end_block {
                 if end_block > latest_block {

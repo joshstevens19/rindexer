@@ -1,22 +1,15 @@
-use crate::manifest::network::Network;
-use crate::types::code::Code;
+use crate::{manifest::network::Network, types::code::Code};
 
 fn network_provider_name(network: &Network) -> String {
     network_provider_name_from_name(&network.name)
 }
 
 fn network_provider_name_from_name(network_name: &str) -> String {
-    format!(
-        "{network_name}_PROVIDER",
-        network_name = network_name.to_uppercase()
-    )
+    format!("{network_name}_PROVIDER", network_name = network_name.to_uppercase())
 }
 
 pub fn network_provider_fn_name(network: &Network) -> String {
-    format!(
-        "get_{fn_name}",
-        fn_name = network_provider_name(network).to_lowercase()
-    )
+    format!("get_{fn_name}", fn_name = network_provider_name(network).to_lowercase())
 }
 
 fn generate_network_lazy_provider_code(network: &Network) -> Code {

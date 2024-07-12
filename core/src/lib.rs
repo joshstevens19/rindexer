@@ -28,16 +28,15 @@ pub mod provider;
 mod start;
 mod types;
 
-pub use start::{
-    start_rindexer, start_rindexer_no_code, IndexerNoCodeDetails, IndexingDetails, StartDetails,
-    StartNoCodeDetails,
-};
-
 // export 3rd party dependencies
 pub use async_trait::async_trait;
 pub use colored::Colorize as RindexerColorize;
 pub use futures::FutureExt;
 pub use lazy_static::lazy_static;
+pub use start::{
+    start_rindexer, start_rindexer_no_code, IndexerNoCodeDetails, IndexingDetails, StartDetails,
+    StartNoCodeDetails,
+};
 pub use tokio::main as rindexer_main;
 pub use tokio_postgres::types::Type as PgType;
 pub use tracing::{error as rindexer_error, info as rindexer_info};
