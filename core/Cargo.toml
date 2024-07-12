@@ -7,6 +7,10 @@ build = "build.rs"
 
 include = ["src/**", "resources/**", "Cargo.toml", "build.rs"]
 
+[dev-dependencies]
+tempfile = "3.3"
+mockito = "0.30"
+
 [dependencies]
 ethers = { version = "2.0", features = ["rustls", "openssl"] }
 tokio = { version = "1", features = ["full"] }
