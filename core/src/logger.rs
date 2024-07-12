@@ -1,3 +1,4 @@
+use tracing::debug;
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::{
     fmt::format::{Format, Writer},
@@ -22,7 +23,7 @@ pub fn setup_logger(log_level: LevelFilter) {
         tracing_subscriber::fmt().with_env_filter(filter).event_format(format).finish();
 
     if tracing::subscriber::set_global_default(subscriber).is_err() {
-        eprintln!("Logger has already been set up, continuing...");
+        debug!("Logger has already been set up, continuing...");
     }
 }
 
