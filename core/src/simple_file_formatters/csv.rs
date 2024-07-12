@@ -1,7 +1,10 @@
+use std::{
+    fs::File,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
 use csv::Writer;
-use std::fs::File;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub struct AsyncCsvAppender {

@@ -1,7 +1,10 @@
+use ethers::{
+    addressbook::Address,
+    prelude::{BlockNumber, Filter, H256, U64},
+    types::ValueOrArray,
+};
+
 use crate::event::contract_setup::IndexingContractSetup;
-use ethers::addressbook::Address;
-use ethers::prelude::{BlockNumber, Filter, H256, U64};
-use ethers::types::ValueOrArray;
 
 #[derive(thiserror::Error, Debug)]
 pub enum BuildRindexerFilterError {
@@ -90,10 +93,7 @@ impl RindexerEventFilter {
                         ),
                     )),
                     None => Ok(RindexerEventFilter::from_filter(
-                        Filter::new()
-                            .topic0(topic0)
-                            .from_block(current_block)
-                            .to_block(next_block),
+                        Filter::new().topic0(topic0).from_block(current_block).to_block(next_block),
                     )),
                 }
             }

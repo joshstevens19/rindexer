@@ -1,10 +1,11 @@
-use std::env;
-use std::path::PathBuf;
-use std::str::FromStr;
+use std::{env, path::PathBuf, str::FromStr};
+
+use rindexer::{
+    manifest::yaml::read_manifest, start_rindexer, GraphqlOverrideSettings, IndexingDetails,
+    StartDetails,
+};
 
 use self::rindexer_lib::indexers::all_handlers::register_all_handlers;
-use rindexer::manifest::yaml::read_manifest;
-use rindexer::{start_rindexer, GraphqlOverrideSettings, IndexingDetails, StartDetails};
 
 mod rindexer_lib;
 
@@ -44,9 +45,7 @@ async fn main() {
             let result = start_rindexer(StartDetails {
                 manifest_path: &manifest_path,
                 indexing_details: if enable_indexer {
-                    Some(IndexingDetails {
-                        registry: register_all_handlers(&manifest_path).await,
-                    })
+                    Some(IndexingDetails { registry: register_all_handlers(&manifest_path).await })
                 } else {
                     None
                 },

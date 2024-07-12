@@ -1,12 +1,17 @@
-use crate::event::callback_registry::Decoder;
-use crate::generate_random_id;
-use crate::manifest::contract::{Contract, EventInputIndexedFilters};
-use crate::provider::{CreateNetworkProvider, JsonRpcCachedProvider};
-use ethers::addressbook::Address;
-use ethers::prelude::{Log, ValueOrArray, U64};
+use std::{any::Any, sync::Arc};
+
+use ethers::{
+    addressbook::Address,
+    prelude::{Log, ValueOrArray, U64},
+};
 use serde::{Deserialize, Serialize};
-use std::any::Any;
-use std::sync::Arc;
+
+use crate::{
+    event::callback_registry::Decoder,
+    generate_random_id,
+    manifest::contract::{Contract, EventInputIndexedFilters},
+    provider::{CreateNetworkProvider, JsonRpcCachedProvider},
+};
 
 #[derive(Clone)]
 pub struct NetworkContract {
@@ -47,17 +52,13 @@ impl ContractInformation {
     ) -> Result<ContractInformation, CreateContractInformationError> {
         let mut details = vec![];
         for c in &contract.details {
-            let provider = network_providers
-                .iter()
-                .find(|item| item.network_name == *c.network);
+            let provider = network_providers.iter().find(|item| item.network_name == *c.network);
 
             match provider {
                 None => {
-                    return Err(
-                        CreateContractInformationError::CanNotFindNetworkFromProviders(
-                            c.network.clone(),
-                        ),
-                    );
+                    return Err(CreateContractInformationError::CanNotFindNetworkFromProviders(
+                        c.network.clone(),
+                    ));
                 }
                 Some(provider) => {
                     details.push(NetworkContract {

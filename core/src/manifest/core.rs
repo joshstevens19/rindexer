@@ -1,11 +1,13 @@
-use crate::indexer::Indexer;
-use crate::manifest::contract::Contract;
-use crate::manifest::global::Global;
-use crate::manifest::graphql::GraphQLSettings;
-use crate::manifest::network::Network;
-use crate::manifest::storage::Storage;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_yaml::Value;
+
+use crate::{
+    indexer::Indexer,
+    manifest::{
+        contract::Contract, global::Global, graphql::GraphQLSettings, network::Network,
+        storage::Storage,
+    },
+};
 
 fn deserialize_project_type<'de, D>(deserializer: D) -> Result<ProjectType, D::Error>
 where
@@ -16,10 +18,7 @@ where
         Value::String(s) => match s.as_str() {
             "rust" => Ok(ProjectType::Rust),
             "no-code" => Ok(ProjectType::NoCode),
-            _ => Err(serde::de::Error::custom(format!(
-                "Unknown project type: {}",
-                s
-            ))),
+            _ => Err(serde::de::Error::custom(format!("Unknown project type: {}", s))),
         },
         _ => Err(serde::de::Error::custom("Invalid project type format")),
     }
@@ -77,17 +76,11 @@ pub struct Manifest {
 
 impl Manifest {
     pub fn to_indexer(&self) -> Indexer {
-        Indexer {
-            name: self.name.clone(),
-            contracts: self.contracts.clone(),
-        }
+        Indexer { name: self.name.clone(), contracts: self.contracts.clone() }
     }
 
     pub fn has_any_contracts_live_indexing(&self) -> bool {
-        self.contracts
-            .iter()
-            .filter(|c| c.details.iter().any(|p| p.end_block.is_none()))
-            .count()
-            > 0
+        self.contracts.iter().filter(|c| c.details.iter().any(|p| p.end_block.is_none())).count() >
+            0
     }
 }

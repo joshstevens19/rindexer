@@ -1,10 +1,14 @@
-use crate::event::callback_registry::EventCallbackRegistryInformation;
+use std::{
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
+
 use colored::{ColoredString, Colorize};
 use ethers::types::U64;
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{error, info};
+
+use crate::event::callback_registry::EventCallbackRegistryInformation;
 
 #[derive(Clone, Debug, Hash)]
 pub enum IndexingEventProgressStatus {
@@ -122,11 +126,7 @@ impl IndexingEventsProgressState {
                             event_info.event_name.to_string(),
                             start_block,
                             start_block,
-                            if latest_block > end_block {
-                                end_block
-                            } else {
-                                latest_block
-                            },
+                            if latest_block > end_block { end_block } else { latest_block },
                             network_contract.network.clone(),
                             network_contract.end_block.is_none(),
                             event_info.info_log_name(),

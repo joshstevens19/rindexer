@@ -1,8 +1,7 @@
+use std::{io, io::Write, str::FromStr};
+
 use colored::Colorize;
 use regex::Regex;
-use std::io;
-use std::io::Write;
-use std::str::FromStr;
 
 pub fn print_error_message(error_message: &str) {
     println!("{}", error_message.red());
@@ -23,9 +22,7 @@ pub fn prompt_for_optional_input<T: FromStr>(prompt: &str, pattern: Option<&str>
         io::stdout().flush().expect("Failed to flush stdout");
 
         let mut input = String::new();
-        io::stdin()
-            .read_line(&mut input)
-            .expect("Failed to read line");
+        io::stdin().read_line(&mut input).expect("Failed to read line");
         let trimmed = input.trim();
 
         if trimmed.is_empty() {
@@ -69,17 +66,11 @@ pub fn prompt_for_input_list(
     }
 
     loop {
-        print!(
-            "{} [{}]: ",
-            field_name.to_string().green(),
-            options_str.yellow()
-        );
+        print!("{} [{}]: ", field_name.to_string().green(), options_str.yellow());
         io::stdout().flush().expect("Failed to flush stdout");
 
         let mut input = String::new();
-        io::stdin()
-            .read_line(&mut input)
-            .expect("Failed to read line");
+        io::stdin().read_line(&mut input).expect("Failed to read line");
         let trimmed = input.trim().to_lowercase();
 
         if options.contains(&trimmed) {
@@ -87,11 +78,8 @@ pub fn prompt_for_input_list(
         } else {
             println!(
                 "{}",
-                format!(
-                    "Invalid option. Please choose one of the following: {}",
-                    options_str
-                )
-                .red()
+                format!("Invalid option. Please choose one of the following: {}", options_str)
+                    .red()
             );
         }
     }
@@ -111,9 +99,7 @@ pub fn prompt_for_input(
             io::stdout().flush().expect("Failed to flush stdout");
 
             let mut input = String::new();
-            io::stdin()
-                .read_line(&mut input)
-                .expect("Failed to read line");
+            io::stdin().read_line(&mut input).expect("Failed to read line");
             let trimmed = input.trim();
 
             if let Some(ref regex) = regex {

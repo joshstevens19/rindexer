@@ -1,7 +1,10 @@
+use std::{
+    fs::{self, File},
+    io::Write,
+    path::Path,
+};
+
 use serde_json::Value;
-use std::fs::{self, File};
-use std::io::Write;
-use std::path::Path;
 
 #[derive(thiserror::Error, Debug)]
 pub enum GenerateOperationsError {
@@ -139,10 +142,12 @@ pub fn generate_operations(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use serde_json::json;
     use std::fs;
+
+    use serde_json::json;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn test_generate_query_single() {
@@ -276,7 +281,8 @@ mod tests {
 
         generate_operations(&schema, generate_path).unwrap();
 
-        let all_nodes_query = fs::read_to_string(generate_path.join("queries/allNodes.graphql")).unwrap();
+        let all_nodes_query =
+            fs::read_to_string(generate_path.join("queries/allNodes.graphql")).unwrap();
         let expected_all_nodes_query = r#"query allNodesQuery(
     $after: Cursor,
     $first: Int = 50,

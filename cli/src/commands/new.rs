@@ -1,19 +1,28 @@
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
+use ethers::{
+    addressbook::Address,
+    prelude::{ValueOrArray, U64},
+};
+use rindexer::{
+    generator::{build::generate_rust_project, generate_docker_file},
+    manifest::{
+        contract::{Contract, ContractDetails},
+        core::{Manifest, ProjectType},
+        network::Network,
+        storage::{CsvDetails, PostgresDetails, Storage},
+        yaml::{write_manifest, YAML_CONFIG_NAME},
+    },
+    write_file, WriteFileError,
+};
+
 use crate::console::{
     print_error_message, print_success_message, prompt_for_input, prompt_for_input_list,
     prompt_for_optional_input,
 };
-use ethers::addressbook::Address;
-use ethers::prelude::{ValueOrArray, U64};
-use rindexer::generator::build::generate_rust_project;
-use rindexer::generator::generate_docker_file;
-use rindexer::manifest::contract::{Contract, ContractDetails};
-use rindexer::manifest::core::{Manifest, ProjectType};
-use rindexer::manifest::network::Network;
-use rindexer::manifest::storage::{CsvDetails, PostgresDetails, Storage};
-use rindexer::manifest::yaml::{write_manifest, YAML_CONFIG_NAME};
-use rindexer::{write_file, WriteFileError};
-use std::fs;
-use std::path::{Path, PathBuf};
 
 fn generate_rindexer_rust_project(project_path: &Path) {
     let generated = generate_rust_project(project_path);
@@ -22,10 +31,7 @@ fn generate_rindexer_rust_project(project_path: &Path) {
             print_success_message("Successfully generated rindexer rust project.");
         }
         Err(err) => {
-            print_error_message(&format!(
-                "Failed to generate rindexer rust project: {}",
-                err
-            ));
+            print_error_message(&format!("Failed to generate rindexer rust project: {}", err));
         }
     }
 }
@@ -67,12 +73,7 @@ pub fn handle_new_command(
     let repository = prompt_for_optional_input::<String>("Repository", None);
     let storage_choice = prompt_for_input_list(
         "What Storages To Enable? (graphql can only be supported if postgres is enabled)",
-        &[
-            "postgres".to_string(),
-            "csv".to_string(),
-            "both".to_string(),
-            "none".to_string(),
-        ],
+        &["postgres".to_string(), "csv".to_string(), "both".to_string(), "none".to_string()],
         None,
     );
     let mut postgres_docker_enable = false;

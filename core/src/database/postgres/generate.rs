@@ -1,11 +1,13 @@
-use crate::abi::{
-    ABIInput, ABIItem, EventInfo, GenerateAbiPropertiesType, ParamTypeError, ReadAbiError,
-};
-use crate::helpers::camel_to_snake;
-use crate::indexer::Indexer;
-use crate::types::code::Code;
 use std::path::Path;
+
 use tracing::info;
+
+use crate::{
+    abi::{ABIInput, ABIItem, EventInfo, GenerateAbiPropertiesType, ParamTypeError, ReadAbiError},
+    helpers::camel_to_snake,
+    indexer::Indexer,
+    types::code::Code,
+};
 
 fn generate_columns(inputs: &[ABIInput], property_type: &GenerateAbiPropertiesType) -> Vec<String> {
     ABIInput::generate_abi_name_properties(inputs, property_type, None)
@@ -114,18 +116,10 @@ pub fn generate_tables_for_indexer_sql(
         sql.push_str(format!("CREATE SCHEMA IF NOT EXISTS {};", schema_name).as_str());
         info!("Creating schema if not exists: {}", schema_name);
 
-        let networks: Vec<&str> = contract
-            .details
-            .iter()
-            .map(|d| d.network.as_str())
-            .collect();
+        let networks: Vec<&str> = contract.details.iter().map(|d| d.network.as_str()).collect();
 
         sql.push_str(&generate_event_table_sql(&event_names, &schema_name));
-        sql.push_str(&generate_internal_event_table_sql(
-            &event_names,
-            &schema_name,
-            networks,
-        ));
+        sql.push_str(&generate_internal_event_table_sql(&event_names, &schema_name, networks));
     }
 
     sql.push_str(&format!(
@@ -161,19 +155,11 @@ pub fn generate_event_table_full_name(
 }
 
 pub fn generate_event_table_columns_names_sql(column_names: &[String]) -> String {
-    column_names
-        .iter()
-        .map(|name| format!("\"{}\"", name))
-        .collect::<Vec<String>>()
-        .join(", ")
+    column_names.iter().map(|name| format!("\"{}\"", name)).collect::<Vec<String>>().join(", ")
 }
 
 pub fn generate_indexer_contract_schema_name(indexer_name: &str, contract_name: &str) -> String {
-    format!(
-        "{}_{}",
-        camel_to_snake(indexer_name),
-        camel_to_snake(contract_name)
-    )
+    format!("{}_{}", camel_to_snake(indexer_name), camel_to_snake(contract_name))
 }
 
 pub fn drop_tables_for_indexer_sql(indexer: &Indexer) -> Code {

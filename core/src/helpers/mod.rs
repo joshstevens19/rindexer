@@ -4,18 +4,19 @@ pub use thread::set_thread_no_logging;
 
 mod file;
 
-pub use file::{
-    create_mod_file, format_all_files_for_project, write_file, CreateModFileError, WriteFileError,
+use std::{
+    env,
+    env::VarError,
+    path::{Path, PathBuf},
+    process::Command,
+    str,
 };
 
 use dotenv::dotenv;
-use rand::distributions::Alphanumeric;
-use rand::Rng;
-use std::env;
-use std::env::VarError;
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::str;
+pub use file::{
+    create_mod_file, format_all_files_for_project, write_file, CreateModFileError, WriteFileError,
+};
+use rand::{distributions::Alphanumeric, Rng};
 
 pub fn camel_to_snake(s: &str) -> String {
     let mut snake_case = String::new();
@@ -24,11 +25,12 @@ pub fn camel_to_snake(s: &str) -> String {
     for (i, c) in s.chars().enumerate() {
         if c.is_alphanumeric() || c == '_' {
             if c.is_uppercase() {
-                // Insert an underscore if it's not the first character and the previous character wasn't uppercase
-                if i > 0
-                    && (!previous_was_uppercase
-                        || (i + 1 < s.len()
-                            && s.chars()
+                // Insert an underscore if it's not the first character and the previous character
+                // wasn't uppercase
+                if i > 0 &&
+                    (!previous_was_uppercase ||
+                        (i + 1 < s.len() &&
+                            s.chars()
                                 .nth(i + 1)
                                 .expect("Failed to get char")
                                 .is_lowercase()))
@@ -48,11 +50,7 @@ pub fn camel_to_snake(s: &str) -> String {
 }
 
 pub fn generate_random_id(len: usize) -> String {
-    rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(len)
-        .map(char::from)
-        .collect()
+    rand::thread_rng().sample_iter(&Alphanumeric).take(len).map(char::from).collect()
 }
 
 pub fn get_full_path(project_path: &Path, file_path: &str) -> PathBuf {
@@ -61,9 +59,7 @@ pub fn get_full_path(project_path: &Path, file_path: &str) -> PathBuf {
         canonical_path
     } else {
         let joined_path = project_path.join(file_path);
-        joined_path
-            .canonicalize()
-            .expect("Failed to canonicalize path")
+        joined_path.canonicalize().expect("Failed to canonicalize path")
     }
 }
 
@@ -75,18 +71,12 @@ pub fn kill_process_on_port(port: u16) -> Result<(), String> {
         .output()
         .map_err(|e| e.to_string())?;
 
-    let pids = str::from_utf8(&output.stdout)
-        .map_err(|e| e.to_string())?
-        .lines()
-        .collect::<Vec<&str>>();
+    let pids =
+        str::from_utf8(&output.stdout).map_err(|e| e.to_string())?.lines().collect::<Vec<&str>>();
 
     for pid in pids {
         // Kill each process using the port
-        Command::new("kill")
-            .arg("-9")
-            .arg(pid)
-            .output()
-            .map_err(|e| e.to_string())?;
+        Command::new("kill").arg("-9").arg(pid).output().map_err(|e| e.to_string())?;
     }
 
     Ok(())

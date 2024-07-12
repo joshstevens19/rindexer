@@ -1,5 +1,6 @@
-use crate::manifest::contract::Contract;
 use serde::{Deserialize, Serialize};
+
+use crate::manifest::contract::Contract;
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct Global {

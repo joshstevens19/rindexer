@@ -1,14 +1,19 @@
-use crate::event::contract_setup::{ContractInformation, NetworkContract};
-use crate::indexer::start::ProcessedNetworkContract;
-use ethers::addressbook::Address;
-use ethers::contract::LogMeta;
-use ethers::types::{Bytes, Log, H256, U256, U64};
+use std::{any::Any, sync::Arc, time::Duration};
+
+use ethers::{
+    addressbook::Address,
+    contract::LogMeta,
+    types::{Bytes, Log, H256, U256, U64},
+};
 use futures::future::BoxFuture;
 use rand::Rng;
-use std::time::Duration;
-use std::{any::Any, sync::Arc};
 use tokio::time::sleep;
 use tracing::{debug, error};
+
+use crate::{
+    event::contract_setup::{ContractInformation, NetworkContract},
+    indexer::start::ProcessedNetworkContract,
+};
 
 pub type Decoder = Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync>;
 
@@ -116,11 +121,7 @@ impl EventCallbackRegistry {
         let mut delay = Duration::from_millis(100);
 
         if let Some(event_information) = self.find_event(topic_id) {
-            debug!(
-                "{} - Pushed {} events",
-                data.len(),
-                event_information.info_log_name()
-            );
+            debug!("{} - Pushed {} events", data.len(), event_information.info_log_name());
 
             loop {
                 match (event_information.callback)(data.clone()).await {
@@ -145,10 +146,7 @@ impl EventCallbackRegistry {
                 }
             }
         } else {
-            error!(
-                "EventCallbackRegistry: No event found for topic_id: {}",
-                topic_id
-            );
+            error!("EventCallbackRegistry: No event found for topic_id: {}", topic_id);
         }
     }
 

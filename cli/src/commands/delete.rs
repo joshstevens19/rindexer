@@ -1,10 +1,15 @@
+use std::path::PathBuf;
+
+use rindexer::{
+    drop_tables_for_indexer_sql,
+    manifest::yaml::{read_manifest, YAML_CONFIG_NAME},
+    PostgresClient,
+};
+use tokio::fs::remove_dir_all;
+
 use crate::console::{
     print_error_message, print_success_message, print_warn_message, prompt_for_input_list,
 };
-use rindexer::manifest::yaml::{read_manifest, YAML_CONFIG_NAME};
-use rindexer::{drop_tables_for_indexer_sql, PostgresClient};
-use std::path::PathBuf;
-use tokio::fs::remove_dir_all;
 
 pub async fn handle_delete_command(
     project_path: PathBuf,
@@ -66,15 +71,10 @@ pub async fn handle_delete_command(
                 let path = &project_path.join(&csv.path);
                 // if no csv exist we will just look like it cleared it
                 if path.exists() {
-                    remove_dir_all(&project_path.join(path))
-                        .await
-                        .map_err(|e| {
-                            print_error_message(&format!(
-                                "Could not delete csv files: trace: {}",
-                                e
-                            ));
-                            e
-                        })?;
+                    remove_dir_all(&project_path.join(path)).await.map_err(|e| {
+                        print_error_message(&format!("Could not delete csv files: trace: {}", e));
+                        e
+                    })?;
                 }
 
                 print_success_message("\n\nSuccessfully deleted all csv files.\n\n");

@@ -1,6 +1,4 @@
-use std::env;
-use std::fs;
-use std::path::PathBuf;
+use std::{env, fs, path::PathBuf};
 
 fn main() {
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
@@ -19,11 +17,8 @@ fn main() {
         let entry = entry.expect("Failed to read directory entry");
         let path = entry.path();
         if path.is_file() {
-            fs::copy(
-                &path,
-                target_dir.join(path.file_name().expect("Failed to get file name")),
-            )
-            .expect("Failed to copy file");
+            fs::copy(&path, target_dir.join(path.file_name().expect("Failed to get file name")))
+                .expect("Failed to copy file");
         }
     }
 

@@ -1,16 +1,19 @@
-use crate::cli_interface::StartSubcommands;
-use crate::console::{print_error_message, print_success_message};
-use crate::rindexer_yaml::validate_rindexer_yaml_exist;
-use rindexer::manifest::core::ProjectType;
-use rindexer::manifest::yaml::{read_manifest, YAML_CONFIG_NAME};
+use std::{path::PathBuf, process::Command, thread, time::Duration};
+
 use rindexer::{
+    manifest::{
+        core::ProjectType,
+        yaml::{read_manifest, YAML_CONFIG_NAME},
+    },
     rindexer_info, setup_info_logger, start_rindexer_no_code, GraphqlOverrideSettings,
     IndexerNoCodeDetails, PostgresClient, StartNoCodeDetails,
 };
-use std::path::PathBuf;
-use std::process::Command;
-use std::thread;
-use std::time::Duration;
+
+use crate::{
+    cli_interface::StartSubcommands,
+    console::{print_error_message, print_success_message},
+    rindexer_yaml::validate_rindexer_yaml_exist,
+};
 
 fn start_docker_compose(project_path: &PathBuf) -> Result<(), String> {
     let status = Command::new("docker compose")
@@ -36,15 +39,14 @@ fn start_docker_compose(project_path: &PathBuf) -> Result<(), String> {
     let mut retries = 0;
 
     while retries < max_retries {
-        let ps_status = Command::new("docker compose")
-            .arg("ps")
-            .current_dir(project_path)
-            .output()
-            .map_err(|e| {
-                let error = format!("Failed to check docker compose status: {}", e);
-                print_error_message(&error);
-                error
-            })?;
+        let ps_status =
+            Command::new("docker compose").arg("ps").current_dir(project_path).output().map_err(
+                |e| {
+                    let error = format!("Failed to check docker compose status: {}", e);
+                    print_error_message(&error);
+                    error
+                },
+            )?;
 
         if ps_status.status.success() {
             let output = String::from_utf8_lossy(&ps_status.stdout);
@@ -85,7 +87,7 @@ pub async fn start(
             let docker_compose_path = project_path.join("docker-compose.yml");
             if !docker_compose_path.exists() {
                 return Err(
-                    "The DATABASE_URL mapped is not running please make sure it is correct".into(),
+                    "The DATABASE_URL mapped is not running please make sure it is correct".into()
                 );
             }
 

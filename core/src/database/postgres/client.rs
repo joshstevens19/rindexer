@@ -1,20 +1,21 @@
-use crate::database::postgres::generate::generate_event_table_columns_names_sql;
-use crate::database::postgres::sql_type_wrapper::EthereumSqlTypeWrapper;
+use std::{env, time::Duration};
+
 use bb8::{Pool, RunError};
 use bb8_postgres::PostgresConnectionManager;
 use bytes::Buf;
 use dotenv::dotenv;
 use futures::pin_mut;
-use std::env;
-use std::time::Duration;
-use tokio::task;
-use tokio::time::timeout;
-use tokio_postgres::binary_copy::BinaryCopyInWriter;
-use tokio_postgres::types::{ToSql, Type as PgType};
+use tokio::{task, time::timeout};
 use tokio_postgres::{
+    binary_copy::BinaryCopyInWriter,
+    types::{ToSql, Type as PgType},
     CopyInSink, Error as PgError, NoTls, Row, Statement, ToStatement, Transaction as PgTransaction,
 };
 use tracing::debug;
+
+use crate::database::postgres::{
+    generate::generate_event_table_columns_names_sql, sql_type_wrapper::EthereumSqlTypeWrapper,
+};
 
 pub fn connection_string() -> Result<String, env::VarError> {
     dotenv().ok();
@@ -105,9 +106,7 @@ impl PostgresClient {
 
     pub async fn batch_execute(&self, sql: &str) -> Result<(), PostgresError> {
         let conn = self.pool.get().await?;
-        conn.batch_execute(sql)
-            .await
-            .map_err(PostgresError::PgError)
+        conn.batch_execute(sql).await.map_err(PostgresError::PgError)
     }
 
     pub async fn execute<T>(
@@ -119,9 +118,7 @@ impl PostgresClient {
         T: ?Sized + ToStatement,
     {
         let conn = self.pool.get().await?;
-        conn.execute(query, params)
-            .await
-            .map_err(PostgresError::PgError)
+        conn.execute(query, params).await.map_err(PostgresError::PgError)
     }
 
     pub async fn prepare(
@@ -130,9 +127,7 @@ impl PostgresClient {
         parameter_types: &[PgType],
     ) -> Result<Statement, PostgresError> {
         let conn = self.pool.get().await?;
-        conn.prepare_typed(query, parameter_types)
-            .await
-            .map_err(PostgresError::PgError)
+        conn.prepare_typed(query, parameter_types).await.map_err(PostgresError::PgError)
     }
 
     pub async fn transaction(&self) -> Result<PostgresTransaction, PostgresError> {
@@ -142,9 +137,7 @@ impl PostgresClient {
         // Wrap the transaction in a static lifetime
         let boxed_transaction: Box<PgTransaction<'static>> =
             unsafe { std::mem::transmute(Box::new(transaction)) };
-        Ok(PostgresTransaction {
-            transaction: *boxed_transaction,
-        })
+        Ok(PostgresTransaction { transaction: *boxed_transaction })
     }
 
     pub async fn query<T>(
@@ -156,10 +149,7 @@ impl PostgresClient {
         T: ?Sized + ToStatement,
     {
         let conn = self.pool.get().await?;
-        let rows = conn
-            .query(query, params)
-            .await
-            .map_err(PostgresError::PgError)?;
+        let rows = conn.query(query, params).await.map_err(PostgresError::PgError)?;
         Ok(rows)
     }
 
@@ -172,10 +162,7 @@ impl PostgresClient {
         T: ?Sized + ToStatement,
     {
         let conn = self.pool.get().await?;
-        let row = conn
-            .query_one(query, params)
-            .await
-            .map_err(PostgresError::PgError)?;
+        let row = conn.query_one(query, params).await.map_err(PostgresError::PgError)?;
         Ok(row)
     }
 
@@ -188,10 +175,7 @@ impl PostgresClient {
         T: ?Sized + ToStatement,
     {
         let conn = self.pool.get().await?;
-        let row = conn
-            .query_opt(query, params)
-            .await
-            .map_err(PostgresError::PgError)?;
+        let row = conn.query_opt(query, params).await.map_err(PostgresError::PgError)?;
         Ok(row)
     }
 
@@ -207,14 +191,9 @@ impl PostgresClient {
         let transaction = conn.transaction().await.map_err(PostgresError::PgError)?;
 
         for params in params_list {
-            let params_refs: Vec<&(dyn ToSql + Sync)> = params
-                .iter()
-                .map(|param| param.as_ref() as &(dyn ToSql + Sync))
-                .collect();
-            transaction
-                .execute(query, &params_refs)
-                .await
-                .map_err(PostgresError::PgError)?;
+            let params_refs: Vec<&(dyn ToSql + Sync)> =
+                params.iter().map(|param| param.as_ref() as &(dyn ToSql + Sync)).collect();
+            transaction.execute(query, &params_refs).await.map_err(PostgresError::PgError)?;
         }
 
         transaction.commit().await.map_err(PostgresError::PgError)?;
@@ -228,9 +207,7 @@ impl PostgresClient {
     {
         let conn = self.pool.get().await?;
 
-        conn.copy_in(statement)
-            .await
-            .map_err(PostgresError::PgError)
+        conn.copy_in(statement).await.map_err(PostgresError::PgError)
     }
 
     pub async fn bulk_insert_via_copy(
@@ -250,11 +227,7 @@ impl PostgresClient {
 
         let prepared_data: Vec<Vec<&(dyn ToSql + Sync)>> = data
             .iter()
-            .map(|row| {
-                row.iter()
-                    .map(|param| param as &(dyn ToSql + Sync))
-                    .collect()
-            })
+            .map(|row| row.iter().map(|param| param as &(dyn ToSql + Sync)).collect())
             .collect();
 
         //debug!("Prepared data: {:?}", prepared_data);
