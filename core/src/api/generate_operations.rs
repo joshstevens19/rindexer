@@ -136,3 +136,180 @@ pub fn generate_operations(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_generate_query_single() {
+        let query = generate_query("node", &["id".to_string(), "name".to_string()]);
+        let expected = r#"query nodeQuery($nodeId: ID!) {
+    node(nodeId: $nodeId) {
+        id
+        name
+    }
+}"#;
+        assert_eq!(query, expected);
+    }
+
+    #[test]
+    fn test_generate_query_all() {
+        let query = generate_query("allNodes", &["id".to_string(), "name".to_string()]);
+        let expected = r#"query allNodesQuery(
+    $after: Cursor,
+    $first: Int = 50,
+    $condition: NodeCondition = {},
+    $orderBy: [NodeOrderBy!] = BLOCK_NUMBER_DESC
+) {
+    allNodes(
+        first: $first,
+        after: $after,
+        condition: $condition,
+        orderBy: $orderBy
+    ) {
+        nodes {
+            id
+            name
+        }
+        pageInfo {
+            endCursor
+            hasNextPage
+            hasPreviousPage
+            startCursor
+        }
+    }
+}"#;
+        assert_eq!(query, expected);
+    }
+
+    #[test]
+    fn test_extract_node_fields() {
+        let schema = json!({
+            "types": [
+                {
+                    "name": "Node",
+                    "fields": [
+                        {"name": "id"},
+                        {"name": "name"}
+                    ]
+                }
+            ]
+        });
+
+        let fields = extract_node_fields("Node", &schema);
+        assert_eq!(fields, vec!["id".to_string(), "name".to_string()]);
+    }
+
+    #[test]
+    fn test_extract_node_fields_case_insensitive() {
+        let schema = json!({
+            "types": [
+                {
+                    "name": "node",
+                    "fields": [
+                        {"name": "id"},
+                        {"name": "name"}
+                    ]
+                }
+            ]
+        });
+
+        let fields = extract_node_fields("Node", &schema);
+        assert_eq!(fields, vec!["id".to_string(), "name".to_string()]);
+    }
+
+    #[test]
+    fn test_extract_node_fields_not_found() {
+        let schema = json!({
+            "types": [
+                {
+                    "name": "Node",
+                    "fields": [
+                        {"name": "id"},
+                        {"name": "name"}
+                    ]
+                }
+            ]
+        });
+
+        let fields = extract_node_fields("NonExistentNode", &schema);
+        assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn test_generate_operations() {
+        let schema = json!({
+            "types": [
+                {
+                    "name": "Query",
+                    "fields": [
+                        {
+                            "name": "allNodes",
+                            "type": {
+                                "name": "Node"
+                            }
+                        },
+                        {
+                            "name": "node",
+                            "type": {
+                                "name": "Node"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "name": "Node",
+                    "fields": [
+                        {"name": "id"},
+                        {"name": "name"}
+                    ]
+                }
+            ]
+        });
+
+        let dir = tempdir().unwrap();
+        let generate_path = dir.path();
+
+        generate_operations(&schema, generate_path).unwrap();
+
+        let all_nodes_query = fs::read_to_string(generate_path.join("queries/allNodes.graphql")).unwrap();
+        let expected_all_nodes_query = r#"query allNodesQuery(
+    $after: Cursor,
+    $first: Int = 50,
+    $condition: NodeCondition = {},
+    $orderBy: [NodeOrderBy!] = BLOCK_NUMBER_DESC
+) {
+    allNodes(
+        first: $first,
+        after: $after,
+        condition: $condition,
+        orderBy: $orderBy
+    ) {
+        nodes {
+            id
+            name
+        }
+        pageInfo {
+            endCursor
+            hasNextPage
+            hasPreviousPage
+            startCursor
+        }
+    }
+}"#;
+        assert_eq!(all_nodes_query, expected_all_nodes_query);
+
+        let node_query = fs::read_to_string(generate_path.join("queries/node.graphql")).unwrap();
+        let expected_node_query = r#"query nodeQuery($nodeId: ID!) {
+    node(nodeId: $nodeId) {
+        id
+        name
+    }
+}"#;
+        assert_eq!(node_query, expected_node_query);
+    }
+}
