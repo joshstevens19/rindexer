@@ -1,4 +1,8 @@
-use std::{str::FromStr, sync::Arc};
+use std::{
+    error::Error,
+    str::FromStr,
+    sync::Arc,
+};
 
 use ethers::{
     addressbook::Address,
@@ -11,14 +15,10 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, error, info};
 
 use crate::{
-    event::RindexerEventFilter,
+    event::{config::EventProcessingConfig, RindexerEventFilter},
     indexer::{log_helpers::is_relevant_block, IndexingEventProgressStatus},
     provider::JsonRpcCachedProvider,
 };
-
-pub struct LiveIndexingDetails {
-    pub indexing_distance_from_head: U64,
-}
 
 pub struct FetchLogsResult {
     pub logs: Vec<Log>,
@@ -28,20 +28,14 @@ pub struct FetchLogsResult {
 }
 
 pub fn fetch_logs_stream(
-    cached_provider: Arc<JsonRpcCachedProvider>,
-    topic_id: H256,
-    initial_filter: RindexerEventFilter,
-    info_log_name: String,
-    live_indexing_details: Option<LiveIndexingDetails>,
-    semaphore: Arc<Semaphore>,
-) -> impl tokio_stream::Stream<Item = Result<FetchLogsResult, Box<dyn std::error::Error + Send>>>
-       + Send
-       + Unpin {
+    config: Arc<EventProcessingConfig>,
+    force_no_live_indexing: bool,
+) -> impl tokio_stream::Stream<Item = Result<FetchLogsResult, Box<dyn Error + Send>>> + Send + Unpin
+{
     let (tx, rx) = mpsc::unbounded_channel();
-    let live_indexing = live_indexing_details.is_some();
+
+    let initial_filter = config.to_event_filter().unwrap();
     let contract_address = initial_filter.contract_address();
-    let reorg_safe_distance =
-        live_indexing_details.map_or(U64::from(0), |details| details.indexing_distance_from_head);
 
     tokio::spawn(async move {
         let snapshot_to_block = initial_filter.get_to_block();
@@ -50,19 +44,19 @@ pub fn fetch_logs_stream(
         // Process historical logs first
         let mut max_block_range_limitation = None;
         while current_filter.get_from_block() <= snapshot_to_block {
-            let semaphore_client = Arc::clone(&semaphore);
+            let semaphore_client = Arc::clone(&config.semaphore);
             let permit = semaphore_client.acquire_owned().await;
 
             match permit {
                 Ok(permit) => {
                     let result = fetch_historic_logs_stream(
-                        &cached_provider,
+                        &config.network_contract.cached_provider,
                         &tx,
-                        &topic_id,
+                        &config.topic_id,
                         current_filter.clone(),
                         max_block_range_limitation,
                         snapshot_to_block,
-                        &info_log_name,
+                        &config.info_log_name,
                     )
                     .await;
 
@@ -72,7 +66,7 @@ pub fn fetch_logs_stream(
                     if let Some(range) = max_block_range_limitation {
                         info!(
                             "{} - RPC PROVIDER IS SLOW - Slow indexing mode enabled, max block range limitation: {} blocks - we advise using a faster provider who can predict the next block ranges.",
-                            &info_log_name,
+                            &config.info_log_name,
                             range
                         );
                     }
@@ -87,7 +81,7 @@ pub fn fetch_logs_stream(
                 Err(e) => {
                     error!(
                         "{} - {} - Semaphore error: {}",
-                        &info_log_name,
+                        &config.info_log_name,
                         IndexingEventProgressStatus::Syncing.log(),
                         e
                     );
@@ -98,21 +92,21 @@ pub fn fetch_logs_stream(
 
         info!(
             "{} - {} - Finished indexing historic events",
-            &info_log_name,
+            &config.info_log_name,
             IndexingEventProgressStatus::Completed.log()
         );
 
         // Live indexing mode
-        if live_indexing {
+        if config.live_indexing && !force_no_live_indexing {
             live_indexing_stream(
-                &cached_provider,
+                &config.network_contract.cached_provider,
                 &tx,
                 &contract_address,
-                &topic_id,
-                reorg_safe_distance,
+                &config.topic_id,
+                &config.indexing_distance_from_head,
                 current_filter,
-                &info_log_name,
-                semaphore,
+                &config.info_log_name,
+                &config.semaphore,
             )
             .await;
         }
@@ -128,7 +122,7 @@ struct ProcessHistoricLogsStreamResult {
 
 async fn fetch_historic_logs_stream(
     cached_provider: &Arc<JsonRpcCachedProvider>,
-    tx: &mpsc::UnboundedSender<Result<FetchLogsResult, Box<dyn std::error::Error + Send>>>,
+    tx: &mpsc::UnboundedSender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
     topic_id: &H256,
     current_filter: RindexerEventFilter,
     max_block_range_limitation: Option<U64>,
@@ -306,13 +300,13 @@ async fn fetch_historic_logs_stream(
 #[allow(clippy::too_many_arguments)]
 async fn live_indexing_stream(
     cached_provider: &Arc<JsonRpcCachedProvider>,
-    tx: &mpsc::UnboundedSender<Result<FetchLogsResult, Box<dyn std::error::Error + Send>>>,
+    tx: &mpsc::UnboundedSender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
     contract_address: &Option<ValueOrArray<Address>>,
     topic_id: &H256,
-    reorg_safe_distance: U64,
+    reorg_safe_distance: &U64,
     mut current_filter: RindexerEventFilter,
     info_log_name: &str,
-    semaphore: Arc<Semaphore>,
+    semaphore: &Arc<Semaphore>,
 ) {
     let mut last_seen_block_number = U64::from(0);
     loop {
@@ -338,8 +332,8 @@ async fn live_indexing_stream(
                             latest_block_number,
                             last_seen_block_number
                         );
-                        let safe_block_number = latest_block_number - reorg_safe_distance;
 
+                        let safe_block_number = latest_block_number - reorg_safe_distance;
                         let from_block = current_filter.get_from_block();
                         // check reorg distance and skip if not safe
                         if from_block > safe_block_number {
@@ -354,7 +348,6 @@ async fn live_indexing_stream(
                         }
 
                         let to_block = safe_block_number;
-
                         if from_block == to_block &&
                             !is_relevant_block(contract_address, topic_id, &latest_block)
                         {
@@ -384,7 +377,7 @@ async fn live_indexing_stream(
                             current_filter
                         );
 
-                        let semaphore_client = Arc::clone(&semaphore);
+                        let semaphore_client = Arc::clone(semaphore);
                         let permit = semaphore_client.acquire_owned().await;
 
                         if let Ok(permit) = permit {

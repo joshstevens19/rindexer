@@ -10,9 +10,6 @@ use crate::event::contract_setup::IndexingContractSetup;
 pub enum BuildRindexerFilterError {
     #[error("Address is valid format")]
     AddressInvalidFormat,
-
-    #[error("Topic0 is valid format")]
-    Topic0InvalidFormat,
 }
 
 #[derive(Clone, Debug)]
@@ -33,7 +30,7 @@ impl RindexerEventFilter {
     }
 
     pub fn new(
-        topic_id: &str,
+        topic_id: &H256,
         event_name: &str,
         indexing_contract_setup: &IndexingContractSetup,
         current_block: U64,
@@ -41,10 +38,6 @@ impl RindexerEventFilter {
     ) -> Result<RindexerEventFilter, BuildRindexerFilterError> {
         match indexing_contract_setup {
             IndexingContractSetup::Address(address_details) => {
-                let topic0 = topic_id
-                    .parse::<H256>()
-                    .map_err(|_| BuildRindexerFilterError::Topic0InvalidFormat)?;
-
                 match &address_details.indexed_filters {
                     Some(indexed_filters) => {
                         if let Some(index_filters) =
@@ -54,7 +47,7 @@ impl RindexerEventFilter {
                                 index_filters.extend_filter_indexed(
                                     Filter::new()
                                         .address(address_details.address.clone())
-                                        .topic0(topic0)
+                                        .topic0(*topic_id)
                                         .from_block(current_block)
                                         .to_block(next_block),
                                 ),
@@ -64,7 +57,7 @@ impl RindexerEventFilter {
                         Ok(RindexerEventFilter::from_filter(
                             Filter::new()
                                 .address(address_details.address.clone())
-                                .topic0(topic0)
+                                .topic0(*topic_id)
                                 .from_block(current_block)
                                 .to_block(next_block),
                         ))
@@ -72,44 +65,35 @@ impl RindexerEventFilter {
                     None => Ok(RindexerEventFilter::from_filter(
                         Filter::new()
                             .address(address_details.address.clone())
-                            .topic0(topic0)
+                            .topic0(*topic_id)
                             .from_block(current_block)
                             .to_block(next_block),
                     )),
                 }
             }
-            IndexingContractSetup::Filter(filter) => {
-                let topic0 = topic_id
-                    .parse::<H256>()
-                    .map_err(|_| BuildRindexerFilterError::Topic0InvalidFormat)?;
-
-                match &filter.indexed_filters {
-                    Some(indexed_filters) => Ok(RindexerEventFilter::from_filter(
-                        indexed_filters.extend_filter_indexed(
-                            Filter::new()
-                                .topic0(topic0)
-                                .from_block(current_block)
-                                .to_block(next_block),
-                        ),
-                    )),
-                    None => Ok(RindexerEventFilter::from_filter(
-                        Filter::new().topic0(topic0).from_block(current_block).to_block(next_block),
-                    )),
-                }
-            }
+            IndexingContractSetup::Filter(filter) => match &filter.indexed_filters {
+                Some(indexed_filters) => Ok(RindexerEventFilter::from_filter(
+                    indexed_filters.extend_filter_indexed(
+                        Filter::new()
+                            .topic0(*topic_id)
+                            .from_block(current_block)
+                            .to_block(next_block),
+                    ),
+                )),
+                None => Ok(RindexerEventFilter::from_filter(
+                    Filter::new().topic0(*topic_id).from_block(current_block).to_block(next_block),
+                )),
+            },
             IndexingContractSetup::Factory(factory) => {
                 let address = factory
                     .address
                     .parse::<Address>()
                     .map_err(|_| BuildRindexerFilterError::AddressInvalidFormat)?;
-                let topic0 = topic_id
-                    .parse::<H256>()
-                    .map_err(|_| BuildRindexerFilterError::Topic0InvalidFormat)?;
 
                 Ok(RindexerEventFilter::from_filter(
                     Filter::new()
                         .address(address)
-                        .topic0(topic0)
+                        .topic0(*topic_id)
                         .from_block(current_block)
                         .to_block(next_block),
                 ))
