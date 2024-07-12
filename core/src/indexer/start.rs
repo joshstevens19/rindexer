@@ -1,7 +1,4 @@
-use std::{
-    path::Path,
-    sync::Arc,
-};
+use std::{path::Path, sync::Arc};
 
 use ethers::{providers::ProviderError, types::U64};
 use futures::future::try_join_all;
@@ -14,13 +11,16 @@ use tracing::{error, info};
 
 use crate::{
     database::postgres::client::PostgresConnectionError,
-    event::{callback_registry::EventCallbackRegistry, config::EventProcessingConfig},
+    event::{
+        callback_registry::EventCallbackRegistry, config::EventProcessingConfig,
+        contract_setup::NetworkContract,
+    },
     indexer::{
         dependency::ContractEventsDependenciesConfig,
-        last_synced::get_last_synced_block_number,
+        last_synced::{get_last_synced_block_number, SyncConfig},
         process::{
-            process_contract_events_with_dependencies, process_event,
-            ProcessContractEventsWithDependenciesError, ProcessEventError,
+            process_contracts_events_with_dependencies, process_event,
+            ProcessContractsEventsWithDependenciesError, ProcessEventError,
         },
         progress::IndexingEventsProgressState,
         reorg::reorg_safe_distance_for_chain,
@@ -33,7 +33,7 @@ use crate::{
 #[derive(thiserror::Error, Debug)]
 pub enum CombinedLogEventProcessingError {
     #[error("{0}")]
-    DependencyError(#[from] ProcessContractEventsWithDependenciesError),
+    DependencyError(#[from] ProcessContractsEventsWithDependenciesError),
     #[error("{0}")]
     NonBlockingError(#[from] ProcessEventError),
     #[error("{0}")]
@@ -78,94 +78,60 @@ pub async fn start_indexing(
 ) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
     let start = Instant::now();
 
-    let database = if manifest.storage.postgres_enabled() {
-        let postgres = PostgresClient::new().await;
-        match postgres {
-            Ok(postgres) => Some(Arc::new(postgres)),
-            Err(e) => {
-                error!("Error connecting to Postgres: {:?}", e);
-                return Err(StartIndexingError::PostgresConnectionError(e));
-            }
-        }
-    } else {
-        None
-    };
+    let database = initialize_database(manifest).await?;
     let event_progress_state = IndexingEventsProgressState::monitor(&registry.events).await;
 
     // we can bring this into the yaml file later if required
     let semaphore = Arc::new(Semaphore::new(100));
-
     // need this to keep track of dependency_events cross contracts and events
     let mut event_processing_configs: Vec<Arc<EventProcessingConfig>> = vec![];
-
     // any events which are non-blocking and can be fired in parallel
     let mut non_blocking_process_events = Vec::new();
     let mut dependency_event_processing_configs: Vec<ContractEventsDependenciesConfig> = Vec::new();
     // if you are doing advanced dependency events where other contracts depend on the processing of
     // this contract you will need to apply the dependency after the processing of the other
     // contract to avoid ordering issues
-    let mut apply_cross_contract_dependency_events_config_after_processing: Vec<(
-        String,
-        Arc<EventProcessingConfig>,
-    )> = Vec::new();
+    let mut apply_cross_contract_dependency_events_config_after_processing = Vec::new();
 
     let mut processed_network_contracts: Vec<ProcessedNetworkContract> = Vec::new();
 
     for event in registry.events.iter() {
         for network_contract in event.contract.details.iter() {
-            let latest_block = network_contract.cached_provider.get_block_number().await?;
+            let config = SyncConfig {
+                project_path,
+                database: &database,
+                csv_details: &manifest.storage.csv,
+                contract_csv_enabled: manifest.contract_csv_enabled(&event.contract.name),
+                indexer_name: &event.indexer_name,
+                contract_name: &event.contract.name,
+                event_name: &event.event_name,
+                network: &network_contract.network,
+            };
 
-            let live_indexing =
-                if no_live_indexing_forced { false } else { network_contract.end_block.is_none() };
-
-            let contract_csv_enabled = manifest
-                .contracts
-                .iter()
-                .find(|c| c.name == event.contract.name)
-                .map_or(false, |c| c.generate_csv.unwrap_or(true));
-
-            // if they are doing live indexing we just always go from the latest block
             let last_known_start_block = if network_contract.start_block.is_some() {
-                get_last_synced_block_number(
-                    project_path,
-                    &database,
-                    &manifest.storage.csv,
-                    manifest.storage.csv_enabled() && contract_csv_enabled,
-                    &event.indexer_name,
-                    &event.contract.name,
-                    &event.event_name,
-                    &network_contract.network,
-                )
-                .await
+                get_last_synced_block_number(config).await
             } else {
                 None
             };
 
+            let latest_block = network_contract.cached_provider.get_block_number().await?;
             let start_block = last_known_start_block
                 .unwrap_or(network_contract.start_block.unwrap_or(latest_block));
-            let mut indexing_distance_from_head = U64::zero();
-            let mut end_block =
+            let end_block =
                 std::cmp::min(network_contract.end_block.unwrap_or(latest_block), latest_block);
-
             if let Some(end_block) = network_contract.end_block {
                 if end_block > latest_block {
                     error!("{} - end_block supplied in yaml - {} is higher then latest - {} - end_block now will be {}", event.info_log_name(), end_block, latest_block, latest_block);
                 }
             }
 
-            if event.contract.reorg_safe_distance {
-                let chain_id = network_contract
-                    .cached_provider
-                    .get_chain_id()
-                    .await
-                    .map_err(StartIndexingError::GetChainIdError)?;
-                let reorg_safe_distance = reorg_safe_distance_for_chain(&chain_id);
-                let safe_block_number = latest_block - reorg_safe_distance;
-                if end_block > safe_block_number {
-                    end_block = safe_block_number;
-                }
-                indexing_distance_from_head = reorg_safe_distance;
-            }
+            let (end_block, indexing_distance_from_head) = calculate_safe_block_number(
+                event.contract.reorg_safe_distance,
+                network_contract,
+                latest_block,
+                end_block,
+            )
+            .await?;
 
             // push status to the processed state
             processed_network_contracts.push(ProcessedNetworkContract {
@@ -178,7 +144,7 @@ pub async fn start_indexing(
                 indexer_name: event.indexer_name.clone(),
                 contract_name: event.contract.name.clone(),
                 info_log_name: event.info_log_name(),
-                topic_id: event.topic_id.clone(),
+                topic_id: event.topic_id,
                 event_name: event.event_name.clone(),
                 network_contract: Arc::new(network_contract.clone()),
                 start_block,
@@ -188,7 +154,11 @@ pub async fn start_indexing(
                 progress: Arc::clone(&event_progress_state),
                 database: database.clone(),
                 csv_details: manifest.storage.csv.clone(),
-                live_indexing,
+                live_indexing: if no_live_indexing_forced {
+                    false
+                } else {
+                    network_contract.is_live_indexing()
+                },
                 index_event_in_order: event.index_event_in_order,
                 indexing_distance_from_head,
             };
@@ -240,8 +210,8 @@ pub async fn start_indexing(
         );
     }
 
-    let dependency_handle: JoinHandle<Result<(), ProcessContractEventsWithDependenciesError>> =
-        tokio::spawn(process_contract_events_with_dependencies(
+    let dependency_handle: JoinHandle<Result<(), ProcessContractsEventsWithDependenciesError>> =
+        tokio::spawn(process_contracts_events_with_dependencies(
             dependency_event_processing_configs,
         ));
 
@@ -277,4 +247,43 @@ pub async fn start_indexing(
     info!("Historical indexing complete - time taken: {:?}", duration);
 
     Ok(processed_network_contracts)
+}
+
+async fn initialize_database(
+    manifest: &Manifest,
+) -> Result<Option<Arc<PostgresClient>>, StartIndexingError> {
+    if manifest.storage.postgres_enabled() {
+        match PostgresClient::new().await {
+            Ok(postgres) => Ok(Some(Arc::new(postgres))),
+            Err(e) => {
+                error!("Error connecting to Postgres: {:?}", e);
+                Err(StartIndexingError::PostgresConnectionError(e))
+            }
+        }
+    } else {
+        Ok(None)
+    }
+}
+
+async fn calculate_safe_block_number(
+    reorg_safe_distance: bool,
+    network_contract: &NetworkContract,
+    latest_block: U64,
+    mut end_block: U64,
+) -> Result<(U64, U64), StartIndexingError> {
+    let mut indexing_distance_from_head = U64::zero();
+    if reorg_safe_distance {
+        let chain_id = network_contract
+            .cached_provider
+            .get_chain_id()
+            .await
+            .map_err(StartIndexingError::GetChainIdError)?;
+        let reorg_safe_distance = reorg_safe_distance_for_chain(&chain_id);
+        let safe_block_number = latest_block - reorg_safe_distance;
+        if end_block > safe_block_number {
+            end_block = safe_block_number;
+        }
+        indexing_distance_from_head = reorg_safe_distance;
+    }
+    Ok((end_block, indexing_distance_from_head))
 }

@@ -100,7 +100,12 @@ fn generate_topic_ids_match_arms_code(event_type_name: &str, event_info: &[Event
         event_info
             .iter()
             .map(|info| {
-                format!("{}::{}(_) => \"0x{}\",", event_type_name, info.name, info.topic_id())
+                format!(
+                    "{}::{}(_) => \"0x{}\",",
+                    event_type_name,
+                    info.name,
+                    info.topic_id_as_hex_string()
+                )
             })
             .collect::<Vec<_>>()
             .join("\n"),
@@ -596,7 +601,7 @@ fn generate_event_bindings_code(
                     indexer_name: "{indexer_name}".to_string(),
                     event_name: event_name.to_string(),
                     index_event_in_order,
-                    topic_id: topic_id.to_string(),
+                    topic_id: topic_id.parse::<H256>().unwrap(),
                     contract,
                     callback,
                 }});

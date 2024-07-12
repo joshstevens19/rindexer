@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use async_std::prelude::StreamExt;
 use ethers::{
@@ -7,48 +7,77 @@ use ethers::{
 };
 use futures::future::join_all;
 use tokio::{
-    sync::{Mutex, Semaphore},
+    sync::{Mutex, MutexGuard},
     task::{JoinError, JoinHandle},
 };
 use tracing::{debug, error, info};
 
 use crate::{
     event::{
-        callback_registry::{EventCallbackRegistry, EventResult},
-        config::EventProcessingConfig,
-        contract_setup::NetworkContract,
-        BuildRindexerFilterError, RindexerEventFilter,
+        callback_registry::EventResult, config::EventProcessingConfig, BuildRindexerFilterError,
+        RindexerEventFilter,
     },
     indexer::{
-        dependency::{ContractEventsDependenciesConfig, EventDependencies, EventsDependencyTree},
-        fetch_logs::{fetch_logs_stream, FetchLogsResult, LiveIndexingDetails},
+        dependency::{ContractEventsDependenciesConfig, EventDependencies},
+        fetch_logs::{fetch_logs_stream, FetchLogsResult},
         last_synced::update_progress_and_last_synced,
         log_helpers::is_relevant_block,
-        progress::{IndexingEventProgressStatus, IndexingEventsProgressState},
+        progress::IndexingEventProgressStatus,
     },
-    manifest::storage::CsvDetails,
-    PostgresClient,
 };
 
 #[derive(thiserror::Error, Debug)]
-pub enum ProcessContractEventsWithDependenciesError {
+pub enum ProcessEventError {
+    #[error("Could not process logs: {0}")]
+    ProcessLogs(#[from] Box<ProviderError>),
+
+    #[error("Could not build filter: {0}")]
+    BuildFilterError(#[from] BuildRindexerFilterError),
+}
+
+pub async fn process_event(config: EventProcessingConfig) -> Result<(), ProcessEventError> {
+    debug!("{} - Processing events", config.info_log_name);
+
+    process_event_logs(Arc::new(config), false).await?;
+
+    Ok(())
+}
+
+async fn process_event_logs(
+    config: Arc<EventProcessingConfig>,
+    force_no_live_indexing: bool,
+) -> Result<(), Box<ProviderError>> {
+    let mut logs_stream = fetch_logs_stream(Arc::clone(&config), force_no_live_indexing);
+
+    while let Some(result) = logs_stream.next().await {
+        handle_logs_result(Arc::clone(&config), result)
+            .await
+            .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
+    }
+
+    Ok(())
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum ProcessContractsEventsWithDependenciesError {
     #[error("{0}")]
-    ProcessEventsWithDependenciesError(#[from] ProcessEventsWithDependenciesError),
+    ProcessContractEventsWithDependenciesError(#[from] ProcessContractEventsWithDependenciesError),
 
     #[error("{0}")]
     JoinError(#[from] JoinError),
 }
 
-pub async fn process_contract_events_with_dependencies(
-    contract_events_config: Vec<ContractEventsDependenciesConfig>,
-) -> Result<(), ProcessContractEventsWithDependenciesError> {
-    let mut handles: Vec<JoinHandle<Result<(), ProcessEventsWithDependenciesError>>> = Vec::new();
+pub async fn process_contracts_events_with_dependencies(
+    contracts_events_config: Vec<ContractEventsDependenciesConfig>,
+) -> Result<(), ProcessContractsEventsWithDependenciesError> {
+    let mut handles: Vec<JoinHandle<Result<(), ProcessContractEventsWithDependenciesError>>> =
+        Vec::new();
 
-    for contract_events in contract_events_config {
+    for contract_events in contracts_events_config {
         let handle = tokio::spawn(async move {
-            process_events_with_dependencies(
+            process_contract_events_with_dependencies(
                 contract_events.event_dependencies,
-                contract_events.events_config,
+                Arc::new(contract_events.events_config),
             )
             .await
         });
@@ -59,11 +88,9 @@ pub async fn process_contract_events_with_dependencies(
 
     for result in results {
         match result {
-            Ok(inner_result) => inner_result.map_err(
-                ProcessContractEventsWithDependenciesError::ProcessEventsWithDependenciesError,
-            )?,
+            Ok(inner_result) => inner_result?,
             Err(join_error) => {
-                return Err(ProcessContractEventsWithDependenciesError::JoinError(join_error))
+                return Err(ProcessContractsEventsWithDependenciesError::JoinError(join_error))
             }
         }
     }
@@ -72,7 +99,7 @@ pub async fn process_contract_events_with_dependencies(
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum ProcessEventsWithDependenciesError {
+pub enum ProcessContractEventsWithDependenciesError {
     #[error("Could not process logs: {0}")]
     ProcessLogs(#[from] Box<ProviderError>),
 
@@ -84,31 +111,22 @@ pub enum ProcessEventsWithDependenciesError {
 
     #[error("Could not run all the logs processes {0}")]
     JoinError(#[from] JoinError),
-
-    #[error("Could not parse topic id: {0}")]
-    CouldNotParseTopicId(String),
-}
-
-async fn process_events_with_dependencies(
-    dependencies: EventDependencies,
-    events_processing_config: Vec<Arc<EventProcessingConfig>>,
-) -> Result<(), ProcessEventsWithDependenciesError> {
-    process_events_dependency_tree(dependencies.tree, Arc::new(events_processing_config)).await
 }
 
 #[derive(Debug, Clone)]
-struct OrderedLiveIndexingDetails {
+pub struct OrderedLiveIndexingDetails {
     pub filter: RindexerEventFilter,
     pub last_seen_block_number: U64,
 }
 
-async fn process_events_dependency_tree(
-    tree: Arc<EventsDependencyTree>,
+async fn process_contract_events_with_dependencies(
+    dependencies: EventDependencies,
     events_processing_config: Arc<Vec<Arc<EventProcessingConfig>>>,
-) -> Result<(), ProcessEventsWithDependenciesError> {
-    let mut stack = vec![tree];
+) -> Result<(), ProcessContractEventsWithDependenciesError> {
+    let mut stack = vec![dependencies.tree];
 
-    let live_indexing_events = Arc::new(Mutex::new(Vec::<(ProcessLogsParams, H256)>::new()));
+    let live_indexing_events =
+        Arc::new(Mutex::new(Vec::<(Arc<EventProcessingConfig>, RindexerEventFilter)>::new()));
 
     while let Some(current_tree) = stack.pop() {
         let mut tasks = vec![];
@@ -125,49 +143,20 @@ async fn process_events_dependency_tree(
                         e.contract_name == dependency.contract_name &&
                             e.event_name == dependency.event_name
                     })
-                    .ok_or(ProcessEventsWithDependenciesError::EventConfigNotFound)?;
+                    .ok_or(ProcessContractEventsWithDependenciesError::EventConfigNotFound)?;
 
-                let filter = RindexerEventFilter::new(
-                    &event_processing_config.topic_id,
-                    &event_processing_config.event_name,
-                    &event_processing_config.network_contract.indexing_contract_setup,
-                    event_processing_config.start_block,
-                    event_processing_config.end_block,
-                )?;
-
-                let logs_params = ProcessLogsParams {
-                    project_path: event_processing_config.project_path.clone(),
-                    indexer_name: event_processing_config.indexer_name.clone(),
-                    contract_name: event_processing_config.contract_name.clone(),
-                    info_log_name: event_processing_config.info_log_name.clone(),
-                    topic_id: event_processing_config.topic_id.clone(),
-                    event_name: event_processing_config.event_name.clone(),
-                    network_contract: Arc::clone(&event_processing_config.network_contract),
-                    filter,
-                    registry: Arc::clone(&event_processing_config.registry),
-                    progress: Arc::clone(&event_processing_config.progress),
-                    database: event_processing_config.database.clone(),
-                    csv_details: event_processing_config.csv_details.clone(),
-                    execute_events_logs_in_order: event_processing_config.index_event_in_order,
-                    // sync the historic ones first and live indexing is added to the stack to
-                    // process after
-                    live_indexing: false,
-                    indexing_distance_from_head: event_processing_config
-                        .indexing_distance_from_head,
-                    semaphore: Arc::clone(&event_processing_config.semaphore),
-                };
-
-                process_logs(logs_params.clone()).await?;
+                // forces live indexing off as it has to handle it a bit differently
+                process_event_logs(Arc::clone(event_processing_config), true).await?;
 
                 if event_processing_config.live_indexing {
-                    let topic_id =
-                        event_processing_config.topic_id.parse::<H256>().map_err(|e| {
-                            ProcessEventsWithDependenciesError::CouldNotParseTopicId(e.to_string())
-                        })?;
-                    live_indexing_events.lock().await.push((logs_params.clone(), topic_id));
+                    let rindexer_event_filter = event_processing_config.to_event_filter()?;
+                    live_indexing_events
+                        .lock()
+                        .await
+                        .push((Arc::clone(event_processing_config), rindexer_event_filter));
                 }
 
-                Ok::<(), ProcessEventsWithDependenciesError>(())
+                Ok::<(), ProcessContractEventsWithDependenciesError>(())
             });
 
             tasks.push(task);
@@ -177,7 +166,7 @@ async fn process_events_dependency_tree(
         for result in results {
             if let Err(e) = result {
                 error!("Error processing logs: {:?}", e);
-                return Err(ProcessEventsWithDependenciesError::JoinError(e));
+                return Err(ProcessContractEventsWithDependenciesError::JoinError(e));
             }
         }
 
@@ -187,73 +176,84 @@ async fn process_events_dependency_tree(
         }
     }
 
+    let live_indexing_events = live_indexing_events.lock().await;
+    if live_indexing_events.is_empty() {
+        return Ok(());
+    }
+
+    live_indexing_for_contract_event_dependencies(&live_indexing_events).await;
+
+    Ok(())
+}
+
+// TODO - this is a similar to live_indexing_stream but has to be a bit different we should merge code
+#[allow(clippy::type_complexity)]
+async fn live_indexing_for_contract_event_dependencies<'a>(
+    live_indexing_events: &'a MutexGuard<
+        'a,
+        Vec<(Arc<EventProcessingConfig>, RindexerEventFilter)>,
+    >,
+) {
     let mut ordering_live_indexing_details_map: HashMap<
         H256,
         Arc<Mutex<OrderedLiveIndexingDetails>>,
     > = HashMap::new();
-    let live_indexing_events = live_indexing_events.lock().await;
-    for (log, topic) in live_indexing_events.iter() {
-        let mut filter = log.filter.clone();
+
+    for (config, event_filter) in live_indexing_events.iter() {
+        let mut filter = event_filter.clone();
         let last_seen_block_number = filter.get_to_block();
         let next_block_number = last_seen_block_number + 1;
 
         filter = filter.set_from_block(next_block_number).set_to_block(next_block_number);
 
         ordering_live_indexing_details_map.insert(
-            *topic,
+            config.topic_id,
             Arc::new(Mutex::new(OrderedLiveIndexingDetails { filter, last_seen_block_number })),
         );
-    }
-
-    if live_indexing_events.is_empty() {
-        return Ok(());
     }
 
     loop {
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
-        for (logs_params, parsed_topic_id) in live_indexing_events.iter() {
+        for (config, _) in live_indexing_events.iter() {
             let mut ordering_live_indexing_details = ordering_live_indexing_details_map
-                .get(parsed_topic_id)
+                .get(&config.topic_id)
                 .expect("Failed to get ordering_live_indexing_details_map")
                 .lock()
                 .await
                 .clone();
 
-            let latest_block =
-                logs_params.network_contract.cached_provider.get_latest_block().await;
+            let latest_block = &config.network_contract.cached_provider.get_latest_block().await;
 
             match latest_block {
                 Ok(latest_block) => {
                     if let Some(latest_block) = latest_block {
                         if let Some(latest_block_number) = latest_block.number {
-                            let reorg_safe_distance = logs_params.indexing_distance_from_head;
                             if ordering_live_indexing_details.last_seen_block_number ==
                                 latest_block_number
                             {
                                 debug!(
                                     "{} - {} - No new blocks to process...",
-                                    logs_params.info_log_name,
+                                    &config.info_log_name,
                                     IndexingEventProgressStatus::Live.log()
                                 );
                                 continue;
                             }
                             info!(
                                 "{} - {} - New block seen {} - Last seen block {}",
-                                logs_params.info_log_name,
+                                &config.info_log_name,
                                 IndexingEventProgressStatus::Live.log(),
                                 latest_block_number,
                                 ordering_live_indexing_details.last_seen_block_number
                             );
+                            let reorg_safe_distance = &config.indexing_distance_from_head;
                             let safe_block_number = latest_block_number - reorg_safe_distance;
-
                             let from_block = ordering_live_indexing_details.filter.get_from_block();
-
                             // check reorg distance and skip if not safe
                             if from_block > safe_block_number {
                                 info!(
                                     "{} - {} - not in safe reorg block range yet block: {} > range: {}",
-                                    logs_params.info_log_name,
+                                    &config.info_log_name,
                                     IndexingEventProgressStatus::Live.log(),
                                     from_block,
                                     safe_block_number
@@ -262,23 +262,22 @@ async fn process_events_dependency_tree(
                             }
 
                             let to_block = safe_block_number;
-
                             if from_block == to_block &&
                                 !is_relevant_block(
                                     &ordering_live_indexing_details.filter.raw_filter().address,
-                                    parsed_topic_id,
-                                    &latest_block,
+                                    &config.topic_id,
+                                    latest_block,
                                 )
                             {
                                 debug!(
                                     "{} - {} - Skipping block {} as it's not relevant",
-                                    logs_params.info_log_name,
+                                    &config.info_log_name,
                                     IndexingEventProgressStatus::Live.log(),
                                     from_block
                                 );
                                 info!(
                                     "{} - {} - LogsBloom check - No events found in the block {}",
-                                    logs_params.info_log_name,
+                                    &config.info_log_name,
                                     IndexingEventProgressStatus::Live.log(),
                                     from_block
                                 );
@@ -290,7 +289,7 @@ async fn process_events_dependency_tree(
 
                                 ordering_live_indexing_details.last_seen_block_number = to_block;
                                 *ordering_live_indexing_details_map
-                                    .get(parsed_topic_id)
+                                    .get(&config.topic_id)
                                     .expect("Failed to get ordering_live_indexing_details_map")
                                     .lock()
                                     .await = ordering_live_indexing_details;
@@ -302,16 +301,16 @@ async fn process_events_dependency_tree(
 
                             debug!(
                                 "{} - {} - Processing live filter: {:?}",
-                                logs_params.info_log_name,
+                                &config.info_log_name,
                                 IndexingEventProgressStatus::Live.log(),
                                 ordering_live_indexing_details.filter
                             );
 
-                            let semaphore_client = Arc::clone(&logs_params.semaphore);
+                            let semaphore_client = Arc::clone(&config.semaphore);
                             let permit = semaphore_client.acquire_owned().await;
 
                             if let Ok(permit) = permit {
-                                match logs_params
+                                match config
                                     .network_contract
                                     .cached_provider
                                     .get_logs(&ordering_live_indexing_details.filter)
@@ -320,9 +319,9 @@ async fn process_events_dependency_tree(
                                     Ok(logs) => {
                                         debug!(
                                             "{} - {} - Live topic_id {}, Logs: {} from {} to {}",
-                                            logs_params.info_log_name,
+                                            &config.info_log_name,
                                             IndexingEventProgressStatus::Live.log(),
-                                            logs_params.topic_id,
+                                            &config.topic_id,
                                             logs.len(),
                                             from_block,
                                             to_block
@@ -330,52 +329,41 @@ async fn process_events_dependency_tree(
 
                                         debug!(
                                             "{} - {} - Fetched {} event logs - blocks: {} - {}",
-                                            logs_params.info_log_name,
+                                            &config.info_log_name,
                                             IndexingEventProgressStatus::Live.log(),
                                             logs.len(),
                                             from_block,
                                             to_block
                                         );
 
-                                        let fetched_logs = Ok(FetchLogsResult {
-                                            logs: logs.clone(),
-                                            from_block,
-                                            to_block,
-                                        });
+                                        let logs_empty = logs.is_empty();
+                                        // clone here over the full logs way less overhead
+                                        let last_log = logs.last().cloned();
 
-                                        let result = handle_logs_result(
-                                            logs_params.project_path.clone(),
-                                            logs_params.indexer_name.clone(),
-                                            logs_params.contract_name.clone(),
-                                            logs_params.event_name.clone(),
-                                            logs_params.topic_id.clone(),
-                                            logs_params.execute_events_logs_in_order,
-                                            Arc::clone(&logs_params.progress),
-                                            Arc::clone(&logs_params.network_contract),
-                                            logs_params.database.clone(),
-                                            logs_params.csv_details.clone(),
-                                            Arc::clone(&logs_params.registry),
-                                            fetched_logs,
-                                        )
-                                        .await;
+                                        let fetched_logs =
+                                            Ok(FetchLogsResult { logs, from_block, to_block });
+
+                                        let result =
+                                            handle_logs_result(Arc::clone(config), fetched_logs)
+                                                .await;
 
                                         match result {
                                             Ok(_) => {
                                                 ordering_live_indexing_details
                                                     .last_seen_block_number = to_block;
-                                                if logs.is_empty() {
+                                                if logs_empty {
                                                     ordering_live_indexing_details.filter =
                                                         ordering_live_indexing_details
                                                             .filter
                                                             .set_from_block(to_block + 1);
                                                     info!(
                                                         "{} - {} - No events found between blocks {} - {}",
-                                                        logs_params.info_log_name,
+                                                        &config.info_log_name,
                                                         IndexingEventProgressStatus::Live.log(),
                                                         from_block,
                                                         to_block
                                                     );
-                                                } else if let Some(last_log) = logs.last() {
+                                                } else if let Some(last_log) = last_log {
                                                     if let Some(last_log_block_number) =
                                                         last_log.block_number
                                                     {
@@ -392,7 +380,7 @@ async fn process_events_dependency_tree(
                                                 }
 
                                                 *ordering_live_indexing_details_map
-                                                    .get(parsed_topic_id)
+                                                    .get(&config.topic_id)
                                                     .expect("Failed to get ordering_live_indexing_details_map")
                                                     .lock()
                                                     .await = ordering_live_indexing_details;
@@ -402,7 +390,7 @@ async fn process_events_dependency_tree(
                                             Err(err) => {
                                                 error!(
                                                     "{} - {} - Error fetching logs: {} - will try again in 200ms",
-                                                    logs_params.info_log_name,
+                                                    &config.info_log_name,
                                                     IndexingEventProgressStatus::Live.log(),
                                                     err
                                                 );
@@ -414,7 +402,7 @@ async fn process_events_dependency_tree(
                                     Err(err) => {
                                         error!(
                                             "{} - {} - Error fetching logs: {} - will try again in 200ms",
-                                            logs_params.info_log_name,
+                                            &config.info_log_name,
                                             IndexingEventProgressStatus::Live.log(),
                                             err
                                         );
@@ -441,166 +429,28 @@ async fn process_events_dependency_tree(
     }
 }
 
-#[derive(thiserror::Error, Debug)]
-pub enum ProcessEventError {
-    #[error("Could not process logs: {0}")]
-    ProcessLogs(#[from] Box<ProviderError>),
-
-    #[error("Could not build filter: {0}")]
-    BuildFilterError(#[from] BuildRindexerFilterError),
-}
-
-pub async fn process_event(
-    event_processing_config: EventProcessingConfig,
-) -> Result<(), ProcessEventError> {
-    debug!("{} - Processing events", event_processing_config.info_log_name);
-
-    let filter = RindexerEventFilter::new(
-        &event_processing_config.topic_id,
-        &event_processing_config.event_name,
-        &event_processing_config.network_contract.indexing_contract_setup,
-        event_processing_config.start_block,
-        event_processing_config.end_block,
-    )?;
-
-    process_logs(ProcessLogsParams {
-        project_path: event_processing_config.project_path,
-        indexer_name: event_processing_config.indexer_name,
-        contract_name: event_processing_config.contract_name,
-        info_log_name: event_processing_config.info_log_name,
-        topic_id: event_processing_config.topic_id,
-        event_name: event_processing_config.event_name,
-        network_contract: event_processing_config.network_contract,
-        filter,
-        registry: event_processing_config.registry,
-        progress: event_processing_config.progress,
-        database: event_processing_config.database,
-        csv_details: event_processing_config.csv_details,
-        execute_events_logs_in_order: event_processing_config.index_event_in_order,
-        live_indexing: event_processing_config.live_indexing,
-        indexing_distance_from_head: event_processing_config.indexing_distance_from_head,
-        semaphore: event_processing_config.semaphore,
-    })
-    .await?;
-
-    Ok(())
-}
-
-#[derive(Clone)]
-pub struct ProcessLogsParams {
-    project_path: PathBuf,
-    indexer_name: String,
-    contract_name: String,
-    info_log_name: String,
-    topic_id: String,
-    event_name: String,
-    network_contract: Arc<NetworkContract>,
-    filter: RindexerEventFilter,
-    registry: Arc<EventCallbackRegistry>,
-    progress: Arc<Mutex<IndexingEventsProgressState>>,
-    database: Option<Arc<PostgresClient>>,
-    csv_details: Option<CsvDetails>,
-    execute_events_logs_in_order: bool,
-    live_indexing: bool,
-    indexing_distance_from_head: U64,
-    semaphore: Arc<Semaphore>,
-}
-
-async fn process_logs(params: ProcessLogsParams) -> Result<(), Box<ProviderError>> {
-    let provider = Arc::clone(&params.network_contract.cached_provider);
-    let mut logs_stream = fetch_logs_stream(
-        provider,
-        params
-            .topic_id
-            .parse::<H256>()
-            .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?,
-        params.filter,
-        params.info_log_name,
-        if params.live_indexing {
-            Some(LiveIndexingDetails {
-                indexing_distance_from_head: params.indexing_distance_from_head,
-            })
-        } else {
-            None
-        },
-        params.semaphore,
-    );
-
-    while let Some(result) = logs_stream.next().await {
-        handle_logs_result(
-            params.project_path.clone(),
-            params.indexer_name.clone(),
-            params.contract_name.clone(),
-            params.event_name.clone(),
-            params.topic_id.clone(),
-            params.execute_events_logs_in_order,
-            Arc::clone(&params.progress),
-            Arc::clone(&params.network_contract),
-            params.database.clone(),
-            params.csv_details.clone(),
-            Arc::clone(&params.registry),
-            result,
-        )
-        .await
-        .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
-    }
-
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
 async fn handle_logs_result(
-    project_path: PathBuf,
-    indexer_name: String,
-    contract_name: String,
-    event_name: String,
-    topic_id: String,
-    execute_events_logs_in_order: bool,
-    progress: Arc<Mutex<IndexingEventsProgressState>>,
-    network_contract: Arc<NetworkContract>,
-    database: Option<Arc<PostgresClient>>,
-    csv_details: Option<CsvDetails>,
-    registry: Arc<EventCallbackRegistry>,
+    config: Arc<EventProcessingConfig>,
     result: Result<FetchLogsResult, Box<dyn std::error::Error + Send>>,
 ) -> Result<(), Box<dyn std::error::Error + Send>> {
     match result {
         Ok(result) => {
-            debug!("Processing logs {} - length {}", event_name, result.logs.len());
+            debug!("Processing logs {} - length {}", config.event_name, result.logs.len());
 
             let fn_data = result
                 .logs
                 .into_iter()
-                .map(|log| EventResult::new(Arc::clone(&network_contract), log))
+                .map(|log| EventResult::new(Arc::clone(&config.network_contract), log))
                 .collect::<Vec<_>>();
 
             if !fn_data.is_empty() {
-                if execute_events_logs_in_order {
-                    registry.trigger_event(&topic_id, fn_data).await;
-                    update_progress_and_last_synced(
-                        project_path.clone(),
-                        indexer_name.clone(),
-                        contract_name,
-                        event_name.clone(),
-                        progress,
-                        network_contract,
-                        database,
-                        csv_details,
-                        result.to_block,
-                    );
+                if config.index_event_in_order {
+                    config.trigger_event(fn_data).await;
+                    update_progress_and_last_synced(config, result.to_block);
                 } else {
                     tokio::spawn(async move {
-                        registry.trigger_event(&topic_id, fn_data).await;
-                        update_progress_and_last_synced(
-                            project_path,
-                            indexer_name.clone(),
-                            contract_name,
-                            event_name.clone(),
-                            progress,
-                            network_contract,
-                            database,
-                            csv_details,
-                            result.to_block,
-                        );
+                        config.trigger_event(fn_data).await;
+                        update_progress_and_last_synced(config, result.to_block);
                     });
                 }
             }

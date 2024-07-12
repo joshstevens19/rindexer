@@ -28,6 +28,10 @@ impl NetworkContract {
     pub fn decode_log(&self, log: Log) -> Arc<dyn Any + Send + Sync> {
         (self.decoder)(log.topics, log.data)
     }
+
+    pub fn is_live_indexing(&self) -> bool {
+        self.end_block.is_none()
+    }
 }
 
 #[derive(Clone)]
