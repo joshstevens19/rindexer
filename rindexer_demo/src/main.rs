@@ -69,6 +69,7 @@ async fn main() {
     }
 }
 
+#[allow(dead_code)]
 fn generate() {
     let path = PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml")
         .expect("Invalid path");
@@ -77,6 +78,7 @@ fn generate() {
         .expect("Failed to generate typings");
 }
 
+#[allow(dead_code)]
 fn generate_code_test() {
     let path = PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml")
         .expect("Invalid path");
@@ -86,6 +88,7 @@ fn generate_code_test() {
         .expect("Failed to generate handlers");
 }
 
+#[allow(dead_code)]
 fn generate_all() {
     let path = PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml")
         .expect("Invalid path");
