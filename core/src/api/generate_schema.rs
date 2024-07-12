@@ -18,7 +18,7 @@ pub enum GenerateGraphqlQueriesError {
     NoData,
 
     #[error("Failed to generate operations: {0}")]
-    GenerateOperationsError(GenerateOperationsError),
+    GenerateOperationsError(#[from] GenerateOperationsError),
 }
 
 pub async fn generate_graphql_queries(
@@ -94,8 +94,7 @@ pub async fn generate_graphql_queries(
         return Err(GenerateGraphqlQueriesError::NoData);
     }
 
-    generate_operations(&schema, generate_path)
-        .map_err(GenerateGraphqlQueriesError::GenerateOperationsError)?;
+    generate_operations(&schema, generate_path)?;
 
     Ok(())
 }

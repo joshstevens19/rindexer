@@ -30,10 +30,10 @@ pub fn abigen_contract_file_name(contract: &Contract) -> String {
 #[derive(thiserror::Error, Debug)]
 pub enum GenerateStructsError {
     #[error("Could not read ABI string: {0}")]
-    CouldNotReadAbiString(std::io::Error),
+    CouldNotReadAbiString(#[from] std::io::Error),
 
     #[error("Could not read ABI JSON: {0}")]
-    CouldNotReadAbiJson(serde_json::Error),
+    CouldNotReadAbiJson(#[from] serde_json::Error),
 
     #[error("Invalid ABI JSON format")]
     InvalidAbiJsonFormat,
@@ -45,10 +45,8 @@ fn generate_structs(
 ) -> Result<Code, GenerateStructsError> {
     // TODO - this could be shared with `get_abi_items`
     let full_path = get_full_path(project_path, &contract.abi);
-    let abi_str =
-        fs::read_to_string(full_path).map_err(GenerateStructsError::CouldNotReadAbiString)?;
-    let abi_json: Value =
-        serde_json::from_str(&abi_str).map_err(GenerateStructsError::CouldNotReadAbiJson)?;
+    let abi_str = fs::read_to_string(full_path)?;
+    let abi_json: Value = serde_json::from_str(&abi_str)?;
 
     let mut structs = Code::blank();
 
@@ -214,7 +212,7 @@ fn generate_csv_instance(
 #[derive(thiserror::Error, Debug)]
 pub enum GenerateEventCallbackStructsError {
     #[error("{0}")]
-    CreateCsvFileForEvent(CreateCsvFileForEvent),
+    CreateCsvFileForEvent(#[from] CreateCsvFileForEvent),
 }
 
 fn generate_event_callback_structs_code(
@@ -229,8 +227,7 @@ fn generate_event_callback_structs_code(
     let mut parts = Vec::new();
 
     for info in event_info {
-        let csv_generator = generate_csv_instance(project_path, contract, info, &storage.csv)
-            .map_err(GenerateEventCallbackStructsError::CreateCsvFileForEvent)?;
+        let csv_generator = generate_csv_instance(project_path, contract, info, &storage.csv)?;
 
         let part = format!(
             r#"
@@ -454,16 +451,16 @@ fn build_pub_contract_fn(
 #[derive(thiserror::Error, Debug)]
 pub enum GenerateEventBindingCodeError {
     #[error("Could not read ABI string: {0}")]
-    CouldNotReadAbiString(std::io::Error),
+    CouldNotReadAbiString(#[from] std::io::Error),
 
     #[error("Could not read ABI JSON: {0}")]
-    CouldNotReadAbiJson(serde_json::Error),
+    CouldNotReadAbiJson(#[from] serde_json::Error),
 
     #[error("{0}")]
-    GenerateStructsError(GenerateStructsError),
+    GenerateStructsError(#[from] GenerateStructsError),
 
     #[error("{0}")]
-    GenerateEventCallbackStructsError(GenerateEventCallbackStructsError),
+    GenerateEventCallbackStructsError(#[from] GenerateEventCallbackStructsError),
 }
 
 fn generate_event_bindings_code(
@@ -631,8 +628,7 @@ fn generate_event_bindings_code(
         abigen_mod_name = abigen_contract_mod_name(contract),
         abigen_file_name = abigen_contract_file_name(contract),
         abigen_name = abigen_contract_name(contract),
-        structs = generate_structs(project_path, contract)
-            .map_err(GenerateEventBindingCodeError::GenerateStructsError)?,
+        structs = generate_structs(project_path, contract)?,
         event_type_name = &event_type_name,
         event_context_database = if storage.postgres_enabled() {
             "pub database: Arc<PostgresClient>,"
@@ -640,8 +636,7 @@ fn generate_event_bindings_code(
             ""
         },
         event_callback_structs =
-            generate_event_callback_structs_code(project_path, &event_info, contract, storage)
-                .map_err(GenerateEventBindingCodeError::GenerateEventCallbackStructsError,)?,
+            generate_event_callback_structs_code(project_path, &event_info, contract, storage)?,
         event_enums = generate_event_enums_code(&event_info),
         topic_ids_match_arms = generate_topic_ids_match_arms_code(&event_type_name, &event_info),
         event_names_match_arms =
@@ -666,13 +661,13 @@ fn generate_event_bindings_code(
 #[derive(thiserror::Error, Debug)]
 pub enum GenerateEventBindingsError {
     #[error("{0}")]
-    ReadAbi(ReadAbiError),
+    ReadAbi(#[from] ReadAbiError),
 
     #[error("{0}")]
-    GenerateEventBindingCode(GenerateEventBindingCodeError),
+    GenerateEventBindingCode(#[from] GenerateEventBindingCodeError),
 
     #[error("{0}")]
-    ParamType(ParamTypeError),
+    ParamType(#[from] ParamTypeError),
 }
 
 pub fn generate_event_bindings(
@@ -682,10 +677,8 @@ pub fn generate_event_bindings(
     is_filter: bool,
     storage: &Storage,
 ) -> Result<Code, GenerateEventBindingsError> {
-    let abi_items = ABIItem::get_abi_items(project_path, contract, is_filter)
-        .map_err(GenerateEventBindingsError::ReadAbi)?;
-    let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)
-        .map_err(GenerateEventBindingsError::ParamType)?;
+    let abi_items = ABIItem::get_abi_items(project_path, contract, is_filter)?;
+    let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
 
     generate_event_bindings_code(project_path, indexer_name, contract, storage, event_names)
         .map_err(GenerateEventBindingsError::GenerateEventBindingCode)
@@ -694,10 +687,10 @@ pub fn generate_event_bindings(
 #[derive(thiserror::Error, Debug)]
 pub enum GenerateEventHandlersError {
     #[error("{0}")]
-    ReadAbiError(ReadAbiError),
+    ReadAbiError(#[from] ReadAbiError),
 
     #[error("{0}")]
-    ParamTypeError(ParamTypeError),
+    ParamTypeError(#[from] ParamTypeError),
 }
 
 pub fn generate_event_handlers(
@@ -707,10 +700,8 @@ pub fn generate_event_handlers(
     contract: &Contract,
     storage: &Storage,
 ) -> Result<Code, GenerateEventHandlersError> {
-    let abi_items = ABIItem::get_abi_items(project_path, contract, is_filter)
-        .map_err(GenerateEventHandlersError::ReadAbiError)?;
-    let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)
-        .map_err(GenerateEventHandlersError::ParamTypeError)?;
+    let abi_items = ABIItem::get_abi_items(project_path, contract, is_filter)?;
+    let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
 
     let mut imports = String::new();
     imports.push_str(
