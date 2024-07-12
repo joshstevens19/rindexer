@@ -59,7 +59,7 @@ if (!disableAdvancedFilters) {
 
 const options = {
     watchPg: true,
-    host: "localhost",
+    host: "0.0.0.0",
     disableDefaultMutations: true,
     dynamicJson: true,
     cors: true,
