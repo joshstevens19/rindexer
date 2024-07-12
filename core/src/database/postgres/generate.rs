@@ -11,8 +11,8 @@ use crate::{
 
 fn generate_columns(inputs: &[ABIInput], property_type: &GenerateAbiPropertiesType) -> Vec<String> {
     ABIInput::generate_abi_name_properties(inputs, property_type, None)
-        .iter()
-        .map(|m| m.value.clone())
+        .into_iter()
+        .map(|m| m.value)
         .collect()
 }
 

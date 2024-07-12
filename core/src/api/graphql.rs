@@ -39,7 +39,7 @@ fn get_graphql_exe() -> Result<PathBuf, ()> {
 
     // Assume `resources` directory is in the same directory as the executable (installed)
     if let Ok(executable_path) = env::current_exe() {
-        let mut path = executable_path.clone();
+        let mut path = executable_path.to_path_buf();
         path.pop(); // Remove the executable name
         path.push("resources");
         path.push(postgraphile_filename);
