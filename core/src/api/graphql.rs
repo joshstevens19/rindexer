@@ -252,6 +252,18 @@ async fn start_server(
     filter_only_on_indexed_columns: bool,
     disable_advanced_filters: bool,
 ) -> Result<Child, String> {
+    let graphql_execution = format!(
+        "{} {} {} {} 1000 10000 {} {}",
+        rindexer_graphql_exe.display(),
+        connection_string,
+        schemas,
+        port,
+        filter_only_on_indexed_columns,
+        disable_advanced_filters
+    );
+
+    println!("{}", graphql_execution);
+    
     Command::new(rindexer_graphql_exe)
         .arg(connection_string)
         .arg(schemas)
