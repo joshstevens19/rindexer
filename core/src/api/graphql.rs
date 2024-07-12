@@ -1,19 +1,27 @@
-use crate::database::postgres::client::connection_string;
-use crate::database::postgres::generate::generate_indexer_contract_schema_name;
-use crate::helpers::{kill_process_on_port, set_thread_no_logging};
-use crate::indexer::Indexer;
-use crate::manifest::graphql::GraphQLSettings;
+use std::{
+    env,
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
+};
+
 use reqwest::{Client, Error};
 use serde_json::{json, Value};
-use std::env;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use tokio::sync::oneshot;
-use tokio::sync::oneshot::Sender;
+use tokio::sync::{oneshot, oneshot::Sender};
 use tracing::{error, info};
+
+use crate::{
+    database::postgres::{
+        client::connection_string, generate::generate_indexer_contract_schema_name,
+    },
+    helpers::{kill_process_on_port, set_thread_no_logging},
+    indexer::Indexer,
+    manifest::graphql::GraphQLSettings,
+};
 
 pub struct GraphqlOverrideSettings {
     pub enabled: bool,
@@ -63,10 +71,8 @@ fn get_graphql_exe() -> Result<PathBuf, ()> {
     }
 
     // If none of the paths exist, return the first one with useful error message
-    let extra_looking = paths
-        .into_iter()
-        .next()
-        .expect("Failed to determine rindexer graphql path");
+    let extra_looking =
+        paths.into_iter().next().expect("Failed to determine rindexer graphql path");
 
     if !extra_looking.exists() {
         return Err(());
@@ -286,12 +292,7 @@ async fn perform_health_check(
     });
     let mut health_check_attempts = 0;
     while health_check_attempts < 40 {
-        match client
-            .post(graphql_endpoint)
-            .json(&health_check_query)
-            .send()
-            .await
-        {
+        match client.post(graphql_endpoint).json(&health_check_query).send().await {
             Ok(response) if response.status().is_success() => {
                 let response_json: Result<Value, Error> = response.json().await;
                 match response_json {

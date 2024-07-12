@@ -77,7 +77,8 @@ pub enum Commands {
     /// Generates rust code based on rindexer.yaml or graphql queries
     ///
     /// Example:
-    /// `rindexer codegen typings` or `rindexer codegen handlers` or `rindexer codegen graphql --endpoint=graphql_api` or `rindexer codegen rust-all`
+    /// `rindexer codegen typings` or `rindexer codegen handlers` or `rindexer codegen graphql
+    /// --endpoint=graphql_api` or `rindexer codegen rust-all`
     #[clap(name = "codegen")]
     Codegen {
         #[clap(subcommand)]
@@ -154,7 +155,8 @@ pub enum StartSubcommands {
 
 #[derive(Subcommand, Debug)]
 pub enum AddSubcommands {
-    /// Add a contract from a network to the rindexer.yaml file. It will download the ABI and add it to the abis folder and map it in the yaml file.
+    /// Add a contract from a network to the rindexer.yaml file. It will download the ABI and add
+    /// it to the abis folder and map it in the yaml file.
     ///
     /// Example:
     /// `rindexer add contract`

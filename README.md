@@ -102,6 +102,10 @@ as this is a workspace.
 
 To build for prod you can run `make prod_build` this will build everything for you and optimise it for production.
 
+## Formatting
+
+you can run `cargo fmt` to format the code, rules have been mapped in the `rustfmt.toml` file.
+
 ## Contributing
 
 Anyone is welcome to contribute to rindexer, feel free to look over the issues or open a new one if you have

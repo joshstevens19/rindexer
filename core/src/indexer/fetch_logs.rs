@@ -1,16 +1,20 @@
-use crate::event::RindexerEventFilter;
-use crate::indexer::log_helpers::is_relevant_block;
-use crate::indexer::IndexingEventProgressStatus;
-use crate::provider::JsonRpcCachedProvider;
-use ethers::addressbook::Address;
-use ethers::middleware::MiddlewareError;
-use ethers::prelude::{BlockNumber, JsonRpcError, Log, ValueOrArray, H256, U64};
+use std::{str::FromStr, sync::Arc};
+
+use ethers::{
+    addressbook::Address,
+    middleware::MiddlewareError,
+    prelude::{BlockNumber, JsonRpcError, Log, ValueOrArray, H256, U64},
+};
 use regex::Regex;
-use std::str::FromStr;
-use std::sync::Arc;
 use tokio::sync::{mpsc, Semaphore};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, error, info};
+
+use crate::{
+    event::RindexerEventFilter,
+    indexer::{log_helpers::is_relevant_block, IndexingEventProgressStatus},
+    provider::JsonRpcCachedProvider,
+};
 
 pub struct LiveIndexingDetails {
     pub indexing_distance_from_head: U64,
@@ -188,14 +192,7 @@ async fn fetch_historic_logs_stream(
             // clone here over the full logs way less overhead
             let last_log = logs.last().cloned();
 
-            if tx
-                .send(Ok(FetchLogsResult {
-                    logs,
-                    from_block,
-                    to_block,
-                }))
-                .is_err()
-            {
+            if tx.send(Ok(FetchLogsResult { logs, from_block, to_block })).is_err() {
                 error!(
                     "{} - {} - Failed to send logs to stream consumer!",
                     IndexingEventProgressStatus::Syncing.log(),
@@ -235,8 +232,8 @@ async fn fetch_historic_logs_stream(
             if let Some(last_log) = last_log {
                 let next_from_block = last_log
                     .block_number
-                    .expect("block number should always be present in a log")
-                    + U64::from(1);
+                    .expect("block number should always be present in a log") +
+                    U64::from(1);
                 debug!(
                     "{} - {} - next_block {:?}",
                     info_log_name,
@@ -358,8 +355,8 @@ async fn live_indexing_stream(
 
                         let to_block = safe_block_number;
 
-                        if from_block == to_block
-                            && !is_relevant_block(contract_address, topic_id, &latest_block)
+                        if from_block == to_block &&
+                            !is_relevant_block(contract_address, topic_id, &latest_block)
                         {
                             debug!(
                                 "{} - {} - Skipping block {} as it's not relevant",
@@ -419,11 +416,7 @@ async fn live_indexing_stream(
                                     let last_log = logs.last().cloned();
 
                                     if tx
-                                        .send(Ok(FetchLogsResult {
-                                            logs,
-                                            from_block,
-                                            to_block,
-                                        }))
+                                        .send(Ok(FetchLogsResult { logs, from_block, to_block }))
                                         .is_err()
                                     {
                                         error!(
@@ -520,22 +513,14 @@ fn retry_with_block_range(
     if let Ok(re) =
         compile_regex(r"this block range should work: \[(0x[0-9a-fA-F]+),\s*(0x[0-9a-fA-F]+)]")
     {
-        if let Some(captures) = re
-            .captures(error_message)
-            .or_else(|| re.captures(error_data))
-        {
+        if let Some(captures) = re.captures(error_message).or_else(|| re.captures(error_data)) {
             if let (Some(start_block), Some(end_block)) = (captures.get(1), captures.get(2)) {
                 let start_block_str = start_block.as_str();
                 let end_block_str = end_block.as_str();
-                if let (Ok(from), Ok(to)) = (
-                    BlockNumber::from_str(start_block_str),
-                    BlockNumber::from_str(end_block_str),
-                ) {
-                    return Some(RetryWithBlockRangeResult {
-                        from,
-                        to,
-                        max_block_range: None,
-                    });
+                if let (Ok(from), Ok(to)) =
+                    (BlockNumber::from_str(start_block_str), BlockNumber::from_str(end_block_str))
+                {
+                    return Some(RetryWithBlockRangeResult { from, to, max_block_range: None });
                 }
             }
         }
@@ -552,15 +537,10 @@ fn retry_with_block_range(
             if let (Some(start_block), Some(end_block)) = (captures.get(1), captures.get(2)) {
                 let start_block_str = format!("0x{}", start_block.as_str());
                 let end_block_str = format!("0x{}", end_block.as_str());
-                if let (Ok(from), Ok(to)) = (
-                    BlockNumber::from_str(&start_block_str),
-                    BlockNumber::from_str(&end_block_str),
-                ) {
-                    return Some(RetryWithBlockRangeResult {
-                        from,
-                        to,
-                        max_block_range: None,
-                    });
+                if let (Ok(from), Ok(to)) =
+                    (BlockNumber::from_str(&start_block_str), BlockNumber::from_str(&end_block_str))
+                {
+                    return Some(RetryWithBlockRangeResult { from, to, max_block_range: None });
                 }
             }
         }
@@ -577,10 +557,7 @@ fn retry_with_block_range(
 
     // QuickNode, 1RPC, zkEVM, Blast, BlockPI
     if let Ok(re) = compile_regex(r"limited to a ([\d,.]+)") {
-        if let Some(captures) = re
-            .captures(error_message)
-            .or_else(|| re.captures(error_data))
-        {
+        if let Some(captures) = re.captures(error_message).or_else(|| re.captures(error_data)) {
             if let Some(range_str_match) = captures.get(1) {
                 let range_str = range_str_match.as_str().replace(&['.', ','][..], "");
                 if let Ok(range) = U64::from_dec_str(&range_str) {

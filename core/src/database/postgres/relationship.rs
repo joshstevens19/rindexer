@@ -1,14 +1,15 @@
-use crate::abi::{
-    get_abi_item_with_db_map, ABIInput, ABIItem, GetAbiItemWithDbMapError, ReadAbiError,
-};
-use crate::database::postgres::client::{PostgresClient, PostgresConnectionError, PostgresError};
-use crate::helpers::camel_to_snake;
-use crate::manifest::contract::Contract;
-use crate::manifest::storage::ForeignKeys;
-use crate::types::code::Code;
-use serde::{Deserialize, Serialize};
 use std::path::Path;
+
+use serde::{Deserialize, Serialize};
 use tracing::info;
+
+use crate::{
+    abi::{get_abi_item_with_db_map, ABIInput, ABIItem, GetAbiItemWithDbMapError, ReadAbiError},
+    database::postgres::client::{PostgresClient, PostgresConnectionError, PostgresError},
+    helpers::camel_to_snake,
+    manifest::{contract::Contract, storage::ForeignKeys},
+    types::code::Code,
+};
 
 #[derive(thiserror::Error, Debug)]
 pub enum CreateRelationshipError {
@@ -113,12 +114,8 @@ impl Relationship {
     fn foreign_key_construct_name(&self) -> String {
         format!(
             "fk_{linked_db_table_name}_{linked_db_table_column}",
-            linked_db_table_name = self
-                .linked_to
-                .db_table_name
-                .split('.')
-                .last()
-                .unwrap_or_else(|| panic!(
+            linked_db_table_name =
+                self.linked_to.db_table_name.split('.').last().unwrap_or_else(|| panic!(
                     "Failed to split and then get schema for table: {}",
                     self.linked_to.db_table_column
                 )),
@@ -165,12 +162,8 @@ impl Relationship {
     fn unique_construct_name(&self) -> String {
         format!(
             "unique_{linked_db_table_name}_{linked_db_table_column}",
-            linked_db_table_name = self
-                .linked_to
-                .db_table_name
-                .split('.')
-                .last()
-                .unwrap_or_else(|| panic!(
+            linked_db_table_name =
+                self.linked_to.db_table_name.split('.').last().unwrap_or_else(|| panic!(
                     "Failed to split and then get schema for table: {}",
                     self.linked_to.db_table_column
                 )),
@@ -196,13 +189,10 @@ impl Relationship {
             // CONCURRENTLY is used to avoid locking the table for writes
             "DROP INDEX CONCURRENTLY IF EXISTS {}.{};",
             // get schema else drop won't work
-            self.db_table_name
-                .split('.')
-                .next()
-                .unwrap_or_else(|| panic!(
-                    "Failed to split and then get schema for table: {}",
-                    self.db_table_column
-                )),
+            self.db_table_name.split('.').next().unwrap_or_else(|| panic!(
+                "Failed to split and then get schema for table: {}",
+                self.db_table_column
+            )),
             self.index_name(),
         ))
     }
@@ -248,32 +238,24 @@ impl Relationship {
     pub fn index_name(&self) -> String {
         format!(
             "idx_{db_table_name}_{db_table_column}",
-            db_table_name = self
-                .db_table_name
-                .split('.')
-                .last()
-                .unwrap_or_else(|| panic!(
-                    "Failed to split and then get schema for table: {}",
-                    self.db_table_column
-                )),
+            db_table_name = self.db_table_name.split('.').last().unwrap_or_else(|| panic!(
+                "Failed to split and then get schema for table: {}",
+                self.db_table_column
+            )),
             db_table_column = self.db_table_column,
         )
     }
 
     pub async fn apply(&self, client: &PostgresClient) -> Result<(), PostgresError> {
         // apply on its own as it's in a DO block
-        client
-            .execute(self.apply_unique_construct_sql().as_str(), &[])
-            .await?;
+        client.execute(self.apply_unique_construct_sql().as_str(), &[]).await?;
         info!(
             "Applied unique constraint key for relationship after historic resync complete: table - {} constraint - {}",
             self.linked_to.db_table_name,
             self.unique_construct_name()
         );
 
-        client
-            .execute(self.apply_foreign_key_construct_sql().as_str(), &[])
-            .await?;
+        client.execute(self.apply_foreign_key_construct_sql().as_str(), &[]).await?;
 
         info!(
             "Applied foreign key for relationship after historic resync complete: table - {} constraint - {}",
@@ -282,9 +264,7 @@ impl Relationship {
         );
 
         // CONCURRENTLY is used to avoid locking the table for writes
-        client
-            .execute(&self.apply_index_sql().to_string(), &[])
-            .await?;
+        client.execute(&self.apply_index_sql().to_string(), &[]).await?;
 
         info!(
             "Applied index for relationship after historic resync complete: table - {} index - {}",
@@ -338,10 +318,7 @@ async fn get_last_known_relationships_dropping_sql(
     if let Some(row) = row_opt {
         let value: &str = row.get(0);
         let foreign_keys: Vec<String> = serde_json::from_str(value)?;
-        Ok(foreign_keys
-            .iter()
-            .map(|foreign_key| Code::new(foreign_key.to_string()))
-            .collect())
+        Ok(foreign_keys.iter().map(|foreign_key| Code::new(foreign_key.to_string())).collect())
     } else {
         Ok(Vec::new())
     }
@@ -385,9 +362,7 @@ pub async fn create_relationships(
     let mut relationships = vec![];
     let mut dropping_sql: Vec<Code> = vec![];
     for foreign_key in foreign_keys {
-        let contract = contracts
-            .iter()
-            .find(|c| c.name == foreign_key.contract_name);
+        let contract = contracts.iter().find(|c| c.name == foreign_key.contract_name);
 
         match contract {
             None => {
@@ -400,10 +375,8 @@ pub async fn create_relationships(
                 let abi_items = ABIItem::read_abi_items(project_path, contract)?;
 
                 for linked_key in &foreign_key.foreign_keys {
-                    let parameter_mapping = foreign_key
-                        .event_input_name
-                        .split('.')
-                        .collect::<Vec<&str>>();
+                    let parameter_mapping =
+                        foreign_key.event_input_name.split('.').collect::<Vec<&str>>();
                     let abi_parameter = get_abi_item_with_db_map(
                         &abi_items,
                         &foreign_key.event_name,
@@ -422,10 +395,8 @@ pub async fn create_relationships(
 
                     let linked_abi_items =
                         ABIItem::read_abi_items(project_path, linked_key_contract)?;
-                    let linked_parameter_mapping = linked_key
-                        .event_input_name
-                        .split('.')
-                        .collect::<Vec<&str>>();
+                    let linked_parameter_mapping =
+                        linked_key.event_input_name.split('.').collect::<Vec<&str>>();
                     let linked_abi_parameter = get_abi_item_with_db_map(
                         &linked_abi_items,
                         &linked_key.event_name,
@@ -478,10 +449,7 @@ pub async fn create_relationships(
     }
 
     let relationships_dropping_sql_json = serde_json::to_string(
-        &dropping_sql
-            .iter()
-            .map(|code| code.as_str())
-            .collect::<Vec<&str>>(),
+        &dropping_sql.iter().map(|code| code.as_str()).collect::<Vec<&str>>(),
     )?;
 
     // save relationships in postgres

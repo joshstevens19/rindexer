@@ -1,5 +1,7 @@
-use std::cell::RefCell;
-use std::io::{self, Write};
+use std::{
+    cell::RefCell,
+    io::{self, Write},
+};
 
 pub struct NullWriter;
 
@@ -30,8 +32,9 @@ pub fn set_thread_no_logging() {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::Write;
+
+    use super::*;
 
     #[test]
     fn test_null_writer_write() {

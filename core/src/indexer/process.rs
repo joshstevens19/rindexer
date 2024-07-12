@@ -1,26 +1,34 @@
-use crate::event::callback_registry::{EventCallbackRegistry, EventResult};
-use crate::event::config::EventProcessingConfig;
-use crate::event::contract_setup::NetworkContract;
-use crate::event::{BuildRindexerFilterError, RindexerEventFilter};
-use crate::indexer::dependency::{
-    ContractEventsDependenciesConfig, EventDependencies, EventsDependencyTree,
-};
-use crate::indexer::fetch_logs::{fetch_logs_stream, FetchLogsResult, LiveIndexingDetails};
-use crate::indexer::last_synced::update_progress_and_last_synced;
-use crate::indexer::log_helpers::is_relevant_block;
-use crate::indexer::progress::{IndexingEventProgressStatus, IndexingEventsProgressState};
-use crate::manifest::storage::CsvDetails;
-use crate::PostgresClient;
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
+
 use async_std::prelude::StreamExt;
-use ethers::prelude::ProviderError;
-use ethers::types::{H256, U64};
+use ethers::{
+    prelude::ProviderError,
+    types::{H256, U64},
+};
 use futures::future::join_all;
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::{Mutex, Semaphore};
-use tokio::task::{JoinError, JoinHandle};
+use tokio::{
+    sync::{Mutex, Semaphore},
+    task::{JoinError, JoinHandle},
+};
 use tracing::{debug, error, info};
+
+use crate::{
+    event::{
+        callback_registry::{EventCallbackRegistry, EventResult},
+        config::EventProcessingConfig,
+        contract_setup::NetworkContract,
+        BuildRindexerFilterError, RindexerEventFilter,
+    },
+    indexer::{
+        dependency::{ContractEventsDependenciesConfig, EventDependencies, EventsDependencyTree},
+        fetch_logs::{fetch_logs_stream, FetchLogsResult, LiveIndexingDetails},
+        last_synced::update_progress_and_last_synced,
+        log_helpers::is_relevant_block,
+        progress::{IndexingEventProgressStatus, IndexingEventsProgressState},
+    },
+    manifest::storage::CsvDetails,
+    PostgresClient,
+};
 
 #[derive(thiserror::Error, Debug)]
 pub enum ProcessContractEventsWithDependenciesError {
@@ -55,9 +63,7 @@ pub async fn process_contract_events_with_dependencies(
                 ProcessContractEventsWithDependenciesError::ProcessEventsWithDependenciesError,
             )?,
             Err(join_error) => {
-                return Err(ProcessContractEventsWithDependenciesError::JoinError(
-                    join_error,
-                ))
+                return Err(ProcessContractEventsWithDependenciesError::JoinError(join_error))
             }
         }
     }
@@ -116,17 +122,15 @@ async fn process_events_dependency_tree(
                 let event_processing_config = event_processing_config
                     .iter()
                     .find(|e| {
-                        e.contract_name == dependency.contract_name
-                            && e.event_name == dependency.event_name
+                        e.contract_name == dependency.contract_name &&
+                            e.event_name == dependency.event_name
                     })
                     .ok_or(ProcessEventsWithDependenciesError::EventConfigNotFound)?;
 
                 let filter = RindexerEventFilter::new(
                     &event_processing_config.topic_id,
                     &event_processing_config.event_name,
-                    &event_processing_config
-                        .network_contract
-                        .indexing_contract_setup,
+                    &event_processing_config.network_contract.indexing_contract_setup,
                     event_processing_config.start_block,
                     event_processing_config.end_block,
                 )?;
@@ -145,7 +149,8 @@ async fn process_events_dependency_tree(
                     database: event_processing_config.database.clone(),
                     csv_details: event_processing_config.csv_details.clone(),
                     execute_events_logs_in_order: event_processing_config.index_event_in_order,
-                    // sync the historic ones first and live indexing is added to the stack to process after
+                    // sync the historic ones first and live indexing is added to the stack to
+                    // process after
                     live_indexing: false,
                     indexing_distance_from_head: event_processing_config
                         .indexing_distance_from_head,
@@ -156,18 +161,10 @@ async fn process_events_dependency_tree(
 
                 if event_processing_config.live_indexing {
                     let topic_id =
-                        event_processing_config
-                            .topic_id
-                            .parse::<H256>()
-                            .map_err(|e| {
-                                ProcessEventsWithDependenciesError::CouldNotParseTopicId(
-                                    e.to_string(),
-                                )
-                            })?;
-                    live_indexing_events
-                        .lock()
-                        .await
-                        .push((logs_params.clone(), topic_id));
+                        event_processing_config.topic_id.parse::<H256>().map_err(|e| {
+                            ProcessEventsWithDependenciesError::CouldNotParseTopicId(e.to_string())
+                        })?;
+                    live_indexing_events.lock().await.push((logs_params.clone(), topic_id));
                 }
 
                 Ok::<(), ProcessEventsWithDependenciesError>(())
@@ -200,16 +197,11 @@ async fn process_events_dependency_tree(
         let last_seen_block_number = filter.get_to_block();
         let next_block_number = last_seen_block_number + 1;
 
-        filter = filter
-            .set_from_block(next_block_number)
-            .set_to_block(next_block_number);
+        filter = filter.set_from_block(next_block_number).set_to_block(next_block_number);
 
         ordering_live_indexing_details_map.insert(
             *topic,
-            Arc::new(Mutex::new(OrderedLiveIndexingDetails {
-                filter,
-                last_seen_block_number,
-            })),
+            Arc::new(Mutex::new(OrderedLiveIndexingDetails { filter, last_seen_block_number })),
         );
     }
 
@@ -228,19 +220,16 @@ async fn process_events_dependency_tree(
                 .await
                 .clone();
 
-            let latest_block = logs_params
-                .network_contract
-                .cached_provider
-                .get_latest_block()
-                .await;
+            let latest_block =
+                logs_params.network_contract.cached_provider.get_latest_block().await;
 
             match latest_block {
                 Ok(latest_block) => {
                     if let Some(latest_block) = latest_block {
                         if let Some(latest_block_number) = latest_block.number {
                             let reorg_safe_distance = logs_params.indexing_distance_from_head;
-                            if ordering_live_indexing_details.last_seen_block_number
-                                == latest_block_number
+                            if ordering_live_indexing_details.last_seen_block_number ==
+                                latest_block_number
                             {
                                 debug!(
                                     "{} - {} - No new blocks to process...",
@@ -274,8 +263,8 @@ async fn process_events_dependency_tree(
 
                             let to_block = safe_block_number;
 
-                            if from_block == to_block
-                                && !is_relevant_block(
+                            if from_block == to_block &&
+                                !is_relevant_block(
                                     &ordering_live_indexing_details.filter.raw_filter().address,
                                     parsed_topic_id,
                                     &latest_block,
@@ -394,8 +383,8 @@ async fn process_events_dependency_tree(
                                                             ordering_live_indexing_details
                                                                 .filter
                                                                 .set_from_block(
-                                                                    last_log_block_number
-                                                                        + U64::from(1),
+                                                                    last_log_block_number +
+                                                                        U64::from(1),
                                                                 );
                                                     } else {
                                                         error!("Failed to get last log block number the provider returned null (should never happen) - try again in 200ms");
@@ -464,17 +453,12 @@ pub enum ProcessEventError {
 pub async fn process_event(
     event_processing_config: EventProcessingConfig,
 ) -> Result<(), ProcessEventError> {
-    debug!(
-        "{} - Processing events",
-        event_processing_config.info_log_name
-    );
+    debug!("{} - Processing events", event_processing_config.info_log_name);
 
     let filter = RindexerEventFilter::new(
         &event_processing_config.topic_id,
         &event_processing_config.event_name,
-        &event_processing_config
-            .network_contract
-            .indexing_contract_setup,
+        &event_processing_config.network_contract.indexing_contract_setup,
         event_processing_config.start_block,
         event_processing_config.end_block,
     )?;
@@ -587,11 +571,7 @@ async fn handle_logs_result(
                 .map(|log| EventResult::new(Arc::clone(&network_contract), log))
                 .collect::<Vec<_>>();
 
-            debug!(
-                "Processing logs {} - length {}",
-                event_name,
-                result.logs.len()
-            );
+            debug!("Processing logs {} - length {}", event_name, result.logs.len());
 
             if !fn_data.is_empty() {
                 if execute_events_logs_in_order {

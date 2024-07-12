@@ -1,15 +1,17 @@
-use crate::database::postgres::generate::solidity_type_to_db_type;
-use crate::database::postgres::sql_type_wrapper::{
-    solidity_type_to_ethereum_sql_type_wrapper, EthereumSqlTypeWrapper,
-};
-use crate::event::contract_setup::IndexingContractSetup;
-use crate::helpers::{camel_to_snake, get_full_path};
-use crate::manifest::contract::Contract;
+use std::{fs, iter::Map, path::Path};
+
 use ethers::utils::keccak256;
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::iter::Map;
-use std::path::Path;
+
+use crate::{
+    database::postgres::{
+        generate::solidity_type_to_db_type,
+        sql_type_wrapper::{solidity_type_to_ethereum_sql_type_wrapper, EthereumSqlTypeWrapper},
+    },
+    event::contract_setup::IndexingContractSetup,
+    helpers::{camel_to_snake, get_full_path},
+    manifest::contract::Contract,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ABIInput {
@@ -58,10 +60,8 @@ impl ABIInput {
     pub fn format_param_type(&self) -> Result<String, ParamTypeError> {
         match self.type_.as_str() {
             "tuple" => {
-                let components = self
-                    .components
-                    .as_ref()
-                    .ok_or(ParamTypeError::MissingComponents)?;
+                let components =
+                    self.components.as_ref().ok_or(ParamTypeError::MissingComponents)?;
                 let formatted_components = components
                     .iter()
                     .map(|component| component.format_param_type())
@@ -103,8 +103,8 @@ impl ABIInput {
                                 &input.type_,
                             )]
                         }
-                        GenerateAbiPropertiesType::PostgresColumnsNamesOnly
-                        | GenerateAbiPropertiesType::CsvHeaderNames => {
+                        GenerateAbiPropertiesType::PostgresColumnsNamesOnly |
+                        GenerateAbiPropertiesType::CsvHeaderNames => {
                             let value = format!(
                                 "{}{}",
                                 prefix.map_or_else(|| "".to_string(), |p| format!("{}_", p)),
@@ -248,22 +248,12 @@ impl EventInfo {
     pub fn new(item: ABIItem, signature: String) -> Self {
         let struct_result = format!("{}Result", item.name);
         let struct_data = format!("{}Data", item.name);
-        EventInfo {
-            name: item.name,
-            inputs: item.inputs,
-            signature,
-            struct_result,
-            struct_data,
-        }
+        EventInfo { name: item.name, inputs: item.inputs, signature, struct_result, struct_data }
     }
 
     pub fn topic_id(&self) -> String {
         let event_signature = format!("{}({})", self.name, self.signature);
-        Map::collect(
-            keccak256(event_signature)
-                .iter()
-                .map(|byte| format!("{:02x}", byte)),
-        )
+        Map::collect(keccak256(event_signature).iter().map(|byte| format!("{:02x}", byte)))
     }
 
     pub fn struct_result(&self) -> &str {
@@ -334,9 +324,7 @@ pub fn get_abi_item_with_db_map(
     event_name: &str,
     parameter_mapping: &[&str],
 ) -> Result<GetAbiItemWithDbMap, GetAbiItemWithDbMapError> {
-    let event_item = abi_items
-        .iter()
-        .find(|item| item.name == event_name && item.type_ == "event");
+    let event_item = abi_items.iter().find(|item| item.name == event_name && item.type_ == "event");
 
     match event_item {
         Some(item) => {
@@ -351,8 +339,8 @@ pub fn get_abi_item_with_db_map(
                         }
                         db_column_name.push_str(&camel_to_snake(&input.name));
 
-                        if param
-                            == parameter_mapping
+                        if param ==
+                            parameter_mapping
                                 .last()
                                 .expect("Parameter mapping should have at least one element")
                         {

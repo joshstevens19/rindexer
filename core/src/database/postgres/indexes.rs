@@ -1,13 +1,15 @@
-use crate::abi::{get_abi_item_with_db_map, ABIItem, GetAbiItemWithDbMapError, ReadAbiError};
-use crate::database::postgres::client::{PostgresClient, PostgresConnectionError, PostgresError};
-use crate::helpers::camel_to_snake;
-use crate::manifest::contract::Contract;
-use crate::manifest::storage::PostgresIndexes;
-use crate::types::code::Code;
+use std::{path::Path, sync::Arc};
+
 use futures::future::join_all;
-use std::path::Path;
-use std::sync::Arc;
 use tracing::info;
+
+use crate::{
+    abi::{get_abi_item_with_db_map, ABIItem, GetAbiItemWithDbMapError, ReadAbiError},
+    database::postgres::client::{PostgresClient, PostgresConnectionError, PostgresError},
+    helpers::camel_to_snake,
+    manifest::{contract::Contract, storage::PostgresIndexes},
+    types::code::Code,
+};
 
 #[derive(Debug, Clone)]
 pub struct PostgresIndexResult {
@@ -55,13 +57,10 @@ impl PostgresIndexResult {
             // CONCURRENTLY is used to avoid locking the table for writes
             "DROP INDEX CONCURRENTLY IF EXISTS {}.{};",
             // get schema else drop won't work
-            self.db_table_name
-                .split('.')
-                .next()
-                .unwrap_or_else(|| panic!(
-                    "Failed to split and then get schema for table: {}",
-                    self.db_table_name
-                )),
+            self.db_table_name.split('.').next().unwrap_or_else(|| panic!(
+                "Failed to split and then get schema for table: {}",
+                self.db_table_name
+            )),
             self.index_name(),
         ))
     }
@@ -69,14 +68,10 @@ impl PostgresIndexResult {
     pub fn index_name(&self) -> String {
         format!(
             "idx_{db_table_name}_{db_table_columns}",
-            db_table_name = self
-                .db_table_name
-                .split('.')
-                .last()
-                .unwrap_or_else(|| panic!(
-                    "Failed to split and then get schema for table: {}",
-                    self.db_table_name
-                )),
+            db_table_name = self.db_table_name.split('.').last().unwrap_or_else(|| panic!(
+                "Failed to split and then get schema for table: {}",
+                self.db_table_name
+            )),
             db_table_columns = self.db_table_columns.join("_"),
         )
     }
@@ -128,10 +123,7 @@ async fn get_last_known_indexes_dropping_sql(
     if let Some(row) = row_opt {
         let value: &str = row.get(0);
         let foreign_keys: Vec<String> = serde_json::from_str(value)?;
-        Ok(foreign_keys
-            .iter()
-            .map(|foreign_key| Code::new(foreign_key.to_string()))
-            .collect())
+        Ok(foreign_keys.iter().map(|foreign_key| Code::new(foreign_key.to_string())).collect())
     } else {
         Ok(Vec::new())
     }
@@ -238,9 +230,7 @@ pub async fn prepare_indexes(
     // then contracts
     if let Some(contract_events_indexes) = &postgres_indexes.contracts {
         for contract_event_indexes in contract_events_indexes.iter() {
-            let contract = contracts
-                .iter()
-                .find(|c| c.name == contract_event_indexes.name);
+            let contract = contracts.iter().find(|c| c.name == contract_event_indexes.name);
 
             match contract {
                 None => {
@@ -315,10 +305,7 @@ pub async fn prepare_indexes(
     }
 
     let indexes_dropping_sql_json = serde_json::to_string(
-        &dropping_sql
-            .iter()
-            .map(|code| code.as_str())
-            .collect::<Vec<&str>>(),
+        &dropping_sql.iter().map(|code| code.as_str()).collect::<Vec<&str>>(),
     )?;
 
     client

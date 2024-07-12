@@ -1,12 +1,17 @@
-use regex::{Captures, Regex};
-use std::env;
-use std::fs::File;
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::{
+    env,
+    fs::File,
+    io::{Read, Write},
+    path::{Path, PathBuf},
+};
 
-use crate::abi::ABIItem;
-use crate::helpers::replace_env_variable_to_raw_name;
-use crate::manifest::core::{Manifest, ProjectType};
+use regex::{Captures, Regex};
+
+use crate::{
+    abi::ABIItem,
+    helpers::replace_env_variable_to_raw_name,
+    manifest::core::{Manifest, ProjectType},
+};
 
 pub const YAML_CONFIG_NAME: &str = "rindexer.yaml";
 
@@ -70,12 +75,10 @@ fn validate_manifest(
 
             if let Some(address) = &detail.filter {
                 if !events.iter().any(|e| e.name == *address.event_name) {
-                    return Err(
-                        ValidateManifestError::InvalidFilterEventNameDoesntExistInABI(
-                            address.event_name.clone(),
-                            contract.name.clone(),
-                        ),
-                    );
+                    return Err(ValidateManifestError::InvalidFilterEventNameDoesntExistInABI(
+                        address.event_name.clone(),
+                        contract.name.clone(),
+                    ));
                 }
             }
 
@@ -83,25 +86,20 @@ fn validate_manifest(
                 for indexed_filter in indexed_filters.iter() {
                     let event = events.iter().find(|e| e.name == indexed_filter.event_name);
                     if let Some(event) = event {
-                        let indexed_allowed_length = event
-                            .inputs
-                            .iter()
-                            .filter(|i| i.indexed.unwrap_or(false))
-                            .count();
+                        let indexed_allowed_length =
+                            event.inputs.iter().filter(|i| i.indexed.unwrap_or(false)).count();
                         let indexed_filter_defined =
-                            indexed_filter.indexed_1.as_ref().map_or(0, |_| 1)
-                                + indexed_filter.indexed_2.as_ref().map_or(0, |_| 1)
-                                + indexed_filter.indexed_3.as_ref().map_or(0, |_| 1);
+                            indexed_filter.indexed_1.as_ref().map_or(0, |_| 1) +
+                                indexed_filter.indexed_2.as_ref().map_or(0, |_| 1) +
+                                indexed_filter.indexed_3.as_ref().map_or(0, |_| 1);
 
                         if indexed_filter_defined > indexed_allowed_length {
-                            return Err(
-                                ValidateManifestError::IndexedFilterDefinedMoreThanAllowed(
-                                    indexed_filter.event_name.clone(),
-                                    contract.name.clone(),
-                                    indexed_allowed_length,
-                                    indexed_filter_defined,
-                                ),
-                            );
+                            return Err(ValidateManifestError::IndexedFilterDefinedMoreThanAllowed(
+                                indexed_filter.event_name.clone(),
+                                contract.name.clone(),
+                                indexed_allowed_length,
+                                indexed_filter_defined,
+                            ));
                         }
                     } else {
                         return Err(ValidateManifestError::IndexedFilterEventNotFoundInABI(
@@ -132,27 +130,17 @@ fn validate_manifest(
     if let Some(postgres) = &manifest.storage.postgres {
         if let Some(relationships) = &postgres.relationships {
             for relationship in relationships {
-                if !manifest
-                    .contracts
-                    .iter()
-                    .any(|c| c.name == relationship.contract_name)
-                {
+                if !manifest.contracts.iter().any(|c| c.name == relationship.contract_name) {
                     return Err(ValidateManifestError::RelationshipContractNotFound(
                         relationship.contract_name.clone(),
                     ));
                 }
 
                 for foreign_key in &relationship.foreign_keys {
-                    if !manifest
-                        .contracts
-                        .iter()
-                        .any(|c| c.name == foreign_key.contract_name)
-                    {
-                        return Err(
-                            ValidateManifestError::RelationshipForeignKeyContractNotFound(
-                                foreign_key.contract_name.clone(),
-                            ),
-                        );
+                    if !manifest.contracts.iter().any(|c| c.name == foreign_key.contract_name) {
+                        return Err(ValidateManifestError::RelationshipForeignKeyContractNotFound(
+                            foreign_key.contract_name.clone(),
+                        ));
                     }
                 }
 
@@ -239,7 +227,6 @@ pub fn write_manifest(data: &Manifest, file_path: &PathBuf) -> Result<(), WriteM
         serde_yaml::to_string(data).map_err(WriteManifestError::CouldNotTurnManifestToString)?;
 
     let mut file = File::create(file_path).map_err(WriteManifestError::CouldNotCreateFile)?;
-    file.write_all(yaml_string.as_bytes())
-        .map_err(WriteManifestError::CouldNotWriteToFile)?;
+    file.write_all(yaml_string.as_bytes()).map_err(WriteManifestError::CouldNotWriteToFile)?;
     Ok(())
 }

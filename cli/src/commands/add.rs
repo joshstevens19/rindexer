@@ -1,16 +1,24 @@
-use crate::console::{
-    print_error_message, print_success_message, prompt_for_input, prompt_for_input_list,
+use std::{borrow::Cow, fs, path::PathBuf};
+
+use ethers::{
+    addressbook::{Address, Chain},
+    prelude::ValueOrArray,
 };
-use crate::rindexer_yaml::validate_rindexer_yaml_exist;
-use ethers::addressbook::{Address, Chain};
-use ethers::prelude::ValueOrArray;
 use ethers_etherscan::Client;
-use rindexer::manifest::contract::{Contract, ContractDetails};
-use rindexer::manifest::yaml::{read_manifest, write_manifest, YAML_CONFIG_NAME};
-use rindexer::write_file;
-use std::borrow::Cow;
-use std::fs;
-use std::path::PathBuf;
+use rindexer::{
+    manifest::{
+        contract::{Contract, ContractDetails},
+        yaml::{read_manifest, write_manifest, YAML_CONFIG_NAME},
+    },
+    write_file,
+};
+
+use crate::{
+    console::{
+        print_error_message, print_success_message, prompt_for_input, prompt_for_input_list,
+    },
+    rindexer_yaml::validate_rindexer_yaml_exist,
+};
 
 pub async fn handle_add_contract_command(
     project_path: PathBuf,
@@ -31,11 +39,8 @@ pub async fn handle_add_contract_command(
         return Err(err.into());
     }
 
-    let networks: Vec<(&str, u32)> = manifest
-        .networks
-        .iter()
-        .map(|network| (network.name.as_str(), network.chain_id))
-        .collect();
+    let networks: Vec<(&str, u32)> =
+        manifest.networks.iter().map(|network| (network.name.as_str(), network.chain_id)).collect();
 
     if networks.is_empty() {
         print_error_message("No networks found in rindexer.yaml. Please add a network first before downloading ABIs.");
@@ -45,11 +50,7 @@ pub async fn handle_add_contract_command(
     let network_choices: Vec<String> = networks.iter().map(|(name, _)| name.to_string()).collect();
 
     let network = if network_choices.len() > 1 {
-        Cow::Owned(prompt_for_input_list(
-            "Enter Network Name",
-            &network_choices,
-            None,
-        ))
+        Cow::Owned(prompt_for_input_list("Enter Network Name", &network_choices, None))
     } else {
         Cow::Borrowed(&network_choices[0])
     };
@@ -64,12 +65,8 @@ pub async fn handle_add_contract_command(
         print_error_message("Network is not supported by etherscan API.");
         e
     })?;
-    let contract_address = prompt_for_input(
-        &format!("Enter {} Contract Address", network),
-        None,
-        None,
-        None,
-    );
+    let contract_address =
+        prompt_for_input(&format!("Enter {} Contract Address", network), None, None, None);
 
     let client = Client::builder()
         .chain(chain_network)
@@ -108,10 +105,7 @@ pub async fn handle_add_contract_command(
             continue;
         }
 
-        let contract_name = manifest
-            .contracts
-            .iter()
-            .find(|c| c.name == item.contract_name);
+        let contract_name = manifest.contracts.iter().find(|c| c.name == item.contract_name);
         let contract_name = if contract_name.is_some() {
             Cow::Owned(prompt_for_input(
                 &format!("Enter a name for the contract as it is clashing with another registered contract name in the yaml: {}", item.contract_name),

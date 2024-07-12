@@ -1,7 +1,7 @@
+use std::{backtrace::Backtrace, env, panic};
+
 #[cfg(feature = "jemalloc")]
 use jemallocator::Jemalloc;
-use std::backtrace::Backtrace;
-use std::{env, panic};
 
 #[cfg(feature = "jemalloc")]
 #[global_allocator]
@@ -12,18 +12,20 @@ mod commands;
 mod console;
 mod rindexer_yaml;
 
-use crate::cli_interface::{AddSubcommands, Commands, NewSubcommands, CLI};
-use crate::commands::{
-    add::handle_add_contract_command, codegen::handle_codegen_command,
-    delete::handle_delete_command, new::handle_new_command, start::start,
-};
-use crate::console::print_error_message;
+use std::{path::PathBuf, str::FromStr, sync::Once};
+
 use clap::Parser;
 use dotenv::{dotenv, from_path};
 use rindexer::manifest::core::ProjectType;
-use std::path::PathBuf;
-use std::str::FromStr;
-use std::sync::Once;
+
+use crate::{
+    cli_interface::{AddSubcommands, Commands, NewSubcommands, CLI},
+    commands::{
+        add::handle_add_contract_command, codegen::handle_codegen_command,
+        delete::handle_delete_command, new::handle_new_command, start::start,
+    },
+    console::print_error_message,
+};
 
 static INIT: Once = Once::new();
 

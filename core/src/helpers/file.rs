@@ -1,8 +1,4 @@
-use std::fs;
-use std::fs::File;
-use std::io::Write;
-use std::path::Path;
-use std::process::Command;
+use std::{fs, fs::File, io::Write, path::Path, process::Command};
 
 /// Formats all Rust source files in the given folder using `cargo fmt`.
 pub fn format_all_files_for_project<P: AsRef<Path>>(project_path: P) {
@@ -39,8 +35,7 @@ pub fn write_file(path: &Path, contents: &str) -> Result<(), WriteFileError> {
     }
 
     let mut file = File::create(path).map_err(WriteFileError::CouldNotCreateFile)?;
-    file.write_all(contents.as_bytes())
-        .map_err(WriteFileError::CouldNotConvertToBytes)?;
+    file.write_all(contents.as_bytes()).map_err(WriteFileError::CouldNotConvertToBytes)?;
     Ok(())
 }
 
@@ -59,7 +54,8 @@ pub enum CreateModFileError {
     WriteExtraLines(std::io::Error),
 }
 
-/// Creates a `mod.rs` file for a given directory, including submodules for all Rust files and directories.
+/// Creates a `mod.rs` file for a given directory, including submodules for all Rust files and
+/// directories.
 pub fn create_mod_file(
     path: &Path,
     code_generated_comment: bool,

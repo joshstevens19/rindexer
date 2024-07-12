@@ -1,12 +1,13 @@
-use super::super::super::typings::blah_baby::events::erc20_filter::{
-    no_extensions, ERC20FilterEventType, TransferEvent,
-};
+use std::{path::PathBuf, sync::Arc};
+
 use rindexer::{
     event::callback_registry::EventCallbackRegistry, rindexer_error, rindexer_info,
     EthereumSqlTypeWrapper, PgType, RindexerColorize,
 };
-use std::path::PathBuf;
-use std::sync::Arc;
+
+use super::super::super::typings::blah_baby::events::erc20_filter::{
+    no_extensions, ERC20FilterEventType, TransferEvent,
+};
 
 async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegistry) {
     ERC20FilterEventType::Transfer(

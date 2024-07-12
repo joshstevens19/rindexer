@@ -1,10 +1,13 @@
-use crate::database::postgres::relationship::Relationship;
-use crate::event::config::EventProcessingConfig;
-use crate::event::contract_setup::ContractEventMapping;
-use crate::manifest::contract::DependencyEventTree;
-use crate::manifest::core::Manifest;
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
+
+use crate::{
+    database::postgres::relationship::Relationship,
+    event::{config::EventProcessingConfig, contract_setup::ContractEventMapping},
+    manifest::{contract::DependencyEventTree, core::Manifest},
+};
 
 #[derive(Debug, Clone)]
 pub struct EventsDependencyTree {
@@ -14,10 +17,7 @@ pub struct EventsDependencyTree {
 
 impl EventsDependencyTree {
     pub fn new(events: Vec<ContractEventMapping>) -> Self {
-        EventsDependencyTree {
-            contract_events: events,
-            then: Box::new(None),
-        }
+        EventsDependencyTree { contract_events: events, then: Box::new(None) }
     }
 
     pub fn add_then(&mut self, tree: EventsDependencyTree) {
@@ -72,9 +72,7 @@ impl ContractEventDependencies {
             return Err(ContractEventDependenciesMapFromRelationshipsError::CrossContractRelationshipsNotDefinedInDependencyEvents);
         }
 
-        Ok(ContractEventDependencies::map_all_dependencies(
-            relationships,
-        ))
+        Ok(ContractEventDependencies::map_all_dependencies(relationships))
     }
 
     fn map_all_dependencies(relationships: &[Relationship]) -> Vec<ContractEventDependencies> {
@@ -97,20 +95,15 @@ impl ContractEventDependencies {
                     e.tree = Arc::new(ContractEventDependencies::merge_trees(&e.tree, &tree));
                     e.dependency_events.extend(dependency_events.clone());
                 })
-                .or_insert(EventDependencies {
-                    tree: Arc::clone(&tree),
-                    dependency_events,
-                });
+                .or_insert(EventDependencies { tree: Arc::clone(&tree), dependency_events });
         }
 
         result_map
             .into_iter()
-            .map(
-                |(contract_name, event_dependencies)| ContractEventDependencies {
-                    contract_name,
-                    event_dependencies,
-                },
-            )
+            .map(|(contract_name, event_dependencies)| ContractEventDependencies {
+                contract_name,
+                event_dependencies,
+            })
             .collect()
     }
 
@@ -129,22 +122,14 @@ impl ContractEventDependencies {
                 Box::new(None)
             } else {
                 Box::new(Some(Arc::new(ContractEventDependencies::merge_trees(
-                    tree1
-                        .then
-                        .as_ref()
-                        .as_ref()
-                        .unwrap_or(&Arc::new(EventsDependencyTree {
-                            contract_events: vec![],
-                            then: Box::new(None),
-                        })),
-                    tree2
-                        .then
-                        .as_ref()
-                        .as_ref()
-                        .unwrap_or(&Arc::new(EventsDependencyTree {
-                            contract_events: vec![],
-                            then: Box::new(None),
-                        })),
+                    tree1.then.as_ref().as_ref().unwrap_or(&Arc::new(EventsDependencyTree {
+                        contract_events: vec![],
+                        then: Box::new(None),
+                    })),
+                    tree2.then.as_ref().as_ref().unwrap_or(&Arc::new(EventsDependencyTree {
+                        contract_events: vec![],
+                        then: Box::new(None),
+                    })),
                 ))))
             },
         }
@@ -156,10 +141,7 @@ impl ContractEventDependencies {
         visited: &mut HashSet<ContractEventMapping>,
     ) -> Arc<EventsDependencyTree> {
         if visited.contains(event) {
-            return Arc::new(EventsDependencyTree {
-                contract_events: vec![],
-                then: Box::new(None),
-            });
+            return Arc::new(EventsDependencyTree { contract_events: vec![], then: Box::new(None) });
         }
 
         visited.insert(event.clone());
@@ -188,10 +170,7 @@ impl ContractEventDependencies {
             }
         }
 
-        Arc::new(EventsDependencyTree {
-            contract_events,
-            then: Box::new(next_tree),
-        })
+        Arc::new(EventsDependencyTree { contract_events, then: Box::new(next_tree) })
     }
 
     fn generate_relationships_map(
@@ -210,10 +189,7 @@ impl ContractEventDependencies {
                 event_name: relationship.linked_to.event.clone(),
             };
 
-            relationships_map
-                .entry(linked_event)
-                .or_insert_with(Vec::new)
-                .push(event);
+            relationships_map.entry(linked_event).or_insert_with(Vec::new).push(event);
         }
 
         relationships_map
@@ -222,9 +198,7 @@ impl ContractEventDependencies {
     fn collect_dependency_events(tree: &EventsDependencyTree) -> Vec<ContractEventMapping> {
         let mut events = tree.contract_events.clone();
         if let Some(ref then_tree) = *tree.then {
-            events.extend(ContractEventDependencies::collect_dependency_events(
-                then_tree,
-            ));
+            events.extend(ContractEventDependencies::collect_dependency_events(then_tree));
         }
         events
     }
@@ -277,15 +251,12 @@ impl ContractEventDependencies {
         event_name: &str,
         dependencies: &[ContractEventDependencies],
     ) -> DependencyStatus {
-        let has_dependency_in_own_contract = dependencies
-            .iter()
-            .find(|d| d.contract_name == contract_name)
-            .map_or(false, |deps| {
-                deps.event_dependencies
-                    .has_dependency(&ContractEventMapping {
-                        contract_name: deps.contract_name.clone(),
-                        event_name: event_name.to_string(),
-                    })
+        let has_dependency_in_own_contract =
+            dependencies.iter().find(|d| d.contract_name == contract_name).map_or(false, |deps| {
+                deps.event_dependencies.has_dependency(&ContractEventMapping {
+                    contract_name: deps.contract_name.clone(),
+                    event_name: event_name.to_string(),
+                })
             });
 
         let dependencies_in_other_contracts: Vec<String> = dependencies
@@ -306,10 +277,7 @@ impl ContractEventDependencies {
             })
             .collect();
 
-        DependencyStatus {
-            has_dependency_in_own_contract,
-            dependencies_in_other_contracts,
-        }
+        DependencyStatus { has_dependency_in_own_contract, dependencies_in_other_contracts }
     }
 }
 

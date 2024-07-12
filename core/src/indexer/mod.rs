@@ -13,8 +13,9 @@ mod last_synced;
 pub mod no_code;
 mod reorg;
 pub mod start;
-use crate::manifest::contract::Contract;
 pub use dependency::{ContractEventDependencies, EventDependencies, EventsDependencyTree};
+
+use crate::manifest::contract::Contract;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Indexer {

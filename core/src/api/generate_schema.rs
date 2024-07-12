@@ -1,7 +1,9 @@
-use crate::api::generate_operations::{generate_operations, GenerateOperationsError};
+use std::path::Path;
+
 use reqwest::Client;
 use serde_json::Value;
-use std::path::Path;
+
+use crate::api::generate_operations::{generate_operations, GenerateOperationsError};
 
 #[derive(thiserror::Error, Debug)]
 pub enum GenerateGraphqlQueriesError {
@@ -103,6 +105,7 @@ pub async fn generate_graphql_queries(
 mod tests {
     use mockito::mock;
     use tempfile::tempdir;
+
     use super::*;
 
     #[tokio::test]
@@ -110,7 +113,8 @@ mod tests {
         let _mock = mock("POST", "/")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{
+            .with_body(
+                r#"{
                 "data": {
                     "__schema": {
                         "types": [
@@ -141,7 +145,8 @@ mod tests {
                         ]
                     }
                 }
-            }"#)
+            }"#,
+            )
             .create();
 
         let dir = tempdir().unwrap();
@@ -150,7 +155,8 @@ mod tests {
         let result = generate_graphql_queries(&mockito::server_url(), generate_path).await;
         assert!(result.is_ok());
 
-        let all_nodes_query = std::fs::read_to_string(generate_path.join("queries/allNodes.graphql")).unwrap();
+        let all_nodes_query =
+            std::fs::read_to_string(generate_path.join("queries/allNodes.graphql")).unwrap();
         let expected_all_nodes_query = r#"query allNodesQuery(
     $after: Cursor,
     $first: Int = 50,
@@ -177,7 +183,8 @@ mod tests {
 }"#;
         assert_eq!(all_nodes_query, expected_all_nodes_query);
 
-        let node_query = std::fs::read_to_string(generate_path.join("queries/node.graphql")).unwrap();
+        let node_query =
+            std::fs::read_to_string(generate_path.join("queries/node.graphql")).unwrap();
         let expected_node_query = r#"query nodeQuery($nodeId: ID!) {
     node(nodeId: $nodeId) {
         id
