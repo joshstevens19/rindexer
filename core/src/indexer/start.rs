@@ -109,7 +109,13 @@ pub async fn start_indexing(
             };
 
             let last_known_start_block = if network_contract.start_block.is_some() {
-                get_last_synced_block_number(config).await
+                let last_synced_block = get_last_synced_block_number(config).await;
+
+                if let Some(value) = last_synced_block {
+                    info!("{} Found last synced block number - {:?} rindexer will start up from this point", event.info_log_name(), value);
+                }
+
+                last_synced_block
             } else {
                 None
             };

@@ -1,8 +1,4 @@
-use std::{
-    error::Error,
-    str::FromStr,
-    sync::Arc,
-};
+use std::{error::Error, str::FromStr, sync::Arc};
 
 use ethers::{
     addressbook::Address,

@@ -186,7 +186,8 @@ async fn process_contract_events_with_dependencies(
     Ok(())
 }
 
-// TODO - this is a similar to live_indexing_stream but has to be a bit different we should merge code
+// TODO - this is a similar to live_indexing_stream but has to be a bit different we should merge
+// code
 #[allow(clippy::type_complexity)]
 async fn live_indexing_for_contract_event_dependencies<'a>(
     live_indexing_events: &'a MutexGuard<

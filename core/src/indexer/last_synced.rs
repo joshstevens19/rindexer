@@ -95,6 +95,12 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
             )
             .await
             {
+                if let Some(value) = result {
+                    if value.is_zero() {
+                        return None;
+                    }
+                }
+                
                 result
             } else {
                 error!("Error fetching last synced block from CSV");
@@ -115,10 +121,12 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
         match database.query_one(&query, &[&config.network]).await {
             Ok(row) => {
                 let result: Decimal = row.get("last_synced_block");
-                Some(
-                    U64::from_dec_str(&result.to_string())
-                        .expect("Failed to parse last_synced_block"),
-                )
+                let parsed = U64::from_dec_str(&result.to_string()).expect("Failed to parse last_synced_block");
+                if parsed.is_zero() {
+                    None
+                } else {
+                    Some(parsed)
+                }
             }
             Err(e) => {
                 error!("Error fetching last synced block: {:?}", e);
