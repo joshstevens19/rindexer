@@ -21,7 +21,7 @@ impl Code {
     }
 
     pub fn as_string(&self) -> String {
-        self.0.clone()
+        self.0.to_string()
     }
 
     pub fn push_str(&mut self, value: &Code) {
