@@ -11,7 +11,7 @@ These will be generated in a `queries` folder in the root of where the rindexer 
 rindexer codegen graphql
 ```
 
-By default it will point to `http://localhost:5005` graphql endpoint, you can change this by passing the endpoint flag:
+By default it will point to `http://localhost:3001` graphql endpoint, you can change this by passing the endpoint flag:
 
 ```bash
 rindexer codegen graphql --endpoint=YOUR_GRAPHQL_API_URL
@@ -30,7 +30,7 @@ import { CodegenConfig } from '@graphql-codegen/cli'
  
 const config: CodegenConfig = {
   // this is YOUR_GRAPHQL_API_URL // [!code focus]
-  schema: 'http://localhost:5005/graphql', // [!code focus]
+  schema: 'http://localhost:3001/graphql', // [!code focus]
   ...
 }
  
