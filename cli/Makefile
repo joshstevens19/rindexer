@@ -29,6 +29,6 @@ codegen_graphql:
 add_contract:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- add --path /Users/joshstevens/code/rindexer/examples/rindexer_demo_cli contract
 delete:
-	cargo run -- delete --path /Users/joshstevens/code/rindexer/examples/rindexer_demo_cli
+	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- delete --path /Users/joshstevens/code/rindexer/examples/rindexer_demo_cli
 prod_build:
 	RUSTFLAGS='-C target-cpu=native' cargo build --release --features jemalloc
