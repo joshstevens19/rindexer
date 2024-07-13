@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use tracing::info;
+use tracing::{error, info};
 
 use crate::{
     abi::{ABIInput, ABIItem, EventInfo, GenerateAbiPropertiesType, ParamTypeError, ReadAbiError},
@@ -162,13 +162,34 @@ pub fn generate_indexer_contract_schema_name(indexer_name: &str, contract_name: 
     format!("{}_{}", camel_to_snake(indexer_name), camel_to_snake(contract_name))
 }
 
-pub fn drop_tables_for_indexer_sql(indexer: &Indexer) -> Code {
-    let mut sql = "DROP SCHEMA IF EXISTS rindexer_internal CASCADE;".to_string();
+pub fn drop_tables_for_indexer_sql(project_path: &Path, indexer: &Indexer) -> Code {
+    let mut sql = format!(
+        "DROP TABLE IF EXISTS rindexer_internal.{}_last_known_indexes_dropping_sql CASCADE;",
+        camel_to_snake(&indexer.name)
+    );
+    sql.push_str(format!("DROP TABLE IF EXISTS rindexer_internal.{}_last_known_relationship_dropping_sql CASCADE;", camel_to_snake(&indexer.name)).as_str());
 
     for contract in &indexer.contracts {
         let contract_name = contract.before_modify_name_if_filter_readonly();
         let schema_name = generate_indexer_contract_schema_name(&indexer.name, &contract_name);
         sql.push_str(format!("DROP SCHEMA IF EXISTS {} CASCADE;", schema_name).as_str());
+
+        // drop last synced blocks for contracts
+        let abi_items = ABIItem::read_abi_items(project_path, contract);
+        if let Ok(abi_items) = abi_items {
+            for abi_item in abi_items.iter() {
+                let table_name = format!("{}_{}", schema_name, camel_to_snake(&abi_item.name));
+                sql.push_str(
+                    format!("DROP TABLE IF EXISTS rindexer_internal.{} CASCADE;", table_name)
+                        .as_str(),
+                );
+            }
+        } else {
+            error!(
+                "Could not read ABI items for contract moving on clearing the other data up: {}",
+                contract.name
+            );
+        }
     }
 
     Code::new(sql)

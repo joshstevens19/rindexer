@@ -10,8 +10,7 @@ use rindexer::{
 };
 
 use crate::{
-    cli_interface::StartSubcommands,
-    console::{print_error_message},
+    cli_interface::StartSubcommands, console::print_error_message,
     rindexer_yaml::validate_rindexer_yaml_exist,
 };
 
@@ -71,7 +70,7 @@ fn start_docker_compose(project_path: &PathBuf) -> Result<(), String> {
     }
 
     rindexer_info!("Docker starting up the postgres container..");
-    
+
     check_docker_compose_status(project_path, 200)
 }
 

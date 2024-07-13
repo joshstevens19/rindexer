@@ -4,6 +4,11 @@ If you want to index only historic data between block ranges just put in the [st
 and [end_block](/docs/start-building/yaml-config/contracts#end_block) in the YAML configuration file. This will index
 only the data between those blocks.
 
+:::info
+rindexer will save the last synced block for each contract in the database so it can pick up where it left off if stopped and started again.
+If you want to start fresh you can use the [delete](/docs/start-building/delete) command to drop all the data and start over.
+:::
+
 ```yaml
 name: rETHIndexer
 description: My first rindexer project
@@ -71,6 +76,11 @@ indexers:
 If you want to index historic data and then live data you can put in the [start_block](/docs/start-building/yaml-config/contracts#start_block)
 you wish to index the data from and then remove the [end_block](/docs/start-building/yaml-config/contracts#end_block) from the YAML configuration file. This will index
 from the block you specified and then index all new blocks as they come in.
+
+:::info
+rindexer will save the last synced block for each contract in the database so it can pick up where it left off if stopped and started again.
+If you want to start fresh you can use the [delete](/docs/start-building/delete) command to drop all the data and start over.
+:::
 
 ```yaml
 name: rETHIndexer

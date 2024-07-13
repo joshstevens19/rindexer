@@ -2,12 +2,13 @@
 
 ## No-code Project
 
-:::note
-rindexer starts your postgres docker compose file up for you automatically if the DATABASE_URL is not resolvable.
-You will need to make sure you have docker running on your machine before starting the project if running locally.
-:::
-
 You can run the no-code project really easily with the CLI toolset.
+
+:::info
+rindexer starts your postgres docker compose file up for you automatically if the DATABASE_URL can not connect to the database and docker-compose.yml is present in the parent directory.
+You will need to make sure you have docker running on your machine before starting the project. If you have not got docker you can install it [here](https://docs.docker.com/get-docker/).
+You can also run docker manually by using `docker compose up -d`.
+:::
 
 :::info
 graphql API can only be ran when you have a postgres storage setup in your YAML.
@@ -30,6 +31,10 @@ rindexer start graphql
 :::
 
 You can change the GraphQL port by doing --port [number] in both all and graphql commands above.
+
+:::info
+If you change your contract ABIs or want to start fresh you can use the [delete](/docs/start-building/delete) command to drop all the data and start over.
+:::
 
 ## Rust Project
 

@@ -46,7 +46,7 @@ pub async fn handle_delete_command(
                 print_error_message(&format!("Could not connect to Postgres, make sure your connection string is mapping in the .env correctly: trace: {}", e));
                 e
             })?;
-            let sql = drop_tables_for_indexer_sql(&manifest.to_indexer());
+            let sql = drop_tables_for_indexer_sql(&project_path, &manifest.to_indexer());
 
             postgres_client.batch_execute(sql.as_str()).await.map_err(|e| {
                 print_error_message(&format!("Could not delete tables from Postgres make sure your connection string is mapping in the .env correctly: trace: {}", e));
