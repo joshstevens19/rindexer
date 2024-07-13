@@ -1,0 +1,59 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:13
+        ports:
+          - 5440:5432
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: rindexer
+          POSTGRES_DB: mydatabase
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Install rindexer
+        run: |
+          curl -L https://rindexer.xyz/install.sh | bash
+
+      - name: Install expect
+        run: sudo apt-get install -y expect
+
+      - name: Create new rindexer project
+        run: |
+          cat <<EOF > new_rindexer.exp
+          #!/usr/bin/expect -f
+          set timeout -1
+          spawn rindexer new no-code
+          expect "Project Name"
+          send "blah\r"
+          expect "What Storages To Enable? (graphql can only be supported if postgres is enabled)"
+          send "postgres\r"
+          expect "Postgres Docker Support Out The Box?"
+          send "no\r"
+          expect eof
+          EOF
+          chmod +x new_rindexer.exp
+          ./new_rindexer.exp
+
+      - name: Change directory to project folder
+        run: cd blah
+
+      - name: Run CLI tool
+        env:
+          DATABASE_URL: postgresql://postgres:rindexer@localhost:5440/postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: mydatabase
+        run: |
+          cd blah
+          rindexer start all
