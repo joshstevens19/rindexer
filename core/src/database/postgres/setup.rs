@@ -7,6 +7,7 @@ use crate::{
         client::{PostgresClient, PostgresConnectionError, PostgresError},
         generate::{generate_tables_for_indexer_sql, GenerateTablesForIndexerSqlError},
     },
+    drop_tables_for_indexer_sql,
     manifest::core::{Manifest, ProjectType},
 };
 
@@ -33,6 +34,17 @@ pub async fn setup_postgres(
     if !manifest.storage.postgres_disable_create_tables() ||
         manifest.project_type == ProjectType::NoCode
     {
+        // check if we need to drop each run
+        if manifest.storage.postgres_drop_each_run() {
+            info!(
+                "`drop_each_run` enabled so dropping all data for {} before starting",
+                &manifest.name
+            );
+            let sql = drop_tables_for_indexer_sql(project_path, &manifest.to_indexer());
+            client.batch_execute(sql.as_str()).await?;
+            info!("Dropped all data for {}", manifest.name);
+        }
+
         info!("Creating tables for {}", manifest.name);
         let sql = generate_tables_for_indexer_sql(project_path, &manifest.to_indexer())?;
         debug!("{}", sql);

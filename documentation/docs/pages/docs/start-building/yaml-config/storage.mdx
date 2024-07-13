@@ -48,6 +48,28 @@ storage:
     enabled: true // [!code focus]
 ```
 
+### drop_each_run
+
+rindexer will keep track of the last synced block for each contracts and events meaning when you start and stop the indexer
+it will start from the last synced block. rindexer will also create tables and indexes for you again which could clash if you
+are using rindexer to grab throw away data and want to start over each time you run it.
+You can use `drop_each_run` to drop all the data for the indexer before starting which will ensure you start fresh.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+    drop_each_run: true // [!code focus]
+```
+
 ### disable_create_tables
 
 :::info

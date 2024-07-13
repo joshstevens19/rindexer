@@ -7,6 +7,7 @@ only the data between those blocks.
 :::info
 rindexer will save the last synced block for each contract in the database so it can pick up where it left off if stopped and started again.
 If you want to start fresh you can use the [delete](/docs/start-building/delete) command to drop all the data and start over.
+You can also use the [drop_each_run](/docs/start-building/yaml-config/storage#drop_each_run) option in the YAML configuration file to drop all the data for the indexer before starting.
 :::
 
 ```yaml
@@ -80,6 +81,7 @@ from the block you specified and then index all new blocks as they come in.
 :::info
 rindexer will save the last synced block for each contract in the database so it can pick up where it left off if stopped and started again.
 If you want to start fresh you can use the [delete](/docs/start-building/delete) command to drop all the data and start over.
+You can also use the [drop_each_run](/docs/start-building/yaml-config/storage#drop_each_run) option in the YAML configuration file to drop all the data for the indexer before starting.
 :::
 
 ```yaml
