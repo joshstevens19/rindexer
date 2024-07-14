@@ -91,16 +91,18 @@ fn start_docker_compose(project_path: &PathBuf) -> Result<(), String> {
     let status = Command::new("docker")
         .args(["compose", "up", "-d"])
         .current_dir(project_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()
         .map_err(|e| {
-            let error = format!("Docker could not startup the postgres container: {}", e);
+            let error = format!("Docker command could not be executed make sure docker is running on the machine: {}", e);
             print_error_message(&error);
             error
         })?;
 
     if !status.success() {
-        let error = format!("docker compose exited with status: {}", status);
-        print_error_message(&error);
+        let error = "Docker compose could not startup the postgres container, please make sure docker is running on the machine".to_string();
+        rindexer_error!(error);
         return Err(error);
     }
 
