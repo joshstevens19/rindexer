@@ -97,7 +97,7 @@ jobs:
       - name: Build binaries
         working-directory: cli
         env:
-          RUSTFLAGS: '-C target-cpu=native'
+          SVM_TARGET_PLATFORM: ${{ matrix.svm_target_platform }}
         shell: bash
         run: |
           set -eo pipefail
