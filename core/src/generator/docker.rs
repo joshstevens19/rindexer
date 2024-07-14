@@ -1,6 +1,5 @@
 pub fn generate_docker_file() -> &'static str {
-    r#"version: '3.8'
-volumes:
+    r#"volumes:
   postgres_data:
     driver: local
 
