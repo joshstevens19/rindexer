@@ -85,21 +85,26 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
             }
 
             // Spawn a separate task for the GraphQL server if specified
-            let graphql_server_handle = if details.graphql_details.enabled {
-                let manifest_clone = Arc::clone(&manifest);
-                let indexer = manifest_clone.to_indexer();
-                let mut graphql_settings = manifest.graphql.clone().unwrap_or_default();
-                if let Some(override_port) = &details.graphql_details.override_port {
-                    graphql_settings.set_port(*override_port);
-                }
-                Some(tokio::spawn(async move {
-                    if let Err(e) = start_graphql_server(&indexer, &graphql_settings).await {
-                        error!("Failed to start GraphQL server: {:?}", e);
+            let graphql_server_handle =
+                if details.graphql_details.enabled && manifest.storage.postgres_enabled() {
+                    let manifest_clone = Arc::clone(&manifest);
+                    let indexer = manifest_clone.to_indexer();
+                    let mut graphql_settings = manifest.graphql.clone().unwrap_or_default();
+                    if let Some(override_port) = &details.graphql_details.override_port {
+                        graphql_settings.set_port(*override_port);
                     }
-                }))
-            } else {
-                None
-            };
+                    Some(tokio::spawn(async move {
+                        if let Err(e) = start_graphql_server(&indexer, &graphql_settings).await {
+                            error!("Failed to start GraphQL server: {:?}", e);
+                        }
+                    }))
+                } else {
+                    None
+                };
+
+            if graphql_server_handle.is_none() && details.graphql_details.enabled {
+                error!("GraphQL can not run without postgres storage enabled, you have tried to run GraphQL which will now be skipped.");
+            }
 
             if let Some(mut indexing_details) = details.indexing_details {
                 let postgres_enabled = &manifest.storage.postgres_enabled();
