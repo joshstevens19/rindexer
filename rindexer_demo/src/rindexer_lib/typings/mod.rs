@@ -2,3 +2,4 @@
 pub mod blah_baby;
 pub mod global_contracts;
 pub mod networks;
+pub mod rindexer_playground;

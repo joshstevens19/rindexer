@@ -314,6 +314,9 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ProcessIndexersError {
+    #[error("Could not find ABI path: {0}")]
+    AbiPathDoesNotExist(String),
+
     #[error("Could not read ABI string: {0}")]
     CouldNotReadAbiString(#[from] io::Error),
 
@@ -349,7 +352,8 @@ pub async fn process_events(
 
     for contract in &mut manifest.contracts {
         // TODO - this could be shared with `get_abi_items`
-        let full_path = get_full_path(project_path, &contract.abi);
+        let full_path = get_full_path(project_path, &contract.abi)
+            .map_err(|_| ProcessIndexersError::AbiPathDoesNotExist(contract.abi.clone()))?;
         let abi_str = fs::read_to_string(full_path)?;
 
         let abi: Abi = serde_json::from_str(&abi_str)?;

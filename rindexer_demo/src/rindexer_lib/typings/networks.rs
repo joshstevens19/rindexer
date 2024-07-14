@@ -12,38 +12,24 @@ use rindexer::{
 };
 
 lazy_static! {
-    static ref POLYGON_PROVIDER: Arc<JsonRpcCachedProvider> = create_client(
-        &public_read_env_value("MAINNET_RPC").unwrap_or("MAINNET_RPC".to_string()),
+    static ref ETHEREUM_PROVIDER: Arc<JsonRpcCachedProvider> = create_client(
+        &public_read_env_value("https://mainnet.gateway.tenderly.co")
+            .unwrap_or("https://mainnet.gateway.tenderly.co".to_string()),
         None
     )
     .expect("Error creating provider");
-    static ref BASE_PROVIDER: Arc<JsonRpcCachedProvider> =
-        create_client(&public_read_env_value("BASE_RPC").unwrap_or("BASE_RPC".to_string()), None)
-            .expect("Error creating provider");
 }
-pub fn get_polygon_provider_cache() -> Arc<JsonRpcCachedProvider> {
-    Arc::clone(&POLYGON_PROVIDER)
+pub fn get_ethereum_provider_cache() -> Arc<JsonRpcCachedProvider> {
+    Arc::clone(&ETHEREUM_PROVIDER)
 }
 
-pub fn get_polygon_provider() -> Arc<Provider<RetryClient<Http>>> {
-    POLYGON_PROVIDER.get_inner_provider()
-}
-
-pub fn get_base_provider_cache() -> Arc<JsonRpcCachedProvider> {
-    Arc::clone(&BASE_PROVIDER)
-}
-
-pub fn get_base_provider() -> Arc<Provider<RetryClient<Http>>> {
-    BASE_PROVIDER.get_inner_provider()
+pub fn get_ethereum_provider() -> Arc<Provider<RetryClient<Http>>> {
+    ETHEREUM_PROVIDER.get_inner_provider()
 }
 
 pub fn get_provider_cache_for_network(network: &str) -> Arc<JsonRpcCachedProvider> {
-    if network == "polygon" {
-        return get_polygon_provider_cache();
-    }
-
-    if network == "base" {
-        return get_base_provider_cache();
+    if network == "ethereum" {
+        return get_ethereum_provider_cache();
     }
     panic!("Network not supported")
 }

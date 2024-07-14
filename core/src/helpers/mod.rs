@@ -53,13 +53,13 @@ pub fn generate_random_id(len: usize) -> String {
     rand::thread_rng().sample_iter(&Alphanumeric).take(len).map(char::from).collect()
 }
 
-pub fn get_full_path(project_path: &Path, file_path: &str) -> PathBuf {
+pub fn get_full_path(project_path: &Path, file_path: &str) -> Result<PathBuf, std::io::Error> {
     let path = PathBuf::from(file_path);
     if let Ok(canonical_path) = path.canonicalize() {
-        canonical_path
+        Ok(canonical_path)
     } else {
         let joined_path = project_path.join(file_path);
-        joined_path.canonicalize().expect("Failed to canonicalize path")
+        joined_path.canonicalize()
     }
 }
 

@@ -34,7 +34,11 @@ async fn main() {
                     }
                 }
             }
-            _ => {}
+            _ => {
+                // default run both
+                enable_graphql = true;
+                enable_indexer = true;
+            }
         }
     }
 
@@ -74,7 +78,7 @@ fn generate() {
     let path = PathBuf::from_str("/Users/joshstevens/code/rindexer/rindexer_demo/rindexer.yaml")
         .expect("Invalid path");
     let manifest = read_manifest(&path).expect("Failed to read manifest");
-    rindexer::generator::build::generate_rindexer_typings(&manifest, &path)
+    rindexer::generator::build::generate_rindexer_typings(&manifest, &path, true)
         .expect("Failed to generate typings");
 }
 
@@ -84,7 +88,7 @@ fn generate_code_test() {
         .expect("Invalid path");
     let manifest = read_manifest(&path).expect("Failed to read manifest");
 
-    rindexer::generator::build::generate_rindexer_handlers(manifest, &path)
+    rindexer::generator::build::generate_rindexer_handlers(manifest, &path, true)
         .expect("Failed to generate handlers");
 }
 
