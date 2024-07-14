@@ -1,18 +1,43 @@
-use std::{path::PathBuf, process::Command, thread, time::Duration};
+use std::{env, path::PathBuf, process::Command, thread, time::Duration};
 
 use rindexer::{
     manifest::{
         core::ProjectType,
         yaml::{read_manifest, YAML_CONFIG_NAME},
     },
-    rindexer_info, setup_info_logger, start_rindexer_no_code, GraphqlOverrideSettings,
-    IndexerNoCodeDetails, PostgresClient, StartNoCodeDetails,
+    rindexer_error, rindexer_info, setup_info_logger, start_rindexer_no_code,
+    GraphqlOverrideSettings, IndexerNoCodeDetails, PostgresClient, StartNoCodeDetails,
 };
 
 use crate::{
     cli_interface::StartSubcommands, console::print_error_message,
     rindexer_yaml::validate_rindexer_yaml_exist,
 };
+
+fn check_postgres_connection(conn_str: &str, max_retries: u32) -> Result<(), String> {
+    let mut retries = 0;
+
+    while retries < max_retries {
+        let status = Command::new("pg_isready").args(["-d", conn_str]).output().map_err(|e| {
+            let error = format!("Failed to check Postgres status: {}", e);
+            rindexer_error!(error);
+            error
+        })?;
+
+        if status.status.success() {
+            return Ok(());
+        }
+
+        retries += 1;
+        thread::sleep(Duration::from_millis(500));
+        rindexer_info!(
+            "Waiting for Postgres to become available this may take a few attempts... attempt: {}",
+            retries
+        );
+    }
+
+    Err("Postgres did not become available within the given retries.".into())
+}
 
 fn check_docker_compose_status(project_path: &PathBuf, max_retries: u32) -> Result<(), String> {
     let mut retries = 0;
@@ -30,14 +55,24 @@ fn check_docker_compose_status(project_path: &PathBuf, max_retries: u32) -> Resu
 
         if ps_status.status.success() {
             let output = String::from_utf8_lossy(&ps_status.stdout);
-            rindexer_info!("Docker compose ps output:\n{}", output);
             if !output.contains("Exit") && output.contains("Up") {
                 rindexer_info!("All containers are up and running.");
-                return Ok(());
+
+                return if let Ok(conn_str) = env::var("DATABASE_URL") {
+                    check_postgres_connection(&conn_str, max_retries).map_err(|e| {
+                        let error = format!("Failed to connect to PostgresSQL: {}", e);
+                        rindexer_error!(error);
+                        error
+                    })
+                } else {
+                    let error = "DATABASE_URL not set.".to_string();
+                    rindexer_error!(error);
+                    Err(error)
+                }
             }
         } else {
             let error = format!("docker compose ps exited with status: {}", ps_status.status);
-            print_error_message(&error);
+            rindexer_error!(error);
         }
 
         retries += 1;
