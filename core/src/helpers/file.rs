@@ -1,5 +1,7 @@
 use std::{fs, fs::File, io::Write, path::Path, process::Command};
 
+use dotenv::{dotenv, from_path};
+
 /// Formats all Rust source files in the given folder using `cargo fmt`.
 pub fn format_all_files_for_project<P: AsRef<Path>>(project_path: P) {
     let manifest_path = project_path.as_ref().join("Cargo.toml");
@@ -28,14 +30,16 @@ pub enum WriteFileError {
     CouldNotCreateFile(std::io::Error),
 }
 
-/// Writes contents to a file, creating directories as needed, and formats the file.
 pub fn write_file(path: &Path, contents: &str) -> Result<(), WriteFileError> {
     if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).map_err(WriteFileError::CouldNotCreateDir)?
+        fs::create_dir_all(dir).map_err(WriteFileError::CouldNotCreateDir)?;
     }
 
+    let cleaned_contents: String =
+        contents.lines().map(|line| line.trim_end()).collect::<Vec<&str>>().join("\n");
+
     let mut file = File::create(path).map_err(WriteFileError::CouldNotCreateFile)?;
-    file.write_all(contents.as_bytes()).map_err(WriteFileError::CouldNotConvertToBytes)?;
+    file.write_all(cleaned_contents.as_bytes()).map_err(WriteFileError::CouldNotConvertToBytes)?;
     Ok(())
 }
 
@@ -113,4 +117,10 @@ pub fn create_mod_file(
     }
 
     Ok(())
+}
+
+pub fn load_env_from_path(project_path: &Path) {
+    if from_path(project_path.join(".env")).is_err() {
+        dotenv().ok();
+    }
 }

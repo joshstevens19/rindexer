@@ -66,6 +66,7 @@ pub type EventCallbackType =
     Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync>;
 
 pub struct EventCallbackRegistryInformation {
+    pub id: String,
     pub indexer_name: String,
     pub topic_id: H256,
     pub event_name: String,
@@ -83,6 +84,7 @@ impl EventCallbackRegistryInformation {
 impl Clone for EventCallbackRegistryInformation {
     fn clone(&self) -> Self {
         EventCallbackRegistryInformation {
+            id: self.id.clone(),
             indexer_name: self.indexer_name.clone(),
             topic_id: self.topic_id,
             event_name: self.event_name.clone(),
@@ -109,32 +111,35 @@ impl EventCallbackRegistry {
         EventCallbackRegistry { events: Vec::new() }
     }
 
-    pub fn find_event(&self, topic_id: &H256) -> Option<&EventCallbackRegistryInformation> {
-        self.events.iter().find(|e| e.topic_id == *topic_id)
+    pub fn find_event(&self, id: &String) -> Option<&EventCallbackRegistryInformation> {
+        self.events.iter().find(|e| e.id == *id)
     }
 
     pub fn register_event(&mut self, event: EventCallbackRegistryInformation) {
         self.events.push(event);
     }
 
-    pub async fn trigger_event(&self, topic_id: &H256, data: Vec<EventResult>) {
+    pub async fn trigger_event(&self, id: &String, data: Vec<EventResult>) {
         let mut attempts = 0;
         let mut delay = Duration::from_millis(100);
 
-        if let Some(event_information) = self.find_event(topic_id) {
+        if let Some(event_information) = self.find_event(id) {
             debug!("{} - Pushed {} events", data.len(), event_information.info_log_name());
 
             loop {
                 match (event_information.callback)(data.clone()).await {
                     Ok(_) => {
-                        debug!("Event processing succeeded for topic_id: {}", topic_id);
+                        debug!(
+                            "Event processing succeeded for id: {} - topic_id: {}",
+                            id, event_information.topic_id
+                        );
                         break;
                     }
                     Err(e) => {
                         attempts += 1;
                         error!(
-                            "{} Event processing failed - topic_id: {}. Retrying... (attempt {}). Error: {}",
-                            event_information.info_log_name(), topic_id, attempts, e
+                            "{} Event processing failed - id: {} - topic_id: {}. Retrying... (attempt {}). Error: {}",
+                            event_information.info_log_name(), id, event_information.topic_id, attempts, e
                         );
 
                         sleep(delay).await;
@@ -147,7 +152,7 @@ impl EventCallbackRegistry {
                 }
             }
         } else {
-            error!("EventCallbackRegistry: No event found for topic_id: {}", topic_id);
+            error!("EventCallbackRegistry: No event found for id: {}", id);
         }
     }
 

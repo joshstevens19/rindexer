@@ -15,6 +15,7 @@ use crate::{
 };
 
 pub struct EventProcessingConfig {
+    pub id: String,
     pub project_path: PathBuf,
     pub indexer_name: String,
     pub contract_name: String,
@@ -46,6 +47,6 @@ impl EventProcessingConfig {
     }
 
     pub async fn trigger_event(&self, fn_data: Vec<EventResult>) {
-        self.registry.trigger_event(&self.topic_id, fn_data).await;
+        self.registry.trigger_event(&self.id, fn_data).await;
     }
 }

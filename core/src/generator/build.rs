@@ -83,6 +83,9 @@ pub enum WriteIndexerEvents {
 
     #[error("{0}")]
     GenerateEventBindingCodeError(#[from] GenerateEventBindingsError),
+
+    #[error("Could not find ABI path: {0}")]
+    AbiPathDoesNotExist(String),
 }
 
 fn write_indexer_events(
@@ -100,7 +103,8 @@ fn write_indexer_events(
             format!("{}/events/{}", camel_to_snake(&indexer.name), camel_to_snake(&contract.name));
         write_file(&generate_file_location(output, &event_path), events_code.as_str())?;
 
-        let abi_full_path = get_full_path(project_path, &contract.abi);
+        let abi_full_path = get_full_path(project_path, &contract.abi)
+            .map_err(|_| WriteIndexerEvents::AbiPathDoesNotExist(contract.abi.clone()))?;
         match abi_full_path.to_str() {
             None => return Err(WriteIndexerEvents::CouldNotCreateAbigenInstance),
             Some(abi_full_path) => {
@@ -151,6 +155,7 @@ pub enum GenerateRindexerTypingsError {
 pub fn generate_rindexer_typings(
     manifest: &Manifest,
     manifest_location: &Path,
+    format_after_generation: bool,
 ) -> Result<(), GenerateRindexerTypingsError> {
     let project_path = manifest_location.parent();
     match project_path {
@@ -165,6 +170,10 @@ pub fn generate_rindexer_typings(
             write_indexer_events(project_path, &output, manifest.to_indexer(), &manifest.storage)?;
 
             create_mod_file(output.as_path(), true)?;
+
+            if format_after_generation {
+                format_all_files_for_project(project_path);
+            }
 
             Ok(())
         }
@@ -209,12 +218,13 @@ pub enum GenerateRindexerHandlersError {
 pub fn generate_rindexer_handlers(
     manifest: Manifest,
     manifest_location: &Path,
+    format_after_generation: bool,
 ) -> Result<(), GenerateRindexerHandlersError> {
-    let output_parent = manifest_location.parent();
-    match output_parent {
+    let project_path = manifest_location.parent();
+    match project_path {
         None => Err(GenerateRindexerHandlersError::ManifestLocationDoesNotHaveAParent),
-        Some(output_parent) => {
-            let output = output_parent.join("./src/rindexer_lib");
+        Some(project_path) => {
+            let output = project_path.join("./src/rindexer_lib");
 
             let mut handlers = String::new();
             handlers.push_str(
@@ -240,7 +250,7 @@ pub fn generate_rindexer_handlers(
                 );
 
                 handlers.push_str(&format!(
-                    r#"{handler_fn_name}(&manifest_path, &mut registry).await;"#
+                    r#"{handler_fn_name}(manifest_path, &mut registry).await;"#
                 ));
 
                 let handler_path = format!("indexers/{}/{}", indexer_name, contract_name);
@@ -248,7 +258,7 @@ pub fn generate_rindexer_handlers(
                 write_file(
                     &generate_file_location(&output, &handler_path),
                     generate_event_handlers(
-                        output_parent,
+                        project_path,
                         &manifest.name,
                         is_filter,
                         &contract,
@@ -264,6 +274,10 @@ pub fn generate_rindexer_handlers(
                 .map_err(GenerateRindexerHandlersError::CouldNotWriteEventHandlersCode)?;
 
             create_mod_file(output.as_path(), false)?;
+
+            if format_after_generation {
+                format_all_files_for_project(project_path);
+            }
 
             Ok(())
         }
@@ -294,8 +308,8 @@ pub fn generate_rindexer_typings_and_handlers(
 ) -> Result<(), GenerateError> {
     let manifest = read_manifest(manifest_location)?;
 
-    generate_rindexer_typings(&manifest, manifest_location)?;
-    generate_rindexer_handlers(manifest, manifest_location)?;
+    generate_rindexer_typings(&manifest, manifest_location, false)?;
+    generate_rindexer_handlers(manifest, manifest_location, false)?;
 
     let parent = manifest_location.parent();
     match parent {
@@ -346,7 +360,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-rindexer = {{ git = "https://github.com/joshstevens19/rindexer", branch = "master", package = "core"}}
+rindexer = {{ git = "https://github.com/joshstevens19/rindexer", branch = "master", package = "core" }}
 tokio = {{ version = "1", features = ["full"] }}
 ethers = {{ version = "2.0", features = ["rustls", "openssl"] }}
 serde = {{ version = "1.0.194", features = ["derive"] }}

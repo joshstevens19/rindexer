@@ -288,6 +288,14 @@ impl Contract {
         format!("{}Filter", self.name)
     }
 
+    pub fn raw_name(&self) -> String {
+        if self.is_filter() {
+            self.name.split("Filter").collect::<Vec<&str>>()[0].to_string()
+        } else {
+            self.name.clone()
+        }
+    }
+
     pub fn before_modify_name_if_filter_readonly(&self) -> Cow<str> {
         if self.is_filter() {
             Cow::Owned(self.contract_name_to_filter_name())

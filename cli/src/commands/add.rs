@@ -23,7 +23,7 @@ use crate::{
 pub async fn handle_add_contract_command(
     project_path: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    validate_rindexer_yaml_exist();
+    validate_rindexer_yaml_exist(&project_path);
 
     let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
 

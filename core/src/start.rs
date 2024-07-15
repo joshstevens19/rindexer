@@ -17,6 +17,7 @@ use crate::{
         start::{start_indexing, StartIndexingError},
         ContractEventDependencies, ContractEventDependenciesMapFromRelationshipsError,
     },
+    load_env_from_path,
     manifest::{
         core::ProjectType,
         storage::RelationshipsAndIndexersError,
@@ -77,6 +78,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
     let project_path = details.manifest_path.parent();
     match project_path {
         Some(project_path) => {
+            load_env_from_path(project_path);
             let manifest = Arc::new(read_manifest(details.manifest_path)?);
 
             if manifest.project_type != ProjectType::NoCode {

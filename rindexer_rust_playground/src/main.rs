@@ -1,0 +1,127 @@
+use std::{env, path::PathBuf, str::FromStr};
+
+use rindexer::{
+    manifest::yaml::read_manifest, start_rindexer, GraphqlOverrideSettings, IndexingDetails,
+    StartDetails,
+};
+
+use self::rindexer_lib::indexers::all_handlers::register_all_handlers;
+
+mod rindexer_lib;
+
+#[tokio::main]
+async fn main() {
+    let args: Vec<String> = env::args().collect();
+
+    let mut enable_graphql = false;
+    let mut enable_indexer = false;
+
+    let mut port: Option<u16> = None;
+
+    for arg in args.iter() {
+        match arg.as_str() {
+            "--graphql" => enable_graphql = true,
+            "--indexer" => enable_indexer = true,
+            _ if arg.starts_with("--port=") || arg.starts_with("--p") => {
+                if let Some(value) = arg.split('=').nth(1) {
+                    let overridden_port = value.parse::<u16>();
+                    match overridden_port {
+                        Ok(overridden_port) => port = Some(overridden_port),
+                        Err(_) => {
+                            println!("Invalid port number");
+                            return;
+                        }
+                    }
+                }
+            }
+            _ => {
+                // default run both
+                enable_graphql = true;
+                enable_indexer = true;
+            }
+        }
+    }
+
+    let path = env::current_dir();
+    match path {
+        Ok(path) => {
+            let manifest_path = path.join("rindexer.yaml");
+            let result = start_rindexer(StartDetails {
+                manifest_path: &manifest_path,
+                indexing_details: if enable_indexer {
+                    Some(IndexingDetails { registry: register_all_handlers(&manifest_path).await })
+                } else {
+                    None
+                },
+                graphql_details: GraphqlOverrideSettings {
+                    enabled: enable_graphql,
+                    override_port: port,
+                },
+            })
+            .await;
+
+            match result {
+                Ok(_) => {}
+                Err(e) => {
+                    println!("Error starting rindexer: {:?}", e);
+                }
+            }
+        }
+        Err(e) => {
+            println!("Error getting current directory: {:?}", e);
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn generate() {
+    let path = PathBuf::from_str(
+        "/Users/joshstevens/code/rindexer/rindexer_rust_playground/rindexer.yaml",
+    )
+    .expect("Invalid path");
+    let manifest = read_manifest(&path).expect("Failed to read manifest");
+    rindexer::generator::build::generate_rindexer_typings(&manifest, &path, true)
+        .expect("Failed to generate typings");
+}
+
+#[allow(dead_code)]
+fn generate_code_test() {
+    let path = PathBuf::from_str(
+        "/Users/joshstevens/code/rindexer/rindexer_rust_playground/rindexer.yaml",
+    )
+    .expect("Invalid path");
+    let manifest = read_manifest(&path).expect("Failed to read manifest");
+
+    rindexer::generator::build::generate_rindexer_handlers(manifest, &path, true)
+        .expect("Failed to generate handlers");
+}
+
+#[allow(dead_code)]
+fn generate_all() {
+    let path = PathBuf::from_str(
+        "/Users/joshstevens/code/rindexer/rindexer_rust_playground/rindexer.yaml",
+    )
+    .expect("Invalid path");
+    rindexer::generator::build::generate_rindexer_typings_and_handlers(&path)
+        .expect("Failed to generate typings and handlers");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_generate() {
+        generate();
+    }
+
+    #[test]
+    fn test_code_generate() {
+        generate_code_test();
+    }
+
+    #[test]
+    fn test_generate_all() {
+        generate_all();
+    }
+}
