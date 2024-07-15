@@ -544,7 +544,7 @@ fn generate_event_bindings_code(
             }}
 
             pub fn contract_name(&self) -> String {{
-                "{contract_name}".to_string()
+                "{raw_contract_name}".to_string()
             }}
 
             fn get_provider(&self, network: &str) -> Arc<JsonRpcCachedProvider> {{
@@ -579,7 +579,7 @@ fn generate_event_bindings_code(
                     .map_or(false, |vec| vec.contains(&event_name.to_string()));
 
                 let contract = ContractInformation {{
-                    name: contract_details.name,
+                    name: contract_details.before_modify_name_if_filter_readonly().into_owned(),
                     details: contract_details
                         .details
                         .iter()
@@ -626,7 +626,7 @@ fn generate_event_bindings_code(
         topic_ids_match_arms = generate_topic_ids_match_arms_code(&event_type_name, &event_info),
         event_names_match_arms =
             generate_event_names_match_arms_code(&event_type_name, &event_info),
-        contract_name = contract.name,
+        raw_contract_name = contract.raw_name(),
         decoder_contract_fn =
             decoder_contract_fn(contract.details.iter().collect(), &abigen_contract_name(contract)),
         build_pub_contract_fn = build_pub_contract_fn(
@@ -824,19 +824,18 @@ pub fn generate_event_handlers(
                 r#"
                     let mut postgres_bulk_data: Vec<Vec<EthereumSqlTypeWrapper>> = vec![];
                     {csv_bulk_data}
-                    for result in results.iter() {{   
-                        {csv_write}   
-                                      
+                    for result in results.iter() {{
+                        {csv_write}
                         let data = {data};
                         postgres_bulk_data.push(data);
                     }}
-                    
+
                     {csv_bulk_insert}
-                    
+
                     if postgres_bulk_data.is_empty() {{
                         return Ok(());
                     }}
-                    
+
                      if postgres_bulk_data.len() > 100 {{
                         let result = context
                             .database
@@ -852,7 +851,7 @@ pub fn generate_event_handlers(
                                 &postgres_bulk_data,
                             )
                             .await;
-                        
+
                         if let Err(e) = result {{
                             rindexer_error!("{event_type_name}::{handler_name} inserting bulk data via COPY: {{:?}}", e);
                             return Err(e.to_string());
@@ -918,7 +917,7 @@ pub fn generate_event_handlers(
 
                             {csv_write}
                             {postgres_write}
-                            
+
                             rindexer_info!(
                                 "{contract_name}::{handler_name} - {{}} - {{}} events",
                                 "INDEXED".green(),

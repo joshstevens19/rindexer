@@ -14,7 +14,8 @@ use std::{
 
 use dotenv::dotenv;
 pub use file::{
-    create_mod_file, format_all_files_for_project, write_file, CreateModFileError, WriteFileError,
+    create_mod_file, format_all_files_for_project, load_env_from_path, write_file,
+    CreateModFileError, WriteFileError,
 };
 use rand::{distributions::Alphanumeric, Rng};
 

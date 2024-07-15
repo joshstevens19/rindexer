@@ -1,4 +1,3 @@
-
 use std::{path::PathBuf, sync::Arc};
 
 use rindexer::{
@@ -33,7 +32,6 @@ async fn approval_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                         result.tx_information.transaction_index.to_string(),
                         result.tx_information.log_index.to_string(),
                     ]);
-
                     let data = vec![
                         EthereumSqlTypeWrapper::Address(result.tx_information.address),
                         EthereumSqlTypeWrapper::Address(result.event_data.owner),
@@ -166,7 +164,6 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                         result.tx_information.transaction_index.to_string(),
                         result.tx_information.log_index.to_string(),
                     ]);
-
                     let data = vec![
                         EthereumSqlTypeWrapper::Address(result.tx_information.address),
                         EthereumSqlTypeWrapper::Address(result.event_data.from),

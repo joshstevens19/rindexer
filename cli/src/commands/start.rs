@@ -117,7 +117,7 @@ pub async fn start(
 ) -> Result<(), Box<dyn std::error::Error>> {
     setup_info_logger();
 
-    validate_rindexer_yaml_exist();
+    validate_rindexer_yaml_exist(&project_path);
 
     let manifest = read_manifest(&project_path.join(YAML_CONFIG_NAME)).map_err(|e| {
         print_error_message(&format!("Could not read the rindexer.yaml file: {}", e));

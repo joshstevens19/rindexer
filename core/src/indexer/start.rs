@@ -62,6 +62,12 @@ pub enum StartIndexingError {
 
     #[error("{0}")]
     CombinedError(#[from] CombinedLogEventProcessingError),
+    
+    #[error("The start block set for {0} is higher than the latest block: {1} - start block: {2}")]
+    StartBlockIsHigherThanLatestBlockError(String, U64, U64),
+    
+    #[error("The end block set for {0} is higher than the latest block: {1} - end block: {2}")]
+    EndBlockIsHigherThanLatestBlockError(String, U64, U64),
 }
 
 pub struct ProcessedNetworkContract {
@@ -108,6 +114,22 @@ pub async fn start_indexing(
                 network: &network_contract.network,
             };
 
+            let latest_block = network_contract.cached_provider.get_block_number().await?;
+            
+            if let Some(start_block) = network_contract.start_block {
+                if start_block > latest_block {
+                    error!("{} - start_block supplied in yaml - {} {} is higher then latest block number - {}", event.info_log_name(), network_contract.network, start_block, latest_block);
+                    return Err(StartIndexingError::StartBlockIsHigherThanLatestBlockError(event.info_log_name().to_string(), start_block, latest_block));
+                }
+            }
+            
+            if let Some(end_block) = network_contract.end_block {
+                if end_block > latest_block {
+                    error!("{} - end_block supplied in yaml - {} {} is higher then latest block number - {}", event.info_log_name(), network_contract.network, end_block, latest_block);
+                    return Err(StartIndexingError::EndBlockIsHigherThanLatestBlockError(event.info_log_name().to_string(), end_block, latest_block));
+                }
+            }
+
             let last_known_start_block = if network_contract.start_block.is_some() {
                 let last_synced_block = get_last_synced_block_number(config).await;
 
@@ -119,8 +141,7 @@ pub async fn start_indexing(
             } else {
                 None
             };
-
-            let latest_block = network_contract.cached_provider.get_block_number().await?;
+            
             let start_block = last_known_start_block
                 .unwrap_or(network_contract.start_block.unwrap_or(latest_block));
             let end_block =

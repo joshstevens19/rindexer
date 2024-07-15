@@ -130,8 +130,8 @@ where
             + Clone,
         Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
     {
-        let csv = AsyncCsvAppender::new("/Users/joshstevens/code/rindexer/rindexer_demo/./generated_csv/RocketPoolETH/rocketpooleth-approval.csv");
-        if !Path::new("/Users/joshstevens/code/rindexer/rindexer_demo/./generated_csv/RocketPoolETH/rocketpooleth-approval.csv").exists() {
+        let csv = AsyncCsvAppender::new("/Users/joshstevens/code/rindexer/rindexer_rust_playground/./generated_csv/RocketPoolETH/rocketpooleth-approval.csv");
+        if !Path::new("/Users/joshstevens/code/rindexer/rindexer_rust_playground/./generated_csv/RocketPoolETH/rocketpooleth-approval.csv").exists() {
             csv.append_header(vec!["contract_address".into(), "owner".into(), "spender".into(), "value".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()])
                 .await
                 .expect("Failed to write CSV header");
@@ -233,8 +233,8 @@ where
             + Clone,
         Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
     {
-        let csv = AsyncCsvAppender::new("/Users/joshstevens/code/rindexer/rindexer_demo/./generated_csv/RocketPoolETH/rocketpooleth-transfer.csv");
-        if !Path::new("/Users/joshstevens/code/rindexer/rindexer_demo/./generated_csv/RocketPoolETH/rocketpooleth-transfer.csv").exists() {
+        let csv = AsyncCsvAppender::new("/Users/joshstevens/code/rindexer/rindexer_rust_playground/./generated_csv/RocketPoolETH/rocketpooleth-transfer.csv");
+        if !Path::new("/Users/joshstevens/code/rindexer/rindexer_rust_playground/./generated_csv/RocketPoolETH/rocketpooleth-transfer.csv").exists() {
             csv.append_header(vec!["contract_address".into(), "from".into(), "to".into(), "value".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()])
                 .await
                 .expect("Failed to write CSV header");
@@ -397,7 +397,7 @@ where
             .map_or(false, |vec| vec.contains(&event_name.to_string()));
 
         let contract = ContractInformation {
-            name: contract_details.name,
+            name: contract_details.before_modify_name_if_filter_readonly().into_owned(),
             details: contract_details
                 .details
                 .iter()

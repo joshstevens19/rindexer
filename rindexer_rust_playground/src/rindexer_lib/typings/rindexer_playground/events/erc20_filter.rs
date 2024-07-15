@@ -128,8 +128,8 @@ where
             + Clone,
         Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
     {
-        let csv = AsyncCsvAppender::new("/Users/joshstevens/code/rindexer/rindexer_demo/./generated_csv/ERC20Filter/erc20filter-transfer.csv");
-        if !Path::new("/Users/joshstevens/code/rindexer/rindexer_demo/./generated_csv/ERC20Filter/erc20filter-transfer.csv").exists() {
+        let csv = AsyncCsvAppender::new("/Users/joshstevens/code/rindexer/rindexer_rust_playground/./generated_csv/ERC20Filter/erc20filter-transfer.csv");
+        if !Path::new("/Users/joshstevens/code/rindexer/rindexer_rust_playground/./generated_csv/ERC20Filter/erc20filter-transfer.csv").exists() {
             csv.append_header(vec!["contract_address".into(), "from".into(), "to".into(), "value".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()])
                 .await
                 .expect("Failed to write CSV header");
@@ -191,7 +191,7 @@ pub fn erc20_filter_contract(
 }
 
 pub fn decoder_contract(network: &str) -> RindexerERC20FilterGen<Arc<Provider<RetryClient<Http>>>> {
-    if network == "polygon" {
+    if network == "ethereum" {
         RindexerERC20FilterGen::new(
             // do not care about address here its decoding makes it easier to handle ValueOrArray
             Address::zero(),
@@ -221,7 +221,7 @@ where
     }
 
     pub fn contract_name(&self) -> String {
-        "ERC20Filter".to_string()
+        "ERC20".to_string()
     }
 
     fn get_provider(&self, network: &str) -> Arc<JsonRpcCachedProvider> {
@@ -268,7 +268,7 @@ where
             .map_or(false, |vec| vec.contains(&event_name.to_string()));
 
         let contract = ContractInformation {
-            name: contract_details.name,
+            name: contract_details.before_modify_name_if_filter_readonly().into_owned(),
             details: contract_details
                 .details
                 .iter()
@@ -299,7 +299,7 @@ where
         };
 
         registry.register_event(EventCallbackRegistryInformation {
-            indexer_name: "BlahBaby".to_string(),
+            indexer_name: "RindexerPlayground".to_string(),
             event_name: event_name.to_string(),
             index_event_in_order,
             topic_id: topic_id.parse::<H256>().unwrap(),

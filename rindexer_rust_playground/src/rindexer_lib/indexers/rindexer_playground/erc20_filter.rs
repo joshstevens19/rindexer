@@ -5,7 +5,7 @@ use rindexer::{
     EthereumSqlTypeWrapper, PgType, RindexerColorize,
 };
 
-use super::super::super::typings::blah_baby::events::erc20_filter::{
+use super::super::super::typings::rindexer_playground::events::erc20_filter::{
     no_extensions, ERC20FilterEventType, TransferEvent,
 };
 
@@ -32,7 +32,6 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                         result.tx_information.transaction_index.to_string(),
                         result.tx_information.log_index.to_string(),
                     ]);
-
                     let data = vec![
                         EthereumSqlTypeWrapper::Address(result.tx_information.address),
                         EthereumSqlTypeWrapper::Address(result.event_data.from),
@@ -67,7 +66,7 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                     let result = context
                         .database
                         .bulk_insert_via_copy(
-                            "blah_baby_erc20_filter.transfer",
+                            "rindexer_playground_erc20_filter.transfer",
                             &[
                                 "contract_address".to_string(),
                                 "from".to_string(),
@@ -101,7 +100,7 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                     let result = context
                         .database
                         .bulk_insert(
-                            "blah_baby_erc20_filter.transfer",
+                            "rindexer_playground_erc20_filter.transfer",
                             &[
                                 "contract_address".to_string(),
                                 "from".to_string(),

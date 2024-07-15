@@ -21,3 +21,11 @@ contracts:
     include_events:
       - Transfer
       - Approval
+  - name: ERC20
+    details:
+      - filter:
+            event_name: Transfer
+        network: ethereum
+        #start_block: 56399431
+    abi: ./abis/erc20-abi.json
+    generate_csv: true

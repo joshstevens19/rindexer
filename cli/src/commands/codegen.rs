@@ -31,7 +31,7 @@ pub async fn handle_codegen_command(
         return Ok(());
     }
 
-    validate_rindexer_yaml_exist();
+    validate_rindexer_yaml_exist(&project_path);
 
     let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
 
