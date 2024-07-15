@@ -62,10 +62,10 @@ pub enum StartIndexingError {
 
     #[error("{0}")]
     CombinedError(#[from] CombinedLogEventProcessingError),
-    
+
     #[error("The start block set for {0} is higher than the latest block: {1} - start block: {2}")]
     StartBlockIsHigherThanLatestBlockError(String, U64, U64),
-    
+
     #[error("The end block set for {0} is higher than the latest block: {1} - end block: {2}")]
     EndBlockIsHigherThanLatestBlockError(String, U64, U64),
 }
@@ -115,18 +115,26 @@ pub async fn start_indexing(
             };
 
             let latest_block = network_contract.cached_provider.get_block_number().await?;
-            
+
             if let Some(start_block) = network_contract.start_block {
                 if start_block > latest_block {
                     error!("{} - start_block supplied in yaml - {} {} is higher then latest block number - {}", event.info_log_name(), network_contract.network, start_block, latest_block);
-                    return Err(StartIndexingError::StartBlockIsHigherThanLatestBlockError(event.info_log_name().to_string(), start_block, latest_block));
+                    return Err(StartIndexingError::StartBlockIsHigherThanLatestBlockError(
+                        event.info_log_name().to_string(),
+                        start_block,
+                        latest_block,
+                    ));
                 }
             }
-            
+
             if let Some(end_block) = network_contract.end_block {
                 if end_block > latest_block {
                     error!("{} - end_block supplied in yaml - {} {} is higher then latest block number - {}", event.info_log_name(), network_contract.network, end_block, latest_block);
-                    return Err(StartIndexingError::EndBlockIsHigherThanLatestBlockError(event.info_log_name().to_string(), end_block, latest_block));
+                    return Err(StartIndexingError::EndBlockIsHigherThanLatestBlockError(
+                        event.info_log_name().to_string(),
+                        end_block,
+                        latest_block,
+                    ));
                 }
             }
 
@@ -141,7 +149,7 @@ pub async fn start_indexing(
             } else {
                 None
             };
-            
+
             let start_block = last_known_start_block
                 .unwrap_or(network_contract.start_block.unwrap_or(latest_block));
             let end_block =
@@ -167,6 +175,7 @@ pub async fn start_indexing(
             });
 
             let event_processing_config = EventProcessingConfig {
+                id: event.id.clone(),
                 project_path: project_path.to_path_buf(),
                 indexer_name: event.indexer_name.clone(),
                 contract_name: event.contract.name.clone(),

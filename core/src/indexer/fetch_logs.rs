@@ -91,7 +91,7 @@ pub fn fetch_logs_stream(
             &config.info_log_name,
             IndexingEventProgressStatus::Completed.log()
         );
-        
+
         // Live indexing mode
         if config.live_indexing && !force_no_live_indexing {
             live_indexing_stream(
@@ -307,7 +307,7 @@ async fn live_indexing_stream(
     let mut last_seen_block_number = U64::from(0);
     loop {
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-        
+
         let latest_block = cached_provider.get_latest_block().await;
         match latest_block {
             Ok(latest_block) => {

@@ -22,6 +22,7 @@ use crate::{
         },
         contract_setup::{ContractInformation, CreateContractInformationError},
     },
+    generate_random_id,
     helpers::get_full_path,
     indexer::log_helpers::{map_log_params_to_raw_values, parse_log},
     manifest::{
@@ -411,6 +412,7 @@ pub async fn process_events(
                 generate_event_table_full_name(&manifest.name, &contract.name, &event_info.name);
 
             let event = EventCallbackRegistryInformation {
+                id: generate_random_id(10),
                 indexer_name: manifest.name.clone(),
                 event_name: event_info.name.clone(),
                 index_event_in_order: contract

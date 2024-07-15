@@ -602,6 +602,7 @@ fn generate_event_bindings_code(
                 }};
 
                registry.register_event(EventCallbackRegistryInformation {{
+                    id: generate_random_id(10),
                     indexer_name: "{indexer_name}".to_string(),
                     event_name: event_name.to_string(),
                     index_event_in_order,
