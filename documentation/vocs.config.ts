@@ -130,5 +130,6 @@ export default defineConfig({
       ],
     },
     { text: 'Changelog', link: '/docs/changelog' },
+    { text: 'Shoutout', link: '/docs/shoutout' },
   ],
 })
