@@ -149,6 +149,9 @@ pub struct ABIItem {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ReadAbiError {
+    #[error("Could not find ABI path: {0}")]
+    AbiPathDoesNotExist(String),
+
     #[error("Could not read ABI string: {0}")]
     CouldNotReadAbiString(#[from] std::io::Error),
 
@@ -183,7 +186,8 @@ impl ABIItem {
         project_path: &Path,
         contract: &Contract,
     ) -> Result<Vec<ABIItem>, ReadAbiError> {
-        let full_path = get_full_path(project_path, &contract.abi);
+        let full_path = get_full_path(project_path, &contract.abi)
+            .map_err(|_| ReadAbiError::AbiPathDoesNotExist(contract.abi.clone()))?;
         let abi_str = fs::read_to_string(full_path)?;
         let abi_items: Vec<ABIItem> = serde_json::from_str(&abi_str)?;
 

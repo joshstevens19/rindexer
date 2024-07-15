@@ -22,6 +22,7 @@ use crate::{
         },
         contract_setup::{ContractInformation, CreateContractInformationError},
     },
+    generate_random_id,
     helpers::get_full_path,
     indexer::log_helpers::{map_log_params_to_raw_values, parse_log},
     manifest::{
@@ -314,6 +315,9 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ProcessIndexersError {
+    #[error("Could not find ABI path: {0}")]
+    AbiPathDoesNotExist(String),
+
     #[error("Could not read ABI string: {0}")]
     CouldNotReadAbiString(#[from] io::Error),
 
@@ -349,7 +353,8 @@ pub async fn process_events(
 
     for contract in &mut manifest.contracts {
         // TODO - this could be shared with `get_abi_items`
-        let full_path = get_full_path(project_path, &contract.abi);
+        let full_path = get_full_path(project_path, &contract.abi)
+            .map_err(|_| ProcessIndexersError::AbiPathDoesNotExist(contract.abi.clone()))?;
         let abi_str = fs::read_to_string(full_path)?;
 
         let abi: Abi = serde_json::from_str(&abi_str)?;
@@ -407,6 +412,7 @@ pub async fn process_events(
                 generate_event_table_full_name(&manifest.name, &contract.name, &event_info.name);
 
             let event = EventCallbackRegistryInformation {
+                id: generate_random_id(10),
                 indexer_name: manifest.name.clone(),
                 event_name: event_info.name.clone(),
                 index_event_in_order: contract

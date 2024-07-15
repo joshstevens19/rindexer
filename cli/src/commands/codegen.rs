@@ -31,7 +31,7 @@ pub async fn handle_codegen_command(
         return Ok(());
     }
 
-    validate_rindexer_yaml_exist();
+    validate_rindexer_yaml_exist(&project_path);
 
     let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
 
@@ -47,7 +47,7 @@ pub async fn handle_codegen_command(
 
     match subcommand {
         CodegenSubcommands::Typings => {
-            generate_rindexer_typings(&manifest, &rindexer_yaml_path).map_err(|e| {
+            generate_rindexer_typings(&manifest, &rindexer_yaml_path, true).map_err(|e| {
                 print_error_message(&format!("Failed to generate rindexer typings: {}", e));
                 e
             })?;
@@ -55,7 +55,7 @@ pub async fn handle_codegen_command(
             print_success_message("Generated rindexer typings.");
         }
         CodegenSubcommands::Indexer => {
-            generate_rindexer_handlers(manifest, &rindexer_yaml_path).map_err(|e| {
+            generate_rindexer_handlers(manifest, &rindexer_yaml_path, true).map_err(|e| {
                 print_error_message(&format!(
                     "Failed to generate rindexer indexer handlers: {}",
                     e

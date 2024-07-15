@@ -60,10 +60,11 @@ pub fn handle_new_command(
 
     let project_name = prompt_for_input(
         "Project Name",
-        Some(r"^\S+$"),
-        Some("No spaces are allowed in the project name"),
+        Some(r"^[a-zA-Z][a-zA-Z0-9]*$"),
+        Some("No spaces, special characters are allowed, and the first letter cannot be a number"),
         None,
     );
+
     let project_path = project_path.join(&project_name);
     if project_path.exists() {
         print_error_message("Directory already exists. Please choose a different project name.");

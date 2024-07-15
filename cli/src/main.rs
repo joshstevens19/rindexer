@@ -15,8 +15,7 @@ mod rindexer_yaml;
 use std::{path::PathBuf, str::FromStr, sync::Once};
 
 use clap::Parser;
-use dotenv::{dotenv, from_path};
-use rindexer::manifest::core::ProjectType;
+use rindexer::{load_env_from_path, manifest::core::ProjectType};
 
 use crate::{
     cli_interface::{AddSubcommands, Commands, NewSubcommands, CLI},
@@ -57,13 +56,6 @@ fn set_panic_hook() {
     });
 }
 
-fn load_env_from_path(project_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    if from_path(project_path).is_err() {
-        dotenv().ok();
-    }
-    Ok(())
-}
-
 fn resolve_path(override_path: &Option<String>) -> Result<PathBuf, String> {
     match override_path {
         Some(path) => {
@@ -86,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match &cli.command {
         Commands::New { subcommand, path } => {
             let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;
-            load_env_from_path(&resolved_path)?;
+            load_env_from_path(&resolved_path);
 
             let project_type = match subcommand {
                 NewSubcommands::NoCode => ProjectType::NoCode,
@@ -97,7 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Add { subcommand, path } => {
             let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;
-            load_env_from_path(&resolved_path)?;
+            load_env_from_path(&resolved_path);
 
             match subcommand {
                 AddSubcommands::Contract => handle_add_contract_command(resolved_path).await,
@@ -105,17 +97,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Codegen { subcommand, path } => {
             let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;
-            load_env_from_path(&resolved_path)?;
+            load_env_from_path(&resolved_path);
             handle_codegen_command(resolved_path, subcommand).await
         }
         Commands::Start { subcommand, path } => {
             let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;
-            load_env_from_path(&resolved_path)?;
+            load_env_from_path(&resolved_path);
             start(resolved_path, subcommand).await
         }
         Commands::Delete { path } => {
             let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;
-            load_env_from_path(&resolved_path)?;
+            load_env_from_path(&resolved_path);
             handle_delete_command(resolved_path).await
         }
     }

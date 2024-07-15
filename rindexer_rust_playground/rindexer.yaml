@@ -1,0 +1,31 @@
+name: RindexerPlayground
+project_type: rust
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+  csv:
+    enabled: true
+    path: ./generated_csv
+contracts:
+  - name: RocketPoolETH
+    details:
+      - network: ethereum
+        address: 0xae78736cd615f374d3085123a210448e74fc6393
+        start_block: '18900000'
+        end_block: '19000000'
+    abi: ./abis/erc20-abi.json
+    include_events:
+      - Transfer
+      - Approval
+  - name: ERC20
+    details:
+      - filter:
+            event_name: Transfer
+        network: ethereum
+        #start_block: 56399431
+    abi: ./abis/erc20-abi.json
+    generate_csv: true

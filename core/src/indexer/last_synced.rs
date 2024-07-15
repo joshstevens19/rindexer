@@ -25,7 +25,9 @@ fn build_last_synced_block_number_for_csv(
 ) -> String {
     format!(
         "{}/{}/last-synced-blocks/{}-{}-{}.txt",
-        get_full_path(project_path, &csv_details.path).display(),
+        get_full_path(project_path, &csv_details.path)
+            .unwrap_or_else(|_| panic!("failed to get full path {}", project_path.display()))
+            .display(),
         contract_name,
         contract_name.to_lowercase(),
         network.to_lowercase(),

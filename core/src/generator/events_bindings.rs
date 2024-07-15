@@ -41,6 +41,9 @@ pub enum GenerateStructsError {
 
     #[error("Invalid ABI JSON format")]
     InvalidAbiJsonFormat,
+
+    #[error("Could not find ABI path: {0}")]
+    AbiPathDoesNotExist(String),
 }
 
 fn generate_structs(
@@ -48,7 +51,8 @@ fn generate_structs(
     contract: &Contract,
 ) -> Result<Code, GenerateStructsError> {
     // TODO - this could be shared with `get_abi_items`
-    let full_path = get_full_path(project_path, &contract.abi);
+    let full_path = get_full_path(project_path, &contract.abi)
+        .map_err(|_| GenerateStructsError::AbiPathDoesNotExist(contract.abi.clone()))?;
     let abi_str = fs::read_to_string(full_path)?;
     let abi_json: Value = serde_json::from_str(&abi_str)?;
 
@@ -225,9 +229,9 @@ fn generate_event_callback_structs_code(
             r#"
             pub fn {lower_name}_handler<TExtensions, F, Fut>(
                 custom_logic: F,
-            ) -> TransferEventCallbackType<TExtensions>
+            ) -> {name}EventCallbackType<TExtensions>
             where
-                TransferResult: Clone + 'static,
+                {struct_result}: Clone + 'static,
                 F: for<'a> Fn(Vec<{struct_result}>, Arc<EventContext<TExtensions>>) -> Fut
                     + Send
                     + Sync
@@ -320,7 +324,7 @@ fn generate_event_callback_structs_code(
                 format!(
                     r#"
                     if result.len() == events_len {{
-                        (self.callback)(&result, Arc::clone(&self.context)).await;
+                        (self.callback)(&result, Arc::clone(&self.context)).await
                     }} else {{
                         panic!("{name}Event: Unexpected data type - expected: {struct_data}")
                     }}
@@ -540,7 +544,7 @@ fn generate_event_bindings_code(
             }}
 
             pub fn contract_name(&self) -> String {{
-                "{contract_name}".to_string()
+                "{raw_contract_name}".to_string()
             }}
 
             fn get_provider(&self, network: &str) -> Arc<JsonRpcCachedProvider> {{
@@ -575,7 +579,7 @@ fn generate_event_bindings_code(
                     .map_or(false, |vec| vec.contains(&event_name.to_string()));
 
                 let contract = ContractInformation {{
-                    name: contract_details.name,
+                    name: contract_details.before_modify_name_if_filter_readonly().into_owned(),
                     details: contract_details
                         .details
                         .iter()
@@ -598,6 +602,7 @@ fn generate_event_bindings_code(
                 }};
 
                registry.register_event(EventCallbackRegistryInformation {{
+                    id: generate_random_id(10),
                     indexer_name: "{indexer_name}".to_string(),
                     event_name: event_name.to_string(),
                     index_event_in_order,
@@ -622,7 +627,7 @@ fn generate_event_bindings_code(
         topic_ids_match_arms = generate_topic_ids_match_arms_code(&event_type_name, &event_info),
         event_names_match_arms =
             generate_event_names_match_arms_code(&event_type_name, &event_info),
-        contract_name = contract.name,
+        raw_contract_name = contract.raw_name(),
         decoder_contract_fn =
             decoder_contract_fn(contract.details.iter().collect(), &abigen_contract_name(contract)),
         build_pub_contract_fn = build_pub_contract_fn(
@@ -755,10 +760,23 @@ pub fn generate_event_handlers(
 
             if storage.postgres_disable_create_tables() {
                 csv_write = format!(
-                    r#"for result in results {{
+                    r#"
+                      let mut csv_bulk_data: Vec<Vec<String>> = vec![];
+                      for result in &results {{
                         {inner_csv_write}
-                    }}"#,
-                    inner_csv_write = csv_write
+                      }}
+                    
+                      if !csv_bulk_data.is_empty() {{
+                        let csv_result = context.csv.append_bulk(csv_bulk_data).await;
+                        if let Err(e) = csv_result {{
+                            rindexer_error!("{event_type_name}::{handler_name} inserting csv data: {{:?}}", e);
+                            return Err(e.to_string());
+                        }}
+                      }}
+                    "#,
+                    inner_csv_write = csv_write,
+                    event_type_name = event_type_name,
+                    handler_name = event.name,
                 );
             }
         }
@@ -807,25 +825,18 @@ pub fn generate_event_handlers(
                 r#"
                     let mut postgres_bulk_data: Vec<Vec<EthereumSqlTypeWrapper>> = vec![];
                     {csv_bulk_data}
-                    for result in results.iter() {{   
-                        {csv_write}   
-                                      
+                    for result in results.iter() {{
+                        {csv_write}
                         let data = {data};
                         postgres_bulk_data.push(data);
                     }}
-                    
-                    if !csv_bulk_data.is_empty() {{
-                        let csv_result = context.csv.append_bulk(csv_bulk_data).await;
-                        if let Err(e) = csv_result {{
-                            rindexer_error!("{event_type_name}::{handler_name} inserting csv data: {{:?}}", e);
-                            return Err(e.to_string());
-                        }}
-                    }}
-                    
+
+                    {csv_bulk_insert}
+
                     if postgres_bulk_data.is_empty() {{
                         return Ok(());
                     }}
-                    
+
                      if postgres_bulk_data.len() > 100 {{
                         let result = context
                             .database
@@ -841,7 +852,7 @@ pub fn generate_event_handlers(
                                 &postgres_bulk_data,
                             )
                             .await;
-                        
+
                         if let Err(e) = result {{
                             rindexer_error!("{event_type_name}::{handler_name} inserting bulk data via COPY: {{:?}}", e);
                             return Err(e.to_string());
@@ -877,6 +888,21 @@ pub fn generate_event_handlers(
                     "let mut csv_bulk_data: Vec<Vec<String>> = vec![];"
                 } else {
                     ""
+                },
+                csv_bulk_insert = if storage.csv_enabled() {
+                    format!(
+                        r#"if !csv_bulk_data.is_empty() {{
+                        let csv_result = context.csv.append_bulk(csv_bulk_data).await;
+                        if let Err(e) = csv_result {{
+                            rindexer_error!("{event_type_name}::{handler_name} inserting csv data: {{:?}}", e);
+                            return Err(e.to_string());
+                        }}
+                    }}"#,
+                        event_type_name = event_type_name,
+                        handler_name = event.name
+                    )
+                } else {
+                    "".to_string()
                 }
             );
         }
@@ -892,7 +918,7 @@ pub fn generate_event_handlers(
 
                             {csv_write}
                             {postgres_write}
-                            
+
                             rindexer_info!(
                                 "{contract_name}::{handler_name} - {{}} - {{}} events",
                                 "INDEXED".green(),
