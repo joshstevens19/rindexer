@@ -18,6 +18,8 @@ start_indexer_lens_mirrors:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- start --path /Users/joshstevens/code/rindexer/examples/lens_mirrors all
 start_graphql:
 	cargo run -- start --path /Users/joshstevens/code/rindexer/examples/rindexer_demo_cli graphql
+start_indexer_uniswap_v3_factory:
+	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- start --path /Users/joshstevens/code/rindexer/examples/uniswap_v3_factory all
 codegen:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path /Users/joshstevens/code/rust typings
 codegen_typings:

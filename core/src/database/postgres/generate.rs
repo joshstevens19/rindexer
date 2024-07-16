@@ -202,12 +202,24 @@ pub fn solidity_type_to_db_type(abi_type: &str) -> String {
     let sql_type = match base_type {
         "address" => "CHAR(42)",
         "bool" => "BOOLEAN",
-        "int256" | "uint256" => "VARCHAR(78)",
-        "int64" | "uint64" | "int128" | "uint128" => "NUMERIC",
-        "int32" | "uint32" => "INTEGER",
         "string" => "TEXT",
         t if t.starts_with("bytes") => "BYTEA",
-        "uint8" | "uint16" | "int8" | "int16" => "SMALLINT",
+        t if t.starts_with("int") || t.starts_with("uint") => {
+            // Handling fixed-size integers (intN and uintN where N can be 8 to 256 in steps of 8)
+            let (prefix, size): (&str, usize) = if t.starts_with("int") {
+                ("int", t[3..].parse().expect("Invalid intN type"))
+            } else {
+                ("uint", t[4..].parse().expect("Invalid uintN type"))
+            };
+
+            match size {
+                8 | 16 => "SMALLINT",
+                24 | 32 => "INTEGER",
+                40 | 48 | 56 | 64 | 72 | 80 | 88 | 96 | 104 | 112 | 120 | 128 => "NUMERIC",
+                136 | 144 | 152 | 160 | 168 | 176 | 184 | 192 | 200 | 208 | 216 | 224 | 232 | 240 | 248 | 256 => "VARCHAR(78)",
+                _ => panic!("Unsupported {}N size: {}", prefix, size),
+            }
+        },
         _ => panic!("Unsupported type: {}", base_type),
     };
 
