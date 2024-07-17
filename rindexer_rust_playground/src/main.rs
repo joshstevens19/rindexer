@@ -1,4 +1,4 @@
-use std::{env, str::FromStr};
+use std::env;
 
 use rindexer::{
     start_rindexer, GraphqlOverrideSettings, IndexingDetails,
