@@ -2,7 +2,7 @@
 pub mod generator;
 pub mod indexer;
 pub mod manifest;
-
+pub mod meterics;
 mod database;
 pub use database::postgres::{
     client::PostgresClient, generate::drop_tables_for_indexer_sql, setup::setup_postgres,
