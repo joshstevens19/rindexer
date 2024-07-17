@@ -118,6 +118,11 @@ jobs:
           else
             cargo build --target "$target" "${flags[@]}"
           fi
+          
+      - name: Run tests
+        shell: bash
+        run: |
+          cargo test --release --target "${{ matrix.target }}"
 
       - name: Archive binaries
         id: artifacts
