@@ -12,7 +12,12 @@ on:
 
 jobs:
   build:
-    if: github.event_name == 'push' && github.actor != 'github-actions[bot]' || github.event_name == 'pull_request'
+    if: |
+      (github.event_name == 'push' || github.event_name == 'pull_request') &&
+      github.actor != 'github-actions[bot]' &&
+      !(github.event_name == 'pull_request' &&
+        startsWith(github.event.pull_request.head.ref, 'release/') &&
+        github.event.pull_request.base.ref == 'master')
     name: ${{ matrix.target }} (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 240
