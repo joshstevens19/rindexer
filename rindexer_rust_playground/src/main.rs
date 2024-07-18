@@ -1,9 +1,6 @@
 use std::env;
 
-use rindexer::{
-    start_rindexer, GraphqlOverrideSettings, IndexingDetails,
-    StartDetails,
-};
+use rindexer::{start_rindexer, GraphqlOverrideSettings, IndexingDetails, StartDetails};
 
 use self::rindexer_lib::indexers::all_handlers::register_all_handlers;
 
@@ -83,7 +80,7 @@ async fn main() {
 //     rindexer::generator::build::generate_rindexer_typings(&manifest, &path, true)
 //         .expect("Failed to generate typings");
 // }
-// 
+//
 // #[allow(dead_code)]
 // fn generate_code_test() {
 //     let path = PathBuf::from_str(
@@ -91,11 +88,11 @@ async fn main() {
 //     )
 //     .expect("Invalid path");
 //     let manifest = read_manifest(&path).expect("Failed to read manifest");
-// 
+//
 //     rindexer::generator::build::generate_rindexer_handlers(manifest, &path, true)
 //         .expect("Failed to generate handlers");
 // }
-// 
+//
 // #[allow(dead_code)]
 // fn generate_all() {
 //     let path = PathBuf::from_str(
@@ -105,21 +102,21 @@ async fn main() {
 //     rindexer::generator::build::generate_rindexer_typings_and_handlers(&path)
 //         .expect("Failed to generate typings and handlers");
 // }
-// 
+//
 // #[cfg(test)]
 // mod tests {
 //     use super::*;
-// 
+//
 //     #[test]
 //     fn test_generate() {
 //         generate();
 //     }
-// 
+//
 //     #[test]
 //     fn test_code_generate() {
 //         generate_code_test();
 //     }
-// 
+//
 //     #[test]
 //     fn test_generate_all() {
 //         generate_all();
