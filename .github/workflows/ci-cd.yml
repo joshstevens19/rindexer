@@ -119,19 +119,6 @@ jobs:
             cargo build --target "$target" "${flags[@]}"
           fi
 
-      - name: Run tests
-        shell: bash
-        run: |
-          set -eo pipefail
-          target="${{ matrix.target }}"
-          flags=()
-          
-          if [[ "$target" != *msvc* && "$target" != "aarch64-unknown-linux-gnu" ]]; then
-            flags+=(--features jemalloc)
-          fi
-          
-          cargo test --exclude rindexer_rust_playground --workspace --release --target "$target" "${flags[@]}"
-
       - name: Archive binaries
         id: artifacts
         if: startsWith(github.ref, 'refs/heads/release/')
@@ -165,6 +152,19 @@ jobs:
             7z a -tzip "$VERSION_DIR/rindexer_${PLATFORM_NAME}-${ARCH}.zip" "$BINARY_NAME"
             echo "file_name=rindexer_${PLATFORM_NAME}-${ARCH}.zip" >> $GITHUB_OUTPUT
           fi
+
+      - name: Run tests
+        shell: bash
+        run: |
+          set -eo pipefail
+          target="${{ matrix.target }}"
+          flags=()
+          
+          if [[ "$target" != *msvc* && "$target" != "aarch64-unknown-linux-gnu" ]]; then
+            flags+=(--features jemalloc)
+          fi
+          
+          cargo test --exclude rindexer_rust_playground --workspace --release --target "$target" "${flags[@]}"
 
       - name: Upload artifact
         if: startsWith(github.ref, 'refs/heads/release/') && matrix.target != 'x86_64-pc-windows-msvc'
