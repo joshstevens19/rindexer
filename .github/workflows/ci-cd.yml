@@ -131,13 +131,9 @@ jobs:
         run: |
           RELEASE_DIR="${{ github.workspace }}/documentation/docs/public/releases/${PLATFORM_NAME}-${ARCH}"
           VERSION_DIR="$RELEASE_DIR/${{ env.VERSION_NAME }}"
+          BUILD_DIR="${{ github.workspace }}/target/${TARGET}/${{ env.BUILD_TYPE }}"
           mkdir -p "$RELEASE_DIR"
           mkdir -p "$VERSION_DIR"
-          if [ "$PLATFORM_NAME" == "linux" ]; then
-            BUILD_DIR="${{ github.workspace }}/cli/target/${TARGET}/${{ env.BUILD_TYPE }}"
-          else
-            BUILD_DIR="${{ github.workspace }}/target/${TARGET}/${{ env.BUILD_TYPE }}"
-          fi
           FILE_NAME="rindexer_${PLATFORM_NAME}-${ARCH}.tar.gz"
           BINARY_NAME="rindexer_cli"
           [[ "$PLATFORM_NAME" == "win32" ]] && BINARY_NAME="rindexer_cli.exe"
