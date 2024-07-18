@@ -5,11 +5,14 @@ use bb8_postgres::PostgresConnectionManager;
 use bytes::Buf;
 use dotenv::dotenv;
 use futures::pin_mut;
+use native_tls::TlsConnector;
+use postgres_native_tls::MakeTlsConnector;
 use tokio::{task, time::timeout};
 use tokio_postgres::{
     binary_copy::BinaryCopyInWriter,
     types::{ToSql, Type as PgType},
-    CopyInSink, Error as PgError, NoTls, Row, Statement, ToStatement, Transaction as PgTransaction,
+    Config, CopyInSink, Error as PgError, Row, Statement, ToStatement,
+    Transaction as PgTransaction,
 };
 use tracing::debug;
 
@@ -21,10 +24,6 @@ pub fn connection_string() -> Result<String, env::VarError> {
     dotenv().ok();
     let connection = env::var("DATABASE_URL")?;
     Ok(connection)
-}
-
-pub struct PostgresClient {
-    pool: Pool<PostgresConnectionManager<NoTls>>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -40,6 +39,12 @@ pub enum PostgresConnectionError {
 
     #[error("Can not connect to the database please make sure your connection string is correct")]
     CanNotConnectToDatabase,
+
+    #[error("Could not parse connection string make sure it is correctly formatted")]
+    CouldNotParseConnectionString,
+
+    #[error("Could not create tls connector")]
+    CouldNotCreateTlsConnector,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -64,14 +69,26 @@ pub enum BulkInsertPostgresError {
     CouldNotWriteDataToPostgres(#[from] tokio_postgres::Error),
 }
 
+pub struct PostgresClient {
+    pool: Pool<PostgresConnectionManager<MakeTlsConnector>>,
+}
+
 impl PostgresClient {
     pub async fn new() -> Result<Self, PostgresConnectionError> {
         let connection_str = connection_string()?;
+        let config: Config = connection_str
+            .parse()
+            .map_err(|_| PostgresConnectionError::CouldNotParseConnectionString)?;
+
+        let connector = TlsConnector::builder()
+            .build()
+            .map_err(|_| PostgresConnectionError::CouldNotCreateTlsConnector)?;
+        let tls_connector = MakeTlsConnector::new(connector);
 
         // Perform a direct connection test
         let (client, connection) = match timeout(
             Duration::from_millis(500),
-            tokio_postgres::connect(&connection_str, NoTls),
+            config.connect(tls_connector.clone()),
         )
         .await
         {
@@ -85,7 +102,7 @@ impl PostgresClient {
 
         // Perform a simple query to check the connection
         match client.query_one("SELECT 1", &[]).await {
-            Ok(_) => (),
+            Ok(_) => {}
             Err(_) => return Err(PostgresConnectionError::CanNotConnectToDatabase),
         };
 
@@ -97,7 +114,8 @@ impl PostgresClient {
             Err(_) => return Err(PostgresConnectionError::CanNotConnectToDatabase),
         }
 
-        let manager = PostgresConnectionManager::new_from_stringlike(&connection_str, NoTls)?;
+        let manager =
+            PostgresConnectionManager::new_from_stringlike(&connection_str, tls_connector)?;
 
         let pool = Pool::builder().build(manager).await?;
 
