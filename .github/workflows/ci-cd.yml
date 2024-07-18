@@ -119,19 +119,6 @@ jobs:
             cargo build --target "$target" "${flags[@]}"
           fi
 
-      - name: Run tests
-        shell: bash
-        run: |
-          set -eo pipefail
-          target="${{ matrix.target }}"
-          flags=()
-          
-          if [[ "$target" != *msvc* && "$target" != "aarch64-unknown-linux-gnu" ]]; then
-            flags+=(--features jemalloc)
-          fi
-          
-          cargo test --exclude rindexer_rust_playground --workspace --release --target "$target" "${flags[@]}"
-
       - name: Archive binaries
         id: artifacts
         if: startsWith(github.ref, 'refs/heads/release/')
@@ -144,13 +131,9 @@ jobs:
         run: |
           RELEASE_DIR="${{ github.workspace }}/documentation/docs/public/releases/${PLATFORM_NAME}-${ARCH}"
           VERSION_DIR="$RELEASE_DIR/${{ env.VERSION_NAME }}"
+          BUILD_DIR="${{ github.workspace }}/target/${TARGET}/${{ env.BUILD_TYPE }}"
           mkdir -p "$RELEASE_DIR"
           mkdir -p "$VERSION_DIR"
-          if [ "$PLATFORM_NAME" == "linux" ]; then
-            BUILD_DIR="${{ github.workspace }}/cli/target/${TARGET}/${{ env.BUILD_TYPE }}"
-          else
-            BUILD_DIR="${{ github.workspace }}/target/${TARGET}/${{ env.BUILD_TYPE }}"
-          fi
           FILE_NAME="rindexer_${PLATFORM_NAME}-${ARCH}.tar.gz"
           BINARY_NAME="rindexer_cli"
           [[ "$PLATFORM_NAME" == "win32" ]] && BINARY_NAME="rindexer_cli.exe"
@@ -165,6 +148,19 @@ jobs:
             7z a -tzip "$VERSION_DIR/rindexer_${PLATFORM_NAME}-${ARCH}.zip" "$BINARY_NAME"
             echo "file_name=rindexer_${PLATFORM_NAME}-${ARCH}.zip" >> $GITHUB_OUTPUT
           fi
+
+      - name: Run tests
+        shell: bash
+        run: |
+          set -eo pipefail
+          target="${{ matrix.target }}"
+          flags=()
+          
+          if [[ "$target" != *msvc* && "$target" != "aarch64-unknown-linux-gnu" ]]; then
+            flags+=(--features jemalloc)
+          fi
+          
+          cargo test --exclude rindexer_rust_playground --workspace --release --target "$target" "${flags[@]}"
 
       - name: Upload artifact
         if: startsWith(github.ref, 'refs/heads/release/') && matrix.target != 'x86_64-pc-windows-msvc'
