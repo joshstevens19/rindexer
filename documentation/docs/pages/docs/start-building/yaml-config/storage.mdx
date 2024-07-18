@@ -30,6 +30,10 @@ connection string, to do this you have to change/define it the `.env` file.
 DATABASE_URL=postgresql://[user[:password]@][host][:port][/dbname]
 ```
 
+:::info
+`sslmode=require` is supported as well just include it in the connection string.
+:::
+
 ### enabled
 
 If postgres is enabled or not, if you do not wish to use postgres you can set this to false or remove postgres from the storage completely.

@@ -66,12 +66,14 @@ For ease of running locally we suggest you enable docker support on the rindexer
 enable docker support with postgres storage you will need to provide a postgres database information in the `.env` file 
 which has been generated for you.
 
+`sslmode=require` is supported as well just include it in the connection string.
+
 ### POSTGRES_PASSWORD
 
 :::warning
 Can skip if:
 - on question "What Storages To Enable?" you selected csv or none
-- on question "Postgres Docker Support Out The Box?" you selected yes
+- on question "Postgres Docker Support Out The Box?" you selected no
 :::
 
 This is injected into the `.env` for your if you selected `yes` to the `Postgres Docker Support Out The Box?` question.
