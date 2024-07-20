@@ -1,4 +1,4 @@
-use std::{borrow::Cow, fs, path::PathBuf};
+use std::{borrow::Cow, fs, path::PathBuf, thread, time::Duration};
 
 use ethers::{
     addressbook::{Address, Chain},
@@ -80,11 +80,34 @@ pub async fn handle_add_contract_command(
     let address = contract_address
         .parse()
         .inspect_err(|e| print_error_message(&format!("Invalid contract address: {}", e)))?;
+    
+    // Fix: implementation was not looking up the address of the implementation contract
+    // in the case of proxy contracts a la Aave V3
+    let mut abi_lookup_address = address;
+    let mut timeout = 1000;
+    let mut n_retry = 0;
+    let max_retries = 3;
+    let backoff_factor = 2;
 
     loop {
-        let metadata = client.contract_source_code(address).await.inspect_err(|e| {
-            print_error_message(&format!("Failed to fetch contract metadata: {}", e))
-        })?;
+        let metadata = match client.contract_source_code(abi_lookup_address).await {
+            Ok(data) => data,
+            Err(e) => {
+                if n_retry >= max_retries {
+                    print_error_message(&format!("Failed to fetch contract metadata: {}, retries: {}", e, n_retry));
+                    return Err(Box::new(e));
+                }
+                // Fix: 
+                // Different verifiers have different rate limits which leads to 
+                // Rate limit errors when adding a contract, Etherscan has good rate limits whereas Arbiscan
+                // is not as good
+                // Timing out to wait for the verifier's API not to hit rate limit
+                thread::sleep(Duration::from_millis(timeout));
+                n_retry += 1;
+                timeout *= n_retry * backoff_factor;
+                continue;
+            }
+        };
 
         if metadata.items.is_empty() {
             print_error_message(&format!(
@@ -96,7 +119,9 @@ pub async fn handle_add_contract_command(
 
         let item = &metadata.items[0];
         if item.proxy == 1 && item.implementation.is_some() {
-            println!("This contract is a proxy contract. Loading the implementation contract...");
+            abi_lookup_address = item.implementation.unwrap();
+            println!("This contract is a proxy contract. Loading the implementation contract {}", abi_lookup_address);
+            thread::sleep(Duration::from_millis(1000));
             continue;
         }
 
