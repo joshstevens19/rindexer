@@ -1,3 +1,4 @@
+use ethers::prelude::U64;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_yaml::Value;
 
@@ -92,5 +93,29 @@ impl Manifest {
             .map_or(false, |c| c.generate_csv.unwrap_or(true));
 
         self.storage.csv_enabled() && contract_csv_enabled
+    }
+}
+
+pub fn deserialize_option_u64_from_string<'de, D>(deserializer: D) -> Result<Option<U64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s: Option<String> = Option::deserialize(deserializer)?;
+    match s {
+        Some(string) => U64::from_dec_str(&string).map(Some).map_err(serde::de::Error::custom),
+        None => Ok(None),
+    }
+}
+
+pub fn serialize_option_u64_as_string<S>(
+    value: &Option<U64>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match *value {
+        Some(ref u64_value) => serializer.serialize_some(&u64_value.as_u64().to_string()),
+        None => serializer.serialize_none(),
     }
 }

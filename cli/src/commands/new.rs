@@ -130,6 +130,7 @@ pub fn handle_new_command(
             chain_id: 1,
             rpc: "https://mainnet.gateway.tenderly.co".to_string(),
             compute_units_per_second: None,
+            max_block_range: None,
         }],
         contracts: vec![Contract {
             name: "RocketPoolETH".to_string(),

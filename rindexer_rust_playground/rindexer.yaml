@@ -7,6 +7,7 @@ networks:
   - name: yominet
     chain_id: 5264468217
     rpc: https://yominet.rpc.caldera.xyz/http
+    max_block_range: 10000
 storage:
   postgres:
     enabled: true
