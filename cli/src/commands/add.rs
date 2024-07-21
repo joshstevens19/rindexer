@@ -1,4 +1,4 @@
-use std::{borrow::Cow, fs, path::PathBuf, thread, time::Duration};
+use std::{borrow::Cow, fs, path::PathBuf, time::Duration};
 
 use ethers::{
     addressbook::{Address, Chain},
@@ -80,31 +80,30 @@ pub async fn handle_add_contract_command(
     let address = contract_address
         .parse()
         .inspect_err(|e| print_error_message(&format!("Invalid contract address: {}", e)))?;
-    
-    // Fix: implementation was not looking up the address of the implementation contract
-    // in the case of proxy contracts a la Aave V3
+
     let mut abi_lookup_address = address;
     let mut timeout = 1000;
-    let mut n_retry = 0;
+    let mut retry_attempts = 0;
     let max_retries = 3;
-    let backoff_factor = 2;
 
     loop {
         let metadata = match client.contract_source_code(abi_lookup_address).await {
             Ok(data) => data,
             Err(e) => {
-                if n_retry >= max_retries {
-                    print_error_message(&format!("Failed to fetch contract metadata: {}, retries: {}", e, n_retry));
+                if retry_attempts >= max_retries {
+                    print_error_message(&format!(
+                        "Failed to fetch contract metadata: {}, retries: {}",
+                        e, retry_attempts
+                    ));
                     return Err(Box::new(e));
                 }
-                // Fix: 
-                // Different verifiers have different rate limits which leads to 
-                // Rate limit errors when adding a contract, Etherscan has good rate limits whereas Arbiscan
-                // is not as good
-                // Timing out to wait for the verifier's API not to hit rate limit
-                thread::sleep(Duration::from_millis(timeout));
-                n_retry += 1;
-                timeout *= n_retry * backoff_factor;
+                // Different verifiers have different rate limits which leads to
+                // rate limit errors when adding a contract.
+                // Etherscan has good rate limits whereas Arbiscan is not as good
+                // Sleeping here avoids APIs hitting rate limit
+                tokio::time::sleep(Duration::from_millis(timeout)).await;
+                retry_attempts += 1;
+                timeout *= retry_attempts * 2;
                 continue;
             }
         };
@@ -120,8 +119,11 @@ pub async fn handle_add_contract_command(
         let item = &metadata.items[0];
         if item.proxy == 1 && item.implementation.is_some() {
             abi_lookup_address = item.implementation.unwrap();
-            println!("This contract is a proxy contract. Loading the implementation contract {}", abi_lookup_address);
-            thread::sleep(Duration::from_millis(1000));
+            println!(
+                "This contract is a proxy contract. Loading the implementation contract {}",
+                abi_lookup_address
+            );
+            tokio::time::sleep(Duration::from_millis(1000)).await;
             continue;
         }
 
