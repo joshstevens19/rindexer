@@ -5,19 +5,7 @@ export default defineConfig({
   iconUrl: '/favicon.png',
   topNav: [
     { text: 'Docs', link: '/docs/introduction/installation', match: '/docs' },
-    {
-      text: '0.1.0-beta',
-      items: [
-        {
-          text: 'Changelog',
-          link: '/docs/changelog',
-        },
-        // {
-        //   text: 'Contributing',
-        //   link: 'https://github.com/wevm/vocs/blob/main/.github/CONTRIBUTING.md',
-        // },
-      ],
-    },
+    { text: 'Changelog', link: '/docs/changelog', match: '/docs' },
   ],
   socials: [
     {
