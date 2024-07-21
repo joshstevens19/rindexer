@@ -15,7 +15,7 @@ pub fn network_provider_fn_name(network: &Network) -> String {
 fn generate_network_lazy_provider_code(network: &Network) -> Code {
     Code::new(format!(
         r#"
-            static ref {network_name}: Arc<JsonRpcCachedProvider> = create_client(&public_read_env_value("{network_url}").unwrap_or("{network_url}".to_string()), {compute_units_per_second}).expect("Error creating provider");
+            static ref {network_name}: Arc<JsonRpcCachedProvider> = create_client(&public_read_env_value("{network_url}").unwrap_or("{network_url}".to_string()), {compute_units_per_second}, {max_block_range}).expect("Error creating provider");
         "#,
         network_name = network_provider_name(network),
         network_url = network.rpc,
@@ -24,7 +24,12 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
                 format!("Some({})", compute_units_per_second)
             } else {
                 "None".to_string()
-            }
+            },
+        max_block_range = if let Some(max_block_range) = network.max_block_range {
+            format!("Some(U64::from({}))", max_block_range)
+        } else {
+            "None".to_string()
+        },
     ))
 }
 
@@ -80,6 +85,7 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
             /// Any manual changes to this file will be overwritten.
             
             use ethers::providers::{Provider, Http, RetryClient};
+            use ethers::types::U64;
             use rindexer::{
                 lazy_static,
                 provider::{create_client, JsonRpcCachedProvider},

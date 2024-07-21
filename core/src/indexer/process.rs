@@ -441,7 +441,14 @@ async fn handle_logs_result(
             let fn_data = result
                 .logs
                 .into_iter()
-                .map(|log| EventResult::new(Arc::clone(&config.network_contract), log))
+                .map(|log| {
+                    EventResult::new(
+                        Arc::clone(&config.network_contract),
+                        log,
+                        result.from_block,
+                        result.to_block,
+                    )
+                })
                 .collect::<Vec<_>>();
 
             if !fn_data.is_empty() {

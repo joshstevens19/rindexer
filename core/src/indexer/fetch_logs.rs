@@ -8,7 +8,7 @@ use ethers::{
 use regex::Regex;
 use tokio::sync::{mpsc, Semaphore};
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
@@ -18,7 +18,6 @@ use crate::{
 
 pub struct FetchLogsResult {
     pub logs: Vec<Log>,
-    #[allow(dead_code)]
     pub from_block: U64,
     pub to_block: U64,
 }
@@ -35,10 +34,25 @@ pub fn fetch_logs_stream(
 
     tokio::spawn(async move {
         let snapshot_to_block = initial_filter.get_to_block();
+        let from_block = initial_filter.get_from_block();
         let mut current_filter = initial_filter;
 
-        // Process historical logs first
-        let mut max_block_range_limitation = None;
+        // add any max block range limitation before we start processing
+        let mut max_block_range_limitation =
+            config.network_contract.cached_provider.max_block_range;
+        if max_block_range_limitation.is_some() {
+            current_filter = current_filter.set_to_block(calculate_process_historic_log_to_block(
+                &from_block,
+                &snapshot_to_block,
+                &max_block_range_limitation,
+            ));
+            warn!(
+                "{} - {} - max block range limitation of {} blocks applied - block range indexing will be slower then RPC providers supplying the optimal ranges - https://rindexer.xyz/docs/references/rpc-node-providers#rpc-node-providers",
+                config.info_log_name,
+                IndexingEventProgressStatus::Syncing.log(),
+                max_block_range_limitation.unwrap()
+            );
+        }
         while current_filter.get_from_block() <= snapshot_to_block {
             let semaphore_client = Arc::clone(&config.semaphore);
             let permit = semaphore_client.acquire_owned().await;
@@ -60,7 +74,7 @@ pub fn fetch_logs_stream(
 
                     // slow indexing warn user
                     if let Some(range) = max_block_range_limitation {
-                        info!(
+                        warn!(
                             "{} - RPC PROVIDER IS SLOW - Slow indexing mode enabled, max block range limitation: {} blocks - we advise using a faster provider who can predict the next block ranges.",
                             &config.info_log_name,
                             range
@@ -146,7 +160,7 @@ async fn fetch_historic_logs_stream(
 
         return Some(ProcessHistoricLogsStreamResult {
             next: current_filter.set_from_block(to_block),
-            max_block_range_limitation: None,
+            max_block_range_limitation,
         });
     }
 
