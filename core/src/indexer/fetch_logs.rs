@@ -368,7 +368,7 @@ async fn live_indexing_stream(
                                 from_block
                             );
                             info!(
-                                "{} - {} - LogsBloom check - No events found in the block {}",
+                                "{} - {} - Did not need to hit RPC as no events in {} block - LogsBloom for block checked",
                                 info_log_name,
                                 IndexingEventProgressStatus::Live.log(),
                                 from_block
