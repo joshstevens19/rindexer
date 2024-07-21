@@ -4,6 +4,9 @@ networks:
   - name: ethereum
     chain_id: 1
     rpc: https://mainnet.gateway.tenderly.co
+  - name: yominet
+    chain_id: 5264468217
+    rpc: https://yominet.rpc.caldera.xyz/http
 storage:
   postgres:
     enabled: true
@@ -29,3 +32,12 @@ contracts:
         #start_block: 56399431
     abi: ./abis/erc20-abi.json
     generate_csv: true
+  - name: World
+    details:
+      - network: yominet
+        address: 0x441e13a25caecad50028e7623a39b91a507bca02
+        start_block: '1077466'
+        end_block: '1650276'
+    abi: ./abis/world.abi.json
+    include_events:
+      - ComponentValueSet

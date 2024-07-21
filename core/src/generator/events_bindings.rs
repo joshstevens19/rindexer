@@ -11,7 +11,7 @@ use crate::{
     database::postgres::generate::{
         generate_column_names_only_with_base_properties, generate_event_table_full_name,
     },
-    helpers::{camel_to_snake, get_full_path},
+    helpers::{camel_to_snake, camel_to_snake_advanced, get_full_path},
     manifest::{
         contract::{Contract, ContractDetails},
         storage::{CsvDetails, Storage},
@@ -24,7 +24,7 @@ pub fn abigen_contract_name(contract: &Contract) -> String {
 }
 
 fn abigen_contract_mod_name(contract: &Contract) -> String {
-    camel_to_snake(&abigen_contract_name(contract))
+    camel_to_snake_advanced(&abigen_contract_name(contract), true)
 }
 
 pub fn abigen_contract_file_name(contract: &Contract) -> String {
@@ -799,7 +799,7 @@ pub fn generate_event_handlers(
                             if !static_bytes.is_empty() {
                                 ".into()"
                             } else {
-                                ""
+                                ".clone()"
                             }
                         } else {
                             ""

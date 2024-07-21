@@ -5,7 +5,7 @@ use rindexer::{
     EthereumSqlTypeWrapper, PgType, RindexerColorize,
 };
 
-use super::super::super::typings::rindexer_playground::events::erc20_filter::{
+use super::super::super::typings::rindexer_playground::events::erc_20_filter::{
     no_extensions, ERC20FilterEventType, TransferEvent,
 };
 
@@ -66,7 +66,7 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                     let result = context
                         .database
                         .bulk_insert_via_copy(
-                            "rindexer_playground_erc20_filter.transfer",
+                            "rindexer_playground_erc_20_filter.transfer",
                             &[
                                 "contract_address".to_string(),
                                 "from".to_string(),
@@ -100,7 +100,7 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                     let result = context
                         .database
                         .bulk_insert(
-                            "rindexer_playground_erc20_filter.transfer",
+                            "rindexer_playground_erc_20_filter.transfer",
                             &[
                                 "contract_address".to_string(),
                                 "from".to_string(),
@@ -140,6 +140,6 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
     )
     .register(manifest_path, registry);
 }
-pub async fn erc20_filter_handlers(manifest_path: &PathBuf, registry: &mut EventCallbackRegistry) {
+pub async fn erc_20_filter_handlers(manifest_path: &PathBuf, registry: &mut EventCallbackRegistry) {
     transfer_handler(manifest_path, registry).await;
 }
