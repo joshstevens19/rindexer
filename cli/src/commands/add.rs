@@ -14,6 +14,7 @@ use rindexer::{
 };
 
 use crate::{
+    commands::BACKUP_ETHERSCAN_API_KEY,
     console::{
         print_error_message, print_success_message, prompt_for_input, prompt_for_input_list,
     },
@@ -65,7 +66,14 @@ pub async fn handle_add_contract_command(
     let contract_address =
         prompt_for_input(&format!("Enter {} Contract Address", network), None, None, None);
 
+    let etherscan_api_key = manifest
+        .global
+        .as_ref()
+        .and_then(|global| global.etherscan_api_key.as_ref())
+        .map_or(BACKUP_ETHERSCAN_API_KEY, String::as_str);
+
     let client = Client::builder()
+        .with_api_key(etherscan_api_key)
         .chain(chain_network)
         .map_err(|e| {
             print_error_message(&format!("Invalid chain id {}", e));
