@@ -487,9 +487,11 @@ fn retry_with_block_range(
 ) -> Option<RetryWithBlockRangeResult> {
     let error_message = &error.message;
     // some providers put the data in the data field
-    let error_data = match &error.data {
-        Some(data) => &data.to_string(),
-        None => &String::from(""),
+    let error_data_binding = error.data.as_ref().map(|data| data.to_string());
+    let empty_string = String::from("");
+    let error_data = match &error_data_binding {
+        Some(data) => data,
+        None => &empty_string,
     };
 
     fn compile_regex(pattern: &str) -> Result<Regex, regex::Error> {

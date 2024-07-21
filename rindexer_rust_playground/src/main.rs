@@ -46,6 +46,7 @@ async fn main() {
             let result = start_rindexer(StartDetails {
                 manifest_path: &manifest_path,
                 indexing_details: if enable_indexer {
+                    // EventCallbackRegistry { events: vec![] }
                     Some(IndexingDetails { registry: register_all_handlers(&manifest_path).await })
                 } else {
                     None
