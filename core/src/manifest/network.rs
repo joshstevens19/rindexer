@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 pub struct Network {
     pub name: String,
 
-    pub chain_id: u32,
+    pub chain_id: u64,
 
     pub rpc: String,
 

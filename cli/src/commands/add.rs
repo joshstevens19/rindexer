@@ -38,7 +38,7 @@ pub async fn handle_add_contract_command(
         return Err(err.into());
     }
 
-    let networks: Vec<(&str, u32)> =
+    let networks: Vec<(&str, u64)> =
         manifest.networks.iter().map(|network| (network.name.as_str(), network.chain_id)).collect();
 
     if networks.is_empty() {
