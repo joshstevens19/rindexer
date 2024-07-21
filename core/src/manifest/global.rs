@@ -6,4 +6,7 @@ use crate::manifest::contract::Contract;
 pub struct Global {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contracts: Option<Vec<Contract>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub etherscan_api_key: Option<String>,
 }
