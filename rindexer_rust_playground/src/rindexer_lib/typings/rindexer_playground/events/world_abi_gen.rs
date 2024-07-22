@@ -12,7 +12,7 @@ pub use rindexer_world_gen::*;
 pub mod rindexer_world_gen {
     const _: () = {
         ::core::include_bytes!(
-            "/Users/joshstevens/code/rindexer/rindexer_rust_playground/abis/world.abi.json",
+            "../../../../../abis/world.abi.json",
         );
     };
     #[allow(deprecated)]
