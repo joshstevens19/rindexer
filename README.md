@@ -53,7 +53,7 @@ rindexer and all the commands available to you.
 
 There's a pre-built docker image which can be used to run `rindexer` inside your dockerized infra:
 
-`ghcr.io/joshstevens19/rindexer`
+[`ghcr.io/joshstevens19/rindexer`](https://github.com/users/joshstevens19/packages/container/package/rindexer)
 
 To use it with an existing project and a running postgres instance you can simply invoke:
 
