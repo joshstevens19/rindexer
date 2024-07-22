@@ -7,7 +7,7 @@ RUN rustup target add x86_64-unknown-linux-musl
 RUN cargo build --release --target x86_64-unknown-linux-musl
 RUN strip /app/target/x86_64-unknown-linux-musl/release/rindexer_cli
 
-FROM scratch
+FROM --platform=linux/amd64 scratch
 COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/rindexer_cli /app/rindexer
 
 ENTRYPOINT ["/app/rindexer"]
