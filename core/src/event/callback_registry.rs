@@ -35,14 +35,26 @@ pub struct TxInformation {
 }
 
 #[derive(Debug, Clone)]
+pub struct LogFoundInRequest {
+    pub from_block: U64,
+    pub to_block: U64,
+}
+
+#[derive(Debug, Clone)]
 pub struct EventResult {
     pub log: Log,
     pub decoded_data: Arc<dyn Any + Send + Sync>,
     pub tx_information: TxInformation,
+    pub found_in_request: LogFoundInRequest,
 }
 
 impl EventResult {
-    pub fn new(network_contract: Arc<NetworkContract>, log: Log) -> Self {
+    pub fn new(
+        network_contract: Arc<NetworkContract>,
+        log: Log,
+        start_block: U64,
+        end_block: U64,
+    ) -> Self {
         let log_meta = LogMeta::from(&log);
         let log_address = log.address;
         Self {
@@ -57,6 +69,7 @@ impl EventResult {
                 transaction_index: log_meta.transaction_index,
                 log_index: log_meta.log_index,
             },
+            found_in_request: LogFoundInRequest { from_block: start_block, to_block: end_block },
         }
     }
 }

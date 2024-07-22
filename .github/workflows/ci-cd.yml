@@ -1,0 +1,223 @@
+name: CI/CD
+
+on:
+  push:
+    branches:
+      - 'release/**'
+      - 'master'
+  pull_request:
+    branches:
+      - 'master'
+      - '**'
+
+jobs:
+  build:
+    if: |
+      (github.event_name == 'push' || github.event_name == 'pull_request') &&
+      github.actor != 'github-actions[bot]' &&
+      !(github.event_name == 'pull_request' &&
+        startsWith(github.event.pull_request.head.ref, 'release/') &&
+        github.event.pull_request.base.ref == 'master')
+    name: ${{ matrix.target }} (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            svm_target_platform: linux-amd64
+            platform: linux
+            arch: amd64
+#          - runner: ubuntu-latest
+#            target: aarch64-unknown-linux-gnu
+#            svm_target_platform: linux-aarch64
+#            platform: linux
+#            arch: arm64
+          - runner: macos-12
+            target: x86_64-apple-darwin
+            svm_target_platform: macosx-amd64
+            platform: darwin
+            arch: amd64
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+            svm_target_platform: macosx-aarch64
+            platform: darwin
+            arch: arm64
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            svm_target_platform: windows-amd64
+            platform: win32
+            arch: amd64
+
+    env:
+      BUILD_TYPE: release
+
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          ref: ${{ github.ref_name }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+          cache-on-failure: true
+
+      - name: Apple M1 setup
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: |
+          echo "SDKROOT=$(xcrun -sdk macosx --show-sdk-path)" >> $GITHUB_ENV
+          echo "MACOSX_DEPLOYMENT_TARGET=$(xcrun -sdk macosx --show-sdk-platform-version)" >> $GITHUB_ENV
+
+      - name: Linux ARM setup
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+
+      - name: Install MSVC target
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: rustup target add x86_64-pc-windows-msvc
+
+      - name: Install OpenSSL development libraries
+        if: matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Setup cross-compilation for pkg-config
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
+          echo "PKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_ENV
+          echo "PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_ENV
+
+      - name: Extract version name
+        id: extract_version
+        run: echo "VERSION_NAME=${GITHUB_REF#refs/heads/release/}" >> $GITHUB_ENV
+
+      - name: Build binaries
+        working-directory: cli
+        env:
+          SVM_TARGET_PLATFORM: ${{ matrix.svm_target_platform }}
+        shell: bash
+        run: |
+          set -eo pipefail
+          target="${{ matrix.target }}"
+          flags=()
+
+          if [[ "$target" != *msvc* && "$target" != "aarch64-unknown-linux-gnu" ]]; then
+            flags+=(--features jemalloc)
+          fi
+
+          [[ "$target" == *windows* ]] && exe=".exe"
+
+          if [[ "${{ env.BUILD_TYPE }}" == "release" ]]; then
+            cargo build --release --target "$target" "${flags[@]}"
+          else
+            cargo build --target "$target" "${flags[@]}"
+          fi
+
+      - name: Archive binaries
+        id: artifacts
+        if: startsWith(github.ref, 'refs/heads/release/')
+        env:
+          PLATFORM_NAME: ${{ matrix.platform }}
+          TARGET: ${{ matrix.target }}
+          ARCH: ${{ matrix.arch }}
+          VERSION_NAME: ${{ env.VERSION_NAME }}
+        shell: bash
+        run: |
+          RELEASE_DIR="${{ github.workspace }}/documentation/docs/public/releases/${PLATFORM_NAME}-${ARCH}"
+          VERSION_DIR="$RELEASE_DIR/${{ env.VERSION_NAME }}"
+          BUILD_DIR="${{ github.workspace }}/target/${TARGET}/${{ env.BUILD_TYPE }}"
+          mkdir -p "$RELEASE_DIR"
+          mkdir -p "$VERSION_DIR"
+          FILE_NAME="rindexer_${PLATFORM_NAME}-${ARCH}.tar.gz"
+          BINARY_NAME="rindexer_cli"
+          [[ "$PLATFORM_NAME" == "win32" ]] && BINARY_NAME="rindexer_cli.exe"
+          
+          if [ "$PLATFORM_NAME" == "linux" ] || [ "$PLATFORM_NAME" == "darwin" ]; then
+            tar -czvf "$RELEASE_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
+            tar -czvf "$VERSION_DIR/$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
+            echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
+          else
+            cd $BUILD_DIR
+            7z a -tzip "$RELEASE_DIR/rindexer_${PLATFORM_NAME}-${ARCH}.zip" "$BINARY_NAME"
+            7z a -tzip "$VERSION_DIR/rindexer_${PLATFORM_NAME}-${ARCH}.zip" "$BINARY_NAME"
+            echo "file_name=rindexer_${PLATFORM_NAME}-${ARCH}.zip" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run tests
+        shell: bash
+        run: |
+          set -eo pipefail
+          target="${{ matrix.target }}"
+          flags=()
+          
+          if [[ "$target" != *msvc* && "$target" != "aarch64-unknown-linux-gnu" ]]; then
+            flags+=(--features jemalloc)
+          fi
+          
+          cargo test --exclude rindexer_rust_playground --workspace --release --target "$target" "${flags[@]}"
+
+      - name: Upload artifact
+        if: startsWith(github.ref, 'refs/heads/release/') && matrix.target != 'x86_64-pc-windows-msvc'
+        uses: actions/upload-artifact@v2
+        with:
+          name: ${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}-${{ matrix.arch }}/${{ env.VERSION_NAME }}
+            ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}-${{ matrix.arch }}/rindexer_${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
+
+      - name: Upload artifact for windows
+        if: startsWith(github.ref, 'refs/heads/release/') && matrix.target == 'x86_64-pc-windows-msvc'
+        uses: actions/upload-artifact@v2
+        with:
+          name: ${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}-${{ matrix.arch }}/${{ env.VERSION_NAME }}
+            ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}-${{ matrix.arch }}/rindexer_${{ matrix.platform }}-${{ matrix.arch }}.zip
+
+  finalize:
+    name: Commit and push changes
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.actor != 'github-actions[bot]' && startsWith(github.ref, 'refs/heads/release/')
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v2
+        with:
+          path: ${{ github.workspace }}/documentation/docs/public/releases
+
+      - name: Commit and push changes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+          git add documentation/docs/public/releases
+          git commit -m "Add release binaries for ${{ env.VERSION_NAME }}"
+          git push origin HEAD:refs/heads/${{ github.ref_name }}
+
+      - name: Clean up uploaded artifacts
+        if: matrix.target != 'x86_64-pc-windows-msvc'
+        run: |
+          rm -rf ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}-${{ env.VERSION_NAME }}/rindexer_${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
+          rm -rf ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}/rindexer_${{ matrix.platform }}-${{ matrix.arch }}.tar.gz
+
+      - name: Clean up uploaded artifacts for windows
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: |
+          rm -rf ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}-${{ env.VERSION_NAME }}/rindexer_${{ matrix.platform }}-${{ matrix.arch }}.zip
+          rm -rf ${{ github.workspace }}/documentation/docs/public/releases/${{ matrix.platform }}/rindexer_${{ matrix.platform }}-${{ matrix.arch }}.zip

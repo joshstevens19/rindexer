@@ -127,8 +127,13 @@ fi
 
 # Add the rindexerup and rindexerdown commands to the profile
 echo "# Adding rindexerup and rindexerdown commands" >> "$PROFILE"
-echo "alias rindexerup='bash $RINDEXERUP_PATH \$@'" >> "$PROFILE"
-echo "alias rindexerdown='bash $RINDEXERDOWN_PATH'" >> "$PROFILE"
+if [[ "$SHELL" == */fish ]]; then
+    echo "alias rindexerup 'bash $RINDEXERUP_PATH \$argv'" >> "$PROFILE"
+    echo "alias rindexerdown 'bash $RINDEXERDOWN_PATH'" >> "$PROFILE"
+else
+    echo "alias rindexerup='bash $RINDEXERUP_PATH \$@'" >> "$PROFILE"
+    echo "alias rindexerdown='bash $RINDEXERDOWN_PATH'" >> "$PROFILE"
+fi
 
 # Create or update the rindexerup script to check for updates
 cat <<EOF > "$RINDEXERUP_PATH"

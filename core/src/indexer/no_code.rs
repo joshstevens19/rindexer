@@ -145,19 +145,10 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                 return Ok(());
             }
 
-            let from_block = match results.first() {
-                Some(first) => first.tx_information.block_number,
+            let (from_block, to_block) = match results.first() {
+                Some(first) => (first.found_in_request.from_block, first.found_in_request.to_block),
                 None => {
                     let error_message = "Unexpected error: no first event despite non-zero length.";
-                    error!("{}", error_message);
-                    return Err(error_message.to_string());
-                }
-            };
-
-            let to_block = match results.last() {
-                Some(last) => last.tx_information.block_number,
-                None => {
-                    let error_message = "Unexpected error: no last event despite non-zero length.";
                     error!("{}", error_message);
                     return Err(error_message.to_string());
                 }

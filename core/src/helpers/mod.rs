@@ -20,14 +20,17 @@ pub use file::{
 use rand::{distributions::Alphanumeric, Rng};
 
 pub fn camel_to_snake(s: &str) -> String {
+    camel_to_snake_advanced(s, false)
+}
+
+pub fn camel_to_snake_advanced(s: &str, numbers_attach_to_last_word: bool) -> String {
     let mut snake_case = String::new();
     let mut previous_was_uppercase = false;
+    let mut previous_was_digit = false;
 
     for (i, c) in s.chars().enumerate() {
         if c.is_alphanumeric() || c == '_' {
             if c.is_uppercase() {
-                // Insert an underscore if it's not the first character and the previous character
-                // wasn't uppercase
                 if i > 0 &&
                     (!previous_was_uppercase ||
                         (i + 1 < s.len() &&
@@ -40,9 +43,22 @@ pub fn camel_to_snake(s: &str) -> String {
                 }
                 snake_case.push(c.to_ascii_lowercase());
                 previous_was_uppercase = true;
+                previous_was_digit = false;
+            } else if c.is_ascii_digit() {
+                if !numbers_attach_to_last_word &&
+                    i > 0 &&
+                    !previous_was_digit &&
+                    !snake_case.ends_with('_')
+                {
+                    snake_case.push('_');
+                }
+                snake_case.push(c);
+                previous_was_uppercase = false;
+                previous_was_digit = true;
             } else {
                 snake_case.push(c);
                 previous_was_uppercase = false;
+                previous_was_digit = false;
             }
         }
     }
@@ -109,6 +125,10 @@ mod tests {
         assert_eq!(camel_to_snake("Camel"), "camel");
         assert_eq!(camel_to_snake("camel"), "camel");
         assert_eq!(camel_to_snake("collectNFTId"), "collect_nft_id");
-        assert_eq!(camel_to_snake("ERC20"), "erc20");
+        assert_eq!(camel_to_snake("ERC20"), "erc_20");
+        assert_eq!(camel_to_snake("arg1"), "arg_1");
+
+        assert_eq!(camel_to_snake_advanced("ERC20", false), "erc_20");
+        assert_eq!(camel_to_snake_advanced("ERC20", true), "erc20");
     }
 }

@@ -277,7 +277,7 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                                     from_block
                                 );
                                 info!(
-                                    "{} - {} - LogsBloom check - No events found in the block {}",
+                                    "{} - {} - Did not need to hit RPC as no events in {} block - LogsBloom for block checked",
                                     &config.info_log_name,
                                     IndexingEventProgressStatus::Live.log(),
                                     from_block
@@ -441,7 +441,14 @@ async fn handle_logs_result(
             let fn_data = result
                 .logs
                 .into_iter()
-                .map(|log| EventResult::new(Arc::clone(&config.network_contract), log))
+                .map(|log| {
+                    EventResult::new(
+                        Arc::clone(&config.network_contract),
+                        log,
+                        result.from_block,
+                        result.to_block,
+                    )
+                })
                 .collect::<Vec<_>>();
 
             if !fn_data.is_empty() {

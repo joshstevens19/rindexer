@@ -16,7 +16,7 @@ use crate::{
 pub const YAML_CONFIG_NAME: &str = "rindexer.yaml";
 
 fn substitute_env_variables(contents: &str) -> Result<String, regex::Error> {
-    let re = Regex::new(r"\$<([^>]+)>")?;
+    let re = Regex::new(r"\$\{([^}]+)\}")?;
     let result = re.replace_all(contents, |caps: &Captures| {
         let var_name = &caps[1];
         match env::var(var_name) {

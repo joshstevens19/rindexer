@@ -21,7 +21,7 @@ start_graphql:
 start_indexer_uniswap_v3_factory:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- start --path /Users/joshstevens/code/rindexer/examples/uniswap_v3_factory all
 codegen:
-	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path /Users/joshstevens/code/rust typings
+	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path /Users/joshstevens/code/kami typings
 codegen_typings:
 	cargo run -- codegen typings
 codegen_indexer:

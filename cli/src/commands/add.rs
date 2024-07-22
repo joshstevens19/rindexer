@@ -1,4 +1,4 @@
-use std::{borrow::Cow, fs, path::PathBuf};
+use std::{borrow::Cow, fs, path::PathBuf, time::Duration};
 
 use ethers::{
     addressbook::{Address, Chain},
@@ -14,6 +14,7 @@ use rindexer::{
 };
 
 use crate::{
+    commands::BACKUP_ETHERSCAN_API_KEY,
     console::{
         print_error_message, print_success_message, prompt_for_input, prompt_for_input_list,
     },
@@ -38,7 +39,7 @@ pub async fn handle_add_contract_command(
         return Err(err.into());
     }
 
-    let networks: Vec<(&str, u32)> =
+    let networks: Vec<(&str, u64)> =
         manifest.networks.iter().map(|network| (network.name.as_str(), network.chain_id)).collect();
 
     if networks.is_empty() {
@@ -65,7 +66,14 @@ pub async fn handle_add_contract_command(
     let contract_address =
         prompt_for_input(&format!("Enter {} Contract Address", network), None, None, None);
 
+    let etherscan_api_key = manifest
+        .global
+        .as_ref()
+        .and_then(|global| global.etherscan_api_key.as_ref())
+        .map_or(BACKUP_ETHERSCAN_API_KEY, String::as_str);
+
     let client = Client::builder()
+        .with_api_key(etherscan_api_key)
         .chain(chain_network)
         .map_err(|e| {
             print_error_message(&format!("Invalid chain id {}", e));
@@ -81,10 +89,32 @@ pub async fn handle_add_contract_command(
         .parse()
         .inspect_err(|e| print_error_message(&format!("Invalid contract address: {}", e)))?;
 
+    let mut abi_lookup_address = address;
+    let mut timeout = 1000;
+    let mut retry_attempts = 0;
+    let max_retries = 3;
+
     loop {
-        let metadata = client.contract_source_code(address).await.inspect_err(|e| {
-            print_error_message(&format!("Failed to fetch contract metadata: {}", e))
-        })?;
+        let metadata = match client.contract_source_code(abi_lookup_address).await {
+            Ok(data) => data,
+            Err(e) => {
+                if retry_attempts >= max_retries {
+                    print_error_message(&format!(
+                        "Failed to fetch contract metadata: {}, retries: {}",
+                        e, retry_attempts
+                    ));
+                    return Err(Box::new(e));
+                }
+                // Different verifiers have different rate limits which leads to
+                // rate limit errors when adding a contract.
+                // Etherscan has good rate limits whereas Arbiscan is not as good
+                // Sleeping here avoids APIs hitting rate limit
+                tokio::time::sleep(Duration::from_millis(timeout)).await;
+                retry_attempts += 1;
+                timeout *= retry_attempts * 2;
+                continue;
+            }
+        };
 
         if metadata.items.is_empty() {
             print_error_message(&format!(
@@ -96,7 +126,12 @@ pub async fn handle_add_contract_command(
 
         let item = &metadata.items[0];
         if item.proxy == 1 && item.implementation.is_some() {
-            println!("This contract is a proxy contract. Loading the implementation contract...");
+            abi_lookup_address = item.implementation.unwrap();
+            println!(
+                "This contract is a proxy contract. Loading the implementation contract {}",
+                abi_lookup_address
+            );
+            tokio::time::sleep(Duration::from_millis(1000)).await;
             continue;
         }
 

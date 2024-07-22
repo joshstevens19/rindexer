@@ -17,11 +17,79 @@
 
 all release branches are deployed through `release/VERSION_NUMBER` branches
 
-#### 0.1.1-beta 16th July 2024
+## 0.2.0-beta - 21th July 2024
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.2.0
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.2.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.2.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.2.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.2.0/rindexer_win32-amd64.zip
+
+### Features
+-------------------------------------------------
+
+- feat: add max_block_range to networks - https://github.com/joshstevens19/rindexer/issues/55
+- feat: allow you to add your own etherscan api key - https://rindexer.xyz/docs/start-building/yaml-config/global#etherscan_api_key
+- feat: improve logs bloom log message
+
+### Bug fixes
+-------------------------------------------------
+
+fix: resolve `substitute_env_variables` to use `${}` instead of `$<>` for env variables
+
+## 0.1.4-beta - 20th July 2024
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.1.4
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.1.4/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.1.4/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.1.4/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.1.4/rindexer_win32-amd64.zip
+
+### Bug fixes
+-------------------------------------------------
+
+- fix: fixing the query of implemntation ABI for proxy contracts
+- fix: add request timeouts to adapt to different verifier's rate limits
+- fix: make chain_id u64 instead of u32 - https://github.com/joshstevens19/rindexer/issues/53
+- fix: fix rust project not being able to run due to borrower check
+- fix: fix typings generations to parse the object values correctly
+
+
+## 0.1.3-beta - 19th July 2024
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.1.3
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.1.3/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.1.3/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.1.3/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.1.3/rindexer_win32-amd64.zip
+
+### Bug fixes
+-------------------------------------------------
+
+- fix: Remove package specifier from codegen Cargo.toml
+
+## 0.1.2-beta - 18th July 2024
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.1.2
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.1.2/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.1.2/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.1.2/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.1.2/rindexer_win32-amd64.zip
+
+### Bug fixes
+-------------------------------------------------
+
+- fix: allow postgres tls connections to be used (?sslmode=require)
+
+## 0.1.1-beta - 16th July 2024
 
 github branch - https://github.com/joshstevens19/rindexer/tree/release/0.1.1
 
-- linux binary - https://rindexer.xyz/releases/linux-amd64/0.1.1rindexer_linux-amd64.tar.gz
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.1.1/rindexer_linux-amd64.tar.gz
 - mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.1.1/rindexer_darwin-arm64.tar.gz
 - mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.1.1/rindexer_darwin-amd64.tar.gz
 - windows binary - https://rindexer/releases.xyz/win32-amd64/0.1.1/rindexer_win32-amd64.zip
@@ -31,7 +99,7 @@ github branch - https://github.com/joshstevens19/rindexer/tree/release/0.1.1
 
 fix: support all the int solidity types - https://github.com/joshstevens19/rindexer/issues/45
 
-### 0.1.0-beta - 15th July 2024
+## 0.1.0-beta - 15th July 2024
 -------------------------------------------------
 
 github branch - https://github.com/joshstevens19/rindexer/tree/release/0.1.0

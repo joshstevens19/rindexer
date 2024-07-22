@@ -19,11 +19,16 @@ use crate::{event::RindexerEventFilter, manifest::core::Manifest};
 pub struct JsonRpcCachedProvider {
     provider: Arc<Provider<RetryClient<Http>>>,
     cache: Mutex<Option<(Instant, Arc<Block<H256>>)>>,
+    pub max_block_range: Option<U64>,
 }
 
 impl JsonRpcCachedProvider {
-    pub fn new(provider: Provider<RetryClient<Http>>) -> Self {
-        JsonRpcCachedProvider { provider: Arc::new(provider), cache: Mutex::new(None) }
+    pub fn new(provider: Provider<RetryClient<Http>>, max_block_range: Option<U64>) -> Self {
+        JsonRpcCachedProvider {
+            provider: Arc::new(provider),
+            cache: Mutex::new(None),
+            max_block_range,
+        }
     }
 
     pub async fn get_latest_block(&self) -> Result<Option<Arc<Block<H256>>>, ProviderError> {
@@ -73,6 +78,7 @@ pub enum RetryClientError {
 pub fn create_client(
     rpc_url: &str,
     compute_units_per_second: Option<u64>,
+    max_block_range: Option<U64>,
 ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
     let url = Url::parse(rpc_url).map_err(|e| {
         RetryClientError::HttpProviderCantBeCreated(rpc_url.to_string(), e.to_string())
@@ -87,7 +93,7 @@ pub fn create_client(
             .initial_backoff(Duration::from_millis(500))
             .build(provider, Box::<ethers::providers::HttpRateLimitRetryPolicy>::default()),
     );
-    Ok(Arc::new(JsonRpcCachedProvider::new(instance)))
+    Ok(Arc::new(JsonRpcCachedProvider::new(instance, max_block_range)))
 }
 
 pub async fn get_chain_id(rpc_url: &str) -> Result<U256, ProviderError> {
@@ -107,7 +113,11 @@ impl CreateNetworkProvider {
     pub fn create(manifest: &Manifest) -> Result<Vec<CreateNetworkProvider>, RetryClientError> {
         let mut result: Vec<CreateNetworkProvider> = vec![];
         for network in &manifest.networks {
-            let provider = create_client(&network.rpc, network.compute_units_per_second)?;
+            let provider = create_client(
+                &network.rpc,
+                network.compute_units_per_second,
+                network.max_block_range,
+            )?;
             result.push(CreateNetworkProvider {
                 network_name: network.name.clone(),
                 client: provider,
@@ -125,14 +135,14 @@ mod tests {
     #[test]
     fn test_create_retry_client() {
         let rpc_url = "http://localhost:8545";
-        let result = create_client(rpc_url, Some(660));
+        let result = create_client(rpc_url, Some(660), None);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_create_retry_client_invalid_url() {
         let rpc_url = "invalid_url";
-        let result = create_client(rpc_url, Some(660));
+        let result = create_client(rpc_url, Some(660), None);
         assert!(result.is_err());
         if let Err(RetryClientError::HttpProviderCantBeCreated(url, _)) = result {
             assert_eq!(url, rpc_url);
