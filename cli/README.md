@@ -32,6 +32,7 @@ Commands:
   add           Add elements such as contracts to the rindexer.yaml file
   codegen       Generates rust code based on rindexer.yaml or graphql queries
   delete        Delete data from the postgres database or csv files
+  phantom       Use phantom events to add your own events to contracts
   help          Print this message or the help of the given subcommand(s)
 
 Options:
@@ -41,19 +42,10 @@ Options:
 
 ## Working with CLI locally
 
-The best way to work with the CLI is to use the `cargo run` command with args after it inside the CLI project, 
-for example if I wanted to create a new project I would run:
+The best way to work with the CLI is to use the `Makefile` predefined commands.
+
+You can also run your own commands using cargo run, example below would create a new no-code project in the path you specified.
 
 ```bash
 cargo run -- new --path PATH_TO_CREATE_PROJECT no-code
 ```
-
-This would create a new no-code project in the path you specified.
-
-If you wanted to look at the help you can run:
-
-```bash
-cargo run -- help
-```
-
-This will show you all the commands available to you.
