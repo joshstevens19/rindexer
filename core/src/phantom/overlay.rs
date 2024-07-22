@@ -43,7 +43,7 @@ pub enum CreateOverlayError {
 pub async fn create_overlay_api_key() -> Result<String, CreateOverlayError> {
     let client = Client::new();
     let response = client
-        .get("https://api.dyrpc.network/generate")
+        .post("https://api.dyrpc.network/generate")
         .send()
         .await
         .map_err(CreateOverlayError::ApiFailed)?;
