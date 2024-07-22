@@ -49,7 +49,7 @@ Options:
 We have full documentation https://rindexer.xyz/docs/introduction/installation which goes into more detail on how to use 
 rindexer and all the commands available to you.
 
-## Docker
+## Docker2
 
 There's a pre-built docker image which can be used to run `rindexer` inside your dockerized infra:
 
