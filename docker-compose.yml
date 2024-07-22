@@ -1,6 +1,3 @@
-volumes:
-  postgres_data: {}
-
 networks:
   default:
     name: rindexer_default
