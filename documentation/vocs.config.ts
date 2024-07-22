@@ -71,6 +71,10 @@ export default defineConfig({
           link: '/docs/start-building/delete',
         },
         {
+          text: 'Phantom Events',
+          link: '/docs/start-building/phantom',
+        },
+        {
           text: 'Rust Project Deep Dive',
           link: '/docs/start-building/rust-project-deep-dive',
           items: [
