@@ -1,0 +1,8 @@
+# ignore everything
+*
+
+# except the following
+!Dockerfile
+!.dockerignore
+!scripts
+!rindexer
