@@ -6,7 +6,7 @@ use crate::{
     indexer::Indexer,
     manifest::{
         contract::Contract, global::Global, graphql::GraphQLSettings, network::Network,
-        storage::Storage,
+        phantom::Phantom, storage::Storage,
     },
 };
 
@@ -67,6 +67,9 @@ pub struct Manifest {
     pub storage: Storage,
 
     pub contracts: Vec<Contract>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phantom: Option<Phantom>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub global: Option<Global>,

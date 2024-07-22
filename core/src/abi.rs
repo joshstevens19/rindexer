@@ -15,10 +15,15 @@ use crate::{
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ABIInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub indexed: Option<bool>,
+
     pub name: String,
+
     #[serde(rename = "type")]
     pub type_: String,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub components: Option<Vec<ABIInput>>,
 }
 
@@ -141,8 +146,10 @@ impl ABIInput {
 pub struct ABIItem {
     #[serde(default)]
     pub inputs: Vec<ABIInput>,
+
     #[serde(default)]
     pub name: String,
+
     #[serde(rename = "type", default)]
     pub type_: String,
 }
