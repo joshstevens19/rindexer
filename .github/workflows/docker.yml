@@ -11,7 +11,7 @@ env:
 
 jobs:
   build:
-    if: startsWith(github.event.pull_request.head.ref, 'release/')
+    if: startsWith(github.head_ref, 'heads/refs/release/')
     runs-on: ubuntu-latest
     permissions:
       contents: read
