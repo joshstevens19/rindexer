@@ -55,6 +55,12 @@ There's a pre-built docker image which can be used to run `rindexer` inside your
 
 [`ghcr.io/joshstevens19/rindexer`](https://github.com/users/joshstevens19/packages/container/package/rindexer)
 
+### Create new project
+To create a new `no-code` project in your current directory, you can run the following:
+
+`docker run -it -v $PWD:/app/project_path ghcr.io/joshstevens19/rindexer new -p /app/project_path no-code`
+
+### Use with existing project
 To use it with an existing project and a running postgres instance you can simply invoke:
 
 ```
