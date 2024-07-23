@@ -77,8 +77,7 @@ pub enum Commands {
     /// Generates rust code based on rindexer.yaml or graphql queries
     ///
     /// Example:
-    /// `rindexer codegen typings` or `rindexer codegen handlers` or `rindexer codegen graphql
-    /// --endpoint=graphql_api` or `rindexer codegen rust-all`
+    /// `rindexer codegen typings` or `rindexer codegen handlers` or `rindexer codegen graphql --endpoint=graphql_api` or `rindexer codegen rust-all`
     #[clap(name = "codegen")]
     Codegen {
         #[clap(subcommand)]
@@ -104,7 +103,7 @@ pub enum Commands {
     /// This command helps you use phantom events within rindexer.
     ///
     /// Example:
-    /// `rindexer phantom`
+    /// `rindexer phantom init` or `rindexer phantom clone <contract::name> <network>` or `rindexer phantom compile <contract::name> <network>` or `rindexer phantom deploy <contract::name> <network>`
     #[clap(name = "phantom")]
     Phantom {
         #[clap(subcommand)]
