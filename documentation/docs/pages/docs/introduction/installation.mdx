@@ -64,7 +64,25 @@ rindexerdown
 rindexer uses docker to spin up postgres databases for you when it runs locally so its recommended to install [docker](https://www.docker.com/products/docker-desktop/)
 if you don't have it installed already.
 
-**If you are using csv you do not need to install docker, it is only recommended with postgres.**
+There's a pre-built docker image which can be used to run `rindexer` inside your dockerized infra:
+
+[`ghcr.io/joshstevens19/rindexer`](https://github.com/users/joshstevens19/packages/container/package/rindexer)
+
+To use it with an existing project and a running postgres instance you can simply invoke:
+
+```
+export PROJECT_PATH=/path/to/your/project
+export DATABASE_URL="postgresql://user:pass@postgres/db"
+
+docker-compose up -d
+```
+
+This will start all local indexing and if you have enabled the graphql endpoint, it will become exposed under:
+
+http://localhost:3001
+
+
+**If you are using csv you do not need to install docker, it is only recommended with postgres or if you're deploying rindexer in cloud environments.**
 
 ## Rust - optional
 
