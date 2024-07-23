@@ -1,7 +1,9 @@
 name: Build & publish docker image
 
 on:
-  push:
+  pull_request:
+    types:
+      - closed
     branches:
       - master
 
@@ -11,7 +13,7 @@ env:
 
 jobs:
   build:
-    if: startsWith(github.event.ref, 'refs/heads/release/')
+    if: github.event.pull_request.merged == true && startsWith(github.head_ref, 'release/')
     runs-on: ubuntu-latest
     permissions:
       contents: read
