@@ -398,6 +398,8 @@ fn handle_phantom_compile(
 
 #[derive(Deserialize, Debug)]
 struct CloneMeta {
+    path: String,
+
     #[serde(rename = "targetContract")]
     target_contract: String,
 
@@ -405,6 +407,12 @@ struct CloneMeta {
 
     #[serde(rename = "constructorArguments")]
     constructor_arguments: String,
+}
+
+impl CloneMeta {
+    fn get_out_contract_sol_from_path(&self) -> String {
+        self.path.split('/').last().unwrap_or_default().to_string()
+    }
 }
 
 fn read_contract_clone_metadata(contract_path: &Path) -> Result<CloneMeta, Box<dyn Error>> {
@@ -435,9 +443,11 @@ fn read_compiled_contract(
     contract_path: &Path,
     clone_meta: &CloneMeta,
 ) -> Result<CompiledContract, Box<dyn Error>> {
-    let compiled_file_path = contract_path
-        .join("out")
-        .join(format!("{}.sol/{}.json", clone_meta.target_contract, clone_meta.target_contract));
+    let compiled_file_path = contract_path.join("out").join(format!(
+        "{}/{}.json",
+        clone_meta.get_out_contract_sol_from_path(),
+        clone_meta.target_contract
+    ));
 
     let mut file = File::open(compiled_file_path)?;
     let mut contents = String::new();
