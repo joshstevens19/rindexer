@@ -1,9 +1,12 @@
 use std::{collections::BTreeMap, path::Path, process::Command};
 
-use ethers_solc::{artifacts::Contracts, CompilerOutput};
-use ethers_solc::artifacts::{Error, SourceFile};
+use ethers_solc::{
+    artifacts::{Contract, Contracts, Error, SourceFile},
+    CompilerOutput,
+};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{manifest::phantom::PhantomShadow, phantom::common::CloneMeta};
 
@@ -88,13 +91,11 @@ pub async fn deploy_shadow_contract(
     if output.status.success() {
         let stdout_str = std::str::from_utf8(&output.stdout)
             .map_err(|_| DeployShadowError::CouldNotReadFormatJson)?;
-        // println!("{}", stdout_str);
 
-        let compiler_output: CompilerOutput = serde_json::from_str(stdout_str)
-            .map_err(|e| {
-                println!("{}", e);
-                DeployShadowError::InvalidCompilerOutputFromFormatJson
-            })?;
+        let compiler_output: CompilerOutput = forge_to_solc(stdout_str).map_err(|e| {
+            println!("{}", e);
+            DeployShadowError::InvalidCompilerOutputFromFormatJson
+        })?;
 
         let shadow_compiler_output = ShadowCompilerOutput::from_compile_output(compiler_output);
         println!("{:?}", shadow_compiler_output);
@@ -103,6 +104,46 @@ pub async fn deploy_shadow_contract(
     } else {
         Err(DeployShadowError::CouldNotReadFormatJson)
     }
+}
+
+fn forge_to_solc(stdout_str: &str) -> Result<CompilerOutput, serde_json::Error> {
+    let val: Value = serde_json::from_str(stdout_str)?;
+    let errors_arr = val["errors"].as_array().unwrap();
+    let contract_objs_val = val["contracts"].as_object().unwrap();
+    let sources_obj_val = val["sources"].as_object().unwrap();
+
+    let mut contracts = Contracts::new();
+    let mut sources: BTreeMap<String, SourceFile> = BTreeMap::new();
+
+    let errors = errors_arr
+        .into_iter()
+        .map(|e| serde_json::from_value::<Error>(e.clone()).unwrap())
+        .collect::<Vec<Error>>();
+
+    for (file, value) in contract_objs_val.into_iter() {
+        let obj = value.as_object().unwrap();
+        let modules = obj.into_iter().collect::<Vec<_>>();
+        let mut contracts_map: BTreeMap<String, Contract> = BTreeMap::new();
+        for (module_name, contract_objs_wrapper) in modules {
+            // Note: Forge output has an array at this level, but solc output
+            // seems to be an object. Is there a guarantee to only be one object?
+            let contract = &contract_objs_wrapper[0]["contract"];
+            let parsed_contract: Contract = serde_json::from_value(contract.clone())?;
+
+            contracts_map.insert(module_name.clone(), parsed_contract);
+        }
+        contracts.insert(file.clone(), contracts_map);
+    }
+
+    for (file, value) in sources_obj_val.into_iter() {
+        let arr = value.as_array().unwrap();
+        // Note: Forge output has an array at this level, but solc output
+        // seems to be an object. Is there a guarantee to only be one object?
+        let source_file: SourceFile = serde_json::from_value(arr[0].clone())?;
+        sources.insert(file.clone(), source_file);
+    }
+
+    Ok(CompilerOutput { errors, sources, contracts })
 }
 
 #[derive(Serialize, Deserialize, Debug)]
