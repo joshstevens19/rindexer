@@ -161,6 +161,7 @@ struct DeployShadowBody {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct DeployShadowResponse {
     pub fork_id: String,
     pub fork_version: u64,
