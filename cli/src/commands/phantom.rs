@@ -2,27 +2,26 @@ use std::{
     env,
     error::Error,
     fs,
-    fs::{File, OpenOptions},
-    io::{Read, Write},
+    fs::OpenOptions,
+    io::Write,
     path::{Path, PathBuf},
     process::Command,
 };
 
-use ethers::{
-    abi::Abi,
-    types::{Address, ValueOrArray, U64},
-};
-use regex::Regex;
+use ethers::types::{Address, ValueOrArray, U64};
 use rindexer::{
     manifest::{
         network::Network,
-        phantom::{Phantom, PhantomOverlay},
+        phantom::{Phantom, PhantomDyrpc, PhantomShadow},
         yaml::{read_manifest, write_manifest, YAML_CONFIG_NAME},
     },
-    phantom::{create_overlay, create_overlay_api_key},
+    phantom::{
+        common::{read_compiled_contract, read_contract_clone_metadata},
+        create_dyrpc_api_key, deploy_dyrpc_contract,
+        shadow::deploy_shadow_contract,
+    },
     write_file,
 };
-use serde::Deserialize;
 
 use crate::{
     cli_interface::{
@@ -36,6 +35,8 @@ use crate::{
     },
     rindexer_yaml::validate_rindexer_yaml_exist,
 };
+
+const RINDEXER_PHANTOM_API_ENV_KEY: &str = "RINDEXER_PHANTOM_API_KEY";
 
 pub async fn handle_phantom_commands(
     project_path: PathBuf,
@@ -92,34 +93,56 @@ async fn handle_phantom_init(project_path: &Path) -> Result<(), Box<dyn Error>> 
 
     install_foundry()?;
 
-    let phantom_provider_choice =
-        prompt_for_input_list("Which provider are you using?", &["overlay".to_string()], None);
+    let phantom_provider_choice = prompt_for_input_list(
+        "Which provider are you using?",
+        &["shadow".to_string(), "dyrpc".to_string()],
+        None,
+    );
 
     let mut api_key_value = prompt_for_input(
-        "Enter your API key (enter to new to generate a new key)",
+        if phantom_provider_choice == "dyRPC" {
+            "Enter your dyRPC API key (enter to new to generate a new key)"
+        } else {
+            "Enter your Shadow API key"
+        },
         None,
         None,
         None,
     );
 
-    if api_key_value == "new" {
-        api_key_value = create_overlay_api_key().await?;
-        println!(
-            "Your API has been created and key is {} - it has also been written to your .env file.",
-            api_key_value
-        );
-    }
+    match phantom_provider_choice.as_str() {
+        "dprpc" => {
+            if api_key_value == "new" {
+                api_key_value = create_dyrpc_api_key().await?;
+                println!(
+                    "Your API has been created and key is {} - it has also been written to your .env file.",
+                    api_key_value
+                );
+            }
 
-    let api_key_env_value =
-        format!("RINDEXER_PHANTOM_{}_API_KEY", phantom_provider_choice.to_uppercase());
+            manifest.phantom = Some(Phantom {
+                dyrpc: Some(PhantomDyrpc {
+                    api_key: format!("${{{}}}", RINDEXER_PHANTOM_API_ENV_KEY),
+                }),
+                shadow: None,
+            });
 
-    // if more providers are added we can turn this into a match statement
-    if phantom_provider_choice == "overlay" {
-        manifest.phantom = Some(Phantom {
-            overlay: Some(PhantomOverlay { api_key: format!("${{{}}}", api_key_env_value) }),
-        });
+            write_manifest(&manifest, &rindexer_yaml_path)?;
+        }
+        "shadow" => {
+            let fork_id = prompt_for_input("Enter the fork ID", None, None, None);
 
-        write_manifest(&manifest, &rindexer_yaml_path)?;
+            manifest.phantom = Some(Phantom {
+                shadow: Some(PhantomShadow {
+                    api_key: format!("${{{}}}", RINDEXER_PHANTOM_API_ENV_KEY),
+                    fork_id,
+                }),
+                dyrpc: None,
+            });
+
+            write_manifest(&manifest, &rindexer_yaml_path)?;
+        }
+        value => panic!("Unknown phantom provider: {}", value),
     }
 
     let env_content = fs::read_to_string(&env_file).unwrap_or_default();
@@ -129,15 +152,15 @@ async fn handle_phantom_init(project_path: &Path) -> Result<(), Box<dyn Error>> 
     let mut lines: Vec<String> = env_content.lines().map(|line| line.to_string()).collect();
     let mut key_found = false;
     for line in &mut lines {
-        if line.starts_with(&format!("{}=", api_key_env_value)) {
-            *line = format!("{}={}", api_key_env_value, value);
+        if line.starts_with(&format!("{}=", RINDEXER_PHANTOM_API_ENV_KEY)) {
+            *line = format!("{}={}", RINDEXER_PHANTOM_API_ENV_KEY, value);
             key_found = true;
             break;
         }
     }
 
     if !key_found {
-        lines.push(format!("{}={}", api_key_env_value, value));
+        lines.push(format!("{}={}", RINDEXER_PHANTOM_API_ENV_KEY, value));
     }
 
     let new_env_content = lines.join("\n");
@@ -222,7 +245,7 @@ fn handle_phantom_clone(
 
             // overlay only supports mainnet at the moment
             if let Some(phantom) = &manifest.phantom {
-                if phantom.overlay.is_some() && network.unwrap().chain_id != 1 {
+                if phantom.dyrpc.is_some() && network.unwrap().chain_id != 1 {
                     let error_message =
                         format!("Network {} is not supported by phantom overlay", args.network);
                     print_error_message(&error_message);
@@ -315,11 +338,6 @@ fn get_phantom_network_name(args: &PhantomBaseArgs) -> String {
     format!("phantom_{}_{}", args.network, args.contract_name)
 }
 
-// fn get_phantom_base_network_name(args: &PhantomBaseArgs) -> String {
-//     let name = get_phantom_network_name(args);
-//     name.split('_').collect::<Vec<&str>>()[1].to_string()
-// }
-
 fn handle_phantom_compile(
     project_path: &Path,
     args: &PhantomCompileArgs,
@@ -396,68 +414,6 @@ fn handle_phantom_compile(
     }
 }
 
-#[derive(Deserialize, Debug)]
-struct CloneMeta {
-    path: String,
-
-    #[serde(rename = "targetContract")]
-    target_contract: String,
-
-    address: String,
-
-    #[serde(rename = "constructorArguments")]
-    constructor_arguments: String,
-}
-
-impl CloneMeta {
-    fn get_out_contract_sol_from_path(&self) -> String {
-        self.path.split('/').last().unwrap_or_default().to_string()
-    }
-}
-
-fn read_contract_clone_metadata(contract_path: &Path) -> Result<CloneMeta, Box<dyn Error>> {
-    let meta_file_path = contract_path.join(".clone.meta");
-
-    let mut file = File::open(meta_file_path)?;
-    let mut contents = String::new();
-    file.read_to_string(&mut contents)?;
-
-    let clone_meta: CloneMeta = serde_json::from_str(&contents)?;
-
-    Ok(clone_meta)
-}
-
-#[derive(Deserialize, Debug)]
-struct Bytecode {
-    pub object: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct CompiledContract {
-    pub abi: Abi,
-
-    pub bytecode: Bytecode,
-}
-
-fn read_compiled_contract(
-    contract_path: &Path,
-    clone_meta: &CloneMeta,
-) -> Result<CompiledContract, Box<dyn Error>> {
-    let compiled_file_path = contract_path.join("out").join(format!(
-        "{}/{}.json",
-        clone_meta.get_out_contract_sol_from_path(),
-        clone_meta.target_contract
-    ));
-
-    let mut file = File::open(compiled_file_path)?;
-    let mut contents = String::new();
-    file.read_to_string(&mut contents)?;
-
-    let compiled_contract: CompiledContract = serde_json::from_str(&contents)?;
-
-    Ok(compiled_contract)
-}
-
 async fn handle_phantom_deploy(
     project_path: &Path,
     args: &PhantomDeployArgs,
@@ -514,41 +470,53 @@ async fn handle_phantom_deploy(
                 .find(|c| c.network == args.network || c.network == name);
             if contract_network.is_some() {
                 let clone_meta = read_contract_clone_metadata(&deploy_in)?;
-                let compiled_contract = read_compiled_contract(&deploy_in, &clone_meta)?;
 
-                let overlay = create_overlay(
-                    &clone_meta.address,
-                    // TODO - make this shared with creation
-                    &env::var("RINDEXER_PHANTOM_OVERLAY_API_KEY").unwrap(),
-                    &compiled_contract.bytecode.object,
-                    &clone_meta.constructor_arguments,
-                )
-                .await?;
+                let phantom = manifest.phantom.as_ref().expect("Failed to get phantom");
+                let rpc_url = if phantom.dyrpc_enabled() {
+                    // only compile here as shadow has to do its own compiling to deploy
+                    forge_compile_contract(&deploy_in, network.unwrap(), &args.contract_name)
+                        .map_err(|e| format!("Failed to compile contract: {}", e))?;
 
-                let re = Regex::new(r"/eth/([a-fA-F0-9]{64})/").unwrap();
-                let overlay_rpc_url = re
-                    .replace(&overlay.overlay_rpc_url, "/eth/{RINDEXER_PHANTOM_OVERLAY_API_KEY}/")
-                    .to_string()
-                    .replace(
-                        "{RINDEXER_PHANTOM_OVERLAY_API_KEY}",
-                        "${RINDEXER_PHANTOM_OVERLAY_API_KEY}",
-                    );
+                    deploy_dyrpc_contract(
+                        &env::var(RINDEXER_PHANTOM_API_ENV_KEY)
+                            .expect("Failed to get phantom api key"),
+                        &clone_meta,
+                        &read_compiled_contract(&deploy_in, &clone_meta)?,
+                    )
+                    .await
+                    .map_err(|e| format!("Failed to deploy contract: {}", e))?
+                } else {
+                    deploy_shadow_contract(
+                        &env::var(RINDEXER_PHANTOM_API_ENV_KEY)
+                            .expect("Failed to get phantom api key"),
+                        &deploy_in,
+                        &clone_meta,
+                        phantom.shadow.as_ref().expect("Failed to get phantom shadow"),
+                    )
+                    .await
+                    .map_err(|e| format!("Failed to deploy contract: {}", e))?
+                };
 
                 let network_index = manifest.networks.iter().position(|net| net.name == name);
 
                 if let Some(index) = network_index {
                     let net = &mut manifest.networks[index];
-                    net.rpc = overlay_rpc_url.to_string();
+                    net.rpc = rpc_url.to_string();
                 } else {
                     manifest.networks.push(Network {
                         name: name.to_string(),
                         chain_id: network.unwrap().chain_id,
-                        rpc: overlay_rpc_url.to_string(),
+                        rpc: rpc_url.to_string(),
                         compute_units_per_second: None,
-                        max_block_range: Some(U64::from(100_000)),
+                        max_block_range: if phantom.dyrpc_enabled() {
+                            Some(U64::from(100_000))
+                        } else {
+                            Some(U64::from(2_000))
+                        },
                     });
                 }
 
+                let compiled_contract = read_compiled_contract(&deploy_in, &clone_meta)?;
                 let abi_path = project_path.join("abis").join(format!("{}.abi.json", name));
                 write_file(
                     &abi_path,
