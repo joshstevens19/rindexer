@@ -139,7 +139,7 @@ fn forge_to_solc(stdout_str: &str) -> Result<CompilerOutput, serde_json::Error> 
         let arr = value.as_array().unwrap();
         // Note: Forge output has an array at this level, but solc output
         // seems to be an object. Is there a guarantee to only be one object?
-        let source_file: SourceFile = serde_json::from_value(arr[0].clone())?;
+        let source_file: SourceFile = serde_json::from_value(arr[0]["source_file"].clone())?;
         sources.insert(file.clone(), source_file);
     }
 
