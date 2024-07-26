@@ -64,7 +64,7 @@ pub enum DeployShadowError {
     #[error("Invalid compiler output from format json")]
     InvalidCompilerOutputFromFormatJson,
 
-    #[error("Failed to create dyRPC: {0}")]
+    #[error("Failed to deploy contract: {0}")]
     FailedToDeployContract(String, String),
 
     #[error("dyRPC response is not json: {0}")]

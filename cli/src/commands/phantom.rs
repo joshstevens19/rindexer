@@ -118,7 +118,7 @@ async fn handle_phantom_init(project_path: &Path) -> Result<(), Box<dyn Error>> 
     );
 
     let mut api_key_value = prompt_for_input(
-        if phantom_provider_choice == "dyRPC" {
+        if phantom_provider_choice == "dyrpc" {
             "Enter your dyRPC API key (enter to new to generate a new key)"
         } else {
             "Enter your Shadow API key"
