@@ -207,8 +207,7 @@ async fn fetch_historic_logs_stream(
 
             if logs_empty {
                 info!(
-                    "{} - {} - No events found between blocks {} - {}",
-                    IndexingEventProgressStatus::Syncing.log(),
+                    "{} - No events found between blocks {} - {}",
                     info_log_name,
                     from_block,
                     to_block
