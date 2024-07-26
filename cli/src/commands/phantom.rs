@@ -24,10 +24,7 @@ use rindexer::{
 };
 
 use crate::{
-    cli_interface::{
-        PhantomBaseArgs, PhantomCloneArgs, PhantomCompileArgs, PhantomDeployArgs,
-        PhantomSubcommands,
-    },
+    cli_interface::{PhantomBaseArgs, PhantomSubcommands},
     commands::BACKUP_ETHERSCAN_API_KEY,
     console::{
         print_error_message, print_success_message, print_warn_message, prompt_for_input,
@@ -46,9 +43,30 @@ pub async fn handle_phantom_commands(
 
     match command {
         PhantomSubcommands::Init => handle_phantom_init(&project_path).await,
-        PhantomSubcommands::Clone(args) => handle_phantom_clone(&project_path, args),
-        PhantomSubcommands::Compile(args) => handle_phantom_compile(&project_path, args),
-        PhantomSubcommands::Deploy(args) => handle_phantom_deploy(&project_path, args).await,
+        PhantomSubcommands::Clone { contract_name, network } => handle_phantom_clone(
+            &project_path,
+            &PhantomBaseArgs {
+                contract_name: contract_name.to_owned(),
+                network: network.to_owned(),
+            },
+        ),
+        PhantomSubcommands::Compile { contract_name, network } => handle_phantom_compile(
+            &project_path,
+            &PhantomBaseArgs {
+                contract_name: contract_name.to_owned(),
+                network: network.to_owned(),
+            },
+        ),
+        PhantomSubcommands::Deploy { contract_name, network } => {
+            handle_phantom_deploy(
+                &project_path,
+                &PhantomBaseArgs {
+                    contract_name: contract_name.to_owned(),
+                    network: network.to_owned(),
+                },
+            )
+            .await
+        }
     }
 }
 
@@ -207,10 +225,7 @@ fn forge_clone_contract(
     }
 }
 
-fn handle_phantom_clone(
-    project_path: &Path,
-    args: &PhantomCloneArgs,
-) -> Result<(), Box<dyn Error>> {
+fn handle_phantom_clone(project_path: &Path, args: &PhantomBaseArgs) -> Result<(), Box<dyn Error>> {
     let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
 
     let manifest = read_manifest(&rindexer_yaml_path).inspect_err(|e| {
@@ -243,8 +258,7 @@ fn handle_phantom_clone(
             }
 
             if network.unwrap().chain_id != 1 {
-                let error_message =
-                    format!("Network {} is not supported", args.network);
+                let error_message = format!("Network {} is not supported", args.network);
                 print_error_message(&error_message);
                 return Err(error_message.into());
             }
@@ -336,7 +350,7 @@ fn get_phantom_network_name(args: &PhantomBaseArgs) -> String {
 
 fn handle_phantom_compile(
     project_path: &Path,
-    args: &PhantomCompileArgs,
+    args: &PhantomBaseArgs,
 ) -> Result<(), Box<dyn Error>> {
     let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
 
@@ -375,7 +389,7 @@ fn handle_phantom_compile(
     let contract = manifest.contracts.iter().find(|c| c.name == args.contract_name);
     match contract {
         Some(contract) => {
-            let name = get_phantom_network_name(&args.into());
+            let name = get_phantom_network_name(&args);
             let network =
                 manifest.networks.iter().find(|n| n.name == args.network || n.name == name);
             if network.is_none() {
@@ -385,8 +399,7 @@ fn handle_phantom_compile(
             }
 
             if network.unwrap().chain_id != 1 {
-                let error_message =
-                    format!("Network {} is not supported", args.network);
+                let error_message = format!("Network {} is not supported", args.network);
                 print_error_message(&error_message);
                 return Err(error_message.into());
             }
@@ -419,7 +432,7 @@ fn handle_phantom_compile(
 
 async fn handle_phantom_deploy(
     project_path: &Path,
-    args: &PhantomDeployArgs,
+    args: &PhantomBaseArgs,
 ) -> Result<(), Box<dyn Error>> {
     let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
 
@@ -458,7 +471,7 @@ async fn handle_phantom_deploy(
     let contract = manifest.contracts.iter_mut().find(|c| c.name == args.contract_name);
     match contract {
         Some(contract) => {
-            let name = get_phantom_network_name(&args.into());
+            let name = get_phantom_network_name(&args);
             let network =
                 manifest.networks.iter().find(|n| n.name == args.network || n.name == name);
             if network.is_none() {
@@ -468,8 +481,7 @@ async fn handle_phantom_deploy(
             }
 
             if network.unwrap().chain_id != 1 {
-                let error_message =
-                    format!("Network {} is not supported", args.network);
+                let error_message = format!("Network {} is not supported", args.network);
                 print_error_message(&error_message);
                 return Err(error_message.into());
             }

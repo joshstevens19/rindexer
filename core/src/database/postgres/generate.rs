@@ -49,7 +49,7 @@ fn generate_event_table_sql(abi_inputs: &[EventInfo], schema_name: &str) -> Stri
             } else {
                 generate_columns_with_data_types(&event_info.inputs).join(", ") + ","
             };
-            
+
             format!(
                 "CREATE TABLE IF NOT EXISTS {} (\
                 rindexer_id SERIAL PRIMARY KEY NOT NULL, \
@@ -62,8 +62,7 @@ fn generate_event_table_sql(abi_inputs: &[EventInfo], schema_name: &str) -> Stri
                 tx_index NUMERIC NOT NULL, \
                 log_index VARCHAR(78) NOT NULL\
             );",
-                table_name,
-                event_columns
+                table_name, event_columns
             )
         })
         .collect::<Vec<_>>()

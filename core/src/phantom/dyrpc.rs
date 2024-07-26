@@ -22,12 +22,13 @@ struct DeployDyrpcDetails<'a> {
 
 #[derive(Deserialize)]
 pub struct DeployDyrpcContractResponse {
-    pub message: String,
-
-    #[serde(rename = "overlayHash")]
-    pub overlay_hash: String,
-
-    pub addresses: Vec<String>,
+    // don't care for now about these
+    // pub message: String,
+    //
+    // #[serde(rename = "overlayHash")]
+    // pub overlay_hash: String,
+    //
+    // pub addresses: Vec<String>,
 
     #[serde(rename = "overlayRpcUrl")]
     pub rpc_url: String,

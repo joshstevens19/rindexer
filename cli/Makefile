@@ -23,13 +23,13 @@ delete:
 phantom_init:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- phantom --path $(CURDIR)/../examples/rindexer_demo_cli init
 phantom_clone:
-	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- phantom --path $(CURDIR)/../examples/rindexer_demo_cli clone RocketPoolETH ethereum
+	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- phantom --path $(CURDIR)/../examples/rindexer_demo_cli clone --contract-name RocketPoolETH --network ethereum
 phantom_compile:
-	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- phantom --path $(CURDIR)/../examples/rindexer_demo_cli compile RocketPoolETH ethereum
+	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- phantom --path $(CURDIR)/../examples/rindexer_demo_cli compile --contract-name RocketPoolETH --network ethereum
 phantom_deploy:
-	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- phantom --path $(CURDIR)/../examples/rindexer_demo_cli deploy RocketPoolETH ethereum
+	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- phantom --path $(CURDIR)/../examples/rindexer_demo_cli deploy --contract-name RocketPoolETH --network ethereum
 help:
-	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- phantom help
+	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- phantom --help
 
 
 ################################################################################

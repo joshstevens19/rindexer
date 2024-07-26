@@ -92,10 +92,11 @@ pub async fn deploy_shadow_contract(
         let stdout_str = std::str::from_utf8(&output.stdout)
             .map_err(|_| DeployShadowError::CouldNotReadFormatJson)?;
 
-        let compiler_output: CompilerOutput = forge_to_solc(stdout_str).map_err(|_|DeployShadowError::InvalidCompilerOutputFromFormatJson)?;
+        let compiler_output: CompilerOutput = forge_to_solc(stdout_str)
+            .map_err(|_| DeployShadowError::InvalidCompilerOutputFromFormatJson)?;
 
         let shadow_compiler_output = ShadowCompilerOutput::from_compile_output(compiler_output);
-        
+
         deploy_shadow(api_key, clone_meta, shadow_details, shadow_compiler_output).await
     } else {
         Err(DeployShadowError::CouldNotReadFormatJson)
@@ -189,7 +190,7 @@ async fn deploy_shadow(
     if response.status().is_success() {
         let response: DeployShadowResponse =
             response.json().await.map_err(DeployShadowError::ResponseNotJson)?;
-        
+
         Ok(response.rpc_url)
     } else {
         Err(DeployShadowError::FailedToDeployContract(

@@ -104,9 +104,10 @@ pub enum Commands {
     /// This command helps you use phantom events within rindexer.
     ///
     /// Example:
-    /// `rindexer phantom init` or `rindexer phantom clone <contract::name> <network>` or `rindexer
-    /// phantom compile <contract::name> <network>` or `rindexer phantom deploy <contract::name>
-    /// <network>`
+    /// `rindexer phantom init` or
+    /// `rindexer phantom clone --contract-name <CONTRACT_NAME> --network <NETWORK>` or
+    /// `rindexer phantom compile --contract-name <CONTRACT_NAME> --network <NETWORK>` or
+    /// `rindexer phantom deploy --contract-name <CONTRACT_NAME> --network <NETWORK>`
     #[clap(name = "phantom")]
     Phantom {
         #[clap(subcommand)]
@@ -217,82 +218,13 @@ pub enum CodegenSubcommands {
 
 #[derive(Args, Debug)]
 pub struct PhantomBaseArgs {
-    /// The name of the contract to clone
+    /// The name of the contract
     #[clap(value_parser)]
     pub contract_name: String,
 
-    /// The network to clone the contract on
+    /// The network the contract is on
     #[clap(value_parser)]
     pub network: String,
-}
-
-#[derive(Args, Debug)]
-pub struct PhantomCloneArgs {
-    /// The name of the contract to clone
-    #[clap(value_parser)]
-    pub contract_name: String,
-
-    /// The network to clone the contract on
-    #[clap(value_parser)]
-    pub network: String,
-}
-
-impl From<PhantomCloneArgs> for PhantomBaseArgs {
-    fn from(value: PhantomCloneArgs) -> Self {
-        Self { contract_name: value.contract_name, network: value.network }
-    }
-}
-
-impl<'a> From<&'a PhantomCloneArgs> for PhantomBaseArgs {
-    fn from(value: &'a PhantomCloneArgs) -> Self {
-        Self { contract_name: value.contract_name.clone(), network: value.network.clone() }
-    }
-}
-
-#[derive(Args, Debug)]
-pub struct PhantomCompileArgs {
-    /// The name of the contract to clone
-    #[clap(value_parser)]
-    pub contract_name: String,
-
-    /// The network to clone the contract on
-    #[clap(value_parser)]
-    pub network: String,
-}
-
-impl From<PhantomCompileArgs> for PhantomBaseArgs {
-    fn from(value: PhantomCompileArgs) -> Self {
-        Self { contract_name: value.contract_name, network: value.network }
-    }
-}
-
-impl<'a> From<&'a PhantomCompileArgs> for PhantomBaseArgs {
-    fn from(value: &'a PhantomCompileArgs) -> Self {
-        Self { contract_name: value.contract_name.clone(), network: value.network.clone() }
-    }
-}
-
-#[derive(Args, Debug)]
-pub struct PhantomDeployArgs {
-    /// The name of the contract to clone
-    #[clap(value_parser)]
-    pub contract_name: String,
-
-    /// The network to clone the contract on
-    #[clap(value_parser)]
-    pub network: String,
-}
-
-impl From<PhantomDeployArgs> for PhantomBaseArgs {
-    fn from(value: PhantomDeployArgs) -> Self {
-        Self { contract_name: value.contract_name, network: value.network }
-    }
-}
-
-impl<'a> From<&'a PhantomDeployArgs> for PhantomBaseArgs {
-    fn from(value: &'a PhantomDeployArgs) -> Self {
-        Self { contract_name: value.contract_name.clone(), network: value.network.clone() }
-    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -311,25 +243,49 @@ pub enum PhantomSubcommands {
     /// Note contract name and network are your values in your rindexer.yaml file.
     ///
     /// Example:
-    /// `rindexer phantom clone <contract::name> <network>`
+    /// `rindexer phantom clone --contract-name <CONTRACT_NAME> --network <NETWORK>`
     #[clap(name = "clone")]
-    Clone(PhantomCloneArgs),
+    Clone {
+        /// The name of the contract to clone
+        #[arg(long)]
+        contract_name: String,
+
+        /// The network
+        #[arg(long)]
+        network: String,
+    },
 
     /// Compiles the phantom contract
     ///
     /// Note contract name and network are your values in your rindexer.yaml file.
     ///
     /// Example:
-    /// `rindexer phantom clone <contract::name> <network>`
+    /// `rindexer phantom compile --contract-name <CONTRACT_NAME> --network <NETWORK>`
     #[clap(name = "compile")]
-    Compile(PhantomCompileArgs),
+    Compile {
+        /// The name of the contract to clone
+        #[arg(long)]
+        contract_name: String,
+
+        /// The network
+        #[arg(long)]
+        network: String,
+    },
 
     /// Deploy the modified phantom contract
     ///
     /// This will compile and update your rindexer project with the phantom events.
     ///
     /// Example:
-    /// `rindexer phantom deploy <contract::name> <network>`
+    /// `rindexer phantom deploy --contract-name <CONTRACT_NAME> --network <NETWORK>`
     #[clap(name = "deploy")]
-    Deploy(PhantomDeployArgs),
+    Deploy {
+        /// The name of the contract to clone
+        #[arg(long)]
+        contract_name: String,
+
+        /// The network
+        #[arg(long)]
+        network: String,
+    },
 }

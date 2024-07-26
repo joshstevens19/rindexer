@@ -10,7 +10,7 @@ They provide a solution for obtaining additional information from a contract wit
 ## Why Use Phantom Events?
 
 Whether you don't control the contract or want to avoid additional gas costs, phantom events offer a flexible solution
-for diverse data needs and use cases. Powered by [Shadow](https://www.shadow.xyz/) and dyRPC,
+for diverse data needs and use cases. Powered by [Shadow](https://www.shadow.xyz/) and [dyRPC](https://ui.dyrpc.network/),
 they are part of the rindexer suite designed to simplify being able to use these powerful features.
 
 ## Getting Started with Phantom Events
@@ -36,7 +36,7 @@ is instrumented to mirror mainnet state in realtime.
 
 - Ethereum
 
-### dyRPC
+### [dyRPC](https://ui.dyrpc.network/)
 
 dyRPC is a tool built on top of overlay which can be ran on any erigon node and allows you to also modify the contract's source code
 adding gasless custom event logs and view functions.
@@ -94,7 +94,7 @@ but you will have to create the foundry project manually in the `phantom` folder
 :::
 
 ```bash
-rindexer phantom clone <CONTRACT_NAME> <NETWORK_NAME>
+rindexer phantom clone --contract-name <CONTRACT_NAME> --network <NETWORK>
 ```
 
 lets say we had a `rindexer.yaml` file like this:
@@ -221,13 +221,13 @@ rindexer uses `foundry` to clone and compile the contracts.
 To compile the phantom contracts you can run the following command:
 
 ```bash
-rindexer phantom compile <CONTRACT_NAME> <NETWORK_NAME>
+rindexer phantom compile --contract-name <CONTRACT_NAME> --network <NETWORK>
 ```
 
 So using the same yaml example as above you would run the following command:
 
 ```bash
-rindexer phantom compile RocketPoolETH ethereum
+rindexer phantom compile --contract-name RocketPoolETH --network ethereum
 ```
 
 This will show you the same compile errors as `foundry` would show you if you have made any mistakes.
@@ -238,13 +238,13 @@ Deploying your phantom contract is different to deploying a normal contract. rin
 the new phantom contract to the provider and all the mappings for you in the `rindexer.yaml` file.
 
 ```bash
-rindexer phantom deploy <CONTRACT_NAME> <NETWORK_NAME>
+rindexer phantom deploy --contract-name <CONTRACT_NAME> --network <NETWORK>
 ```
 
 So using the same yaml example as above you would run the following command:
 
 ```bash
-rindexer phantom deploy RocketPoolETH ethereum
+rindexer phantom deploy --contract-name RocketPoolETH --network ethereum
 ```
 
 This will do a few things to your yaml file:
