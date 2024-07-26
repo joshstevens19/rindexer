@@ -62,7 +62,7 @@ pub async fn handle_add_contract_command(
         .1;
 
     let chain_network = Chain::try_from(chain_id)
-        .inspect_err(|_| print_error_message("Network is not supported by etherscan API"))?;
+        .inspect_err(|_| print_error_message("Network is not supported by etherscan API, please add the contract manually in the rindexer.yaml file"))?;
     let contract_address =
         prompt_for_input(&format!("Enter {} Contract Address", network), None, None, None);
 
