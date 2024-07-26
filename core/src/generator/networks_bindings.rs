@@ -33,9 +33,9 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
         client_fn =
             if network.rpc.contains("shadow") { "create_shadow_client" } else { "create_client" },
         placeholder_headers = if network.rpc.contains("shadow") {
-            ", HeaderMap::new()"
-        } else {
             ""
+        } else {
+            ", HeaderMap::new()"
         },
     ))
 }
