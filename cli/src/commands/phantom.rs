@@ -129,7 +129,7 @@ async fn handle_phantom_init(project_path: &Path) -> Result<(), Box<dyn Error>> 
     );
 
     match phantom_provider_choice.as_str() {
-        "dprpc" => {
+        "dyrpc" => {
             if api_key_value == "new" {
                 api_key_value = create_dyrpc_api_key().await?;
                 println!(
@@ -187,7 +187,7 @@ async fn handle_phantom_init(project_path: &Path) -> Result<(), Box<dyn Error>> 
 
     writeln!(file, "{}", new_env_content)?;
 
-    print_success_message("rindexer Phantom events are now setup.\nYou can now use `rindexer phantom clone <contract::name> <network>` to start adding your own custom events.");
+    print_success_message("rindexer Phantom events are now setup.\nYou can now use `rindexer phantom clone --contract-name <contract> --network <network>` to start adding your own custom events.");
 
     Ok(())
 }
@@ -292,7 +292,7 @@ fn handle_phantom_clone(project_path: &Path, args: &PhantomBaseArgs) -> Result<(
                     )
                     .map_err(|e| format!("Failed to clone contract: {}", e))?;
 
-                    print_success_message(format!("\ncloned {} in {} you can start adding your custom events.\nYou can now use `rindexer phantom compile {} {}` to compile the phantom contract anytime.", contract.name.as_str(), clone_in.display(), contract.name.as_str(), args.network).as_str());
+                    print_success_message(format!("\ncloned {} in {} you can start adding your custom events.\nYou can now use `rindexer phantom compile -contract-name {} --network {}` to compile the phantom contract anytime.", contract.name.as_str(), clone_in.display(), contract.name.as_str(), args.network).as_str());
 
                     Ok(())
                 } else {
@@ -389,7 +389,7 @@ fn handle_phantom_compile(
     let contract = manifest.contracts.iter().find(|c| c.name == args.contract_name);
     match contract {
         Some(contract) => {
-            let name = get_phantom_network_name(&args);
+            let name = get_phantom_network_name(args);
             let network =
                 manifest.networks.iter().find(|n| n.name == args.network || n.name == name);
             if network.is_none() {
@@ -410,7 +410,7 @@ fn handle_phantom_compile(
                 forge_compile_contract(&compile_in, network.unwrap(), &args.contract_name)
                     .map_err(|e| format!("Failed to compile contract: {}", e))?;
 
-                print_success_message(format!("\ncompiled contract {} for network {} successful.\nYou can use `rindexer phantom deploy {} {}` to deploy the phantom contract and start indexing your custom events.", args.contract_name, args.network, args.contract_name, args.network).as_str());
+                print_success_message(format!("\ncompiled contract {} for network {} successful.\nYou can use `rindexer phantom deploy --contract-name {} --network {}` to deploy the phantom contract and start indexing your custom events.", args.contract_name, args.network, args.contract_name, args.network).as_str());
                 Ok(())
             } else {
                 let error_message = format!(
@@ -471,7 +471,7 @@ async fn handle_phantom_deploy(
     let contract = manifest.contracts.iter_mut().find(|c| c.name == args.contract_name);
     match contract {
         Some(contract) => {
-            let name = get_phantom_network_name(&args);
+            let name = get_phantom_network_name(args);
             let network =
                 manifest.networks.iter().find(|n| n.name == args.network || n.name == name);
             if network.is_none() {

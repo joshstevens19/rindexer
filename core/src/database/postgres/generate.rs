@@ -200,6 +200,7 @@ pub fn drop_tables_for_indexer_sql(project_path: &Path, indexer: &Indexer) -> Co
     Code::new(sql)
 }
 
+#[allow(clippy::manual_strip)]
 pub fn solidity_type_to_db_type(abi_type: &str) -> String {
     let is_array = abi_type.ends_with("[]");
     let base_type = abi_type.trim_end_matches("[]");
