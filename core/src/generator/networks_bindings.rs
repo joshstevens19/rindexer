@@ -95,7 +95,7 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
             use ethers::types::U64;
             use rindexer::{
                 lazy_static,
-                provider::{create_client, JsonRpcCachedProvider},
+                provider::{create_client, JsonRpcCachedProvider, RetryClientError},
                 public_read_env_value, HeaderMap,
             };
             use std::sync::Arc;
