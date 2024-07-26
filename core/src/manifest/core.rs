@@ -97,6 +97,16 @@ impl Manifest {
 
         self.storage.csv_enabled() && contract_csv_enabled
     }
+
+    pub fn get_custom_headers(&self) -> reqwest::header::HeaderMap {
+        let mut headers = reqwest::header::HeaderMap::new();
+        if let Some(phantom) = &self.phantom {
+            if let Some(shadow) = &phantom.shadow {
+                headers.insert("X-SHADOW-API-KEY", shadow.api_key.parse().unwrap());
+            }
+        }
+        headers
+    }
 }
 
 pub fn deserialize_option_u64_from_string<'de, D>(deserializer: D) -> Result<Option<U64>, D::Error>

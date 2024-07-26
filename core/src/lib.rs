@@ -35,6 +35,7 @@ pub use async_trait::async_trait;
 pub use colored::Colorize as RindexerColorize;
 pub use futures::FutureExt;
 pub use lazy_static::lazy_static;
+pub use reqwest::header::HeaderMap;
 pub use start::{
     start_rindexer, start_rindexer_no_code, IndexerNoCodeDetails, IndexingDetails, StartDetails,
     StartNoCodeDetails,

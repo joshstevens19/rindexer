@@ -15,7 +15,7 @@ pub fn network_provider_fn_name(network: &Network) -> String {
 fn generate_network_lazy_provider_code(network: &Network) -> Code {
     Code::new(format!(
         r#"
-            static ref {network_name}: Arc<JsonRpcCachedProvider> = create_client(&public_read_env_value("{network_url}").unwrap_or("{network_url}".to_string()), {compute_units_per_second}, {max_block_range}).expect("Error creating provider");
+            static ref {network_name}: Arc<JsonRpcCachedProvider> = {client_fn}(&public_read_env_value("{network_url}").unwrap_or("{network_url}".to_string()), {compute_units_per_second}, {max_block_range}, HeaderMap::new()).expect("Error creating provider");
         "#,
         network_name = network_provider_name(network),
         network_url = network.rpc,
@@ -30,6 +30,8 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
         } else {
             "None".to_string()
         },
+        client_fn =
+            if network.rpc.contains("shadow") { "create_shadow_client" } else { "create_client" },
     ))
 }
 
@@ -89,9 +91,23 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
             use rindexer::{
                 lazy_static,
                 provider::{create_client, JsonRpcCachedProvider},
-                public_read_env_value,
+                public_read_env_value, HeaderMap,
             };
             use std::sync::Arc;
+            
+            #[allow(dead_code)]
+            fn create_shadow_client(
+                rpc_url: &str,
+                compute_units_per_second: Option<u64>,
+                max_block_range: Option<U64>,
+            ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
+                let mut header = HeaderMap::new();
+                header.insert(
+                    "X-SHADOW-API-KEY",
+                    public_read_env_value("RINDEXER_PHANTOM_API_KEY").unwrap().parse().unwrap(),
+                );
+                create_client(rpc_url, compute_units_per_second, max_block_range, header)
+            }
 
             lazy_static! {
         "#

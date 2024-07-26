@@ -172,6 +172,7 @@ async fn deploy_shadow(
     shadow_compiler_output: ShadowCompilerOutput,
 ) -> Result<String, DeployShadowError> {
     let client = Client::new();
+
     let response = client
         // https://api.staging.shadow.xyz
         // https://api.shadow.xyz

@@ -8,23 +8,39 @@ use ethers::providers::{Http, Provider, RetryClient};
 use ethers::types::U64;
 use rindexer::{
     lazy_static,
-    provider::{create_client, JsonRpcCachedProvider},
-    public_read_env_value,
+    provider::{create_client, JsonRpcCachedProvider, RetryClientError},
+    public_read_env_value, HeaderMap,
 };
+
+#[allow(dead_code)]
+fn create_shadow_client(
+    rpc_url: &str,
+    compute_units_per_second: Option<u64>,
+    max_block_range: Option<U64>,
+) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
+    let mut header = HeaderMap::new();
+    header.insert(
+        "X-SHADOW-API-KEY",
+        public_read_env_value("RINDEXER_PHANTOM_API_KEY").unwrap().parse().unwrap(),
+    );
+    create_client(rpc_url, compute_units_per_second, max_block_range, header)
+}
 
 lazy_static! {
     static ref ETHEREUM_PROVIDER: Arc<JsonRpcCachedProvider> = create_client(
         &public_read_env_value("https://mainnet.gateway.tenderly.co")
             .unwrap_or("https://mainnet.gateway.tenderly.co".to_string()),
         None,
-        None
+        None,
+        HeaderMap::new(),
     )
     .expect("Error creating provider");
     static ref YOMINET_PROVIDER: Arc<JsonRpcCachedProvider> = create_client(
         &public_read_env_value("https://yominet.rpc.caldera.xyz/http")
             .unwrap_or("https://yominet.rpc.caldera.xyz/http".to_string()),
         None,
-        Some(U64::from(10000))
+        Some(U64::from(10000)),
+        HeaderMap::new(),
     )
     .expect("Error creating provider");
 }
