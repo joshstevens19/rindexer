@@ -44,11 +44,17 @@ fn generate_event_table_sql(abi_inputs: &[EventInfo], schema_name: &str) -> Stri
         .map(|event_info| {
             let table_name = format!("{}.{}", schema_name, camel_to_snake(&event_info.name));
             info!("Creating table if not exists: {}", table_name);
+            let event_columns = if event_info.inputs.is_empty() {
+                "".to_string()
+            } else {
+                generate_columns_with_data_types(&event_info.inputs).join(", ") + ","
+            };
+            
             format!(
                 "CREATE TABLE IF NOT EXISTS {} (\
                 rindexer_id SERIAL PRIMARY KEY NOT NULL, \
                 contract_address CHAR(66) NOT NULL, \
-                {}, \
+                {} \
                 tx_hash CHAR(66) NOT NULL, \
                 block_number NUMERIC NOT NULL, \
                 block_hash CHAR(66) NOT NULL, \
@@ -57,7 +63,7 @@ fn generate_event_table_sql(abi_inputs: &[EventInfo], schema_name: &str) -> Stri
                 log_index VARCHAR(78) NOT NULL\
             );",
                 table_name,
-                generate_columns_with_data_types(&event_info.inputs).join(", ")
+                event_columns
             )
         })
         .collect::<Vec<_>>()
