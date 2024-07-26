@@ -29,7 +29,6 @@ pub struct DeployDyrpcContractResponse {
     // pub overlay_hash: String,
     //
     // pub addresses: Vec<String>,
-
     #[serde(rename = "overlayRpcUrl")]
     pub rpc_url: String,
 }
@@ -80,9 +79,9 @@ pub async fn deploy_dyrpc_contract(
 
     let re = Regex::new(r"/eth/([a-fA-F0-9]{64})/").unwrap();
     let rpc_url = re
-        .replace(&result.rpc_url, "/eth/{RINDEXER_PHANTOM_API_ENV_KEY}/")
+        .replace(&result.rpc_url, "/eth/{RINDEXER_PHANTOM_API_KEY}/")
         .to_string()
-        .replace("{RINDEXER_PHANTOM_API_ENV_KEY}", "${RINDEXER_PHANTOM_API_ENV_KEY}");
+        .replace("{RINDEXER_PHANTOM_API_KEY}", "${RINDEXER_PHANTOM_API_KEY}");
 
     Ok(rpc_url)
 }

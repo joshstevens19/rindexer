@@ -8,9 +8,9 @@ use ethers_etherscan::Client;
 use rindexer::{
     manifest::{
         contract::{Contract, ContractDetails},
-        yaml::{read_manifest, write_manifest, YAML_CONFIG_NAME},
+        yaml::{read_manifest_raw, write_manifest, YAML_CONFIG_NAME},
     },
-    write_file,
+    public_read_env_value, write_file,
 };
 
 use crate::{
@@ -28,7 +28,7 @@ pub async fn handle_add_contract_command(
 
     let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
 
-    let mut manifest = read_manifest(&rindexer_yaml_path).inspect_err(|e| {
+    let mut manifest = read_manifest_raw(&rindexer_yaml_path).inspect_err(|e| {
         print_error_message(&format!("Could not read the rindexer.yaml file: {}", e))
     })?;
 
@@ -66,11 +66,11 @@ pub async fn handle_add_contract_command(
     let contract_address =
         prompt_for_input(&format!("Enter {} Contract Address", network), None, None, None);
 
-    let etherscan_api_key = manifest
-        .global
-        .as_ref()
-        .and_then(|global| global.etherscan_api_key.as_ref())
-        .map_or(BACKUP_ETHERSCAN_API_KEY, String::as_str);
+    let etherscan_api_key =
+        manifest.global.as_ref().and_then(|global| global.etherscan_api_key.as_ref()).map_or_else(
+            || BACKUP_ETHERSCAN_API_KEY.to_string(),
+            |key| public_read_env_value(key).unwrap_or_else(|_| key.to_string()),
+        );
 
     let client = Client::builder()
         .with_api_key(etherscan_api_key)

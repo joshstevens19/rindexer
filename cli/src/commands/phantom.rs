@@ -13,14 +13,14 @@ use rindexer::{
     manifest::{
         network::Network,
         phantom::{Phantom, PhantomDyrpc, PhantomShadow},
-        yaml::{read_manifest, write_manifest, YAML_CONFIG_NAME},
+        yaml::{read_manifest, read_manifest_raw, write_manifest, YAML_CONFIG_NAME},
     },
     phantom::{
         common::{read_compiled_contract, read_contract_clone_metadata},
         create_dyrpc_api_key, deploy_dyrpc_contract,
         shadow::deploy_shadow_contract,
     },
-    write_file,
+    public_read_env_value, write_file,
 };
 
 use crate::{
@@ -97,7 +97,7 @@ async fn handle_phantom_init(project_path: &Path) -> Result<(), Box<dyn Error>> 
     let env_file = project_path.join(".env");
     let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
 
-    let mut manifest = read_manifest(&rindexer_yaml_path).inspect_err(|e| {
+    let mut manifest = read_manifest_raw(&rindexer_yaml_path).inspect_err(|e| {
         print_error_message(&format!("Could not read the rindexer.yaml file: {}", e))
     })?;
 
@@ -197,6 +197,7 @@ fn forge_clone_contract(
     network: &Network,
     address: &Address,
     contract_name: &str,
+    etherscan_api_key: &str,
 ) -> Result<(), Box<dyn Error>> {
     print_success_message(&format!(
         "Cloning contract {} on network {} at address {:?} this may take a little moment...",
@@ -208,7 +209,7 @@ fn forge_clone_contract(
         .arg(format!("{:?}", address))
         //.arg(format!("--chain {}", network.chain_id))
         .arg("--etherscan-api-key")
-        .arg(BACKUP_ETHERSCAN_API_KEY)
+        .arg(etherscan_api_key)
         .arg(contract_name)
         .current_dir(clone_in)
         .output()?;
@@ -284,11 +285,21 @@ fn handle_phantom_clone(project_path: &Path, args: &PhantomBaseArgs) -> Result<(
                         fs::create_dir(&clone_in)?;
                     }
 
+                    let etherscan_api_key = manifest
+                        .global
+                        .as_ref()
+                        .and_then(|global| global.etherscan_api_key.as_ref())
+                        .map_or_else(
+                            || BACKUP_ETHERSCAN_API_KEY.to_string(),
+                            |key| public_read_env_value(key).unwrap_or_else(|_| key.to_string()),
+                        );
+
                     forge_clone_contract(
                         &clone_in,
                         network.unwrap(),
                         address,
                         contract.name.as_str(),
+                        &etherscan_api_key,
                     )
                     .map_err(|e| format!("Failed to clone contract: {}", e))?;
 
@@ -436,7 +447,7 @@ async fn handle_phantom_deploy(
 ) -> Result<(), Box<dyn Error>> {
     let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
 
-    let mut manifest = read_manifest(&rindexer_yaml_path).inspect_err(|e| {
+    let mut manifest = read_manifest_raw(&rindexer_yaml_path).inspect_err(|e| {
         print_error_message(&format!("Could not read the rindexer.yaml file: {}", e))
     })?;
 
@@ -532,7 +543,7 @@ async fn handle_phantom_deploy(
                         rpc: rpc_url.to_string(),
                         compute_units_per_second: None,
                         max_block_range: if phantom.dyrpc_enabled() {
-                            Some(U64::from(100_000))
+                            Some(U64::from(20_000))
                         } else {
                             Some(U64::from(2_000))
                         },

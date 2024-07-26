@@ -170,6 +170,24 @@ pub enum ReadManifestError {
     NoProjectPathFoundUsingParentOfManifestPath,
 }
 
+pub fn read_manifest_raw(file_path: &PathBuf) -> Result<Manifest, ReadManifestError> {
+    let mut file = File::open(file_path)?;
+    let mut contents = String::new();
+
+    file.read_to_string(&mut contents)?;
+
+    let manifest: Manifest = serde_yaml::from_str(&contents)?;
+
+    let project_path = file_path.parent();
+    match project_path {
+        None => Err(ReadManifestError::NoProjectPathFoundUsingParentOfManifestPath),
+        Some(project_path) => {
+            validate_manifest(project_path, &manifest)?;
+            Ok(manifest)
+        }
+    }
+}
+
 pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError> {
     let mut file = File::open(file_path)?;
     let mut contents = String::new();

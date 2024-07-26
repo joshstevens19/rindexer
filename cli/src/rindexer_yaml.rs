@@ -1,5 +1,4 @@
-use std::fs;
-use std::path::Path;
+use std::{fs, path::Path};
 
 use rindexer::manifest::yaml::YAML_CONFIG_NAME;
 
