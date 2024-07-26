@@ -21,6 +21,7 @@ Cargo.lock
 cli/rindexer.yaml
 cli/.env
 examples/*
+!examples/rindexer_demo_cli
 documentation/node_modules
 documentation/dist
 documentation/docs/dist

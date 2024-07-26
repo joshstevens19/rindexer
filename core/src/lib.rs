@@ -23,7 +23,9 @@ pub use api::{generate_graphql_queries, GraphqlOverrideSettings};
 mod logger;
 pub use logger::setup_info_logger;
 mod abi;
+pub use abi::ABIItem;
 pub mod event;
+pub mod phantom;
 pub mod provider;
 mod start;
 mod types;
@@ -33,6 +35,7 @@ pub use async_trait::async_trait;
 pub use colored::Colorize as RindexerColorize;
 pub use futures::FutureExt;
 pub use lazy_static::lazy_static;
+pub use reqwest::header::HeaderMap;
 pub use start::{
     start_rindexer, start_rindexer_no_code, IndexerNoCodeDetails, IndexingDetails, StartDetails,
     StartNoCodeDetails,

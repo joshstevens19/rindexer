@@ -21,7 +21,8 @@ use crate::{
     cli_interface::{AddSubcommands, Commands, NewSubcommands, CLI},
     commands::{
         add::handle_add_contract_command, codegen::handle_codegen_command,
-        delete::handle_delete_command, new::handle_new_command, start::start,
+        delete::handle_delete_command, new::handle_new_command, phantom::handle_phantom_commands,
+        start::start,
     },
     console::print_error_message,
 };
@@ -109,6 +110,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;
             load_env_from_path(&resolved_path);
             handle_delete_command(resolved_path).await
+        }
+        Commands::Phantom { subcommand, path } => {
+            let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;
+            load_env_from_path(&resolved_path);
+            handle_phantom_commands(resolved_path, subcommand).await
         }
     }
 }

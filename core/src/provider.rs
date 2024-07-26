@@ -9,6 +9,7 @@ use ethers::{
     providers::{Http, Provider, ProviderError, RetryClient, RetryClientBuilder},
     types::{Block, BlockNumber, H256, U256, U64},
 };
+use reqwest::header::HeaderMap;
 use thiserror::Error;
 use tokio::sync::Mutex;
 use url::Url;
@@ -73,17 +74,23 @@ impl JsonRpcCachedProvider {
 pub enum RetryClientError {
     #[error("http provider can't be created for {0}: {1}")]
     HttpProviderCantBeCreated(String, String),
+
+    #[error("Could not build client: {0}")]
+    CouldNotBuildClient(#[from] reqwest::Error),
 }
 
 pub fn create_client(
     rpc_url: &str,
     compute_units_per_second: Option<u64>,
     max_block_range: Option<U64>,
+    custom_headers: HeaderMap,
 ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
     let url = Url::parse(rpc_url).map_err(|e| {
         RetryClientError::HttpProviderCantBeCreated(rpc_url.to_string(), e.to_string())
     })?;
-    let provider = Http::new(url);
+    let client = reqwest::Client::builder().default_headers(custom_headers).build()?;
+
+    let provider = Http::new_with_client(url, client);
     let instance = Provider::new(
         RetryClientBuilder::default()
             // assume minimum compute units per second if not provided as growth plan standard
@@ -117,6 +124,7 @@ impl CreateNetworkProvider {
                 &network.rpc,
                 network.compute_units_per_second,
                 network.max_block_range,
+                manifest.get_custom_headers(),
             )?;
             result.push(CreateNetworkProvider {
                 network_name: network.name.clone(),
@@ -135,14 +143,14 @@ mod tests {
     #[test]
     fn test_create_retry_client() {
         let rpc_url = "http://localhost:8545";
-        let result = create_client(rpc_url, Some(660), None);
+        let result = create_client(rpc_url, Some(660), None, HeaderMap::new());
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_create_retry_client_invalid_url() {
         let rpc_url = "invalid_url";
-        let result = create_client(rpc_url, Some(660), None);
+        let result = create_client(rpc_url, Some(660), None, HeaderMap::new());
         assert!(result.is_err());
         if let Err(RetryClientError::HttpProviderCantBeCreated(url, _)) = result {
             assert_eq!(url, rpc_url);

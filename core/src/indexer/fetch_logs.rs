@@ -206,6 +206,12 @@ async fn fetch_historic_logs_stream(
             }
 
             if logs_empty {
+                info!(
+                    "{} - No events found between blocks {} - {}",
+                    info_log_name,
+                    from_block,
+                    to_block
+                );
                 let next_from_block = to_block + 1;
                 return if next_from_block > snapshot_to_block {
                     None

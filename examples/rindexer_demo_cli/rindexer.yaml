@@ -1,0 +1,22 @@
+name: RocketPoolETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+    drop_each_run: true
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: 0xae78736cd615f374d3085123a210448e74fc6393
+    start_block: '18600000'
+    end_block: '18718056'
+  abi: ./abis/RocketTokenRETH.abi.json
+  include_events:
+  - Transfer
