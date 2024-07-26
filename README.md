@@ -1,6 +1,6 @@
 # 🦀 rindexer 🦀
 
-Note rindexer is brand new and only in beta and actively under development, things will change and bugs will exist - if you find any bugs or have any
+Note rindexer is brand new and actively under development, things will change and bugs will exist - if you find any bugs or have any
 feature requests please open an issue on [github](https://github.com/joshstevens19/rindexer/issues).
 
 rindexer is an opensource powerful, high-speed indexing toolset developed in Rust, designed for compatibility with any EVM chain.

@@ -64,13 +64,13 @@ pub enum DeployShadowError {
     #[error("Invalid compiler output from format json")]
     InvalidCompilerOutputFromFormatJson,
 
-    #[error("Failed to create overlay: {0}")]
+    #[error("Failed to create dyRPC: {0}")]
     FailedToDeployContract(String, String),
 
-    #[error("overlay response is not json: {0}")]
+    #[error("dyRPC response is not json: {0}")]
     ResponseNotJson(reqwest::Error),
 
-    #[error("overlay api failed: {0}")]
+    #[error("dyRPC api failed: {0}")]
     ApiFailed(reqwest::Error),
 }
 
@@ -92,14 +92,10 @@ pub async fn deploy_shadow_contract(
         let stdout_str = std::str::from_utf8(&output.stdout)
             .map_err(|_| DeployShadowError::CouldNotReadFormatJson)?;
 
-        let compiler_output: CompilerOutput = forge_to_solc(stdout_str).map_err(|e| {
-            println!("{}", e);
-            DeployShadowError::InvalidCompilerOutputFromFormatJson
-        })?;
+        let compiler_output: CompilerOutput = forge_to_solc(stdout_str).map_err(|_|DeployShadowError::InvalidCompilerOutputFromFormatJson)?;
 
         let shadow_compiler_output = ShadowCompilerOutput::from_compile_output(compiler_output);
-        println!("{:?}", shadow_compiler_output);
-
+        
         deploy_shadow(api_key, clone_meta, shadow_details, shadow_compiler_output).await
     } else {
         Err(DeployShadowError::CouldNotReadFormatJson)
@@ -116,7 +112,7 @@ fn forge_to_solc(stdout_str: &str) -> Result<CompilerOutput, serde_json::Error> 
     let mut sources: BTreeMap<String, SourceFile> = BTreeMap::new();
 
     let errors = errors_arr
-        .into_iter()
+        .iter()
         .map(|e| serde_json::from_value::<Error>(e.clone()).unwrap())
         .collect::<Vec<Error>>();
 
@@ -178,7 +174,7 @@ async fn deploy_shadow(
     let response = client
         // https://api.staging.shadow.xyz
         // https://api.shadow.xyz
-        .post(format!("https://api.staging.shadow.xyz/v1/{}/deploy", shadow_details.fork_id))
+        .post(format!("https://api.shadow.xyz/v1/{}/deploy", shadow_details.fork_id))
         .header("X-SHADOW-API-KEY", api_key)
         .json(&DeployShadowBody {
             shadowed_contracts: vec![ShadowBodyContract {
@@ -193,7 +189,7 @@ async fn deploy_shadow(
     if response.status().is_success() {
         let response: DeployShadowResponse =
             response.json().await.map_err(DeployShadowError::ResponseNotJson)?;
-        println!("{:?}", response);
+        
         Ok(response.rpc_url)
     } else {
         Err(DeployShadowError::FailedToDeployContract(

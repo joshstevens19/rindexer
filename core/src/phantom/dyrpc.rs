@@ -35,13 +35,13 @@ pub struct DeployDyrpcContractResponse {
 
 #[derive(thiserror::Error, Debug)]
 pub enum CreateDyrpcError {
-    #[error("Failed to deploy overlay: {0}")]
+    #[error("Failed to deploy dyRPC: {0}")]
     FailedToDeployContract(String, String),
 
-    #[error("overlay response is not json: {0}")]
+    #[error("dyRPC response is not json: {0}")]
     ResponseNotJson(reqwest::Error),
 
-    #[error("overlay api failed: {0}")]
+    #[error("dyRPC api failed: {0}")]
     ApiFailed(reqwest::Error),
 }
 

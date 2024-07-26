@@ -186,7 +186,6 @@ fn forge_clone_contract(
     ));
     let output = Command::new("forge")
         .arg("clone")
-        .arg("--no-git")
         .arg("--no-commit")
         .arg(format!("{:?}", address))
         //.arg(format!("--chain {}", network.chain_id))
@@ -243,14 +242,11 @@ fn handle_phantom_clone(
                 return Err(error_message.into());
             }
 
-            // overlay only supports mainnet at the moment
-            if let Some(phantom) = &manifest.phantom {
-                if phantom.dyrpc.is_some() && network.unwrap().chain_id != 1 {
-                    let error_message =
-                        format!("Network {} is not supported by phantom overlay", args.network);
-                    print_error_message(&error_message);
-                    return Err(error_message.into());
-                }
+            if network.unwrap().chain_id != 1 {
+                let error_message =
+                    format!("Network {} is not supported", args.network);
+                print_error_message(&error_message);
+                return Err(error_message.into());
             }
 
             let contract_network = contract.details.iter().find(|c| c.network == args.network);
@@ -388,6 +384,13 @@ fn handle_phantom_compile(
                 return Err(error_message.into());
             }
 
+            if network.unwrap().chain_id != 1 {
+                let error_message =
+                    format!("Network {} is not supported", args.network);
+                print_error_message(&error_message);
+                return Err(error_message.into());
+            }
+
             let contract_network =
                 contract.details.iter().find(|c| c.network == args.network || c.network == name);
             if contract_network.is_some() {
@@ -464,6 +467,13 @@ async fn handle_phantom_deploy(
                 return Err(error_message.into());
             }
 
+            if network.unwrap().chain_id != 1 {
+                let error_message =
+                    format!("Network {} is not supported", args.network);
+                print_error_message(&error_message);
+                return Err(error_message.into());
+            }
+
             let contract_network = contract
                 .details
                 .iter_mut()
@@ -486,6 +496,7 @@ async fn handle_phantom_deploy(
                     .await
                     .map_err(|e| format!("Failed to deploy contract: {}", e))?
                 } else {
+                    println!("deploying shadow contracts, this may take a while....");
                     deploy_shadow_contract(
                         &env::var(RINDEXER_PHANTOM_API_ENV_KEY)
                             .expect("Failed to get phantom api key"),

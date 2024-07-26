@@ -1,43 +1,70 @@
 # Phantom events
 
-Phantom events give you ability to add your own custom events or edit existing events for ANY smart contract
-this allows you to get any data you need from the contract.
+Phantom events enable you to add custom events or modify existing events for any smart contract.
+This feature allows you to extract any data you need from smart contracts without the constraints of on-chain modifications.
 
-"Phantom events are a gasless events, logged on an off-chain execution environment that mirrors mainnet state in realtime."
+## What are Phantom Events?
+Phantom events are gasless events logged in an off-chain execution environment that mirrors the mainnet state in real-time.
+They provide a solution for obtaining additional information from a contract without incurring extra gas costs for users.
 
-Have you ever needed more information from a contract but you either do not control the contract as its
-decentralised or you did not want to add more gas for the users? This is where phantom events come in.
-Everyone has different needs and different use cases for what data they want to get from the contract.
-Phantom events powered by Shadow and dyRPC are rindexer solutions to this problem.
+## Why Use Phantom Events?
 
-rindexer abstracts away all of the complexity and has first party support for getting up and running with phantom events.
+Whether you don't control the contract or want to avoid additional gas costs, phantom events offer a flexible solution
+for diverse data needs and use cases. Powered by [Shadow](https://www.shadow.xyz/) and dyRPC,
+they are part of the rindexer suite designed to simplify being able to use these powerful features.
 
-rindexer uses Etherscan APIs to download source code and ABIs for the contracts you want to index. The rindexer Etherscan
-API key is a shared API key, this means you will get rate limited if you use this too much
-or if many people use this at the same time.
-You can add your own API key [here](/docs/start-building/yaml-config/global#etherscan_api_key) which we advise you do.
+## Getting Started with Phantom Events
+rindexer abstracts away the complexity and offers first-party support for implementing phantom events.
+It utilizes Etherscan APIs to download source code and ABIs for the contracts you want to index.
+Note that the shared Etherscan API key may lead to rate limits if heavily used.
+To avoid this, we recommend adding your own API key here [here](/docs/start-building/yaml-config/global#etherscan_api_key).
 
 Right let's get started with phantom events.
 
 ## Providers
 
+:::warning
+To use phantom events you will need to have a provider, rindexer just offers first-party support for implementing phantom events.
+:::
+
+### [Shadow](https://www.shadow.xyz/)
+
+Shadow enables you to modify a deployed contract's source code to add gasless custom event logs and view functions on a shadow fork that
+is instrumented to mirror mainnet state in realtime.
+
+#### Networks Supported
+
+- Ethereum
+
 ### dyRPC
 
-TODO
+dyRPC is a tool built on top of overlay which can be ran on any erigon node and allows you to also modify the contract's source code
+adding gasless custom event logs and view functions.
 
-### Shadow
+#### Networks Supported
 
-TODO
+- Ethereum
 
-## Setup
+## Dependencies
 
-rindexer uses its CLI for everything and phantom events behaves the same way. Each rindexer project by default
-does not have phantom events enabled you have to set them up for each project.
+### Installing Foundry
 
 :::info
-rindexer uses `forge` to clone and compile the contracts.
-If you do not have `foundry` installed it will install it for you as you run the `init` command.
+If you do not have `foundry` installed it will install it for you when you run the `init` command but we recommend you install it yourself.
 :::
+
+foundry is required to be installed to compile the contracts.
+
+```bash
+curl -L https://foundry.paradigm.xyz | bash
+```
+
+if you already have got foundry installed you can run `foundryup` to update it.
+
+## Init
+
+rindexer uses its CLI first approach for everything and phantom events behaves the same way. Each rindexer project by default
+does not have phantom events enabled you have to set them up for each project.
 
 To enable phantom events for your rindexer project you can run the following command:
 
@@ -45,7 +72,15 @@ To enable phantom events for your rindexer project you can run the following com
 rindexer phantom init
 ```
 
-You will be asked to pick your provider and add your API key if you have not added one already. It will save the API key
+### Required information
+
+- Shadow
+    - API key (generate on the shadow portal)
+    - Fork ID (generate on the shadow portal)
+- dyRPC
+    - API key (generate on the dyRPC portal or use "new" to generate a new one)
+
+You will be asked to pick your provider and add your API key. It will save the API key
 int the `.env` file in your project directory. It will also add your phantom provider to the `rindexer.yaml` file.
 
 ## Clone
@@ -95,7 +130,7 @@ to clone this contract you would run the following command
 rindexer phantom clone RocketPoolETH ethereum
 ```
 
-This will create you a folder called `phantom` in the root of your rindexer project and also create a the network name
+This will create you a folder called `phantom` in the root of your rindexer project and also create the network name
 to make it easier to find contracts you have cloned. for example in the above example it will create a folder called `phantom/ethereum/`
 and inside it will have a folder called `RocketPoolETH/` which will have your solidity project files and the contract ABI.
 This folder will contain all the phantom contracts you have cloned.
@@ -113,13 +148,13 @@ contract RocketTokenRETH is RocketBase, ERC20, RocketTokenRETHInterface {
     event EtherDeposited(address indexed from, uint256 amount, uint256 time);
     event TokensMinted(address indexed to, uint256 amount, uint256 ethAmount, uint256 time);
     event TokensBurned(address indexed from, uint256 amount, uint256 ethAmount, uint256 time);
-    event TransferTime(address indexed from, uint256 time); // [!code focus]
+    event PhantomTransferTime(address indexed from, uint256 time); // [!code focus]
 
     ...
 
     function _beforeTokenTransfer(address from, address, uint256) internal override {
         // emit your own event
-        emit TransferTime(from, block.timestamp); // [!code focus]
+        emit PhantomTransferTime(from, block.timestamp); // [!code focus]
 
         // Don't run check if this is a mint transaction
         if (from != address(0)) {
@@ -152,7 +187,7 @@ contract RocketTokenRETH is RocketBase, ERC20, RocketTokenRETHInterface {
     event EtherDeposited(address indexed from, uint256 amount, uint256 time);
     event TokensMinted(uint256 newBalance, address indexed to, uint256 amount, uint256 ethAmount, uint256 time); // [!code focus]
     event TokensBurned(address indexed from, uint256 amount, uint256 ethAmount, uint256 time);
-    event TransferTime(address indexed from, uint256 time);
+    event PhantomTransferTime(address indexed from, uint256 time);
 
     ...
 
@@ -174,14 +209,13 @@ That is it you can now compile and deploy your phantom contract which we will go
 If editing different events on different networks (aka your indexing `RocketPoolETH` on ethereum as well as base)
 your contract details should be separate for each network in the `rindexer.yaml` file,
 as when you deploy the phantom contract it will remap the new ABI and if your events now do not match the types
-it will not work.
+it will error.
 :::
 
 ## Compile
 
 :::info
-rindexer uses `forge` to clone and compile the contracts.
-If you do not have `foundry` installed it will install it for you as you run the `init` command.
+rindexer uses `foundry` to clone and compile the contracts.
 :::
 
 To compile the phantom contracts you can run the following command:
@@ -200,8 +234,8 @@ This will show you the same compile errors as `foundry` would show you if you ha
 
 ## Deploy
 
-Deploying your phantom contract is different to deploying a normal contract. rindexer will take care of the uploading
-the new phantom contract and all the mappings for you in the `rindexer.yaml` file.
+Deploying your phantom contract is different to deploying a normal contract. rindexer will take care of uploading
+the new phantom contract to the provider and all the mappings for you in the `rindexer.yaml` file.
 
 ```bash
 rindexer phantom deploy <CONTRACT_NAME> <NETWORK_NAME>
@@ -294,6 +328,37 @@ contracts:
 ...
 ```
 
+right now lets include the `PhantomTransferTime` event in our yaml file `include_events` array so we can index it.
+
+```yaml
+name: RocketPoolETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+- name: phantom_ethereum_RocketPoolETH
+  chain_id: 1
+  rpc: PROVIDER_RPC
+storage:
+  postgres:
+    enabled: true
+    drop_each_run: true
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: phantom_ethereum_RocketPoolETH
+    address: 0xae78736cd615f374d3085123a210448e74fc6393
+    start_block: '18600000'
+    end_block: '18718056'
+  abi: ./abis/phantom_ethereum_RocketPoolETH.abi.json
+  include_events:
+  - PhantomTransferTime // [!code focus]
+...
+```
+
 ## Indexing
 
 everything else is same as before so you can run `rindexer start all` the database tables will all be created,
@@ -305,4 +370,4 @@ All phantom providers at the moment use block ranges over optimal ranges so phan
 than normal events.
 :::
 
-That is you now have created phantom events with rindexer.
+That is it you now have created phantom events with rindexer.
