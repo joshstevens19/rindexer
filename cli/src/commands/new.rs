@@ -152,6 +152,7 @@ pub fn handle_new_command(
             reorg_safe_distance: None,
             generate_csv: None,
         }],
+        phantom: None,
         global: None,
         storage: Storage {
             postgres: if postgres_enabled {

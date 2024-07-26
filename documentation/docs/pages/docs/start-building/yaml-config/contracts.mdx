@@ -74,7 +74,7 @@ contracts: // [!code focus]
   - name: RocketPoolETH
     details:
       - network: ethereum
-        address: 0xae78736cd615f374d3085123a210448e74fc6393 // [!code focus]
+        address: "0xae78736cd615f374d3085123a210448e74fc6393" // [!code focus]
 ```
 
 To listen to many contract addresses you can provide an array of addresses.
@@ -95,8 +95,8 @@ contracts: // [!code focus]
     details:
       - network: ethereum
         address:
-          - 0xae78736cd615f374d3085123a210448e74fc6393 // [!code focus]
-          - 0x2FD5c1659A82E87217DF254f3D4b71A22aE43eE1 // [!code focus]
+          - "0xae78736cd615f374d3085123a210448e74fc6393" // [!code focus]
+          - "0x2FD5c1659A82E87217DF254f3D4b71A22aE43eE1" // [!code focus]
 ```
 
 ### filter
@@ -230,12 +230,12 @@ contracts: // [!code focus]
    - name: RocketPoolETH
      details:
        - network: ethereum
-         address: 0xae78736cd615f374d3085123a210448e74fc6393
+         address: "0xae78736cd615f374d3085123a210448e74fc6393"
          indexed_filters: // [!code focus]
            - event_name: Approval // [!code focus]
              indexed_1:
-               - 0xd87b8e0db0cf9cbf9963c035a6ad72d614e37fd5 // [!code focus]
-               - 0x0338ce5020c447f7e668dc2ef778025ce398266b // [!code focus]
+               - "0xd87b8e0db0cf9cbf9963c035a6ad72d614e37fd5" // [!code focus]
+               - "0x0338ce5020c447f7e668dc2ef778025ce398266b" // [!code focus]
 ```
 
 Another example using filters is if you wanted to get all the approvals for any token for owner `0xd87b8e0db0cf9cbf9963c035a6ad72d614e37fd5`
@@ -291,7 +291,7 @@ contracts: // [!code focus]
   - name: RocketPoolETH
     details:
       - network: ethereum
-        address: 0xae78736cd615f374d3085123a210448e74fc6393
+        address: "0xae78736cd615f374d3085123a210448e74fc6393"
         start_block: 18600000 // [!code focus]
 ```
 
@@ -317,7 +317,7 @@ contracts: // [!code focus]
   - name: RocketPoolETH
     details:
       - network: ethereum
-        address: 0xae78736cd615f374d3085123a210448e74fc6393
+        address: "0xae78736cd615f374d3085123a210448e74fc6393"
         start_block: 18600000
         end_block: 18718056 // [!code focus]
 ```
@@ -346,11 +346,11 @@ contracts: // [!code focus]
   - name: RocketPoolETH
     details: // [!code focus]
     - network: ethereum // [!code focus]
-      address: 0xae78736cd615f374d3085123a210448e74fc6393 // [!code focus]
+      address: "0xae78736cd615f374d3085123a210448e74fc6393" // [!code focus]
       start_block: 18600000 // [!code focus]
       end_block: 18718056 // [!code focus]
     - network: base // [!code focus]
-      address: 0xba25348cd615f374d3085123a210448e74fa3333 // [!code focus]
+      address: "0xba25348cd615f374d3085123a210448e74fa3333" // [!code focus]
       start_block: 18118056 // [!code focus]
       end_block: 18918056 // [!code focus]
 ```
@@ -374,7 +374,7 @@ contracts: // [!code focus]
   - name: RocketPoolETH
     details:
       - network: ethereum
-        address: 0xae78736cd615f374d3085123a210448e74fc6393
+        address: "0xae78736cd615f374d3085123a210448e74fc6393"
         start_block: 18600000
         end_block: 18718056
     abi: ./abis/RocketTokenRETH.abi.json // [!code focus]
@@ -403,7 +403,7 @@ contracts: // [!code focus]
   - name: RocketPoolETH
     details:
       - network: ethereum
-        address: 0xae78736cd615f374d3085123a210448e74fc6393
+        address: "0xae78736cd615f374d3085123a210448e74fc6393"
         start_block: 18600000
         end_block: 18718056
     abi: ./abis/RocketTokenRETH.abi.json
@@ -439,7 +439,7 @@ contracts: // [!code focus]
   - name: RocketPoolETH
     details:
       - network: ethereum
-        address: 0xae78736cd615f374d3085123a210448e74fc6393
+        address: "0xae78736cd615f374d3085123a210448e74fc6393"
         start_block: 18600000
         end_block: 18718056
     abi: ./abis/RocketTokenRETH.abi.json
@@ -493,7 +493,7 @@ contracts: // [!code focus]
   - name: RocketPoolETH
     details:
       - network: ethereum
-        address: 0xae78736cd615f374d3085123a210448e74fc6393
+        address: "0xae78736cd615f374d3085123a210448e74fc6393"
         start_block: 18600000
         end_block: 18718056
     abi: ./abis/RocketTokenRETH.abi.json
@@ -541,7 +541,7 @@ contracts: // [!code focus]
   - name: RocketPoolETH
     details:
       - network: ethereum
-        address: 0xae78736cd615f374d3085123a210448e74fc6393
+        address: "0xae78736cd615f374d3085123a210448e74fc6393"
         start_block: 18600000
         end_block: 18718056
     abi: ./abis/RocketTokenRETH.abi.json
@@ -587,7 +587,7 @@ contracts: // [!code focus]
   - name: RocketPoolETH
     details:
       - network: ethereum
-        address: 0xae78736cd615f374d3085123a210448e74fc6393
+        address: "0xae78736cd615f374d3085123a210448e74fc6393"
         start_block: 18600000
         end_block: 18718056
     abi: ./abis/RocketTokenRETH.abi.json
@@ -621,7 +621,7 @@ contracts: // [!code focus]
   - name: RocketPoolETH
     details:
       - network: ethereum
-        address: 0xae78736cd615f374d3085123a210448e74fc6393
+        address: "0xae78736cd615f374d3085123a210448e74fc6393"
         start_block: 18600000
         end_block: 18718056
     abi: ./abis/RocketTokenRETH.abi.json

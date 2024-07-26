@@ -1,6 +1,6 @@
 # 🦀 rindexer 🦀
 
-Note rindexer is brand new and only in beta and actively under development, things will change and bugs will exist - if you find any bugs or have any
+Note rindexer is brand new and actively under development, things will change and bugs will exist - if you find any bugs or have any
 feature requests please open an issue on [github](https://github.com/joshstevens19/rindexer/issues).
 
 rindexer is an opensource powerful, high-speed indexing toolset developed in Rust, designed for compatibility with any EVM chain.
@@ -39,6 +39,7 @@ Commands:
   add           Add elements such as contracts to the rindexer.yaml file
   codegen       Generates rust code based on rindexer.yaml or graphql queries
   delete        Delete data from the postgres database or csv files
+  phantom       Use phantom events to add your own events to contracts
   help          Print this message or the help of the given subcommand(s)
 
 Options:
@@ -110,6 +111,13 @@ you can run `cargo fmt` to format the code, rules have been mapped in the `rustf
 
 Anyone is welcome to contribute to rindexer, feel free to look over the issues or open a new one if you have
 any new ideas or bugs you have found.
+
+### Playing around with the CLI locally
+
+You can use the `make` commands to run the CLI commands locally, this is useful for testing and developing.
+These are located in the `cli` folder > `Makefile`. It uses `CURDIR` to resolve the paths for you, so they should work
+out of the box. The examples repo has a `rindexer_demo_cli` folder which you can modify (please do not commit any changes though) 
+or spin up a new no-code project using the make commands.
 
 ## Release
 

@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Parser, Debug)]
@@ -99,6 +99,24 @@ pub enum Commands {
         #[clap(long, short)]
         path: Option<String>,
     },
+    /// Use phantom events to add your own events to contracts
+    ///
+    /// This command helps you use phantom events within rindexer.
+    ///
+    /// Example:
+    /// `rindexer phantom init` or
+    /// `rindexer phantom clone --contract-name <CONTRACT_NAME> --network <NETWORK>` or
+    /// `rindexer phantom compile --contract-name <CONTRACT_NAME> --network <NETWORK>` or
+    /// `rindexer phantom deploy --contract-name <CONTRACT_NAME> --network <NETWORK>`
+    #[clap(name = "phantom")]
+    Phantom {
+        #[clap(subcommand)]
+        subcommand: PhantomSubcommands,
+
+        /// optional - The path to create the project in, default will be where the command is run.
+        #[clap(long, short)]
+        path: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -195,5 +213,79 @@ pub enum CodegenSubcommands {
     GraphQL {
         #[clap(long, help = "The graphql endpoint - defaults to localhost:3001")]
         endpoint: Option<String>,
+    },
+}
+
+#[derive(Args, Debug)]
+pub struct PhantomBaseArgs {
+    /// The name of the contract
+    #[clap(value_parser)]
+    pub contract_name: String,
+
+    /// The network the contract is on
+    #[clap(value_parser)]
+    pub network: String,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PhantomSubcommands {
+    /// Sets up phantom events on rindexer
+    ///
+    /// Want to add your own custom events to contracts? This command will help you do that.
+    ///
+    /// Example:
+    /// `rindexer phantom init`
+    #[clap(name = "init")]
+    Init,
+
+    /// Clone the contract with the network you wish to add phantom events to.
+    ///
+    /// Note contract name and network are your values in your rindexer.yaml file.
+    ///
+    /// Example:
+    /// `rindexer phantom clone --contract-name <CONTRACT_NAME> --network <NETWORK>`
+    #[clap(name = "clone")]
+    Clone {
+        /// The name of the contract to clone
+        #[arg(long)]
+        contract_name: String,
+
+        /// The network
+        #[arg(long)]
+        network: String,
+    },
+
+    /// Compiles the phantom contract
+    ///
+    /// Note contract name and network are your values in your rindexer.yaml file.
+    ///
+    /// Example:
+    /// `rindexer phantom compile --contract-name <CONTRACT_NAME> --network <NETWORK>`
+    #[clap(name = "compile")]
+    Compile {
+        /// The name of the contract to clone
+        #[arg(long)]
+        contract_name: String,
+
+        /// The network
+        #[arg(long)]
+        network: String,
+    },
+
+    /// Deploy the modified phantom contract
+    ///
+    /// This will compile and update your rindexer project with the phantom events.
+    ///
+    /// Example:
+    /// `rindexer phantom deploy --contract-name <CONTRACT_NAME> --network <NETWORK>`
+    #[clap(name = "deploy")]
+    Deploy {
+        /// The name of the contract to clone
+        #[arg(long)]
+        contract_name: String,
+
+        /// The network
+        #[arg(long)]
+        network: String,
     },
 }

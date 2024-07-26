@@ -6,7 +6,7 @@ use crate::{
     indexer::Indexer,
     manifest::{
         contract::Contract, global::Global, graphql::GraphQLSettings, network::Network,
-        storage::Storage,
+        phantom::Phantom, storage::Storage,
     },
 };
 
@@ -69,6 +69,9 @@ pub struct Manifest {
     pub contracts: Vec<Contract>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phantom: Option<Phantom>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub global: Option<Global>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -93,6 +96,16 @@ impl Manifest {
             .map_or(false, |c| c.generate_csv.unwrap_or(true));
 
         self.storage.csv_enabled() && contract_csv_enabled
+    }
+
+    pub fn get_custom_headers(&self) -> reqwest::header::HeaderMap {
+        let mut headers = reqwest::header::HeaderMap::new();
+        if let Some(phantom) = &self.phantom {
+            if let Some(shadow) = &phantom.shadow {
+                headers.insert("X-SHADOW-API-KEY", shadow.api_key.parse().unwrap());
+            }
+        }
+        headers
     }
 }
 

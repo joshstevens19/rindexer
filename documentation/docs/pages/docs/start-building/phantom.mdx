@@ -1,0 +1,374 @@
+# Phantom events
+
+Phantom events enable you to add custom events or modify existing events for any smart contract.
+This feature allows you to extract any data you need from smart contracts without the constraints of on-chain modifications.
+
+## What are Phantom Events?
+Phantom events are gasless events logged in an off-chain execution environment that mirrors the mainnet state in real-time.
+They provide a solution for obtaining additional information from a contract without incurring extra gas costs for users.
+
+## Why Use Phantom Events?
+
+Whether you don't control the contract or want to avoid additional gas costs, phantom events offer a flexible solution
+for diverse data needs and use cases. Powered by [Shadow](https://www.shadow.xyz/) and [dyRPC](https://ui.dyrpc.network/),
+they are part of the rindexer suite designed to simplify being able to use these powerful features.
+
+## Getting Started with Phantom Events
+rindexer abstracts away the complexity and offers first-party support for implementing phantom events.
+It utilizes Etherscan APIs to download source code and ABIs for the contracts you want to index.
+Note that the shared Etherscan API key may lead to rate limits if heavily used.
+To avoid this, we recommend adding your own API key here [here](/docs/start-building/yaml-config/global#etherscan_api_key).
+
+Right let's get started with phantom events.
+
+## Providers
+
+:::warning
+To use phantom events you will need to have a provider, rindexer just offers first-party support for implementing phantom events.
+:::
+
+### [Shadow](https://www.shadow.xyz/)
+
+Shadow enables you to modify a deployed contract's source code to add gasless custom event logs and view functions on a shadow fork that
+is instrumented to mirror mainnet state in realtime.
+
+#### Networks Supported
+
+- Ethereum
+
+### [dyRPC](https://ui.dyrpc.network/)
+
+dyRPC is a tool built on top of overlay which can be ran on any erigon node and allows you to also modify the contract's source code
+adding gasless custom event logs and view functions.
+
+#### Networks Supported
+
+- Ethereum
+
+## Dependencies
+
+### Installing Foundry
+
+:::info
+If you do not have `foundry` installed it will install it for you when you run the `init` command but we recommend you install it yourself.
+:::
+
+foundry is required to be installed to compile the contracts.
+
+```bash
+curl -L https://foundry.paradigm.xyz | bash
+```
+
+if you already have got foundry installed you can run `foundryup` to update it.
+
+## Init
+
+rindexer uses its CLI first approach for everything and phantom events behaves the same way. Each rindexer project by default
+does not have phantom events enabled you have to set them up for each project.
+
+To enable phantom events for your rindexer project you can run the following command:
+
+```bash
+rindexer phantom init
+```
+
+### Required information
+
+- Shadow
+    - API key (generate on the shadow portal)
+    - Fork ID (generate on the shadow portal)
+- dyRPC
+    - API key (generate on the dyRPC portal or use "new" to generate a new one)
+
+You will be asked to pick your provider and add your API key. It will save the API key
+int the `.env` file under `RINDEXER_PHANTOM_API_KEY` in your project directory.
+It will also add your phantom provider to the `rindexer.yaml` file.
+
+## Clone
+
+As the `rindexer.yaml` file is defined by you we use these contract names and network names to allow you to
+easily understand what you are cloning.
+
+:::info
+Only verified contracts on Etherscan can be cloned, if you wish to use an unverified contract it will still work
+but you will have to create the foundry project manually in the `phantom` folder.
+:::
+
+```bash
+rindexer phantom clone --contract-name <CONTRACT_NAME> --network <NETWORK>
+```
+
+lets say we had a `rindexer.yaml` file like this:
+
+```yaml
+name: RocketPoolETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+    drop_each_run: true
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: '18600000'
+    end_block: '18718056'
+  abi: ./abis/RocketTokenRETH.abi.json
+  include_events:
+  - Transfer
+```
+
+to clone this contract you would run the following command
+
+```bash
+rindexer phantom clone RocketPoolETH ethereum
+```
+
+This will create you a folder called `phantom` in the root of your rindexer project and also create the network name
+to make it easier to find contracts you have cloned. for example in the above example it will create a folder called `phantom/ethereum/`
+and inside it will have a folder called `RocketPoolETH/` which will have your solidity project files and the contract ABI.
+This folder will contain all the phantom contracts you have cloned.
+
+You can now go to the contracts folder and start making changes to the phantom contracts.
+
+## Add your own event
+
+Above we cloned `RocketPoolETH` on `ethereum` lets open up `RocketTokenRETH.sol` and add a phantom event on transfer hook.
+
+```solidity
+contract RocketTokenRETH is RocketBase, ERC20, RocketTokenRETHInterface {
+    using SafeMath for uint;
+
+    event EtherDeposited(address indexed from, uint256 amount, uint256 time);
+    event TokensMinted(address indexed to, uint256 amount, uint256 ethAmount, uint256 time);
+    event TokensBurned(address indexed from, uint256 amount, uint256 ethAmount, uint256 time);
+    event PhantomTransferTime(address indexed from, uint256 time); // [!code focus]
+
+    ...
+
+    function _beforeTokenTransfer(address from, address, uint256) internal override {
+        // emit your own event
+        emit PhantomTransferTime(from, block.timestamp); // [!code focus]
+
+        // Don't run check if this is a mint transaction
+        if (from != address(0)) {
+            // Check which block the user's last deposit was
+            bytes32 key = keccak256(abi.encodePacked("user.deposit.block", from));
+            uint256 lastDepositBlock = getUint(key);
+            if (lastDepositBlock > 0) {
+                // Ensure enough blocks have passed
+                uint256 depositDelay = getUint(keccak256(abi.encodePacked(keccak256("dao.protocol.setting.network"), "network.reth.deposit.delay")));
+                uint256 blocksPassed = block.number.sub(lastDepositBlock);
+                require(blocksPassed > depositDelay, "Not enough time has passed since deposit");
+                // Clear the state as it's no longer necessary to check this until another deposit is made
+                deleteUint(key);
+            }
+        }
+    }
+```
+
+That is it you can now compile and deploy your phantom contract which we will go over in the next section.
+
+## Editing existing events
+
+You can edit any event to whatever you want for example lets say we wanted to change `TokensMinted` to include
+the new balance of the `to` address after minted.
+
+```solidity
+contract RocketTokenRETH is RocketBase, ERC20, RocketTokenRETHInterface {
+    using SafeMath for uint;
+
+    event EtherDeposited(address indexed from, uint256 amount, uint256 time);
+    event TokensMinted(uint256 newBalance, address indexed to, uint256 amount, uint256 ethAmount, uint256 time); // [!code focus]
+    event TokensBurned(address indexed from, uint256 amount, uint256 ethAmount, uint256 time);
+    event PhantomTransferTime(address indexed from, uint256 time);
+
+    ...
+
+    function mint(uint256 _ethAmount, address _to) override external onlyLatestContract("rocketDepositPool", msg.sender) {
+        // Get rETH amount
+        uint256 rethAmount = getRethValue(_ethAmount);
+        // Check rETH amount
+        require(rethAmount > 0, "Invalid token mint amount");
+        // Update balance & supply
+        _mint(_to, rethAmount);
+        // Emit tokens minted event
+        emit TokensMinted(balanceOf(_to), _to, rethAmount, _ethAmount, block.timestamp); // [!code focus]
+    }
+```
+
+That is it you can now compile and deploy your phantom contract which we will go over in the next section.
+
+:::info
+If editing different events on different networks (aka your indexing `RocketPoolETH` on ethereum as well as base)
+your contract details should be separate for each network in the `rindexer.yaml` file,
+as when you deploy the phantom contract it will remap the new ABI and if your events now do not match the types
+it will error.
+:::
+
+## Compile
+
+:::info
+rindexer uses `foundry` to clone and compile the contracts.
+:::
+
+To compile the phantom contracts you can run the following command:
+
+```bash
+rindexer phantom compile --contract-name <CONTRACT_NAME> --network <NETWORK>
+```
+
+So using the same yaml example as above you would run the following command:
+
+```bash
+rindexer phantom compile --contract-name RocketPoolETH --network ethereum
+```
+
+This will show you the same compile errors as `foundry` would show you if you have made any mistakes.
+
+## Deploy
+
+Deploying your phantom contract is different to deploying a normal contract. rindexer will take care of uploading
+the new phantom contract to the provider and all the mappings for you in the `rindexer.yaml` file.
+
+```bash
+rindexer phantom deploy --contract-name <CONTRACT_NAME> --network <NETWORK>
+```
+
+So using the same yaml example as above you would run the following command:
+
+```bash
+rindexer phantom deploy --contract-name RocketPoolETH --network ethereum
+```
+
+This will do a few things to your yaml file:
+
+1. It will add the phantom network to the `rindexer.yaml` file this is always named `phantom_${NETWORK_NAME}_${CONTRACT_NAME}`
+
+```yaml
+name: RocketPoolETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+- name: phantom_ethereum_RocketPoolETH // [!code focus]
+  chain_id: 1 // [!code focus]
+  rpc: PROVIDER_RPC // [!code focus]
+...
+```
+
+2. It will change the `contracts` section to point the contract details to the phantom network.
+
+```yaml
+name: RocketPoolETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+- name: phantom_ethereum_RocketPoolETH // [!code focus]
+  chain_id: 1 // [!code focus]
+  rpc: PROVIDER_RPC // [!code focus]
+storage:
+  postgres:
+    enabled: true
+    drop_each_run: true
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: phantom_ethereum_RocketPoolETH // [!code focus]
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: '18600000'
+    end_block: '18718056'
+  abi: ./abis/phantom_ethereum_RocketPoolETH.abi.json
+  include_events:
+  - Transfer
+...
+```
+
+3. It will upload the new ABI to your `abi` folder named the same as the network name but with the `.abi.json` extension.
+
+```yaml
+name: RocketPoolETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+- name: phantom_ethereum_RocketPoolETH // [!code focus]
+  chain_id: 1 // [!code focus]
+  rpc: PROVIDER_RPC // [!code focus]
+storage:
+  postgres:
+    enabled: true
+    drop_each_run: true
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: phantom_ethereum_RocketPoolETH // [!code focus]
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: '18600000'
+    end_block: '18718056'
+  abi: ./abis/phantom_ethereum_RocketPoolETH.abi.json // [!code focus]
+  include_events:
+  - Transfer
+...
+```
+
+right now lets include the `PhantomTransferTime` event in our yaml file `include_events` array so we can index it.
+
+```yaml
+name: RocketPoolETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+- name: phantom_ethereum_RocketPoolETH
+  chain_id: 1
+  rpc: PROVIDER_RPC
+storage:
+  postgres:
+    enabled: true
+    drop_each_run: true
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: phantom_ethereum_RocketPoolETH
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: '18600000'
+    end_block: '18718056'
+  abi: ./abis/phantom_ethereum_RocketPoolETH.abi.json
+  include_events:
+  - PhantomTransferTime // [!code focus]
+...
+```
+
+## Indexing
+
+everything else is same as before so you can run `rindexer start all` the database tables will all be created,
+indexer will start indexing and the GraphQL API will be available at http://localhost:3001/graphql.
+
+:::info
+Expect slower indexing as you will have to wait for the phantom provider to index the events.
+All phantom providers at the moment use block ranges over optimal ranges so phantom events will be slower
+than normal events.
+:::
+
+That is it you now have created phantom events with rindexer.
