@@ -40,7 +40,7 @@ pub enum ValidateManifestError {
     #[error("Could not read or parse ABI for contract {0} with path {1}")]
     InvalidABI(String, String),
 
-    #[error("Event {0} included in include_events for contract {1} not found in ABI")]
+    #[error("Event {0} included in include_events for contract {1} but not found in ABI - it must be an event type and match the name exactly")]
     EventIncludedNotFoundInABI(String, String),
 
     #[error("Event {0} not found in ABI for contract {1}")]
@@ -113,7 +113,7 @@ fn validate_manifest(
 
         if let Some(include_events) = &contract.include_events {
             for event in include_events {
-                if !events.iter().any(|e| e.name == *event) {
+                if !events.iter().any(|e| e.name == *event && e.type_ == "event") {
                     return Err(ValidateManifestError::EventIncludedNotFoundInABI(
                         event.clone(),
                         contract.name.clone(),
