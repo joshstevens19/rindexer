@@ -99,7 +99,10 @@ impl PostgresClient {
                     Ok(Ok((client, connection))) => (client, connection),
                     Ok(Err(e)) => {
                         // retry without ssl if ssl has been attempted and failed
-                        if !disable_ssl && config.get_ssl_mode() != SslMode::Disable {
+                        if !disable_ssl &&
+                            config.get_ssl_mode() != SslMode::Disable &&
+                            !connection_str.contains("sslmode=require")
+                        {
                             return Box::pin(_new(true)).await;
                         }
                         error!("Error connecting to database: {}", e);
