@@ -132,7 +132,6 @@ impl PostgresClient {
 
     pub async fn batch_execute(&self, sql: &str) -> Result<(), PostgresError> {
         let conn = self.pool.get().await?;
-        println!("Executing batch sql: {}", sql);
         conn.batch_execute(sql).await.map_err(PostgresError::PgError)
     }
 
