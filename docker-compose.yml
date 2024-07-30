@@ -1,0 +1,18 @@
+networks:
+  default:
+    name: rindexer_default
+
+services:
+  rindexer:
+    image: ghcr.io/joshstevens19/rindexer
+    platform: linux/amd64
+    command: |
+      start -p /app/project_path all
+    environment:
+      - PROJECT_PATH
+      - DATABASE_URL
+    volumes:
+      - ${PROJECT_PATH}:/app/project_path
+    ports:
+      - 3001:3001
+    restart: always
