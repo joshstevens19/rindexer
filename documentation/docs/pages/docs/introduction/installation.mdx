@@ -2,6 +2,11 @@
 
 rindexer installation process is simple and can be done with a few steps.
 
+:::info
+rindexer uses docker to spin up postgres databases for you when it runs locally so its recommended to install [docker](https://www.docker.com/products/docker-desktop/)
+if you don't have it installed already.
+:::
+
 ## rindexer CLI
 
 rindexer operates as a CLI toolset to make it easy to create new rindexer projects or run existing ones.
@@ -60,10 +65,7 @@ To uninstall rindexer you can run the following command:
 rindexerdown
 ```
 
-## Docker
-
-rindexer uses docker to spin up postgres databases for you when it runs locally so its recommended to install [docker](https://www.docker.com/products/docker-desktop/)
-if you don't have it installed already.
+## Docker pre-built image
 
 There's a pre-built docker image which can be used to run `rindexer` inside your dockerized infra:
 
