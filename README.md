@@ -50,6 +50,32 @@ Options:
 We have full documentation https://rindexer.xyz/docs/introduction/installation which goes into more detail on how to use 
 rindexer and all the commands available to you.
 
+## Docker
+
+There's a pre-built docker image which can be used to run `rindexer` inside your dockerized infra:
+
+[`ghcr.io/joshstevens19/rindexer`](https://github.com/users/joshstevens19/packages/container/package/rindexer)
+
+### Create new project
+To create a new `no-code` project in your current directory, you can run the following:
+
+`docker run -it -v $PWD:/app/project_path ghcr.io/joshstevens19/rindexer new -p /app/project_path no-code`
+
+### Use with existing project
+To use it with an existing project and a running postgres instance you can simply invoke:
+
+```
+export PROJECT_PATH=/path/to/your/project
+export DATABASE_URL="postgresql://user:pass@postgres/db"
+
+docker-compose up -d
+```
+
+This will start all local indexing and if you have enabled the graphql endpoint, it will become exposed under:
+
+http://localhost:3001
+
+
 ## What can I use rindexer for?
 
 - Hackathons: spin up a quick indexer to index events for your dApp with an API without any code needed
