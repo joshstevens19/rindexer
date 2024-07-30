@@ -7,9 +7,10 @@ WORKDIR /usr/src/app
 
 COPY ${PROJECT_PATH} /usr/src/app/rindexer-app
 
-ENV PORT=3001
+ARG PORT="3001"
+ENV PORT=${PORT}
 
 EXPOSE ${PORT}
 
 ENTRYPOINT ["/app/rindexer"]
-CMD ["start", "-p", "./rindexer-app", "all", "--port", "${PORT}"]
+CMD ["start", "-p", "./rindexer-app", "all"]

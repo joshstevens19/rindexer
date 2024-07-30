@@ -20,5 +20,3 @@ contracts:
       - Approval
       - Transfer
       - Withdrawal
-graphql:
-  port: ${PORT}
