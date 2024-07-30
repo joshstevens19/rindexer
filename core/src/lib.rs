@@ -25,6 +25,7 @@ pub use logger::setup_info_logger;
 mod abi;
 pub mod event;
 pub mod provider;
+pub mod alloy_provider;
 mod start;
 mod types;
 
