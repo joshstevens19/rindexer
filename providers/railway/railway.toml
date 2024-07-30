@@ -1,0 +1,12 @@
+#: schema https://railway.app/railway.schema.json
+[build]
+builder = "DOCKERFILE"
+buildEnvironment = "V2"
+dockerfilePath = "./Dockerfile"
+
+[deploy]
+runtime = "V2"
+numReplicas = 1
+sleepApplication = false
+restartPolicyMaxRetries = 10
+restartPolicyType = "ON_FAILURE"
