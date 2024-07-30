@@ -10,41 +10,40 @@
 
 1. Clone the relevant directory
 
-  ```shell-session
+  ```bash
   # this will clone the railway directory
-  git clone --no-checkout --depth=1 --filter=tree:0 https://github.com/joshstevens19/rindexer .
-  git sparse-checkout set --no-cone providers/railway
-  git checkout
+  mkdir rindexer-railway && cd rindexer-railway
+  git clone \
+    --depth=1 \
+    --no-checkout \
+    --filter=tree:0 \
+    https://github.com/joshstevens19/rindexer .
+  git sparse-checkout set --no-cone providers/railway .
+  git checkout && cp -r providers/railway/* . && rm -rf providers
   ```
 
-2. Change into the directory
+2. Initialize a new Railway project
 
-  ```shell-session
-  cd providers/railway
-  ```
-
-3. Initialize a new Railway project
-
-  ```shell-session
+  ```bash
   railway init --name rindexer-example
   ```
 
-4. Create a service and link it to the project
+3. Create a service and link it to the project
   
-  ```shell-session
+  ```bash
   railway up --detach
   railway link --name rindexer-example --enviroment production
   ```
 
-5. Create a Postgres database
+4. Create a Postgres database
 
-  ```shell-session
+  ```bash
   railway add --database postgre-sql
   ```
 
-6. Configure environment variables
+5. Configure environment variables
 
-  ```shell-session
+  ```bash
   railway open
   ```
 
@@ -52,14 +51,14 @@
 - postfix `?sslmode=diable` to the end of the value. It should look like this: `${{Postgres.DATABASE_URL}}?sslmode=disable`,
 - hit "Deploy" or Shift+Enter.
 
-8. Create a domain to access GraphQL Playground
+6. Create a domain to access GraphQL Playground
 
-  ```shell-session
+  ```bash
   railway domain
   ```
 
-9. Redeploy the service
+7. Redeploy the service
 
-  ```shell-session
+  ```bash
   railway up
   ```
