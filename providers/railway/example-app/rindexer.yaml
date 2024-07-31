@@ -1,0 +1,22 @@
+name: wETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: sepolia
+    chain_id: 11155111
+    rpc: https://sepolia.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+contracts:
+  - name: SepoliaWETH
+    details:
+      - network: sepolia
+        address: 0x097D90c9d3E0B50Ca60e1ae45F6A81010f9FB534
+    abi: ./erc20.abi.json
+    include_events:
+      - Deposit
+      - Approval
+      - Transfer
+      - Withdrawal

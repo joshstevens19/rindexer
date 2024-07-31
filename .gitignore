@@ -28,3 +28,5 @@ documentation/docs/dist
 documentation/vocs.config.ts*
 graphql/node_modules
 rindexer_rust_playground/generated_csv/*/*.csv
+.env
+!.env.example
