@@ -6,7 +6,7 @@
 
 ## Deploy an example project
 
-https://github.com/joshstevens19/rindexer/tree/master/providers/railway
+<https://github.com/joshstevens19/rindexer/tree/master/providers/railway>
 
 1. Clone the relevant directory
 
@@ -47,9 +47,9 @@ https://github.com/joshstevens19/rindexer/tree/master/providers/railway
   railway open
   ```
 
-  - then open the service "Variables" tab and click on "Add Variable Reference" and select `DATABASE_URL`,
-  - postfix `?sslmode=diable` to the end of the value. It should look like this: `${{Postgres.DATABASE_URL}}?sslmode=disable`,
-  - hit "Deploy" or Shift+Enter.
+- then open the service "Variables" tab and click on "Add Variable Reference" and select `DATABASE_URL`,
+- postfix `?sslmode=diable` to the end of the value. It should look like this: `${{Postgres.DATABASE_URL}}?sslmode=disable`,
+- hit "Deploy" or Shift+Enter.
 
 6. Create a domain to access GraphQL Playground
 
