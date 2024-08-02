@@ -11,9 +11,7 @@ pub use rindexer_world_gen::*;
 )]
 pub mod rindexer_world_gen {
     const _: () = {
-        ::core::include_bytes!(
-            "../../../../../abis/world.abi.json",
-        );
+        ::core::include_bytes!("../../../../../abis/world.abi.json",);
     };
     #[allow(deprecated)]
     fn __abi() -> ::ethers::core::abi::Abi {

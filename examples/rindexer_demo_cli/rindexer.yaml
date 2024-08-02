@@ -20,3 +20,19 @@ contracts:
   abi: ./abis/RocketTokenRETH.abi.json
   include_events:
   - Transfer
+  streams:
+    sns:
+      - topic_arn: "arn:aws:sns:us-east-1:664643779377:test.fifo"
+        networks:
+          - ethereum
+        events:
+          - Transfer
+#    rabbitmq:
+#      - queue: my-queue
+#        networks:
+#          - ethereum
+#        events:
+#          - Transfer
+#    kafka:
+    # telegram, discord and slack
+
