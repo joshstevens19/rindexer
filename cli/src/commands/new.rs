@@ -151,6 +151,7 @@ pub fn handle_new_command(
             dependency_events: None,
             reorg_safe_distance: None,
             generate_csv: None,
+            streams: None,
         }],
         phantom: None,
         global: None,

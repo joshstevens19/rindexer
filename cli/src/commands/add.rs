@@ -182,6 +182,7 @@ pub async fn handle_add_contract_command(
             dependency_events: None,
             reorg_safe_distance: None,
             generate_csv: None,
+            streams: None,
         });
 
         write_manifest(&manifest, &rindexer_yaml_path).map_err(|e| {

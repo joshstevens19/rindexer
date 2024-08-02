@@ -200,6 +200,19 @@ impl DependencyEventTree {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SNSStreamConfig {
+    pub prefix_id: Option<String>,
+    pub topic_arn: String,
+    pub networks: Vec<String>,
+    pub events: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StreamsConfig {
+    pub sns: Option<Vec<SNSStreamConfig>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Contract {
     pub name: String,
 
@@ -221,6 +234,9 @@ pub struct Contract {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generate_csv: Option<bool>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub streams: Option<StreamsConfig>,
 }
 
 impl Contract {

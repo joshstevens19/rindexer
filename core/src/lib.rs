@@ -28,6 +28,7 @@ pub mod event;
 pub mod phantom;
 pub mod provider;
 mod start;
+mod streams;
 mod types;
 
 // export 3rd party dependencies
