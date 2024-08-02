@@ -680,7 +680,7 @@ pub fn map_ethereum_wrapper_to_json(
     is_within_tuple: bool,
 ) -> Value {
     let mut result = serde_json::Map::new();
-    
+
     let mut current_wrapper_index = 0;
     let mut wrappers_index_processed = Vec::new();
     for abi_input in abi_inputs.iter() {

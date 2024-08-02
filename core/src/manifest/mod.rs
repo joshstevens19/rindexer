@@ -5,4 +5,5 @@ pub mod graphql;
 pub mod network;
 pub mod phantom;
 pub mod storage;
+pub mod stream;
 pub mod yaml;

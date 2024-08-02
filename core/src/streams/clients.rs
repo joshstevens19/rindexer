@@ -8,7 +8,7 @@ use tokio::{task, task::JoinError};
 use tracing::error;
 
 use crate::{
-    manifest::contract::{SNSStreamConfig, StreamsConfig},
+    manifest::stream::{SNSStreamConfig, StreamsConfig},
     streams::SNS,
 };
 
