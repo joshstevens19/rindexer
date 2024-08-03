@@ -1,19 +1,29 @@
 use std::sync::Arc;
 
-use aws_sdk_sns::{config::http::HttpResponse, error::SdkError, operation::publish::PublishError};
+use aws_sdk_sns::{
+    config::http::HttpResponse,
+    error::SdkError,
+    operation::publish::PublishError,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
-use tokio::{task, task::JoinError};
+use tokio::{
+    task,
+    task::{JoinError, JoinHandle},
+};
 use tracing::error;
 
 use crate::{
-    manifest::stream::{SNSStreamConfig, StreamsConfig},
-    streams::SNS,
+    manifest::stream::{SNSStreamConfig, StreamsConfig, WebhookStreamConfig},
+    streams::{webhook::WebhookError, Webhook, SNS},
 };
 
-// we should limit the max chunk size we send over when streaming to 100KB
-const MAX_CHUNK_SIZE: usize = 100 * 1024; // 100 KB
+// we should limit the max chunk size we send over when streaming to 70KB - 100KB is most limits
+// we can add this to yaml if people need it
+const MAX_CHUNK_SIZE: usize = 75 * 1024; // 75 KB
+
+type StreamPublishes = Vec<JoinHandle<Result<(), StreamError>>>;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EventMessage {
@@ -30,15 +40,25 @@ struct SNSStream {
 
 #[derive(Error, Debug)]
 pub enum StreamError {
-    #[error("SNS could not public - {0}")]
+    #[error("SNS could not publish - {0}")]
     SnsCouldNotPublish(#[from] SdkError<PublishError, HttpResponse>),
 
     #[error("SNS Task failed: {0}")]
     SnsJoinError(JoinError),
+
+    #[error("Webhook could not publish: {0}")]
+    WebhookCouldNotPublish(#[from] WebhookError),
+}
+
+#[derive(Debug, Clone)]
+struct WebhookStream {
+    config: Vec<WebhookStreamConfig>,
+    client: Arc<Webhook>,
 }
 
 pub struct StreamsClients {
     sns: Option<SNSStream>,
+    webhook: Option<WebhookStream>,
 }
 
 impl StreamsClients {
@@ -49,7 +69,16 @@ impl StreamsClients {
             None
         };
 
-        Self { sns }
+        let webhook = stream_config.webhook.as_ref().map(|config| WebhookStream {
+            config: config.clone(),
+            client: Arc::new(Webhook::new()),
+        });
+
+        Self { sns, webhook }
+    }
+
+    fn has_any_streams(&self) -> bool {
+        self.sns.is_some() || self.webhook.is_some()
     }
 
     fn chunk_data(&self, data_array: &Vec<Value>) -> Vec<Vec<Value>> {
@@ -78,61 +107,154 @@ impl StreamsClients {
         chunks
     }
 
+    fn create_chunk_message_raw(&self, event_message: &EventMessage, chunk: &[Value]) -> String {
+        let chunk_message = EventMessage {
+            event_name: event_message.event_name.clone(),
+            event_data: Value::Array(chunk.to_vec()),
+            network: event_message.network.clone(),
+        };
+
+        serde_json::to_string(&chunk_message).unwrap()
+    }
+
+    fn create_chunk_message_json(&self, event_message: &EventMessage, chunk: &[Value]) -> Value {
+        let chunk_message = EventMessage {
+            event_name: event_message.event_name.clone(),
+            event_data: Value::Array(chunk.to_vec()),
+            network: event_message.network.clone(),
+        };
+
+        serde_json::to_value(&chunk_message).unwrap()
+    }
+
+    fn generate_publish_message_id(
+        &self,
+        id: &str,
+        index: usize,
+        prefix: &Option<String>,
+    ) -> String {
+        format!(
+            "rindexer_stream__{}-{}-chunk-{}",
+            prefix.as_ref().unwrap_or(&"".to_string()),
+            id.to_lowercase(),
+            index
+        )
+    }
+
+    fn sns_stream_tasks(
+        &self,
+        config: &SNSStreamConfig,
+        client: Arc<SNS>,
+        id: &str,
+        event_message: &EventMessage,
+        chunks: Arc<Vec<Vec<Value>>>,
+    ) -> StreamPublishes {
+        let tasks: Vec<_> = chunks
+            .iter()
+            .enumerate()
+            .map(|(index, chunk)| {
+                let publish_message_id =
+                    self.generate_publish_message_id(id, index, &config.prefix_id);
+                let client = Arc::clone(&client);
+                let topic_arn = config.topic_arn.clone();
+                let publish_message = self.create_chunk_message_raw(event_message, chunk);
+                task::spawn(async move {
+                    let _ =
+                        client.publish(&publish_message_id, &topic_arn, &publish_message).await?;
+
+                    Ok(())
+                })
+            })
+            .collect();
+
+        tasks
+    }
+
+    fn webhook_stream_tasks(
+        &self,
+        endpoint: String,
+        client: Arc<Webhook>,
+        id: &str,
+        event_message: &EventMessage,
+        chunks: Arc<Vec<Vec<Value>>>,
+    ) -> StreamPublishes {
+        let tasks: Vec<_> = chunks
+            .iter()
+            .enumerate()
+            .map(|(index, chunk)| {
+                let publish_message_id = self.generate_publish_message_id(id, index, &None);
+                let endpoint = endpoint.clone();
+                let client = Arc::clone(&client);
+                let publish_message = self.create_chunk_message_json(event_message, chunk);
+                task::spawn(async move {
+                    client.publish(&publish_message_id, &endpoint, &publish_message).await?;
+
+                    Ok(())
+                })
+            })
+            .collect();
+
+        tasks
+    }
+
     pub async fn stream(
         &self,
         id: String,
         event_message: EventMessage,
     ) -> Result<usize, StreamError> {
+        if !self.has_any_streams() {
+            return Ok(0);
+        }
+
         if let Value::Array(data_array) = &event_message.event_data {
+            let chunks = Arc::new(self.chunk_data(data_array));
+            let total_streamed: usize = chunks.iter().map(|chunk| chunk.len()).sum();
+
+            let mut streams: Vec<StreamPublishes> = Vec::new();
+
             if let Some(sns) = &self.sns {
                 for config in &sns.config {
                     if config.events.contains(&event_message.event_name) &&
                         config.networks.contains(&event_message.network)
                     {
-                        let chunks = self.chunk_data(data_array);
-                        let total_streamed: usize = chunks.iter().map(|chunk| chunk.len()).sum();
-
-                        let tasks: Vec<_> = chunks
-                            .into_iter()
-                            .enumerate()
-                            .map(|(index, chunk)| {
-                                let prefix_id = config
-                                    .prefix_id
-                                    .clone()
-                                    .unwrap_or("rindexer_stream".to_string());
-                                let id =
-                                    format!("{}__{}-clunk-{}", prefix_id, id.to_lowercase(), index);
-                                let client = sns.client.clone();
-                                let topic_arn = config.topic_arn.clone();
-                                let chunk_message = EventMessage {
-                                    event_name: event_message.event_name.clone(),
-                                    event_data: Value::Array(chunk.to_vec()),
-                                    network: event_message.network.clone(),
-                                };
-                                let message_str = serde_json::to_string(&chunk_message).unwrap();
-                                task::spawn(async move {
-                                    client
-                                        .publish(&id, &topic_arn, &message_str)
-                                        .await
-                                        .map_err(StreamError::SnsCouldNotPublish)
-                                })
-                            })
-                            .collect();
-
-                        for task in tasks {
-                            match task.await {
-                                Ok(Ok(_)) => (),
-                                Ok(Err(e)) => return Err(e),
-                                Err(e) => return Err(StreamError::SnsJoinError(e)),
-                            }
-                        }
-
-                        return Ok(total_streamed);
+                        streams.push(self.sns_stream_tasks(
+                            config,
+                            Arc::clone(&sns.client),
+                            &id,
+                            &event_message,
+                            Arc::clone(&chunks),
+                        ));
                     }
                 }
             };
 
-            Ok(0)
+            if let Some(webhook) = &self.webhook {
+                for config in &webhook.config {
+                    if config.events.contains(&event_message.event_name) &&
+                        config.networks.contains(&event_message.network)
+                    {
+                        streams.push(self.webhook_stream_tasks(
+                            config.endpoint.clone(),
+                            Arc::clone(&webhook.client),
+                            &id,
+                            &event_message,
+                            Arc::clone(&chunks),
+                        ));
+                    }
+                }
+            }
+
+            for stream in streams {
+                for publish in stream {
+                    match publish.await {
+                        Ok(Ok(_)) => (),
+                        Ok(Err(e)) => return Err(e),
+                        Err(e) => return Err(StreamError::SnsJoinError(e)),
+                    }
+                }
+            }
+
+            Ok(total_streamed)
         } else {
             unreachable!("Event data should be an array");
         }
