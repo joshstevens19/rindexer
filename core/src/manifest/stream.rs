@@ -16,7 +16,22 @@ pub struct WebhookStreamConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RabbitMQStreamQueueConfig {
+    pub exchange: String,
+    pub routing_key: String,
+    pub networks: Vec<String>,
+    pub events: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RabbitMQStreamConfig {
+    pub url: String,
+    pub exchanges: Vec<RabbitMQStreamQueueConfig>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StreamsConfig {
     pub sns: Option<Vec<SNSStreamConfig>>,
     pub webhook: Option<Vec<WebhookStreamConfig>>,
+    pub rabbitmq: Option<RabbitMQStreamConfig>,
 }

@@ -1,10 +1,6 @@
 use std::sync::Arc;
 
-use aws_sdk_sns::{
-    config::http::HttpResponse,
-    error::SdkError,
-    operation::publish::PublishError,
-};
+use aws_sdk_sns::{config::http::HttpResponse, error::SdkError, operation::publish::PublishError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -15,8 +11,11 @@ use tokio::{
 use tracing::error;
 
 use crate::{
-    manifest::stream::{SNSStreamConfig, StreamsConfig, WebhookStreamConfig},
-    streams::{webhook::WebhookError, Webhook, SNS},
+    manifest::stream::{
+        RabbitMQStreamConfig, RabbitMQStreamQueueConfig, SNSStreamConfig, StreamsConfig,
+        WebhookStreamConfig,
+    },
+    streams::{RabbitMQ, RabbitMQError, Webhook, WebhookError, SNS},
 };
 
 // we should limit the max chunk size we send over when streaming to 70KB - 100KB is most limits
@@ -48,6 +47,9 @@ pub enum StreamError {
 
     #[error("Webhook could not publish: {0}")]
     WebhookCouldNotPublish(#[from] WebhookError),
+
+    #[error("RabbitMQ could not publish: {0}")]
+    RabbitMQCouldNotPublish(#[from] RabbitMQError),
 }
 
 #[derive(Debug, Clone)]
@@ -56,9 +58,15 @@ struct WebhookStream {
     client: Arc<Webhook>,
 }
 
+pub struct RabbitMQStream {
+    config: RabbitMQStreamConfig,
+    client: Arc<RabbitMQ>,
+}
+
 pub struct StreamsClients {
     sns: Option<SNSStream>,
     webhook: Option<WebhookStream>,
+    rabbitmq: Option<RabbitMQStream>,
 }
 
 impl StreamsClients {
@@ -74,7 +82,16 @@ impl StreamsClients {
             client: Arc::new(Webhook::new()),
         });
 
-        Self { sns, webhook }
+        let rabbitmq = if let Some(config) = stream_config.rabbitmq.as_ref() {
+            Some(RabbitMQStream {
+                config: config.clone(),
+                client: Arc::new(RabbitMQ::new(&config.url).await),
+            })
+        } else {
+            None
+        };
+
+        Self { sns, webhook, rabbitmq }
     }
 
     fn has_any_streams(&self) -> bool {
@@ -197,6 +214,34 @@ impl StreamsClients {
         tasks
     }
 
+    fn rabbitmq_stream_tasks(
+        &self,
+        config: &RabbitMQStreamQueueConfig,
+        client: Arc<RabbitMQ>,
+        id: &str,
+        event_message: &EventMessage,
+        chunks: Arc<Vec<Vec<Value>>>,
+    ) -> StreamPublishes {
+        let tasks: Vec<_> = chunks
+            .iter()
+            .enumerate()
+            .map(|(index, chunk)| {
+                let publish_message_id = self.generate_publish_message_id(id, index, &None);
+                let client = Arc::clone(&client);
+                let exchange = config.exchange.clone();
+                let routing_key = config.routing_key.clone();
+                let publish_message = self.create_chunk_message_json(event_message, chunk);
+                task::spawn(async move {
+                    client
+                        .publish(&publish_message_id, &exchange, &routing_key, &publish_message)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .collect();
+        tasks
+    }
+
     pub async fn stream(
         &self,
         id: String,
@@ -236,6 +281,22 @@ impl StreamsClients {
                         streams.push(self.webhook_stream_tasks(
                             config.endpoint.clone(),
                             Arc::clone(&webhook.client),
+                            &id,
+                            &event_message,
+                            Arc::clone(&chunks),
+                        ));
+                    }
+                }
+            }
+
+            if let Some(rabbitmq) = &self.rabbitmq {
+                for config in &rabbitmq.config.exchanges {
+                    if config.events.contains(&event_message.event_name) &&
+                        config.networks.contains(&event_message.network)
+                    {
+                        streams.push(self.rabbitmq_stream_tasks(
+                            config,
+                            Arc::clone(&rabbitmq.client),
                             &id,
                             &event_message,
                             Arc::clone(&chunks),
