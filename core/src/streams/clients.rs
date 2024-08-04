@@ -107,7 +107,9 @@ impl StreamsClients {
             Some(KafkaStream {
                 config: config.clone(),
                 client: Arc::new(
-                    Kafka::new(config).await.expect("Failed to create Kafka client"),
+                    Kafka::new(config)
+                        .await
+                        .unwrap_or_else(|e| panic!("Failed to create Kafka client: {:?}", e)),
                 ),
             })
         } else {
@@ -118,7 +120,10 @@ impl StreamsClients {
     }
 
     fn has_any_streams(&self) -> bool {
-        self.sns.is_some() || self.webhook.is_some()
+        self.sns.is_some() ||
+            self.webhook.is_some() ||
+            self.rabbitmq.is_some() ||
+            self.kafka.is_some()
     }
 
     fn chunk_data(&self, data_array: &Vec<Value>) -> Vec<Vec<Value>> {
@@ -252,11 +257,19 @@ impl StreamsClients {
                 let publish_message_id = self.generate_publish_message_id(id, index, &None);
                 let client = Arc::clone(&client);
                 let exchange = config.exchange.clone();
+                let exchange_type = config.exchange_type.clone();
                 let routing_key = config.routing_key.clone();
                 let publish_message = self.create_chunk_message_json(event_message, chunk);
+
                 task::spawn(async move {
                     client
-                        .publish(&publish_message_id, &exchange, &routing_key, &publish_message)
+                        .publish(
+                            &publish_message_id,
+                            &exchange,
+                            &exchange_type,
+                            &routing_key,
+                            &publish_message,
+                        )
                         .await?;
                     Ok(())
                 })

@@ -54,6 +54,9 @@ pub enum ValidateManifestError {
 
     #[error("Relationship foreign key contract {0} not found")]
     RelationshipForeignKeyContractNotFound(String),
+
+    #[error("Streams config is invalid: {0}")]
+    StreamsConfigValidationError(String),
 }
 
 fn validate_manifest(
@@ -124,6 +127,12 @@ fn validate_manifest(
 
         if let Some(_dependency_events) = &contract.dependency_events {
             // TODO - validate the events all exist in the contract ABIs
+        }
+
+        if let Some(streams) = &contract.streams {
+            if let Err(e) = streams.validate() {
+                return Err(ValidateManifestError::StreamsConfigValidationError(e));
+            }
         }
     }
 

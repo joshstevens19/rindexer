@@ -1,7 +1,9 @@
 use deadpool::managed::PoolError;
 use deadpool_lapin::{Manager, Pool};
-use lapin::{options::*, types::FieldTable, BasicProperties, ConnectionProperties};
+use lapin::{options::*, types::FieldTable, BasicProperties, ConnectionProperties, ExchangeKind};
 use serde_json::Value;
+
+use crate::manifest::stream::ExchangeKindWrapper;
 
 #[derive(thiserror::Error, Debug)]
 pub enum RabbitMQError {
@@ -32,7 +34,8 @@ impl RabbitMQ {
         &self,
         id: &str,
         exchange: &str,
-        routing_key: &str,
+        exchange_type: &ExchangeKindWrapper,
+        routing_key: &Option<String>,
         message: &Value,
     ) -> Result<(), RabbitMQError> {
         let message_body = serde_json::to_vec(message)?;
@@ -43,7 +46,7 @@ impl RabbitMQ {
         channel
             .exchange_declare(
                 exchange,
-                lapin::ExchangeKind::Direct,
+                exchange_type.0.clone(),
                 ExchangeDeclareOptions::default(),
                 FieldTable::default(),
             )
@@ -52,7 +55,10 @@ impl RabbitMQ {
         channel
             .basic_publish(
                 exchange,
-                routing_key,
+                match exchange_type.0 {
+                    ExchangeKind::Fanout => "", // Fanout exchange ignores the routing key
+                    _ => routing_key.as_ref().expect("Routing key should be defined"),
+                },
                 BasicPublishOptions::default(),
                 &message_body,
                 BasicProperties::default()
