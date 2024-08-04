@@ -12,10 +12,13 @@ use tracing::error;
 
 use crate::{
     manifest::stream::{
-        RabbitMQStreamConfig, RabbitMQStreamQueueConfig, SNSStreamConfig, StreamsConfig,
-        WebhookStreamConfig,
+        KafkaStreamConfig, KafkaStreamQueueConfig, RabbitMQStreamConfig, RabbitMQStreamQueueConfig,
+        SNSStreamConfig, StreamsConfig, WebhookStreamConfig,
     },
-    streams::{RabbitMQ, RabbitMQError, Webhook, WebhookError, SNS},
+    streams::{
+        kafka::{Kafka, KafkaError},
+        RabbitMQ, RabbitMQError, Webhook, WebhookError, SNS,
+    },
 };
 
 // we should limit the max chunk size we send over when streaming to 70KB - 100KB is most limits
@@ -50,6 +53,9 @@ pub enum StreamError {
 
     #[error("RabbitMQ could not publish: {0}")]
     RabbitMQCouldNotPublish(#[from] RabbitMQError),
+
+    #[error("Kafka could not publish: {0}")]
+    KafkaCouldNotPublish(#[from] KafkaError),
 }
 
 #[derive(Debug, Clone)]
@@ -63,10 +69,16 @@ pub struct RabbitMQStream {
     client: Arc<RabbitMQ>,
 }
 
+pub struct KafkaStream {
+    config: KafkaStreamConfig,
+    client: Arc<Kafka>,
+}
+
 pub struct StreamsClients {
     sns: Option<SNSStream>,
     webhook: Option<WebhookStream>,
     rabbitmq: Option<RabbitMQStream>,
+    kafka: Option<KafkaStream>,
 }
 
 impl StreamsClients {
@@ -91,7 +103,18 @@ impl StreamsClients {
             None
         };
 
-        Self { sns, webhook, rabbitmq }
+        let kafka = if let Some(config) = stream_config.kafka.as_ref() {
+            Some(KafkaStream {
+                config: config.clone(),
+                client: Arc::new(
+                    Kafka::new(config).await.expect("Failed to create Kafka client"),
+                ),
+            })
+        } else {
+            None
+        };
+
+        Self { sns, webhook, rabbitmq, kafka }
     }
 
     fn has_any_streams(&self) -> bool {
@@ -242,6 +265,34 @@ impl StreamsClients {
         tasks
     }
 
+    fn kafka_stream_tasks(
+        &self,
+        config: &KafkaStreamQueueConfig,
+        client: Arc<Kafka>,
+        id: &str,
+        event_message: &EventMessage,
+        chunks: Arc<Vec<Vec<Value>>>,
+    ) -> StreamPublishes {
+        let tasks: Vec<_> = chunks
+            .iter()
+            .enumerate()
+            .map(|(index, chunk)| {
+                let publish_message_id = self.generate_publish_message_id(id, index, &None);
+                let client = Arc::clone(&client);
+                let exchange = config.topic.clone();
+                let routing_key = config.key.clone();
+                let publish_message = self.create_chunk_message_json(event_message, chunk);
+                task::spawn(async move {
+                    client
+                        .publish(&publish_message_id, &exchange, &routing_key, &publish_message)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .collect();
+        tasks
+    }
+
     pub async fn stream(
         &self,
         id: String,
@@ -297,6 +348,22 @@ impl StreamsClients {
                         streams.push(self.rabbitmq_stream_tasks(
                             config,
                             Arc::clone(&rabbitmq.client),
+                            &id,
+                            &event_message,
+                            Arc::clone(&chunks),
+                        ));
+                    }
+                }
+            }
+
+            if let Some(kafka) = &self.kafka {
+                for config in &kafka.config.topics {
+                    if config.events.contains(&event_message.event_name) &&
+                        config.networks.contains(&event_message.network)
+                    {
+                        streams.push(self.kafka_stream_tasks(
+                            config,
+                            Arc::clone(&kafka.client),
                             &id,
                             &event_message,
                             Arc::clone(&chunks),

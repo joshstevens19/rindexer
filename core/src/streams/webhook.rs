@@ -1,6 +1,8 @@
 use reqwest::Client;
 use serde_json::Value;
 
+use crate::streams::STREAM_MESSAGE_ID_KEY;
+
 #[derive(thiserror::Error, Debug)]
 pub enum WebhookError {
     #[error("Request error: {0}")]
@@ -30,7 +32,7 @@ impl Webhook {
             .client
             .post(endpoint)
             .header("Content-Type", "application/json")
-            .header("x-rindexer-id", id)
+            .header(STREAM_MESSAGE_ID_KEY, id)
             .json(message)
             .send()
             .await?;
