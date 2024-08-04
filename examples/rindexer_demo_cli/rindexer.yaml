@@ -21,18 +21,27 @@ contracts:
   include_events:
   - Transfer
   streams:
-    sns:
-      - topic_arn: "arn:aws:sns:us-east-1:664643779377:test.fifo"
-        networks:
-          - ethereum
-        events:
-          - Transfer
-#    rabbitmq:
-#      - queue: my-queue
+#    sns:
+#      - topic_arn: "arn:aws:sns:us-east-1:664643779377:test.fifo"
 #        networks:
 #          - ethereum
 #        events:
 #          - Transfer
+#    webhook:
+#      - endpoint: http://localhost:5003/webhook
+#        networks:
+#          - ethereum
+#        events:
+#          - Transfer
+#    rabbitmq:
+#      url: amqp://guest:guest@localhost:5672/
+#      exchanges:
+#        - exchange: my-exchange
+#          routing_key: my-routing-key
+#          networks:
+#            - ethereum
+#          events:
+#            - Transfer
 #    kafka:
     # telegram, discord and slack
 

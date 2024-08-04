@@ -43,12 +43,16 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "time"]
 chrono = "0.4.38"
 log = "0.4.20"
 colored = "2.0"
+# do not change version as have to match ethers at the moment
 reqwest = { version = "0.11.27", features = ["json"] }
 thread_local = "1.1"
 native-tls = "0.2"
 postgres-native-tls = "0.5"
 aws-config = "1.5.0"
 aws-sdk-sns = "1.37.0"
+lapin = "2.5.0"
+deadpool = { version = "0.12", features = ["rt_tokio_1"] }
+deadpool-lapin = "0.12"
 
 # build
 jemallocator = { version = "0.5.0", optional = true }
