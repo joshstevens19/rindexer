@@ -1,7 +1,7 @@
 {
-  "name": "webhook",
+  "name": "rabbitmq",
   "version": "1.0.0",
-  "main": "server.js",
+  "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -10,7 +10,6 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "body-parser": "^1.20.2",
-    "express": "^4.19.2"
+    "amqplib": "^0.10.4"
   }
 }

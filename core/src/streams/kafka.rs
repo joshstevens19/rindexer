@@ -33,8 +33,7 @@ impl Kafka {
         client_config
             .set("bootstrap.servers", &servers_list)
             .set("security.protocol", &config.security_protocol)
-            .set("acks", &config.acks)
-            .set("dr_msg_cb", &config.dr_msg_cb.to_string());
+            .set("acks", &config.acks);
 
         if let Some(ref sasl_mechanisms) = config.sasl_mechanisms {
             client_config.set("sasl.mechanisms", sasl_mechanisms);
@@ -55,14 +54,20 @@ impl Kafka {
         &self,
         id: &str,
         topic: &str,
-        key: &str,
+        key: &Option<String>,
         message: &Value,
     ) -> Result<(), KafkaError> {
         let message_body = serde_json::to_vec(message)?;
 
-        let record = FutureRecord::to(topic).key(key).payload(&message_body).headers(
-            OwnedHeaders::new().insert(Header { key: STREAM_MESSAGE_ID_KEY, value: Some(id) }),
-        );
+        let record = if key.is_some() {
+            FutureRecord::to(topic).key(key.as_ref().unwrap()).payload(&message_body).headers(
+                OwnedHeaders::new().insert(Header { key: STREAM_MESSAGE_ID_KEY, value: Some(id) }),
+            )
+        } else {
+            FutureRecord::to(topic).payload(&message_body).headers(
+                OwnedHeaders::new().insert(Header { key: STREAM_MESSAGE_ID_KEY, value: Some(id) }),
+            )
+        };
 
         self.producer
             .send(record, Timeout::After(Duration::from_secs(0)))
