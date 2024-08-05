@@ -71,10 +71,10 @@ export default defineConfig({
           link: '/docs/start-building/delete',
         },
         {
-          text: 'ChatOps',
-          link: '/docs/start-building/chat-ops',
+          text: 'Chatbots',
+          link: '/docs/start-building/chatbots',
           items: [
-            { text: 'Telegram', link: '/docs/start-building/chat-ops/telegram' },
+            { text: 'Telegram', link: '/docs/start-building/chatbots/telegram' },
             { text: 'Slack - coming soon' },
             { text: 'Discord - coming soon' },
           ],
