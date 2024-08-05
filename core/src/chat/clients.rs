@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use ethers::types::U64;
+use futures::future::join_all;
 use serde_json::Value;
 use teloxide::types::ChatId;
 use thiserror::Error;
@@ -106,6 +107,7 @@ impl ChatClients {
     pub async fn send_message(
         &self,
         event_message: &EventMessage,
+        index_event_in_order: bool,
         from_block: &U64,
         to_block: &U64,
     ) -> Result<usize, ChatError> {
@@ -140,9 +142,21 @@ impl ChatClients {
 
             let mut messages_sent = 0;
 
-            for message in messages {
-                for publish in message {
-                    match publish.await {
+            if index_event_in_order {
+                for message in messages {
+                    for publish in message {
+                        match publish.await {
+                            Ok(Ok(_)) => messages_sent += 1,
+                            Ok(Err(e)) => return Err(e),
+                            Err(e) => return Err(ChatError::JoinError(e)),
+                        }
+                    }
+                }
+            } else {
+                let tasks: Vec<_> = messages.into_iter().flatten().collect();
+                let results = join_all(tasks).await;
+                for result in results {
+                    match result {
                         Ok(Ok(_)) => messages_sent += 1,
                         Ok(Err(e)) => return Err(e),
                         Err(e) => return Err(ChatError::JoinError(e)),

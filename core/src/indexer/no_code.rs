@@ -129,6 +129,7 @@ struct NoCodeCallbackParams {
     indexer_name: String,
     contract_name: String,
     event: Event,
+    index_event_in_order: bool,
     csv: Option<Arc<AsyncCsvAppender>>,
     postgres: Option<Arc<PostgresClient>>,
     postgres_event_table_name: String,
@@ -337,7 +338,10 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                     params.contract_name, params.event_info.name, network, from_block, to_block
                 );
 
-                match streams_clients.stream(stream_id, &event_message).await {
+                match streams_clients
+                    .stream(stream_id, &event_message, params.index_event_in_order)
+                    .await
+                {
                     Ok(streamed) => {
                         if streamed > 0 {
                             info!(
@@ -370,7 +374,15 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                         format!("- blocks: {} - {} - network: {}", from_block, to_block, network)
                     );
                 } else {
-                    match chat_clients.send_message(&event_message, &from_block, &to_block).await {
+                    match chat_clients
+                        .send_message(
+                            &event_message,
+                            params.index_event_in_order,
+                            &from_block,
+                            &to_block,
+                        )
+                        .await
+                    {
                         Ok(messages_sent) => {
                             if messages_sent > 0 {
                                 info!(
@@ -519,14 +531,16 @@ pub async fn process_events(
                 None
             };
 
+            let index_event_in_order = contract
+                .index_event_in_order
+                .as_ref()
+                .map_or(false, |vec| vec.contains(&event_info.name));
+
             let event = EventCallbackRegistryInformation {
                 id: generate_random_id(10),
                 indexer_name: manifest.name.clone(),
                 event_name: event_info.name.clone(),
-                index_event_in_order: contract
-                    .index_event_in_order
-                    .as_ref()
-                    .map_or(false, |vec| vec.contains(&event_info.name)),
+                index_event_in_order,
                 topic_id: event_info.topic_id(),
                 contract: contract_information,
                 callback: no_code_callback(Arc::new(NoCodeCallbackParams {
@@ -534,6 +548,7 @@ pub async fn process_events(
                     indexer_name: manifest.name.clone(),
                     contract_name: contract.name.clone(),
                     event: event.clone(),
+                    index_event_in_order,
                     csv,
                     postgres: postgres.clone(),
                     postgres_event_table_name,
