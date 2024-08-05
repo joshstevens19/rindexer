@@ -1,0 +1,26 @@
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TelegramConfig {
+    pub bot_token: String,
+    pub chat_id: i64,
+    pub networks: Vec<String>,
+    pub messages: Vec<TelegramEvent>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TelegramEvent {
+    pub event_name: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conditions: Option<Vec<Map<String, Value>>>,
+
+    pub template_inline: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ChatConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telegram: Option<Vec<TelegramConfig>>,
+}

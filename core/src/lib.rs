@@ -24,6 +24,7 @@ mod logger;
 pub use logger::setup_info_logger;
 mod abi;
 pub use abi::ABIItem;
+mod chat;
 pub mod event;
 pub mod phantom;
 pub mod provider;
