@@ -152,6 +152,7 @@ pub fn handle_new_command(
             reorg_safe_distance: None,
             generate_csv: None,
             streams: None,
+            chat: None,
         }],
         phantom: None,
         global: None,

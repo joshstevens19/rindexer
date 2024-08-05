@@ -4,10 +4,11 @@ use colored::Colorize;
 use ethers::abi::{Abi, Contract as EthersContract, Event};
 use serde_json::Value;
 use tokio_postgres::types::Type as PgType;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     abi::{ABIItem, CreateCsvFileForEvent, EventInfo, ParamTypeError, ReadAbiError},
+    chat::ChatClients,
     database::postgres::{
         client::PostgresClient,
         generate::{
@@ -25,6 +26,7 @@ use crate::{
             EventCallbackType, TxInformation,
         },
         contract_setup::{ContractInformation, CreateContractInformationError},
+        EventMessage,
     },
     generate_random_id,
     helpers::get_full_path,
@@ -35,7 +37,7 @@ use crate::{
     },
     provider::{CreateNetworkProvider, RetryClientError},
     setup_info_logger,
-    streams::{EventMessage, StreamsClients},
+    streams::StreamsClients,
     AsyncCsvAppender, FutureExt, IndexingDetails, StartDetails, StartNoCodeDetails,
 };
 
@@ -132,6 +134,7 @@ struct NoCodeCallbackParams {
     postgres_event_table_name: String,
     postgres_column_names: Vec<String>,
     streams_clients: Arc<Option<StreamsClients>>,
+    chat_clients: Arc<Option<ChatClients>>,
 }
 
 fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
@@ -167,8 +170,8 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
             let mut postgres_bulk_column_types: Vec<PgType> = Vec::new();
             let mut csv_bulk_data: Vec<Vec<String>> = Vec::new();
 
-            // stream info required
-            let mut stream_event_data: Vec<Value> = Vec::new();
+            // stream and chat info
+            let mut event_message_data: Vec<Value> = Vec::new();
 
             // Collect owned results to avoid lifetime issues
             let owned_results: Vec<_> = results
@@ -227,7 +230,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                 end_global_parameters,
             ) in owned_results
             {
-                if params.streams_clients.is_some() {
+                if params.streams_clients.is_some() || params.chat_clients.is_some() {
                     let event_result = map_ethereum_wrapper_to_json(
                         &params.event_info.inputs,
                         &event_parameters,
@@ -242,7 +245,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                         },
                         false,
                     );
-                    stream_event_data.push(event_result);
+                    event_message_data.push(event_result);
                 }
 
                 let mut all_params: Vec<EthereumSqlTypeWrapper> = vec![contract_address];
@@ -322,28 +325,60 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                 }
             }
 
+            let event_message = EventMessage {
+                event_name: params.event_info.name.clone(),
+                event_data: Value::Array(event_message_data),
+                network: network.clone(),
+            };
+
             if let Some(streams_clients) = params.streams_clients.as_ref() {
-                if params.streams_clients.is_some() {
-                    let event_message = EventMessage {
-                        event_name: params.event_info.name.clone(),
-                        event_data: Value::Array(stream_event_data),
-                        network: network.clone(),
-                    };
+                let stream_id = format!(
+                    "{}-{}-{}-{}-{}",
+                    params.contract_name, params.event_info.name, network, from_block, to_block
+                );
 
-                    let stream_id = format!(
-                        "{}-{}-{}-{}-{}",
-                        params.contract_name, params.event_info.name, network, from_block, to_block
+                match streams_clients.stream(stream_id, &event_message).await {
+                    Ok(streamed) => {
+                        if streamed > 0 {
+                            info!(
+                                "{}::{} - {} - {} events {}",
+                                params.contract_name,
+                                params.event_info.name,
+                                "STREAMED".green(),
+                                streamed,
+                                format!(
+                                    "- blocks: {} - {} - network: {}",
+                                    from_block, to_block, network
+                                )
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        error!("Error streaming event: {}", e);
+                        return Err(e.to_string());
+                    }
+                }
+            }
+
+            if let Some(chat_clients) = params.chat_clients.as_ref() {
+                if !chat_clients.is_in_block_range_to_send(&from_block, &to_block) {
+                    warn!(
+                        "{}::{} - {} - messages has a max 10 block range due the rate limits - {}",
+                        params.contract_name,
+                        params.event_info.name,
+                        "CHAT_MESSAGES_DISABLED".yellow(),
+                        format!("- blocks: {} - {} - network: {}", from_block, to_block, network)
                     );
-
-                    match streams_clients.stream(stream_id, event_message).await {
-                        Ok(streamed) => {
-                            if streamed > 0 {
+                } else {
+                    match chat_clients.send_message(&event_message, &from_block, &to_block).await {
+                        Ok(messages_sent) => {
+                            if messages_sent > 0 {
                                 info!(
                                     "{}::{} - {} - {} events {}",
                                     params.contract_name,
                                     params.event_info.name,
-                                    "STREAMED".green(),
-                                    streamed,
+                                    "CHAT_MESSAGES_SENT".green(),
+                                    messages_sent,
                                     format!(
                                         "- blocks: {} - {} - network: {}",
                                         from_block, to_block, network
@@ -352,7 +387,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                             }
                         }
                         Err(e) => {
-                            error!("Error streaming event: {}", e);
+                            error!("Error sending chat messages: {}", e);
                             return Err(e.to_string());
                         }
                     }
@@ -478,6 +513,12 @@ pub async fn process_events(
                 None
             };
 
+            let chat_clients = if let Some(chats) = &contract.chat {
+                Some(ChatClients::new(chats.clone()).await)
+            } else {
+                None
+            };
+
             let event = EventCallbackRegistryInformation {
                 id: generate_random_id(10),
                 indexer_name: manifest.name.clone(),
@@ -498,6 +539,7 @@ pub async fn process_events(
                     postgres_event_table_name,
                     postgres_column_names,
                     streams_clients: Arc::new(streams_client),
+                    chat_clients: Arc::new(chat_clients),
                 })),
             };
 

@@ -10,6 +10,6 @@ pub use rabbitmq::{RabbitMQ, RabbitMQError};
 mod kafka;
 
 mod clients;
-pub use clients::{EventMessage, StreamsClients};
+pub use clients::StreamsClients;
 
 pub const STREAM_MESSAGE_ID_KEY: &str = "x-rindexer-id";

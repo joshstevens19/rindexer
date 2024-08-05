@@ -12,7 +12,7 @@ use crate::{
         AddressDetails, ContractEventMapping, FilterDetails, IndexingContractSetup,
     },
     indexer::parse_topic,
-    manifest::stream::StreamsConfig,
+    manifest::{chat::ChatConfig, stream::StreamsConfig},
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -225,6 +225,9 @@ pub struct Contract {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub streams: Option<StreamsConfig>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat: Option<ChatConfig>,
 }
 
 impl Contract {

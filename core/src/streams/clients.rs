@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use aws_sdk_sns::{config::http::HttpResponse, error::SdkError, operation::publish::PublishError};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 use tokio::{
@@ -11,6 +10,7 @@ use tokio::{
 use tracing::error;
 
 use crate::{
+    event::EventMessage,
     manifest::stream::{
         KafkaStreamConfig, KafkaStreamQueueConfig, RabbitMQStreamConfig, RabbitMQStreamQueueConfig,
         SNSStreamConfig, StreamsConfig, WebhookStreamConfig,
@@ -27,13 +27,6 @@ const MAX_CHUNK_SIZE: usize = 75 * 1024; // 75 KB
 
 type StreamPublishes = Vec<JoinHandle<Result<(), StreamError>>>;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct EventMessage {
-    pub event_name: String,
-    pub event_data: Value,
-    pub network: String,
-}
-
 #[derive(Debug, Clone)]
 struct SNSStream {
     config: Vec<SNSStreamConfig>,
@@ -45,9 +38,6 @@ pub enum StreamError {
     #[error("SNS could not publish - {0}")]
     SnsCouldNotPublish(#[from] SdkError<PublishError, HttpResponse>),
 
-    #[error("SNS Task failed: {0}")]
-    SnsJoinError(JoinError),
-
     #[error("Webhook could not publish: {0}")]
     WebhookCouldNotPublish(#[from] WebhookError),
 
@@ -56,6 +46,9 @@ pub enum StreamError {
 
     #[error("Kafka could not publish: {0}")]
     KafkaCouldNotPublish(#[from] KafkaError),
+
+    #[error("Task failed: {0}")]
+    JoinError(JoinError),
 }
 
 #[derive(Debug, Clone)]
@@ -309,12 +302,13 @@ impl StreamsClients {
     pub async fn stream(
         &self,
         id: String,
-        event_message: EventMessage,
+        event_message: &EventMessage,
     ) -> Result<usize, StreamError> {
         if !self.has_any_streams() {
             return Ok(0);
         }
 
+        // will always have something even if the event has no parameters due to the tx_information
         if let Value::Array(data_array) = &event_message.event_data {
             let chunks = Arc::new(self.chunk_data(data_array));
             let total_streamed: usize = chunks.iter().map(|chunk| chunk.len()).sum();
@@ -390,7 +384,7 @@ impl StreamsClients {
                     match publish.await {
                         Ok(Ok(_)) => (),
                         Ok(Err(e)) => return Err(e),
-                        Err(e) => return Err(StreamError::SnsJoinError(e)),
+                        Err(e) => return Err(StreamError::JoinError(e)),
                     }
                 }
             }
