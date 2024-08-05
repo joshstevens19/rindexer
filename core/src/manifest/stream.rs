@@ -2,6 +2,8 @@ use lapin::ExchangeKind;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
+use crate::types::aws_config::AwsConfig;
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StreamEvent {
     pub event_name: String,
@@ -11,11 +13,17 @@ pub struct StreamEvent {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct SNSStreamConfig {
+pub struct SNSStreamTopicConfig {
     pub prefix_id: Option<String>,
     pub topic_arn: String,
     pub networks: Vec<String>,
     pub events: Vec<StreamEvent>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SNSStreamConfig {
+    pub aws_config: AwsConfig,
+    pub topics: Vec<SNSStreamTopicConfig>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -125,7 +133,7 @@ pub struct KafkaStreamConfig {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StreamsConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sns: Option<Vec<SNSStreamConfig>>,
+    pub sns: Option<SNSStreamConfig>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webhooks: Option<Vec<WebhookStreamConfig>>,
