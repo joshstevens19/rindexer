@@ -10,10 +10,10 @@ use tokio::{
 use tracing::error;
 
 use crate::{
-    event::EventMessage,
+    event::{filter_event_data_by_conditions, EventMessage},
     manifest::stream::{
         KafkaStreamConfig, KafkaStreamQueueConfig, RabbitMQStreamConfig, RabbitMQStreamQueueConfig,
-        SNSStreamConfig, StreamsConfig, WebhookStreamConfig,
+        SNSStreamConfig, StreamEvent, StreamsConfig, WebhookStreamConfig,
     },
     streams::{
         kafka::{Kafka, KafkaError},
@@ -179,6 +179,32 @@ impl StreamsClients {
         )
     }
 
+    fn filter_chunk_event_data_by_conditions(
+        &self,
+        events: &[StreamEvent],
+        event_message: &EventMessage,
+        chunk: &[Value],
+    ) -> Vec<Value> {
+        let stream_event = events
+            .iter()
+            .find(|e| e.event_name == event_message.event_name)
+            .expect("Failed to find stream event - should never happen please raise an issue");
+
+        let filtered_chunk: Vec<Value> = chunk
+            .iter()
+            .filter(|event_data| {
+                if let Some(conditions) = &stream_event.conditions {
+                    filter_event_data_by_conditions(event_data, conditions)
+                } else {
+                    true
+                }
+            })
+            .cloned()
+            .collect();
+
+        filtered_chunk
+    }
+
     fn sns_stream_tasks(
         &self,
         config: &SNSStreamConfig,
@@ -191,11 +217,17 @@ impl StreamsClients {
             .iter()
             .enumerate()
             .map(|(index, chunk)| {
+                let filtered_chunk: Vec<Value> = self.filter_chunk_event_data_by_conditions(
+                    &config.events,
+                    event_message,
+                    chunk,
+                );
+
                 let publish_message_id =
                     self.generate_publish_message_id(id, index, &config.prefix_id);
                 let client = Arc::clone(&client);
                 let topic_arn = config.topic_arn.clone();
-                let publish_message = self.create_chunk_message_raw(event_message, chunk);
+                let publish_message = self.create_chunk_message_raw(event_message, &filtered_chunk);
                 task::spawn(async move {
                     let _ =
                         client.publish(&publish_message_id, &topic_arn, &publish_message).await?;
@@ -210,7 +242,7 @@ impl StreamsClients {
 
     fn webhook_stream_tasks(
         &self,
-        endpoint: String,
+        config: &WebhookStreamConfig,
         client: Arc<Webhook>,
         id: &str,
         event_message: &EventMessage,
@@ -220,10 +252,17 @@ impl StreamsClients {
             .iter()
             .enumerate()
             .map(|(index, chunk)| {
+                let filtered_chunk: Vec<Value> = self.filter_chunk_event_data_by_conditions(
+                    &config.events,
+                    event_message,
+                    chunk,
+                );
+
                 let publish_message_id = self.generate_publish_message_id(id, index, &None);
-                let endpoint = endpoint.clone();
+                let endpoint = config.endpoint.clone();
                 let client = Arc::clone(&client);
-                let publish_message = self.create_chunk_message_json(event_message, chunk);
+                let publish_message =
+                    self.create_chunk_message_json(event_message, &filtered_chunk);
                 task::spawn(async move {
                     client.publish(&publish_message_id, &endpoint, &publish_message).await?;
 
@@ -247,12 +286,19 @@ impl StreamsClients {
             .iter()
             .enumerate()
             .map(|(index, chunk)| {
+                let filtered_chunk: Vec<Value> = self.filter_chunk_event_data_by_conditions(
+                    &config.events,
+                    event_message,
+                    chunk,
+                );
+
                 let publish_message_id = self.generate_publish_message_id(id, index, &None);
                 let client = Arc::clone(&client);
                 let exchange = config.exchange.clone();
                 let exchange_type = config.exchange_type.clone();
                 let routing_key = config.routing_key.clone();
-                let publish_message = self.create_chunk_message_json(event_message, chunk);
+                let publish_message =
+                    self.create_chunk_message_json(event_message, &filtered_chunk);
 
                 task::spawn(async move {
                     client
@@ -283,11 +329,18 @@ impl StreamsClients {
             .iter()
             .enumerate()
             .map(|(index, chunk)| {
+                let filtered_chunk: Vec<Value> = self.filter_chunk_event_data_by_conditions(
+                    &config.events,
+                    event_message,
+                    chunk,
+                );
+
                 let publish_message_id = self.generate_publish_message_id(id, index, &None);
                 let client = Arc::clone(&client);
                 let exchange = config.topic.clone();
                 let routing_key = config.key.clone();
-                let publish_message = self.create_chunk_message_json(event_message, chunk);
+                let publish_message =
+                    self.create_chunk_message_json(event_message, &filtered_chunk);
                 task::spawn(async move {
                     client
                         .publish(&publish_message_id, &exchange, &routing_key, &publish_message)
@@ -317,14 +370,14 @@ impl StreamsClients {
 
             if let Some(sns) = &self.sns {
                 for config in &sns.config {
-                    if config.events.contains(&event_message.event_name) &&
+                    if config.events.iter().any(|e| e.event_name == event_message.event_name) &&
                         config.networks.contains(&event_message.network)
                     {
                         streams.push(self.sns_stream_tasks(
                             config,
                             Arc::clone(&sns.client),
                             &id,
-                            &event_message,
+                            event_message,
                             Arc::clone(&chunks),
                         ));
                     }
@@ -333,14 +386,14 @@ impl StreamsClients {
 
             if let Some(webhook) = &self.webhook {
                 for config in &webhook.config {
-                    if config.events.contains(&event_message.event_name) &&
+                    if config.events.iter().any(|e| e.event_name == event_message.event_name) &&
                         config.networks.contains(&event_message.network)
                     {
                         streams.push(self.webhook_stream_tasks(
-                            config.endpoint.clone(),
+                            config,
                             Arc::clone(&webhook.client),
                             &id,
-                            &event_message,
+                            event_message,
                             Arc::clone(&chunks),
                         ));
                     }
@@ -349,14 +402,14 @@ impl StreamsClients {
 
             if let Some(rabbitmq) = &self.rabbitmq {
                 for config in &rabbitmq.config.exchanges {
-                    if config.events.contains(&event_message.event_name) &&
+                    if config.events.iter().any(|e| e.event_name == event_message.event_name) &&
                         config.networks.contains(&event_message.network)
                     {
                         streams.push(self.rabbitmq_stream_tasks(
                             config,
                             Arc::clone(&rabbitmq.client),
                             &id,
-                            &event_message,
+                            event_message,
                             Arc::clone(&chunks),
                         ));
                     }
@@ -365,14 +418,14 @@ impl StreamsClients {
 
             if let Some(kafka) = &self.kafka {
                 for config in &kafka.config.topics {
-                    if config.events.contains(&event_message.event_name) &&
+                    if config.events.iter().any(|e| e.event_name == event_message.event_name) &&
                         config.networks.contains(&event_message.network)
                     {
                         streams.push(self.kafka_stream_tasks(
                             config,
                             Arc::clone(&kafka.client),
                             &id,
-                            &event_message,
+                            event_message,
                             Arc::clone(&chunks),
                         ));
                     }
