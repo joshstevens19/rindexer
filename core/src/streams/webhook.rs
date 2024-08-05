@@ -26,12 +26,14 @@ impl Webhook {
         &self,
         id: &str,
         endpoint: &str,
+        shared_secret: &str,
         message: &Value,
     ) -> Result<(), WebhookError> {
         let response = self
             .client
             .post(endpoint)
             .header("Content-Type", "application/json")
+            .header("x-rindexer-shared-secret", shared_secret)
             .header(STREAM_MESSAGE_ID_KEY, id)
             .json(message)
             .send()

@@ -71,6 +71,25 @@ export default defineConfig({
           link: '/docs/start-building/delete',
         },
         {
+          text: 'ChatOps',
+          link: '/docs/start-building/chat-ops',
+          items: [
+            { text: 'Telegram', link: '/docs/start-building/chat-ops/telegram' },
+            { text: 'Slack - coming soon' },
+            { text: 'Discord - coming soon' },
+          ],
+        },
+        {
+          text: 'Streams',
+          link: '/docs/start-building/streams',
+          items: [
+            { text: 'Webhooks', link: '/docs/start-building/streams/webhooks' },
+            { text: 'Kafka', link: '/docs/start-building/streams/kafka' },
+            { text: 'Rabbitmq', link: '/docs/start-building/streams/rabbitmq' },
+            { text: 'SNS/SQS', link: '/docs/start-building/streams/sns' },
+          ],
+        },
+        {
           text: 'Phantom Events',
           link: '/docs/start-building/phantom',
         },
