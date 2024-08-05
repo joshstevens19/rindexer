@@ -21,6 +21,7 @@ pub struct SNSStreamConfig {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WebhookStreamConfig {
     pub endpoint: String,
+    pub shared_secret: String,
     pub networks: Vec<String>,
     pub events: Vec<StreamEvent>,
 }
@@ -127,7 +128,7 @@ pub struct StreamsConfig {
     pub sns: Option<Vec<SNSStreamConfig>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub webhook: Option<Vec<WebhookStreamConfig>>,
+    pub webhooks: Option<Vec<WebhookStreamConfig>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rabbitmq: Option<RabbitMQStreamConfig>,

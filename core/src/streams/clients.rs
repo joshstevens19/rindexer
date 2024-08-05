@@ -82,7 +82,7 @@ impl StreamsClients {
             None
         };
 
-        let webhook = stream_config.webhook.as_ref().map(|config| WebhookStream {
+        let webhook = stream_config.webhooks.as_ref().map(|config| WebhookStream {
             config: config.clone(),
             client: Arc::new(Webhook::new()),
         });
@@ -260,11 +260,14 @@ impl StreamsClients {
 
                 let publish_message_id = self.generate_publish_message_id(id, index, &None);
                 let endpoint = config.endpoint.clone();
+                let shared_secret = config.shared_secret.clone();
                 let client = Arc::clone(&client);
                 let publish_message =
                     self.create_chunk_message_json(event_message, &filtered_chunk);
                 task::spawn(async move {
-                    client.publish(&publish_message_id, &endpoint, &publish_message).await?;
+                    client
+                        .publish(&publish_message_id, &endpoint, &shared_secret, &publish_message)
+                        .await?;
 
                     Ok(())
                 })

@@ -1,0 +1,509 @@
+# RabbitMQ
+
+:::info
+rindexer streams can be used without any other storage providers. It can also be used with storage providers.
+:::
+
+rindexer allows you to configure [RabbitMQ](https://www.rabbitmq.com/) to stream any data to. This goes under
+the [contracts](/docs/start-building/yaml-config/contracts) section of the YAML configuration file.
+
+Find out more about [RabbitMQ](https://www.rabbitmq.com/).
+
+rindexer rabbitmq integration supports `direct`, `topic` and `fanout` exchanges.
+You can read more about what they do differently [here](https://medium.com/trendyol-tech/rabbitmq-exchange-types-d7e1f51ec825).
+
+## Configuration with rindexer
+
+`rabbitmq` property accepts an array of `exchanges` allowing you to split up the streams any way you wish.
+
+### Example
+
+:::code-group
+
+```yaml [direct]
+name: RocketPoolETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    rabbitmq: // [!code focus]
+      # we advise to put this in a environment variables // [!code focus]
+      url: ${RABBITMQ_URL} // [!code focus]
+      exchanges: // [!code focus]
+        - exchange: transfer // [!code focus]
+          #  expected one of `direct`, `topic` or `fanout` // [!code focus]
+          exchange_type: direct // [!code focus]
+          routing_key: my-routing-key // [!code focus]
+          networks: // [!code focus]
+            - ethereum // [!code focus]
+          events: // [!code focus]
+            - event_name: Transfer // [!code focus]
+```
+
+```yaml [topic]
+name: RocketPoolETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    rabbitmq: // [!code focus]
+      # we advise to put this in a environment variables // [!code focus]
+      url: ${RABBITMQ_URL} // [!code focus]
+      exchanges: // [!code focus]
+        - exchange: transfer // [!code focus]
+          #  expected one of `direct`, `topic` or `fanout` // [!code focus]
+          exchange_type: topic // [!code focus]
+          routing_key: my-routing-key // [!code focus]
+          networks: // [!code focus]
+            - ethereum // [!code focus]
+          events: // [!code focus]
+            - event_name: Transfer // [!code focus]
+```
+
+```yaml [fanout]
+name: RocketPoolETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    rabbitmq: // [!code focus]
+      # we advise to put this in a environment variables // [!code focus]
+      url: ${RABBITMQ_URL} // [!code focus]
+      exchanges: // [!code focus]
+        - exchange: transfer // [!code focus]
+          #  expected one of `direct`, `topic` or `fanout` // [!code focus]
+          exchange_type: fanout // [!code focus]
+          networks: // [!code focus]
+            - ethereum // [!code focus]
+          events: // [!code focus]
+            - event_name: Transfer // [!code focus]
+```
+
+:::
+
+### url
+
+This is the rabbitmq connection url we advise to put this in a environment variable.
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    rabbitmq: // [!code focus]
+      # we advise to put this in a environment variables // [!code focus]
+      url: ${RABBITMQ_URL} // [!code focus]
+```
+
+
+### exchanges
+
+This is an array of exchanges you want to stream to this rabbitmq.
+
+#### exchange
+
+This is the exchange name.
+
+```yaml [standard]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    rabbitmq: // [!code focus]
+      # we advise to put this in a environment variables
+      url: ${RABBITMQ_URL}
+      exchanges: // [!code focus]
+          - exchange: transfer // [!code focus]
+```
+
+#### exchange_type
+
+This is the exchange type, you can read more about them [here](https://medium.com/trendyol-tech/rabbitmq-exchange-types-d7e1f51ec825).
+rindexer supports `direct`, `topic` and `fanout` exchanges.
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    rabbitmq: // [!code focus]
+      # we advise to put this in a environment variables
+      url: ${RABBITMQ_URL}
+      exchanges: // [!code focus]
+        - exchange: transfer
+          #  expected one of `direct`, `topic` or `fanout`
+          exchange_type: direct // [!code focus]
+```
+
+#### routing_key
+
+This is the routing key for the exchange. You do not need to provide this if you are using a `fanout` exchange. This
+is mandatory for `direct` and `topic` exchanges.
+
+:::info
+This is optional for `fanout` exchanges, required for `direct` and `topic` exchanges.
+:::
+
+```yaml [fifo]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    rabbitmq: // [!code focus]
+      # we advise to put this in a environment variables
+      url: ${RABBITMQ_URL}
+      exchanges: // [!code focus]
+        - exchange: transfer
+          #  expected one of `direct`, `topic` or `fanout`
+          exchange_type: direct
+          routing_key: my-routing-key // [!code focus]
+```
+
+### networks
+
+This is an array of networks you want to stream to this rabbitmq.
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    rabbitmq: // [!code focus]
+      # we advise to put this in a environment variables // [!code focus]
+      url: ${RABBITMQ_URL}
+      exchanges: // [!code focus]
+        - exchange: transfer
+          #  expected one of `direct`, `topic` or `fanout`
+          exchange_type: direct
+          routing_key: my-routing-key
+          networks: // [!code focus]
+            - ethereum // [!code focus]
+```
+
+### events
+
+This is an array of events you want to stream to this rabbitmq.
+
+#### event_name
+
+This is the name of the event you want to stream to this rabbitmq, must match the ABI event name.
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    rabbitmq: // [!code focus]
+      # we advise to put this in a environment variables // [!code focus]
+      url: ${RABBITMQ_URL}
+      exchanges: // [!code focus]
+        - exchange: transfer
+          #  expected one of `direct`, `topic` or `fanout`
+          exchange_type: direct
+          routing_key: my-routing-key
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer // [!code focus]
+```
+
+#### conditions
+
+This accepts an array of conditions you want to apply to the event data before streaming to this rabbitmq.
+
+:::info
+This is optional, if you do not provide any conditions all data will be streamed.
+:::
+
+You may want to filter on the stream based on the event data, if the event data has not got an index on the on the
+solidity event you can not filter it over the logs. The `conditions` filter is here to help you with this,
+based on your ABI you can filter on the event data.
+
+rindexer has enabled a special syntax which allows you to define on your ABI fields what you want to filter on.
+
+1. `>` - higher then (for numbers only)
+2. `<` - lower then (for numbers only)
+3. `=` - equals
+4. `>=` - higher then or equals (for numbers only)
+5. `<=` - lower then or equals (for numbers only)
+6. `||` - or
+7. `&&` - and
+
+So lets look at an example lets say i only want to get transfer events which are higher then `2000000000000000000` RETH wei
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    rabbitmq: // [!code focus]
+      # we advise to put this in a environment variables // [!code focus]
+      url: ${RABBITMQ_URL}
+      exchanges: // [!code focus]
+        - exchange: transfer
+          #  expected one of `direct`, `topic` or `fanout`
+          exchange_type: direct
+          routing_key: my-routing-key
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer // [!code focus]
+              conditions: // [!code focus]
+                - "value": ">=2000000000000000000" // [!code focus]
+```
+
+We use the ABI input name `value` to filter on the value field, you can find these names in the ABI file.
+
+```json
+{
+    "anonymous":false,
+    "inputs":[
+      {
+        "indexed":true,
+        "internalType":"address",
+        "name":"from",
+        "type":"address"
+      },
+      {
+        "indexed":true,
+        "internalType":"address",
+        "name":"to",
+        "type":"address"
+      },
+      {
+        "indexed":false,
+        "internalType":"uint256",
+        "name":"value", // [!code focus]
+        "type":"uint256"
+      }
+    ],
+    "name":"Transfer",
+    "type":"event"
+}
+```
+
+You can use the `||` or `&&` to combine conditions.
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    rabbitmq: // [!code focus]
+      # we advise to put this in a environment variables // [!code focus]
+      url: ${RABBITMQ_URL}
+      exchanges: // [!code focus]
+        - exchange: transfer
+          #  expected one of `direct`, `topic` or `fanout`
+          exchange_type: direct
+          routing_key: my-routing-key
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer
+              conditions: // [!code focus]
+                - "value": ">=2000000000000000000 && value <=4000000000000000000" // [!code focus]
+```
+
+You can use the `=` to filter on other aspects like the `from` or `to` address.
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    rabbitmq: // [!code focus]
+      # we advise to put this in a environment variables // [!code focus]
+      url: ${RABBITMQ_URL}
+      exchanges: // [!code focus]
+        - exchange: transfer
+          #  expected one of `direct`, `topic` or `fanout`
+          exchange_type: direct
+          routing_key: my-routing-key
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer
+              conditions: // [!code focus]
+                - "from": "0x0338ce5020c447f7e668dc2ef778025ce3982662 || 0x0338ce5020c447f7e668dc2ef778025ce398266u" // [!code focus]
+                - "value": ">=2000000000000000000 || value <=4000000000000000000" // [!code focus]
+```
+
+:::info
+Note we advise you to filer any `indexed` fields in the contract details in the `rindexer.yaml` file.
+As these can be filtered out on the request level and not filtered out in rindexer itself.
+You can read more about it [here](/docs/start-building/yaml-config/contracts#indexed_1-indexed_2-indexed_3).
+:::
+
+If you have a tuple and you want to get that value you just use the object notation.
+
+For example lets say we want to only get the events for `profileId` from the `quoteParams` tuple which equals `1`:
+
+```json
+{
+     "anonymous": false,
+     "inputs": [
+       {
+         "components": [
+           {
+             "internalType": "uint256",
+             "name": "profileId", // [!code focus]
+             "type": "uint256"
+           },
+           ...
+         ],
+         "indexed": false,
+         "internalType": "struct Types.QuoteParams",
+         "name": "quoteParams", // [!code focus]
+         "type": "tuple"
+       },
+       ...
+     ],
+     "name": "QuoteCreated", // [!code focus]
+     "type": "event"
+}
+```
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    rabbitmq: // [!code focus]
+      # we advise to put this in a environment variables // [!code focus]
+      url: ${RABBITMQ_URL}
+      exchanges: // [!code focus]
+        - exchange: transfer
+          #  expected one of `direct`, `topic` or `fanout`
+          exchange_type: direct
+          routing_key: my-routing-key
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer
+              conditions: // [!code focus]
+                - "quoteParams.profileId": "=1" // [!code focus]
+```
+

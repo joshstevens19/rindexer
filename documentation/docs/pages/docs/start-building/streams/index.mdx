@@ -1,0 +1,24 @@
+# Streams
+
+:::info
+rindexer streams can be used without any other storage providers. It can also be used with storage providers.
+:::
+
+rindexer supports streaming data from rindexer to anywhere you want. This allows you to
+build your own data indexing solutions in any language you wish, alongside stream the data to any location
+you want with tons of use cases. Streams also support advanced filtering and conditions which allows you to filter the data
+before it is streamed. This can all be done using no-code and set in the YAML configuration file.
+
+:::info
+Rust projects do not get exposed to the stream clients yet but it can easily be exposed in the future.
+:::
+
+Note you can use all the streams together they are independent of each other, so if you wanted to us `kafka`,
+`webhooks`, `rabbitmq` and `sns` together you can do that.
+
+Supported stream providers:
+
+- [Webhooks](/docs/start-building/streams/webhooks) - Fire webhooks to your own APIs
+- [Kafka](/docs/start-building/streams/kafka) - Find out more about [Apache Kafka](https://kafka.apache.org/)
+- [RabbitMQ](/docs/start-building/streams/rabbitmq) - Find out more about [RabbitMQ](https://www.rabbitmq.com/)
+- [SNS/SQS](/docs/start-building/streams/sns) - Find out more about [Simple Notification Service](https://aws.amazon.com/sns/) and [Simple Queue Service](https://aws.amazon.com/sqs/)
