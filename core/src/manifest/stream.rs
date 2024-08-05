@@ -1,19 +1,28 @@
 use lapin::ExchangeKind;
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::{Map, Value};
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StreamEvent {
+    pub event_name: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conditions: Option<Vec<Map<String, Value>>>,
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SNSStreamConfig {
     pub prefix_id: Option<String>,
     pub topic_arn: String,
     pub networks: Vec<String>,
-    pub events: Vec<String>,
+    pub events: Vec<StreamEvent>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WebhookStreamConfig {
     pub endpoint: String,
     pub networks: Vec<String>,
-    pub events: Vec<String>,
+    pub events: Vec<StreamEvent>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -44,7 +53,7 @@ pub struct RabbitMQStreamQueueConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing_key: Option<String>,
     pub networks: Vec<String>,
-    pub events: Vec<String>,
+    pub events: Vec<StreamEvent>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -91,7 +100,7 @@ pub struct KafkaStreamQueueConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
     pub networks: Vec<String>,
-    pub events: Vec<String>,
+    pub events: Vec<StreamEvent>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

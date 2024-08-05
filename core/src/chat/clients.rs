@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use ethers::types::U64;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use teloxide::types::ChatId;
 use thiserror::Error;
 use tokio::{
@@ -14,7 +14,7 @@ use crate::{
         telegram::{TelegramBot, TelegramError},
         template::Template,
     },
-    event::EventMessage,
+    event::{filter_event_data_by_conditions, EventMessage},
     manifest::chat::{ChatConfig, TelegramConfig, TelegramEvent},
 };
 
@@ -74,97 +74,6 @@ impl ChatClients {
         self.telegram.is_some()
     }
 
-    fn get_nested_value(&self, data: &Value, path: &str) -> Option<Value> {
-        let keys: Vec<&str> = path.split('.').collect();
-        let mut current = data;
-        for key in keys {
-            match current.get(key) {
-                Some(value) => current = value,
-                None => return None,
-            }
-        }
-        Some(current.clone())
-    }
-
-    #[allow(clippy::manual_strip)]
-    fn evaluate_condition(&self, value: &Value, condition: &str) -> bool {
-        if condition.contains("||") ||
-            condition.contains("&&") ||
-            condition.contains('>') ||
-            condition.contains('<') ||
-            condition.contains('=')
-        {
-            let parts: Vec<&str> = condition.split("||").collect();
-            for part in parts {
-                let subparts: Vec<&str> = part.split("&&").collect();
-                let mut and_result = true;
-                for subpart in subparts {
-                    let (op, comp) = if subpart.starts_with(">=") {
-                        (">=", &subpart[2..])
-                    } else if subpart.starts_with("<=") {
-                        ("<=", &subpart[2..])
-                    } else if subpart.starts_with(">") {
-                        (">", &subpart[1..])
-                    } else if subpart.starts_with("<") {
-                        ("<", &subpart[1..])
-                    } else if subpart.starts_with("=") {
-                        ("=", &subpart[1..])
-                    } else {
-                        ("", subpart)
-                    };
-
-                    and_result &= match op {
-                        ">=" => {
-                            U64::from_str_radix(value.as_str().unwrap_or("0"), 10)
-                                .unwrap_or_default() >=
-                                U64::from_str_radix(comp, 10).unwrap_or_default()
-                        }
-                        "<=" => {
-                            U64::from_str_radix(value.as_str().unwrap_or("0"), 10)
-                                .unwrap_or_default() <=
-                                U64::from_str_radix(comp, 10).unwrap_or_default()
-                        }
-                        ">" => {
-                            U64::from_str_radix(value.as_str().unwrap_or("0"), 10)
-                                .unwrap_or_default() >
-                                U64::from_str_radix(comp, 10).unwrap_or_default()
-                        }
-                        "<" => {
-                            U64::from_str_radix(value.as_str().unwrap_or("0"), 10)
-                                .unwrap_or_default() <
-                                U64::from_str_radix(comp, 10).unwrap_or_default()
-                        }
-                        "=" => value == &Value::String(comp.to_string()),
-                        "" => value == &Value::String(subpart.to_string()), /* Exact match if no
-                                                                              * operator */
-                        _ => false,
-                    };
-                }
-                if and_result {
-                    return true;
-                }
-            }
-            false
-        } else {
-            value == &Value::String(condition.to_string())
-        }
-    }
-
-    fn filter_event(&self, event_data: &Value, conditions: &Vec<Map<String, Value>>) -> bool {
-        for condition in conditions {
-            for (key, value) in condition {
-                if let Some(event_value) = self.get_nested_value(event_data, key) {
-                    if !self.evaluate_condition(&event_value, value.as_str().unwrap_or("")) {
-                        return false;
-                    }
-                } else {
-                    return false;
-                }
-            }
-        }
-        true
-    }
-
     fn telegram_send_message_tasks(
         &self,
         instance: &TelegramInstance,
@@ -175,7 +84,7 @@ impl ChatClients {
             .iter()
             .filter(|event_data| {
                 if let Some(conditions) = &event_for.conditions {
-                    self.filter_event(event_data, conditions)
+                    filter_event_data_by_conditions(event_data, conditions)
                 } else {
                     true
                 }
