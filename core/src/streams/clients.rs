@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use aws_sdk_sns::{config::http::HttpResponse, error::SdkError, operation::publish::PublishError};
+use futures::future::join_all;
 use serde_json::Value;
 use thiserror::Error;
 use tokio::{
@@ -25,7 +26,7 @@ use crate::{
 // we can add this to yaml if people need it
 const MAX_CHUNK_SIZE: usize = 75 * 1024; // 75 KB
 
-type StreamPublishes = Vec<JoinHandle<Result<(), StreamError>>>;
+type StreamPublishes = Vec<JoinHandle<Result<usize, StreamError>>>;
 
 #[derive(Debug, Clone)]
 struct SNSStream {
@@ -232,7 +233,7 @@ impl StreamsClients {
                     let _ =
                         client.publish(&publish_message_id, &topic_arn, &publish_message).await?;
 
-                    Ok(())
+                    Ok(filtered_chunk.len())
                 })
             })
             .collect();
@@ -269,7 +270,7 @@ impl StreamsClients {
                         .publish(&publish_message_id, &endpoint, &shared_secret, &publish_message)
                         .await?;
 
-                    Ok(())
+                    Ok(filtered_chunk.len())
                 })
             })
             .collect();
@@ -313,7 +314,7 @@ impl StreamsClients {
                             &publish_message,
                         )
                         .await?;
-                    Ok(())
+                    Ok(filtered_chunk.len())
                 })
             })
             .collect();
@@ -348,7 +349,7 @@ impl StreamsClients {
                     client
                         .publish(&publish_message_id, &exchange, &routing_key, &publish_message)
                         .await?;
-                    Ok(())
+                    Ok(filtered_chunk.len())
                 })
             })
             .collect();
@@ -359,6 +360,7 @@ impl StreamsClients {
         &self,
         id: String,
         event_message: &EventMessage,
+        index_event_in_order: bool,
     ) -> Result<usize, StreamError> {
         if !self.has_any_streams() {
             return Ok(0);
@@ -367,8 +369,6 @@ impl StreamsClients {
         // will always have something even if the event has no parameters due to the tx_information
         if let Value::Array(data_array) = &event_message.event_data {
             let chunks = Arc::new(self.chunk_data(data_array));
-            let total_streamed: usize = chunks.iter().map(|chunk| chunk.len()).sum();
-
             let mut streams: Vec<StreamPublishes> = Vec::new();
 
             if let Some(sns) = &self.sns {
@@ -435,17 +435,35 @@ impl StreamsClients {
                 }
             }
 
-            for stream in streams {
-                for publish in stream {
-                    match publish.await {
-                        Ok(Ok(_)) => (),
+            let mut streamed_total = 0;
+
+            if index_event_in_order {
+                for stream in streams {
+                    for task in stream {
+                        match task.await {
+                            Ok(Ok(streamed)) => {
+                                streamed_total += streamed;
+                            }
+                            Ok(Err(e)) => return Err(e),
+                            Err(e) => return Err(StreamError::JoinError(e)),
+                        }
+                    }
+                }
+            } else {
+                let tasks: Vec<_> = streams.into_iter().flatten().collect();
+                let results = join_all(tasks).await;
+                for result in results {
+                    match result {
+                        Ok(Ok(streamed)) => {
+                            streamed_total += streamed;
+                        }
                         Ok(Err(e)) => return Err(e),
                         Err(e) => return Err(StreamError::JoinError(e)),
                     }
                 }
             }
 
-            Ok(total_streamed)
+            Ok(streamed_total)
         } else {
             unreachable!("Event data should be an array");
         }
