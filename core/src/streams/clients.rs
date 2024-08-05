@@ -14,7 +14,7 @@ use crate::{
     event::{filter_event_data_by_conditions, EventMessage},
     manifest::stream::{
         KafkaStreamConfig, KafkaStreamQueueConfig, RabbitMQStreamConfig, RabbitMQStreamQueueConfig,
-        SNSStreamConfig, StreamEvent, StreamsConfig, WebhookStreamConfig,
+        SNSStreamTopicConfig, StreamEvent, StreamsConfig, WebhookStreamConfig,
     },
     streams::{
         kafka::{Kafka, KafkaError},
@@ -30,7 +30,7 @@ type StreamPublishes = Vec<JoinHandle<Result<usize, StreamError>>>;
 
 #[derive(Debug, Clone)]
 struct SNSStream {
-    config: Vec<SNSStreamConfig>,
+    config: Vec<SNSStreamTopicConfig>,
     client: Arc<SNS>,
 }
 
@@ -78,7 +78,10 @@ pub struct StreamsClients {
 impl StreamsClients {
     pub async fn new(stream_config: StreamsConfig) -> Self {
         let sns = if let Some(config) = &stream_config.sns {
-            Some(SNSStream { config: config.clone(), client: Arc::new(SNS::new().await) })
+            Some(SNSStream {
+                config: config.topics.clone(),
+                client: Arc::new(SNS::new(&config.aws_config).await),
+            })
         } else {
             None
         };
@@ -208,7 +211,7 @@ impl StreamsClients {
 
     fn sns_stream_tasks(
         &self,
-        config: &SNSStreamConfig,
+        config: &SNSStreamTopicConfig,
         client: Arc<SNS>,
         id: &str,
         event_message: &EventMessage,

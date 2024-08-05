@@ -11,7 +11,7 @@ Find out more about [Simple Notification Service](https://aws.amazon.com/sns/) a
 
 ## Configuration with rindexer
 
-`sns` property accepts an array allowing you to split up the streams any way you wish.
+`sns` `topics` property accepts an array allowing you to split up the streams any way you wish.
 
 ### Example
 
@@ -36,14 +36,140 @@ contracts:
   - Transfer
   streams: // [!code focus]
     sns: // [!code focus]
-      - topic_arn: "arn:aws:sns:us-east-1:664643779377:test.fifo" // [!code focus]
-        networks: // [!code focus]
-          - ethereum // [!code focus]
-        events: // [!code focus]
-          - event_name: Transfer // [!code focus]
+      aws_config: // [!code focus]
+        region: us-east-1 // [!code focus]
+        access_key: ${AWS_ACCESS_KEY_ID} // [!code focus]
+        secret_key: ${AWS_SECRET_ACCESS_KEY} // [!code focus]
+        # session_token is optional // [!code focus]
+        session_token: ${AWS_SESSION_TOKEN} // [!code focus]
+      topics: // [!code focus]
+        - topic_arn: "arn:aws:sns:us-east-1:664643779377:test" // [!code focus]
+          networks: // [!code focus]
+            - ethereum // [!code focus]
+          events: // [!code focus]
+            - event_name: Transfer // [!code focus]
 ```
 
-### topic_arn
+### aws_config
+
+This is the AWS configuration for the SNS client.
+
+#### region
+
+The AWS region to connect to.
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    sns: // [!code focus]
+      aws_config: // [!code focus]
+        region: us-east-1 // [!code focus]
+```
+
+#### access_key
+
+:::info
+We advise you to put this in a environment variables.
+:::
+
+The AWS access key to connect to.
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    sns: // [!code focus]
+      aws_config: // [!code focus]
+        region: us-east-1
+        access_key: ${AWS_ACCESS_KEY_ID} // [!code focus]
+```
+
+#### secret_key
+
+:::info
+We advise you to put this in a environment variables.
+:::
+
+The AWS secret key to connect to.
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    sns: // [!code focus]
+      aws_config: // [!code focus]
+        region: us-east-1
+        access_key: ${AWS_ACCESS_KEY_ID}
+        secret_key: ${AWS_SECRET_ACCESS_KEY} // [!code focus]
+```
+
+#### session_token
+
+:::info
+This is optional
+:::
+
+:::info
+We advise you to put this in a environment variables.
+:::
+
+
+The AWS session token to connect to.
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    sns: // [!code focus]
+      aws_config: // [!code focus]
+        region: us-east-1
+        access_key: ${AWS_ACCESS_KEY_ID}
+        secret_key: ${AWS_SECRET_ACCESS_KEY}
+        session_token: ${AWS_SESSION_TOKEN} // [!code focus]
+```
+
+### topics
+
+This is an array of topics you want to stream to this sns.
+
+#### topic_arn
 
 This is your SNS topic arn. It supports first-in-first-out and standard topics.
 You can read about the different here [here](https://aws.amazon.com/sns/features/).
@@ -64,7 +190,14 @@ contracts:
   - Transfer
   streams: // [!code focus]
     sns: // [!code focus]
-      - topic_arn: "arn:aws:sns:us-east-1:664643779377:test" // [!code focus]
+      aws_config:
+        region: us-east-1
+        access_key: ${AWS_ACCESS_KEY_ID}
+        secret_key: ${AWS_SECRET_ACCESS_KEY}
+        # session_token is optional
+        session_token: ${AWS_SESSION_TOKEN}
+      topics: // [!code focus]
+        - topic_arn: "arn:aws:sns:us-east-1:664643779377:test" // [!code focus]
 ```
 
 ```yaml [fifo]
@@ -81,12 +214,19 @@ contracts:
   - Transfer
   streams: // [!code focus]
     sns: // [!code focus]
-      - topic_arn: "arn:aws:sns:us-east-1:664643779377:test.fifo" // [!code focus]
+      aws_config:
+        region: us-east-1
+        access_key: ${AWS_ACCESS_KEY_ID}
+        secret_key: ${AWS_SECRET_ACCESS_KEY}
+        # session_token is optional
+        session_token: ${AWS_SESSION_TOKEN}
+      topics: // [!code focus]
+        - topic_arn: "arn:aws:sns:us-east-1:664643779377:test.fifo" // [!code focus]
 ```
 
 :::
 
-### networks
+#### networks
 
 This is an array of networks you want to stream to this webhook.
 
@@ -104,16 +244,23 @@ contracts:
   - Transfer
   streams: // [!code focus]
     sns: // [!code focus]
-      - topic_arn: "arn:aws:sns:us-east-1:664643779377:test.fifo"
-        networks: // [!code focus]
-          - ethereum // [!code focus]
+      aws_config:
+        region: us-east-1
+        access_key: ${AWS_ACCESS_KEY_ID}
+        secret_key: ${AWS_SECRET_ACCESS_KEY}
+        # session_token is optional
+        session_token: ${AWS_SESSION_TOKEN}
+      topics: // [!code focus]
+        - topic_arn: "arn:aws:sns:us-east-1:664643779377:test"
+          networks: // [!code focus]
+            - ethereum // [!code focus]
 ```
 
-### events
+#### events
 
 This is an array of events you want to stream to this SNS topic.
 
-#### event_name
+##### event_name
 
 This is the name of the event you want to stream to this SNS topic, must match the ABI event name.
 
@@ -131,14 +278,21 @@ contracts:
   - Transfer
   streams: // [!code focus]
     sns: // [!code focus]
-      - topic_arn: "arn:aws:sns:us-east-1:664643779377:test.fifo"
-        networks:
-          - ethereum
-        events: // [!code focus]
-          - event_name: Transfer // [!code focus]
+      aws_config:
+        region: us-east-1
+        access_key: ${AWS_ACCESS_KEY_ID}
+        secret_key: ${AWS_SECRET_ACCESS_KEY}
+        # session_token is optional
+        session_token: ${AWS_SESSION_TOKEN}
+      topics: // [!code focus]
+        - topic_arn: "arn:aws:sns:us-east-1:664643779377:test"
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer // [!code focus]
 ```
 
-#### conditions
+##### conditions
 
 This accepts an array of conditions you want to apply to the event data before streaming to this SNS topic.
 
@@ -176,13 +330,20 @@ contracts:
   - Transfer
   streams: // [!code focus]
     sns: // [!code focus]
-      - topic_arn: "arn:aws:sns:us-east-1:664643779377:test.fifo"
-        networks:
-          - ethereum
-        events: // [!code focus]
-          - event_name: Transfer // [!code focus]
-            conditions: // [!code focus]
-              - "value": ">=2000000000000000000" // [!code focus]
+      aws_config:
+        region: us-east-1
+        access_key: ${AWS_ACCESS_KEY_ID}
+        secret_key: ${AWS_SECRET_ACCESS_KEY}
+        # session_token is optional
+        session_token: ${AWS_SESSION_TOKEN}
+      topics: // [!code focus]
+        - topic_arn: "arn:aws:sns:us-east-1:664643779377:test"
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer
+              conditions: // [!code focus]
+                - "value": ">=2000000000000000000" // [!code focus]
 ```
 
 We use the ABI input name `value` to filter on the value field, you can find these names in the ABI file.
@@ -231,13 +392,20 @@ contracts:
   - Transfer
   streams: // [!code focus]
     sns: // [!code focus]
-      - topic_arn: "arn:aws:sns:us-east-1:664643779377:test.fifo"
-        networks:
-          - ethereum
-        events: // [!code focus]
-          - event_name: Transfer
-            conditions: // [!code focus]
-              - "value": ">=2000000000000000000 && value <=4000000000000000000" // [!code focus]
+      aws_config:
+        region: us-east-1
+        access_key: ${AWS_ACCESS_KEY_ID}
+        secret_key: ${AWS_SECRET_ACCESS_KEY}
+        # session_token is optional
+        session_token: ${AWS_SESSION_TOKEN}
+      topics: // [!code focus]
+        - topic_arn: "arn:aws:sns:us-east-1:664643779377:test"
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer
+              conditions: // [!code focus]
+                - "value": ">=2000000000000000000 && value <=4000000000000000000" // [!code focus]
 ```
 
 You can use the `=` to filter on other aspects like the `from` or `to` address.
@@ -256,14 +424,21 @@ contracts:
   - Transfer
   streams: // [!code focus]
     sns: // [!code focus]
-      - topic_arn: "arn:aws:sns:us-east-1:664643779377:test.fifo"
-        networks:
-          - ethereum
-        events: // [!code focus]
-          - event_name: Transfer
-            conditions: // [!code focus]
-              - "from": "0x0338ce5020c447f7e668dc2ef778025ce3982662 || 0x0338ce5020c447f7e668dc2ef778025ce398266u" // [!code focus]
-              - "value": ">=2000000000000000000 || value <=4000000000000000000" // [!code focus]
+      aws_config:
+        region: us-east-1
+        access_key: ${AWS_ACCESS_KEY_ID}
+        secret_key: ${AWS_SECRET_ACCESS_KEY}
+        # session_token is optional
+        session_token: ${AWS_SESSION_TOKEN}
+      topics: // [!code focus]
+        - topic_arn: "arn:aws:sns:us-east-1:664643779377:test"
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer
+              conditions: // [!code focus]
+                - "from": "0x0338ce5020c447f7e668dc2ef778025ce3982662 || 0x0338ce5020c447f7e668dc2ef778025ce398266u" // [!code focus]
+                - "value": ">=2000000000000000000 || value <=4000000000000000000" // [!code focus]
 ```
 
 :::info
@@ -315,11 +490,18 @@ contracts:
   - Transfer
   streams: // [!code focus]
     sns: // [!code focus]
-      - topic_arn: "arn:aws:sns:us-east-1:664643779377:test.fifo"
-        networks:
-          - ethereum
-        events: // [!code focus]
-          - event_name: Transfer
-            conditions: // [!code focus]
-              - "quoteParams.profileId": "=1" // [!code focus]
+      aws_config:
+        region: us-east-1
+        access_key: ${AWS_ACCESS_KEY_ID}
+        secret_key: ${AWS_SECRET_ACCESS_KEY}
+        # session_token is optional
+        session_token: ${AWS_SESSION_TOKEN}
+      topics: // [!code focus]
+        - topic_arn: "arn:aws:sns:us-east-1:664643779377:test"
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer
+              conditions: // [!code focus]
+                - "quoteParams.profileId": "=1" // [!code focus]
 ```

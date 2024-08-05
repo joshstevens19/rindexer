@@ -1,10 +1,12 @@
-use aws_config::{meta::region::RegionProviderChain, BehaviorVersion};
+use aws_config::{meta::region::RegionProviderChain, BehaviorVersion, Region};
 use aws_sdk_sns::{
-    config::http::HttpResponse,
+    config::{http::HttpResponse, Credentials},
     error::SdkError,
     operation::publish::{PublishError, PublishOutput},
     Client,
 };
+
+use crate::types::aws_config::AwsConfig;
 
 #[derive(Debug, Clone)]
 pub struct SNS {
@@ -12,10 +14,22 @@ pub struct SNS {
 }
 
 impl SNS {
-    pub async fn new() -> Self {
-        let region_provider = RegionProviderChain::default_provider();
-        let config =
-            aws_config::defaults(BehaviorVersion::latest()).region(region_provider).load().await;
+    pub async fn new(config: &AwsConfig) -> Self {
+        let region_provider = RegionProviderChain::first_try(Region::new(config.region.clone()));
+
+        let credentials_provider = Credentials::new(
+            &config.access_key,
+            &config.secret_key,
+            config.session_token.clone(),
+            None,
+            "manual",
+        );
+
+        let config = aws_config::defaults(BehaviorVersion::latest())
+            .region(region_provider)
+            .credentials_provider(credentials_provider)
+            .load()
+            .await;
         let client = Client::new(&config);
 
         Self { client }
