@@ -102,7 +102,7 @@ jobs:
         id: extract_version
         run: echo "VERSION_NAME=${GITHUB_REF#refs/heads/release/}" >> $GITHUB_ENV
 
-      - name: Install NASM on Windows
+      - name: Install and setup NASM on Windows
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: pwsh
         run: |
@@ -110,23 +110,14 @@ jobs:
           $nasmPath = "C:\Program Files\NASM"
           $env:PATH += ";$nasmPath"
           echo "$nasmPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "NASM_PATH=$nasmPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          refreshenv
           nasm -v
-
-      - name: Debug info
-        shell: bash
-        run: |
-          echo "Target: ${{ matrix.target }}"
-          echo "PATH: $PATH"
-          if [[ "${{ matrix.target }}" == *windows* ]]; then
-            where nasm
-            nasm -v
-          fi
 
       - name: Build binaries
         working-directory: cli
         env:
           SVM_TARGET_PLATFORM: ${{ matrix.svm_target_platform }}
-          AWS_LC_SYS_NO_ASM: 1
         shell: bash
         run: |
           set -eo pipefail
@@ -139,10 +130,17 @@ jobs:
 
           [[ "$target" == *windows* ]] && exe=".exe"
 
+          if [[ "$target" == *windows* ]]; then
+            export PATH="$PATH:/c/Program Files/NASM"
+            export NASM="$NASM_PATH/nasm.exe"
+            echo "NASM location: $NASM"
+            "$NASM" -v
+          fi
+
           if [[ "${{ env.BUILD_TYPE }}" == "release" ]]; then
-            cargo build --release --target "$target" "${flags[@]}"
+            RUST_BACKTRACE=1 cargo build --release --target "$target" "${flags[@]}" -vv
           else
-            cargo build --target "$target" "${flags[@]}"
+            RUST_BACKTRACE=1 cargo build --target "$target" "${flags[@]}" -vv
           fi
 
       - name: Archive binaries
