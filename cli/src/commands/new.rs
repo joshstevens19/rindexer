@@ -54,7 +54,7 @@ fn write_docker_compose(path: &Path) -> Result<(), WriteFileError> {
 
 fn write_gitignore(path: &Path) -> Result<(), WriteFileError> {
     write_file(&path.join(".gitignore"), r#".rindexer
-    generated_csv/*.txt
+    generated_csv/**/*.txt
     "#)
 }
 
