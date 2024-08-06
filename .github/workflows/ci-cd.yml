@@ -102,6 +102,10 @@ jobs:
         id: extract_version
         run: echo "VERSION_NAME=${GITHUB_REF#refs/heads/release/}" >> $GITHUB_ENV
 
+      - name: Install nasm on Windows
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: choco install nasm
+
       - name: Build binaries
         working-directory: cli
         env:
