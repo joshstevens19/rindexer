@@ -102,26 +102,26 @@ jobs:
         id: extract_version
         run: echo "VERSION_NAME=${GITHUB_REF#refs/heads/release/}" >> $GITHUB_ENV
 
-      - name: Install and setup NASM on Windows
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        shell: pwsh
-        run: |
-          choco install nasm
-          $nasmPath = "C:\Program Files\NASM"
-          $env:PATH += ";$nasmPath"
-          echo "$nasmPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          refreshenv
-          $env:PATH = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-          nasm -v
-          
-      - name: Debug environment
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        shell: pwsh
-        run: |
-          $env:PATH = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-          echo "Current PATH: $env:PATH"
-          Get-Command nasm | Format-List
-          nasm -v
+#      - name: Install and setup NASM on Windows
+#        if: matrix.target == 'x86_64-pc-windows-msvc'
+#        shell: pwsh
+#        run: |
+#          choco install nasm
+#          $nasmPath = "C:\Program Files\NASM"
+#          $env:PATH += ";$nasmPath"
+#          echo "$nasmPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+#          refreshenv
+#          $env:PATH = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+#          nasm -v
+#          
+#      - name: Debug environment
+#        if: matrix.target == 'x86_64-pc-windows-msvc'
+#        shell: pwsh
+#        run: |
+#          $env:PATH = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+#          echo "Current PATH: $env:PATH"
+#          Get-Command nasm | Format-List
+#          nasm -v
           
       - name: Set AWS_LC_SYS_NO_ASM for Windows
         if: matrix.target == 'x86_64-pc-windows-msvc'
