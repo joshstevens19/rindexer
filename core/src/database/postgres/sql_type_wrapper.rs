@@ -7,9 +7,10 @@ use ethers::{
     prelude::{Bytes, H128, H160, H256, H512, U128, U256, U512, U64},
 };
 use rust_decimal::Decimal;
+use serde_json::{json, Value};
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type as PgType};
 
-use crate::abi::ABIInput;
+use crate::{abi::ABIInput, event::callback_registry::TxInformation};
 
 #[derive(Debug, Clone)]
 pub enum EthereumSqlTypeWrapper {
@@ -655,4 +656,111 @@ fn serialize_vec_decimal<T: ToString>(
 
     out.extend_from_slice(&buf);
     Ok(IsNull::No)
+}
+
+fn count_components(components: &[ABIInput]) -> usize {
+    components
+        .iter()
+        .map(|component| {
+            if component.type_ == "tuple" {
+                let nested_components =
+                    component.components.as_ref().expect("Tuple should have components defined");
+                1 + count_components(nested_components)
+            } else {
+                1
+            }
+        })
+        .sum()
+}
+
+pub fn map_ethereum_wrapper_to_json(
+    abi_inputs: &[ABIInput],
+    wrappers: &[EthereumSqlTypeWrapper],
+    transaction_information: &TxInformation,
+    is_within_tuple: bool,
+) -> Value {
+    let mut result = serde_json::Map::new();
+
+    let mut current_wrapper_index = 0;
+    let mut wrappers_index_processed = Vec::new();
+    for abi_input in abi_inputs.iter() {
+        // tuples will take in multiple wrapper indexes, so we need to skip them if processed
+        if wrappers_index_processed.contains(&current_wrapper_index) {
+            continue;
+        }
+        if let Some(wrapper) = wrappers.get(current_wrapper_index) {
+            if abi_input.type_ == "tuple" {
+                let components =
+                    abi_input.components.as_ref().expect("Tuple should have components defined");
+                let total_properties = count_components(components);
+                let tuple_value = map_ethereum_wrapper_to_json(
+                    components,
+                    &wrappers[current_wrapper_index..total_properties],
+                    transaction_information,
+                    true,
+                );
+                result.insert(abi_input.name.clone(), tuple_value);
+                for i in current_wrapper_index..total_properties {
+                    wrappers_index_processed.push(i);
+                }
+                current_wrapper_index = total_properties;
+            } else {
+                let value = match wrapper {
+                    EthereumSqlTypeWrapper::U64(u) => json!(u),
+                    EthereumSqlTypeWrapper::VecU64(u64s) => json!(u64s),
+                    EthereumSqlTypeWrapper::U128(u) => json!(u.to_string()),
+                    EthereumSqlTypeWrapper::VecU128(u128s) => {
+                        json!(u128s.iter().map(|u| u.to_string()).collect::<Vec<_>>())
+                    }
+                    EthereumSqlTypeWrapper::U256(u) => json!(u.to_string()),
+                    EthereumSqlTypeWrapper::VecU256(u256s) => {
+                        json!(u256s.iter().map(|u| u.to_string()).collect::<Vec<_>>())
+                    }
+                    EthereumSqlTypeWrapper::U512(u) => json!(u.to_string()),
+                    EthereumSqlTypeWrapper::VecU512(u512s) => {
+                        json!(u512s.iter().map(|u| u.to_string()).collect::<Vec<_>>())
+                    }
+                    EthereumSqlTypeWrapper::H128(h) => json!(h),
+                    EthereumSqlTypeWrapper::VecH128(h128s) => json!(h128s),
+                    EthereumSqlTypeWrapper::H160(h) => json!(h),
+                    EthereumSqlTypeWrapper::VecH160(h160s) => json!(h160s),
+                    EthereumSqlTypeWrapper::H256(h) => json!(h),
+                    EthereumSqlTypeWrapper::VecH256(h256s) => json!(h256s),
+                    EthereumSqlTypeWrapper::H512(h) => json!(h),
+                    EthereumSqlTypeWrapper::VecH512(h512s) => json!(h512s),
+                    EthereumSqlTypeWrapper::Address(address) => json!(address),
+                    EthereumSqlTypeWrapper::VecAddress(addresses) => json!(addresses),
+                    EthereumSqlTypeWrapper::Bool(b) => json!(b),
+                    EthereumSqlTypeWrapper::VecBool(bools) => json!(bools),
+                    EthereumSqlTypeWrapper::U32(u) => json!(u),
+                    EthereumSqlTypeWrapper::VecU32(u32s) => json!(u32s),
+                    EthereumSqlTypeWrapper::U16(u) => json!(u),
+                    EthereumSqlTypeWrapper::VecU16(u16s) => json!(u16s),
+                    EthereumSqlTypeWrapper::U8(u) => json!(u),
+                    EthereumSqlTypeWrapper::VecU8(u8s) => json!(u8s),
+                    EthereumSqlTypeWrapper::String(s) => json!(s),
+                    EthereumSqlTypeWrapper::VecString(strings) => json!(strings),
+                    EthereumSqlTypeWrapper::Bytes(bytes) => json!(hex::encode(bytes)),
+                    EthereumSqlTypeWrapper::VecBytes(bytes) => {
+                        json!(bytes.iter().map(hex::encode).collect::<Vec<_>>())
+                    }
+                };
+                result.insert(abi_input.name.clone(), value);
+                wrappers_index_processed.push(current_wrapper_index);
+                current_wrapper_index += 1;
+            }
+        } else {
+            panic!(
+                "No wrapper found for ABI input {:?} and wrapper index {} - wrappers {:?}",
+                abi_input, current_wrapper_index, wrappers
+            );
+        }
+    }
+
+    // only do this at the top level
+    if !is_within_tuple {
+        result.insert("transaction_information".to_string(), json!(transaction_information));
+    }
+
+    Value::Object(result)
 }

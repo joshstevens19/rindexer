@@ -6,6 +6,7 @@ use std::{
 };
 
 use regex::{Captures, Regex};
+use tracing::error;
 
 use crate::{
     abi::ABIItem,
@@ -22,6 +23,7 @@ fn substitute_env_variables(contents: &str) -> Result<String, regex::Error> {
         match env::var(var_name) {
             Ok(val) => val,
             Err(_) => {
+                error!("Environment variable {} not found", var_name);
                 panic!("Environment variable {} not found", var_name)
             }
         }
@@ -54,6 +56,9 @@ pub enum ValidateManifestError {
 
     #[error("Relationship foreign key contract {0} not found")]
     RelationshipForeignKeyContractNotFound(String),
+
+    #[error("Streams config is invalid: {0}")]
+    StreamsConfigValidationError(String),
 }
 
 fn validate_manifest(
@@ -124,6 +129,12 @@ fn validate_manifest(
 
         if let Some(_dependency_events) = &contract.dependency_events {
             // TODO - validate the events all exist in the contract ABIs
+        }
+
+        if let Some(streams) = &contract.streams {
+            if let Err(e) = streams.validate() {
+                return Err(ValidateManifestError::StreamsConfigValidationError(e));
+            }
         }
     }
 
