@@ -14,11 +14,15 @@ use tokio::{
 use crate::{
     chat::{
         discord::{DiscordBot, DiscordError},
+        slack::{SlackBot, SlackError},
         telegram::{TelegramBot, TelegramError},
         template::Template,
     },
     event::{filter_event_data_by_conditions, EventMessage},
-    manifest::chat::{ChatConfig, DiscordConfig, DiscordEvent, TelegramConfig, TelegramEvent},
+    manifest::chat::{
+        ChatConfig, DiscordConfig, DiscordEvent, SlackConfig, SlackEvent, TelegramConfig,
+        TelegramEvent,
+    },
 };
 
 type SendMessage = Vec<JoinHandle<Result<(), ChatError>>>;
@@ -30,6 +34,9 @@ pub enum ChatError {
 
     #[error("Discord error: {0}")]
     Discord(#[from] DiscordError),
+
+    #[error("Slack error: {0}")]
+    Slack(#[from] SlackError),
 
     #[error("Task failed: {0}")]
     JoinError(JoinError),
@@ -47,9 +54,16 @@ struct DiscordInstance {
     client: Arc<DiscordBot>,
 }
 
+#[derive(Debug)]
+struct SlackInstance {
+    config: SlackConfig,
+    client: Arc<SlackBot>,
+}
+
 pub struct ChatClients {
     telegram: Option<Vec<TelegramInstance>>,
     discord: Option<Vec<DiscordInstance>>,
+    slack: Option<Vec<SlackInstance>>,
 }
 
 impl ChatClients {
@@ -74,7 +88,17 @@ impl ChatClients {
                 .collect()
         });
 
-        Self { telegram, discord }
+        let slack = chat_config.slack.map(|config| {
+            config
+                .into_iter()
+                .map(|config| {
+                    let client = Arc::new(SlackBot::new(config.bot_token.clone()));
+                    SlackInstance { config, client }
+                })
+                .collect()
+        });
+
+        Self { telegram, discord, slack }
     }
 
     fn find_accepted_block_range(&self, from_block: &U64, to_block: &U64) -> U64 {
@@ -155,6 +179,35 @@ impl ChatClients {
         tasks
     }
 
+    fn slack_send_message_tasks(
+        &self,
+        instance: &SlackInstance,
+        event_for: &SlackEvent,
+        events_data: &[Value],
+    ) -> SendMessage {
+        let tasks: Vec<_> = events_data
+            .iter()
+            .filter(|event_data| {
+                if let Some(conditions) = &event_for.conditions {
+                    filter_event_data_by_conditions(event_data, conditions)
+                } else {
+                    true
+                }
+            })
+            .map(|event_data| {
+                let client = Arc::clone(&instance.client);
+                let channel = instance.config.channel.clone();
+                let message = Template::new(event_for.template_inline.clone())
+                    .parse_template_inline(event_data);
+                task::spawn(async move {
+                    client.send_message(&channel, &message).await?;
+                    Ok(())
+                })
+            })
+            .collect();
+        tasks
+    }
+
     pub async fn send_message(
         &self,
         event_message: &EventMessage,
@@ -206,6 +259,24 @@ impl ChatClients {
                                 discord_event,
                                 data_array,
                             );
+                            messages.push(message);
+                        }
+                    }
+                }
+            }
+
+            if let Some(slack) = &self.slack {
+                for instance in slack {
+                    if instance.config.networks.contains(&event_message.network) {
+                        let slack_event = instance
+                            .config
+                            .messages
+                            .iter()
+                            .find(|e| e.event_name == event_message.event_name);
+
+                        if let Some(slack_event) = slack_event {
+                            let message =
+                                self.slack_send_message_tasks(instance, slack_event, data_array);
                             messages.push(message);
                         }
                     }
