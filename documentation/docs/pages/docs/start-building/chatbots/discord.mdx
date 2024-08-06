@@ -2,11 +2,24 @@
 
 Discord is one of the most popular chat platforms, and is great to build bots and notifications when things happen on chain.
 
-## Setup a bot
+## Setup a bot on discord
 
-You can follow this guide to setup a bot [here](https://www.writebots.com/discord-bot-token/).
+1. go to https://discordapp.com/developers/applications/
+2. If you already have a bot created, click it in the list. If you don’t have any discord bots, click the “New Application” button.
+3. Give Your Bot a Name (you can then after add a description and icon for it)
+4. Your next step is to go over the menu on the left side of the screen and click “Bot”. It’s the icon that looks like a little puzzle piece.
+5. Click the “Add Bot” button and press "Yes, do it!"
+6. You see a section called “Token” you need to generate your bot token and save it somewhere safe for later.
+7. In order to add your bot to your Discord Server, you’ll need to navigate back to the “OAuth2” tab.
+8. Once there, scroll down to the “Oauth2 URL Generator” section. In the “Scopes” section, you’ll want to select the “bot” checkbox.
+9. You’ll notice that a URL appeared as soon as you clicked “bot” — this will be your URL for adding your bot to a server.
+10. Scroll down some more to the “Bot Permissions” section. This is where you choose what permissions to give your bot, and what it can and can’t do.
+11. You want to do tick "Send messages" as rindexer does not read any messages from the server.
+12. After you’ve selected your permissions, scroll up a little bit and look at the URL that was generated and copy and go to that url in your browser.
+13. Here you’ll want to select the server you’re adding your bot to and press “Continue”
+14. It then confirm permissions make sure you have ticked "Send Messages" and press "Authorize"
+14. You are now done you will need the bot token to setup the discord bot with rindexer
 
-Make sure you copy your bot token as you will need it later.
 
 ## Configure rindexer
 
