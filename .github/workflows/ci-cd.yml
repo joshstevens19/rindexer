@@ -104,7 +104,15 @@ jobs:
 
       - name: Install nasm on Windows
         if: matrix.target == 'x86_64-pc-windows-msvc'
-        run: choco install nasm
+        run: |
+          choco install nasm
+          echo "::add-path::C:\\Program Files\\NASM"
+
+      - name: Verify nasm installation
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: |
+          nasm -v
+          where nasm
 
       - name: Build binaries
         working-directory: cli
