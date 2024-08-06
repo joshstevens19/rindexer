@@ -30,3 +30,5 @@ graphql/node_modules
 rindexer_rust_playground/generated_csv/*/*.csv
 .env
 !.env.example
+.mesh
+_

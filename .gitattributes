@@ -1,0 +1,6 @@
+* text=auto
+core/resources/rindexer-graphql filter=lfs diff=lfs merge=lfs -text
+core/resources/rindexer-graphql-linux filter=lfs diff=lfs merge=lfs -text
+core/resources/rindexer-graphql-macos filter=lfs diff=lfs merge=lfs -text
+core/resources/rindexer-graphql-win.exe filter=lfs diff=lfs merge=lfs -text
+core/resources/ filter=lfs diff=lfs merge=lfs -text
