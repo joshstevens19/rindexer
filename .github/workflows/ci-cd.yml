@@ -123,14 +123,18 @@ jobs:
 #          Get-Command nasm | Format-List
 #          nasm -v
           
-      - name: Set AWS_LC_SYS_NO_ASM for Windows
+      - name: Set and verify AWS_LC_SYS_NO_ASM for Windows
         if: matrix.target == 'x86_64-pc-windows-msvc'
-        run: echo "AWS_LC_SYS_NO_ASM=1" >> $GITHUB_ENV
+        shell: bash
+        run: |
+          echo "AWS_LC_SYS_NO_ASM=1" >> $GITHUB_ENV
+          echo "AWS_LC_SYS_NO_ASM is set to: $AWS_LC_SYS_NO_ASM"
 
       - name: Build binaries
         working-directory: cli
         env:
           SVM_TARGET_PLATFORM: ${{ matrix.svm_target_platform }}
+          AWS_LC_SYS_NO_ASM: 1
         shell: bash
         run: |
           set -eo pipefail
