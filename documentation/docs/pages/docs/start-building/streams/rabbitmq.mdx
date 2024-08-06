@@ -16,7 +16,7 @@ You can read more about what they do differently [here](https://medium.com/trend
 
 `rabbitmq` property accepts an array of `exchanges` allowing you to split up the streams any way you wish.
 
-### Example
+## Example
 
 :::code-group
 
@@ -123,7 +123,7 @@ contracts:
 
 :::
 
-### url
+## url
 
 This is the rabbitmq connection url we advise to put this in a environment variable.
 
@@ -146,11 +146,11 @@ contracts:
 ```
 
 
-### exchanges
+## exchanges
 
 This is an array of exchanges you want to stream to this rabbitmq.
 
-#### exchange
+### exchange
 
 This is the exchange name.
 
@@ -174,7 +174,7 @@ contracts:
           - exchange: transfer // [!code focus]
 ```
 
-#### exchange_type
+### exchange_type
 
 This is the exchange type, you can read more about them [here](https://medium.com/trendyol-tech/rabbitmq-exchange-types-d7e1f51ec825).
 rindexer supports `direct`, `topic` and `fanout` exchanges.
@@ -201,7 +201,7 @@ contracts:
           exchange_type: direct // [!code focus]
 ```
 
-#### routing_key
+### routing_key
 
 This is the routing key for the exchange. You do not need to provide this if you are using a `fanout` exchange. This
 is mandatory for `direct` and `topic` exchanges.
@@ -233,7 +233,7 @@ contracts:
           routing_key: my-routing-key // [!code focus]
 ```
 
-### networks
+## networks
 
 This is an array of networks you want to stream to this rabbitmq.
 
@@ -262,11 +262,11 @@ contracts:
             - ethereum // [!code focus]
 ```
 
-### events
+## events
 
 This is an array of events you want to stream to this rabbitmq.
 
-#### event_name
+### event_name
 
 This is the name of the event you want to stream to this rabbitmq, must match the ABI event name.
 
@@ -297,7 +297,7 @@ contracts:
             - event_name: Transfer // [!code focus]
 ```
 
-#### conditions
+### conditions
 
 This accepts an array of conditions you want to apply to the event data before streaming to this rabbitmq.
 

@@ -13,7 +13,7 @@ Find out more about [Simple Notification Service](https://aws.amazon.com/sns/) a
 
 `sns` `topics` property accepts an array allowing you to split up the streams any way you wish.
 
-### Example
+## Example
 
 ```yaml [rindexer.yaml]
 name: RocketPoolETHIndexer
@@ -50,11 +50,11 @@ contracts:
             - event_name: Transfer // [!code focus]
 ```
 
-### aws_config
+## aws_config
 
 This is the AWS configuration for the SNS client.
 
-#### region
+### region
 
 The AWS region to connect to.
 
@@ -76,7 +76,7 @@ contracts:
         region: us-east-1 // [!code focus]
 ```
 
-#### access_key
+### access_key
 
 :::info
 We advise you to put this in a environment variables.
@@ -103,7 +103,7 @@ contracts:
         access_key: ${AWS_ACCESS_KEY_ID} // [!code focus]
 ```
 
-#### secret_key
+### secret_key
 
 :::info
 We advise you to put this in a environment variables.
@@ -131,7 +131,7 @@ contracts:
         secret_key: ${AWS_SECRET_ACCESS_KEY} // [!code focus]
 ```
 
-#### session_token
+### session_token
 
 :::info
 This is optional
@@ -165,11 +165,11 @@ contracts:
         session_token: ${AWS_SESSION_TOKEN} // [!code focus]
 ```
 
-### topics
+## topics
 
 This is an array of topics you want to stream to this sns.
 
-#### topic_arn
+### topic_arn
 
 This is your SNS topic arn. It supports first-in-first-out and standard topics.
 You can read about the different here [here](https://aws.amazon.com/sns/features/).
@@ -256,11 +256,11 @@ contracts:
             - ethereum // [!code focus]
 ```
 
-#### events
+### events
 
 This is an array of events you want to stream to this SNS topic.
 
-##### event_name
+#### event_name
 
 This is the name of the event you want to stream to this SNS topic, must match the ABI event name.
 
@@ -292,7 +292,7 @@ contracts:
             - event_name: Transfer // [!code focus]
 ```
 
-##### conditions
+#### conditions
 
 This accepts an array of conditions you want to apply to the event data before streaming to this SNS topic.
 

@@ -16,7 +16,7 @@ You have to use telegram itself to setup a bot:
 
 `telegram` property accepts an array allowing you to split up the chats any way you wish.
 
-### Example
+## Example
 
 ```yaml
 name: RocketPoolETHIndexer
@@ -63,7 +63,7 @@ contracts:
                               " // [!code focus]
 ```
 
-### bot_token
+## bot_token
 
 This is your telegram bot token which you generate using @BotFather.
 
@@ -88,7 +88,7 @@ contracts:
       - bot_token: ${TELEGRAM_BOT_TOKEN} // [!code focus]
 ```
 
-### chat_id
+## chat_id
 
 You have add your bot to chats to use it, so this is the chat ID you wish the bot to send messages to.
 
@@ -110,7 +110,7 @@ contracts:
         chat_id: -4223616270 // [!code focus]
 ```
 
-### networks
+## networks
 
 This is an array of networks you want to send messages to this telegram chat.
 
@@ -134,12 +134,12 @@ contracts:
           - ethereum // [!code focus]
 ```
 
-### messages
+## messages
 
 This is an array of messages you want to send to this telegram chat. It is an array as you can define many different
 messages to send to this chat with different conditions.
 
-#### event_name
+### event_name
 
 This is the name of the event you want to send a message for, must match the ABI event name.
 
@@ -165,7 +165,7 @@ contracts:
           - event_name: Transfer // [!code focus]
 ```
 
-#### conditions
+### conditions
 
 This accepts an array of conditions you want to apply to the event data before sending a message to this telegram chat.
 
@@ -355,7 +355,7 @@ contracts:
               - "quoteParams.profileId": "=1" // [!code focus]
 ```
 
-#### template_inline
+### template_inline
 
 You can then write your own template inline, this is the template you want to send to the chat.
 You have to use the ABI input names in object notation for example if i wanted to put value in the template
@@ -370,7 +370,7 @@ The template supports:
 - pre-formatted fixed-width known code block = \`\`\`rust pre-formatted fixed-width known code block\`\`\`
 - breaks = just line break in the template
 
-##### transaction_information
+#### transaction_information
 
 You also can use the `transaction_information` object to get common information about the transaction, this is the
 transaction information for the event.
@@ -398,7 +398,7 @@ pub struct TxInformation {
 To avoid confusion `address` in `transaction_information` is the address of the contract the event was emitted from.
 :::
 
-##### format_value
+#### format_value
 
 You can use the `format_value` function to format the value of the event to a decimal value with the specified decimals.
 

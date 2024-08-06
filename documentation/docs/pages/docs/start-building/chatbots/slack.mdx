@@ -18,7 +18,7 @@ since it’s the one we will be using to send messages.
 
 `slack` property accepts an array allowing you to split up the channels any way you wish.
 
-### Example
+## Example
 
 ```yaml
 name: RocketPoolETHIndexer
@@ -65,7 +65,7 @@ contracts:
                               " // [!code focus]
 ```
 
-### bot_token
+## bot_token
 
 This is your slack bot token which you generate using @BotFather.
 
@@ -90,7 +90,7 @@ contracts:
       - bot_token: ${SLACK_BOT_TOKEN} // [!code focus]
 ```
 
-### channel
+## channel
 
 This is the channel you want to send messages to.
 
@@ -116,7 +116,7 @@ contracts:
         channel: "#RethTransferEvents" // [!code focus]
 ```
 
-### networks
+## networks
 
 This is an array of networks you want to send messages to this slack channel.
 
@@ -140,12 +140,12 @@ contracts:
           - ethereum // [!code focus]
 ```
 
-### messages
+## messages
 
 This is an array of messages you want to send to this slack channel. It is an array as you can define many different
 messages to send to this channel with different conditions.
 
-#### event_name
+### event_name
 
 This is the name of the event you want to send a message for, must match the ABI event name.
 
@@ -171,7 +171,7 @@ contracts:
           - event_name: Transfer // [!code focus]
 ```
 
-#### conditions
+### conditions
 
 This accepts an array of conditions you want to apply to the event data before sending a message to this slack channel.
 
@@ -361,7 +361,7 @@ contracts:
               - "quoteParams.profileId": "=1" // [!code focus]
 ```
 
-#### template_inline
+### template_inline
 
 You can then write your own template inline, this is the template you want to send to the channel.
 You have to use the ABI input names in object notation for example if i wanted to put value in the template
@@ -376,7 +376,7 @@ The template supports:
 - pre-formatted fixed-width known code block = \`\`\`rust pre-formatted fixed-width known code block\`\`\`
 - breaks = just line break in the template
 
-##### transaction_information
+#### transaction_information
 
 You also can use the `transaction_information` object to get common information about the transaction, this is the
 transaction information for the event.
