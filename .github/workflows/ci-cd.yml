@@ -102,10 +102,48 @@ jobs:
         id: extract_version
         run: echo "VERSION_NAME=${GITHUB_REF#refs/heads/release/}" >> $GITHUB_ENV
 
+      - name: Install and setup NASM on Windows
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          choco install nasm
+          $nasmPath = "C:\Program Files\NASM"
+          $env:PATH += ";$nasmPath"
+          echo "$nasmPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "NASM_PATH=$nasmPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          refreshenv
+          nasm -v
+
+      - name: Install vcpkg on Windows
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          git clone https://github.com/Microsoft/vcpkg.git C:\vcpkg
+          C:\vcpkg\bootstrap-vcpkg.bat
+          C:\vcpkg\vcpkg integrate install
+          echo "VCPKG_ROOT=C:\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "C:\vcpkg" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          
+      - name: Install CMake on Windows
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System'
+          refreshenv
+          cmake --version
+          echo "CMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install dependencies with vcpkg on Windows
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          C:\vcpkg\vcpkg install openssl:x64-windows-static-md zlib:x64-windows-static-md
+
       - name: Build binaries
         working-directory: cli
         env:
           SVM_TARGET_PLATFORM: ${{ matrix.svm_target_platform }}
+          CMAKE_TOOLCHAIN_FILE: C:/vcpkg/scripts/buildsystems/vcpkg.cmake
         shell: bash
         run: |
           set -eo pipefail
@@ -118,10 +156,19 @@ jobs:
 
           [[ "$target" == *windows* ]] && exe=".exe"
 
+          if [[ "$target" == *windows* ]]; then
+            export PATH="$PATH:/c/Program Files/NASM:/c/vcpkg"
+            export NASM="$NASM_PATH/nasm.exe"
+            echo "NASM location: $NASM"
+            "$NASM" -v
+            echo "CMAKE_TOOLCHAIN_FILE: $CMAKE_TOOLCHAIN_FILE"
+            ls -l "$CMAKE_TOOLCHAIN_FILE" || echo "Toolchain file not found!"
+          fi
+
           if [[ "${{ env.BUILD_TYPE }}" == "release" ]]; then
-            cargo build --release --target "$target" "${flags[@]}"
+            RUST_BACKTRACE=1 CMAKE_TOOLCHAIN_FILE="$CMAKE_TOOLCHAIN_FILE" cargo build --release --target "$target" "${flags[@]}" -vv
           else
-            cargo build --target "$target" "${flags[@]}"
+            RUST_BACKTRACE=1 CMAKE_TOOLCHAIN_FILE="$CMAKE_TOOLCHAIN_FILE" cargo build --target "$target" "${flags[@]}" -vv
           fi
 
       - name: Archive binaries
