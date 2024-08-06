@@ -75,8 +75,8 @@ export default defineConfig({
           link: '/docs/start-building/chatbots',
           items: [
             { text: 'Telegram', link: '/docs/start-building/chatbots/telegram' },
+            { text: 'Discord', link: '/docs/start-building/chatbots/discord' },
             { text: 'Slack - coming soon' },
-            { text: 'Discord - coming soon' },
           ],
         },
         {
