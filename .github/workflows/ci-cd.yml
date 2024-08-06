@@ -106,13 +106,19 @@ jobs:
         if: matrix.target == 'x86_64-pc-windows-msvc'
         run: |
           choco install nasm
-          echo "::add-path::C:\\Program Files\\NASM"
-
-      - name: Verify nasm installation
+          refreshenv
+          nasm -v
+          echo "C:\Program Files\NASM" >> $GITHUB_PATH
+          
+      - name: Refresh environment
         if: matrix.target == 'x86_64-pc-windows-msvc'
         run: |
-          nasm -v
-          where nasm
+          Import-Module "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1"
+          refreshenv
+          
+      - name: Set AWS_LC_SYS_NO_ASM for Windows
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: echo "AWS_LC_SYS_NO_ASM=1" >> $GITHUB_ENV
 
       - name: Build binaries
         working-directory: cli
