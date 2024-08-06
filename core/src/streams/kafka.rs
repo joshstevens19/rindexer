@@ -57,8 +57,7 @@ impl Kafka {
 
         #[cfg(windows)]
         {
-            println!("Initializing mock Kafka producer for Windows");
-            Ok(Self {})
+            panic!("Kafka is not supported on Windows")
         }
     }
 
@@ -93,8 +92,7 @@ impl Kafka {
 
         #[cfg(windows)]
         {
-            println!("Mock Kafka publish on Windows: topic={}, id={}", topic, id);
-            Ok(())
+            panic!("Kafka is not supported on Windows")
         }
     }
 }
