@@ -15,7 +15,7 @@ rindexer kafka integration supports SSL queues and none SSL queues.
 
 `kafka` property accepts an array of `topics` allowing you to split up the streams any way you wish.
 
-### Example
+## Example
 
 Kafka has to be configured to use SASL_SSL or PLAINTEXT. You can read more about it [here](https://kafka.apache.org/documentation/#security_sasl).
 
@@ -96,7 +96,7 @@ contracts:
 
 :::
 
-### brokers
+## brokers
 
 You define the kafka brokers you wish to connect to, you can pass in multiple brokers if you wish. A single broker
 will of course work as well.
@@ -240,7 +240,7 @@ contracts:
 
 This is an array of topics you want to stream to this kafka.
 
-#### topic
+### topic
 
 This is the topic name.
 
@@ -269,7 +269,7 @@ contracts:
         - topic: test-topic // [!code focus]
 ```
 
-#### key
+### key
 
 :::info
 This is optional
@@ -308,7 +308,7 @@ contracts:
             - event_name: Transfer
 ```
 
-### networks
+## networks
 
 This is an array of networks you want to stream to this kafka.
 
@@ -342,11 +342,11 @@ contracts:
             - event_name: Transfer
 ```
 
-### events
+## events
 
 This is an array of events you want to stream to this kafka.
 
-#### event_name
+### event_name
 
 This is the name of the event you want to stream to this kafka, must match the ABI event name.
 
@@ -380,7 +380,7 @@ contracts:
             - event_name: Transfer // [!code focus]
 ```
 
-#### conditions
+### conditions
 
 This accepts an array of conditions you want to apply to the event data before streaming to this kafka.
 

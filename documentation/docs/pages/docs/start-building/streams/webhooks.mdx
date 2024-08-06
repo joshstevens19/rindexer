@@ -11,7 +11,7 @@ the [contracts](/docs/start-building/yaml-config/contracts) section of the YAML 
 
 `webhooks` property accepts an array allowing you to split up the webhooks any way you wish.
 
-### Example
+## Example
 
 ```yaml [rindexer.yaml]
 name: RocketPoolETHIndexer
@@ -42,7 +42,7 @@ contracts:
           - event_name: Transfer // [!code focus]
 ```
 
-### endpoint
+## endpoint
 
 This is your rabbitmq url.
 
@@ -63,7 +63,7 @@ contracts:
       - endpoint: YOUR_WEBHOOK_URL // [!code focus]
 ```
 
-### shared_secret
+## shared_secret
 
 This is the shared secret you want to use to authenticate the webhook so you know it ha came from rindexer.
 This is always injected in the header as `x-rindexer-shared-secret`.
@@ -112,11 +112,11 @@ contracts:
           - ethereum // [!code focus]
 ```
 
-### events
+## events
 
 This is an array of events you want to stream to this webhook.
 
-#### event_name
+### event_name
 
 This is the name of the event you want to stream to this webhook, must match the ABI event name.
 
@@ -142,7 +142,7 @@ contracts:
           - event_name: Transfer // [!code focus]
 ```
 
-#### conditions
+### conditions
 
 This accepts an array of conditions you want to apply to the event data before calling the webhook.
 
