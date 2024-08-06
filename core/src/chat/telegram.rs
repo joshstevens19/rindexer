@@ -1,4 +1,5 @@
 use teloxide::{prelude::*, RequestError};
+use teloxide::types::ParseMode;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -19,7 +20,7 @@ impl TelegramBot {
     }
 
     pub async fn send_message(&self, chat_id: ChatId, message: &str) -> Result<(), TelegramError> {
-        self.bot.send_message(chat_id, message).await?;
+        self.bot.send_message(chat_id, message).parse_mode(ParseMode::MarkdownV2).await?;
         Ok(())
     }
 }

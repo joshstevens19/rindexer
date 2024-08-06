@@ -49,7 +49,18 @@ contracts:
             conditions: // [!code focus]
               - "from": "0x0338ce5020c447f7e668dc2ef778025ce3982662||0x0338ce5020c447f7e668dc2ef778025ce398266u" // [!code focus]
               - "value": ">=10||<=2000000000000000000" // [!code focus]
-            template_inline: 'Transfer from {{from}} to {{to}} value {{value}} for token {{transaction_information.address}}' // [!code focus]
+            template_inline: "*New RETH Transfer Event* // [!code focus]
+
+                              from: {{from}} // [!code focus]
+
+                              to: {{to}} // [!code focus]
+
+                              amount: {{format_value(value, 18)}} // [!code focus]
+
+                              RETH contract: {{transaction_information.address}} // [!code focus]
+
+                              [etherscan](https://etherscan.io/tx/{{transaction_information.transaction_hash}}) // [!code focus]
+                              " // [!code focus]
 ```
 
 ### bot_token
@@ -340,8 +351,8 @@ contracts:
           - ethereum
         messages:
           - event_name: Transfer
-              conditions: // [!code focus]
-                - "quoteParams.profileId": "=1" // [!code focus]
+            conditions: // [!code focus]
+              - "quoteParams.profileId": "=1" // [!code focus]
 ```
 
 #### template_inline
@@ -350,7 +361,18 @@ You can then write your own template inline, this is the template you want to se
 You have to use the ABI input names in object notation for example if i wanted to put value in the template
 i just have to write `{{value}}` in the template and it will be replaced with the value of the event itself.
 
-You also can use the `transaction_information` object to get information about the transaction, this is the
+The template supports:
+- bold text = \*bold text\*
+- italic text = \_italic text\_
+- inline url = \[inline URL\](YOUR_URL)
+- inline fixed-width code = \`inline fixed-width code\`
+- pre-formatted fixed-width code block = \`\`\`pre-formatted fixed-width code block\`\`\`
+- pre-formatted fixed-width known code block = \`\`\`rust pre-formatted fixed-width known code block\`\`\`
+- breaks = just line break in the template
+
+##### transaction_information
+
+You also can use the `transaction_information` object to get common information about the transaction, this is the
 transaction information for the event.
 
 ```rs
@@ -372,6 +394,16 @@ pub struct TxInformation {
 }
 ```
 
+:::info
+To avoid confusion `address` in `transaction_information` is the address of the contract the event was emitted from.
+:::
+
+##### format_value
+
+You can use the `format_value` function to format the value of the event to a decimal value with the specified decimals.
+
+Lets put it all together:
+
 ```yaml [rindexer.yaml]
 ...
 contracts:
@@ -392,5 +424,16 @@ contracts:
           - ethereum
         messages:
           - event_name: Transfer // [!code focus]
-          - template_inline: 'Transfer from {{from}} to {{to}} value {{value}} for token {{transaction_information.address}}'
+            template_inline: "*New RETH Transfer Event* // [!code focus]
+
+                              from: {{from}} // [!code focus]
+
+                              to: {{to}} // [!code focus]
+
+                              amount: {{format_value(value, 18)}} // [!code focus]
+
+                              RETH contract: {{transaction_information.address}} // [!code focus]
+
+                              [etherscan](https://etherscan.io/tx/{{transaction_information.transaction_hash}}) // [!code focus]
+                              " // [!code focus]
 ```
