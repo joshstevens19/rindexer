@@ -243,7 +243,7 @@ impl ChatClients {
                     }
                 }
             }
-            
+
             if let Some(discord) = &self.discord {
                 for instance in discord {
                     if instance.config.networks.contains(&event_message.network) {

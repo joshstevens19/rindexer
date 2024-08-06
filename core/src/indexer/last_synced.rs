@@ -22,13 +22,9 @@ async fn get_last_synced_block_number_file(
     network: &str,
     event_name: &str,
 ) -> Result<Option<U64>, UpdateLastSyncedBlockNumberFile> {
-    let file_path = build_last_synced_block_number_file(
-        full_path,
-        contract_name,
-        network,
-        event_name,
-    );
-    
+    let file_path =
+        build_last_synced_block_number_file(full_path, contract_name, network, event_name);
+
     let path = Path::new(&file_path);
 
     if !path.exists() {
@@ -86,8 +82,9 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
     if config.database.is_none() && config.contract_csv_enabled {
         if let Some(csv_details) = config.csv_details {
             return if let Ok(result) = get_last_synced_block_number_file(
-                &get_full_path(config.project_path, &csv_details.path)
-                    .unwrap_or_else(|_| panic!("failed to get full path {}", config.project_path.display())),
+                &get_full_path(config.project_path, &csv_details.path).unwrap_or_else(|_| {
+                    panic!("failed to get full path {}", config.project_path.display())
+                }),
                 config.contract_name,
                 config.network,
                 config.event_name,
@@ -114,10 +111,16 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
         let stream_details = config.stream_details.as_ref().unwrap();
 
         // create the path if it does not exist
-        stream_details.create_full_streams_last_synced_block_path(config.project_path, config.contract_name).await;
+        stream_details
+            .create_full_streams_last_synced_block_path(config.project_path, config.contract_name)
+            .await;
 
         return if let Ok(result) = get_last_synced_block_number_file(
-            &config.project_path.join(stream_details.get_streams_last_synced_block_path()).canonicalize().expect("Failed to canonicalize path"),
+            &config
+                .project_path
+                .join(stream_details.get_streams_last_synced_block_path())
+                .canonicalize()
+                .expect("Failed to canonicalize path"),
             config.contract_name,
             config.network,
             config.event_name,
@@ -187,7 +190,7 @@ async fn update_last_synced_block_number_for_file(
         &config.network_contract.network,
         &config.event_name,
     );
-    
+
     let last_block = get_last_synced_block_number_file(
         full_path,
         &config.contract_name,
@@ -244,21 +247,30 @@ pub fn update_progress_and_last_synced(config: Arc<EventProcessingConfig>, to_bl
                 error!("Error updating last synced block: {:?}", e);
             }
         } else if let Some(csv_details) = &config.csv_details {
-            if let Err(e) =
-                update_last_synced_block_number_for_file(&config,
-                                                         &get_full_path(&config.project_path, &csv_details.path)
-                                                             .unwrap_or_else(|_| panic!("failed to get full path {}", config.project_path.display())),
-                                                         to_block).await
+            if let Err(e) = update_last_synced_block_number_for_file(
+                &config,
+                &get_full_path(&config.project_path, &csv_details.path).unwrap_or_else(|_| {
+                    panic!("failed to get full path {}", config.project_path.display())
+                }),
+                to_block,
+            )
+            .await
             {
                 error!(
                     "Error updating last synced block to CSV - path - {} error - {:?}",
                     csv_details.path, e
                 );
             }
-        } else if let Some(stream_last_synced_block_file_path) = &config.stream_last_synced_block_file_path {
+        } else if let Some(stream_last_synced_block_file_path) =
+            &config.stream_last_synced_block_file_path
+        {
             if let Err(e) = update_last_synced_block_number_for_file(
                 &config,
-                &config.project_path.join(stream_last_synced_block_file_path).canonicalize().expect("Failed to canonicalize path"),
+                &config
+                    .project_path
+                    .join(stream_last_synced_block_file_path)
+                    .canonicalize()
+                    .expect("Failed to canonicalize path"),
                 to_block,
             )
             .await
