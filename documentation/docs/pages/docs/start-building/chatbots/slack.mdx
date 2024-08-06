@@ -8,7 +8,7 @@ Slack is one of the most popular chat platforms, and is great to build bots and 
 2. Click on From scratch and then give it a name and select your workspace. We will call ours RethTransferEvents.
 3. Click on the Bots box under the Add features and functionality header
 4. Click on Review scopes to add
-5. Scroll down to the Bot token scopes header and add `chat:write`. These are the permissions the bot needs to write messages 
+5. Scroll down to the Bot token scopes header and add `chat:write`. These are the permissions the bot needs to write messages
 6. Finally, scroll all the way up and click on Install to workspace, and Allow on the following screen.
 This should now show a screen with the Bot User OAuth Token visible. Take note of this token,
 since it’s the one we will be using to send messages.
@@ -60,7 +60,7 @@ contracts:
 
                               RETH contract: {{transaction_information.address}} // [!code focus]
 
-                              [etherscan](https://etherscan.io/tx/{{transaction_information.transaction_hash}}) // [!code focus]
+                              <https://etherscan.io/tx/{{transaction_information.transaction_hash}} | etherscan> // [!code focus]
                               " // [!code focus]
 ```
 
@@ -369,7 +369,9 @@ i just have to write `{{value}}` in the template and it will be replaced with th
 The template supports:
 - bold text = \*bold text\*
 - italic text = \_italic text\_
-- inline url = \[inline URL\](YOUR_URL)
+- strikethrough text = \~strikethrough text\~
+- block qoute = \> block quote
+- inline url = \<URL \| etherscan\>
 - inline fixed-width code = \`inline fixed-width code\`
 - pre-formatted fixed-width code block = \`\`\`pre-formatted fixed-width code block\`\`\`
 - pre-formatted fixed-width known code block = \`\`\`rust pre-formatted fixed-width known code block\`\`\`
@@ -439,6 +441,6 @@ contracts:
 
                               RETH contract: {{transaction_information.address}} // [!code focus]
 
-                              [etherscan](https://etherscan.io/tx/{{transaction_information.transaction_hash}}) // [!code focus]
+                              <https://etherscan.io/tx/{{transaction_information.transaction_hash}} | etherscan> // [!code focus]
                               " // [!code focus]
 ```

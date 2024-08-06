@@ -35,8 +35,15 @@ impl SlackBot {
             .header("Content-Type", "application/json")
             .json(&json!({
                 "channel": channel,
-                "text": message,
-                "mrkdwn": true
+                "blocks": [
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": message
+                        }
+                    }
+                ]
             }))
             .send()
             .await?;
