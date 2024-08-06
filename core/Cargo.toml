@@ -55,13 +55,18 @@ aws-sdk-sns = "1.37.0"
 lapin = "2.5.0"
 deadpool = { version = "0.12", features = ["rt_tokio_1"] }
 deadpool-lapin = "0.12"
-rdkafka = { version = "0.36", features = ["tokio"] }
 teloxide = "0.12"
 serenity = { version = "0.12", features = ["client", "framework"] }
 
 # build
 jemallocator = { version = "0.5.0", optional = true }
 jemalloc-ctl = { version = "0.5.0", optional = true }
+
+[target.'cfg(not(windows))'.dependencies]
+rdkafka = { version = "0.36", features = ["tokio"] }
+
+[target.'cfg(windows)'.dependencies]
+rdkafka = { version = "0.36", features = ["tokio", "cmake-build"] }
 
 [profile.release]
 lto = "fat"
