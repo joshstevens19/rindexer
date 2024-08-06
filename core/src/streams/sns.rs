@@ -5,6 +5,7 @@ use aws_sdk_sns::{
     operation::publish::{PublishError, PublishOutput},
     Client,
 };
+use tracing::{error, info};
 
 use crate::types::aws_config::AwsConfig;
 
@@ -31,6 +32,17 @@ impl SNS {
             .load()
             .await;
         let client = Client::new(&config);
+
+        // Test the connection by listing SNS topics
+        match client.list_topics().send().await {
+            Ok(_) => {
+                info!("Successfully connected to SNS.");
+            }
+            Err(error) => {
+                error!("Error connecting to SNS: {}", error);
+                panic!("Error connecting to SNS: {}", error);
+            }
+        }
 
         Self { client }
     }

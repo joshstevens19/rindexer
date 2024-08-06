@@ -45,6 +45,7 @@ contracts:
       brokers: // [!code focus]
         - ${KAFKA_BROKER_URL_1} // [!code focus]
         - ${KAFKA_BROKER_URL_2} // [!code focus]
+      acks: all // [!code focus]
       security_protocol: PLAINTEXT // [!code focus]
       topics: // [!code focus]
         - topic: test-topic // [!code focus]
@@ -80,6 +81,7 @@ contracts:
       brokers: // [!code focus]
         - ${KAFKA_BROKER_URL_1} // [!code focus]
         - ${KAFKA_BROKER_URL_2} // [!code focus]
+      acks: all // [!code focus]
       security_protocol: SASL_SSL // [!code focus]
       sasl_mechanisms: PLAIN // [!code focus]
       sasl_username: $<CLUSTER_API_KEY> // [!code focus]
@@ -124,6 +126,35 @@ contracts:
         - ${KAFKA_BROKER_URL_2} // [!code focus]
 ```
 
+## acks
+
+- `acks=0` - When acks=0 producers consider messages as "written successfully" the moment the message was sent without waiting for the broker to accept it at all.
+- `acks=1` - When acks=1 , producers consider messages as "written successfully" when the message was acknowledged by only the leader.
+- `acks=all` - When acks=all, producers consider messages as "written successfully" when the message is accepted by all in-sync replicas (ISR).
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    kafka: // [!code focus]
+      brokers:
+        - ${KAFKA_BROKER_URL_1}
+        - ${KAFKA_BROKER_URL_2}
+      # all or 0 or 1
+      acks: all // [!code focus]
+      security_protocol: SASL_SSL // [!code focus]
+```
+
+
 ## security_protocol
 
 This is either `PLAINTEXT` or `SASL_SSL`. You can read more about it [here](https://kafka.apache.org/documentation/#security_sasl).
@@ -145,6 +176,7 @@ contracts:
       brokers:
         - ${KAFKA_BROKER_URL_1}
         - ${KAFKA_BROKER_URL_2}
+      acks: all
       security_protocol: SASL_SSL // [!code focus]
 ```
 
@@ -171,6 +203,7 @@ contracts:
       brokers:
         - ${KAFKA_BROKER_URL_1}
         - ${KAFKA_BROKER_URL_2}
+      acks: all
       security_protocol: SASL_SSL
       sasl_mechanisms: PLAIN // [!code focus]
 ```
@@ -200,6 +233,7 @@ contracts:
       brokers:
         - ${KAFKA_BROKER_URL_1}
         - ${KAFKA_BROKER_URL_2}
+      acks: all
       security_protocol: SASL_SSL
       sasl_mechanisms: PLAIN
       sasl_username: $<CLUSTER_API_KEY> // [!code focus]
@@ -230,6 +264,7 @@ contracts:
       brokers:
         - ${KAFKA_BROKER_URL_1}
         - ${KAFKA_BROKER_URL_2}
+      acks: all
       security_protocol: SASL_SSL
       sasl_mechanisms: PLAIN
       sasl_username: $<CLUSTER_API_KEY>
@@ -261,6 +296,7 @@ contracts:
       brokers:
         - ${KAFKA_BROKER_URL_1}
         - ${KAFKA_BROKER_URL_2}
+      acks: all
       security_protocol: SASL_SSL
       sasl_mechanisms: PLAIN
       sasl_username: $<CLUSTER_API_KEY>
@@ -295,6 +331,7 @@ contracts:
       brokers:
         - ${KAFKA_BROKER_URL_1}
         - ${KAFKA_BROKER_URL_2}
+      acks: all
       security_protocol: SASL_SSL
       sasl_mechanisms: PLAIN
       sasl_username: $<CLUSTER_API_KEY>
@@ -329,6 +366,7 @@ contracts:
       brokers:
         - ${KAFKA_BROKER_URL_1}
         - ${KAFKA_BROKER_URL_2}
+      acks: all
       security_protocol: SASL_SSL
       sasl_mechanisms: PLAIN
       sasl_username: $<CLUSTER_API_KEY>
@@ -367,6 +405,7 @@ contracts:
       brokers:
         - ${KAFKA_BROKER_URL_1}
         - ${KAFKA_BROKER_URL_2}
+      acks: all
       security_protocol: SASL_SSL
       sasl_mechanisms: PLAIN
       sasl_username: $<CLUSTER_API_KEY>
@@ -421,6 +460,7 @@ contracts:
       brokers:
         - ${KAFKA_BROKER_URL_1}
         - ${KAFKA_BROKER_URL_2}
+      acks: all
       security_protocol: SASL_SSL
       sasl_mechanisms: PLAIN
       sasl_username: $<CLUSTER_API_KEY>
@@ -485,6 +525,7 @@ contracts:
       brokers:
         - ${KAFKA_BROKER_URL_1}
         - ${KAFKA_BROKER_URL_2}
+      acks: all
       security_protocol: SASL_SSL
       sasl_mechanisms: PLAIN
       sasl_username: $<CLUSTER_API_KEY>
@@ -519,6 +560,7 @@ contracts:
       brokers:
         - ${KAFKA_BROKER_URL_1}
         - ${KAFKA_BROKER_URL_2}
+      acks: all
       security_protocol: SASL_SSL
       sasl_mechanisms: PLAIN
       sasl_username: $<CLUSTER_API_KEY>
@@ -587,6 +629,7 @@ contracts:
       brokers:
         - ${KAFKA_BROKER_URL_1}
         - ${KAFKA_BROKER_URL_2}
+      acks: all
       security_protocol: SASL_SSL
       sasl_mechanisms: PLAIN
       sasl_username: $<CLUSTER_API_KEY>
