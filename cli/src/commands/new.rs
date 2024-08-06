@@ -52,6 +52,12 @@ fn write_docker_compose(path: &Path) -> Result<(), WriteFileError> {
     write_file(&path.join("docker-compose.yml"), generate_docker_file())
 }
 
+fn write_gitignore(path: &Path) -> Result<(), WriteFileError> {
+    write_file(&path.join(".gitignore"), r#".rindexer
+    generated_csv/*.txt
+    "#)
+}
+
 pub fn handle_new_command(
     project_path: PathBuf,
     project_type: ProjectType,
@@ -212,6 +218,8 @@ POSTGRES_PASSWORD=rindexer"#;
     if is_rust_project {
         generate_rindexer_rust_project(&project_path);
     }
+    
+    write_gitignore(&project_path)?;
 
     print_success_message(&success_message);
 
