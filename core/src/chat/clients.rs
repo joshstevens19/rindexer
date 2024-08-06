@@ -3,6 +3,7 @@ use std::sync::Arc;
 use ethers::types::U64;
 use futures::future::join_all;
 use serde_json::Value;
+use serenity::all::ChannelId;
 use teloxide::types::ChatId;
 use thiserror::Error;
 use tokio::{
@@ -12,11 +13,12 @@ use tokio::{
 
 use crate::{
     chat::{
+        discord::{DiscordBot, DiscordError},
         telegram::{TelegramBot, TelegramError},
         template::Template,
     },
     event::{filter_event_data_by_conditions, EventMessage},
-    manifest::chat::{ChatConfig, TelegramConfig, TelegramEvent},
+    manifest::chat::{ChatConfig, DiscordConfig, DiscordEvent, TelegramConfig, TelegramEvent},
 };
 
 type SendMessage = Vec<JoinHandle<Result<(), ChatError>>>;
@@ -24,7 +26,10 @@ type SendMessage = Vec<JoinHandle<Result<(), ChatError>>>;
 #[derive(Error, Debug)]
 pub enum ChatError {
     #[error("Telegram error: {0}")]
-    TelegramError(#[from] TelegramError),
+    Telegram(#[from] TelegramError),
+
+    #[error("Discord error: {0}")]
+    Discord(#[from] DiscordError),
 
     #[error("Task failed: {0}")]
     JoinError(JoinError),
@@ -36,8 +41,15 @@ struct TelegramInstance {
     client: Arc<TelegramBot>,
 }
 
+#[derive(Debug)]
+struct DiscordInstance {
+    config: DiscordConfig,
+    client: Arc<DiscordBot>,
+}
+
 pub struct ChatClients {
     telegram: Option<Vec<TelegramInstance>>,
+    discord: Option<Vec<DiscordInstance>>,
 }
 
 impl ChatClients {
@@ -52,7 +64,17 @@ impl ChatClients {
                 .collect()
         });
 
-        Self { telegram }
+        let discord = chat_config.discord.map(|config| {
+            config
+                .into_iter()
+                .map(|config| {
+                    let client = Arc::new(DiscordBot::new(&config.bot_token));
+                    DiscordInstance { config, client }
+                })
+                .collect()
+        });
+
+        Self { telegram, discord }
     }
 
     fn find_accepted_block_range(&self, from_block: &U64, to_block: &U64) -> U64 {
@@ -104,6 +126,35 @@ impl ChatClients {
         tasks
     }
 
+    fn discord_send_message_tasks(
+        &self,
+        instance: &DiscordInstance,
+        event_for: &DiscordEvent,
+        events_data: &[Value],
+    ) -> SendMessage {
+        let tasks: Vec<_> = events_data
+            .iter()
+            .filter(|event_data| {
+                if let Some(conditions) = &event_for.conditions {
+                    filter_event_data_by_conditions(event_data, conditions)
+                } else {
+                    true
+                }
+            })
+            .map(|event_data| {
+                let client = Arc::clone(&instance.client);
+                let channel_id = ChannelId::new(instance.config.channel_id);
+                let message = Template::new(event_for.template_inline.clone())
+                    .parse_template_inline(event_data);
+                task::spawn(async move {
+                    client.send_message(channel_id, &message).await?;
+                    Ok(())
+                })
+            })
+            .collect();
+        tasks
+    }
+
     pub async fn send_message(
         &self,
         event_message: &EventMessage,
@@ -132,6 +183,27 @@ impl ChatClients {
                             let message = self.telegram_send_message_tasks(
                                 instance,
                                 telegram_event,
+                                data_array,
+                            );
+                            messages.push(message);
+                        }
+                    }
+                }
+            }
+
+            if let Some(discord) = &self.discord {
+                for instance in discord {
+                    if instance.config.networks.contains(&event_message.network) {
+                        let discord_event = instance
+                            .config
+                            .messages
+                            .iter()
+                            .find(|e| e.event_name == event_message.event_name);
+
+                        if let Some(discord_event) = discord_event {
+                            let message = self.discord_send_message_tasks(
+                                instance,
+                                discord_event,
                                 data_array,
                             );
                             messages.push(message);

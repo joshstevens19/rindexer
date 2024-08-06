@@ -1,5 +1,4 @@
-use teloxide::{prelude::*, RequestError};
-use teloxide::types::ParseMode;
+use teloxide::{prelude::*, types::ParseMode, RequestError};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
