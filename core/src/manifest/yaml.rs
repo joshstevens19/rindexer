@@ -6,6 +6,7 @@ use std::{
 };
 
 use regex::{Captures, Regex};
+use tracing::error;
 
 use crate::{
     abi::ABIItem,
@@ -22,6 +23,7 @@ fn substitute_env_variables(contents: &str) -> Result<String, regex::Error> {
         match env::var(var_name) {
             Ok(val) => val,
             Err(_) => {
+                error!("Environment variable {} not found", var_name);
                 panic!("Environment variable {} not found", var_name)
             }
         }
