@@ -58,8 +58,7 @@ fn evaluate_condition(value: &Value, condition: &str) -> bool {
                             U64::from_str_radix(comp, 10).unwrap_or_default()
                     }
                     "=" => value == &Value::String(comp.to_string()),
-                    "" => value == &Value::String(subpart.to_string()), /* Exact match if no */
-                    // operator
+                    "" => value == &Value::String(subpart.to_string()),
                     _ => false,
                 };
             }

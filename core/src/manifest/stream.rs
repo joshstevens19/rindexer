@@ -1,4 +1,5 @@
 use std::path::Path;
+
 use lapin::ExchangeKind;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
@@ -171,8 +172,13 @@ impl StreamsConfig {
         path.trim_end_matches('_').to_string()
     }
 
-    pub async fn create_full_streams_last_synced_block_path(&self, project_path: &Path, contract_name: &str) {
-        let path = self.get_streams_last_synced_block_path() + "/" + contract_name + "/last-synced-blocks";
+    pub async fn create_full_streams_last_synced_block_path(
+        &self,
+        project_path: &Path,
+        contract_name: &str,
+    ) {
+        let path =
+            self.get_streams_last_synced_block_path() + "/" + contract_name + "/last-synced-blocks";
 
         let full_path = project_path.join(path);
 
