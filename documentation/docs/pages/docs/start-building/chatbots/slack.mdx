@@ -1,16 +1,22 @@
-# Discord
+# Slack
 
-Discord is one of the most popular chat platforms, and is great to build bots and notifications when things happen on chain.
+Slack is one of the most popular chat platforms, and is great to build bots and notifications when things happen on chain.
 
 ## Setup a bot
 
-You can follow this guide to setup a bot [here](https://www.writebots.com/discord-bot-token/).
-
-Make sure you copy your bot token as you will need it later.
+1. Go to api.slack.com, log into your workspace and click on Create an app
+2. Click on From scratch and then give it a name and select your workspace. We will call ours RethTransferEvents.
+3. Click on the Bots box under the Add features and functionality header
+4. Click on Review scopes to add
+5. Scroll down to the Bot token scopes header and add `chat:write`, `chat:write.customize`, `channels:read` and `files:write`.
+These are the permissions the bot needs to write messages and send files into the Slack channels.
+6. Finally, scroll all the way up and click on Install to workspace, and Allow on the following screen.
+This should now show a screen like this, with the Bot User OAuth Token visible. Take note of this token,
+since it’s the one we will be using to send messages.
 
 ## Configure rindexer
 
-`discord` property accepts an array allowing you to split up the channels any way you wish.
+`slack` property accepts an array allowing you to split up the channels any way you wish.
 
 ### Example
 
@@ -34,9 +40,9 @@ contracts:
   include_events:
   - Transfer
   chat: // [!code focus]
-    discord: // [!code focus]
-      - bot_token: ${DISCORD_BOT_TOKEN} // [!code focus]
-        channel_id: 123456789012345678 // [!code focus]
+    slack: // [!code focus]
+      - bot_token: ${SLACK_BOT_TOKEN} // [!code focus]
+        channel: "#RethTransferEvents" // [!code focus]
         networks: // [!code focus]
           - ethereum // [!code focus]
         messages:
@@ -61,7 +67,7 @@ contracts:
 
 ### bot_token
 
-This is your discord bot token which you generate using @BotFather.
+This is your slack bot token which you generate using @BotFather.
 
 :::info
 We advise you to put this in a environment variables.
@@ -80,13 +86,17 @@ contracts:
   include_events:
   - Transfer
   chat: // [!code focus]
-    discord: // [!code focus]
-      - bot_token: ${DISCORD_BOT_TOKEN} // [!code focus]
+    slack: // [!code focus]
+      - bot_token: ${SLACK_BOT_TOKEN} // [!code focus]
 ```
 
-### channel_id
+### channel
 
-You have add your bot to channel to use it, so this is the channel ID you wish the bot to send messages to.
+This is the channel you want to send messages to.
+
+:::info
+The `#` must be included in the channel name.
+:::
 
 ```yaml
 ...
@@ -101,14 +111,14 @@ contracts:
   include_events:
   - Transfer
   chat: // [!code focus]
-    discord: // [!code focus]
-      - bot_token: ${DISCORD_BOT_TOKEN}
-        channel_id: -4223616270 // [!code focus]
+    slack: // [!code focus]
+      - bot_token: ${SLACK_BOT_TOKEN}
+        channel: "#RethTransferEvents" // [!code focus]
 ```
 
 ### networks
 
-This is an array of networks you want to send messages to this discord channel.
+This is an array of networks you want to send messages to this slack channel.
 
 ```yaml [rindexer.yaml]
 ...
@@ -123,16 +133,16 @@ contracts:
   include_events:
   - Transfer
   chat: // [!code focus]
-    discord: // [!code focus]
-      - bot_token: ${DISCORD_BOT_TOKEN}
-        channel_id: 123456789012345678
+    slack: // [!code focus]
+      - bot_token: ${SLACK_BOT_TOKEN}
+        channel: "#RethTransferEvents"
         networks: // [!code focus]
           - ethereum // [!code focus]
 ```
 
 ### messages
 
-This is an array of messages you want to send to this discord channel. It is an array as you can define many different
+This is an array of messages you want to send to this slack channel. It is an array as you can define many different
 messages to send to this channel with different conditions.
 
 #### event_name
@@ -152,9 +162,9 @@ contracts:
   include_events:
   - Transfer
   chat: // [!code focus]
-    discord: // [!code focus]
-      - bot_token: ${DISCORD_BOT_TOKEN}
-        channel_id: 123456789012345678
+    slack: // [!code focus]
+      - bot_token: ${SLACK_BOT_TOKEN}
+        channel: "#RethTransferEvents"
         networks:
           - ethereum
         messages:
@@ -163,10 +173,10 @@ contracts:
 
 #### conditions
 
-This accepts an array of conditions you want to apply to the event data before sending a message to this discord channel.
+This accepts an array of conditions you want to apply to the event data before sending a message to this slack channel.
 
 :::info
-This is optional, if you do not provide any conditions all the events will be sent to this discord channel.
+This is optional, if you do not provide any conditions all the events will be sent to this slack channel.
 :::
 
 You may want to filter on the message based on the event data, if the event data has not got an index on the on the
@@ -198,9 +208,9 @@ contracts:
   include_events:
   - Transfer
   chat: // [!code focus]
-    discord: // [!code focus]
-      - bot_token: ${DISCORD_BOT_TOKEN}
-        channel_id: 123456789012345678
+    slack: // [!code focus]
+      - bot_token: ${SLACK_BOT_TOKEN}
+        channel: "#RethTransferEvents"
         networks:
           - ethereum
         messages:
@@ -254,9 +264,9 @@ contracts:
   include_events:
   - Transfer
   chat: // [!code focus]
-    discord: // [!code focus]
-      - bot_token: ${DISCORD_BOT_TOKEN}
-        channel_id: 123456789012345678
+    slack: // [!code focus]
+      - bot_token: ${SLACK_BOT_TOKEN}
+        channel: "#RethTransferEvents"
         networks:
           - ethereum
         messages:
@@ -280,9 +290,9 @@ contracts:
   include_events:
   - Transfer
   chat: // [!code focus]
-    discord: // [!code focus]
-      - bot_token: ${DISCORD_BOT_TOKEN}
-        channel_id: 123456789012345678
+    slack: // [!code focus]
+      - bot_token: ${SLACK_BOT_TOKEN}
+        channel: "#RethTransferEvents"
         networks:
           - ethereum
         messages:
@@ -340,9 +350,9 @@ contracts:
   include_events:
   - Transfer
   chat: // [!code focus]
-    discord: // [!code focus]
-      - bot_token: ${DISCORD_BOT_TOKEN}
-        channel_id: 123456789012345678
+    slack: // [!code focus]
+      - bot_token: ${SLACK_BOT_TOKEN}
+        channel: "#RethTransferEvents"
         networks:
           - ethereum
         messages:
@@ -413,9 +423,9 @@ contracts:
   include_events:
   - Transfer
   chat: // [!code focus]
-    discord: // [!code focus]
-      - bot_token: ${DISCORD_BOT_TOKEN}
-        channel_id: 123456789012345678
+    slack: // [!code focus]
+      - bot_token: ${SLACK_BOT_TOKEN}
+        channel: "#RethTransferEvents"
         networks:
           - ethereum
         messages:
