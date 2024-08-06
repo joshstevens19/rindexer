@@ -2,16 +2,15 @@
 
 Slack is one of the most popular chat platforms, and is great to build bots and notifications when things happen on chain.
 
-## Setup a bot
+## Setup a bot on slack
 
 1. Go to api.slack.com, log into your workspace and click on Create an app
 2. Click on From scratch and then give it a name and select your workspace. We will call ours RethTransferEvents.
 3. Click on the Bots box under the Add features and functionality header
 4. Click on Review scopes to add
-5. Scroll down to the Bot token scopes header and add `chat:write`, `chat:write.customize`, `channels:read` and `files:write`.
-These are the permissions the bot needs to write messages and send files into the Slack channels.
+5. Scroll down to the Bot token scopes header and add `chat:write`. These are the permissions the bot needs to write messages 
 6. Finally, scroll all the way up and click on Install to workspace, and Allow on the following screen.
-This should now show a screen like this, with the Bot User OAuth Token visible. Take note of this token,
+This should now show a screen with the Bot User OAuth Token visible. Take note of this token,
 since it’s the one we will be using to send messages.
 
 ## Configure rindexer

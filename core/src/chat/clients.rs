@@ -118,7 +118,7 @@ impl ChatClients {
     }
 
     fn has_any_chat(&self) -> bool {
-        self.telegram.is_some()
+        self.telegram.is_some() || self.discord.is_some() || self.slack.is_some()
     }
 
     fn telegram_send_message_tasks(
@@ -243,7 +243,7 @@ impl ChatClients {
                     }
                 }
             }
-
+            
             if let Some(discord) = &self.discord {
                 for instance in discord {
                     if instance.config.networks.contains(&event_message.network) {
