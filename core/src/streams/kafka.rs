@@ -77,21 +77,3 @@ impl Kafka {
         Ok(())
     }
 }
-
-// #[tokio::main]
-// async fn main() {
-//     // Example usage
-//     let kafka_producer = KafkaProducer::new("localhost:9092").await.expect("Failed to create
-// Kafka producer");
-//
-//     // Example JSON message
-//     let message = serde_json::json!({
-//         "key": "value",
-//         "another_key": 123,
-//     });
-//
-//     match kafka_producer.publish("message_id_123", "my_topic", "my_key", &message).await {
-//         Ok(_) => println!("Message published successfully!"),
-//         Err(err) => eprintln!("Failed to publish message: {:?}", err),
-//     }
-// }
