@@ -30,6 +30,7 @@ pub struct EventProcessingConfig {
     pub progress: Arc<Mutex<IndexingEventsProgressState>>,
     pub database: Option<Arc<PostgresClient>>,
     pub csv_details: Option<CsvDetails>,
+    pub stream_last_synced_block_file_path: Option<String>,
     pub index_event_in_order: bool,
     pub live_indexing: bool,
     pub indexing_distance_from_head: U64,

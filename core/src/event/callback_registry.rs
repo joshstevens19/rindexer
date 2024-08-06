@@ -7,6 +7,7 @@ use ethers::{
 };
 use futures::future::BoxFuture;
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
 use tracing::{debug, error};
 
@@ -23,7 +24,7 @@ pub fn noop_decoder() -> Decoder {
     }) as Decoder
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TxInformation {
     pub network: String,
     pub address: Address,

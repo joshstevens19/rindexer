@@ -2,25 +2,31 @@ use std::{fs, io, path::Path, sync::Arc};
 
 use colored::Colorize;
 use ethers::abi::{Abi, Contract as EthersContract, Event};
+use serde_json::Value;
 use tokio_postgres::types::Type as PgType;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     abi::{ABIItem, CreateCsvFileForEvent, EventInfo, ParamTypeError, ReadAbiError},
+    chat::ChatClients,
     database::postgres::{
         client::PostgresClient,
         generate::{
             generate_column_names_only_with_base_properties, generate_event_table_full_name,
         },
         setup::{setup_postgres, SetupPostgresError},
-        sql_type_wrapper::{map_log_params_to_ethereum_wrapper, EthereumSqlTypeWrapper},
+        sql_type_wrapper::{
+            map_ethereum_wrapper_to_json, map_log_params_to_ethereum_wrapper,
+            EthereumSqlTypeWrapper,
+        },
     },
     event::{
         callback_registry::{
             noop_decoder, EventCallbackRegistry, EventCallbackRegistryInformation,
-            EventCallbackType,
+            EventCallbackType, TxInformation,
         },
         contract_setup::{ContractInformation, CreateContractInformationError},
+        EventMessage,
     },
     generate_random_id,
     helpers::get_full_path,
@@ -30,8 +36,9 @@ use crate::{
         yaml::{read_manifest, ReadManifestError},
     },
     provider::{CreateNetworkProvider, RetryClientError},
-    setup_info_logger, AsyncCsvAppender, FutureExt, IndexingDetails, StartDetails,
-    StartNoCodeDetails,
+    setup_info_logger,
+    streams::StreamsClients,
+    AsyncCsvAppender, FutureExt, IndexingDetails, StartDetails, StartNoCodeDetails,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -122,10 +129,13 @@ struct NoCodeCallbackParams {
     indexer_name: String,
     contract_name: String,
     event: Event,
+    index_event_in_order: bool,
     csv: Option<Arc<AsyncCsvAppender>>,
     postgres: Option<Arc<PostgresClient>>,
     postgres_event_table_name: String,
     postgres_column_names: Vec<String>,
+    streams_clients: Arc<Option<StreamsClients>>,
+    chat_clients: Arc<Option<ChatClients>>,
 }
 
 fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
@@ -154,10 +164,15 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                 }
             };
 
+            let network = results.first().unwrap().tx_information.network.clone();
+
             let mut indexed_count = 0;
             let mut postgres_bulk_data: Vec<Vec<EthereumSqlTypeWrapper>> = Vec::new();
             let mut postgres_bulk_column_types: Vec<PgType> = Vec::new();
             let mut csv_bulk_data: Vec<Vec<String>> = Vec::new();
+
+            // stream and chat info
+            let mut event_message_data: Vec<Value> = Vec::new();
 
             // Collect owned results to avoid lifetime issues
             let owned_results: Vec<_> = results
@@ -170,7 +185,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                     let block_number = result.tx_information.block_number;
                     let block_hash = result.tx_information.block_hash;
                     let network = result.tx_information.network.to_string();
-                    let tx_index = result.tx_information.transaction_index;
+                    let transaction_index = result.tx_information.transaction_index;
                     let log_index = result.tx_information.log_index;
 
                     let event_parameters: Vec<EthereumSqlTypeWrapper> =
@@ -182,7 +197,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                         EthereumSqlTypeWrapper::U64(block_number),
                         EthereumSqlTypeWrapper::H256(block_hash),
                         EthereumSqlTypeWrapper::String(network.to_string()),
-                        EthereumSqlTypeWrapper::U64(tx_index),
+                        EthereumSqlTypeWrapper::U64(transaction_index),
                         EthereumSqlTypeWrapper::U256(log_index),
                     ];
 
@@ -190,6 +205,8 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                         log.params,
                         address,
                         transaction_hash,
+                        log_index,
+                        transaction_index,
                         block_number,
                         block_hash,
                         network,
@@ -204,6 +221,8 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                 log_params,
                 address,
                 transaction_hash,
+                log_index,
+                transaction_index,
                 block_number,
                 block_hash,
                 network,
@@ -212,6 +231,24 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                 end_global_parameters,
             ) in owned_results
             {
+                if params.streams_clients.is_some() || params.chat_clients.is_some() {
+                    let event_result = map_ethereum_wrapper_to_json(
+                        &params.event_info.inputs,
+                        &event_parameters,
+                        &TxInformation {
+                            network: network.clone(),
+                            address,
+                            block_hash,
+                            block_number,
+                            transaction_hash,
+                            log_index,
+                            transaction_index,
+                        },
+                        false,
+                    );
+                    event_message_data.push(event_result);
+                }
+
                 let mut all_params: Vec<EthereumSqlTypeWrapper> = vec![contract_address];
                 all_params.extend(event_parameters);
                 all_params.extend(end_global_parameters);
@@ -289,13 +326,93 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                 }
             }
 
+            let event_message = EventMessage {
+                event_name: params.event_info.name.clone(),
+                event_data: Value::Array(event_message_data),
+                network: network.clone(),
+            };
+
+            if let Some(streams_clients) = params.streams_clients.as_ref() {
+                let stream_id = format!(
+                    "{}-{}-{}-{}-{}",
+                    params.contract_name, params.event_info.name, network, from_block, to_block
+                );
+
+                match streams_clients
+                    .stream(stream_id, &event_message, params.index_event_in_order)
+                    .await
+                {
+                    Ok(streamed) => {
+                        if streamed > 0 {
+                            info!(
+                                "{}::{} - {} - {} events {}",
+                                params.contract_name,
+                                params.event_info.name,
+                                "STREAMED".green(),
+                                streamed,
+                                format!(
+                                    "- blocks: {} - {} - network: {}",
+                                    from_block, to_block, network
+                                )
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        error!("Error streaming event: {}", e);
+                        return Err(e.to_string());
+                    }
+                }
+            }
+
+            if let Some(chat_clients) = params.chat_clients.as_ref() {
+                if !chat_clients.is_in_block_range_to_send(&from_block, &to_block) {
+                    warn!(
+                        "{}::{} - {} - messages has a max 10 block range due the rate limits - {}",
+                        params.contract_name,
+                        params.event_info.name,
+                        "CHAT_MESSAGES_DISABLED".yellow(),
+                        format!("- blocks: {} - {} - network: {}", from_block, to_block, network)
+                    );
+                } else {
+                    match chat_clients
+                        .send_message(
+                            &event_message,
+                            params.index_event_in_order,
+                            &from_block,
+                            &to_block,
+                        )
+                        .await
+                    {
+                        Ok(messages_sent) => {
+                            if messages_sent > 0 {
+                                info!(
+                                    "{}::{} - {} - {} events {}",
+                                    params.contract_name,
+                                    params.event_info.name,
+                                    "CHAT_MESSAGES_SENT".green(),
+                                    messages_sent,
+                                    format!(
+                                        "- blocks: {} - {} - network: {}",
+                                        from_block, to_block, network
+                                    )
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            error!("Error sending chat messages: {}", e);
+                            return Err(e.to_string());
+                        }
+                    }
+                }
+            }
+
             info!(
                 "{}::{} - {} - {} events {}",
                 params.contract_name,
                 params.event_info.name,
                 "INDEXED".green(),
                 indexed_count,
-                format!("- blocks: {} - {}", from_block, to_block)
+                format!("- blocks: {} - {} - network: {}", from_block, to_block, network)
             );
 
             Ok(())
@@ -402,14 +519,28 @@ pub async fn process_events(
             let postgres_event_table_name =
                 generate_event_table_full_name(&manifest.name, &contract.name, &event_info.name);
 
+            let streams_client = if let Some(streams) = &contract.streams {
+                Some(StreamsClients::new(streams.clone()).await)
+            } else {
+                None
+            };
+
+            let chat_clients = if let Some(chats) = &contract.chat {
+                Some(ChatClients::new(chats.clone()).await)
+            } else {
+                None
+            };
+
+            let index_event_in_order = contract
+                .index_event_in_order
+                .as_ref()
+                .map_or(false, |vec| vec.contains(&event_info.name));
+
             let event = EventCallbackRegistryInformation {
                 id: generate_random_id(10),
                 indexer_name: manifest.name.clone(),
                 event_name: event_info.name.clone(),
-                index_event_in_order: contract
-                    .index_event_in_order
-                    .as_ref()
-                    .map_or(false, |vec| vec.contains(&event_info.name)),
+                index_event_in_order,
                 topic_id: event_info.topic_id(),
                 contract: contract_information,
                 callback: no_code_callback(Arc::new(NoCodeCallbackParams {
@@ -417,10 +548,13 @@ pub async fn process_events(
                     indexer_name: manifest.name.clone(),
                     contract_name: contract.name.clone(),
                     event: event.clone(),
+                    index_event_in_order,
                     csv,
                     postgres: postgres.clone(),
                     postgres_event_table_name,
                     postgres_column_names,
+                    streams_clients: Arc::new(streams_client),
+                    chat_clients: Arc::new(chat_clients),
                 })),
             };
 
