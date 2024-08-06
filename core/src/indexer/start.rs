@@ -102,12 +102,18 @@ pub async fn start_indexing(
     let mut processed_network_contracts: Vec<ProcessedNetworkContract> = Vec::new();
 
     for event in registry.events.iter() {
+        let stream_details = manifest
+            .contracts
+            .iter()
+            .find(|c| c.name == event.contract.name)
+            .and_then(|c| c.streams.as_ref());
         for network_contract in event.contract.details.iter() {
             let config = SyncConfig {
                 project_path,
                 database: &database,
                 csv_details: &manifest.storage.csv,
                 contract_csv_enabled: manifest.contract_csv_enabled(&event.contract.name),
+                stream_details: &stream_details,
                 indexer_name: &event.indexer_name,
                 contract_name: &event.contract.name,
                 event_name: &event.event_name,
@@ -190,6 +196,9 @@ pub async fn start_indexing(
                 progress: Arc::clone(&event_progress_state),
                 database: database.clone(),
                 csv_details: manifest.storage.csv.clone(),
+                stream_last_synced_block_file_path: stream_details
+                    .as_ref()
+                    .map(|s| s.get_streams_last_synced_block_path()),
                 live_indexing: if no_live_indexing_forced {
                     false
                 } else {

@@ -1,6 +1,8 @@
+use std::path::Path;
 use lapin::ExchangeKind;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
+use tokio::fs;
 
 use crate::types::aws_config::AwsConfig;
 
@@ -152,5 +154,30 @@ impl StreamsConfig {
         }
 
         Ok(())
+    }
+
+    pub fn get_streams_last_synced_block_path(&self) -> String {
+        let mut path = ".rindexer/".to_string();
+        if self.rabbitmq.is_some() {
+            path.push_str("rabbitmq_");
+        } else if self.sns.is_some() {
+            path.push_str("sns_");
+        } else if self.webhooks.is_some() {
+            path.push_str("webhooks_");
+        } else if self.kafka.is_some() {
+            path.push_str("kafka_");
+        }
+
+        path.trim_end_matches('_').to_string()
+    }
+
+    pub async fn create_full_streams_last_synced_block_path(&self, project_path: &Path, contract_name: &str) {
+        let path = self.get_streams_last_synced_block_path() + "/" + contract_name + "/last-synced-blocks";
+
+        let full_path = project_path.join(path);
+
+        if !Path::new(&full_path).exists() {
+            fs::create_dir_all(&full_path).await.expect("Failed to create directory for stream");
+        }
     }
 }
