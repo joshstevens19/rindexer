@@ -9,7 +9,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build:
@@ -18,6 +17,13 @@ jobs:
     permissions:
       contents: read
       packages: write
+    strategy:
+      matrix:
+        include:
+          - dockerfile: Dockerfile
+            image: ghcr.io/joshstevens19/rindexer
+          - dockerfile: Dockerfile.bundled
+            image: ghcr.io/joshstevens19/rindexer-bundled
 
     steps:
       - name: Checkout repository
@@ -38,7 +44,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ matrix.image }}
           tags: |
             type=sha
             type=sha,format=long
@@ -51,6 +57,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: ${{ matrix.dockerfile }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
