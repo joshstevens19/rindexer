@@ -22,7 +22,7 @@ jobs:
         include:
           - dockerfile: Dockerfile
             image: ghcr.io/joshstevens19/rindexer
-          - dockerfile: Dockerfile.bundled
+          - dockerfile: bundled.Dockerfile
             image: ghcr.io/joshstevens19/rindexer-bundled
 
     steps:
