@@ -31,7 +31,6 @@ phantom_deploy:
 help:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- phantom --help
 
-
 ################################################################################
 # LOCAL NONE CHECKED IN PROJECT COMMANDS
 ################################################################################
@@ -41,3 +40,5 @@ start_graphql_base_paint:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/base_paint graphql
 start_indexer_lens_mirrors:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/lens_mirrors all
+start_uniswap:
+	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/uniswap_v3_factory all
