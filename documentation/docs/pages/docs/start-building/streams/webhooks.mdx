@@ -42,9 +42,40 @@ contracts:
           - event_name: Transfer // [!code focus]
 ```
 
+## Response
+
+The response sent to you is already decoded and parsed into a JSON object.
+
+- `event_name` - The name of the event
+- `event_data` - The event data which has all the event fields decoded and the transaction information which is under `transaction_information`
+- `network` - The network the event was emitted on
+
+For example a transfer event would look like:
+
+```json
+{
+    "event_name": "Transfer",
+    "event_data": {
+        "from": "0x0338ce5020c447f7e668dc2ef778025ce3982662",
+        "to": "0x0338ce5020c447f7e668dc2ef778025ce3982662",
+        "value": "1000000000000000000",
+        "transaction_information": {
+            "address": "0xae78736cd615f374d3085123a210448e74fc6393",
+            "block_hash": "0x8461da7a1d4b47190a01fa6eae219be40aacffab0dd64af7259b2d404572c3d9",
+            "block_number": "18718011",
+            "log_index": "0",
+            "network": "ethereum",
+            "transaction_hash": "0x145c6705ffbf461e85d08b4a7f5850d6b52a7364d93a057722ca1194034f3ba4",
+            "transaction_index": "0"
+        }
+    },
+    "network": "ethereum"
+}
+```
+
 ## endpoint
 
-This is your rabbitmq url.
+This is your webhook url.
 
 ```yaml [rindexer.yaml]
 ...
