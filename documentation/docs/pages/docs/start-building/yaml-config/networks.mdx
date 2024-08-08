@@ -120,6 +120,30 @@ networks:
   compute_units_per_second: 660 // [!code focus]
 ```
 
+### disable_logs_bloom_checks
+
+:::warning
+This field is optional and should only be turned on if you know what you are doing.
+
+You should only enable this if you are using a chain which does not have support for logs blooms. Logs blooms
+allow you to be able to skip calling `eth_getLogs` on blocks which do not contain the events you care about,
+this is a huge performance gain for the indexer alongside a saving on the RPC bill.
+
+If you are using a chain which does not support logs blooms you can enable this to skip the bloom checks.
+:::
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+  disable_logs_bloom_checks: true // [!code focus]
+```
+
 ## Multiple Networks
 
 You can have as many networks as you want in the YAML file.

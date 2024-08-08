@@ -22,6 +22,7 @@ pub struct NetworkContract {
     pub decoder: Decoder,
     pub start_block: Option<U64>,
     pub end_block: Option<U64>,
+    pub disable_logs_bloom_checks: bool,
 }
 
 impl NetworkContract {
@@ -73,6 +74,7 @@ impl ContractInformation {
                         indexing_contract_setup: c.indexing_contract_setup(),
                         start_block: c.start_block,
                         end_block: c.end_block,
+                        disable_logs_bloom_checks: provider.disable_logs_bloom_checks,
                     });
                 }
             }

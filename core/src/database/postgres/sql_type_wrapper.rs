@@ -357,15 +357,52 @@ pub fn solidity_type_to_ethereum_sql_type_wrapper(
             };
 
             Some(match size {
-                8 => if is_array { EthereumSqlTypeWrapper::VecU8(Vec::new()) } else { EthereumSqlTypeWrapper::U8(0) },
-                16 => if is_array { EthereumSqlTypeWrapper::VecU16(Vec::new()) } else { EthereumSqlTypeWrapper::U16(0) },
-                24 | 32 => if is_array { EthereumSqlTypeWrapper::VecU32(Vec::new()) } else { EthereumSqlTypeWrapper::U32(0) },
-                40 | 48 | 56 | 64 => if is_array { EthereumSqlTypeWrapper::VecU64(Vec::new()) } else { EthereumSqlTypeWrapper::U64(U64::zero()) },
-                72 | 80 | 88 | 96 | 104 | 112 | 120 | 128 => if is_array { EthereumSqlTypeWrapper::VecU128(Vec::new()) } else { EthereumSqlTypeWrapper::U128(U128::zero()) },
-                136 | 144 | 152 | 160 | 168 | 176 | 184 | 192 | 200 | 208 | 216 | 224 | 232 | 240 | 248 | 256 => if is_array { EthereumSqlTypeWrapper::VecU256(Vec::new()) } else { EthereumSqlTypeWrapper::U256(U256::zero()) },
+                8 => {
+                    if is_array {
+                        EthereumSqlTypeWrapper::VecU8(Vec::new())
+                    } else {
+                        EthereumSqlTypeWrapper::U8(0)
+                    }
+                }
+                16 => {
+                    if is_array {
+                        EthereumSqlTypeWrapper::VecU16(Vec::new())
+                    } else {
+                        EthereumSqlTypeWrapper::U16(0)
+                    }
+                }
+                24 | 32 => {
+                    if is_array {
+                        EthereumSqlTypeWrapper::VecU32(Vec::new())
+                    } else {
+                        EthereumSqlTypeWrapper::U32(0)
+                    }
+                }
+                40 | 48 | 56 | 64 => {
+                    if is_array {
+                        EthereumSqlTypeWrapper::VecU64(Vec::new())
+                    } else {
+                        EthereumSqlTypeWrapper::U64(U64::zero())
+                    }
+                }
+                72 | 80 | 88 | 96 | 104 | 112 | 120 | 128 => {
+                    if is_array {
+                        EthereumSqlTypeWrapper::VecU128(Vec::new())
+                    } else {
+                        EthereumSqlTypeWrapper::U128(U128::zero())
+                    }
+                }
+                136 | 144 | 152 | 160 | 168 | 176 | 184 | 192 | 200 | 208 | 216 | 224 | 232 |
+                240 | 248 | 256 => {
+                    if is_array {
+                        EthereumSqlTypeWrapper::VecU256(Vec::new())
+                    } else {
+                        EthereumSqlTypeWrapper::U256(U256::zero())
+                    }
+                }
                 _ => return None,
             })
-        },
+        }
         _ => None,
     }
 }
@@ -451,7 +488,7 @@ fn convert_int(value: &Int, target_type: &EthereumSqlTypeWrapper) -> EthereumSql
             let error_message = format!("Unsupported target type - {:?}", target_type);
             error!("{}", error_message);
             panic!("{}", error_message)
-        },
+        }
     }
 }
 

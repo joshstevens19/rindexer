@@ -284,6 +284,11 @@ where
                     indexing_contract_setup: c.indexing_contract_setup(),
                     start_block: c.start_block,
                     end_block: c.end_block,
+                    disable_logs_bloom_checks: rindexer_yaml
+                        .networks
+                        .iter()
+                        .find(|n| n.name == c.network)
+                        .map_or(false, |n| n.disable_logs_bloom_checks.unwrap_or_default()),
                 })
                 .collect(),
             abi: contract_details.abi,

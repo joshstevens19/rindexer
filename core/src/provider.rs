@@ -113,6 +113,7 @@ pub async fn get_chain_id(rpc_url: &str) -> Result<U256, ProviderError> {
 #[derive(Debug)]
 pub struct CreateNetworkProvider {
     pub network_name: String,
+    pub disable_logs_bloom_checks: bool,
     pub client: Arc<JsonRpcCachedProvider>,
 }
 
@@ -128,6 +129,7 @@ impl CreateNetworkProvider {
             )?;
             result.push(CreateNetworkProvider {
                 network_name: network.name.clone(),
+                disable_logs_bloom_checks: network.disable_logs_bloom_checks.unwrap_or_default(),
                 client: provider,
             });
         }
