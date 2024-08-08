@@ -264,6 +264,7 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
 
                             let to_block = safe_block_number;
                             if from_block == to_block &&
+                                !config.network_contract.disable_logs_bloom_checks &&
                                 !is_relevant_block(
                                     &ordering_live_indexing_details.filter.raw_filter().address,
                                     &config.topic_id,

@@ -21,4 +21,7 @@ pub struct Network {
         serialize_with = "serialize_option_u64_as_string"
     )]
     pub max_block_range: Option<U64>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disable_logs_bloom_checks: Option<bool>,
 }

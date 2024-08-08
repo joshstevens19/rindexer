@@ -547,6 +547,7 @@ async fn handle_phantom_deploy(
                         } else {
                             Some(U64::from(2_000))
                         },
+                        disable_logs_bloom_checks: None,
                     });
                 }
 

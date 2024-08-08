@@ -49,8 +49,8 @@ impl Kafka {
                 client_config.set("sasl.password", sasl_password);
             }
 
-            let producer: FutureProducer = client_config.create()
-                .map_err(|e| KafkaError::RdkafkaError(e.to_string()))?;
+            let producer: FutureProducer =
+                client_config.create().map_err(|e| KafkaError::RdkafkaError(e.to_string()))?;
 
             Ok(Self { producer })
         }
@@ -74,11 +74,13 @@ impl Kafka {
 
             let record = if key.is_some() {
                 FutureRecord::to(topic).key(key.as_ref().unwrap()).payload(&message_body).headers(
-                    OwnedHeaders::new().insert(Header { key: STREAM_MESSAGE_ID_KEY, value: Some(id) }),
+                    OwnedHeaders::new()
+                        .insert(Header { key: STREAM_MESSAGE_ID_KEY, value: Some(id) }),
                 )
             } else {
                 FutureRecord::to(topic).payload(&message_body).headers(
-                    OwnedHeaders::new().insert(Header { key: STREAM_MESSAGE_ID_KEY, value: Some(id) }),
+                    OwnedHeaders::new()
+                        .insert(Header { key: STREAM_MESSAGE_ID_KEY, value: Some(id) }),
                 )
             };
 
