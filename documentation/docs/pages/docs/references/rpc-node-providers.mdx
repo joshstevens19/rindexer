@@ -37,9 +37,9 @@ rindexer should work with any local nodes you run including [Anvil](https://book
 
 # RPC Proxy and Caching
 
-[eRPC](https://erpc.cloud/) is a fault-tolerant EVM RPC proxy and re-org aware permanent caching solution. It is built with read-heavy use-cases in mind such as data indexing and high-load frontend usage.
+[eRPC](https://github.com/erpc/erpc) is a fault-tolerant EVM RPC proxy and re-org aware permanent caching solution. It is built with read-heavy use-cases in mind such as data indexing and high-load frontend usage.
 
-# Quickstart
+## Quickstart
 
 1. Create your [`erpc.yaml`](https://docs.erpc.cloud/config/example) configuration file:
 
@@ -63,18 +63,34 @@ See [a complete config example](https://docs.erpc.cloud/config/example) for insp
 docker run -v $(pwd)/erpc.yaml:/root/erpc.yaml -p 4000:4000 -p 4001:4001 ghcr.io/erpc/erpc:latest
 ```
 
-3. Send your first request:
+or add the below configs to the rindexer's [docker-compose.yaml](https://github.com/joshstevens19/rindexer/blob/master/docker-compose.yml) as a service and run `docker-compose up -d`:
 
-```bash
-curl --location 'http://localhost:4000/main/evm/137' \
---header 'Content-Type: application/json' \
---data '{
-    "method": "eth_getBlockByNumber",
-    "params": [
-        "0x397f96e",
-        false
-    ],
-    "id": 9199,
-    "jsonrpc": "2.0"
-}'
+```yaml [rindexer.yaml]
+  services:
+    ...
+
+    erpc: // [!code focus]
+      image: ghcr.io/erpc/erpc:latest // [!code focus]
+      platform: linux/amd64 // [!code focus]
+      volumes: // [!code focus]
+        - ${PROJECT_PATH}/erpc.yaml:/root/erpc.yaml // [!code focus]
+      ports: // [!code focus]
+        - 4000:4000 // [!code focus]
+        - 4001:4001 // [!code focus]
+      restart: always // [!code focus]
 ```
+
+3. Set erpc url in [rindexer network config](https://rindexer.xyz/docs/start-building/yaml-config/networks#rpc):
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: http://erpc:4000/main/evm/1 // [!code focus]
+```
+
+and you are set to go. the rpc requests now will be redirected toward erpc and it will handle caching, failover, auto-batching, rate-limiting, auto-discovery of node providers, etc. behind the scens.

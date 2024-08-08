@@ -48,7 +48,21 @@ project_type: no-code
 networks:
 - name: ethereum
   chain_id: 1
+  // erpc
   rpc: https://mainnet.gateway.tenderly.co // [!code focus]
+```
+
+You can use [erpc](https://rindexer.xyz/docs/references/rpc-node-providers#rpc-proxy-and-caching) for load-balancing between multiple rpc endpoints (with failover, re-org aware caching, auto-batching, rate-limiters, auto-discovery of node providers, etc.)
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: http://erpc:4000/main/evm/1 // [!code focus]
 ```
 
 We advise using environment variables for the rpc url to avoid checking in sensitive information.
