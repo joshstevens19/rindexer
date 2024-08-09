@@ -9,7 +9,7 @@ For more advanced needs, the rindexer provides foundations and advanced capabili
 It's highly extendable, enabling you to construct indexing pipelines with ease and focus exclusively on the logic.
 rindexer out the box also gives you a GraphQL API to query the data you have indexed instantly.
 
-You can get to the full rindexer [documentation](https://rindexer.xyz/docs/introduction/installation).
+You can get to the full rindexer [documentation](https://rindexer.xyz/).
 
 ## Install 
 
