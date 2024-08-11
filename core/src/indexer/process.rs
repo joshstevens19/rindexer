@@ -1,5 +1,9 @@
 use std::{collections::HashMap, sync::Arc};
 
+use alloy::{
+    primitives::{BlockNumber, B256},
+    transports::{RpcError, TransportError},
+};
 use async_std::prelude::StreamExt;
 use ethers::{
     prelude::ProviderError,
@@ -29,7 +33,7 @@ use crate::{
 #[derive(thiserror::Error, Debug)]
 pub enum ProcessEventError {
     #[error("Could not process logs: {0}")]
-    ProcessLogs(#[from] Box<ProviderError>),
+    ProcessLogs(#[from] Box<RpcError<TransportError>>),
 
     #[error("Could not build filter: {0}")]
     BuildFilterError(#[from] BuildRindexerFilterError),
@@ -46,7 +50,7 @@ pub async fn process_event(config: EventProcessingConfig) -> Result<(), ProcessE
 async fn process_event_logs(
     config: Arc<EventProcessingConfig>,
     force_no_live_indexing: bool,
-) -> Result<(), Box<ProviderError>> {
+) -> Result<(), Box<RpcError<TransportError>>> {
     let mut logs_stream = fetch_logs_stream(Arc::clone(&config), force_no_live_indexing);
 
     while let Some(result) = logs_stream.next().await {
@@ -101,7 +105,7 @@ pub async fn process_contracts_events_with_dependencies(
 #[derive(thiserror::Error, Debug)]
 pub enum ProcessContractEventsWithDependenciesError {
     #[error("Could not process logs: {0}")]
-    ProcessLogs(#[from] Box<ProviderError>),
+    ProcessLogs(#[from] Box<RpcError<TransportError>>),
 
     #[error("Could not build filter: {0}")]
     BuildFilterError(#[from] BuildRindexerFilterError),
@@ -116,7 +120,7 @@ pub enum ProcessContractEventsWithDependenciesError {
 #[derive(Debug, Clone)]
 pub struct OrderedLiveIndexingDetails {
     pub filter: RindexerEventFilter,
-    pub last_seen_block_number: U64,
+    pub last_seen_block_number: BlockNumber,
 }
 
 async fn process_contract_events_with_dependencies(
@@ -196,7 +200,7 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
     >,
 ) {
     let mut ordering_live_indexing_details_map: HashMap<
-        H256,
+        B256,
         Arc<Mutex<OrderedLiveIndexingDetails>>,
     > = HashMap::new();
 
@@ -229,7 +233,7 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
             match latest_block {
                 Ok(latest_block) => {
                     if let Some(latest_block) = latest_block {
-                        if let Some(latest_block_number) = latest_block.number {
+                        if let Some(latest_block_number) = latest_block.header.number {
                             if ordering_live_indexing_details.last_seen_block_number ==
                                 latest_block_number
                             {
@@ -373,8 +377,7 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                                                             ordering_live_indexing_details
                                                                 .filter
                                                                 .set_from_block(
-                                                                    last_log_block_number +
-                                                                        U64::from(1),
+                                                                    last_log_block_number + 1,
                                                                 );
                                                     } else {
                                                         error!("Failed to get last log block number the provider returned null (should never happen) - try again in 200ms");

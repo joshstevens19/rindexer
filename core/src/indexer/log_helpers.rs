@@ -1,23 +1,24 @@
 use std::str::FromStr;
 
-use ethers::{
-    abi::{Event, Log as ParsedLog, LogParam, RawLog, Token},
-    addressbook::Address,
-    prelude::{Block, Bloom, FilteredParams, ValueOrArray, H256, U256},
-    types::{BigEndianHash, Log},
-    utils::keccak256,
+use alloy::{
+    primitives::{keccak256, Address, Bloom, B256},
+    rpc::types::{Block, FilteredParams, Log, ValueOrArray},
 };
+use alloy::dyn_abi::{DecodedEvent, EventExt};
+use alloy::json_abi::Event;
+use alloy::primitives::LogData;
 
-pub fn parse_log(event: &Event, log: &Log) -> Option<ParsedLog> {
-    let raw_log = RawLog { topics: log.topics.clone(), data: log.data.to_vec() };
-
+pub fn parse_log(event: &Event, log: &Log) -> Option<DecodedEvent> {
+    let topics = log.topics();
     // as topic[0] is the event signature
-    let topics_length = log.topics.len() - 1;
+    let topics_length = topics.len() - 1;
     let indexed_inputs_abi_length = event.inputs.iter().filter(|param| param.indexed).count();
-
+    
     // check if topics and data match the event
     if topics_length == indexed_inputs_abi_length {
-        let log = match event.parse_log(raw_log) {
+        let log_data = LogData::new(topics.to_vec(), log.data().clone().data).unwrap();
+
+        let log = match event.decode_log(&log_data, true) {
             Ok(log) => Some(log),
             Err(_) => None,
         };
@@ -58,17 +59,17 @@ pub fn map_log_params_to_raw_values(params: &[LogParam]) -> Vec<String> {
     raw_values
 }
 
-pub fn parse_topic(input: &str) -> H256 {
+pub fn parse_topic(input: &str) -> B256 {
     match input.to_lowercase().as_str() {
-        "true" => H256::from_low_u64_be(1),
-        "false" => H256::from_low_u64_be(0),
+        "true" => B256::from_low_u64_be(1),
+        "false" => B256::from_low_u64_be(0),
         _ => {
             if let Ok(address) = Address::from_str(input) {
-                H256::from(address)
-            } else if let Ok(num) = U256::from_dec_str(input) {
-                H256::from_uint(&num)
+                B256::from(address)
+            } else if let Ok(num) = B256::from_dec_str(input) {
+                B256::from_uint(&num)
             } else {
-                H256::from(keccak256(input))
+                B256::from(keccak256(input))
             }
         }
     }
@@ -80,7 +81,7 @@ pub fn contract_in_bloom(contract_address: Address, logs_bloom: Bloom) -> bool {
     FilteredParams::matches_address(logs_bloom, &address_filter)
 }
 
-pub fn topic_in_bloom(topic_id: H256, logs_bloom: Bloom) -> bool {
+pub fn topic_in_bloom(topic_id: B256, logs_bloom: Bloom) -> bool {
     let topic_filter =
         FilteredParams::topics_filter(&Some(vec![ValueOrArray::Value(Some(topic_id))]));
     FilteredParams::matches_topics(logs_bloom, &topic_filter)
@@ -88,10 +89,10 @@ pub fn topic_in_bloom(topic_id: H256, logs_bloom: Bloom) -> bool {
 
 pub fn is_relevant_block(
     contract_address: &Option<ValueOrArray<Address>>,
-    topic_id: &H256,
-    latest_block: &Block<H256>,
+    topic_id: &B256,
+    latest_block: &Block<B256>,
 ) -> bool {
-    match latest_block.logs_bloom {
+    match latest_block.header.logs_bloom {
         None => false,
         Some(logs_bloom) => {
             if let Some(contract_address) = contract_address {

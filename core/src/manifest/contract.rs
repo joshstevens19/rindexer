@@ -1,12 +1,11 @@
 use std::borrow::Cow;
 
-use ethers::{
-    addressbook::Address,
-    prelude::{Filter, ValueOrArray, U64},
+use alloy::{
+    primitives::{Address, BlockNumber},
+    rpc::types::{Filter, ValueOrArray},
 };
 use serde::{Deserialize, Serialize};
 
-use super::core::{deserialize_option_u64_from_string, serialize_option_u64_as_string};
 use crate::{
     event::contract_setup::{
         AddressDetails, ContractEventMapping, FilterDetails, IndexingContractSetup,
@@ -64,21 +63,11 @@ pub struct ContractDetails {
 
     // #[serde(default, skip_serializing_if = "Option::is_none")]
     // factory: Option<FactoryDetails>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_option_u64_from_string",
-        serialize_with = "serialize_option_u64_as_string"
-    )]
-    pub start_block: Option<U64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_block: Option<BlockNumber>,
 
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_option_u64_from_string",
-        serialize_with = "serialize_option_u64_as_string"
-    )]
-    pub end_block: Option<U64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_block: Option<BlockNumber>,
 }
 
 impl ContractDetails {
@@ -114,8 +103,8 @@ impl ContractDetails {
         network: String,
         address: ValueOrArray<Address>,
         indexed_filters: Option<Vec<EventInputIndexedFilters>>,
-        start_block: Option<U64>,
-        end_block: Option<U64>,
+        start_block: Option<BlockNumber>,
+        end_block: Option<BlockNumber>,
     ) -> Self {
         Self {
             network,
@@ -132,8 +121,8 @@ impl ContractDetails {
         network: String,
         filter: FilterDetailsYaml,
         indexed_filters: Option<Vec<EventInputIndexedFilters>>,
-        start_block: Option<U64>,
-        end_block: Option<U64>,
+        start_block: Option<BlockNumber>,
+        end_block: Option<BlockNumber>,
     ) -> Self {
         Self {
             network,

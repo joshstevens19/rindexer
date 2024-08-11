@@ -1,8 +1,8 @@
 use std::{any::Any, sync::Arc};
 
-use ethers::{
-    addressbook::Address,
-    prelude::{Log, ValueOrArray, U64},
+use alloy::{
+    primitives::{Address, BlockNumber, Log},
+    rpc::types::ValueOrArray,
 };
 use serde::{Deserialize, Serialize};
 
@@ -20,14 +20,15 @@ pub struct NetworkContract {
     pub indexing_contract_setup: IndexingContractSetup,
     pub cached_provider: Arc<JsonRpcCachedProvider>,
     pub decoder: Decoder,
-    pub start_block: Option<U64>,
-    pub end_block: Option<U64>,
+    pub start_block: Option<BlockNumber>,
+    pub end_block: Option<BlockNumber>,
     pub disable_logs_bloom_checks: bool,
 }
 
 impl NetworkContract {
     pub fn decode_log(&self, log: Log) -> Arc<dyn Any + Send + Sync> {
-        (self.decoder)(log.topics, log.data)
+        let topics = log.topics();
+        (self.decoder)(topics.to_vec(), log.data.data)
     }
 
     pub fn is_live_indexing(&self) -> bool {

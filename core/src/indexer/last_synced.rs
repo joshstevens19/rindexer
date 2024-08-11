@@ -1,6 +1,6 @@
 use std::{path::Path, sync::Arc};
 
-use ethers::prelude::U64;
+use alloy::primitives::U64;
 use rust_decimal::Decimal;
 use tokio::{
     fs,

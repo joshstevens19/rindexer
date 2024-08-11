@@ -1,6 +1,6 @@
 use std::{fs, iter::Map, path::Path};
 
-use ethers::{types::H256, utils::keccak256};
+use alloy::primitives::{keccak256, B256};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -262,9 +262,8 @@ impl EventInfo {
         EventInfo { name: item.name, inputs: item.inputs, signature, struct_result, struct_data }
     }
 
-    pub fn topic_id(&self) -> H256 {
-        let event_signature = format!("{}({})", self.name, self.signature);
-        H256::from_slice(&keccak256(event_signature))
+    pub fn topic_id(&self) -> B256 {
+        keccak256(format!("{}({})", self.name, self.signature))
     }
 
     pub fn topic_id_as_hex_string(&self) -> String {

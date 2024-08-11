@@ -3,8 +3,8 @@ use std::{
     sync::Arc,
 };
 
+use alloy::primitives::U64;
 use colored::{ColoredString, Colorize};
-use ethers::types::U64;
 use tokio::sync::Mutex;
 use tracing::{error, info};
 

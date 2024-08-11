@@ -1,6 +1,6 @@
 use std::{path::PathBuf, sync::Arc};
 
-use ethers::prelude::{H256, U64};
+use alloy::primitives::{B256, U64};
 use tokio::sync::{Mutex, Semaphore};
 
 use crate::{
@@ -20,7 +20,7 @@ pub struct EventProcessingConfig {
     pub indexer_name: String,
     pub contract_name: String,
     pub info_log_name: String,
-    pub topic_id: H256,
+    pub topic_id: B256,
     pub event_name: String,
     pub network_contract: Arc<NetworkContract>,
     pub start_block: U64,
@@ -33,7 +33,7 @@ pub struct EventProcessingConfig {
     pub stream_last_synced_block_file_path: Option<String>,
     pub index_event_in_order: bool,
     pub live_indexing: bool,
-    pub indexing_distance_from_head: U64,
+    pub indexing_distance_from_head: u64,
 }
 
 impl EventProcessingConfig {

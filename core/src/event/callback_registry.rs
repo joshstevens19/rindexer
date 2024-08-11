@@ -1,10 +1,11 @@
 use std::{any::Any, sync::Arc, time::Duration};
 
-use ethers::{
-    addressbook::Address,
-    contract::LogMeta,
-    types::{Bytes, Log, H256, U256, U64},
-};
+use alloy::primitives::{Address, BlockHash, BlockNumber, Bytes, Log, TxHash, B256, U256, U64};
+// use ethers::{
+//     addressbook::Address,
+//     contract::LogMeta,
+//     types::{Bytes, Log, H256, U256, U64},
+// };
 use futures::future::BoxFuture;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -16,10 +17,10 @@ use crate::{
     indexer::start::ProcessedNetworkContract,
 };
 
-pub type Decoder = Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync>;
+pub type Decoder = Arc<dyn Fn(Vec<B256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync>;
 
 pub fn noop_decoder() -> Decoder {
-    Arc::new(move |_topics: Vec<H256>, _data: Bytes| {
+    Arc::new(move |_topics: Vec<B256>, _data: Bytes| {
         Arc::new(String::new()) as Arc<dyn Any + Send + Sync>
     }) as Decoder
 }
@@ -28,17 +29,17 @@ pub fn noop_decoder() -> Decoder {
 pub struct TxInformation {
     pub network: String,
     pub address: Address,
-    pub block_hash: H256,
-    pub block_number: U64,
-    pub transaction_hash: H256,
+    pub block_hash: BlockHash,
+    pub block_number: BlockNumber,
+    pub transaction_hash: TxHash,
     pub log_index: U256,
     pub transaction_index: U64,
 }
 
 #[derive(Debug, Clone)]
 pub struct LogFoundInRequest {
-    pub from_block: U64,
-    pub to_block: U64,
+    pub from_block: BlockNumber,
+    pub to_block: BlockNumber,
 }
 
 #[derive(Debug, Clone)]
@@ -53,8 +54,8 @@ impl EventResult {
     pub fn new(
         network_contract: Arc<NetworkContract>,
         log: Log,
-        start_block: U64,
-        end_block: U64,
+        start_block: BlockNumber,
+        end_block: BlockNumber,
     ) -> Self {
         let log_meta = LogMeta::from(&log);
         let log_address = log.address;
@@ -82,7 +83,7 @@ pub type EventCallbackType =
 pub struct EventCallbackRegistryInformation {
     pub id: String,
     pub indexer_name: String,
-    pub topic_id: H256,
+    pub topic_id: B256,
     pub event_name: String,
     pub index_event_in_order: bool,
     pub contract: ContractInformation,

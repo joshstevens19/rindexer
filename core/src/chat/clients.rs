@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use ethers::types::U64;
+use alloy::primitives::BlockNumber;
 use futures::future::join_all;
 use serde_json::Value;
 use serenity::all::ChannelId;
@@ -101,20 +101,28 @@ impl ChatClients {
         Self { telegram, discord, slack }
     }
 
-    fn find_accepted_block_range(&self, from_block: &U64, to_block: &U64) -> U64 {
+    fn find_accepted_block_range(
+        &self,
+        from_block: &BlockNumber,
+        to_block: &BlockNumber,
+    ) -> BlockNumber {
         if from_block > to_block {
             panic!("Invalid range: from_block must be less than or equal to to_block");
         }
 
         match from_block.overflowing_add(to_block - from_block) {
             (result, false) => result,
-            (_, true) => U64::max_value(),
+            (_, true) => BlockNumber::MAX,
         }
     }
 
-    pub fn is_in_block_range_to_send(&self, from_block: &U64, to_block: &U64) -> bool {
+    pub fn is_in_block_range_to_send(
+        &self,
+        from_block: &BlockNumber,
+        to_block: &BlockNumber,
+    ) -> bool {
         // only 10 blocks at a time else rate limits will kick in
-        U64::from(10) <= self.find_accepted_block_range(from_block, to_block)
+        10 <= self.find_accepted_block_range(from_block, to_block)
     }
 
     fn has_any_chat(&self) -> bool {
@@ -212,8 +220,8 @@ impl ChatClients {
         &self,
         event_message: &EventMessage,
         index_event_in_order: bool,
-        from_block: &U64,
-        to_block: &U64,
+        from_block: &BlockNumber,
+        to_block: &BlockNumber,
     ) -> Result<usize, ChatError> {
         if !self.has_any_chat() || !self.is_in_block_range_to_send(from_block, to_block) {
             return Ok(0);

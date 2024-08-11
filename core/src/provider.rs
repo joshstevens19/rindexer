@@ -3,11 +3,19 @@ use std::{
     time::{Duration, Instant},
 };
 
-use ethers::{
-    middleware::Middleware,
-    prelude::Log,
-    providers::{Http, Provider, ProviderError, RetryClient, RetryClientBuilder},
-    types::{Block, BlockNumber, H256, U256, U64},
+use alloy::{
+    eips::BlockNumberOrTag,
+    primitives::{BlockNumber, B256},
+    providers::{Provider, ProviderBuilder, RootProvider},
+    rpc::{
+        client::ClientBuilder,
+        types::{Block, Log},
+    },
+    transports::{
+        http::{Client, Http},
+        layers::{RetryBackoffLayer, RetryBackoffService},
+        RpcError, TransportErrorKind, TransportResult,
+    },
 };
 use reqwest::header::HeaderMap;
 use thiserror::Error;
@@ -16,15 +24,17 @@ use url::Url;
 
 use crate::{event::RindexerEventFilter, manifest::core::Manifest};
 
+pub type RindexerHttpProvider = RootProvider<RetryBackoffService<Http<Client>>>;
+
 #[derive(Debug)]
 pub struct JsonRpcCachedProvider {
-    provider: Arc<Provider<RetryClient<Http>>>,
-    cache: Mutex<Option<(Instant, Arc<Block<H256>>)>>,
-    pub max_block_range: Option<U64>,
+    provider: Arc<RindexerHttpProvider>,
+    cache: Mutex<Option<(Instant, Arc<Block>)>>,
+    pub max_block_range: Option<u64>,
 }
 
 impl JsonRpcCachedProvider {
-    pub fn new(provider: Provider<RetryClient<Http>>, max_block_range: Option<U64>) -> Self {
+    pub fn new(provider: RindexerHttpProvider, max_block_range: Option<u64>) -> Self {
         JsonRpcCachedProvider {
             provider: Arc::new(provider),
             cache: Mutex::new(None),
@@ -32,7 +42,9 @@ impl JsonRpcCachedProvider {
         }
     }
 
-    pub async fn get_latest_block(&self) -> Result<Option<Arc<Block<H256>>>, ProviderError> {
+    pub async fn get_latest_block(
+        &self,
+    ) -> Result<Option<Arc<Block>>, RpcError<TransportErrorKind>> {
         let mut cache_guard = self.cache.lock().await;
 
         if let Some((timestamp, block)) = &*cache_guard {
@@ -41,7 +53,8 @@ impl JsonRpcCachedProvider {
             }
         }
 
-        let latest_block = self.provider.get_block(BlockNumber::Latest).await?;
+        let latest_block =
+            self.provider.get_block_by_number(BlockNumberOrTag::Latest, false).await?;
 
         if let Some(block) = latest_block {
             let arc_block = Arc::new(block);
@@ -54,19 +67,19 @@ impl JsonRpcCachedProvider {
         Ok(None)
     }
 
-    pub async fn get_block_number(&self) -> Result<U64, ProviderError> {
+    pub async fn get_block_number(&self) -> TransportResult<BlockNumber> {
         self.provider.get_block_number().await
     }
 
-    pub async fn get_logs(&self, filter: &RindexerEventFilter) -> Result<Vec<Log>, ProviderError> {
+    pub async fn get_logs(&self, filter: &RindexerEventFilter) -> TransportResult<Vec<Log>> {
         self.provider.get_logs(filter.raw_filter()).await
     }
 
-    pub async fn get_chain_id(&self) -> Result<U256, ProviderError> {
-        self.provider.get_chainid().await
+    pub async fn get_chain_id(&self) -> TransportResult<u64> {
+        self.provider.get_chain_id().await
     }
 
-    pub fn get_inner_provider(&self) -> Arc<Provider<RetryClient<Http>>> {
+    pub fn get_inner_provider(&self) -> Arc<RindexerHttpProvider> {
         Arc::clone(&self.provider)
     }
 }
@@ -82,32 +95,27 @@ pub enum RetryClientError {
 pub fn create_client(
     rpc_url: &str,
     compute_units_per_second: Option<u64>,
-    max_block_range: Option<U64>,
+    max_block_range: Option<u64>,
     custom_headers: HeaderMap,
 ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
     let url = Url::parse(rpc_url).map_err(|e| {
         RetryClientError::HttpProviderCantBeCreated(rpc_url.to_string(), e.to_string())
     })?;
-    let client = reqwest::Client::builder().default_headers(custom_headers).build()?;
+    // let client = reqwest::Client::builder().default_headers(custom_headers).build()?;
+    // missing timeout_retries
 
-    let provider = Http::new_with_client(url, client);
-    let instance = Provider::new(
-        RetryClientBuilder::default()
-            // assume minimum compute units per second if not provided as growth plan standard
-            .compute_units_per_second(compute_units_per_second.unwrap_or(660))
-            .rate_limit_retries(5000)
-            .timeout_retries(1000)
-            .initial_backoff(Duration::from_millis(500))
-            .build(provider, Box::<ethers::providers::HttpRateLimitRetryPolicy>::default()),
-    );
-    Ok(Arc::new(JsonRpcCachedProvider::new(instance, max_block_range)))
+    let retry_layer = RetryBackoffLayer::new(5000, 500, compute_units_per_second.unwrap_or(660));
+    let client = ClientBuilder::default().layer(retry_layer).http(url.clone());
+
+    let provider = ProviderBuilder::new().on_client(client);
+
+    Ok(Arc::new(JsonRpcCachedProvider::new(provider, max_block_range)))
 }
 
-pub async fn get_chain_id(rpc_url: &str) -> Result<U256, ProviderError> {
-    let url = Url::parse(rpc_url).map_err(|_| ProviderError::UnsupportedRPC)?;
-    let provider = Provider::new(Http::new(url));
-
-    provider.get_chainid().await
+pub async fn get_chain_id(rpc_url: &str) -> Result<u64, RpcError<TransportErrorKind>> {
+    let provider = create_client(rpc_url, None, None, HeaderMap::new())
+        .map_err(|e| TransportErrorKind::custom(Box::new(e)))?;
+    provider.get_chain_id().await
 }
 
 #[derive(Debug)]

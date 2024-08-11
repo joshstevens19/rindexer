@@ -1,7 +1,7 @@
-use ethers::{
-    addressbook::Address,
-    prelude::{BlockNumber, Filter, H256, U64},
-    types::ValueOrArray,
+use alloy::{
+    eips::BlockNumberOrTag,
+    primitives::{Address, BlockNumber, B256, U64},
+    rpc::types::{Filter, ValueOrArray},
 };
 
 use crate::event::contract_setup::IndexingContractSetup;
@@ -30,7 +30,7 @@ impl RindexerEventFilter {
     }
 
     pub fn new(
-        topic_id: &H256,
+        topic_id: &B256,
         event_name: &str,
         indexing_contract_setup: &IndexingContractSetup,
         current_block: U64,
@@ -47,7 +47,7 @@ impl RindexerEventFilter {
                                 index_filters.extend_filter_indexed(
                                     Filter::new()
                                         .address(address_details.address.clone())
-                                        .topic0(*topic_id)
+                                        .event_signature(*topic_id)
                                         .from_block(current_block)
                                         .to_block(next_block),
                                 ),
@@ -57,7 +57,7 @@ impl RindexerEventFilter {
                         Ok(RindexerEventFilter::from_filter(
                             Filter::new()
                                 .address(address_details.address.clone())
-                                .topic0(*topic_id)
+                                .event_signature(*topic_id)
                                 .from_block(current_block)
                                 .to_block(next_block),
                         ))
@@ -65,7 +65,7 @@ impl RindexerEventFilter {
                     None => Ok(RindexerEventFilter::from_filter(
                         Filter::new()
                             .address(address_details.address.clone())
-                            .topic0(*topic_id)
+                            .event_signature(*topic_id)
                             .from_block(current_block)
                             .to_block(next_block),
                     )),
@@ -75,13 +75,16 @@ impl RindexerEventFilter {
                 Some(indexed_filters) => Ok(RindexerEventFilter::from_filter(
                     indexed_filters.extend_filter_indexed(
                         Filter::new()
-                            .topic0(*topic_id)
+                            .event_signature(*topic_id)
                             .from_block(current_block)
                             .to_block(next_block),
                     ),
                 )),
                 None => Ok(RindexerEventFilter::from_filter(
-                    Filter::new().topic0(*topic_id).from_block(current_block).to_block(next_block),
+                    Filter::new()
+                        .event_signature(*topic_id)
+                        .from_block(current_block)
+                        .to_block(next_block),
                 )),
             },
             IndexingContractSetup::Factory(factory) => {
@@ -93,7 +96,7 @@ impl RindexerEventFilter {
                 Ok(RindexerEventFilter::from_filter(
                     Filter::new()
                         .address(address)
-                        .topic0(*topic_id)
+                        .event_signature(*topic_id)
                         .from_block(current_block)
                         .to_block(next_block),
                 ))
@@ -101,30 +104,30 @@ impl RindexerEventFilter {
         }
     }
 
-    pub fn get_to_block(&self) -> U64 {
+    pub fn get_to_block(&self) -> BlockNumber {
         self.filter
             .get_to_block()
             .expect("impossible to not have a to block in RindexerEventFilter")
     }
 
-    pub fn get_from_block(&self) -> U64 {
+    pub fn get_from_block(&self) -> BlockNumber {
         self.filter
             .get_from_block()
             .expect("impossible to not have a from block in RindexerEventFilter")
     }
 
-    pub fn set_from_block<T: Into<BlockNumber>>(mut self, block: T) -> Self {
+    pub fn set_from_block<T: Into<BlockNumberOrTag>>(mut self, block: T) -> Self {
         self.filter = self.filter.from_block(block);
         self
     }
 
-    pub fn set_to_block<T: Into<BlockNumber>>(mut self, block: T) -> Self {
+    pub fn set_to_block<T: Into<BlockNumberOrTag>>(mut self, block: T) -> Self {
         self.filter = self.filter.to_block(block);
         self
     }
 
     pub fn contract_address(&self) -> Option<ValueOrArray<Address>> {
-        self.filter.address.clone()
+        self.filter.address.clone().to_value_or_array()
     }
 
     pub fn raw_filter(&self) -> &Filter {

@@ -14,6 +14,8 @@ mockito = "0.30"
 [dependencies]
 ethers = { version = "2.0", features = ["rustls", "openssl"] }
 ethers-solc = "2.0.14"
+alloy = { version = "0.2", features = ["full", "serde", "rpc", "json-rpc"] }
+foundry-compilers = "0.10.1"
 tokio = { version = "1", features = ["full"] }
 tokio-postgres = { version="0.7", features=["with-uuid-1"] }
 bb8 = "0.8.3"

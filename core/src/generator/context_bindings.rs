@@ -1,4 +1,4 @@
-use ethers::prelude::ValueOrArray;
+use alloy::rpc::types::ValueOrArray;
 
 use super::networks_bindings::network_provider_fn_name;
 use crate::{

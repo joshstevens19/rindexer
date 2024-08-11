@@ -1,5 +1,6 @@
 use std::{fs, io, path::Path, sync::Arc};
 
+use alloy::json_abi::JsonAbi;
 use colored::Colorize;
 use ethers::abi::{Abi, Contract as EthersContract, Event};
 use serde_json::Value;
@@ -465,7 +466,7 @@ pub async fn process_events(
             .map_err(|_| ProcessIndexersError::AbiPathDoesNotExist(contract.abi.clone()))?;
         let abi_str = fs::read_to_string(full_path)?;
 
-        let abi: Abi = serde_json::from_str(&abi_str)?;
+        let abi: JsonAbi = serde_json::from_str(&abi_str)?;
 
         #[allow(clippy::useless_conversion)]
         let abi_gen = EthersContract::from(abi);

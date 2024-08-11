@@ -1,6 +1,9 @@
 use std::{path::Path, sync::Arc};
 
-use ethers::{providers::ProviderError, types::U64};
+use alloy::{
+    primitives::{BlockNumber, U64},
+    transports::{RpcError, TransportErrorKind},
+};
 use futures::future::try_join_all;
 use tokio::{
     sync::Semaphore,
@@ -52,10 +55,10 @@ pub enum StartIndexingError {
     PostgresConnectionError(#[from] PostgresConnectionError),
 
     #[error("Could not get block number from provider: {0}")]
-    GetBlockNumberError(#[from] ProviderError),
+    GetBlockNumberError(#[from] RpcError<TransportErrorKind>),
 
     #[error("Could not get chain id from provider: {0}")]
-    GetChainIdError(ProviderError),
+    GetChainIdError(RpcError<TransportErrorKind>),
 
     #[error("Could not process event sequentially: {0}")]
     ProcessEventSequentiallyError(ProcessEventError),
@@ -64,15 +67,15 @@ pub enum StartIndexingError {
     CombinedError(#[from] CombinedLogEventProcessingError),
 
     #[error("The start block set for {0} is higher than the latest block: {1} - start block: {2}")]
-    StartBlockIsHigherThanLatestBlockError(String, U64, U64),
+    StartBlockIsHigherThanLatestBlockError(String, BlockNumber, BlockNumber),
 
     #[error("The end block set for {0} is higher than the latest block: {1} - end block: {2}")]
-    EndBlockIsHigherThanLatestBlockError(String, U64, U64),
+    EndBlockIsHigherThanLatestBlockError(String, BlockNumber, BlockNumber),
 }
 
 pub struct ProcessedNetworkContract {
     pub id: String,
-    pub processed_up_to: U64,
+    pub processed_up_to: BlockNumber,
 }
 
 pub async fn start_indexing(
@@ -313,10 +316,10 @@ async fn initialize_database(
 async fn calculate_safe_block_number(
     reorg_safe_distance: bool,
     network_contract: &NetworkContract,
-    latest_block: U64,
-    mut end_block: U64,
-) -> Result<(U64, U64), StartIndexingError> {
-    let mut indexing_distance_from_head = U64::zero();
+    latest_block: BlockNumber,
+    mut end_block: BlockNumber,
+) -> Result<(BlockNumber, BlockNumber), StartIndexingError> {
+    let mut indexing_distance_from_head = 0;
     if reorg_safe_distance {
         let chain_id = network_contract
             .cached_provider
