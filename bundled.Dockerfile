@@ -5,7 +5,6 @@ RUN apt update && apt install -y libssl-dev pkg-config build-essential
 WORKDIR /app
 COPY . .
 RUN RUSTFLAGS='-C target-cpu=native' cargo build --release --features jemalloc
-RUN strip /app/target/release/rindexer_cli
 
 FROM --platform=linux/amd64 node:lts-bookworm as node-builder
 RUN apt update && apt install -y ca-certificates
