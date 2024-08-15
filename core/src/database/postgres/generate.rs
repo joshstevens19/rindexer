@@ -4,8 +4,9 @@ use tracing::{error, info};
 
 use crate::{
     abi::{ABIInput, ABIItem, EventInfo, GenerateAbiPropertiesType, ParamTypeError, ReadAbiError},
-    helpers::camel_to_snake,
+    helpers::{camel_to_snake, to_pascal_case},
     indexer::Indexer,
+    manifest::contract::Contract,
     types::code::Code,
 };
 
@@ -38,7 +39,11 @@ pub fn generate_column_names_only_with_base_properties(inputs: &[ABIInput]) -> V
     column_names
 }
 
-fn generate_event_table_sql(abi_inputs: &[EventInfo], schema_name: &str) -> String {
+fn generate_event_table_sql_with_comments(
+    abi_inputs: &[EventInfo],
+    schema_name: &str,
+    apply_full_name_comment_for_events: Vec<String>,
+) -> String {
     abi_inputs
         .iter()
         .map(|event_info| {
@@ -50,7 +55,7 @@ fn generate_event_table_sql(abi_inputs: &[EventInfo], schema_name: &str) -> Stri
                 generate_columns_with_data_types(&event_info.inputs).join(", ") + ","
             };
 
-            format!(
+            let create_table_sql = format!(
                 "CREATE TABLE IF NOT EXISTS {} (\
                 rindexer_id SERIAL PRIMARY KEY NOT NULL, \
                 contract_address CHAR(66) NOT NULL, \
@@ -63,7 +68,21 @@ fn generate_event_table_sql(abi_inputs: &[EventInfo], schema_name: &str) -> Stri
                 log_index VARCHAR(78) NOT NULL\
             );",
                 table_name, event_columns
-            )
+            );
+
+            if !apply_full_name_comment_for_events.contains(&event_info.name) {
+                return create_table_sql;
+            }
+
+            // smart comments needed to avoid clashing of order by graphql names
+            let table_comment = format!(
+                "COMMENT ON TABLE {} IS E'@name {}{}';",
+                table_name,
+                to_pascal_case(schema_name).as_str(),
+                event_info.name
+            );
+
+            format!("{}\n{}", create_table_sql, table_comment)
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -107,6 +126,37 @@ pub enum GenerateTablesForIndexerSqlError {
     ParamTypeError(#[from] ParamTypeError),
 }
 
+/// If any event names match the whole table name should be exposed differently on graphql
+/// to avoid clashing of graphql namings
+fn find_clashing_event_names(
+    project_path: &Path,
+    current_contract: &Contract,
+    other_contracts: &[Contract],
+    current_event_names: &[EventInfo],
+) -> Result<Vec<String>, GenerateTablesForIndexerSqlError> {
+    let mut clashing_events = Vec::new();
+
+    for other_contract in other_contracts {
+        if other_contract.name == current_contract.name {
+            continue;
+        }
+
+        let other_abi_items = ABIItem::read_abi_items(project_path, other_contract)?;
+        let other_event_names =
+            ABIItem::extract_event_names_and_signatures_from_abi(other_abi_items)?;
+
+        for event_name in current_event_names {
+            if other_event_names.iter().any(|e| e.name == event_name.name) &&
+                !clashing_events.contains(&event_name.name)
+            {
+                clashing_events.push(event_name.name.clone());
+            }
+        }
+    }
+
+    Ok(clashing_events)
+}
+
 pub fn generate_tables_for_indexer_sql(
     project_path: &Path,
     indexer: &Indexer,
@@ -123,7 +173,14 @@ pub fn generate_tables_for_indexer_sql(
 
         let networks: Vec<&str> = contract.details.iter().map(|d| d.network.as_str()).collect();
 
-        sql.push_str(&generate_event_table_sql(&event_names, &schema_name));
+        let event_matching_name_on_other =
+            find_clashing_event_names(project_path, contract, &indexer.contracts, &event_names)?;
+
+        sql.push_str(&generate_event_table_sql_with_comments(
+            &event_names,
+            &schema_name,
+            event_matching_name_on_other,
+        ));
         sql.push_str(&generate_internal_event_table_sql(&event_names, &schema_name, networks));
     }
 
