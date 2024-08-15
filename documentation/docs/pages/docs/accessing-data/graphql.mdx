@@ -176,6 +176,55 @@ The format of the query names are:
 For single item queries you can use the `nodeId` to query single items which is always returned as a field
 in the list results alongside the singular item query.
 
+#### Conflicting event naming
+
+:::warning
+Important to read if you have 2 events with matching names across contracts.
+:::
+
+If you have 2 events which have exactly the same name as another contract this is a conflict of naming for graphql and it will render
+full naming, for example `Transfer` would turn into `{indexer_name}{contract_name}Transfer`.info
+
+So its is super clear lets say i had a yaml like this:
+
+```yaml
+name: RocketPoolETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: 0xae78736cd615f374d3085123a210448e74fc6393
+    start_block: '18600000'
+    end_block: '18718056'
+  abi: ./abis/RocketTokenRETH.abi.json
+  include_events:
+  - Transfer
+- name: RocketPoolETHFork
+  details:
+  - network: ethereum
+    address: 0xba78736cb615f374d3035123a210448e74fc6392
+    start_block: '18600000'
+    end_block: '18718056'
+  abi: ./abis/RocketTokenRETH.abi.json
+  include_events:
+  - Transfer
+```
+
+My query names for `allTransfers` would be:
+
+- `AllRocketPoolETHIndexerRocketPoolETHTransfers`
+- `AllRocketPoolETHIndexerRocketPoolETHForkTransfers`
+
 ### Ordering
 
 :::info
