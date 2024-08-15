@@ -9,5 +9,6 @@ RUN strip /app/target/x86_64-unknown-linux-musl/release/rindexer_cli
 
 FROM --platform=linux/amd64 scratch
 COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/rindexer_cli /app/rindexer
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 ENTRYPOINT ["/app/rindexer"]
