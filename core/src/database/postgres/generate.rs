@@ -4,7 +4,7 @@ use tracing::{error, info};
 
 use crate::{
     abi::{ABIInput, ABIItem, EventInfo, GenerateAbiPropertiesType, ParamTypeError, ReadAbiError},
-    helpers::{camel_to_snake, to_pascal_case},
+    helpers::camel_to_snake,
     indexer::Indexer,
     manifest::contract::Contract,
     types::code::Code,
@@ -41,6 +41,7 @@ pub fn generate_column_names_only_with_base_properties(inputs: &[ABIInput]) -> V
 
 fn generate_event_table_sql_with_comments(
     abi_inputs: &[EventInfo],
+    contract_name: &str,
     schema_name: &str,
     apply_full_name_comment_for_events: Vec<String>,
 ) -> String {
@@ -77,9 +78,7 @@ fn generate_event_table_sql_with_comments(
             // smart comments needed to avoid clashing of order by graphql names
             let table_comment = format!(
                 "COMMENT ON TABLE {} IS E'@name {}{}';",
-                table_name,
-                to_pascal_case(schema_name).as_str(),
-                event_info.name
+                table_name, contract_name, event_info.name
             );
 
             format!("{}\n{}", create_table_sql, table_comment)
@@ -178,6 +177,7 @@ pub fn generate_tables_for_indexer_sql(
 
         sql.push_str(&generate_event_table_sql_with_comments(
             &event_names,
+            &contract.name,
             &schema_name,
             event_matching_name_on_other,
         ));
