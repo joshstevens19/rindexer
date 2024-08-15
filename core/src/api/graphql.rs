@@ -106,9 +106,14 @@ pub async fn start_graphql_server(
     let schemas: Vec<String> = indexer
         .contracts
         .iter()
-        .map(move |contract| generate_indexer_contract_schema_name(&indexer.name, &contract.name))
+        .map(move |contract| {
+            generate_indexer_contract_schema_name(
+                &indexer.name,
+                &contract.before_modify_name_if_filter_readonly(),
+            )
+        })
         .collect();
-
+    
     let connection_string = connection_string()?;
     let port = settings.port;
     let graphql_endpoint = format!("http://localhost:{}/graphql", &port);
@@ -310,6 +315,7 @@ async fn perform_health_check(
                     }
                     Err(_) => {
                         // try again
+                        info!("🦀 GraphQL API not healthy yet...");
                         continue;
                     }
                 }
