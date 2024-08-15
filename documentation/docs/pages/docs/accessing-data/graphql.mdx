@@ -182,8 +182,8 @@ in the list results alongside the singular item query.
 Important to read if you have 2 events with matching names across contracts.
 :::
 
-If you have 2 events which have exactly the same name as another contract this is a conflict of naming for graphql and it will render
-full naming, for example `Transfer` would turn into `{indexer_name}{contract_name}Transfer`.info
+If you have 2 events which have exactly the same name as another contract this is a conflict of naming for graphql so rindexer will render
+it as `{contract_name}{event_name}` in pascal case, for example `Transfer` would turn into `{contract_name}Transfer`
 
 So its is super clear lets say i had a yaml like this:
 
@@ -222,8 +222,8 @@ contracts:
 
 My query names for `allTransfers` would be:
 
-- `AllRocketPoolETHIndexerRocketPoolETHTransfers`
-- `AllRocketPoolETHIndexerRocketPoolETHForkTransfers`
+- `AllRocketPoolETHTransfers`
+- `AllRocketPoolETHForkTransfers`
 
 ### Ordering
 

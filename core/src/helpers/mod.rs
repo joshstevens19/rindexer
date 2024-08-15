@@ -112,24 +112,6 @@ pub fn replace_env_variable_to_raw_name(rpc: &str) -> String {
     }
 }
 
-pub fn to_pascal_case(s: &str) -> String {
-    let mut result = String::new();
-    let mut capitalize_next = true;
-
-    for c in s.chars() {
-        if c == '_' {
-            capitalize_next = true;
-        } else if capitalize_next {
-            result.push(c.to_ascii_uppercase());
-            capitalize_next = false;
-        } else {
-            result.push(c.to_ascii_lowercase());
-        }
-    }
-
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,25 +130,5 @@ mod tests {
 
         assert_eq!(camel_to_snake_advanced("ERC20", false), "erc_20");
         assert_eq!(camel_to_snake_advanced("ERC20", true), "erc20");
-    }
-
-    #[test]
-    fn test_pascal_case() {
-        let test_cases = vec![
-            ("hello_world", "HelloWorld"),
-            ("hello", "Hello"),
-            ("hello__world__test", "HelloWorldTest"),
-            ("_hello_world", "HelloWorld"),
-            ("hello_world_", "HelloWorld"),
-            ("", ""),
-            ("HELLO_WORLD", "HelloWorld"),
-            ("hElLo_WoRlD", "HelloWorld"),
-            ("hello_world_123", "HelloWorld123"),
-            ("indexer_cdh", "IndexerCdh"),
-        ];
-
-        for (input, expected) in test_cases {
-            assert_eq!(to_pascal_case(input), expected, "Failed for input: {}", input);
-        }
     }
 }

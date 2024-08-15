@@ -113,7 +113,7 @@ pub async fn start_graphql_server(
             )
         })
         .collect();
-    
+
     let connection_string = connection_string()?;
     let port = settings.port;
     let graphql_endpoint = format!("http://localhost:{}/graphql", &port);
