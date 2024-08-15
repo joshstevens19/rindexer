@@ -14,10 +14,13 @@ RUN cd /app/graphql && npm i && npm run build-linux
 
 FROM --platform=linux/amd64 debian:bookworm-slim
 RUN apt update \
-  && apt install -y libssl-dev libc-dev libstdc++6 ca-certificates lsof \
+  && apt install -y libssl-dev libc-dev libstdc++6 ca-certificates lsof curl git \
   && apt-get autoremove --yes \
   && apt-get clean --yes \
   && rm -rf /var/lib/apt/lists/*
+
+RUN curl -L https://foundry.paradigm.xyz | bash
+RUN /root/.foundry/bin/foundryup
 
 COPY --from=node-builder /app/core/resources/rindexer-graphql-linux /app/resources/rindexer-graphql-linux
 COPY --from=builder /app/target/release/rindexer_cli /app/rindexer
