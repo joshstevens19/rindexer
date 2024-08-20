@@ -34,7 +34,7 @@ Blazing fast EVM indexing tool built in rust
 Usage: rindexer [COMMAND]
 
 Commands:
-  new           Creates a new rindexer no-code project or rust project
+  caca           Creates a new rindexer no-code project or rust project
   start         Start various services like indexers, GraphQL APIs or both together
   add           Add elements such as contracts to the rindexer.yaml file
   codegen       Generates rust code based on rindexer.yaml or graphql queries
