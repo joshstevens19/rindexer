@@ -9,9 +9,9 @@ Ensure that you have the following installed and configured:
 - **[Helm](https://helm.sh/docs/intro/install/)**: Installed.
 - **[eksctl](https://eksctl.io/installation/)**: Installed.
 
-## Step 1: Create an EKS Cluster Using `eksctl`
+## 1. Create an EKS Cluster
 
-1. **Create the Cluster:**
+This command creates a new EKS cluster with a managed node group. Adjust the `--region`, `--node-type`, and node count options as needed.
 
 ```bash
 eksctl create cluster --name my-cluster --region us-west-2 --nodegroup-name standard-workers --node-type t3.medium --nodes 1 --nodes-min 1 --nodes-max 2 --managed
@@ -74,11 +74,6 @@ Output:
 2024-08-20 18:37:41 [✔]  EKS cluster "my-cluster" in "us-west-2" region is ready
 ```
 
-    
-This command creates a new EKS cluster with a managed node group. Adjust the `--region`, `--node-type`, and node count options as needed.
-
-2. **Verify the Cluster:**
-
 ```bash
 eksctl get cluster --name my-cluster --region us-west-2
 ```
@@ -89,8 +84,6 @@ Output:
 NAME		VERSION	STATUS	CREATED			VPC			SUBNETS														SECURITYGROUPS		PROVIDER
 my-cluster	1.30	ACTIVE	2024-08-20T16:21:42Z	vpc-090d3761130933be4	subnet-00f479ddeb9bc51f7,subnet-0123eaaf4d9fb037a,subnet-09256a39c7e39ad7c,subnet-0df075e1795076648,subnet-0ed78cc4efed47b11,subnet-0f64d1e62abe83d4d	sg-0939a7fb80a664be9	EKS
 ```
-
-3. **Configure kubectl**:
 
 `eksctl` automatically configures your `kubeconfig` file. To check your nodes:
 
@@ -105,7 +98,15 @@ NAME                                          STATUS   ROLES    AGE     VERSION
 ip-192-168-22-89.us-west-2.compute.internal   Ready    <none>   6m33s   v1.30.2-eks-1552ad0
 ```
 
-## Step 2: Configure the `values.yaml` File
+## 2. Deploy the Helm Chart
+
+### 2.1. Download the rindexer repository
+
+```bash
+git clone https://github.com/joshstevens19/rindexer.git
+```
+
+### 2.2. Configure the `values.yaml` File
 
 Customize the `values.yaml` for your deployment:
 
@@ -128,9 +129,7 @@ postgresql:
   enabled: false
 ```
 
-## Step 3: Deploy the Helm Chart
-
-1. **Install the Helm Chart:**
+### 2.3. Install the Helm Chart
 
 ```bash
 helm install rindexer ./helm/rindexer -f helm/rindexer/values.yaml
@@ -153,7 +152,7 @@ NOTES:
   kubectl --namespace default port-forward $POD_NAME 8080:$CONTAINER_PORT
 ```
 
-2. **Verify the Deployment**:
+### 2.4. Verify the Deployment
 
     ```bash
     kubectl get pods
@@ -163,12 +162,12 @@ NOTES:
 
     ```bash
     NAME                                READY   STATUS    RESTARTS     AGE
-    rindexer-rindexer-94dd58475-p8g5d   1/1     Running   1 (7s ago)   17s
+    rindexer-rindexer-94dd58475-p8g5d   1/1     Running   0            17s
     ```
 
-## Step 4: Monitor and Manage the Deployment
+## 3. Monitor and Manage the Deployment
 
-### View Logs
+### 3.1. View Logs
 
 ```bash
 kubectl logs -l app.kubernetes.io/name=rindexer
@@ -189,13 +188,15 @@ Output:
 20 August - 16:44:18.906414  INFO rindexer resync is complete
 ```
 
-### Upgrade the Helm Chart
+### 3.2. Upgrade the Helm Chart
 
 ```bash
 helm upgrade rindexer ./rindexer -f values.yaml
 ```
 
-### Uninstall the Helm Chart
+## 4. Clean Up
+
+### 4.1. Uninstall the Helm Chart
 
 ```bash
 helm uninstall rindexer
@@ -207,9 +208,7 @@ Output:
 release "rindexer" uninstalled
 ```
 
-## Step 5: Clean Up
-
-To delete the EKS cluster:
+### 4.2. Delete the EKS cluster
 
 ```bash
 eksctl delete cluster --name my-cluster --region us-west-2
