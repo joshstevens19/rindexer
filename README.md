@@ -75,6 +75,15 @@ This will start all local indexing and if you have enabled the graphql endpoint,
 
 http://localhost:3001
 
+## Helm Chart
+
+We also provide a Helm chart for deploying `rindexer` in Kubernetes environments. The Helm chart simplifies the deployment process and allows for easy customization of the deployment parameters.
+
+You can find the Helm chart in the following directory:
+
+- **[rindexer Helm Chart](https://github.com/joshstevens19/rindexer/tree/master/helm/rindexer)**
+
+To use the Helm chart, follow the instructions in the [Helm Chart README](https://github.com/joshstevens19/rindexer/tree/master/helm/rindexer/README.md) to deploy `rindexer` to your Kubernetes cluster.
 
 ## What can I use rindexer for?
 
