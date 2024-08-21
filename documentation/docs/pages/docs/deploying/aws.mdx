@@ -1,1 +1,238 @@
 # AWS
+
+## Prerequisites
+
+Ensure that you have the following installed and configured:
+
+- **[AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html)**: Configured with necessary permissions.
+- **[kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl/)**: Installed and configured.
+- **[Helm](https://helm.sh/docs/intro/install/)**: Installed.
+- **[eksctl](https://eksctl.io/installation/)**: Installed.
+
+## 1. Create an EKS Cluster
+
+This command creates a new EKS cluster with a managed node group. Adjust the `--region`, `--node-type`, and node count options as needed.
+
+```bash
+eksctl create cluster --name my-cluster --region us-west-2 --nodegroup-name standard-workers --node-type t3.medium --nodes 1 --nodes-min 1 --nodes-max 2 --managed
+```
+
+Output:
+
+```bash
+2024-08-20 18:21:15 [ℹ]  eksctl version 0.189.0-dev+c9afc4260.2024-08-19T12:43:03Z
+2024-08-20 18:21:15 [ℹ]  using region us-west-2
+2024-08-20 18:21:16 [ℹ]  setting availability zones to [us-west-2c us-west-2d us-west-2b]
+2024-08-20 18:21:16 [ℹ]  subnets for us-west-2c - public:192.168.0.0/19 private:192.168.96.0/19
+2024-08-20 18:21:16 [ℹ]  subnets for us-west-2d - public:192.168.32.0/19 private:192.168.128.0/19
+2024-08-20 18:21:16 [ℹ]  subnets for us-west-2b - public:192.168.64.0/19 private:192.168.160.0/19
+2024-08-20 18:21:16 [ℹ]  nodegroup "standard-workers" will use "" [AmazonLinux2/1.30]
+2024-08-20 18:21:16 [ℹ]  using Kubernetes version 1.30
+2024-08-20 18:21:16 [ℹ]  creating EKS cluster "my-cluster" in "us-west-2" region with managed nodes
+2024-08-20 18:21:16 [ℹ]  will create 2 separate CloudFormation stacks for cluster itself and the initial managed nodegroup
+2024-08-20 18:21:16 [ℹ]  if you encounter any issues, check CloudFormation console or try 'eksctl utils describe-stacks --region=us-west-2 --cluster=my-cluster'
+2024-08-20 18:21:16 [ℹ]  Kubernetes API endpoint access will use default of {publicAccess=true, privateAccess=false} for cluster "my-cluster" in "us-west-2"
+2024-08-20 18:21:16 [ℹ]  CloudWatch logging will not be enabled for cluster "my-cluster" in "us-west-2"
+2024-08-20 18:21:16 [ℹ]  you can enable it with 'eksctl utils update-cluster-logging --enable-types={SPECIFY-YOUR-LOG-TYPES-HERE (e.g. all)} --region=us-west-2 --cluster=my-cluster'
+2024-08-20 18:21:16 [ℹ]  default addons coredns, vpc-cni, kube-proxy were not specified, will install them as EKS addons
+2024-08-20 18:21:16 [ℹ]
+2 sequential tasks: { create cluster control plane "my-cluster",
+    2 sequential sub-tasks: {
+        2 sequential sub-tasks: {
+            1 task: { create addons },
+            wait for control plane to become ready,
+        },
+        create managed nodegroup "standard-workers",
+    }
+}
+2024-08-20 18:21:16 [ℹ]  building cluster stack "eksctl-my-cluster-cluster"
+2024-08-20 18:21:18 [ℹ]  deploying stack "eksctl-my-cluster-cluster"
+2024-08-20 18:21:48 [ℹ]  waiting for CloudFormation stack "eksctl-my-cluster-cluster"
+...
+2024-08-20 18:30:29 [ℹ]  creating addon
+2024-08-20 18:30:29 [ℹ]  successfully created addon
+2024-08-20 18:30:30 [!]  recommended policies were found for "vpc-cni" addon, but since OIDC is disabled on the cluster, eksctl cannot configure the requested permissions; the recommended way to provide IAM permissions for "vpc-cni" addon is via pod identity associations; after addon creation is completed, add all recommended policies to the config file, under `addon.PodIdentityAssociations`, and run `eksctl update addon`
+2024-08-20 18:30:30 [ℹ]  creating addon
+2024-08-20 18:30:31 [ℹ]  successfully created addon
+2024-08-20 18:30:32 [ℹ]  creating addon
+2024-08-20 18:30:32 [ℹ]  successfully created addon
+2024-08-20 18:32:35 [ℹ]  building managed nodegroup stack "eksctl-my-cluster-nodegroup-standard-workers"
+2024-08-20 18:32:37 [ℹ]  deploying stack "eksctl-my-cluster-nodegroup-standard-workers"
+2024-08-20 18:32:37 [ℹ]  waiting for CloudFormation stack "eksctl-my-cluster-nodegroup-standard-workers"
+...
+2024-08-20 18:37:39 [✔]  saved kubeconfig as "/Users/rindexer/.kube/config"
+2024-08-20 18:37:39 [ℹ]  no tasks
+2024-08-20 18:37:39 [✔]  all EKS cluster resources for "my-cluster" have been created
+2024-08-20 18:37:39 [✔]  created 0 nodegroup(s) in cluster "my-cluster"
+2024-08-20 18:37:40 [ℹ]  nodegroup "standard-workers" has 1 node(s)
+2024-08-20 18:37:40 [ℹ]  node "ip-192-168-22-89.us-west-2.compute.internal" is ready
+2024-08-20 18:37:40 [ℹ]  waiting for at least 1 node(s) to become ready in "standard-workers"
+2024-08-20 18:37:40 [ℹ]  nodegroup "standard-workers" has 1 node(s)
+2024-08-20 18:37:40 [ℹ]  node "ip-192-168-22-89.us-west-2.compute.internal" is ready
+2024-08-20 18:37:40 [✔]  created 1 managed nodegroup(s) in cluster "my-cluster"
+2024-08-20 18:37:41 [ℹ]  kubectl command should work with "/Users/rindexer/.kube/config", try 'kubectl get nodes'
+2024-08-20 18:37:41 [✔]  EKS cluster "my-cluster" in "us-west-2" region is ready
+```
+
+```bash
+eksctl get cluster --name my-cluster --region us-west-2
+```
+
+Output:
+
+```bash
+NAME		VERSION	STATUS	CREATED			VPC			SUBNETS														SECURITYGROUPS		PROVIDER
+my-cluster	1.30	ACTIVE	2024-08-20T16:21:42Z	vpc-090d3761130933be4	subnet-00f479ddeb9bc51f7,subnet-0123eaaf4d9fb037a,subnet-09256a39c7e39ad7c,subnet-0df075e1795076648,subnet-0ed78cc4efed47b11,subnet-0f64d1e62abe83d4d	sg-0939a7fb80a664be9	EKS
+```
+
+`eksctl` automatically configures your `kubeconfig` file. To check your nodes:
+
+```bash
+kubectl get nodes
+```
+
+Output:
+
+```bash
+NAME                                          STATUS   ROLES    AGE     VERSION
+ip-192-168-22-89.us-west-2.compute.internal   Ready    <none>   6m33s   v1.30.2-eks-1552ad0
+```
+
+## 2. Deploy the Helm Chart
+
+### 2.1. Download the rindexer repository
+
+```bash
+git clone https://github.com/joshstevens19/rindexer.git
+```
+
+### 2.2. Configure the `values.yaml` File
+
+Customize the `values.yaml` for your deployment:
+
+```yaml
+replicaCount: 2
+
+image:
+  repository: ghcr.io/joshstevens19/rindexer
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 3001
+
+ingress:
+  enabled: false
+
+postgresql:
+  enabled: false
+```
+
+### 2.3. Install the Helm Chart
+
+```bash
+helm install rindexer ./helm/rindexer -f helm/rindexer/values.yaml
+```
+
+Output:
+
+```bash
+NAME: rindexer
+LAST DEPLOYED: Tue Aug 20 18:43:58 2024
+NAMESPACE: default
+STATUS: deployed
+REVISION: 1
+TEST SUITE: None
+NOTES:
+1. Get the application URL by running these commands:
+  export POD_NAME=$(kubectl get pods --namespace default -l "app.kubernetes.io/name=rindexer,app.kubernetes.io/instance=rindexer" -o jsonpath="{.items[0].metadata.name}")
+  export CONTAINER_PORT=$(kubectl get pod --namespace default $POD_NAME -o jsonpath="{.spec.containers[0].ports[0].containerPort}")
+  echo "Visit http://127.0.0.1:8080 to use your application"
+  kubectl --namespace default port-forward $POD_NAME 8080:$CONTAINER_PORT
+```
+
+### 2.4. Verify the Deployment
+
+```bash
+kubectl get pods
+```
+
+Output:
+
+```bash
+NAME                                READY   STATUS    RESTARTS     AGE
+rindexer-rindexer-94dd58475-p8g5d   1/1     Running   0            17s
+```
+
+## 3. Monitor and Manage the Deployment
+
+### 3.1. View Logs
+
+```bash
+kubectl logs -l app.kubernetes.io/name=rindexer
+```
+
+Output:
+
+```bash
+20 August - 16:44:17.710908  INFO RocketPoolETH::Transfer - network ethereum - 100.00% progress
+20 August - 16:44:17.779423  INFO RocketPoolETH::Transfer - No events found between blocks 18999946 - 19000000
+20 August - 16:44:17.779458  INFO RocketPoolETH::Transfer - COMPLETED - Finished indexing historic events
+20 August - 16:44:18.825983  INFO RocketPoolETH::Approval - INDEXED - 4884 events - blocks: 18900000 - 19000000 - network: ethereum
+20 August - 16:44:18.827845  INFO RocketPoolETH::Approval - network ethereum - 100.00% progress
+20 August - 16:44:18.906260  INFO RocketPoolETH::Approval - No events found between blocks 18999896 - 19000000
+20 August - 16:44:18.906299  INFO RocketPoolETH::Approval - COMPLETED - Finished indexing historic events
+20 August - 16:44:18.906347  INFO Historical indexing complete - time taken: 2.599786906s
+20 August - 16:44:18.906407  INFO Applying indexes if any back to the database as historic resync is complete
+20 August - 16:44:18.906414  INFO rindexer resync is complete
+```
+
+### 3.2. Upgrade the Helm Chart
+
+```bash
+helm upgrade rindexer ./rindexer -f values.yaml
+```
+
+## 4. Clean Up
+
+### 4.1. Uninstall the Helm Chart
+
+```bash
+helm uninstall rindexer
+```
+
+Output:
+
+```bash
+release "rindexer" uninstalled
+```
+
+### 4.2. Delete the EKS cluster
+
+```bash
+eksctl delete cluster --name my-cluster --region us-west-2
+```
+
+Ouput:
+
+```bash
+2024-08-20 18:49:04 [ℹ]  deleting EKS cluster "my-cluster"
+2024-08-20 18:49:05 [ℹ]  will drain 0 unmanaged nodegroup(s) in cluster "my-cluster"
+2024-08-20 18:49:05 [ℹ]  starting parallel draining, max in-flight of 1
+2024-08-20 18:49:05 [✖]  failed to acquire semaphore while waiting for all routines to finish: context canceled
+2024-08-20 18:49:07 [ℹ]  deleted 0 Fargate profile(s)
+2024-08-20 18:49:09 [✔]  kubeconfig has been updated
+2024-08-20 18:49:09 [ℹ]  cleaning up AWS load balancers created by Kubernetes objects of Kind Service or Ingress
+2024-08-20 18:49:12 [ℹ]
+2 sequential tasks: { delete nodegroup "standard-workers", delete cluster control plane "my-cluster" [async]
+}
+2024-08-20 18:49:12 [ℹ]  will delete stack "eksctl-my-cluster-nodegroup-standard-workers"
+2024-08-20 18:49:12 [ℹ]  waiting for stack "eksctl-my-cluster-nodegroup-standard-workers" to get deleted
+2024-08-20 18:49:13 [ℹ]  waiting for CloudFormation stack "eksctl-my-cluster-nodegroup-standard-workers"
+....
+2024-08-20 18:58:09 [ℹ]  will delete stack "eksctl-my-cluster-cluster"
+2024-08-20 18:58:10 [✔]  all cluster resources were deleted
+```
+
+This guide provides the necessary steps to deploy the `rindexer` Helm chart on AWS EKS using `eksctl`.
