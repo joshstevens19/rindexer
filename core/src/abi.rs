@@ -87,10 +87,14 @@ impl ABIInput {
             .iter()
             .flat_map(|input| {
                 if let Some(components) = &input.components {
+                    let new_prefix = match prefix {
+                        Some(p) => format!("{}_{}", p, camel_to_snake(&input.name)),
+                        None => camel_to_snake(&input.name),
+                    };
                     ABIInput::generate_abi_name_properties(
                         components,
                         properties_type,
-                        Some(&camel_to_snake(&input.name)),
+                        Some(&new_prefix),
                     )
                 } else {
                     match properties_type {
