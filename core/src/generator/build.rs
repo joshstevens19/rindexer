@@ -392,7 +392,13 @@ serde = {{ version = "1.0.194", features = ["derive"] }}
                 
                 let mut port: Option<u16> = None;
 
-                for arg in args.iter() {
+                let args = args.iter();
+                if args.len() == 0 {
+                    enable_graphql = true;
+                    enable_indexer = true;
+                }
+
+                for arg in args {
                     match arg.as_str() {
                         "--graphql" => enable_graphql = true,
                         "--indexer" => enable_indexer = true,
@@ -408,11 +414,7 @@ serde = {{ version = "1.0.194", features = ["derive"] }}
                                 }
                             }
                         },
-                        _ => {
-                            // default run both
-                            enable_graphql = true;
-                            enable_indexer = true;
-                        }
+                        _ => {}
                     }
                 }
 
