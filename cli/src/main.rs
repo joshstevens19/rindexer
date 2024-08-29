@@ -63,10 +63,7 @@ fn resolve_path(override_path: &Option<String>) -> Result<PathBuf, String> {
             let path = PathBuf::from_str(path).map_err(|_| "Invalid path provided.".to_string())?;
             Ok(path)
         }
-        None => {
-            Ok(std::env::current_dir()
-                .map_err(|_| "Failed to get current directory.".to_string())?)
-        }
+        None => Ok(PathBuf::from(".")),
     }
 }
 
