@@ -15,7 +15,13 @@ async fn main() {
 
     let mut port: Option<u16> = None;
 
-    for arg in args.iter() {
+    let args = args.iter();
+    if args.len() == 0 {
+        enable_graphql = true;
+        enable_indexer = true;
+    }
+
+    for arg in args {
         match arg.as_str() {
             "--graphql" => enable_graphql = true,
             "--indexer" => enable_indexer = true,
@@ -31,13 +37,11 @@ async fn main() {
                     }
                 }
             }
-            _ => {
-                // default run both
-                enable_graphql = true;
-                enable_indexer = true;
-            }
+            _ => {}
         }
     }
+    
+    println!("Starting rindexer rust project - graphql {} indexer {}", enable_graphql, enable_indexer);
 
     let path = env::current_dir();
     match path {
