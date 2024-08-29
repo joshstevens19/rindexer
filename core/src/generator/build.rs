@@ -346,7 +346,7 @@ pub enum GenerateRustProjectError {
 
 pub fn generate_rust_project(project_path: &Path) -> Result<(), GenerateRustProjectError> {
     let manifest_location = project_path.join(YAML_CONFIG_NAME);
-    let manifest = read_manifest(&project_path.join(&manifest_location))?;
+    let manifest = read_manifest(&manifest_location)?;
 
     let abi_path = project_path.join("abis");
 
