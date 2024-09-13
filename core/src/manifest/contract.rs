@@ -60,7 +60,7 @@ pub struct ContractDetails {
     address: Option<ValueOrArray<Address>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub filter: Option<FilterDetailsYaml>,
+    pub filter: Option<ValueOrArray<FilterDetailsYaml>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub indexed_filters: Option<Vec<EventInputIndexedFilters>>,
@@ -94,10 +94,18 @@ impl ContractDetails {
             // } else if let Some(factory) = &self.factory {
             //     IndexingContractSetup::Factory(factory.clone())
         } else if let Some(filter) = &self.filter {
-            IndexingContractSetup::Filter(FilterDetails {
-                event_name: filter.event_name.clone(),
-                indexed_filters: self.indexed_filters.as_ref().and_then(|f| f.first().cloned()),
-            })
+            return match filter {
+                ValueOrArray::Value(filter) => IndexingContractSetup::Filter(FilterDetails {
+                    events: ValueOrArray::Value(filter.event_name.clone()),
+                    indexed_filters: self.indexed_filters.as_ref().and_then(|f| f.first().cloned()),
+                }),
+                ValueOrArray::Array(filters) => IndexingContractSetup::Filter(FilterDetails {
+                    events: ValueOrArray::Array(
+                        filters.iter().map(|f| f.event_name.clone()).collect(),
+                    ),
+                    indexed_filters: self.indexed_filters.as_ref().and_then(|f| f.first().cloned()),
+                }),
+            }
         } else {
             panic!("Contract details must have an address, factory or filter");
         }
@@ -124,24 +132,6 @@ impl ContractDetails {
             network,
             address: Some(address),
             filter: None,
-            indexed_filters,
-            //factory: None,
-            start_block,
-            end_block,
-        }
-    }
-
-    pub fn new_with_filter(
-        network: String,
-        filter: FilterDetailsYaml,
-        indexed_filters: Option<Vec<EventInputIndexedFilters>>,
-        start_block: Option<U64>,
-        end_block: Option<U64>,
-    ) -> Self {
-        Self {
-            network,
-            address: None,
-            filter: Some(filter),
             indexed_filters,
             //factory: None,
             start_block,
