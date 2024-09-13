@@ -217,12 +217,17 @@ fn generate_event_callback_structs_code(
     storage: &Storage,
 ) -> Result<Code, GenerateEventCallbackStructsError> {
     let databases_enabled = storage.postgres_enabled();
+    let csv_enabled = storage.csv_enabled();
     let is_filter = contract.is_filter();
 
     let mut parts = Vec::new();
 
     for info in event_info {
-        let csv_generator = generate_csv_instance(project_path, contract, info, &storage.csv)?;
+        let csv_generator = if csv_enabled {
+            generate_csv_instance(project_path, contract, info, &storage.csv)?
+        } else {
+            Code::blank()
+        };
 
         let part = format!(
             r#"
@@ -270,12 +275,12 @@ fn generate_event_callback_structs_code(
                     Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
                 {{
                     {csv_generator}
-            
+
                     Self {{
                         callback: {lower_name}_handler(closure),
                         context: Arc::new(EventContext {{
                             {database}
-                            csv: Arc::new(csv),
+                            {csv}
                             extensions: Arc::new(extensions),
                         }}),
                     }}
@@ -313,6 +318,11 @@ fn generate_event_callback_structs_code(
             struct_data = info.struct_data(),
             database = if databases_enabled {
                 r#"database: Arc::new(PostgresClient::new().await.expect("Failed to connect to Postgres")),"#
+            } else {
+                ""
+            },
+            csv = if csv_enabled {
+                r#"csv: Arc::new(csv),"#
             } else {
                 ""
             },
@@ -478,7 +488,7 @@ fn generate_event_bindings_code(
         use ethers::{{providers::{{Http, Provider, RetryClient}}, abi::Address, types::{{Bytes, H256}}}};
         use rindexer::{{
             async_trait,
-            AsyncCsvAppender,
+            {csv_import}
             generate_random_id,
             FutureExt,
             event::{{
@@ -492,7 +502,7 @@ fn generate_event_bindings_code(
                 contract::{{Contract, ContractDetails}},
                 yaml::read_manifest,
             }},
-            {client_import}
+            {postgres_client_import}
             provider::JsonRpcCachedProvider
         }};
         use super::super::super::super::typings::networks::get_provider_cache_for_network;
@@ -508,7 +518,7 @@ fn generate_event_bindings_code(
 
         pub struct EventContext<TExtensions> where TExtensions: Send + Sync {{
             {event_context_database}
-            pub csv: Arc<AsyncCsvAppender>,
+            {event_context_csv}
             pub extensions: Arc<TExtensions>,
         }}
 
@@ -617,7 +627,8 @@ fn generate_event_bindings_code(
             }}
         }}
         "#,
-        client_import = if storage.postgres_enabled() { "PostgresClient," } else { "" },
+        postgres_client_import = if storage.postgres_enabled() { "PostgresClient," } else { "" },
+        csv_import = if storage.csv_enabled() { "AsyncCsvAppender," } else { "" },
         abigen_mod_name = abigen_contract_mod_name(contract),
         abigen_file_name = abigen_contract_file_name(contract),
         abigen_name = abigen_contract_name(contract),
@@ -625,6 +636,7 @@ fn generate_event_bindings_code(
         event_type_name = &event_type_name,
         event_context_database =
             if storage.postgres_enabled() { "pub database: Arc<PostgresClient>," } else { "" },
+        event_context_csv = if storage.csv_enabled() { "pub csv: Arc<AsyncCsvAppender>," } else { "" },
         event_callback_structs =
             generate_event_callback_structs_code(project_path, &event_info, contract, storage)?,
         event_enums = generate_event_enums_code(&event_info),
