@@ -14,6 +14,7 @@ use super::{
     networks_bindings::generate_networks_code,
 };
 use crate::{
+    generator::database_bindings::generate_database_code,
     helpers::{
         camel_to_snake, create_mod_file, format_all_files_for_project, write_file,
         CreateModFileError, WriteFileError,
@@ -61,6 +62,13 @@ fn write_global(
 ) -> Result<(), WriteGlobalError> {
     let context_code = generate_context_code(&global.contracts, networks);
     write_file(&generate_file_location(output, "global_contracts"), context_code.as_str())?;
+
+    Ok(())
+}
+
+fn write_database(output: &Path) -> Result<(), WriteGlobalError> {
+    let database_code = generate_database_code();
+    write_file(&generate_file_location(output, "database"), database_code.as_str())?;
 
     Ok(())
 }
@@ -161,6 +169,10 @@ pub fn generate_rindexer_typings(
             write_networks(&output, &manifest.networks)?;
             if let Some(global) = &manifest.global {
                 write_global(&output, global, &manifest.networks)?;
+            }
+
+            if manifest.storage.postgres_enabled() {
+                write_database(&output)?;
             }
 
             write_indexer_events(project_path, &output, manifest.to_indexer(), &manifest.storage)?;

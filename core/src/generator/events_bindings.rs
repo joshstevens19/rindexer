@@ -317,7 +317,7 @@ fn generate_event_callback_structs_code(
             struct_result = info.struct_result(),
             struct_data = info.struct_data(),
             database = if databases_enabled {
-                r#"database: Arc::new(PostgresClient::new().await.expect("Failed to connect to Postgres")),"#
+                "database: get_or_init_postgres_client().await,"
             } else {
                 ""
             },
@@ -498,10 +498,11 @@ fn generate_event_bindings_code(
                 contract::{{Contract, ContractDetails}},
                 yaml::read_manifest,
             }},
+            provider::JsonRpcCachedProvider,
             {postgres_client_import}
-            provider::JsonRpcCachedProvider
         }};
         use super::super::super::super::typings::networks::get_provider_cache_for_network;
+        {postgres_import}
 
         {structs}
 
@@ -623,6 +624,11 @@ fn generate_event_bindings_code(
             }}
         }}
         "#,
+        postgres_import = if storage.postgres_enabled() {
+            "use super::super::super::super::typings::database::get_or_init_postgres_client;"
+        } else {
+            ""
+        },
         postgres_client_import = if storage.postgres_enabled() { "PostgresClient," } else { "" },
         csv_import = if storage.csv_enabled() { "AsyncCsvAppender," } else { "" },
         abigen_mod_name = abigen_contract_mod_name(contract),
