@@ -66,6 +66,24 @@ pub fn camel_to_snake_advanced(s: &str, numbers_attach_to_last_word: bool) -> St
     snake_case
 }
 
+pub fn to_pascal_case(input: &str) -> String {
+    let mut result = String::new();
+    let mut capitalize_next = true;
+
+    for ch in input.chars() {
+        if ch == '_' {
+            capitalize_next = true;
+        } else if capitalize_next {
+            result.push(ch.to_ascii_uppercase());
+            capitalize_next = false;
+        } else {
+            result.push(ch);
+        }
+    }
+
+    result
+}
+
 pub fn generate_random_id(len: usize) -> String {
     rand::thread_rng().sample_iter(&Alphanumeric).take(len).map(char::from).collect()
 }
@@ -130,5 +148,51 @@ mod tests {
 
         assert_eq!(camel_to_snake_advanced("ERC20", false), "erc_20");
         assert_eq!(camel_to_snake_advanced("ERC20", true), "erc20");
+    }
+
+    #[test]
+    fn test_underscore_separated() {
+        assert_eq!(to_pascal_case("user_profile_update"), "UserProfileUpdate");
+        assert_eq!(to_pascal_case("get_user_by_id"), "GetUserById");
+    }
+
+    #[test]
+    fn test_already_pascal_case() {
+        assert_eq!(to_pascal_case("UserProfile"), "UserProfile");
+        assert_eq!(to_pascal_case("GetUserById"), "GetUserById");
+    }
+
+    #[test]
+    fn test_mixed_case() {
+        assert_eq!(to_pascal_case("getUserProfile"), "GetUserProfile");
+        assert_eq!(to_pascal_case("userProfileUpdate"), "UserProfileUpdate");
+    }
+
+    #[test]
+    fn test_with_numbers() {
+        assert_eq!(to_pascal_case("user123_profile"), "User123Profile");
+        assert_eq!(to_pascal_case("get_user_2_by_id"), "GetUser2ById");
+    }
+
+    #[test]
+    fn test_with_acronyms() {
+        assert_eq!(to_pascal_case("ETH_USD_price"), "ETHUSDPrice");
+        assert_eq!(to_pascal_case("http_request_handler"), "HttpRequestHandler");
+    }
+
+    #[test]
+    fn test_single_word() {
+        assert_eq!(to_pascal_case("user"), "User");
+        assert_eq!(to_pascal_case("CONSTANT"), "CONSTANT");
+    }
+
+    #[test]
+    fn test_empty_string() {
+        assert_eq!(to_pascal_case(""), "");
+    }
+
+    #[test]
+    fn test_multiple_underscores() {
+        assert_eq!(to_pascal_case("user__profile___update"), "UserProfileUpdate");
     }
 }
