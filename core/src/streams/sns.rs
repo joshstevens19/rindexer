@@ -10,6 +10,7 @@ use tracing::{error, info};
 use crate::types::aws_config::AwsConfig;
 
 #[derive(Debug, Clone)]
+#[allow(clippy::upper_case_acronyms)]
 pub struct SNS {
     client: Client,
 }

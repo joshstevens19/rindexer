@@ -12,6 +12,7 @@ use crate::{
     abi::ABIItem,
     helpers::replace_env_variable_to_raw_name,
     manifest::core::{Manifest, ProjectType},
+    StringOrArray,
 };
 
 pub const YAML_CONFIG_NAME: &str = "rindexer.yaml";
@@ -59,6 +60,9 @@ pub enum ValidateManifestError {
 
     #[error("Streams config is invalid: {0}")]
     StreamsConfigValidationError(String),
+
+    #[error("Global ABI can only be a single string")]
+    GlobalAbiCanOnlyBeASingleString(String),
 }
 
 fn validate_manifest(
@@ -156,6 +160,24 @@ fn validate_manifest(
                 }
 
                 // TODO - Add validation for the event names and event inputs match the ABIs
+            }
+        }
+    }
+
+    if let Some(global) = &manifest.global {
+        if let Some(contracts) = &global.contracts {
+            for contract in contracts {
+                match &contract.abi {
+                    StringOrArray::Single(_) => {}
+                    StringOrArray::Multiple(value) => {
+                        return Err(ValidateManifestError::GlobalAbiCanOnlyBeASingleString(
+                            format!(
+                                "Global ABI can only be a single string but found multiple: {:?}",
+                                value
+                            ),
+                        ));
+                    }
+                }
             }
         }
     }

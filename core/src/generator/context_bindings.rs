@@ -8,6 +8,7 @@ use crate::{
         network::Network,
     },
     types::code::Code,
+    StringOrArray,
 };
 
 fn generate_contract_code(
@@ -19,6 +20,7 @@ fn generate_contract_code(
     if let Some(address) = contract_details.address() {
         match address {
             ValueOrArray::Value(address) => {
+                let contract_address = format!("{:?}", address);
                 let code = format!(
                     r#"
                         abigen!({contract_name}, "{contract_path}");
@@ -33,7 +35,7 @@ fn generate_contract_code(
                     "#,
                     contract_name = contract_name,
                     contract_fn_name = camel_to_snake(contract_name),
-                    contract_address = address,
+                    contract_address = contract_address,
                     network_fn_name = network_provider_fn_name(network),
                     contract_path = abi_location
                 );
@@ -83,12 +85,16 @@ fn generate_contracts_code(contracts: &[Contract], networks: &[Network]) -> Code
     for contract in contracts {
         for details in &contract.details {
             if let Some(network) = networks.iter().find(|&n| n.name == details.network) {
-                code.push_str(&generate_contract_code(
-                    &contract.name,
-                    details,
-                    &contract.abi,
-                    network,
-                ));
+                if let StringOrArray::Single(abi_path) = &contract.abi {
+                    code.push_str(&generate_contract_code(
+                        &contract.name,
+                        details,
+                        abi_path,
+                        network,
+                    ));
+                } else {
+                    panic!("Multiple ABIs not supported yet on global contracts");
+                }
             }
         }
     }

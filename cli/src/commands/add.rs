@@ -10,7 +10,7 @@ use rindexer::{
         contract::{Contract, ContractDetails},
         yaml::{read_manifest_raw, write_manifest, YAML_CONFIG_NAME},
     },
-    public_read_env_value, write_file,
+    public_read_env_value, write_file, StringOrArray,
 };
 
 use crate::{
@@ -176,7 +176,7 @@ pub async fn handle_add_contract_command(
                 None,
                 None,
             )],
-            abi: abi_path_relative,
+            abi: StringOrArray::Single(abi_path_relative),
             include_events: None,
             index_event_in_order: None,
             dependency_events: None,

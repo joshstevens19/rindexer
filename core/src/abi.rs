@@ -9,8 +9,8 @@ use crate::{
         sql_type_wrapper::{solidity_type_to_ethereum_sql_type_wrapper, EthereumSqlTypeWrapper},
     },
     event::contract_setup::IndexingContractSetup,
-    helpers::{camel_to_snake, get_full_path},
-    manifest::contract::Contract,
+    helpers::camel_to_snake,
+    manifest::contract::{Contract, ParseAbiError},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,6 +168,9 @@ pub enum ReadAbiError {
 
     #[error("Could not read ABI JSON: {0}")]
     CouldNotReadAbiJson(#[from] serde_json::Error),
+
+    #[error("{0}")]
+    ParseAbiError(#[from] ParseAbiError),
 }
 
 impl ABIItem {
@@ -197,9 +200,7 @@ impl ABIItem {
         project_path: &Path,
         contract: &Contract,
     ) -> Result<Vec<ABIItem>, ReadAbiError> {
-        let full_path = get_full_path(project_path, &contract.abi)
-            .map_err(|_| ReadAbiError::AbiPathDoesNotExist(contract.abi.clone()))?;
-        let abi_str = fs::read_to_string(full_path)?;
+        let abi_str = contract.parse_abi(project_path)?;
         let abi_items: Vec<ABIItem> = serde_json::from_str(&abi_str)?;
 
         let filtered_abi_items = match &contract.include_events {
