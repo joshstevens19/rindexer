@@ -1,9 +1,6 @@
-use std::{env, str::FromStr};
+use std::env;
 
-use rindexer::{
-    start_rindexer, GraphqlOverrideSettings, IndexingDetails,
-    StartDetails,
-};
+use rindexer::{start_rindexer, GraphqlOverrideSettings, IndexingDetails, StartDetails};
 
 use self::rindexer_lib::indexers::all_handlers::register_all_handlers;
 

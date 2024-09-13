@@ -11,7 +11,7 @@ use crate::{
     database::postgres::generate::{
         generate_column_names_only_with_base_properties, generate_event_table_full_name,
     },
-    helpers::{camel_to_snake, camel_to_snake_advanced},
+    helpers::{camel_to_snake, camel_to_snake_advanced, to_pascal_case},
     manifest::{
         contract::{Contract, ContractDetails, ParseAbiError},
         storage::{CsvDetails, Storage},
@@ -65,7 +65,7 @@ fn generate_structs(
 
             structs.push_str(&Code::new(format!(
                 r#"
-                    pub type {struct_data} = {abigen_mod_name}::{event_name}Filter;
+                    pub type {struct_data} = {abigen_mod_name}::{pascal_event_name}Filter;
 
                     #[derive(Debug, Clone)]
                     pub struct {struct_result} {{
@@ -76,7 +76,7 @@ fn generate_structs(
                 struct_result = struct_result,
                 struct_data = struct_data,
                 abigen_mod_name = abigen_contract_mod_name(contract),
-                event_name = event_name
+                pascal_event_name = to_pascal_case(event_name)
             )));
         }
     }
@@ -321,11 +321,7 @@ fn generate_event_callback_structs_code(
             } else {
                 ""
             },
-            csv = if csv_enabled {
-                r#"csv: Arc::new(csv),"#
-            } else {
-                ""
-            },
+            csv = if csv_enabled { r#"csv: Arc::new(csv),"# } else { "" },
             csv_generator = csv_generator,
             event_callback_events_len =
                 if !is_filter { "let events_len = events.len();" } else { "" },
@@ -636,7 +632,8 @@ fn generate_event_bindings_code(
         event_type_name = &event_type_name,
         event_context_database =
             if storage.postgres_enabled() { "pub database: Arc<PostgresClient>," } else { "" },
-        event_context_csv = if storage.csv_enabled() { "pub csv: Arc<AsyncCsvAppender>," } else { "" },
+        event_context_csv =
+            if storage.csv_enabled() { "pub csv: Arc<AsyncCsvAppender>," } else { "" },
         event_callback_structs =
             generate_event_callback_structs_code(project_path, &event_info, contract, storage)?,
         event_enums = generate_event_enums_code(&event_info),
