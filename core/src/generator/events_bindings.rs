@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::path::Path;
 
 use ethers::types::ValueOrArray;
 use serde_json::Value;
@@ -11,9 +11,9 @@ use crate::{
     database::postgres::generate::{
         generate_column_names_only_with_base_properties, generate_event_table_full_name,
     },
-    helpers::{camel_to_snake, camel_to_snake_advanced, get_full_path},
+    helpers::{camel_to_snake, camel_to_snake_advanced},
     manifest::{
-        contract::{Contract, ContractDetails},
+        contract::{Contract, ContractDetails, ParseAbiError},
         storage::{CsvDetails, Storage},
     },
     types::code::Code,
@@ -42,8 +42,8 @@ pub enum GenerateStructsError {
     #[error("Invalid ABI JSON format")]
     InvalidAbiJsonFormat,
 
-    #[error("Could not find ABI path: {0}")]
-    AbiPathDoesNotExist(String),
+    #[error("{0}")]
+    ParseAbiError(#[from] ParseAbiError),
 }
 
 fn generate_structs(
@@ -51,9 +51,8 @@ fn generate_structs(
     contract: &Contract,
 ) -> Result<Code, GenerateStructsError> {
     // TODO - this could be shared with `get_abi_items`
-    let full_path = get_full_path(project_path, &contract.abi)
-        .map_err(|_| GenerateStructsError::AbiPathDoesNotExist(contract.abi.clone()))?;
-    let abi_str = fs::read_to_string(full_path)?;
+    let abi_str = contract.parse_abi(project_path)?;
+
     let abi_json: Value = serde_json::from_str(&abi_str)?;
 
     let mut structs = Code::blank();

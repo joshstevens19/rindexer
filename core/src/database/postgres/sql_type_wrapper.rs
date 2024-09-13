@@ -322,6 +322,7 @@ impl ToSql for EthereumSqlTypeWrapper {
     to_sql_checked!();
 }
 
+#[allow(clippy::manual_strip)]
 pub fn solidity_type_to_ethereum_sql_type_wrapper(
     abi_type: &str,
 ) -> Option<EthereumSqlTypeWrapper> {

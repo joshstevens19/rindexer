@@ -4,10 +4,6 @@ networks:
   - name: ethereum
     chain_id: 1
     rpc: https://mainnet.gateway.tenderly.co
-  - name: yominet
-    chain_id: 5264468217
-    rpc: https://yominet.rpc.caldera.xyz/http
-    max_block_range: 10000
 storage:
   postgres:
     enabled: true
@@ -30,15 +26,15 @@ contracts:
       - filter:
             event_name: Transfer
         network: ethereum
-        #start_block: 56399431
+        start_block: 56399431
     abi: ./abis/erc20-abi.json
     generate_csv: true
-  - name: World
-    details:
-      - network: yominet
-        address: 0x441e13a25caecad50028e7623a39b91a507bca02
-        start_block: '1077466'
-        end_block: '1650276'
-    abi: ./abis/world.abi.json
-    include_events:
-      - ComponentValueSet
+global:
+  contracts:
+    - name: USDT
+      details:
+        - address: 0xdac17f958d2ee523a2206206994597c13d831ec7
+          network: ethereum
+        - address: 0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2
+          network: base
+      abi: ./abis/erc20-abi.json

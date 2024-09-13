@@ -1,6 +1,9 @@
-use std::env;
+use std::{env, str::FromStr};
 
-use rindexer::{start_rindexer, GraphqlOverrideSettings, IndexingDetails, StartDetails};
+use rindexer::{
+    start_rindexer, GraphqlOverrideSettings, IndexingDetails,
+    StartDetails,
+};
 
 use self::rindexer_lib::indexers::all_handlers::register_all_handlers;
 
@@ -40,8 +43,11 @@ async fn main() {
             _ => {}
         }
     }
-    
-    println!("Starting rindexer rust project - graphql {} indexer {}", enable_graphql, enable_indexer);
+
+    println!(
+        "Starting rindexer rust project - graphql {} indexer {}",
+        enable_graphql, enable_indexer
+    );
 
     let path = env::current_dir();
     match path {

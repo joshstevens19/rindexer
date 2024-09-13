@@ -31,7 +31,6 @@ pub mod provider;
 mod start;
 mod streams;
 mod types;
-
 // export 3rd party dependencies
 pub use async_trait::async_trait;
 pub use colored::Colorize as RindexerColorize;
@@ -45,3 +44,4 @@ pub use start::{
 pub use tokio::main as rindexer_main;
 pub use tokio_postgres::types::Type as PgType;
 pub use tracing::{error as rindexer_error, info as rindexer_info};
+pub use types::single_or_array::StringOrArray;

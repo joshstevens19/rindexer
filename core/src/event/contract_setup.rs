@@ -11,6 +11,7 @@ use crate::{
     generate_random_id,
     manifest::contract::{Contract, EventInputIndexedFilters},
     provider::{CreateNetworkProvider, JsonRpcCachedProvider},
+    types::single_or_array::StringOrArray,
 };
 
 #[derive(Clone)]
@@ -39,7 +40,7 @@ impl NetworkContract {
 pub struct ContractInformation {
     pub name: String,
     pub details: Vec<NetworkContract>,
-    pub abi: String,
+    pub abi: StringOrArray,
     pub reorg_safe_distance: bool,
 }
 
