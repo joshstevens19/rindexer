@@ -10,9 +10,6 @@ pub use rindexer_rocket_pool_eth_gen::*;
     non_camel_case_types
 )]
 pub mod rindexer_rocket_pool_eth_gen {
-    const _: () = {
-        ::core::include_bytes!("../../../../../abis/erc20-abi.json",);
-    };
     #[allow(deprecated)]
     fn __abi() -> ::ethers::core::abi::Abi {
         ::ethers::core::abi::ethabi::Contract {

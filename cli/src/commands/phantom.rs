@@ -20,7 +20,7 @@ use rindexer::{
         create_dyrpc_api_key, deploy_dyrpc_contract,
         shadow::deploy_shadow_contract,
     },
-    public_read_env_value, write_file,
+    public_read_env_value, write_file, StringOrArray,
 };
 
 use crate::{
@@ -558,7 +558,7 @@ async fn handle_phantom_deploy(
                     serde_json::to_string_pretty(&compiled_contract.abi).unwrap().as_str(),
                 )?;
 
-                contract.abi = format!("./abis/{}.abi.json", name);
+                contract.abi = StringOrArray::Single(format!("./abis/{}.abi.json", name));
                 contract_network.unwrap().network = name;
 
                 write_manifest(&manifest, &rindexer_yaml_path)?;

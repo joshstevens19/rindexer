@@ -1,4 +1,4 @@
-use std::{fs, io, path::Path, sync::Arc};
+use std::{io, path::Path, sync::Arc};
 
 use colored::Colorize;
 use ethers::abi::{Abi, Contract as EthersContract, Event};
@@ -29,9 +29,9 @@ use crate::{
         EventMessage,
     },
     generate_random_id,
-    helpers::get_full_path,
     indexer::log_helpers::{map_log_params_to_raw_values, parse_log},
     manifest::{
+        contract::ParseAbiError,
         core::Manifest,
         yaml::{read_manifest, ReadManifestError},
     },
@@ -423,9 +423,6 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ProcessIndexersError {
-    #[error("Could not find ABI path: {0}")]
-    AbiPathDoesNotExist(String),
-
     #[error("Could not read ABI string: {0}")]
     CouldNotReadAbiString(#[from] io::Error),
 
@@ -449,6 +446,9 @@ pub enum ProcessIndexersError {
 
     #[error("Event name not found in ABI for contract: {0} - event: {1}")]
     EventNameNotFoundInAbi(String, String),
+
+    #[error("{0}")]
+    ParseAbiError(#[from] ParseAbiError),
 }
 
 pub async fn process_events(
@@ -461,10 +461,7 @@ pub async fn process_events(
 
     for contract in &mut manifest.contracts {
         // TODO - this could be shared with `get_abi_items`
-        let full_path = get_full_path(project_path, &contract.abi)
-            .map_err(|_| ProcessIndexersError::AbiPathDoesNotExist(contract.abi.clone()))?;
-        let abi_str = fs::read_to_string(full_path)?;
-
+        let abi_str = contract.parse_abi(project_path)?;
         let abi: Abi = serde_json::from_str(&abi_str)?;
 
         #[allow(clippy::useless_conversion)]
