@@ -5,6 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use ethers::types::ValueOrArray;
 use regex::{Captures, Regex};
 use tracing::error;
 
@@ -82,12 +83,30 @@ fn validate_manifest(
                 ));
             }
 
-            if let Some(address) = &detail.filter {
-                if !events.iter().any(|e| e.name == *address.event_name) {
-                    return Err(ValidateManifestError::InvalidFilterEventNameDoesntExistInABI(
-                        address.event_name.clone(),
-                        contract.name.clone(),
-                    ));
+            if let Some(filter_details) = &detail.filter {
+                match filter_details {
+                    ValueOrArray::Value(filter_details) => {
+                        if !events.iter().any(|e| e.name == *filter_details.event_name) {
+                            return Err(
+                                ValidateManifestError::InvalidFilterEventNameDoesntExistInABI(
+                                    filter_details.event_name.clone(),
+                                    contract.name.clone(),
+                                ),
+                            );
+                        }
+                    }
+                    ValueOrArray::Array(filters) => {
+                        for filter_details in filters {
+                            if !events.iter().any(|e| e.name == *filter_details.event_name) {
+                                return Err(
+                                    ValidateManifestError::InvalidFilterEventNameDoesntExistInABI(
+                                        filter_details.event_name.clone(),
+                                        contract.name.clone(),
+                                    ),
+                                );
+                            }
+                        }
+                    }
                 }
             }
 

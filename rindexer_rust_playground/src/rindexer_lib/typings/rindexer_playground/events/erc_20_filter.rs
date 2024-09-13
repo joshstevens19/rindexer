@@ -78,6 +78,101 @@ pub fn no_extensions() -> NoExtensions {
     NoExtensions {}
 }
 
+pub fn approval_handler<TExtensions, F, Fut>(
+    custom_logic: F,
+) -> ApprovalEventCallbackType<TExtensions>
+where
+    ApprovalResult: Clone + 'static,
+    F: for<'a> Fn(Vec<ApprovalResult>, Arc<EventContext<TExtensions>>) -> Fut
+        + Send
+        + Sync
+        + 'static
+        + Clone,
+    Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
+    TExtensions: Send + Sync + 'static,
+{
+    Arc::new(move |results, context| {
+        let custom_logic = custom_logic.clone();
+        let results = results.clone();
+        let context = Arc::clone(&context);
+        async move { (custom_logic)(results, context).await }.boxed()
+    })
+}
+
+type ApprovalEventCallbackType<TExtensions> = Arc<
+    dyn for<'a> Fn(
+            &'a Vec<ApprovalResult>,
+            Arc<EventContext<TExtensions>>,
+        ) -> BoxFuture<'a, EventCallbackResult<()>>
+        + Send
+        + Sync,
+>;
+
+pub struct ApprovalEvent<TExtensions>
+where
+    TExtensions: Send + Sync + 'static,
+{
+    callback: ApprovalEventCallbackType<TExtensions>,
+    context: Arc<EventContext<TExtensions>>,
+}
+
+impl<TExtensions> ApprovalEvent<TExtensions>
+where
+    TExtensions: Send + Sync + 'static,
+{
+    pub async fn handler<F, Fut>(closure: F, extensions: TExtensions) -> Self
+    where
+        ApprovalResult: Clone + 'static,
+        F: for<'a> Fn(Vec<ApprovalResult>, Arc<EventContext<TExtensions>>) -> Fut
+            + Send
+            + Sync
+            + 'static
+            + Clone,
+        Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
+    {
+        let csv = AsyncCsvAppender::new("/Users/joshstevens/code/rindexer/rindexer_rust_playground/./generated_csv/ERC20Filter/erc20filter-approval.csv");
+        if !Path::new("/Users/joshstevens/code/rindexer/rindexer_rust_playground/./generated_csv/ERC20Filter/erc20filter-approval.csv").exists() {
+            csv.append_header(vec!["contract_address".into(), "owner".into(), "spender".into(), "value".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()])
+                .await
+                .expect("Failed to write CSV header");
+        }
+
+        Self {
+            callback: approval_handler(closure),
+            context: Arc::new(EventContext {
+                database: get_or_init_postgres_client().await,
+                csv: Arc::new(csv),
+                extensions: Arc::new(extensions),
+            }),
+        }
+    }
+}
+
+#[async_trait]
+impl<TExtensions> EventCallback for ApprovalEvent<TExtensions>
+where
+    TExtensions: Send + Sync,
+{
+    async fn call(&self, events: Vec<EventResult>) -> EventCallbackResult<()> {
+        // note some can not downcast because it cant decode
+        // this happens on events which failed decoding due to
+        // not having the right abi for example
+        // transfer events with 2 indexed topics cant decode
+        // transfer events with 3 indexed topics
+        let result: Vec<ApprovalResult> = events
+            .into_iter()
+            .filter_map(|item| {
+                item.decoded_data.downcast::<ApprovalData>().ok().map(|arc| ApprovalResult {
+                    event_data: (*arc).clone(),
+                    tx_information: item.tx_information,
+                })
+            })
+            .collect();
+
+        (self.callback)(&result, Arc::clone(&self.context)).await
+    }
+}
+
 pub fn transfer_handler<TExtensions, F, Fut>(
     custom_logic: F,
 ) -> TransferEventCallbackType<TExtensions>
@@ -177,6 +272,7 @@ pub enum ERC20FilterEventType<TExtensions>
 where
     TExtensions: 'static + Send + Sync,
 {
+    Approval(ApprovalEvent<TExtensions>),
     Transfer(TransferEvent<TExtensions>),
 }
 
@@ -208,6 +304,9 @@ where
 {
     pub fn topic_id(&self) -> &'static str {
         match self {
+            ERC20FilterEventType::Approval(_) => {
+                "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925"
+            }
             ERC20FilterEventType::Transfer(_) => {
                 "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
             }
@@ -216,6 +315,7 @@ where
 
     pub fn event_name(&self) -> &'static str {
         match self {
+            ERC20FilterEventType::Approval(_) => "Approval",
             ERC20FilterEventType::Transfer(_) => "Transfer",
         }
     }
@@ -235,6 +335,13 @@ where
         let decoder_contract = decoder_contract(network);
 
         match self {
+            ERC20FilterEventType::Approval(_) => Arc::new(move |topics: Vec<H256>, data: Bytes| {
+                match decoder_contract.decode_event::<ApprovalData>("Approval", topics, data) {
+                    Ok(filter) => Arc::new(filter) as Arc<dyn Any + Send + Sync>,
+                    Err(error) => Arc::new(error) as Arc<dyn Any + Send + Sync>,
+                }
+            }),
+
             ERC20FilterEventType::Transfer(_) => Arc::new(move |topics: Vec<H256>, data: Bytes| {
                 match decoder_contract.decode_event::<TransferData>("Transfer", topics, data) {
                     Ok(filter) => Arc::new(filter) as Arc<dyn Any + Send + Sync>,
@@ -294,6 +401,14 @@ where
         let callback: Arc<
             dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync,
         > = match self {
+            ERC20FilterEventType::Approval(event) => {
+                let event = Arc::new(event);
+                Arc::new(move |result| {
+                    let event = Arc::clone(&event);
+                    async move { event.call(result).await }.boxed()
+                })
+            }
+
             ERC20FilterEventType::Transfer(event) => {
                 let event = Arc::new(event);
                 Arc::new(move |result| {

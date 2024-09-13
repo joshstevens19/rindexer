@@ -118,7 +118,7 @@ pub struct FactoryDetails {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FilterDetails {
-    pub event_name: String,
+    pub events: ValueOrArray<String>,
 
     pub indexed_filters: Option<EventInputIndexedFilters>,
 }

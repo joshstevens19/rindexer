@@ -142,12 +142,9 @@ contracts: // [!code focus]
           event_name: Transfer // [!code focus]
 ```
 
-#### Index more then 1 filter
+#### Index more then 1 filter for the contract
 
-To use more then 1 filter at the moment you have to add a new entry in the details, we will merge this into `event_name`
-soon which will turn this into accepting an singular filter details or an array of filter details https://github.com/joshstevens19/rindexer/issues/40.
-
-For now you have to do it like this:
+You can just pass in an array of events names to index on the filter.
 
 ```yaml [rindexer.yaml]
 name: rETHIndexer
@@ -166,10 +163,8 @@ contracts: // [!code focus]
     details:
       - network: ethereum
         filter: // [!code focus]
-          event_name: Transfer // [!code focus]
-      - network: ethereum
-        filter: // [!code focus]
-          event_name: Approval // [!code focus]
+          - event_name: Transfer // [!code focus]
+          - event_name: Approval // [!code focus]
 ```
 
 ### indexed_1, indexed_2, indexed_3

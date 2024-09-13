@@ -1,6 +1,9 @@
-use std::{fs, iter::Map, path::Path};
+use std::{collections::HashSet, fs, iter::Map, path::Path};
 
-use ethers::{types::H256, utils::keccak256};
+use ethers::{
+    types::{ValueOrArray, H256},
+    utils::keccak256,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -221,16 +224,20 @@ impl ABIItem {
     ) -> Result<Vec<ABIItem>, ReadAbiError> {
         let mut abi_items = ABIItem::read_abi_items(project_path, contract)?;
         if is_filter {
-            let filter_event_names: Vec<String> = contract
+            let filter_event_names: HashSet<String> = contract
                 .details
                 .iter()
                 .filter_map(|detail| {
                     if let IndexingContractSetup::Filter(filter) = &detail.indexing_contract_setup()
                     {
-                        Some(filter.event_name.clone())
+                        Some(filter.events.clone())
                     } else {
                         None
                     }
+                })
+                .flat_map(|events| match events {
+                    ValueOrArray::Value(event) => vec![event.clone()],
+                    ValueOrArray::Array(event_array) => event_array.clone(),
                 })
                 .collect();
 
