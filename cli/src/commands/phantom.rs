@@ -11,7 +11,7 @@ use std::{
 use ethers::types::{Address, ValueOrArray, U64};
 use rindexer::{
     manifest::{
-        network::Network,
+        network::{Network, ProviderType},
         phantom::{Phantom, PhantomDyrpc, PhantomShadow},
         yaml::{read_manifest, read_manifest_raw, write_manifest, YAML_CONFIG_NAME},
     },
@@ -539,6 +539,7 @@ async fn handle_phantom_deploy(
                 } else {
                     manifest.networks.push(Network {
                         name: name.to_string(),
+                        kind: ProviderType::Rpc,
                         chain_id: network.unwrap().chain_id,
                         rpc: rpc_url.to_string(),
                         compute_units_per_second: None,
