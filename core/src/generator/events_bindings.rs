@@ -708,7 +708,7 @@ pub fn generate_event_handlers(
 
     let mut imports = String::new();
     imports.push_str(
-        r#"
+        r#"#![allow(non_snake_case)]
             use rindexer::{
                 event::callback_registry::EventCallbackRegistry,
                 EthereumSqlTypeWrapper, PgType, RindexerColorize, rindexer_error, rindexer_info
