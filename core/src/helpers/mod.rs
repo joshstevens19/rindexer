@@ -67,31 +67,54 @@ pub fn camel_to_snake_advanced(s: &str, numbers_attach_to_last_word: bool) -> St
 }
 
 pub fn to_pascal_case(input: &str) -> String {
-    let mut result = String::new();
-    let mut capitalize_next = true;
-    let mut prev_is_lowercase = false;
+    if input.is_empty() {
+        return String::new();
+    }
 
-    for (i, ch) in input.chars().enumerate() {
-        if ch == '_' {
-            capitalize_next = true;
-            prev_is_lowercase = false;
-        } else if capitalize_next {
-            result.push(ch.to_ascii_uppercase());
-            capitalize_next = false;
-            prev_is_lowercase = false;
-        } else if ch.is_ascii_uppercase() && prev_is_lowercase {
-            result.push(ch);
-            prev_is_lowercase = false;
-        } else if i > 0 &&
-            ch.is_ascii_uppercase() &&
-            !prev_is_lowercase &&
-            input.chars().nth(i + 1).map_or(false, |next| next.is_ascii_lowercase())
-        {
-            result.push(ch.to_ascii_lowercase());
-            prev_is_lowercase = true;
+    let words: Vec<&str> = input.split('_').filter(|s| !s.is_empty()).collect();
+    let mut result = String::with_capacity(input.len());
+
+    for (i, word) in words.iter().enumerate() {
+        if i > 0 {
+            result.push('_');
+        }
+        result.push_str(&capitalize_word(word, i == 0 && words.len() == 1));
+    }
+
+    result.replace('_', "")
+}
+
+fn capitalize_word(word: &str, is_single_word: bool) -> String {
+    if word.chars().all(|c| c.is_ascii_uppercase()) {
+        if is_single_word {
+            // Convert single all-uppercase word to Pascal case
+            let mut chars = word.chars();
+            return chars.next().unwrap().to_string() + &chars.as_str().to_lowercase();
         } else {
-            result.push(ch.to_ascii_lowercase());
-            prev_is_lowercase = ch.is_ascii_lowercase();
+            // Preserve acronyms in compound words
+            return word.to_string();
+        }
+    }
+
+    let mut result = String::with_capacity(word.len());
+    let mut chars = word.chars();
+
+    // Capitalize the first character
+    if let Some(first) = chars.next() {
+        result.extend(first.to_uppercase());
+    }
+
+    let mut prev_is_upper = false;
+    for c in chars {
+        if c.is_ascii_uppercase() {
+            if !prev_is_upper {
+                result.push('_');
+            }
+            result.extend(c.to_uppercase());
+            prev_is_upper = true;
+        } else {
+            result.extend(c.to_lowercase());
+            prev_is_upper = false;
         }
     }
 
@@ -190,7 +213,7 @@ mod tests {
 
     #[test]
     fn test_with_acronyms() {
-        assert_eq!(to_pascal_case("ETH_USD_price"), "EthUsdPrice");
+        assert_eq!(to_pascal_case("ETH_USD_price"), "ETHUSDPrice");
         assert_eq!(to_pascal_case("http_request_handler"), "HttpRequestHandler");
     }
 
