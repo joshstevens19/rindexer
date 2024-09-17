@@ -69,15 +69,29 @@ pub fn camel_to_snake_advanced(s: &str, numbers_attach_to_last_word: bool) -> St
 pub fn to_pascal_case(input: &str) -> String {
     let mut result = String::new();
     let mut capitalize_next = true;
+    let mut prev_is_lowercase = false;
 
-    for ch in input.chars() {
+    for (i, ch) in input.chars().enumerate() {
         if ch == '_' {
             capitalize_next = true;
+            prev_is_lowercase = false;
         } else if capitalize_next {
             result.push(ch.to_ascii_uppercase());
             capitalize_next = false;
-        } else {
+            prev_is_lowercase = false;
+        } else if ch.is_ascii_uppercase() && prev_is_lowercase {
             result.push(ch);
+            prev_is_lowercase = false;
+        } else if i > 0 &&
+            ch.is_ascii_uppercase() &&
+            !prev_is_lowercase &&
+            input.chars().nth(i + 1).map_or(false, |next| next.is_ascii_lowercase())
+        {
+            result.push(ch.to_ascii_lowercase());
+            prev_is_lowercase = true;
+        } else {
+            result.push(ch.to_ascii_lowercase());
+            prev_is_lowercase = ch.is_ascii_lowercase();
         }
     }
 
@@ -176,14 +190,15 @@ mod tests {
 
     #[test]
     fn test_with_acronyms() {
-        assert_eq!(to_pascal_case("ETH_USD_price"), "ETHUSDPrice");
+        assert_eq!(to_pascal_case("ETH_USD_price"), "EthUsdPrice");
         assert_eq!(to_pascal_case("http_request_handler"), "HttpRequestHandler");
     }
 
     #[test]
     fn test_single_word() {
         assert_eq!(to_pascal_case("user"), "User");
-        assert_eq!(to_pascal_case("CONSTANT"), "CONSTANT");
+        assert_eq!(to_pascal_case("CONSTANT"), "Constant");
+        assert_eq!(to_pascal_case("URI"), "Uri");
     }
 
     #[test]
