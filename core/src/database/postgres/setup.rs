@@ -31,7 +31,7 @@ pub async fn setup_postgres(
     let client = PostgresClient::new().await?;
 
     let disable_event_tables = manifest.storage.postgres_disable_create_tables();
-    
+
     if manifest.storage.postgres_drop_each_run() {
         info!(
             "`drop_each_run` enabled so dropping all data for {} before starting",

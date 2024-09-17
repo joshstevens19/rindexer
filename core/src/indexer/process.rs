@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use async_std::prelude::StreamExt;
 use ethers::{
@@ -9,6 +9,7 @@ use futures::future::join_all;
 use tokio::{
     sync::{Mutex, MutexGuard},
     task::{JoinError, JoinHandle},
+    time::Instant,
 };
 use tracing::{debug, error, info};
 
@@ -213,8 +214,12 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
         );
     }
 
+    // this is used for less busy chains to make sure they know rindexer is still alive
+    let mut last_no_new_block_log_time = Instant::now();
+    let log_no_new_block_interval = Duration::from_secs(20);
+
     loop {
-        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
 
         for (config, _) in live_indexing_events.iter() {
             let mut ordering_live_indexing_details = ordering_live_indexing_details_map
@@ -238,6 +243,16 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                                     &config.info_log_name,
                                     IndexingEventProgressStatus::Live.log()
                                 );
+                                if last_no_new_block_log_time.elapsed() >= log_no_new_block_interval
+                                {
+                                    info!(
+                                        "{} - {} - No new blocks published in the last 20 seconds - latest block number {}",
+                                        &config.info_log_name,
+                                        IndexingEventProgressStatus::Live.log(),
+                                        latest_block_number
+                                    );
+                                    last_no_new_block_log_time = Instant::now();
+                                }
                                 continue;
                             }
                             info!(
