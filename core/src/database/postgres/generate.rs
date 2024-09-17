@@ -159,6 +159,7 @@ fn find_clashing_event_names(
 pub fn generate_tables_for_indexer_sql(
     project_path: &Path,
     indexer: &Indexer,
+    disable_event_tables: bool,
 ) -> Result<Code, GenerateTablesForIndexerSqlError> {
     let mut sql = "CREATE SCHEMA IF NOT EXISTS rindexer_internal;".to_string();
 
@@ -167,20 +168,27 @@ pub fn generate_tables_for_indexer_sql(
         let abi_items = ABIItem::read_abi_items(project_path, contract)?;
         let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
         let schema_name = generate_indexer_contract_schema_name(&indexer.name, &contract_name);
-        sql.push_str(format!("CREATE SCHEMA IF NOT EXISTS {};", schema_name).as_str());
-        info!("Creating schema if not exists: {}", schema_name);
-
         let networks: Vec<&str> = contract.details.iter().map(|d| d.network.as_str()).collect();
 
-        let event_matching_name_on_other =
-            find_clashing_event_names(project_path, contract, &indexer.contracts, &event_names)?;
+        if !disable_event_tables {
+            sql.push_str(format!("CREATE SCHEMA IF NOT EXISTS {};", schema_name).as_str());
+            info!("Creating schema if not exists: {}", schema_name);
 
-        sql.push_str(&generate_event_table_sql_with_comments(
-            &event_names,
-            &contract.name,
-            &schema_name,
-            event_matching_name_on_other,
-        ));
+            let event_matching_name_on_other = find_clashing_event_names(
+                project_path,
+                contract,
+                &indexer.contracts,
+                &event_names,
+            )?;
+
+            sql.push_str(&generate_event_table_sql_with_comments(
+                &event_names,
+                &contract.name,
+                &schema_name,
+                event_matching_name_on_other,
+            ));
+        }
+        // we still need to create the internal tables for the contract
         sql.push_str(&generate_internal_event_table_sql(&event_names, &schema_name, networks));
     }
 
