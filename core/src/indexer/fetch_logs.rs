@@ -1,4 +1,4 @@
-use std::{error::Error, str::FromStr, sync::Arc};
+use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
 
 use ethers::{
     addressbook::Address,
@@ -6,7 +6,10 @@ use ethers::{
     prelude::{BlockNumber, JsonRpcError, Log, ValueOrArray, H256, U64},
 };
 use regex::Regex;
-use tokio::sync::{mpsc, Semaphore};
+use tokio::{
+    sync::{mpsc, Semaphore},
+    time::Instant,
+};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, error, info, warn};
 
@@ -325,6 +328,11 @@ async fn live_indexing_stream(
     disable_logs_bloom_checks: bool,
 ) {
     let mut last_seen_block_number = U64::from(0);
+
+    // this is used for less busy chains to make sure they know rindexer is still alive
+    let mut last_no_new_block_log_time = Instant::now();
+    let log_no_new_block_interval = Duration::from_secs(20);
+
     loop {
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
@@ -339,6 +347,15 @@ async fn live_indexing_stream(
                                 info_log_name,
                                 IndexingEventProgressStatus::Live.log()
                             );
+                            if last_no_new_block_log_time.elapsed() >= log_no_new_block_interval {
+                                info!(
+                                    "{} - {} - No new blocks published in the last 20 seconds - latest block number {}",
+                                    info_log_name,
+                                    IndexingEventProgressStatus::Live.log(),
+                                    last_seen_block_number,
+                                );
+                                last_no_new_block_log_time = Instant::now();
+                            }
                             continue;
                         }
                         info!(
