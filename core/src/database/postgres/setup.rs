@@ -8,7 +8,7 @@ use crate::{
         generate::{generate_tables_for_indexer_sql, GenerateTablesForIndexerSqlError},
     },
     drop_tables_for_indexer_sql,
-    manifest::core::{Manifest, ProjectType},
+    manifest::core::Manifest,
 };
 
 #[derive(thiserror::Error, Debug)]
