@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     env,
     fs::File,
     io::{Read, Write},
@@ -35,6 +36,9 @@ fn substitute_env_variables(contents: &str) -> Result<String, regex::Error> {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ValidateManifestError {
+    #[error("Contract names {0} must be unique")]
+    ContractNameMustBeUnique(String),
+
     #[error("Invalid network mapped to contract: network - {0} contract - {1}")]
     InvalidNetworkMappedToContract(String, String),
 
@@ -70,6 +74,19 @@ fn validate_manifest(
     project_path: &Path,
     manifest: &Manifest,
 ) -> Result<(), ValidateManifestError> {
+    let mut seen = HashSet::new();
+    let duplicates_contract_names: Vec<String> = manifest
+        .contracts
+        .iter()
+        .filter_map(|c| if seen.insert(&c.name) { None } else { Some(c.name.clone()) })
+        .collect();
+
+    if !duplicates_contract_names.is_empty() {
+        return Err(ValidateManifestError::ContractNameMustBeUnique(
+            duplicates_contract_names.join(", "),
+        ));
+    }
+
     for contract in &manifest.contracts {
         let events = ABIItem::read_abi_items(project_path, contract)
             .map_err(|e| ValidateManifestError::InvalidABI(contract.name.clone(), e.to_string()))?;
