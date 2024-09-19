@@ -5,6 +5,29 @@
 
 ### Features
 -------------------------------------------------
+
+### Bug fixes
+-------------------------------------------------
+
+### Breaking changes
+-------------------------------------------------
+
+## Releases
+-------------------------------------------------
+
+all release branches are deployed through `release/VERSION_NUMBER` branches
+
+## 0.9.0-beta - 19th September 2024
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.9.0
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.9.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.9.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.9.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.9.0/rindexer_win32-amd64.zip
+
+### Features
+-------------------------------------------------
 - feat: allow some other attributes on the generated event typings
 
 ### Bug fixes
@@ -18,11 +41,6 @@
 some other issues with mapping to object names so now it has been fixed and in the example above it will be `uniswap_v3_pool`,
 if you have any running indexers with these buggy names in your db you just need to rename them and same with the `rindexer.internal` tables which will
 have these odd names as well.
-
-## Releases
--------------------------------------------------
-
-all release branches are deployed through `release/VERSION_NUMBER` branches
 
 ## 0.8.0-beta - 17th September 2024
 
