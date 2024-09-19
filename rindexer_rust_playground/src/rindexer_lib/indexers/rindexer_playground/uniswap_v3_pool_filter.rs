@@ -20,8 +20,38 @@ async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegis
             let mut postgres_bulk_data: Vec<Vec<EthereumSqlTypeWrapper>> = vec![];
             let mut csv_bulk_data: Vec<Vec<String>> = vec![];
             for result in results.iter() {
-                csv_bulk_data.push(vec![format!("{:?}", result.tx_information.address),format!("{:?}", result.event_data.sender,),format!("{:?}", result.event_data.recipient,),result.event_data.amount_0.to_string(),result.event_data.amount_1.to_string(),result.event_data.sqrt_price_x96.to_string(),result.event_data.liquidity.to_string(),result.event_data.tick.to_string(),format!("{:?}", result.tx_information.transaction_hash),result.tx_information.block_number.to_string(),result.tx_information.block_hash.to_string(),result.tx_information.network.to_string(),result.tx_information.transaction_index.to_string(),result.tx_information.log_index.to_string()]);
-                let data = vec![EthereumSqlTypeWrapper::Address(result.tx_information.address),EthereumSqlTypeWrapper::Address(result.event_data.sender),EthereumSqlTypeWrapper::Address(result.event_data.recipient),EthereumSqlTypeWrapper::I256(result.event_data.amount_0),EthereumSqlTypeWrapper::I256(result.event_data.amount_1),EthereumSqlTypeWrapper::U256(result.event_data.sqrt_price_x96),EthereumSqlTypeWrapper::U128(result.event_data.liquidity),EthereumSqlTypeWrapper::I32(result.event_data.tick),EthereumSqlTypeWrapper::H256(result.tx_information.transaction_hash),EthereumSqlTypeWrapper::U64(result.tx_information.block_number),EthereumSqlTypeWrapper::H256(result.tx_information.block_hash),EthereumSqlTypeWrapper::String(result.tx_information.network.to_string()),EthereumSqlTypeWrapper::U64(result.tx_information.transaction_index),EthereumSqlTypeWrapper::U256(result.tx_information.log_index)];;
+                csv_bulk_data.push(vec![
+                    format!("{:?}", result.tx_information.address),
+                    format!("{:?}", result.event_data.sender,),
+                    format!("{:?}", result.event_data.recipient,),
+                    result.event_data.amount_0.to_string(),
+                    result.event_data.amount_1.to_string(),
+                    result.event_data.sqrt_price_x96.to_string(),
+                    result.event_data.liquidity.to_string(),
+                    result.event_data.tick.to_string(),
+                    format!("{:?}", result.tx_information.transaction_hash),
+                    result.tx_information.block_number.to_string(),
+                    result.tx_information.block_hash.to_string(),
+                    result.tx_information.network.to_string(),
+                    result.tx_information.transaction_index.to_string(),
+                    result.tx_information.log_index.to_string()
+                ]);
+                let data = vec![
+                    EthereumSqlTypeWrapper::Address(result.tx_information.address),
+                    EthereumSqlTypeWrapper::Address(result.event_data.sender),
+                    EthereumSqlTypeWrapper::Address(result.event_data.recipient),
+                    EthereumSqlTypeWrapper::I256(result.event_data.amount_0),
+                    EthereumSqlTypeWrapper::I256(result.event_data.amount_1),
+                    EthereumSqlTypeWrapper::U256(result.event_data.sqrt_price_x96),
+                    EthereumSqlTypeWrapper::U128(result.event_data.liquidity),
+                    EthereumSqlTypeWrapper::I32(result.event_data.tick),
+                    EthereumSqlTypeWrapper::H256(result.tx_information.transaction_hash),
+                    EthereumSqlTypeWrapper::U64(result.tx_information.block_number),
+                    EthereumSqlTypeWrapper::H256(result.tx_information.block_hash),
+                    EthereumSqlTypeWrapper::String(result.tx_information.network.to_string()),
+                    EthereumSqlTypeWrapper::U64(result.tx_information.transaction_index),
+                    EthereumSqlTypeWrapper::U256(result.tx_information.log_index)
+                ];
                 postgres_bulk_data.push(data);
             }
 
@@ -42,7 +72,22 @@ async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegis
                     .database
                     .bulk_insert_via_copy(
                         "rindexer_playground_uniswap_v3_pool_filter.swap",
-                        &["contract_address".to_string(), "sender".to_string(), "recipient".to_string(), "amount_0".to_string(), "amount_1".to_string(), "sqrt_price_x96".to_string(), "liquidity".to_string(), "tick".to_string(), "tx_hash".to_string(), "block_number".to_string(), "block_hash".to_string(), "network".to_string(), "tx_index".to_string(), "log_index".to_string()],
+                        &[
+                            "contract_address".to_string(),
+                            "sender".to_string(),
+                            "recipient".to_string(),
+                            "amount_0".to_string(),
+                            "amount_1".to_string(),
+                            "sqrt_price_x96".to_string(),
+                            "liquidity".to_string(),
+                            "tick".to_string(),
+                            "tx_hash".to_string(),
+                            "block_number".to_string(),
+                            "block_hash".to_string(),
+                            "network".to_string(),
+                            "tx_index".to_string(),
+                            "log_index".to_string()
+                        ],
                         &postgres_bulk_data
                             .first()
                             .ok_or("No first element in bulk data, impossible")?
@@ -62,7 +107,22 @@ async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegis
                         .database
                         .bulk_insert(
                             "rindexer_playground_uniswap_v3_pool_filter.swap",
-                            &["contract_address".to_string(), "sender".to_string(), "recipient".to_string(), "amount_0".to_string(), "amount_1".to_string(), "sqrt_price_x96".to_string(), "liquidity".to_string(), "tick".to_string(), "tx_hash".to_string(), "block_number".to_string(), "block_hash".to_string(), "network".to_string(), "tx_index".to_string(), "log_index".to_string()],
+                            &[
+                                "contract_address".to_string(),
+                                "sender".to_string(),
+                                "recipient".to_string(),
+                                "amount_0".to_string(),
+                                "amount_1".to_string(),
+                                "sqrt_price_x96".to_string(),
+                                "liquidity".to_string(),
+                                "tick".to_string(),
+                                "tx_hash".to_string(),
+                                "block_number".to_string(),
+                                "block_hash".to_string(),
+                                "network".to_string(),
+                                "tx_index".to_string(),
+                                "log_index".to_string()
+                            ],
                             &postgres_bulk_data,
                         )
                         .await;
