@@ -4,6 +4,9 @@ networks:
   - name: ethereum
     chain_id: 1
     rpc: https://mainnet.gateway.tenderly.co
+  - name: base
+    chain_id: 8453
+    rpc: https://mainnet.base.org
 storage:
   postgres:
     enabled: true
@@ -27,9 +30,28 @@ contracts:
             - event_name: Transfer
             - event_name: Approval
         network: ethereum
-        #start_block: 56399431
     abi: ./abis/erc20-abi.json
     generate_csv: true
+  - name: UniswapV3Pool
+    details:
+      - network: base
+        filter:
+          event_name: Swap
+        start_block: 19953475
+        end_block: 19953475
+    abi: ./abis/uniswap-v3-pool-abi.json
+    include_events:
+      - Swap
+  - name: PlaygroundTypes
+    details:
+      - network: base
+        filter:
+          event_name: Swap
+        start_block: 19953475
+        end_block: 19953475
+    abi: ./abis/playground-types-abi.json
+    include_events:
+      - Swap
 global:
   contracts:
     - name: USDT

@@ -35,6 +35,14 @@ lazy_static! {
         HeaderMap::new()
     )
     .expect("Error creating provider");
+    static ref BASE_PROVIDER: Arc<JsonRpcCachedProvider> = create_client(
+        &public_read_env_value("https://mainnet.base.org")
+            .unwrap_or("https://mainnet.base.org".to_string()),
+        None,
+        None,
+        HeaderMap::new()
+    )
+    .expect("Error creating provider");
 }
 pub fn get_ethereum_provider_cache() -> Arc<JsonRpcCachedProvider> {
     Arc::clone(&ETHEREUM_PROVIDER)
@@ -44,9 +52,21 @@ pub fn get_ethereum_provider() -> Arc<Provider<RetryClient<Http>>> {
     ETHEREUM_PROVIDER.get_inner_provider()
 }
 
+pub fn get_base_provider_cache() -> Arc<JsonRpcCachedProvider> {
+    Arc::clone(&BASE_PROVIDER)
+}
+
+pub fn get_base_provider() -> Arc<Provider<RetryClient<Http>>> {
+    BASE_PROVIDER.get_inner_provider()
+}
+
 pub fn get_provider_cache_for_network(network: &str) -> Arc<JsonRpcCachedProvider> {
     if network == "ethereum" {
         return get_ethereum_provider_cache();
+    }
+
+    if network == "base" {
+        return get_base_provider_cache();
     }
     panic!("Network not supported")
 }
