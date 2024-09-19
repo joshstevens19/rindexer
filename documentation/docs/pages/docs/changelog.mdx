@@ -9,9 +9,15 @@
 
 ### Bug fixes
 -------------------------------------------------
+- fix: handle signed integers throughout rindexer
+- fix: generating global types would repeat the same code on a regenerate causing issues
 
 ### Breaking changes
 -------------------------------------------------
+- breaking: rindexer had an parsing error meaning stuff like `UniswapV3Pool` would parse to uniswap_v_3_pool. This caused
+some other issues with mapping to object names so now it has been fixed and in the example above it will be `uniswap_v3_pool`,
+if you have any running indexers with these buggy names in your db you just need to rename them and same with the `rindexer.internal` tables which will
+have these odd names as well.
 
 ## Releases
 -------------------------------------------------

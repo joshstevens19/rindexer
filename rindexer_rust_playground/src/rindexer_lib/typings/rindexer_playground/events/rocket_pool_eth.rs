@@ -1,3 +1,11 @@
+#![allow(
+    non_camel_case_types,
+    clippy::enum_variant_names,
+    clippy::too_many_arguments,
+    clippy::upper_case_acronyms,
+    clippy::type_complexity,
+    dead_code
+)]
 use std::{
     any::Any,
     error::Error,

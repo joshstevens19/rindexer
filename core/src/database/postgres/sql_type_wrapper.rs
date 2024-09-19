@@ -4,43 +4,77 @@ use bytes::BytesMut;
 use ethers::{
     abi::{Int, LogParam, Token},
     addressbook::Address,
-    prelude::{Bytes, H128, H160, H256, H512, U128, U256, U512, U64},
+    prelude::{Bytes, H128, H160, H256, H512, U256, U512, U64},
+    types::I256,
 };
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type as PgType};
 use tracing::error;
 
-use crate::{abi::ABIInput, event::callback_registry::TxInformation};
+use crate::{abi::ABIInput, event::callback_registry::TxInformation, helpers::u256_to_i256};
 
 #[derive(Debug, Clone)]
 pub enum EthereumSqlTypeWrapper {
-    U64(U64),
-    VecU64(Vec<U64>),
-    U128(U128),
-    VecU128(Vec<U128>),
-    U256(U256),
-    VecU256(Vec<U256>),
-    U512(U512),
-    VecU512(Vec<U512>),
-    H128(H128),
-    VecH128(Vec<H128>),
-    H160(H160),
-    VecH160(Vec<H160>),
-    H256(H256),
-    VecH256(Vec<H256>),
-    H512(H512),
-    VecH512(Vec<H512>),
-    Address(Address),
-    VecAddress(Vec<Address>),
+    // Boolean
     Bool(bool),
     VecBool(Vec<bool>),
-    U32(u32),
-    VecU32(Vec<u32>),
-    U16(u16),
-    VecU16(Vec<u16>),
+
+    // 8-bit integers
     U8(u8),
+    I8(i8),
     VecU8(Vec<u8>),
+    VecI8(Vec<i8>),
+
+    // 16-bit integers
+    U16(u16),
+    I16(i16),
+    VecU16(Vec<u16>),
+    VecI16(Vec<i16>),
+
+    // 32-bit integers
+    U32(u32),
+    I32(i32),
+    VecU32(Vec<u32>),
+    VecI32(Vec<i32>),
+
+    // 64-bit integers
+    U64(U64),
+    I64(i64),
+    VecU64(Vec<U64>),
+    VecI64(Vec<i64>),
+
+    // 128-bit integers
+    U128(u128),
+    I128(i128),
+    VecU128(Vec<u128>),
+    VecI128(Vec<i128>),
+
+    // 256-bit integers
+    U256(U256),
+    I256(I256),
+    VecU256(Vec<U256>),
+    VecI256(Vec<I256>),
+
+    // 512-bit integers
+    U512(U512),
+    VecU512(Vec<U512>),
+
+    // Hashes
+    H128(H128),
+    H160(H160),
+    H256(H256),
+    H512(H512),
+    VecH128(Vec<H128>),
+    VecH160(Vec<H160>),
+    VecH256(Vec<H256>),
+    VecH512(Vec<H512>),
+
+    // Address
+    Address(Address),
+    VecAddress(Vec<Address>),
+
+    // Strings and Bytes
     String(String),
     VecString(Vec<String>),
     Bytes(Bytes),
@@ -50,32 +84,65 @@ pub enum EthereumSqlTypeWrapper {
 impl EthereumSqlTypeWrapper {
     pub fn raw_name(&self) -> &'static str {
         match self {
-            EthereumSqlTypeWrapper::U64(_) => "U64",
-            EthereumSqlTypeWrapper::VecU64(_) => "VecU64",
-            EthereumSqlTypeWrapper::U128(_) => "U128",
-            EthereumSqlTypeWrapper::VecU128(_) => "VecU128",
-            EthereumSqlTypeWrapper::U256(_) => "U256",
-            EthereumSqlTypeWrapper::VecU256(_) => "VecU256",
-            EthereumSqlTypeWrapper::U512(_) => "U512",
-            EthereumSqlTypeWrapper::VecU512(_) => "VecU512",
-            EthereumSqlTypeWrapper::H128(_) => "H128",
-            EthereumSqlTypeWrapper::VecH128(_) => "VecH128",
-            EthereumSqlTypeWrapper::H160(_) => "H160",
-            EthereumSqlTypeWrapper::VecH160(_) => "VecH160",
-            EthereumSqlTypeWrapper::H256(_) => "H256",
-            EthereumSqlTypeWrapper::VecH256(_) => "VecH256",
-            EthereumSqlTypeWrapper::H512(_) => "H512",
-            EthereumSqlTypeWrapper::VecH512(_) => "VecH512",
-            EthereumSqlTypeWrapper::Address(_) => "Address",
-            EthereumSqlTypeWrapper::VecAddress(_) => "VecAddress",
+            // Boolean
             EthereumSqlTypeWrapper::Bool(_) => "Bool",
             EthereumSqlTypeWrapper::VecBool(_) => "VecBool",
-            EthereumSqlTypeWrapper::U32(_) => "U32",
-            EthereumSqlTypeWrapper::VecU32(_) => "VecU32",
-            EthereumSqlTypeWrapper::U16(_) => "U16",
-            EthereumSqlTypeWrapper::VecU16(_) => "VecU16",
+
+            // 8-bit integers
             EthereumSqlTypeWrapper::U8(_) => "U8",
+            EthereumSqlTypeWrapper::I8(_) => "I8",
             EthereumSqlTypeWrapper::VecU8(_) => "VecU8",
+            EthereumSqlTypeWrapper::VecI8(_) => "VecI8",
+
+            // 16-bit integers
+            EthereumSqlTypeWrapper::U16(_) => "U16",
+            EthereumSqlTypeWrapper::I16(_) => "I16",
+            EthereumSqlTypeWrapper::VecU16(_) => "VecU16",
+            EthereumSqlTypeWrapper::VecI16(_) => "VecI16",
+
+            // 32-bit integers
+            EthereumSqlTypeWrapper::U32(_) => "U32",
+            EthereumSqlTypeWrapper::I32(_) => "I32",
+            EthereumSqlTypeWrapper::VecU32(_) => "VecU32",
+            EthereumSqlTypeWrapper::VecI32(_) => "VecI32",
+
+            // 64-bit integers
+            EthereumSqlTypeWrapper::U64(_) => "U64",
+            EthereumSqlTypeWrapper::I64(_) => "I64",
+            EthereumSqlTypeWrapper::VecU64(_) => "VecU64",
+            EthereumSqlTypeWrapper::VecI64(_) => "VecI64",
+
+            // 128-bit integers
+            EthereumSqlTypeWrapper::U128(_) => "U128",
+            EthereumSqlTypeWrapper::I128(_) => "I128",
+            EthereumSqlTypeWrapper::VecU128(_) => "VecU128",
+            EthereumSqlTypeWrapper::VecI128(_) => "VecI128",
+
+            // 256-bit integers
+            EthereumSqlTypeWrapper::U256(_) => "U256",
+            EthereumSqlTypeWrapper::I256(_) => "I256",
+            EthereumSqlTypeWrapper::VecU256(_) => "VecU256",
+            EthereumSqlTypeWrapper::VecI256(_) => "VecI256",
+
+            // 512-bit integers
+            EthereumSqlTypeWrapper::U512(_) => "U512",
+            EthereumSqlTypeWrapper::VecU512(_) => "VecU512",
+
+            // Hashes
+            EthereumSqlTypeWrapper::H128(_) => "H128",
+            EthereumSqlTypeWrapper::H160(_) => "H160",
+            EthereumSqlTypeWrapper::H256(_) => "H256",
+            EthereumSqlTypeWrapper::H512(_) => "H512",
+            EthereumSqlTypeWrapper::VecH128(_) => "VecH128",
+            EthereumSqlTypeWrapper::VecH160(_) => "VecH160",
+            EthereumSqlTypeWrapper::VecH256(_) => "VecH256",
+            EthereumSqlTypeWrapper::VecH512(_) => "VecH512",
+
+            // Address
+            EthereumSqlTypeWrapper::Address(_) => "Address",
+            EthereumSqlTypeWrapper::VecAddress(_) => "VecAddress",
+
+            // Strings and Bytes
             EthereumSqlTypeWrapper::String(_) => "String",
             EthereumSqlTypeWrapper::VecString(_) => "VecString",
             EthereumSqlTypeWrapper::Bytes(_) => "Bytes",
@@ -85,38 +152,69 @@ impl EthereumSqlTypeWrapper {
 
     pub fn to_type(&self) -> PgType {
         match self {
-            EthereumSqlTypeWrapper::U64(_) => PgType::INT8,
-            EthereumSqlTypeWrapper::VecU64(_) => PgType::INT8_ARRAY,
-            EthereumSqlTypeWrapper::U128(_) => PgType::NUMERIC,
-            EthereumSqlTypeWrapper::VecU128(_) => PgType::NUMERIC_ARRAY,
-            // keep as VARCHAR, so we can keep a decimal string when we return the data
-            EthereumSqlTypeWrapper::U256(_) => PgType::VARCHAR,
-            // keep as VARCHAR, so we can keep a decimal string when we return the data
-            EthereumSqlTypeWrapper::VecU256(_) => PgType::VARCHAR,
-            EthereumSqlTypeWrapper::U512(_) => PgType::TEXT,
-            EthereumSqlTypeWrapper::VecU512(_) => PgType::TEXT_ARRAY,
-            EthereumSqlTypeWrapper::H128(_) => PgType::BYTEA,
-            EthereumSqlTypeWrapper::VecH128(_) => PgType::BYTEA_ARRAY,
-            EthereumSqlTypeWrapper::H160(_) => PgType::BYTEA,
-            EthereumSqlTypeWrapper::VecH160(_) => PgType::BYTEA_ARRAY,
-            EthereumSqlTypeWrapper::H256(_) => PgType::BYTEA,
-            EthereumSqlTypeWrapper::VecH256(_) => PgType::BYTEA_ARRAY,
-            EthereumSqlTypeWrapper::H512(_) => PgType::BYTEA,
-            EthereumSqlTypeWrapper::VecH512(_) => PgType::BYTEA_ARRAY,
-            EthereumSqlTypeWrapper::Address(_) => PgType::BPCHAR,
-            EthereumSqlTypeWrapper::VecAddress(_) => PgType::TEXT_ARRAY,
+            // Boolean
             EthereumSqlTypeWrapper::Bool(_) => PgType::BOOL,
             EthereumSqlTypeWrapper::VecBool(_) => PgType::BOOL_ARRAY,
+
+            // 8-bit integers
+            EthereumSqlTypeWrapper::U8(_) => PgType::INT2,
+            EthereumSqlTypeWrapper::I8(_) => PgType::INT2,
+            EthereumSqlTypeWrapper::VecU8(_) => PgType::INT2_ARRAY,
+            EthereumSqlTypeWrapper::VecI8(_) => PgType::INT2_ARRAY,
+
+            // 16-bit integers
             EthereumSqlTypeWrapper::U16(_) => PgType::INT2,
+            EthereumSqlTypeWrapper::I16(_) => PgType::INT2,
             EthereumSqlTypeWrapper::VecU16(_) => PgType::INT2_ARRAY,
+            EthereumSqlTypeWrapper::VecI16(_) => PgType::INT2_ARRAY,
+
+            // 32-bit integers
+            EthereumSqlTypeWrapper::U32(_) => PgType::INT4,
+            EthereumSqlTypeWrapper::I32(_) => PgType::INT4,
+            EthereumSqlTypeWrapper::VecU32(_) => PgType::INT4_ARRAY,
+            EthereumSqlTypeWrapper::VecI32(_) => PgType::INT4_ARRAY,
+
+            // 64-bit integers
+            EthereumSqlTypeWrapper::U64(_) => PgType::INT8,
+            EthereumSqlTypeWrapper::I64(_) => PgType::INT8,
+            EthereumSqlTypeWrapper::VecU64(_) => PgType::INT8_ARRAY,
+            EthereumSqlTypeWrapper::VecI64(_) => PgType::INT8_ARRAY,
+
+            // 128-bit integers
+            EthereumSqlTypeWrapper::U128(_) => PgType::NUMERIC,
+            EthereumSqlTypeWrapper::I128(_) => PgType::NUMERIC,
+            EthereumSqlTypeWrapper::VecU128(_) => PgType::NUMERIC_ARRAY,
+            EthereumSqlTypeWrapper::VecI128(_) => PgType::NUMERIC_ARRAY,
+
+            // 256-bit integers (kept as VARCHAR for decimal string representation)
+            EthereumSqlTypeWrapper::U256(_) => PgType::VARCHAR,
+            EthereumSqlTypeWrapper::I256(_) => PgType::VARCHAR,
+            EthereumSqlTypeWrapper::VecU256(_) => PgType::VARCHAR_ARRAY,
+            EthereumSqlTypeWrapper::VecI256(_) => PgType::VARCHAR_ARRAY,
+
+            // 512-bit integers
+            EthereumSqlTypeWrapper::U512(_) => PgType::TEXT,
+            EthereumSqlTypeWrapper::VecU512(_) => PgType::TEXT_ARRAY,
+
+            // Hashes
+            EthereumSqlTypeWrapper::H128(_) => PgType::BYTEA,
+            EthereumSqlTypeWrapper::H160(_) => PgType::BYTEA,
+            EthereumSqlTypeWrapper::H256(_) => PgType::BYTEA,
+            EthereumSqlTypeWrapper::H512(_) => PgType::BYTEA,
+            EthereumSqlTypeWrapper::VecH128(_) => PgType::BYTEA_ARRAY,
+            EthereumSqlTypeWrapper::VecH160(_) => PgType::BYTEA_ARRAY,
+            EthereumSqlTypeWrapper::VecH256(_) => PgType::BYTEA_ARRAY,
+            EthereumSqlTypeWrapper::VecH512(_) => PgType::BYTEA_ARRAY,
+
+            // Address
+            EthereumSqlTypeWrapper::Address(_) => PgType::BPCHAR,
+            EthereumSqlTypeWrapper::VecAddress(_) => PgType::TEXT_ARRAY,
+
+            // Strings and Bytes
             EthereumSqlTypeWrapper::String(_) => PgType::TEXT,
             EthereumSqlTypeWrapper::VecString(_) => PgType::TEXT_ARRAY,
             EthereumSqlTypeWrapper::Bytes(_) => PgType::BYTEA,
             EthereumSqlTypeWrapper::VecBytes(_) => PgType::BYTEA_ARRAY,
-            EthereumSqlTypeWrapper::U32(_) => PgType::INT2,
-            EthereumSqlTypeWrapper::VecU32(_) => PgType::INT2_ARRAY,
-            EthereumSqlTypeWrapper::U8(_) => PgType::INT2,
-            EthereumSqlTypeWrapper::VecU8(_) => PgType::INT2_ARRAY,
         }
     }
 }
@@ -124,37 +222,71 @@ impl EthereumSqlTypeWrapper {
 impl ToSql for EthereumSqlTypeWrapper {
     fn to_sql(
         &self,
-        _ty: &PgType,
+        ty: &PgType,
         out: &mut BytesMut,
     ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
         match self {
             EthereumSqlTypeWrapper::U64(value) => {
                 let value = value.to_string();
-                Decimal::to_sql(&value.parse::<Decimal>()?, _ty, out)
+                Decimal::to_sql(&value.parse::<Decimal>()?, ty, out)
             }
-            EthereumSqlTypeWrapper::VecU64(values) => serialize_vec_decimal(values, _ty, out),
+            EthereumSqlTypeWrapper::I64(value) => value.to_sql(ty, out),
+            EthereumSqlTypeWrapper::VecU64(values) => serialize_vec_decimal(values, ty, out),
+            EthereumSqlTypeWrapper::VecI64(values) => {
+                if values.is_empty() {
+                    Ok(IsNull::Yes)
+                } else {
+                    values.to_sql(ty, out)
+                }
+            }
             EthereumSqlTypeWrapper::U128(value) => {
                 let value = value.to_string();
-                Decimal::to_sql(&value.parse::<Decimal>()?, _ty, out)
+                Decimal::to_sql(&value.parse::<Decimal>()?, ty, out)
             }
-            EthereumSqlTypeWrapper::VecU128(values) => serialize_vec_decimal(values, _ty, out),
-            EthereumSqlTypeWrapper::U256(value) => {
+            EthereumSqlTypeWrapper::I128(value) => {
                 let value = value.to_string();
-                String::to_sql(&value, _ty, out)
+                Decimal::to_sql(&value.parse::<Decimal>()?, ty, out)
+            }
+            EthereumSqlTypeWrapper::VecU128(values) => serialize_vec_decimal(values, ty, out),
+            EthereumSqlTypeWrapper::VecI128(values) => serialize_vec_decimal(values, ty, out),
+            EthereumSqlTypeWrapper::U256(value) => {
+                // handle two’s complement without adding a new type
+                let i256_value = u256_to_i256(*value);
+                String::to_sql(&i256_value.to_string(), ty, out)
             }
             EthereumSqlTypeWrapper::VecU256(values) => {
+                if values.is_empty() {
+                    Ok(IsNull::Yes)
+                } else {
+                    let values_strings: Vec<String> = values
+                        .iter()
+                        .map(|v| {
+                            // handle two’s complement without adding a new type
+                            let i256_value = u256_to_i256(*v);
+                            i256_value.to_string()
+                        })
+                        .collect();
+                    let formatted_str = values_strings.join(",");
+                    String::to_sql(&formatted_str, ty, out)
+                }
+            }
+            EthereumSqlTypeWrapper::I256(value) => {
+                let value = value.to_string();
+                String::to_sql(&value, ty, out)
+            }
+            EthereumSqlTypeWrapper::VecI256(values) => {
                 if values.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
                     let values_strings: Vec<String> =
                         values.iter().map(|v| v.to_string()).collect();
                     let formatted_str = values_strings.join(",");
-                    String::to_sql(&formatted_str, _ty, out)
+                    String::to_sql(&formatted_str, ty, out)
                 }
             }
             EthereumSqlTypeWrapper::U512(value) => {
                 let value = value.to_string();
-                String::to_sql(&value, _ty, out)
+                String::to_sql(&value, ty, out)
             }
             EthereumSqlTypeWrapper::VecU512(values) => {
                 if values.is_empty() {
@@ -163,7 +295,7 @@ impl ToSql for EthereumSqlTypeWrapper {
                     let values_strings: Vec<String> =
                         values.iter().map(|v| v.to_string()).collect();
                     let formatted_str = values_strings.join(",");
-                    String::to_sql(&formatted_str, _ty, out)
+                    String::to_sql(&formatted_str, ty, out)
                 }
             }
             EthereumSqlTypeWrapper::H128(value) => {
@@ -176,7 +308,7 @@ impl ToSql for EthereumSqlTypeWrapper {
                 if hexes.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
-                    hexes.to_sql(_ty, out)
+                    hexes.to_sql(ty, out)
                 }
             }
             EthereumSqlTypeWrapper::H160(value) => {
@@ -189,7 +321,7 @@ impl ToSql for EthereumSqlTypeWrapper {
                 if hexes.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
-                    hexes.to_sql(_ty, out)
+                    hexes.to_sql(ty, out)
                 }
             }
             EthereumSqlTypeWrapper::H256(value) => {
@@ -202,7 +334,7 @@ impl ToSql for EthereumSqlTypeWrapper {
                 if hexes.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
-                    hexes.to_sql(_ty, out)
+                    hexes.to_sql(ty, out)
                 }
             }
             EthereumSqlTypeWrapper::H512(value) => {
@@ -215,22 +347,22 @@ impl ToSql for EthereumSqlTypeWrapper {
                 if hexes.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
-                    hexes.to_sql(_ty, out)
+                    hexes.to_sql(ty, out)
                 }
             }
             EthereumSqlTypeWrapper::Address(value) => {
                 let hex = format!("{:?}", value);
-                String::to_sql(&hex, _ty, out)
+                String::to_sql(&hex, ty, out)
             }
             EthereumSqlTypeWrapper::VecAddress(values) => {
                 let addresses: Vec<String> = values.iter().map(|s| format!("{:?}", s)).collect();
                 if addresses.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
-                    addresses.to_sql(_ty, out)
+                    addresses.to_sql(ty, out)
                 }
             }
-            EthereumSqlTypeWrapper::Bool(value) => bool::to_sql(value, _ty, out),
+            EthereumSqlTypeWrapper::Bool(value) => bool::to_sql(value, ty, out),
             EthereumSqlTypeWrapper::VecBool(values) => {
                 if values.is_empty() {
                     return Ok(IsNull::Yes);
@@ -256,12 +388,12 @@ impl ToSql for EthereumSqlTypeWrapper {
                 out.extend_from_slice(&buf);
                 Ok(IsNull::No)
             }
-            EthereumSqlTypeWrapper::String(value) => String::to_sql(value, _ty, out),
+            EthereumSqlTypeWrapper::String(value) => String::to_sql(value, ty, out),
             EthereumSqlTypeWrapper::VecString(values) => {
                 if values.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
-                    values.to_sql(_ty, out)
+                    values.to_sql(ty, out)
                 }
             }
             EthereumSqlTypeWrapper::Bytes(value) => {
@@ -273,43 +405,71 @@ impl ToSql for EthereumSqlTypeWrapper {
                 if hexes.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
-                    hexes.to_sql(_ty, out)
+                    hexes.to_sql(ty, out)
                 }
             }
             EthereumSqlTypeWrapper::U32(value) => {
                 let int_value: i32 = *value as i32;
-                int_value.to_sql(_ty, out)
+                int_value.to_sql(ty, out)
             }
+            EthereumSqlTypeWrapper::I32(value) => value.to_sql(ty, out),
             EthereumSqlTypeWrapper::VecU32(values) => {
                 let int_values: Vec<i32> = values.iter().map(|&s| s as i32).collect();
                 if int_values.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
-                    int_values.to_sql(_ty, out)
+                    int_values.to_sql(ty, out)
+                }
+            }
+            EthereumSqlTypeWrapper::VecI32(values) => {
+                if values.is_empty() {
+                    Ok(IsNull::Yes)
+                } else {
+                    values.to_sql(ty, out)
                 }
             }
             EthereumSqlTypeWrapper::U16(value) => {
                 let int_value: i16 = *value as i16;
-                int_value.to_sql(_ty, out)
+                int_value.to_sql(ty, out)
             }
+            EthereumSqlTypeWrapper::I16(value) => value.to_sql(ty, out),
             EthereumSqlTypeWrapper::VecU16(values) => {
                 let int_values: Vec<i16> = values.iter().map(|&s| s as i16).collect();
                 if int_values.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
-                    int_values.to_sql(_ty, out)
+                    int_values.to_sql(ty, out)
+                }
+            }
+            EthereumSqlTypeWrapper::VecI16(values) => {
+                if values.is_empty() {
+                    Ok(IsNull::Yes)
+                } else {
+                    values.to_sql(ty, out)
                 }
             }
             EthereumSqlTypeWrapper::U8(value) => {
                 let int_value: i16 = *value as i16;
-                int_value.to_sql(_ty, out)
+                int_value.to_sql(ty, out)
+            }
+            EthereumSqlTypeWrapper::I8(value) => {
+                let int_value: i16 = *value as i16;
+                int_value.to_sql(ty, out)
             }
             EthereumSqlTypeWrapper::VecU8(values) => {
                 let int_values: Vec<i16> = values.iter().map(|&s| s as i16).collect();
                 if int_values.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
-                    int_values.to_sql(_ty, out)
+                    int_values.to_sql(ty, out)
+                }
+            }
+            EthereumSqlTypeWrapper::VecI8(values) => {
+                let int_values: Vec<i16> = values.iter().map(|&s| s as i16).collect();
+                if int_values.is_empty() {
+                    Ok(IsNull::Yes)
+                } else {
+                    int_values.to_sql(ty, out)
                 }
             }
         }
@@ -356,49 +516,99 @@ pub fn solidity_type_to_ethereum_sql_type_wrapper(
             } else {
                 t[4..].parse().unwrap_or(256)
             };
+            let is_signed = t.starts_with("int");
 
-            Some(match size {
-                8 => {
+            Some(match (size, is_signed) {
+                (8, false) => {
                     if is_array {
                         EthereumSqlTypeWrapper::VecU8(Vec::new())
                     } else {
                         EthereumSqlTypeWrapper::U8(0)
                     }
                 }
-                16 => {
+                (8, true) => {
+                    if is_array {
+                        EthereumSqlTypeWrapper::VecI8(Vec::new())
+                    } else {
+                        EthereumSqlTypeWrapper::I8(0)
+                    }
+                }
+                (16, false) => {
                     if is_array {
                         EthereumSqlTypeWrapper::VecU16(Vec::new())
                     } else {
                         EthereumSqlTypeWrapper::U16(0)
                     }
                 }
-                24 | 32 => {
+                (16, true) => {
+                    if is_array {
+                        EthereumSqlTypeWrapper::VecI16(Vec::new())
+                    } else {
+                        EthereumSqlTypeWrapper::I16(0)
+                    }
+                }
+                (24 | 32, false) => {
                     if is_array {
                         EthereumSqlTypeWrapper::VecU32(Vec::new())
                     } else {
                         EthereumSqlTypeWrapper::U32(0)
                     }
                 }
-                40 | 48 | 56 | 64 => {
+                (24 | 32, true) => {
+                    if is_array {
+                        EthereumSqlTypeWrapper::VecI32(Vec::new())
+                    } else {
+                        EthereumSqlTypeWrapper::I32(0)
+                    }
+                }
+                (40 | 48 | 56 | 64, false) => {
                     if is_array {
                         EthereumSqlTypeWrapper::VecU64(Vec::new())
                     } else {
                         EthereumSqlTypeWrapper::U64(U64::zero())
                     }
                 }
-                72 | 80 | 88 | 96 | 104 | 112 | 120 | 128 => {
+                (40 | 48 | 56 | 64, true) => {
+                    if is_array {
+                        EthereumSqlTypeWrapper::VecI64(Vec::new())
+                    } else {
+                        EthereumSqlTypeWrapper::I64(0)
+                    }
+                }
+                (72 | 80 | 88 | 96 | 104 | 112 | 120 | 128, false) => {
                     if is_array {
                         EthereumSqlTypeWrapper::VecU128(Vec::new())
                     } else {
-                        EthereumSqlTypeWrapper::U128(U128::zero())
+                        EthereumSqlTypeWrapper::U128(0)
                     }
                 }
-                136 | 144 | 152 | 160 | 168 | 176 | 184 | 192 | 200 | 208 | 216 | 224 | 232 |
-                240 | 248 | 256 => {
+                (72 | 80 | 88 | 96 | 104 | 112 | 120 | 128, true) => {
+                    if is_array {
+                        EthereumSqlTypeWrapper::VecI128(Vec::new())
+                    } else {
+                        EthereumSqlTypeWrapper::I128(0)
+                    }
+                }
+                (
+                    136 | 144 | 152 | 160 | 168 | 176 | 184 | 192 | 200 | 208 | 216 | 224 | 232 |
+                    240 | 248 | 256,
+                    false,
+                ) => {
                     if is_array {
                         EthereumSqlTypeWrapper::VecU256(Vec::new())
                     } else {
                         EthereumSqlTypeWrapper::U256(U256::zero())
+                    }
+                }
+                (
+                    136 | 144 | 152 | 160 | 168 | 176 | 184 | 192 | 200 | 208 | 216 | 224 | 232 |
+                    240 | 248 | 256,
+                    true,
+                ) => {
+                    if is_array {
+                        EthereumSqlTypeWrapper::VecI256(Vec::new())
+                    } else {
+                        EthereumSqlTypeWrapper::I256(I256::zero())
                     }
                 }
                 _ => return None,
@@ -470,20 +680,39 @@ fn convert_int(value: &Int, target_type: &EthereumSqlTypeWrapper) -> EthereumSql
         EthereumSqlTypeWrapper::U256(_) | EthereumSqlTypeWrapper::VecU256(_) => {
             EthereumSqlTypeWrapper::U256(*value)
         }
+        EthereumSqlTypeWrapper::I256(_) | EthereumSqlTypeWrapper::VecI256(_) => {
+            // proxy back to U256 which handles I25 to avoid odd parsing issues
+            EthereumSqlTypeWrapper::U256(*value)
+        }
         EthereumSqlTypeWrapper::U128(_) | EthereumSqlTypeWrapper::VecU128(_) => {
-            EthereumSqlTypeWrapper::U128(U128::from(value.low_u128()))
+            EthereumSqlTypeWrapper::U128(value.low_u128())
+        }
+        EthereumSqlTypeWrapper::I128(_) | EthereumSqlTypeWrapper::VecI128(_) => {
+            EthereumSqlTypeWrapper::I128(value.low_u128() as i128)
         }
         EthereumSqlTypeWrapper::U64(_) | EthereumSqlTypeWrapper::VecU64(_) => {
             EthereumSqlTypeWrapper::U64(value.as_u64().into())
         }
+        EthereumSqlTypeWrapper::I64(_) | EthereumSqlTypeWrapper::VecI64(_) => {
+            EthereumSqlTypeWrapper::I64(value.as_u64() as i64)
+        }
         EthereumSqlTypeWrapper::U32(_) | EthereumSqlTypeWrapper::VecU32(_) => {
             EthereumSqlTypeWrapper::U32(value.low_u32())
+        }
+        EthereumSqlTypeWrapper::I32(_) | EthereumSqlTypeWrapper::VecI32(_) => {
+            EthereumSqlTypeWrapper::I32(value.low_u32() as i32)
         }
         EthereumSqlTypeWrapper::U16(_) | EthereumSqlTypeWrapper::VecU16(_) => {
             EthereumSqlTypeWrapper::U16(value.low_u32() as u16)
         }
+        EthereumSqlTypeWrapper::I16(_) | EthereumSqlTypeWrapper::VecI16(_) => {
+            EthereumSqlTypeWrapper::I16(value.low_u32() as i16)
+        }
         EthereumSqlTypeWrapper::U8(_) | EthereumSqlTypeWrapper::VecU8(_) => {
             EthereumSqlTypeWrapper::U8(value.low_u32() as u8)
+        }
+        EthereumSqlTypeWrapper::I8(_) | EthereumSqlTypeWrapper::VecI8(_) => {
+            EthereumSqlTypeWrapper::I8(value.low_u32() as i8)
         }
         _ => {
             let error_message = format!("Unsupported target type - {:?}", target_type);
@@ -586,6 +815,18 @@ fn map_log_token_to_ethereum_wrapper(
                                             .collect(),
                                     )
                                 }
+                                EthereumSqlTypeWrapper::I256(_) |
+                                EthereumSqlTypeWrapper::VecI256(_) => {
+                                    EthereumSqlTypeWrapper::VecI256(
+                                        vec_wrapper
+                                            .into_iter()
+                                            .map(|w| match w {
+                                                EthereumSqlTypeWrapper::I256(v) => v,
+                                                _ => unreachable!(),
+                                            })
+                                            .collect(),
+                                    )
+                                }
                                 EthereumSqlTypeWrapper::U128(_) |
                                 EthereumSqlTypeWrapper::VecU128(_) => {
                                     EthereumSqlTypeWrapper::VecU128(
@@ -593,6 +834,18 @@ fn map_log_token_to_ethereum_wrapper(
                                             .into_iter()
                                             .map(|w| match w {
                                                 EthereumSqlTypeWrapper::U128(v) => v,
+                                                _ => unreachable!(),
+                                            })
+                                            .collect(),
+                                    )
+                                }
+                                EthereumSqlTypeWrapper::I128(_) |
+                                EthereumSqlTypeWrapper::VecI128(_) => {
+                                    EthereumSqlTypeWrapper::VecI128(
+                                        vec_wrapper
+                                            .into_iter()
+                                            .map(|w| match w {
+                                                EthereumSqlTypeWrapper::I128(v) => v,
                                                 _ => unreachable!(),
                                             })
                                             .collect(),
@@ -610,6 +863,18 @@ fn map_log_token_to_ethereum_wrapper(
                                             .collect(),
                                     )
                                 }
+                                EthereumSqlTypeWrapper::I64(_) |
+                                EthereumSqlTypeWrapper::VecI64(_) => {
+                                    EthereumSqlTypeWrapper::VecI64(
+                                        vec_wrapper
+                                            .into_iter()
+                                            .map(|w| match w {
+                                                EthereumSqlTypeWrapper::I64(v) => v,
+                                                _ => unreachable!(),
+                                            })
+                                            .collect(),
+                                    )
+                                }
                                 EthereumSqlTypeWrapper::U32(_) |
                                 EthereumSqlTypeWrapper::VecU32(_) => {
                                     EthereumSqlTypeWrapper::VecU32(
@@ -617,6 +882,18 @@ fn map_log_token_to_ethereum_wrapper(
                                             .into_iter()
                                             .map(|w| match w {
                                                 EthereumSqlTypeWrapper::U32(v) => v,
+                                                _ => unreachable!(),
+                                            })
+                                            .collect(),
+                                    )
+                                }
+                                EthereumSqlTypeWrapper::I32(_) |
+                                EthereumSqlTypeWrapper::VecI32(_) => {
+                                    EthereumSqlTypeWrapper::VecI32(
+                                        vec_wrapper
+                                            .into_iter()
+                                            .map(|w| match w {
+                                                EthereumSqlTypeWrapper::I32(v) => v,
                                                 _ => unreachable!(),
                                             })
                                             .collect(),
@@ -634,12 +911,34 @@ fn map_log_token_to_ethereum_wrapper(
                                             .collect(),
                                     )
                                 }
+                                EthereumSqlTypeWrapper::I16(_) |
+                                EthereumSqlTypeWrapper::VecI16(_) => {
+                                    EthereumSqlTypeWrapper::VecI16(
+                                        vec_wrapper
+                                            .into_iter()
+                                            .map(|w| match w {
+                                                EthereumSqlTypeWrapper::I16(v) => v,
+                                                _ => unreachable!(),
+                                            })
+                                            .collect(),
+                                    )
+                                }
                                 EthereumSqlTypeWrapper::U8(_) |
                                 EthereumSqlTypeWrapper::VecU8(_) => EthereumSqlTypeWrapper::VecU8(
                                     vec_wrapper
                                         .into_iter()
                                         .map(|w| match w {
                                             EthereumSqlTypeWrapper::U8(v) => v,
+                                            _ => unreachable!(),
+                                        })
+                                        .collect(),
+                                ),
+                                EthereumSqlTypeWrapper::I8(_) |
+                                EthereumSqlTypeWrapper::VecI8(_) => EthereumSqlTypeWrapper::VecI8(
+                                    vec_wrapper
+                                        .into_iter()
+                                        .map(|w| match w {
+                                            EthereumSqlTypeWrapper::I8(v) => v,
                                             _ => unreachable!(),
                                         })
                                         .collect(),
@@ -771,13 +1070,34 @@ pub fn map_ethereum_wrapper_to_json(
                 let value = match wrapper {
                     EthereumSqlTypeWrapper::U64(u) => json!(u),
                     EthereumSqlTypeWrapper::VecU64(u64s) => json!(u64s),
+                    EthereumSqlTypeWrapper::I64(i) => json!(i),
+                    EthereumSqlTypeWrapper::VecI64(i64s) => json!(i64s),
                     EthereumSqlTypeWrapper::U128(u) => json!(u.to_string()),
                     EthereumSqlTypeWrapper::VecU128(u128s) => {
                         json!(u128s.iter().map(|u| u.to_string()).collect::<Vec<_>>())
                     }
-                    EthereumSqlTypeWrapper::U256(u) => json!(u.to_string()),
+                    EthereumSqlTypeWrapper::I128(i) => json!(i.to_string()),
+                    EthereumSqlTypeWrapper::VecI128(i128s) => {
+                        json!(i128s.iter().map(|i| i.to_string()).collect::<Vec<_>>())
+                    }
+                    EthereumSqlTypeWrapper::U256(u) => {
+                        // handle two's complement without adding a new type
+                        let i256_value = u256_to_i256(*u);
+                        json!(i256_value.to_string())
+                    }
                     EthereumSqlTypeWrapper::VecU256(u256s) => {
-                        json!(u256s.iter().map(|u| u.to_string()).collect::<Vec<_>>())
+                        json!(u256s
+                            .iter()
+                            .map(|u| {
+                                // handle two's complement without adding a new type
+                                let i256_value = u256_to_i256(*u);
+                                i256_value.to_string()
+                            })
+                            .collect::<Vec<_>>())
+                    }
+                    EthereumSqlTypeWrapper::I256(i) => json!(i.to_string()),
+                    EthereumSqlTypeWrapper::VecI256(i256s) => {
+                        json!(i256s.iter().map(|i| i.to_string()).collect::<Vec<_>>())
                     }
                     EthereumSqlTypeWrapper::U512(u) => json!(u.to_string()),
                     EthereumSqlTypeWrapper::VecU512(u512s) => {
@@ -797,10 +1117,16 @@ pub fn map_ethereum_wrapper_to_json(
                     EthereumSqlTypeWrapper::VecBool(bools) => json!(bools),
                     EthereumSqlTypeWrapper::U32(u) => json!(u),
                     EthereumSqlTypeWrapper::VecU32(u32s) => json!(u32s),
+                    EthereumSqlTypeWrapper::I32(i) => json!(i),
+                    EthereumSqlTypeWrapper::VecI32(i32s) => json!(i32s),
                     EthereumSqlTypeWrapper::U16(u) => json!(u),
                     EthereumSqlTypeWrapper::VecU16(u16s) => json!(u16s),
+                    EthereumSqlTypeWrapper::I16(i) => json!(i),
+                    EthereumSqlTypeWrapper::VecI16(i16s) => json!(i16s),
                     EthereumSqlTypeWrapper::U8(u) => json!(u),
                     EthereumSqlTypeWrapper::VecU8(u8s) => json!(u8s),
+                    EthereumSqlTypeWrapper::I8(i) => json!(i),
+                    EthereumSqlTypeWrapper::VecI8(i8s) => json!(i8s),
                     EthereumSqlTypeWrapper::String(s) => json!(s),
                     EthereumSqlTypeWrapper::VecString(strings) => json!(strings),
                     EthereumSqlTypeWrapper::Bytes(bytes) => json!(hex::encode(bytes)),
