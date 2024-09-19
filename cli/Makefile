@@ -50,3 +50,5 @@ codegen_typings_lens:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path $(CURDIR)/../../lens-backend/crates/indexer typings
 codegen_indexer_lens:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path $(CURDIR)/../../lens-backend/crates/indexer indexer
+start_uniswap_base:
+	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/uniswap_v3_base indexer

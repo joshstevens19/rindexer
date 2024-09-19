@@ -13,6 +13,7 @@ use std::{
 };
 
 use dotenv::dotenv;
+use ethers::prelude::{I256, U256};
 pub use file::{
     create_mod_file, format_all_files_for_project, load_env_from_path, write_file,
     CreateModFileError, WriteFileError,
@@ -27,6 +28,7 @@ pub fn camel_to_snake_advanced(s: &str, numbers_attach_to_last_word: bool) -> St
     let mut snake_case = String::new();
     let mut previous_was_uppercase = false;
     let mut previous_was_digit = false;
+    let mut uppercase_sequence_length = 0;
 
     for (i, c) in s.chars().enumerate() {
         if c.is_alphanumeric() || c == '_' {
@@ -44,21 +46,25 @@ pub fn camel_to_snake_advanced(s: &str, numbers_attach_to_last_word: bool) -> St
                 snake_case.push(c.to_ascii_lowercase());
                 previous_was_uppercase = true;
                 previous_was_digit = false;
+                uppercase_sequence_length += 1;
             } else if c.is_ascii_digit() {
                 if !numbers_attach_to_last_word &&
                     i > 0 &&
                     !previous_was_digit &&
-                    !snake_case.ends_with('_')
+                    !snake_case.ends_with('_') &&
+                    uppercase_sequence_length != 1
                 {
                     snake_case.push('_');
                 }
                 snake_case.push(c);
                 previous_was_uppercase = false;
                 previous_was_digit = true;
+                uppercase_sequence_length = 0;
             } else {
                 snake_case.push(c);
                 previous_was_uppercase = false;
                 previous_was_digit = false;
+                uppercase_sequence_length = 0;
             }
         }
     }
@@ -167,6 +173,23 @@ pub fn replace_env_variable_to_raw_name(rpc: &str) -> String {
     }
 }
 
+pub fn u256_to_i256(value: U256) -> I256 {
+    let max_i256_as_u256 = U256::from_str_radix(
+        "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        16,
+    )
+    .unwrap();
+
+    if value <= max_i256_as_u256 {
+        // If the value is less than or equal to I256::MAX, it's a positive number
+        I256::from_raw(value)
+    } else {
+        // If it's larger, it represents a negative number in two's complement
+        let twos_complement = (!value).overflowing_add(U256::one()).0;
+        I256::from_raw(twos_complement).wrapping_neg()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,6 +205,7 @@ mod tests {
         assert_eq!(camel_to_snake("collectNFTId"), "collect_nft_id");
         assert_eq!(camel_to_snake("ERC20"), "erc_20");
         assert_eq!(camel_to_snake("arg1"), "arg_1");
+        assert_eq!(camel_to_snake("sqrtPriceX96"), "sqrt_price_x96");
 
         assert_eq!(camel_to_snake_advanced("ERC20", false), "erc_20");
         assert_eq!(camel_to_snake_advanced("ERC20", true), "erc20");
