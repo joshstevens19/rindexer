@@ -53,6 +53,9 @@ fn write_networks(output: &Path, networks: &[Network]) -> Result<(), WriteNetwor
 pub enum WriteGlobalError {
     #[error("{0}")]
     CanNotWriteGlobalCode(#[from] WriteFileError),
+
+    #[error("{0}")]
+    CouldNotDeleteGlobalContractFile(#[from] std::io::Error),
 }
 
 fn write_global(
@@ -60,8 +63,13 @@ fn write_global(
     global: &Global,
     networks: &[Network],
 ) -> Result<(), WriteGlobalError> {
+    let global_contract_file_path = generate_file_location(output, "global_contracts");
+    if global_contract_file_path.exists() {
+        fs::remove_file(&global_contract_file_path)?;
+    }
+
     let context_code = generate_context_code(&global.contracts, networks);
-    write_file(&generate_file_location(output, "global_contracts"), context_code.as_str())?;
+    write_file(&global_contract_file_path, context_code.as_str())?;
 
     Ok(())
 }
