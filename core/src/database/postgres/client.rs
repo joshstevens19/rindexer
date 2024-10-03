@@ -315,4 +315,32 @@ impl PostgresClient {
 
         self.execute(&query, &params).await
     }
+
+    /// This will use COPY to insert the data into the database
+    /// or use the normal bulk inserts if the data is not large enough to 
+    /// need a COPY. This uses `bulk_insert` and `bulk_insert_via_copy` under the hood
+    pub async fn insert_bulk(
+        &self,
+        table_name: &str,
+        columns: &[String],
+        postgres_bulk_data: &[Vec<EthereumSqlTypeWrapper>],
+    ) -> Result<(), String> {
+        if postgres_bulk_data.is_empty() {
+            return Ok(());
+        }
+
+        if postgres_bulk_data.len() > 100 {
+            let column_types: Vec<PgType> =
+                postgres_bulk_data[0].iter().map(|param| param.to_type()).collect();
+
+            self.bulk_insert_via_copy(table_name, columns, &column_types, postgres_bulk_data)
+                .await
+                .map_err(|e| e.to_string())
+        } else {
+            self.bulk_insert(table_name, columns, postgres_bulk_data)
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        }
+    }
 }
