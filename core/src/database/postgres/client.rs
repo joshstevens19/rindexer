@@ -317,7 +317,7 @@ impl PostgresClient {
     }
 
     /// This will use COPY to insert the data into the database
-    /// or use the normal bulk inserts if the data is not large enough to 
+    /// or use the normal bulk inserts if the data is not large enough to
     /// need a COPY. This uses `bulk_insert` and `bulk_insert_via_copy` under the hood
     pub async fn insert_bulk(
         &self,

@@ -266,7 +266,7 @@ pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError>
     let manifest_before_transform: Manifest = serde_yaml::from_str(&contents)?;
 
     contents = substitute_env_variables(&contents)?;
-
+    
     let mut manifest_after_transform: Manifest = serde_yaml::from_str(&contents)?;
 
     // as we don't want to inject the RPC URL in rust projects in clear text we should change

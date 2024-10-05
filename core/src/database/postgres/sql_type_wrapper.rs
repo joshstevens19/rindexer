@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use bytes::BytesMut;
+use chrono::{DateTime, Utc};
 use ethers::{
     abi::{Int, LogParam, Token},
     addressbook::Address,
@@ -79,6 +80,8 @@ pub enum EthereumSqlTypeWrapper {
     VecString(Vec<String>),
     Bytes(Bytes),
     VecBytes(Vec<Bytes>),
+
+    DateTime(DateTime<Utc>),
 }
 
 impl EthereumSqlTypeWrapper {
@@ -147,6 +150,8 @@ impl EthereumSqlTypeWrapper {
             EthereumSqlTypeWrapper::VecString(_) => "VecString",
             EthereumSqlTypeWrapper::Bytes(_) => "Bytes",
             EthereumSqlTypeWrapper::VecBytes(_) => "VecBytes",
+
+            EthereumSqlTypeWrapper::DateTime(_) => "DateTime",
         }
     }
 
@@ -215,6 +220,9 @@ impl EthereumSqlTypeWrapper {
             EthereumSqlTypeWrapper::VecString(_) => PgType::TEXT_ARRAY,
             EthereumSqlTypeWrapper::Bytes(_) => PgType::BYTEA,
             EthereumSqlTypeWrapper::VecBytes(_) => PgType::BYTEA_ARRAY,
+
+            // DateTime
+            EthereumSqlTypeWrapper::DateTime(_) => PgType::TIMESTAMPTZ,
         }
     }
 }
@@ -472,6 +480,7 @@ impl ToSql for EthereumSqlTypeWrapper {
                     int_values.to_sql(ty, out)
                 }
             }
+            EthereumSqlTypeWrapper::DateTime(value) => value.to_sql(ty, out),
         }
     }
 
@@ -1132,6 +1141,9 @@ pub fn map_ethereum_wrapper_to_json(
                     EthereumSqlTypeWrapper::Bytes(bytes) => json!(hex::encode(bytes)),
                     EthereumSqlTypeWrapper::VecBytes(bytes) => {
                         json!(bytes.iter().map(hex::encode).collect::<Vec<_>>())
+                    }
+                    EthereumSqlTypeWrapper::DateTime(date_time) => {
+                        json!(date_time.to_rfc3339())
                     }
                 };
                 result.insert(abi_input.name.clone(), value);
