@@ -543,8 +543,8 @@ contracts: // [!code focus]
       events:
         - Transfer // [!code focus]
       then:
-        - events:
-            - Approval // [!code focus]
+        events:
+          - Approval // [!code focus]
 ```
 
 ### Cross Contract Dependency Events
@@ -591,9 +591,9 @@ contracts: // [!code focus]
       events:
         - Transfer // [!code focus]
       then:
-        - events:
-            - contract_name: WrappedRocketPoolETH // [!code focus]
-              event_name: Approval // [!code focus]
+        events:
+          - contract_name: WrappedRocketPoolETH // [!code focus]
+            event_name: Approval // [!code focus]
 ```
 
 So now `WrappedRocketPoolETH` > `Approval` will not be processed until `RocketPoolETH` > `Transfer` is processed.
