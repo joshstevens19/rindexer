@@ -107,6 +107,7 @@ pub async fn start_indexing(
             .iter()
             .find(|c| c.name == event.contract.name)
             .and_then(|c| c.streams.as_ref());
+
         for network_contract in event.contract.details.iter() {
             let config = SyncConfig {
                 project_path,
@@ -209,8 +210,8 @@ pub async fn start_indexing(
             };
 
             let dependencies_status = ContractEventDependencies::dependencies_status(
-                &event.contract.name,
-                &event.event_name,
+                &event_processing_config.contract_name,
+                &event_processing_config.event_name,
                 dependencies,
             );
 
@@ -232,7 +233,6 @@ pub async fn start_indexing(
                 }
 
                 ContractEventsDependenciesConfig::add_to_event_or_new_entry(
-                    &event.contract.name,
                     &mut dependency_event_processing_configs,
                     event_processing_config_arc,
                     dependencies,
@@ -247,7 +247,6 @@ pub async fn start_indexing(
     // apply dependency events config after processing to avoid ordering issues
     for apply in apply_cross_contract_dependency_events_config_after_processing {
         let (dependency_in_other_contract, event_processing_config) = apply;
-
         ContractEventsDependenciesConfig::add_to_event_or_panic(
             &dependency_in_other_contract,
             &mut dependency_event_processing_configs,
