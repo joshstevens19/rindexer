@@ -39,6 +39,9 @@ pub enum ValidateManifestError {
     #[error("Contract names {0} must be unique")]
     ContractNameMustBeUnique(String),
 
+    #[error("Contract name {0} can not include 'Filter' in the name as it is a reserved word")]
+    ContractNameCanNotIncludeFilter(String),
+
     #[error("Invalid network mapped to contract: network - {0} contract - {1}")]
     InvalidNetworkMappedToContract(String, String),
 
@@ -88,6 +91,12 @@ fn validate_manifest(
     }
 
     for contract in &manifest.contracts {
+        if contract.name.to_lowercase().contains("filter") {
+            return Err(ValidateManifestError::ContractNameCanNotIncludeFilter(
+                contract.name.clone(),
+            ));
+        }
+
         let events = ABIItem::read_abi_items(project_path, contract)
             .map_err(|e| ValidateManifestError::InvalidABI(contract.name.clone(), e.to_string()))?;
 
@@ -266,7 +275,7 @@ pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError>
     let manifest_before_transform: Manifest = serde_yaml::from_str(&contents)?;
 
     contents = substitute_env_variables(&contents)?;
-    
+
     let mut manifest_after_transform: Manifest = serde_yaml::from_str(&contents)?;
 
     // as we don't want to inject the RPC URL in rust projects in clear text we should change

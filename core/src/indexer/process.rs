@@ -107,8 +107,8 @@ pub enum ProcessContractEventsWithDependenciesError {
     #[error("Could not build filter: {0}")]
     BuildFilterError(#[from] BuildRindexerFilterError),
 
-    #[error("Event config not found")]
-    EventConfigNotFound,
+    #[error("Event config not found for contract: {0} and event: {1}")]
+    EventConfigNotFound(String, String),
 
     #[error("Could not run all the logs processes {0}")]
     JoinError(#[from] JoinError),
@@ -118,6 +118,7 @@ pub enum ProcessContractEventsWithDependenciesError {
 pub struct OrderedLiveIndexingDetails {
     pub filter: RindexerEventFilter,
     pub last_seen_block_number: U64,
+    pub last_no_new_block_log_time: Instant,
 }
 
 async fn process_contract_events_with_dependencies(
@@ -141,10 +142,15 @@ async fn process_contract_events_with_dependencies(
                 let event_processing_config = event_processing_config
                     .iter()
                     .find(|e| {
-                        e.contract_name == dependency.contract_name &&
+                        // TODO - this is a hacky way to check if it's a filter event
+                        (e.contract_name == dependency.contract_name ||
+                            e.contract_name.replace("Filter", "") == dependency.contract_name) &&
                             e.event_name == dependency.event_name
                     })
-                    .ok_or(ProcessContractEventsWithDependenciesError::EventConfigNotFound)?;
+                    .ok_or(ProcessContractEventsWithDependenciesError::EventConfigNotFound(
+                        dependency.contract_name,
+                        dependency.event_name,
+                    ))?;
 
                 // forces live indexing off as it has to handle it a bit differently
                 process_event_logs(Arc::clone(event_processing_config), true).await?;
@@ -165,9 +171,18 @@ async fn process_contract_events_with_dependencies(
 
         let results = join_all(tasks).await;
         for result in results {
-            if let Err(e) = result {
-                error!("Error processing logs: {:?}", e);
-                return Err(ProcessContractEventsWithDependenciesError::JoinError(e));
+            match result {
+                Ok(result) => match result {
+                    Ok(_) => {}
+                    Err(e) => {
+                        error!("Error processing logs due to dependencies error: {:?}", e);
+                        return Err(e);
+                    }
+                },
+                Err(e) => {
+                    error!("Error processing logs: {:?}", e);
+                    return Err(ProcessContractEventsWithDependenciesError::JoinError(e));
+                }
             }
         }
 
@@ -210,12 +225,15 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
 
         ordering_live_indexing_details_map.insert(
             config.topic_id,
-            Arc::new(Mutex::new(OrderedLiveIndexingDetails { filter, last_seen_block_number })),
+            Arc::new(Mutex::new(OrderedLiveIndexingDetails {
+                filter,
+                last_seen_block_number,
+                last_no_new_block_log_time: Instant::now(),
+            })),
         );
     }
 
     // this is used for less busy chains to make sure they know rindexer is still alive
-    let mut last_no_new_block_log_time = Instant::now();
     let log_no_new_block_interval = Duration::from_secs(20);
 
     loop {
@@ -243,7 +261,10 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                                     &config.info_log_name,
                                     IndexingEventProgressStatus::Live.log()
                                 );
-                                if last_no_new_block_log_time.elapsed() >= log_no_new_block_interval
+                                if ordering_live_indexing_details
+                                    .last_no_new_block_log_time
+                                    .elapsed() >=
+                                    log_no_new_block_interval
                                 {
                                     info!(
                                         "{} - {} - No new blocks published in the last 20 seconds - latest block number {}",
@@ -251,7 +272,13 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                                         IndexingEventProgressStatus::Live.log(),
                                         latest_block_number
                                     );
-                                    last_no_new_block_log_time = Instant::now();
+                                    ordering_live_indexing_details.last_no_new_block_log_time =
+                                        Instant::now();
+                                    *ordering_live_indexing_details_map
+                                        .get(&config.topic_id)
+                                        .expect("Failed to get ordering_live_indexing_details_map")
+                                        .lock()
+                                        .await = ordering_live_indexing_details;
                                 }
                                 continue;
                             }
