@@ -1,4 +1,5 @@
 use std::{env, time::Duration};
+use std::future::Future;
 
 use bb8::{Pool, RunError};
 use bb8_postgres::PostgresConnectionManager;
@@ -11,15 +12,15 @@ use tokio::{task, time::timeout};
 use tokio_postgres::{
     binary_copy::BinaryCopyInWriter,
     config::SslMode,
-    types::{ToSql, Type as PgType},
     Config, CopyInSink, Error as PgError, Row, Statement, ToStatement,
     Transaction as PgTransaction,
 };
+pub use tokio_postgres::types::{ToSql, Type as PgType};
 use tracing::{debug, error};
-
 use crate::database::postgres::{
     generate::generate_event_table_columns_names_sql, sql_type_wrapper::EthereumSqlTypeWrapper,
 };
+
 
 pub fn connection_string() -> Result<String, env::VarError> {
     dotenv().ok();
@@ -57,8 +58,25 @@ pub enum PostgresError {
     ConnectionPoolError(#[from] RunError<tokio_postgres::Error>),
 }
 
-pub struct PostgresTransaction {
-    pub transaction: PgTransaction<'static>,
+pub struct PostgresTransaction<'a> {
+    pub transaction: PgTransaction<'a>,
+}
+impl<'a> PostgresTransaction<'a> {
+    pub async fn execute(
+        &mut self,
+        query: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<u64, PostgresError> {
+        self.transaction.execute(query, params).await.map_err(PostgresError::PgError)
+    }
+
+    pub async fn commit(self) -> Result<(), PostgresError> {
+        self.transaction.commit().await.map_err(PostgresError::PgError)
+    }
+
+    pub async fn rollback(self) -> Result<(), PostgresError> {
+        self.transaction.rollback().await.map_err(PostgresError::PgError)
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -167,14 +185,27 @@ impl PostgresClient {
         conn.prepare_typed(query, parameter_types).await.map_err(PostgresError::PgError)
     }
 
-    pub async fn transaction(&self) -> Result<PostgresTransaction, PostgresError> {
-        let mut conn = self.pool.get().await?;
+    pub async fn with_transaction<F, Fut, T, Q>(
+        &self,
+        query: &Q,
+        params: &[&(dyn ToSql + Sync)],
+        f: F,
+    ) -> Result<T, PostgresError>
+    where
+        F: FnOnce(u64) -> Fut + Send,
+        Fut: Future<Output = Result<T, PostgresError>> + Send,
+        Q: ?Sized + ToStatement,
+    {
+        let mut conn = self.pool.get().await.map_err(PostgresError::ConnectionPoolError)?;
         let transaction = conn.transaction().await.map_err(PostgresError::PgError)?;
 
-        // Wrap the transaction in a static lifetime
-        let boxed_transaction: Box<PgTransaction<'static>> =
-            unsafe { std::mem::transmute(Box::new(transaction)) };
-        Ok(PostgresTransaction { transaction: *boxed_transaction })
+        let count = transaction.execute(query, params).await.map_err(PostgresError::PgError)?;
+
+        let result = f(count).await?;
+
+        transaction.commit().await.map_err(PostgresError::PgError)?;
+
+        Ok(result)
     }
 
     pub async fn query<T>(
