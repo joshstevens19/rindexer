@@ -796,9 +796,13 @@ pub enum EthereumSqlTypeWrapper {
 
     // 256-bit integers
     U256(U256),
+    U256Bytes(U256),
     I256(I256),
+    I256Bytes(I256),
     VecU256(Vec<U256>),
+    VecU256Bytes(Vec<U256>),
     VecI256(Vec<I256>),
+    VecI256Bytes(Vec<I256>),
 
     // 512-bit integers
     U512(U512),
@@ -808,21 +812,27 @@ pub enum EthereumSqlTypeWrapper {
     H128(H128),
     H160(H160),
     H256(H256),
+    H256Bytes(H256),
     H512(H512),
     VecH128(Vec<H128>),
     VecH160(Vec<H160>),
     VecH256(Vec<H256>),
+    VecH256Bytes(Vec<H256>),
     VecH512(Vec<H512>),
 
     // Address
     Address(Address),
+    AddressBytes(Address),
     VecAddress(Vec<Address>),
+    VecAddressBytes(Vec<Address>),
 
     // Strings and Bytes
     String(String),
     VecString(Vec<String>),
     Bytes(Bytes),
     VecBytes(Vec<Bytes>),
+
+    DateTime(DateTime<Utc>),
 }
 
 // to use it you just pass the value in the enum
