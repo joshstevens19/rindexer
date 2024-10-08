@@ -796,9 +796,13 @@ pub enum EthereumSqlTypeWrapper {
 
     // 256-bit integers
     U256(U256),
+    U256Nullable(U256),
     U256Bytes(U256),
+    U256BytesNullable(U256),
     I256(I256),
+    I256Nullable(I256),
     I256Bytes(I256),
+    I256BytesNullable(I256),
     VecU256(Vec<U256>),
     VecU256Bytes(Vec<U256>),
     VecI256(Vec<I256>),
@@ -828,8 +832,10 @@ pub enum EthereumSqlTypeWrapper {
 
     // Strings and Bytes
     String(String),
+    StringNullable(String),
     VecString(Vec<String>),
     Bytes(Bytes),
+    BytesNullable(Bytes),
     VecBytes(Vec<Bytes>),
 
     DateTime(DateTime<Utc>),
