@@ -48,6 +48,7 @@ project_type: no-code
 networks:
 - name: ethereum
   chain_id: 1
+  kind: Rpc
   rpc: https://mainnet.gateway.tenderly.co // [!code focus]
 ```
 
@@ -96,6 +97,7 @@ project_type: no-code
 networks:
 - name: ethereum
   chain_id: 1
+  kind: Rpc
   rpc: https://mainnet.gateway.tenderly.co
   max_block_range: 10000 // [!code focus]
 ```
@@ -116,6 +118,7 @@ project_type: no-code
 networks:
 - name: ethereum
   chain_id: 1
+  kind: Rpc
   rpc: https://mainnet.gateway.tenderly.co
   compute_units_per_second: 660 // [!code focus]
 ```
@@ -140,6 +143,7 @@ project_type: no-code
 networks:
 - name: ethereum
   chain_id: 1
+  kind: Rpc
   rpc: https://mainnet.gateway.tenderly.co
   disable_logs_bloom_checks: true // [!code focus]
 ```
@@ -156,6 +160,7 @@ project_type: no-code
 networks: // [!code focus]
 - name: ethereum // [!code focus]
   chain_id: 1 // [!code focus]
+  kind: Rpc // [!code focus]
   rpc: https://mainnet.gateway.tenderly.co // [!code focus]
 - name: base // [!code focus]
   chain_id: 8453 // [!code focus]
