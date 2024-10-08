@@ -14,6 +14,7 @@ use tracing::{debug, error};
 use crate::{
     event::contract_setup::{ContractInformation, NetworkContract},
     indexer::start::ProcessedNetworkContract,
+    provider::WrappedLog,
 };
 
 pub type Decoder = Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync>;
@@ -30,6 +31,7 @@ pub struct TxInformation {
     pub address: Address,
     pub block_hash: H256,
     pub block_number: U64,
+    pub block_timestamp: Option<U256>,
     pub transaction_hash: H256,
     pub log_index: U256,
     pub transaction_index: U64,
@@ -52,20 +54,21 @@ pub struct EventResult {
 impl EventResult {
     pub fn new(
         network_contract: Arc<NetworkContract>,
-        log: Log,
+        log: WrappedLog,
         start_block: U64,
         end_block: U64,
     ) -> Self {
-        let log_meta = LogMeta::from(&log);
-        let log_address = log.address;
+        let log_meta = LogMeta::from(&log.inner);
+        let log_address = log.inner.address;
         Self {
-            log: log.clone(),
-            decoded_data: network_contract.decode_log(log),
+            log: log.inner.clone(),
+            decoded_data: network_contract.decode_log(log.inner),
             tx_information: TxInformation {
                 network: network_contract.network.to_string(),
                 address: log_address,
                 block_hash: log_meta.block_hash,
                 block_number: log_meta.block_number,
+                block_timestamp: log.block_timestamp,
                 transaction_hash: log_meta.transaction_hash,
                 transaction_index: log_meta.transaction_index,
                 log_index: log_meta.log_index,

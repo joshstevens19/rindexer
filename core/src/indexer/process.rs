@@ -409,7 +409,7 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                                                     );
                                                 } else if let Some(last_log) = last_log {
                                                     if let Some(last_log_block_number) =
-                                                        last_log.block_number
+                                                        last_log.inner.block_number
                                                     {
                                                         ordering_live_indexing_details.filter =
                                                             ordering_live_indexing_details
