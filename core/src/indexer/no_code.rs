@@ -241,6 +241,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                             block_hash,
                             block_number,
                             transaction_hash,
+                            block_timestamp: None,
                             log_index,
                             transaction_index,
                         },

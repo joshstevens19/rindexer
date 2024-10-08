@@ -47,7 +47,7 @@ start_sophon:
 start_xenea:
 	RUSTFLAGS='-C target-cpu=native' RUST_BACKTRACE='full' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/xenea-bug graphql
 codegen_typings_lens:
-	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path $(CURDIR)/../../lens-backend/crates/indexer typings
+	cargo run -- codegen --path $(CURDIR)/../../lens-backend/crates/lens-indexer typings
 codegen_indexer_lens:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path $(CURDIR)/../../lens-backend/crates/indexer indexer
 start_uniswap_base:
