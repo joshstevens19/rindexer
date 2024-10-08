@@ -53,9 +53,13 @@ pub enum EthereumSqlTypeWrapper {
 
     // 256-bit integers
     U256(U256),
+    U256Nullable(U256),
     U256Bytes(U256),
+    U256BytesNullable(U256),
     I256(I256),
+    I256Nullable(I256),
     I256Bytes(I256),
+    I256BytesNullable(I256),
     VecU256(Vec<U256>),
     VecU256Bytes(Vec<U256>),
     VecI256(Vec<I256>),
@@ -79,14 +83,18 @@ pub enum EthereumSqlTypeWrapper {
 
     // Address
     Address(Address),
+    AddressNullable(Address),
     AddressBytes(Address),
+    AddressBytesNullable(Address),
     VecAddress(Vec<Address>),
     VecAddressBytes(Vec<Address>),
 
     // Strings and Bytes
     String(String),
+    StringNullable(String),
     VecString(Vec<String>),
     Bytes(Bytes),
+    BytesNullable(Bytes),
     VecBytes(Vec<Bytes>),
 
     DateTime(DateTime<Utc>),
@@ -131,9 +139,13 @@ impl EthereumSqlTypeWrapper {
 
             // 256-bit integers
             EthereumSqlTypeWrapper::U256(_) => "U256",
+            EthereumSqlTypeWrapper::U256Nullable(_) => "U256Nullable",
             EthereumSqlTypeWrapper::U256Bytes(_) => "U256Bytes",
+            EthereumSqlTypeWrapper::U256BytesNullable(_) => "U256BytesNullable",
             EthereumSqlTypeWrapper::I256(_) => "I256",
+            EthereumSqlTypeWrapper::I256Nullable(_) => "I256Nullable",
             EthereumSqlTypeWrapper::I256Bytes(_) => "I256Bytes",
+            EthereumSqlTypeWrapper::I256BytesNullable(_) => "I256BytesNullable",
             EthereumSqlTypeWrapper::VecU256(_) => "VecU256",
             EthereumSqlTypeWrapper::VecU256Bytes(_) => "VecU256Bytes",
             EthereumSqlTypeWrapper::VecI256(_) => "VecI256",
@@ -157,14 +169,18 @@ impl EthereumSqlTypeWrapper {
 
             // Address
             EthereumSqlTypeWrapper::Address(_) => "Address",
+            EthereumSqlTypeWrapper::AddressNullable(_) => "AddressNullable",
             EthereumSqlTypeWrapper::AddressBytes(_) => "AddressBytes",
+            EthereumSqlTypeWrapper::AddressBytesNullable(_) => "AddressBytesNullable",
             EthereumSqlTypeWrapper::VecAddress(_) => "VecAddress",
             EthereumSqlTypeWrapper::VecAddressBytes(_) => "VecAddressBytes",
 
             // Strings and Bytes
             EthereumSqlTypeWrapper::String(_) => "String",
+            EthereumSqlTypeWrapper::StringNullable(_) => "StringNullable",
             EthereumSqlTypeWrapper::VecString(_) => "VecString",
             EthereumSqlTypeWrapper::Bytes(_) => "Bytes",
+            EthereumSqlTypeWrapper::BytesNullable(_) => "BytesNullable",
             EthereumSqlTypeWrapper::VecBytes(_) => "VecBytes",
 
             EthereumSqlTypeWrapper::DateTime(_) => "DateTime",
@@ -208,10 +224,18 @@ impl EthereumSqlTypeWrapper {
             EthereumSqlTypeWrapper::VecI128(_) => PgType::NUMERIC_ARRAY,
 
             // 256-bit integers (kept as VARCHAR for decimal string representation)
-            EthereumSqlTypeWrapper::U256(_) => PgType::VARCHAR,
-            EthereumSqlTypeWrapper::U256Bytes(_) => PgType::BYTEA,
-            EthereumSqlTypeWrapper::I256(_) => PgType::VARCHAR,
-            EthereumSqlTypeWrapper::I256Bytes(_) => PgType::BYTEA,
+            EthereumSqlTypeWrapper::U256(_) | EthereumSqlTypeWrapper::U256Nullable(_) => {
+                PgType::VARCHAR
+            }
+            EthereumSqlTypeWrapper::U256Bytes(_) | EthereumSqlTypeWrapper::U256BytesNullable(_) => {
+                PgType::BYTEA
+            }
+            EthereumSqlTypeWrapper::I256(_) | EthereumSqlTypeWrapper::I256Nullable(_) => {
+                PgType::VARCHAR
+            }
+            EthereumSqlTypeWrapper::I256Bytes(_) | EthereumSqlTypeWrapper::I256BytesNullable(_) => {
+                PgType::BYTEA
+            }
             EthereumSqlTypeWrapper::VecU256(_) => PgType::VARCHAR_ARRAY,
             EthereumSqlTypeWrapper::VecU256Bytes(_) => PgType::BYTEA_ARRAY,
             EthereumSqlTypeWrapper::VecI256(_) => PgType::VARCHAR_ARRAY,
@@ -236,15 +260,22 @@ impl EthereumSqlTypeWrapper {
             EthereumSqlTypeWrapper::VecH512(_) => PgType::BYTEA_ARRAY,
 
             // Address
-            EthereumSqlTypeWrapper::Address(_) => PgType::BPCHAR,
-            EthereumSqlTypeWrapper::AddressBytes(_) => PgType::BYTEA,
+            EthereumSqlTypeWrapper::Address(_) | EthereumSqlTypeWrapper::AddressNullable(_) => {
+                PgType::BPCHAR
+            }
+            EthereumSqlTypeWrapper::AddressBytes(_) |
+            EthereumSqlTypeWrapper::AddressBytesNullable(_) => PgType::BYTEA,
             EthereumSqlTypeWrapper::VecAddress(_) => PgType::TEXT_ARRAY,
             EthereumSqlTypeWrapper::VecAddressBytes(_) => PgType::BYTEA_ARRAY,
 
             // Strings and Bytes
-            EthereumSqlTypeWrapper::String(_) => PgType::TEXT,
+            EthereumSqlTypeWrapper::String(_) | EthereumSqlTypeWrapper::StringNullable(_) => {
+                PgType::TEXT
+            }
             EthereumSqlTypeWrapper::VecString(_) => PgType::TEXT_ARRAY,
-            EthereumSqlTypeWrapper::Bytes(_) => PgType::BYTEA,
+            EthereumSqlTypeWrapper::Bytes(_) | EthereumSqlTypeWrapper::BytesNullable(_) => {
+                PgType::BYTEA
+            }
             EthereumSqlTypeWrapper::VecBytes(_) => PgType::BYTEA_ARRAY,
 
             // DateTime
@@ -288,7 +319,26 @@ impl ToSql for EthereumSqlTypeWrapper {
                 let i256_value = u256_to_i256(*value);
                 String::to_sql(&i256_value.to_string(), ty, out)
             }
+            EthereumSqlTypeWrapper::U256Nullable(value) => {
+                if value.is_zero() {
+                    return Ok(IsNull::Yes);
+                }
+                // handle two’s complement without adding a new type
+                let i256_value = u256_to_i256(*value);
+                String::to_sql(&i256_value.to_string(), ty, out)
+            }
             EthereumSqlTypeWrapper::U256Bytes(value) => {
+                let mut bytes = [0u8; 32];
+                value.to_big_endian(&mut bytes);
+                let bytes = Bytes::from(bytes);
+                out.extend_from_slice(&bytes);
+                Ok(IsNull::No)
+            }
+            EthereumSqlTypeWrapper::U256BytesNullable(value) => {
+                if value.is_zero() {
+                    return Ok(IsNull::Yes);
+                }
+
                 let mut bytes = [0u8; 32];
                 value.to_big_endian(&mut bytes);
                 let bytes = Bytes::from(bytes);
@@ -328,7 +378,26 @@ impl ToSql for EthereumSqlTypeWrapper {
                 let value = value.to_string();
                 String::to_sql(&value, ty, out)
             }
+            EthereumSqlTypeWrapper::I256Nullable(value) => {
+                if value.is_zero() {
+                    return Ok(IsNull::Yes);
+                }
+
+                let value = value.to_string();
+                String::to_sql(&value, ty, out)
+            }
             EthereumSqlTypeWrapper::I256Bytes(value) => {
+                let mut bytes = [0u8; 32];
+                value.to_big_endian(&mut bytes);
+                let bytes = Bytes::from(bytes);
+                out.extend_from_slice(&bytes);
+                Ok(IsNull::No)
+            }
+            EthereumSqlTypeWrapper::I256BytesNullable(value) => {
+                if value.is_zero() {
+                    return Ok(IsNull::Yes);
+                }
+
                 let mut bytes = [0u8; 32];
                 value.to_big_endian(&mut bytes);
                 let bytes = Bytes::from(bytes);
@@ -444,7 +513,24 @@ impl ToSql for EthereumSqlTypeWrapper {
                 let hex = format!("{:?}", value);
                 String::to_sql(&hex, ty, out)
             }
+            EthereumSqlTypeWrapper::AddressNullable(value) => {
+                if value.is_zero() {
+                    return Ok(IsNull::Yes);
+                }
+
+                let hex = format!("{:?}", value);
+                String::to_sql(&hex, ty, out)
+            }
             EthereumSqlTypeWrapper::AddressBytes(value) => {
+                let bytes: Bytes = value.as_bytes().to_vec().into();
+                out.extend_from_slice(&bytes);
+                Ok(IsNull::No)
+            }
+            EthereumSqlTypeWrapper::AddressBytesNullable(value) => {
+                if value.is_zero() {
+                    return Ok(IsNull::Yes);
+                }
+
                 let bytes: Bytes = value.as_bytes().to_vec().into();
                 out.extend_from_slice(&bytes);
                 Ok(IsNull::No)
@@ -495,6 +581,13 @@ impl ToSql for EthereumSqlTypeWrapper {
                 Ok(IsNull::No)
             }
             EthereumSqlTypeWrapper::String(value) => String::to_sql(value, ty, out),
+            EthereumSqlTypeWrapper::StringNullable(value) => {
+                if value.is_empty() {
+                    return Ok(IsNull::Yes);
+                }
+
+                String::to_sql(value, ty, out)
+            }
             EthereumSqlTypeWrapper::VecString(values) => {
                 if values.is_empty() {
                     Ok(IsNull::Yes)
@@ -503,6 +596,14 @@ impl ToSql for EthereumSqlTypeWrapper {
                 }
             }
             EthereumSqlTypeWrapper::Bytes(value) => {
+                out.extend_from_slice(value);
+                Ok(IsNull::No)
+            }
+            EthereumSqlTypeWrapper::BytesNullable(value) => {
+                if value.is_empty() {
+                    return Ok(IsNull::Yes);
+                }
+
                 out.extend_from_slice(value);
                 Ok(IsNull::No)
             }
@@ -1189,7 +1290,10 @@ pub fn map_ethereum_wrapper_to_json(
                     EthereumSqlTypeWrapper::VecI128(i128s) => {
                         json!(i128s.iter().map(|i| i.to_string()).collect::<Vec<_>>())
                     }
-                    EthereumSqlTypeWrapper::U256(u) | EthereumSqlTypeWrapper::U256Bytes(u) => {
+                    EthereumSqlTypeWrapper::U256(u) |
+                    EthereumSqlTypeWrapper::U256Bytes(u) |
+                    EthereumSqlTypeWrapper::U256Nullable(u) |
+                    EthereumSqlTypeWrapper::U256BytesNullable(u) => {
                         // handle two's complement without adding a new type
                         let i256_value = u256_to_i256(*u);
                         json!(i256_value.to_string())
@@ -1205,7 +1309,10 @@ pub fn map_ethereum_wrapper_to_json(
                             })
                             .collect::<Vec<_>>())
                     }
-                    EthereumSqlTypeWrapper::I256(i) | EthereumSqlTypeWrapper::I256Bytes(i) => {
+                    EthereumSqlTypeWrapper::I256(i) |
+                    EthereumSqlTypeWrapper::I256Bytes(i) |
+                    EthereumSqlTypeWrapper::I256Nullable(i) |
+                    EthereumSqlTypeWrapper::I256BytesNullable(i) => {
                         json!(i.to_string())
                     }
                     EthereumSqlTypeWrapper::VecI256(i256s) |
@@ -1228,7 +1335,9 @@ pub fn map_ethereum_wrapper_to_json(
                     EthereumSqlTypeWrapper::H512(h) => json!(h),
                     EthereumSqlTypeWrapper::VecH512(h512s) => json!(h512s),
                     EthereumSqlTypeWrapper::Address(address) |
-                    EthereumSqlTypeWrapper::AddressBytes(address) => json!(address),
+                    EthereumSqlTypeWrapper::AddressBytes(address) |
+                    EthereumSqlTypeWrapper::AddressBytesNullable(address) |
+                    EthereumSqlTypeWrapper::AddressNullable(address) => json!(address),
                     EthereumSqlTypeWrapper::VecAddress(addresses) |
                     EthereumSqlTypeWrapper::VecAddressBytes(addresses) => json!(addresses),
                     EthereumSqlTypeWrapper::Bool(b) => json!(b),
@@ -1245,9 +1354,11 @@ pub fn map_ethereum_wrapper_to_json(
                     EthereumSqlTypeWrapper::VecU8(u8s) => json!(u8s),
                     EthereumSqlTypeWrapper::I8(i) => json!(i),
                     EthereumSqlTypeWrapper::VecI8(i8s) => json!(i8s),
-                    EthereumSqlTypeWrapper::String(s) => json!(s),
+                    EthereumSqlTypeWrapper::String(s) |
+                    EthereumSqlTypeWrapper::StringNullable(s) => json!(s),
                     EthereumSqlTypeWrapper::VecString(strings) => json!(strings),
-                    EthereumSqlTypeWrapper::Bytes(bytes) => json!(hex::encode(bytes)),
+                    EthereumSqlTypeWrapper::Bytes(bytes) |
+                    EthereumSqlTypeWrapper::BytesNullable(bytes) => json!(hex::encode(bytes)),
                     EthereumSqlTypeWrapper::VecBytes(bytes) => {
                         json!(bytes.iter().map(hex::encode).collect::<Vec<_>>())
                     }
