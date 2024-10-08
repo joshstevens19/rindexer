@@ -8,7 +8,6 @@ use ethers::providers::{Http, Provider, RetryClient};
 use ethers::types::U64;
 use rindexer::{
     lazy_static,
-    manifest::network::ProviderType,
     provider::{create_jsonrpc_client, JsonRpcCachedProvider, ProviderInterface, RetryClientError},
     public_read_env_value, HeaderMap,
 };
@@ -24,8 +23,13 @@ fn create_shadow_client(
         "X-SHADOW-API-KEY",
         public_read_env_value("RINDEXER_PHANTOM_API_KEY").unwrap().parse().unwrap(),
     );
-    create_jsonrpc_client(rpc_url.parse().unwrap(), compute_units_per_second, max_block_range, header)
-        .and_then(|client| Ok(client as Arc<dyn ProviderInterface>))
+    create_jsonrpc_client(
+        rpc_url.parse().unwrap(),
+        compute_units_per_second,
+        max_block_range,
+        header,
+    )
+    .and_then(|client| Ok(client as Arc<dyn ProviderInterface>))
 }
 
 lazy_static! {
