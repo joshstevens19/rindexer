@@ -24,8 +24,7 @@ fn create_shadow_client(
         "X-SHADOW-API-KEY",
         public_read_env_value("RINDEXER_PHANTOM_API_KEY").unwrap().parse().unwrap(),
     );
-    let url = rpc_url.parse().unwrap();
-    create_jsonrpc_client(url, compute_units_per_second, max_block_range, header)
+    create_jsonrpc_client(rpc_url.parse().unwrap(), compute_units_per_second, max_block_range, header)
         .and_then(|client| Ok(client as Arc<dyn ProviderInterface>))
 }
 
