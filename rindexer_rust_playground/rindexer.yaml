@@ -3,9 +3,11 @@ project_type: rust
 networks:
   - name: ethereum
     chain_id: 1
+    kind: Rpc
     rpc: https://mainnet.gateway.tenderly.co
   - name: base
     chain_id: 8453
+    kind: Rpc
     rpc: https://mainnet.base.org
 storage:
   postgres:
