@@ -92,7 +92,7 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
             use ethers::types::U64;
             use rindexer::{
                 lazy_static,
-                provider::{create_client, JsonRpcCachedProvider, RetryClientError},
+                provider::{create_jsonrpc_client, JsonRpcCachedProvider, ProviderInterface, RetryClientError},
                 public_read_env_value, HeaderMap,
             };
             use std::sync::Arc;
@@ -102,13 +102,14 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
                 rpc_url: &str,
                 compute_units_per_second: Option<u64>,
                 max_block_range: Option<U64>,
-            ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
+            ) -> Result<Arc<dyn ProviderInterface>, RetryClientError> {
                 let mut header = HeaderMap::new();
                 header.insert(
                     "X-SHADOW-API-KEY",
                     public_read_env_value("RINDEXER_PHANTOM_API_KEY").unwrap().parse().unwrap(),
                 );
-                create_client(rpc_url, compute_units_per_second, max_block_range, header)
+                create_jsonrpc_client(rpc_url.parse().unwrap(), compute_units_per_second, max_block_range, header)
+                    .and_then(|client| Ok(client as Arc<dyn ProviderInterface>))
             }
 
             lazy_static! {

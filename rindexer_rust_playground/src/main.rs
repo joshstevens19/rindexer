@@ -83,10 +83,7 @@ async fn main() {
 
 #[allow(dead_code)]
 fn generate() {
-    let path = PathBuf::from_str(
-        "./rindexer.yaml",
-    )
-    .expect("Invalid path");
+    let path = PathBuf::from_str("./rindexer.yaml").expect("Invalid path");
     let manifest = read_manifest(&path).expect("Failed to read manifest");
     rindexer::generator::build::generate_rindexer_typings(&manifest, &path, true)
         .expect("Failed to generate typings");
@@ -94,10 +91,7 @@ fn generate() {
 
 #[allow(dead_code)]
 fn generate_code_test() {
-    let path = PathBuf::from_str(
-        "./rindexer.yaml",
-    )
-    .expect("Invalid path");
+    let path = PathBuf::from_str("./rindexer.yaml").expect("Invalid path");
     let manifest = read_manifest(&path).expect("Failed to read manifest");
 
     rindexer::generator::build::generate_rindexer_handlers(manifest, &path, true)
@@ -106,10 +100,7 @@ fn generate_code_test() {
 
 #[allow(dead_code)]
 fn generate_all() {
-    let path = PathBuf::from_str(
-        "./rindexer.yaml",
-    )
-    .expect("Invalid path");
+    let path = PathBuf::from_str("./rindexer.yaml").expect("Invalid path");
     rindexer::generator::build::generate_rindexer_typings_and_handlers(&path)
         .expect("Failed to generate typings and handlers");
 }
