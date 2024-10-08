@@ -1,5 +1,4 @@
-use std::{env, time::Duration};
-use std::future::Future;
+use std::{env, future::Future, time::Duration};
 
 use bb8::{Pool, RunError};
 use bb8_postgres::PostgresConnectionManager;
@@ -9,18 +8,16 @@ use futures::pin_mut;
 use native_tls::TlsConnector;
 use postgres_native_tls::MakeTlsConnector;
 use tokio::{task, time::timeout};
-use tokio_postgres::{
-    binary_copy::BinaryCopyInWriter,
-    config::SslMode,
-    Config, CopyInSink, Error as PgError, Row, Statement, ToStatement,
-    Transaction as PgTransaction,
-};
 pub use tokio_postgres::types::{ToSql, Type as PgType};
+use tokio_postgres::{
+    binary_copy::BinaryCopyInWriter, config::SslMode, Config, CopyInSink, Error as PgError, Row,
+    Statement, ToStatement, Transaction as PgTransaction,
+};
 use tracing::{debug, error};
+
 use crate::database::postgres::{
     generate::generate_event_table_columns_names_sql, sql_type_wrapper::EthereumSqlTypeWrapper,
 };
-
 
 pub fn connection_string() -> Result<String, env::VarError> {
     dotenv().ok();
