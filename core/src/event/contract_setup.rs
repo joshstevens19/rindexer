@@ -10,7 +10,7 @@ use crate::{
     event::callback_registry::Decoder,
     generate_random_id,
     manifest::contract::{Contract, EventInputIndexedFilters},
-    provider::{CreateNetworkProvider, JsonRpcCachedProvider},
+    provider::{CreateNetworkProvider, ProviderInterface},
     types::single_or_array::StringOrArray,
 };
 
@@ -19,7 +19,7 @@ pub struct NetworkContract {
     pub id: String,
     pub network: String,
     pub indexing_contract_setup: IndexingContractSetup,
-    pub cached_provider: Arc<JsonRpcCachedProvider>,
+    pub cached_provider: Arc<dyn ProviderInterface>,
     pub decoder: Decoder,
     pub start_block: Option<U64>,
     pub end_block: Option<U64>,

@@ -3,6 +3,12 @@ use serde::{Deserialize, Serialize};
 
 use super::core::{deserialize_option_u64_from_string, serialize_option_u64_as_string};
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum ProviderType {
+    Rpc,
+    Hypersync,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Network {
     pub name: String,
@@ -10,6 +16,9 @@ pub struct Network {
     pub chain_id: u64,
 
     pub rpc: String,
+
+    #[serde(default = "default_provider")]
+    pub kind: ProviderType,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compute_units_per_second: Option<u64>,
@@ -24,4 +33,8 @@ pub struct Network {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disable_logs_bloom_checks: Option<bool>,
+}
+
+fn default_provider() -> ProviderType {
+    ProviderType::Rpc
 }

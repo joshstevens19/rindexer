@@ -16,7 +16,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
     indexer::{log_helpers::is_relevant_block, IndexingEventProgressStatus},
-    provider::{JsonRpcCachedProvider, WrappedLog},
+    provider::{ProviderInterface, WrappedLog},
 };
 
 pub struct FetchLogsResult {
@@ -42,7 +42,7 @@ pub fn fetch_logs_stream(
 
         // add any max block range limitation before we start processing
         let mut max_block_range_limitation =
-            config.network_contract.cached_provider.max_block_range;
+            config.network_contract.cached_provider.max_block_range();
         if max_block_range_limitation.is_some() {
             current_filter = current_filter.set_to_block(calculate_process_historic_log_to_block(
                 &from_block,
@@ -135,7 +135,7 @@ struct ProcessHistoricLogsStreamResult {
 }
 
 async fn fetch_historic_logs_stream(
-    cached_provider: &Arc<JsonRpcCachedProvider>,
+    cached_provider: &Arc<dyn ProviderInterface>,
     tx: &mpsc::UnboundedSender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
     topic_id: &H256,
     current_filter: RindexerEventFilter,
@@ -318,7 +318,7 @@ async fn fetch_historic_logs_stream(
 /// within a safe range, updating the filter, and sending the logs to the provided channel.
 #[allow(clippy::too_many_arguments)]
 async fn live_indexing_stream(
-    cached_provider: &Arc<JsonRpcCachedProvider>,
+    cached_provider: &Arc<dyn ProviderInterface>,
     tx: &mpsc::UnboundedSender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
     contract_address: &Option<ValueOrArray<Address>>,
     topic_id: &H256,
