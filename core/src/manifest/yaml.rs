@@ -5,21 +5,17 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
 };
-
+use std::str::FromStr;
 use ethers::types::ValueOrArray;
 use regex::{Captures, Regex};
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
-use crate::{
-    abi::ABIItem,
-    helpers::replace_env_variable_to_raw_name,
-    manifest::{
-        core::{Manifest, ProjectType},
-        network::Network,
-    },
-    StringOrArray,
-};
+use crate::{abi::ABIItem, helpers::replace_env_variable_to_raw_name, load_env_from_project_path, manifest::{
+    core::{Manifest, ProjectType},
+    network::Network,
+}, StringOrArray};
+use crate::helpers::load_env_from_full_path;
 
 pub const YAML_CONFIG_NAME: &str = "rindexer.yaml";
 
@@ -275,11 +271,30 @@ struct ManifestNetworksOnly {
     pub networks: Vec<Network>,
 }
 
+fn extract_environment_path(contents: &str, file_path: &Path) -> Option<PathBuf> {
+    let re = Regex::new(r"(?m)^environment_path:\s*(.+)$").unwrap();
+    re.captures(contents)
+        .and_then(|cap| cap.get(1))
+        .map(|m| {
+            let path_str = m.as_str().trim().replace('\"', ""); // Remove any quotes
+            let base_dir = file_path.parent().unwrap_or(Path::new(""));
+            let full_path = base_dir.join(path_str);
+            full_path.canonicalize().unwrap_or(full_path)
+        })
+}
+
+
 pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError> {
     let mut file = File::open(file_path)?;
     let mut contents = String::new();
 
     file.read_to_string(&mut contents)?;
+
+    let environment_path = extract_environment_path(&contents, file_path);
+    if let Some(ref path) = environment_path {
+        println!("Loading environment from path: {:?}", path);
+        load_env_from_full_path(path);
+    }
 
     let contents_before_transform = contents.clone();
 
