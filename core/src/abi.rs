@@ -302,7 +302,7 @@ impl EventInfo {
     }
 
     pub fn topic_id_as_hex_string(&self) -> String {
-        format!("0x{:x}", self.topic_id())
+        format!("{:x}", self.topic_id())
     }
 
     pub fn struct_result(&self) -> &str {
