@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use super::core::{deserialize_option_u64_from_string, serialize_option_u64_as_string};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum ProviderType {
     Rpc,
     Hypersync,
@@ -17,6 +17,7 @@ pub struct Network {
 
     pub rpc: String,
 
+    #[serde(default = "default_provider")]
     pub kind: ProviderType,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -32,4 +33,8 @@ pub struct Network {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disable_logs_bloom_checks: Option<bool>,
+}
+
+fn default_provider() -> ProviderType {
+    ProviderType::Rpc
 }
