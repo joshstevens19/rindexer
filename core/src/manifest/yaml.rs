@@ -8,12 +8,16 @@ use std::{
 
 use ethers::types::ValueOrArray;
 use regex::{Captures, Regex};
+use serde::{Deserialize, Serialize};
 use tracing::error;
 
 use crate::{
     abi::ABIItem,
     helpers::replace_env_variable_to_raw_name,
-    manifest::core::{Manifest, ProjectType},
+    manifest::{
+        core::{Manifest, ProjectType},
+        network::Network,
+    },
     StringOrArray,
 };
 
@@ -266,23 +270,31 @@ pub fn read_manifest_raw(file_path: &PathBuf) -> Result<Manifest, ReadManifestEr
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct ManifestNetworksOnly {
+    pub networks: Vec<Network>,
+}
+
 pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError> {
     let mut file = File::open(file_path)?;
     let mut contents = String::new();
 
     file.read_to_string(&mut contents)?;
 
-    let manifest_before_transform: Manifest = serde_yaml::from_str(&contents)?;
+    let contents_before_transform = contents.clone();
 
     contents = substitute_env_variables(&contents)?;
 
     let mut manifest_after_transform: Manifest = serde_yaml::from_str(&contents)?;
+    println!("Manifest after transform contents: {:?}", manifest_after_transform);
 
     // as we don't want to inject the RPC URL in rust projects in clear text we should change
     // the networks.rpc back to what it was before and the generated code will handle it
     if manifest_after_transform.project_type == ProjectType::Rust {
+        let manifest_networks_only: ManifestNetworksOnly =
+            serde_yaml::from_str(&contents_before_transform)?;
         for network in &mut manifest_after_transform.networks {
-            network.rpc = manifest_before_transform
+            network.rpc = manifest_networks_only
                 .networks
                 .iter()
                 .find(|n| n.name == network.name)
