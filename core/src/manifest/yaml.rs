@@ -293,7 +293,6 @@ pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError>
 
     let environment_path = extract_environment_path(&contents, file_path);
     if let Some(ref path) = environment_path {
-        println!("Loading environment from path: {:?}", path);
         load_env_from_full_path(path);
     }
 
