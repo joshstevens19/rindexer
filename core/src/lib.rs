@@ -16,7 +16,7 @@ pub use simple_file_formatters::csv::AsyncCsvAppender;
 
 mod helpers;
 pub use helpers::{
-    format_all_files_for_project, generate_random_id, load_env_from_path, public_read_env_value,
+    format_all_files_for_project, generate_random_id, load_env_from_project_path, public_read_env_value,
     write_file, WriteFileError,
 };
 mod api;

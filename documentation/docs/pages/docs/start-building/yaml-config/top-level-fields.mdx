@@ -37,6 +37,19 @@ description: My first rindexer project
 repository: https://github.com/joshstevens19/rindexer // [!code focus]
 ```
 
+## environment_path
+
+By default rindexer will load the environment variables from the `.env` file in the root of the project.
+
+You can override this by providing the path to the environment file you wish to use.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+environment_path: "../../.env" // [!code focus]
+```
+
 ## project_type
 
 The rindexer project type
