@@ -17,7 +17,6 @@ use crate::{
         start::{start_indexing, StartIndexingError},
         ContractEventDependencies, ContractEventDependenciesMapFromRelationshipsError,
     },
-    load_env_from_project_path,
     manifest::{
         core::ProjectType,
         storage::RelationshipsAndIndexersError,

@@ -15,8 +15,8 @@ use std::{
 use dotenv::dotenv;
 use ethers::prelude::{I256, U256};
 pub use file::{
-    create_mod_file, format_all_files_for_project, load_env_from_project_path, write_file,
-    CreateModFileError, WriteFileError, load_env_from_full_path
+    create_mod_file, format_all_files_for_project, load_env_from_full_path,
+    load_env_from_project_path, write_file, CreateModFileError, WriteFileError,
 };
 use rand::{distributions::Alphanumeric, Rng};
 
