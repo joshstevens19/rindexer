@@ -130,4 +130,3 @@ pub fn load_env_from_full_path(path: &Path) {
         dotenv().ok();
     }
 }
-
