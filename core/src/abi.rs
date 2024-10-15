@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fs, iter::Map, path::Path};
+use std::{collections::HashSet, fs, path::Path};
 
 use ethers::{
     types::{ValueOrArray, H256},
@@ -178,12 +178,33 @@ pub enum ReadAbiError {
 
 impl ABIItem {
     pub fn format_event_signature(&self) -> Result<String, ParamTypeError> {
-        let formatted_inputs = self
-            .inputs
-            .iter()
-            .map(|component| component.format_param_type())
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(formatted_inputs.join(","))
+        let name = &self.name;
+        let params = self.inputs.iter()
+            .map(Self::format_param_type)
+            .collect::<Result<Vec<_>, _>>()?
+            .join(",");
+
+        Ok(format!("{}({})", name, params))
+    }
+
+    fn format_param_type(input: &ABIInput) -> Result<String, ParamTypeError> {
+        let base_type = input.type_.split('[').next().unwrap_or(&input.type_);
+        let array_suffix = input.type_.strip_prefix(base_type).unwrap_or("");
+
+        let type_str = match base_type {
+            "tuple" => {
+                let inner = input.components.as_ref()
+                    .ok_or(ParamTypeError::MissingComponents)?
+                    .iter()
+                    .map(Self::format_param_type)
+                    .collect::<Result<Vec<_>, _>>()?
+                    .join(",");
+                format!("({})", inner)
+            },
+            _ => base_type.to_string(),
+        };
+
+        Ok(format!("{}{}", type_str, array_suffix))
     }
 
     pub fn extract_event_names_and_signatures_from_abi(
@@ -193,6 +214,7 @@ impl ABIItem {
         for item in abi_json.into_iter() {
             if item.type_ == "event" {
                 let signature = item.format_event_signature()?;
+                // println!("signature {}", signature);
                 events.push(EventInfo::new(item, signature));
             }
         }
@@ -275,13 +297,12 @@ impl EventInfo {
     }
 
     pub fn topic_id(&self) -> H256 {
-        let event_signature = format!("{}({})", self.name, self.signature);
+        let event_signature = self.signature.clone();
         H256::from_slice(&keccak256(event_signature))
     }
 
     pub fn topic_id_as_hex_string(&self) -> String {
-        let event_signature = format!("{}({})", self.name, self.signature);
-        Map::collect(keccak256(event_signature).iter().map(|byte| format!("{:02x}", byte)))
+        format!("0x{:x}", self.topic_id())
     }
 
     pub fn struct_result(&self) -> &str {
