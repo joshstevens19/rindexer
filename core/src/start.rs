@@ -32,6 +32,7 @@ pub struct IndexingDetails {
 
 pub struct StartDetails<'a> {
     pub manifest_path: &'a PathBuf,
+    pub override_environment_path: Option<&'a PathBuf>,
     pub indexing_details: Option<IndexingDetails>,
     pub graphql_details: GraphqlOverrideSettings,
 }
@@ -78,7 +79,9 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
     let project_path = details.manifest_path.parent();
     match project_path {
         Some(project_path) => {
-            load_env_from_path(project_path);
+            let env_path =
+                details.override_environment_path.map(PathBuf::as_path).unwrap_or(project_path);
+            load_env_from_path(env_path);
             let manifest = Arc::new(read_manifest(details.manifest_path)?);
 
             if manifest.project_type != ProjectType::NoCode {

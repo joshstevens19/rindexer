@@ -84,6 +84,8 @@ pub async fn setup_no_code(
             if !details.indexing_details.enabled {
                 return Ok(StartDetails {
                     manifest_path: details.manifest_path,
+                    // TODO: enable ability to override this for no-code projects
+                    override_environment_path: None,
                     indexing_details: None,
                     graphql_details: details.graphql_details,
                 });
@@ -115,6 +117,8 @@ pub async fn setup_no_code(
 
             Ok(StartDetails {
                 manifest_path: details.manifest_path,
+                // TODO: enable ability to override this for no-code projects
+                override_environment_path: None,
                 indexing_details: Some(IndexingDetails { registry }),
                 graphql_details: details.graphql_details,
             })

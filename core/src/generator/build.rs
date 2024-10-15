@@ -440,6 +440,7 @@ serde = {{ version = "1.0.194", features = ["derive"] }}
                         let manifest_path = path.join("rindexer.yaml");
                         let result = start_rindexer(StartDetails {
                             manifest_path: &manifest_path,
+                            override_environment_path: None,
                             indexing_details: if enable_indexer {
                                 Some(IndexingDetails {
                                     registry: register_all_handlers(&manifest_path).await,
