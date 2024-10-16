@@ -5,11 +5,7 @@ project_type: no-code
 networks:
 - name: ethereum
   chain_id: 1
-  kind: Rpc
   rpc: https://mainnet.gateway.tenderly.co
-  
-#  kind: Hypersync
-#  rpc: https://1.hypersync.xyz
 storage:
   postgres:
     enabled: true
@@ -19,8 +15,8 @@ contracts:
   details:
   - network: ethereum
     address: 0xae78736cd615f374d3085123a210448e74fc6393
-    start_block: '11600000'
-    end_block: '17718056'
+    start_block: '18600000'
+    end_block: '18718056'
   abi: ./abis/RocketTokenRETH.abi.json
   include_events:
   - Transfer

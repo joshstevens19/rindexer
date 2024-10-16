@@ -26,13 +26,20 @@ it then ask you 2 questions:
 networks:
   - name: ethereum // [!code focus]
     chain_id: 1
-    kind: Rpc
     rpc: https://mainnet.gateway.tenderly.co
 ```
 
 This will skip for you if you only have one network setup.
 
 By setting kind to "Hypersync" you could use [hypersync](https://docs.envio.dev/docs/HyperSync/overview) as a data source.
+
+```yaml
+networks:
+  - name: ethereum // [!code focus]
+    kind: Hypersync
+    chain_id: 1
+    rpc: https://1.hypersync.xyz
+```
 
 2. "Enter Contract Address" - This is the contract address you want to add to your YAML project
 
