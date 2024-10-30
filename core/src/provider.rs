@@ -42,7 +42,7 @@ pub trait ProviderInterface: Send + Sync + Debug {
 
     async fn get_block_number(&self) -> Result<U64, ProviderError>;
 
-    async fn get_logs(&self, filter: &RindexerEventFilter) -> Result<Vec<Log>, ProviderError>;
+    async fn get_logs(&self, filter: &RindexerEventFilter) -> Result<Vec<WrappedLog>, ProviderError>;
 
     fn max_block_range(&self) -> Option<U64>;
 
@@ -199,6 +199,7 @@ impl ProviderInterface for HyperSyncProvider {
 
         let all_log_fields: BTreeSet<String> =
             hypersync_schema::log().fields.iter().map(|x| x.name.clone()).collect();
+        let block_fields = BTreeSet::from(["timestamp".to_string(), "number".to_string()]);
 
         let mut query = match raw_filter.block_option {
             FilterBlockOption::Range { from_block, to_block } => {
@@ -210,7 +211,7 @@ impl ProviderInterface for HyperSyncProvider {
                 Query {
                     from_block: from_block.as_u64(),
                     to_block: to_block.map(|n| n.as_u64() + 1),
-                    field_selection: FieldSelection { log: all_log_fields, ..Default::default() },
+                    field_selection: FieldSelection { log: all_log_fields, block: block_fields, ..Default::default() },
                     ..Default::default()
                 }
             }
@@ -221,8 +222,7 @@ impl ProviderInterface for HyperSyncProvider {
                     hash: vec![block_hash.into()],
                     ..Default::default()
                 }],
-                field_selection: FieldSelection { log: all_log_fields, ..Default::default() },
-                join_mode: JoinMode::JoinAll,
+                field_selection: FieldSelection { log: all_log_fields, block: block_fields ,..Default::default() },
                 ..Default::default()
             },
         };
@@ -255,7 +255,7 @@ impl ProviderInterface for HyperSyncProvider {
             topics: hypersync_topics,
         }];
 
-        query.join_mode = JoinMode::JoinNothing;
+        query.join_mode = JoinMode::JoinAll;
 
         let resp = self
             .provider
@@ -264,17 +264,24 @@ impl ProviderInterface for HyperSyncProvider {
             .await
             .map_err(|err| ProviderError::CustomError(err.to_string()))?;
 
-        Ok(resp
-            .data
-            .logs
-            .into_iter()
-            .flatten()
-            .filter_map(|log| {
+        let mut blocks = resp.data.blocks.into_iter().flatten();
+        let block = blocks.next();
+        if let None = block {
+            return Ok(vec![]);
+        }
+        let mut block = block.unwrap();
+        Ok(resp.data.logs.into_iter().flatten().filter_map(|log| {
+            if block.number.unwrap() != u64::from(log.block_number.unwrap()) {
+                block = blocks.next().unwrap();
+            };
+            if block.number.unwrap() != u64::from(log.block_number.unwrap()) {
                 let log = log.try_into().ok()?;
                 Some(WrappedLog{inner: log, block_timestamp: None})
-            })
-            .collect::<Vec<WrappedLog>>())
-
+            } else {
+                let log = log.try_into().ok()?;
+                Some(WrappedLog{inner: log, block_timestamp: block.timestamp.clone().and_then(|ts| ts.try_into().ok())})
+            }
+        }).collect::<Vec<WrappedLog>>())
     }
 
     fn max_block_range(&self) -> Option<U64> {
@@ -309,12 +316,8 @@ pub fn create_client(
         RetryClientError::HttpProviderCantBeCreated(rpc_url.to_string(), e.to_string())
     })?;
     match kind {
-        ProviderType::Rpc => {
-            create_jsonrpc_client(url, compute_units_per_second, max_block_range, custom_headers)
-                .and_then(|client| Ok(client as Arc<dyn ProviderInterface>))
-        }
-        ProviderType::Hypersync => create_hypersync_client(url, max_block_range)
-            .and_then(|client| Ok(client as Arc<dyn ProviderInterface>)),
+        ProviderType::Rpc => create_jsonrpc_client(url, compute_units_per_second, max_block_range, custom_headers).map(|client| client as Arc<dyn ProviderInterface>),
+        ProviderType::Hypersync => create_hypersync_client(url, max_block_range).map(|client| client as Arc<dyn ProviderInterface>),
     }
 }
 

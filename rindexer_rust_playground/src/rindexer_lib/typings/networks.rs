@@ -29,7 +29,7 @@ fn create_shadow_client(
         max_block_range,
         header,
     )
-    .and_then(|client| Ok(client as Arc<dyn ProviderInterface>))
+    .map(|client| client as Arc<dyn ProviderInterface>)
 }
 
 lazy_static! {
