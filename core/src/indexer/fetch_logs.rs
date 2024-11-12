@@ -332,7 +332,7 @@ async fn live_indexing_stream(
 
     // this is used for less busy chains to make sure they know rindexer is still alive
     let mut last_no_new_block_log_time = Instant::now();
-    let log_no_new_block_interval = Duration::from_secs(20);
+    let log_no_new_block_interval = Duration::from_secs(300);
 
     loop {
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
@@ -350,7 +350,7 @@ async fn live_indexing_stream(
                             );
                             if last_no_new_block_log_time.elapsed() >= log_no_new_block_interval {
                                 info!(
-                                    "{} - {} - No new blocks published in the last 20 seconds - latest block number {}",
+                                    "{} - {} - No new blocks published in the last 5 minutes - latest block number {}",
                                     info_log_name,
                                     IndexingEventProgressStatus::Live.log(),
                                     last_seen_block_number,

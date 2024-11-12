@@ -73,7 +73,16 @@ impl JsonRpcCachedProvider {
         &self,
         filter: &RindexerEventFilter,
     ) -> Result<Vec<WrappedLog>, ProviderError> {
-        self.provider.request("eth_getLogs", [filter.raw_filter()]).await
+        // rindexer_info!("get_logs DEBUG [{:?}]", filter.raw_filter());
+        // LEAVING FOR NOW CONTEXT: TEMP FIX TO MAKE SURE FROM BLOCK IS ALWAYS SET
+        // let mut filter = filter.raw_filter().clone();
+        // if filter.get_from_block().is_none() {
+        //     filter = filter.from_block(BlockNumber::Earliest);
+        // }
+        // rindexer_info!("get_logs DEBUG AFTER [{:?}]", filter);
+        let result = self.provider.request("eth_getLogs", [filter.raw_filter()]).await?;
+        // rindexer_info!("get_logs RESULT [{:?}]", result);
+        Ok(result)
     }
 
     pub async fn get_chain_id(&self) -> Result<U256, ProviderError> {
