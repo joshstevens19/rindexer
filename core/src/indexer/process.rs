@@ -234,7 +234,7 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
     }
 
     // this is used for less busy chains to make sure they know rindexer is still alive
-    let log_no_new_block_interval = Duration::from_secs(20);
+    let log_no_new_block_interval = Duration::from_secs(300);
 
     loop {
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -267,7 +267,7 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                                     log_no_new_block_interval
                                 {
                                     info!(
-                                        "{} - {} - No new blocks published in the last 20 seconds - latest block number {}",
+                                        "{} - {} - No new blocks published in the last 5 minutes - latest block number {}",
                                         &config.info_log_name,
                                         IndexingEventProgressStatus::Live.log(),
                                         latest_block_number

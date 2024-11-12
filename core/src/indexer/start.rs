@@ -159,6 +159,7 @@ pub async fn start_indexing(
 
             let start_block = last_known_start_block
                 .unwrap_or(network_contract.start_block.unwrap_or(latest_block));
+            info!("{} start_block is {}", event.info_log_name(), start_block);
             let end_block =
                 std::cmp::min(network_contract.end_block.unwrap_or(latest_block), latest_block);
             if let Some(end_block) = network_contract.end_block {
