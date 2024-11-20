@@ -67,10 +67,10 @@ async fn process_event_logs(
     }
 
     if block_until_indexed {
-        // Wait for all spawned tasks to complete
-        for task in tasks {
-            task.await.map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
-        }
+        // Wait for all tasks in parallel
+        futures::future::try_join_all(tasks)
+            .await
+            .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
     }
 
     Ok(())
