@@ -36,24 +36,41 @@ pub enum ProcessEventError {
     BuildFilterError(#[from] BuildRindexerFilterError),
 }
 
-pub async fn process_event(config: EventProcessingConfig) -> Result<(), ProcessEventError> {
+pub async fn process_event(
+    config: EventProcessingConfig,
+    block_until_indexed: bool,
+) -> Result<(), ProcessEventError> {
     debug!("{} - Processing events", config.info_log_name);
 
-    process_event_logs(Arc::new(config), false).await?;
+    process_event_logs(Arc::new(config), false, block_until_indexed).await?;
 
     Ok(())
 }
 
+/// note block_until_indexed:
+/// Whether to wait for all indexing tasks to complete for an event before returning
+//  (needed for dependency indexing)
 async fn process_event_logs(
     config: Arc<EventProcessingConfig>,
     force_no_live_indexing: bool,
+    block_until_indexed: bool,
 ) -> Result<(), Box<ProviderError>> {
     let mut logs_stream = fetch_logs_stream(Arc::clone(&config), force_no_live_indexing);
+    let mut tasks = Vec::new();
 
     while let Some(result) = logs_stream.next().await {
-        handle_logs_result(Arc::clone(&config), result)
+        let task = handle_logs_result(Arc::clone(&config), result)
             .await
             .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
+
+        tasks.push(task);
+    }
+
+    if block_until_indexed {
+        // Wait for all spawned tasks to complete
+        for task in tasks {
+            task.await.map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
+        }
     }
 
     Ok(())
@@ -153,7 +170,7 @@ async fn process_contract_events_with_dependencies(
                     ))?;
 
                 // forces live indexing off as it has to handle it a bit differently
-                process_event_logs(Arc::clone(event_processing_config), true).await?;
+                process_event_logs(Arc::clone(event_processing_config), true, true).await?;
 
                 if event_processing_config.live_indexing {
                     let rindexer_event_filter = event_processing_config.to_event_filter()?;
@@ -392,7 +409,18 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                                                 .await;
 
                                         match result {
-                                            Ok(_) => {
+                                            Ok(task) => {
+                                                let complete = task.await;
+                                                if let Err(e) = complete {
+                                                    error!(
+                                                        "{} - {} - Error indexing task: {} - will try again in 200ms",
+                                                        &config.info_log_name,
+                                                        IndexingEventProgressStatus::Live.log(),
+                                                        e
+                                                    );
+                                                    drop(permit);
+                                                    break;
+                                                }
                                                 ordering_live_indexing_details
                                                     .last_seen_block_number = to_block;
                                                 if logs_empty {
@@ -476,7 +504,7 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
 async fn handle_logs_result(
     config: Arc<EventProcessingConfig>,
     result: Result<FetchLogsResult, Box<dyn std::error::Error + Send>>,
-) -> Result<(), Box<dyn std::error::Error + Send>> {
+) -> Result<JoinHandle<()>, Box<dyn std::error::Error + Send>> {
     match result {
         Ok(result) => {
             debug!("Processing logs {} - length {}", config.event_name, result.logs.len());
@@ -495,18 +523,21 @@ async fn handle_logs_result(
                 .collect::<Vec<_>>();
 
             if !fn_data.is_empty() {
-                if config.index_event_in_order {
+                return if config.index_event_in_order {
                     config.trigger_event(fn_data).await;
                     update_progress_and_last_synced(config, result.to_block);
+                    Ok(tokio::spawn(async {})) // Return a completed task
                 } else {
-                    tokio::spawn(async move {
+                    let task = tokio::spawn(async move {
                         config.trigger_event(fn_data).await;
                         update_progress_and_last_synced(config, result.to_block);
                     });
+
+                    Ok(task)
                 }
             }
 
-            Ok(())
+            Ok(tokio::spawn(async {})) // Return a completed task
         }
         Err(e) => {
             error!("Error fetching logs: {:?}", e);
