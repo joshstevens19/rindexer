@@ -21,10 +21,12 @@ use crate::{
     indexer::{
         dependency::{ContractEventsDependenciesConfig, EventDependencies},
         fetch_logs::{fetch_logs_stream, FetchLogsResult},
-        last_synced::update_progress_and_last_synced,
+        last_synced::update_progress_and_last_synced_task,
         log_helpers::is_relevant_block,
         progress::IndexingEventProgressStatus,
+        task_tracker::{indexing_event_processed, indexing_event_processing},
     },
+    is_running,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -97,7 +99,7 @@ pub async fn process_contracts_events_with_dependencies(
                 contract_events.event_dependencies,
                 Arc::new(contract_events.events_config),
             )
-            .await
+                .await
         });
         handles.push(handle);
     }
@@ -501,6 +503,16 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
     }
 }
 
+async fn trigger_event(
+    config: Arc<EventProcessingConfig>,
+    fn_data: Vec<EventResult>,
+    to_block: U64,
+) {
+    indexing_event_processing();
+    config.trigger_event(fn_data).await;
+    update_progress_and_last_synced_task(config, to_block, indexing_event_processed);
+}
+
 async fn handle_logs_result(
     config: Arc<EventProcessingConfig>,
     result: Result<FetchLogsResult, Box<dyn std::error::Error + Send>>,
@@ -522,17 +534,19 @@ async fn handle_logs_result(
                 })
                 .collect::<Vec<_>>();
 
+            // if shutting down so do not process anymore event
+            while !is_running() {
+                tokio::time::sleep(Duration::from_millis(1000)).await;
+            }
+
             if !fn_data.is_empty() {
                 return if config.index_event_in_order {
-                    config.trigger_event(fn_data).await;
-                    update_progress_and_last_synced(config, result.to_block);
-                    Ok(tokio::spawn(async {})) // Return a completed task
+                    trigger_event(config, fn_data, result.to_block).await;
+                    Ok(tokio::spawn(async {}))
                 } else {
                     let task = tokio::spawn(async move {
-                        config.trigger_event(fn_data).await;
-                        update_progress_and_last_synced(config, result.to_block);
+                        trigger_event(config, fn_data, result.to_block).await;
                     });
-
                     Ok(task)
                 }
             }
