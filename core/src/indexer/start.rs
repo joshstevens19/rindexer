@@ -239,7 +239,7 @@ pub async fn start_indexing(
                     dependencies,
                 );
             } else {
-                let process_event = tokio::spawn(process_event(event_processing_config));
+                let process_event = tokio::spawn(process_event(event_processing_config, false));
                 non_blocking_process_events.push(process_event);
             }
         }
