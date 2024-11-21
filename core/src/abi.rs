@@ -179,7 +179,9 @@ pub enum ReadAbiError {
 impl ABIItem {
     pub fn format_event_signature(&self) -> Result<String, ParamTypeError> {
         let name = &self.name;
-        let params = self.inputs.iter()
+        let params = self
+            .inputs
+            .iter()
             .map(Self::format_param_type)
             .collect::<Result<Vec<_>, _>>()?
             .join(",");
@@ -193,14 +195,16 @@ impl ABIItem {
 
         let type_str = match base_type {
             "tuple" => {
-                let inner = input.components.as_ref()
+                let inner = input
+                    .components
+                    .as_ref()
                     .ok_or(ParamTypeError::MissingComponents)?
                     .iter()
                     .map(Self::format_param_type)
                     .collect::<Result<Vec<_>, _>>()?
                     .join(",");
                 format!("({})", inner)
-            },
+            }
             _ => base_type.to_string(),
         };
 
