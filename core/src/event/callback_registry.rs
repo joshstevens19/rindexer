@@ -148,7 +148,7 @@ impl EventCallbackRegistry {
                     info!("Detected shutdown, stopping event trigger");
                     break;
                 }
-                
+
                 match (event_information.callback)(data.clone()).await {
                     Ok(_) => {
                         debug!(

@@ -6,9 +6,7 @@ use std::{
 use once_cell::sync::Lazy;
 use tracing::info;
 
-use crate::{
-    indexer::task_tracker::active_indexing_count,
-};
+use crate::indexer::task_tracker::active_indexing_count;
 
 static IS_RUNNING: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(true));
 

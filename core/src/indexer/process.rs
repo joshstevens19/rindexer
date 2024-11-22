@@ -99,7 +99,7 @@ pub async fn process_contracts_events_with_dependencies(
                 contract_events.event_dependencies,
                 Arc::new(contract_events.events_config),
             )
-                .await
+            .await
         });
         handles.push(handle);
     }
