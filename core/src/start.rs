@@ -203,7 +203,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     }
                 }
 
-                // keep graphql alive even if indexing has finished
+                // Do not need now with the main shutdown keeping around in-case
                 // if details.graphql_details.enabled {
                 //     signal::ctrl_c()
                 //         .await
