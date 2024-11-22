@@ -6,14 +6,14 @@ use ethers::{
     types::{Bytes, Log, H256, U256, U64},
 };
 use futures::future::BoxFuture;
-use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use crate::{
     event::contract_setup::{ContractInformation, NetworkContract},
     indexer::start::ProcessedNetworkContract,
+    is_running,
     provider::WrappedLog,
 };
 
@@ -144,6 +144,11 @@ impl EventCallbackRegistry {
             debug!("{} - Pushed {} events", data.len(), event_information.info_log_name());
 
             loop {
+                if !is_running() {
+                    info!("Detected shutdown, stopping event trigger");
+                    break;
+                }
+                
                 match (event_information.callback)(data.clone()).await {
                     Ok(_) => {
                         debug!(
@@ -153,18 +158,19 @@ impl EventCallbackRegistry {
                         break;
                     }
                     Err(e) => {
+                        if !is_running() {
+                            info!("Detected shutdown, stopping event trigger");
+                            break;
+                        }
                         attempts += 1;
                         error!(
                             "{} Event processing failed - id: {} - topic_id: {}. Retrying... (attempt {}). Error: {}",
                             event_information.info_log_name(), id, event_information.topic_id, attempts, e
                         );
 
-                        sleep(delay).await;
-                        delay = (delay * 2).min(Duration::from_secs(15)); // Max delay of 15 seconds
+                        delay = (delay * 2).min(Duration::from_secs(15));
 
-                        // add some jitter to the delay to avoid thundering herd problem
-                        let jitter = Duration::from_millis(rand::thread_rng().gen_range(0..1000));
-                        sleep(delay + jitter).await;
+                        sleep(delay).await;
                     }
                 }
             }
