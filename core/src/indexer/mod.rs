@@ -13,6 +13,8 @@ mod last_synced;
 pub mod no_code;
 mod reorg;
 pub mod start;
+pub mod task_tracker;
+
 pub use dependency::{ContractEventDependencies, EventDependencies, EventsDependencyTree};
 
 use crate::manifest::contract::Contract;

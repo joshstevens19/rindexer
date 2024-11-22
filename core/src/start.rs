@@ -17,6 +17,8 @@ use crate::{
         start::{start_indexing, StartIndexingError},
         ContractEventDependencies, ContractEventDependenciesMapFromRelationshipsError,
     },
+    initiate_shutdown,
+    logger::mark_shutdown_started,
     manifest::{
         core::ProjectType,
         storage::RelationshipsAndIndexersError,
@@ -71,12 +73,40 @@ pub enum StartRindexerError {
 
     #[error("{0}")]
     RelationshipsAndIndexersError(#[from] RelationshipsAndIndexersError),
+
+    #[error("Shutdown handler failed with error: {0}")]
+    ShutdownHandlerFailed(String),
+}
+
+async fn handle_shutdown(signal: &str) {
+    // Mark shutdown state only once, at the very beginning of the shutdown process
+    mark_shutdown_started();
+    info!("Received {} signal gracefully shutting down...", signal);
+    initiate_shutdown().await;
+    // These info! calls work because they're before/after the shutdown process
+    info!("Graceful shutdown completed for {}", signal);
+    std::process::exit(0);
 }
 
 pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindexerError> {
     let project_path = details.manifest_path.parent();
     match project_path {
         Some(project_path) => {
+            let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
+                .map_err(|e| StartRindexerError::ShutdownHandlerFailed(e.to_string()))?;
+            let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt())
+                .map_err(|e| StartRindexerError::ShutdownHandlerFailed(e.to_string()))?;
+            let mut sigquit = signal::unix::signal(signal::unix::SignalKind::quit())
+                .map_err(|e| StartRindexerError::ShutdownHandlerFailed(e.to_string()))?;
+
+            let shutdown_handle = tokio::spawn(async move {
+                tokio::select! {
+                    _ = sigterm.recv() => handle_shutdown("SIGTERM").await,
+                    _ = sigint.recv() => handle_shutdown("SIGINT (Ctrl+C)").await,
+                    _ = sigquit.recv() => handle_shutdown("SIGQUIT").await,
+                }
+            });
+
             let manifest = Arc::new(read_manifest(details.manifest_path)?);
 
             if manifest.project_type != ProjectType::NoCode {
@@ -173,19 +203,12 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     }
                 }
 
-                // keep graphql alive even if indexing has finished
-                if details.graphql_details.enabled {
-                    signal::ctrl_c()
-                        .await
-                        .map_err(|_| StartRindexerError::FailedToListenToGraphqlSocket)?;
-                } else {
-                    info!("rindexer resync is complete");
-                    // to avoid the thread closing before the stream is consumed
-                    // lets just sit here for 5 seconds to avoid the race
-                    // 100% a better way to handle this
-                    // TODO - handle this nicer
-                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-                }
+                // Do not need now with the main shutdown keeping around in-case
+                // if details.graphql_details.enabled {
+                //     signal::ctrl_c()
+                //         .await
+                //         .map_err(|_| StartRindexerError::FailedToListenToGraphqlSocket)?;
+                // }
             }
 
             // Await the GraphQL server task if it was started
@@ -194,13 +217,16 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     error!("GraphQL server task failed: {:?}", e);
                 });
             }
-        }
-        None => {
-            return Err(StartRindexerError::NoProjectPathFoundUsingParentOfManifestPath);
-        }
-    }
 
-    Ok(())
+            shutdown_handle.await.map_err(|e| {
+                error!("Shutdown handler failed: {:?}", e);
+                StartRindexerError::ShutdownHandlerFailed(e.to_string())
+            })?;
+
+            Ok(())
+        }
+        None => Err(StartRindexerError::NoProjectPathFoundUsingParentOfManifestPath),
+    }
 }
 
 pub struct IndexerNoCodeDetails {
