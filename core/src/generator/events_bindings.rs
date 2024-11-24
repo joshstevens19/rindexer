@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ethers::types::ValueOrArray;
 use serde_json::Value;
@@ -177,30 +177,34 @@ fn generate_csv_instance(
     event_info: &EventInfo,
     csv: &Option<CsvDetails>,
 ) -> Result<Code, CreateCsvFileForEvent> {
-    let csv_path = csv.as_ref().map_or("./generated_csv", |c| &c.path);
+    let mut csv_path = csv.as_ref().map_or(PathBuf::from("generated_csv"), |c| PathBuf::from((&c.path).strip_prefix("./").unwrap()));
+
+    csv_path = project_path.join(csv_path);
 
     if !contract.generate_csv.unwrap_or(true) {
         return Ok(Code::new(format!(
-            r#"let csv = AsyncCsvAppender::new(r"{csv_path}");"#,
-            csv_path = csv_path,
+            r#"let csv = AsyncCsvAppender::new(r"{}");"#,
+            csv_path.display(),
         )));
     }
 
-    let csv_path = event_info.create_csv_file_for_event(project_path, contract, csv_path)?;
+    let csv_path_str = csv_path.to_str().expect("Failed to convert csv path to string");
+    let csv_path = event_info.create_csv_file_for_event(project_path, contract, csv_path_str)?;
     let headers: Vec<String> =
         event_info.csv_headers_for_event().iter().map(|h| format!("\"{}\"", h)).collect();
 
     Ok(Code::new(format!(
         r#"
-        let csv = AsyncCsvAppender::new(r"{csv_path}");
-        if !Path::new(r"{csv_path}").exists() {{
-            csv.append_header(vec![{headers}.into()])
+        let csv = AsyncCsvAppender::new(r"{}");
+        if !Path::new(r"{}").exists() {{
+            csv.append_header(vec![{}].into())
                 .await
                 .expect("Failed to write CSV header");
         }}
     "#,
-        csv_path = csv_path,
-        headers = headers.join(".into(), ")
+        csv_path,
+        csv_path,
+        headers.join(".into(), ")
     )))
 }
 
