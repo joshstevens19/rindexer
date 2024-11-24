@@ -193,6 +193,8 @@ fn generate_csv_instance(
     let headers: Vec<String> =
         event_info.csv_headers_for_event().iter().map(|h| format!("\"{}\"", h)).collect();
 
+    let headers_with_into: Vec<String> = headers.iter().map(|h| format!("{}.into()", h)).collect();
+
     Ok(Code::new(format!(
         r#"
         let csv = AsyncCsvAppender::new(r"{}");
@@ -204,7 +206,7 @@ fn generate_csv_instance(
     "#,
         csv_path,
         csv_path,
-        headers.join(".into(), ")
+        headers_with_into.join(", ")
     )))
 }
 
