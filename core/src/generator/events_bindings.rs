@@ -181,7 +181,7 @@ fn generate_csv_instance(
 
     if !contract.generate_csv.unwrap_or(true) {
         return Ok(Code::new(format!(
-            r#"let csv = AsyncCsvAppender::new("{csv_path}");"#,
+            r#"let csv = AsyncCsvAppender::new(r"{csv_path}");"#,
             csv_path = csv_path,
         )));
     }
@@ -192,8 +192,8 @@ fn generate_csv_instance(
 
     Ok(Code::new(format!(
         r#"
-        let csv = AsyncCsvAppender::new("{csv_path}");
-        if !Path::new("{csv_path}").exists() {{
+        let csv = AsyncCsvAppender::new(r"{csv_path}");
+        if !Path::new(r"{csv_path}").exists() {{
             csv.append_header(vec![{headers}.into()])
                 .await
                 .expect("Failed to write CSV header");
