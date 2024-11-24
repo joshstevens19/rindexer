@@ -55,14 +55,26 @@ fn build_last_synced_block_number_file(
     network: &str,
     event_name: &str,
 ) -> String {
-    format!(
+    #[cfg(unix)]
+    return format!(
         "{}/{}/last-synced-blocks/{}-{}-{}.txt",
         full_path.display(),
         contract_name,
         contract_name.to_lowercase(),
         network.to_lowercase(),
         event_name.to_lowercase()
-    )
+    );
+
+    #[cfg(windows)]
+    return format!(
+        "{}\\{}\\last-synced-blocks\\{}-{}-{}.txt",
+        full_path.display(),
+        contract_name,
+        contract_name.to_lowercase(),
+        network.to_lowercase(),
+        event_name.to_lowercase()
+    );
+
 }
 
 pub struct SyncConfig<'a> {

@@ -177,9 +177,12 @@ impl StreamsConfig {
         project_path: &Path,
         contract_name: &str,
     ) {
+        #[cfg(unix)]
         let path =
             self.get_streams_last_synced_block_path() + "/" + contract_name + "/last-synced-blocks";
-
+        #[cfg(windows)]
+        let path =
+            self.get_streams_last_synced_block_path() + "\\" + contract_name + "\\last-synced-blocks";
         let full_path = project_path.join(path);
 
         if !Path::new(&full_path).exists() {
