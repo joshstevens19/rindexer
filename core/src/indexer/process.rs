@@ -301,7 +301,7 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                                 }
                                 continue;
                             }
-                            info!(
+                            debug!(
                                 "{} - {} - New block seen {} - Last seen block {}",
                                 &config.info_log_name,
                                 IndexingEventProgressStatus::Live.log(),
@@ -338,7 +338,7 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                                     IndexingEventProgressStatus::Live.log(),
                                     from_block
                                 );
-                                info!(
+                                debug!(
                                     "{} - {} - Did not need to hit RPC as no events in {} block - LogsBloom for block checked",
                                     &config.info_log_name,
                                     IndexingEventProgressStatus::Live.log(),

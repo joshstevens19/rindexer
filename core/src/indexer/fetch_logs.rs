@@ -359,7 +359,7 @@ async fn live_indexing_stream(
                             }
                             continue;
                         }
-                        info!(
+                        debug!(
                             "{} - {} - New block seen {} - Last seen block {}",
                             info_log_name,
                             IndexingEventProgressStatus::Live.log(),
@@ -392,7 +392,7 @@ async fn live_indexing_stream(
                                 IndexingEventProgressStatus::Live.log(),
                                 from_block
                             );
-                            info!(
+                            debug!(
                                 "{} - {} - Did not need to hit RPC as no events in {} block - LogsBloom for block checked",
                                 info_log_name,
                                 IndexingEventProgressStatus::Live.log(),
