@@ -12,7 +12,7 @@ use crate::{
     database::postgres::{
         client::PostgresClient,
         generate::{
-            generate_column_names_only_with_base_properties, generate_event_table_full_name,
+            generate_column_names_only_with_base_properties,
         },
         setup::{setup_postgres, SetupPostgresError},
         sql_type_wrapper::{
@@ -40,6 +40,9 @@ use crate::{
     streams::StreamsClients,
     AsyncCsvAppender, FutureExt, IndexingDetails, StartDetails, StartNoCodeDetails,
 };
+use crate::database::clickhouse::client::ClickhouseClient;
+use crate::database::clickhouse::setup::{setup_clickhouse, SetupClickhouseError};
+use crate::database::common_sql::generate::generate_event_table_full_name;
 
 #[derive(thiserror::Error, Debug)]
 pub enum SetupNoCodeError {
@@ -51,6 +54,9 @@ pub enum SetupNoCodeError {
 
     #[error("Could not setup postgres: {0}")]
     SetupPostgresError(#[from] SetupPostgresError),
+
+    #[error("Could not setup clickhouse: {0}")]
+    SetupClickhouseError(#[from] SetupClickhouseError),
 
     #[error("{0}")]
     RetryClientError(#[from] RetryClientError),
@@ -79,6 +85,11 @@ pub async fn setup_no_code(
             let mut postgres: Option<Arc<PostgresClient>> = None;
             if manifest.storage.postgres_enabled() {
                 postgres = Some(Arc::new(setup_postgres(project_path, &manifest).await?));
+            }
+
+            let mut clickhouse: Option<Arc<ClickhouseClient>> = None;
+            if manifest.storage.clickhouse_enabled() {
+                clickhouse = Some(Arc::new(setup_clickhouse(project_path, &manifest).await?));
             }
 
             if !details.indexing_details.enabled {

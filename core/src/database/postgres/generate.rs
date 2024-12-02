@@ -9,6 +9,7 @@ use crate::{
     manifest::contract::Contract,
     types::code::Code,
 };
+use crate::database::common_sql::generate::generate_indexer_contract_schema_name;
 
 fn generate_columns(inputs: &[ABIInput], property_type: &GenerateAbiPropertiesType) -> Vec<String> {
     ABIInput::generate_abi_name_properties(inputs, property_type, None)
@@ -214,24 +215,6 @@ pub fn generate_tables_for_indexer_sql(
 
     Ok(Code::new(sql))
 }
-
-pub fn generate_event_table_full_name(
-    indexer_name: &str,
-    contract_name: &str,
-    event_name: &str,
-) -> String {
-    let schema_name = generate_indexer_contract_schema_name(indexer_name, contract_name);
-    format!("{}.{}", schema_name, camel_to_snake(event_name))
-}
-
-pub fn generate_event_table_columns_names_sql(column_names: &[String]) -> String {
-    column_names.iter().map(|name| format!("\"{}\"", name)).collect::<Vec<String>>().join(", ")
-}
-
-pub fn generate_indexer_contract_schema_name(indexer_name: &str, contract_name: &str) -> String {
-    format!("{}_{}", camel_to_snake(indexer_name), camel_to_snake(contract_name))
-}
-
 pub fn drop_tables_for_indexer_sql(project_path: &Path, indexer: &Indexer) -> Code {
     let mut sql = format!(
         "DROP TABLE IF EXISTS rindexer_internal.{}_last_known_indexes_dropping_sql CASCADE;",

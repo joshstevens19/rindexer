@@ -16,12 +16,13 @@ use tracing::{error, info};
 
 use crate::{
     database::postgres::{
-        client::connection_string, generate::generate_indexer_contract_schema_name,
+        client::connection_string,
     },
     helpers::{kill_process_on_port, set_thread_no_logging},
     indexer::Indexer,
     manifest::graphql::GraphQLSettings,
 };
+use crate::database::common_sql::generate::generate_indexer_contract_schema_name;
 
 pub struct GraphqlOverrideSettings {
     pub enabled: bool,

@@ -226,7 +226,7 @@ POSTGRES_PASSWORD=rindexer"#;
     }
 
     if clickhouse_enabled {
-        let env = "CLICKHOUSE_URL=\nCLICKHOUSE_USER=\nCLICKHOUSE_PASSWORD=";
+        let env = "CLICKHOUSE_URL=\nCLICKHOUSE_USER=\nCLICKHOUSE_PASSWORD=\nCLICKHOUSE_DATABASE=";
 
         write_file(&project_path.join(".env"), env).map_err(|e| {
             print_error_message(&format!("Failed to write .env file: {}", e));
