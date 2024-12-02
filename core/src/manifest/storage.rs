@@ -104,6 +104,11 @@ pub struct CsvDetails {
     pub disable_create_headers: Option<bool>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ClickhouseDetails {
+    pub enabled: bool
+}
+
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct Storage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -111,6 +116,9 @@ pub struct Storage {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csv: Option<CsvDetails>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clickhouse: Option<ClickhouseDetails>
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -172,6 +180,13 @@ impl Storage {
         self.csv
             .as_ref()
             .map_or(false, |details| details.disable_create_headers.unwrap_or_default())
+    }
+
+    pub fn clickhouse_enabled(&self) -> bool {
+        match &self.clickhouse {
+            Some(details) => details.enabled,
+            None => false,
+        }
     }
 
     pub async fn create_relationships_and_indexes(

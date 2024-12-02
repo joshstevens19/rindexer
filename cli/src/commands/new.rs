@@ -13,12 +13,11 @@ use rindexer::{
         contract::{Contract, ContractDetails},
         core::{Manifest, ProjectType},
         network::Network,
-        storage::{CsvDetails, PostgresDetails, Storage},
+        storage::{CsvDetails, PostgresDetails, ClickhouseDetails, Storage},
         yaml::{write_manifest, YAML_CONFIG_NAME},
     },
     write_file, StringOrArray, WriteFileError,
 };
-
 use crate::console::{
     print_error_message, print_success_message, prompt_for_input, prompt_for_input_list,
     prompt_for_optional_input,
@@ -82,8 +81,8 @@ pub fn handle_new_command(
     let project_description = prompt_for_optional_input::<String>("Project Description", None);
     let repository = prompt_for_optional_input::<String>("Repository", None);
     let storage_choice = prompt_for_input_list(
-        "What Storages To Enable? (graphql can only be supported if postgres is enabled)",
-        &["postgres".to_string(), "csv".to_string(), "both".to_string(), "none".to_string()],
+        "What Storages To Enable? (graphql can only be supported if postgres is enabled) both means postgres and csv",
+        &["postgres".to_string(), "csv".to_string(), "both".to_string(), "clickhouse".to_string(), "none".to_string()],
         None,
     );
     let mut postgres_docker_enable = false;
@@ -98,7 +97,7 @@ pub fn handle_new_command(
 
     let postgres_enabled = storage_choice == "postgres" || storage_choice == "both";
     let csv_enabled = storage_choice == "csv" || storage_choice == "both";
-
+    let clickhouse_enabled = storage_choice == "clickhouse";
     let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
     let rindexer_abis_folder = project_path.join("abis");
 
@@ -187,6 +186,13 @@ pub fn handle_new_command(
             } else {
                 None
             },
+            clickhouse: if clickhouse_enabled {
+                Some(ClickhouseDetails{
+                    enabled: true,
+                })
+            } else {
+                None
+            }
         },
         graphql: None,
     };
@@ -217,6 +223,15 @@ POSTGRES_PASSWORD=rindexer"#;
                 e
             })?;
         }
+    }
+
+    if clickhouse_enabled {
+        let env = "CLICKHOUSE_URL=\nCLICKHOUSE_USER=\nCLICKHOUSE_PASSWORD=";
+
+        write_file(&project_path.join(".env"), env).map_err(|e| {
+            print_error_message(&format!("Failed to write .env file: {}", e));
+            e
+        })?;
     }
 
     if is_rust_project {
