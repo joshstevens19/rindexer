@@ -16,7 +16,6 @@ pub async fn setup_clickhouse(
 ) -> Result<ClickhouseClient, SetupClickhouseError> {
     info!("Setting up clickhouse");
     let client = ClickhouseClient::new().await?;
-
   /*  let sql = generate_tables_for_indexer_clickhouse(
         project_path,
         &manifest.to_indexer()

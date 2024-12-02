@@ -6,7 +6,7 @@ pub struct ClickhouseConnection {
     url: String,
     user: String,
     password: String,
-    database: String,
+    //database: String,
 }
 
 pub fn clickhouse_connection() -> Result<ClickhouseConnection, env::VarError> {
@@ -15,8 +15,7 @@ pub fn clickhouse_connection() -> Result<ClickhouseConnection, env::VarError> {
     let connection = ClickhouseConnection {
         url: env::var("CLICKHOUSE_URL")?,
         user: env::var("CLICKHOUSE_USER")?,
-        password: env::var("CLICKHOUSE_PASSWORD")?,
-        database: env::var("CLICKHOUSE_DATABASE=")?,
+        password: env::var("CLICKHOUSE_PASSWORD")?
     };
 
     Ok(connection)
@@ -39,8 +38,7 @@ impl ClickhouseClient {
         let client = Client::default()
             .with_url(connection.url)
             .with_user(connection.user)
-            .with_password(connection.password)
-            .with_database(connection.database);
+            .with_password(connection.password);
 
         Ok(ClickhouseClient { conn: client })
     }
