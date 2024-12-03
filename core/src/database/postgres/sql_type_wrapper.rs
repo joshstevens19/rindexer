@@ -91,8 +91,14 @@ pub enum EthereumSqlTypeWrapper {
 
     // Strings and Bytes
     String(String),
+    StringVarchar(String),
+    StringChar(String),
     StringNullable(String),
+    StringVarcharNullable(String),
+    StringCharNullable(String),
     VecString(Vec<String>),
+    VecStringVarchar(Vec<String>),
+    VecStringChar(Vec<String>),
     Bytes(Bytes),
     BytesNullable(Bytes),
     VecBytes(Vec<Bytes>),
@@ -177,8 +183,14 @@ impl EthereumSqlTypeWrapper {
 
             // Strings and Bytes
             EthereumSqlTypeWrapper::String(_) => "String",
+            EthereumSqlTypeWrapper::StringVarchar(_) => "StringVarchar",
+            EthereumSqlTypeWrapper::StringChar(_) => "StringChar",
             EthereumSqlTypeWrapper::StringNullable(_) => "StringNullable",
+            EthereumSqlTypeWrapper::StringVarcharNullable(_) => "StringVarcharNullable",
+            EthereumSqlTypeWrapper::StringCharNullable(_) => "StringCharNullable",
             EthereumSqlTypeWrapper::VecString(_) => "VecString",
+            EthereumSqlTypeWrapper::VecStringVarchar(_) => "VecStringVarchar",
+            EthereumSqlTypeWrapper::VecStringChar(_) => "VecStringChar",
             EthereumSqlTypeWrapper::Bytes(_) => "Bytes",
             EthereumSqlTypeWrapper::BytesNullable(_) => "BytesNullable",
             EthereumSqlTypeWrapper::VecBytes(_) => "VecBytes",
@@ -272,7 +284,13 @@ impl EthereumSqlTypeWrapper {
             EthereumSqlTypeWrapper::String(_) | EthereumSqlTypeWrapper::StringNullable(_) => {
                 PgType::TEXT
             }
+            EthereumSqlTypeWrapper::StringVarchar(_) |
+            EthereumSqlTypeWrapper::StringVarcharNullable(_) => PgType::VARCHAR,
+            EthereumSqlTypeWrapper::StringChar(_) |
+            EthereumSqlTypeWrapper::StringCharNullable(_) => PgType::CHAR,
             EthereumSqlTypeWrapper::VecString(_) => PgType::TEXT_ARRAY,
+            EthereumSqlTypeWrapper::VecStringVarchar(_) => PgType::VARCHAR_ARRAY,
+            EthereumSqlTypeWrapper::VecStringChar(_) => PgType::CHAR_ARRAY,
             EthereumSqlTypeWrapper::Bytes(_) | EthereumSqlTypeWrapper::BytesNullable(_) => {
                 PgType::BYTEA
             }
@@ -580,15 +598,21 @@ impl ToSql for EthereumSqlTypeWrapper {
                 out.extend_from_slice(&buf);
                 Ok(IsNull::No)
             }
-            EthereumSqlTypeWrapper::String(value) => String::to_sql(value, ty, out),
-            EthereumSqlTypeWrapper::StringNullable(value) => {
+            EthereumSqlTypeWrapper::String(value) |
+            EthereumSqlTypeWrapper::StringVarchar(value) |
+            EthereumSqlTypeWrapper::StringChar(value) => String::to_sql(value, ty, out),
+            EthereumSqlTypeWrapper::StringNullable(value) |
+            EthereumSqlTypeWrapper::StringVarcharNullable(value) |
+            EthereumSqlTypeWrapper::StringCharNullable(value) => {
                 if value.is_empty() {
                     return Ok(IsNull::Yes);
                 }
 
                 String::to_sql(value, ty, out)
             }
-            EthereumSqlTypeWrapper::VecString(values) => {
+            EthereumSqlTypeWrapper::VecString(values) |
+            EthereumSqlTypeWrapper::VecStringVarchar(values) |
+            EthereumSqlTypeWrapper::VecStringChar(values) => {
                 if values.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
@@ -1355,8 +1379,14 @@ pub fn map_ethereum_wrapper_to_json(
                     EthereumSqlTypeWrapper::I8(i) => json!(i),
                     EthereumSqlTypeWrapper::VecI8(i8s) => json!(i8s),
                     EthereumSqlTypeWrapper::String(s) |
-                    EthereumSqlTypeWrapper::StringNullable(s) => json!(s),
-                    EthereumSqlTypeWrapper::VecString(strings) => json!(strings),
+                    EthereumSqlTypeWrapper::StringNullable(s) |
+                    EthereumSqlTypeWrapper::StringVarchar(s) |
+                    EthereumSqlTypeWrapper::StringVarcharNullable(s) |
+                    EthereumSqlTypeWrapper::StringChar(s) |
+                    EthereumSqlTypeWrapper::StringCharNullable(s) => json!(s),
+                    EthereumSqlTypeWrapper::VecString(strings) |
+                    EthereumSqlTypeWrapper::VecStringVarchar(strings) |
+                    EthereumSqlTypeWrapper::VecStringChar(strings) => json!(strings),
                     EthereumSqlTypeWrapper::Bytes(bytes) |
                     EthereumSqlTypeWrapper::BytesNullable(bytes) => json!(hex::encode(bytes)),
                     EthereumSqlTypeWrapper::VecBytes(bytes) => {
