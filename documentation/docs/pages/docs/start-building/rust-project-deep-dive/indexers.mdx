@@ -827,14 +827,22 @@ pub enum EthereumSqlTypeWrapper {
 
     // Address
     Address(Address),
+    AddressNullable(Address),
     AddressBytes(Address),
+    AddressBytesNullable(Address),
     VecAddress(Vec<Address>),
     VecAddressBytes(Vec<Address>),
 
     // Strings and Bytes
     String(String),
+    StringVarchar(String),
+    StringChar(String),
     StringNullable(String),
+    StringVarcharNullable(String),
+    StringCharNullable(String),
     VecString(Vec<String>),
+    VecStringVarchar(Vec<String>),
+    VecStringChar(Vec<String>),
     Bytes(Bytes),
     BytesNullable(Bytes),
     VecBytes(Vec<Bytes>),
