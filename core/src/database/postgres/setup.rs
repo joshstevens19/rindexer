@@ -5,11 +5,11 @@ use tracing::{debug, info};
 use crate::{
     database::postgres::{
         client::{PostgresClient, PostgresConnectionError, PostgresError},
-        generate::{generate_tables_for_indexer_sql, GenerateTablesForIndexerSqlError},
     },
     drop_tables_for_indexer_sql,
     manifest::core::Manifest,
 };
+use crate::database::common_sql::generate::{generate_tables_for_indexer_sql, GenerateTablesForIndexerSqlError};
 
 #[derive(thiserror::Error, Debug)]
 pub enum SetupPostgresError {

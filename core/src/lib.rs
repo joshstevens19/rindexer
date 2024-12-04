@@ -1,3 +1,5 @@
+#![feature(let_chains)]
+
 // public
 pub mod generator;
 pub mod indexer;
