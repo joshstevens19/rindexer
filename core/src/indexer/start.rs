@@ -149,10 +149,17 @@ pub async fn start_indexing(
                 let last_synced_block = get_last_synced_block_number(config).await;
 
                 if let Some(value) = last_synced_block {
-                    info!("{} Found last synced block number - {:?} rindexer will start up from this point", event.info_log_name(), value);
+                    let start_from = value + 1;
+                    info!(
+                        "{} Found last synced block number - {:?} rindexer will start up from {:?}",
+                        event.info_log_name(),
+                        value,
+                        start_from
+                    );
+                    Some(start_from)
+                } else {
+                    None
                 }
-
-                last_synced_block
             } else {
                 None
             };
