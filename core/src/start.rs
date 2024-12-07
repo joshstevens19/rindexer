@@ -92,19 +92,32 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
     let project_path = details.manifest_path.parent();
     match project_path {
         Some(project_path) => {
-            let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
-                .map_err(|e| StartRindexerError::ShutdownHandlerFailed(e.to_string()))?;
-            let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt())
-                .map_err(|e| StartRindexerError::ShutdownHandlerFailed(e.to_string()))?;
-            let mut sigquit = signal::unix::signal(signal::unix::SignalKind::quit())
-                .map_err(|e| StartRindexerError::ShutdownHandlerFailed(e.to_string()))?;
+            #[cfg(unix)]
+            let shutdown_handle = {
+                let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
+                    .map_err(|e| StartRindexerError::ShutdownHandlerFailed(e.to_string()))?;
+                let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt())
+                    .map_err(|e| StartRindexerError::ShutdownHandlerFailed(e.to_string()))?;
+                let mut sigquit = signal::unix::signal(signal::unix::SignalKind::quit())
+                    .map_err(|e| StartRindexerError::ShutdownHandlerFailed(e.to_string()))?;
 
+                tokio::spawn(async move {
+                    tokio::select! {
+                        _ = sigterm.recv() => handle_shutdown("SIGTERM").await,
+                        _ = sigint.recv() => handle_shutdown("SIGINT (Ctrl+C)").await,
+                        _ = sigquit.recv() => handle_shutdown("SIGQUIT").await,
+                    }
+                })
+            };
+
+            // On Windows, we just use Ctrl+C to trigger shutdown
+            #[cfg(windows)]
             let shutdown_handle = tokio::spawn(async move {
-                tokio::select! {
-                    _ = sigterm.recv() => handle_shutdown("SIGTERM").await,
-                    _ = sigint.recv() => handle_shutdown("SIGINT (Ctrl+C)").await,
-                    _ = sigquit.recv() => handle_shutdown("SIGQUIT").await,
+                if let Err(e) = signal::ctrl_c().await {
+                    error!("Failed to register Ctrl+C handler: {}", e);
+                    panic!("Ctrl+C handler failed: {}", e);
                 }
+                handle_shutdown("Ctrl+C").await
             });
 
             let manifest = Arc::new(read_manifest(details.manifest_path)?);
