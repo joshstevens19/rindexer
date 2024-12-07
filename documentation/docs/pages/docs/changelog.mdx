@@ -5,14 +5,9 @@
 
 ### Features
 -------------------------------------------------
-feat: handle graceful shutdowns (deployed if install from github)
 
 ### Bug fixes
 -------------------------------------------------
-fix: resolve race condition of dependency blocking indexing (deployed if install from github)
-fix: add new type for EthereumSqlTypeWrapper to handle VARCHAR strings (deployed if install from github)
-fix: error on startup not +1 onto the next block causing duplicates logs sometimes
-fix: issue with it working on windows
 
 ### Breaking changes
 -------------------------------------------------
@@ -21,6 +16,26 @@ fix: issue with it working on windows
 -------------------------------------------------
 
 all release branches are deployed through `release/VERSION_NUMBER` branches
+
+## 0.11.0-beta - 7th December 2024
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.11.0
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.11.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.11.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.11.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.11.0/rindexer_win32-amd64.zip
+
+### Features
+-------------------------------------------------
+- feat: handle graceful shutdowns (deployed if install from github)
+
+### Bug fixes
+-------------------------------------------------
+- fix: resolve race condition of dependency blocking indexing (deployed if install from github)
+- fix: add new type for EthereumSqlTypeWrapper to handle VARCHAR strings (deployed if install from github)
+- fix: error on startup not +1 onto the next block causing duplicates logs sometimes
+- fix: issue with it working on windows
 
 ## 0.10.0-beta - 15th October 2024
 
