@@ -1,4 +1,8 @@
-use std::{io, path::Path, path::PathBuf, sync::Arc};
+use std::{
+    io,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use colored::Colorize;
 use ethers::abi::{Abi, Contract as EthersContract, Event};
@@ -499,7 +503,10 @@ pub async fn process_events(
 
             let mut csv: Option<Arc<AsyncCsvAppender>> = None;
             if contract.generate_csv.unwrap_or(true) && manifest.storage.csv_enabled() {
-                let csv_path = manifest.storage.csv.as_ref().map_or(PathBuf::from("generated_csv"), |c| PathBuf::from((&c.path).strip_prefix("./").unwrap()));
+                let csv_path =
+                    manifest.storage.csv.as_ref().map_or(PathBuf::from("generated_csv"), |c| {
+                        PathBuf::from((&c.path).strip_prefix("./").unwrap())
+                    });
 
                 let headers: Vec<String> = event_info.csv_headers_for_event();
                 let csv_path_str = csv_path.to_str().expect("Failed to convert csv path to string");

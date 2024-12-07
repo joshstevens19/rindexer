@@ -55,17 +55,14 @@ fn build_last_synced_block_number_file(
     network: &str,
     event_name: &str,
 ) -> String {
-    let path = full_path
-    .join(contract_name)
-    .join("last-synced-blocks")
-    .join(format!(
+    let path = full_path.join(contract_name).join("last-synced-blocks").join(format!(
         "{}-{}-{}.txt",
         contract_name.to_lowercase(),
         network.to_lowercase(),
         event_name.to_lowercase()
     ));
 
-path.to_string_lossy().into_owned()
+    path.to_string_lossy().into_owned()
 }
 
 pub struct SyncConfig<'a> {

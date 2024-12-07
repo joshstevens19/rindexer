@@ -181,11 +181,9 @@ impl StreamsConfig {
         let base_path = Path::new(&streams_last_synced_block_path);
         let path = base_path.join(contract_name).join("last-synced-blocks");
         let full_path = project_path.join(path);
-    
+
         if !full_path.exists() {
-            fs::create_dir_all(&full_path)
-                .await
-                .expect("Failed to create directory for stream");
+            fs::create_dir_all(&full_path).await.expect("Failed to create directory for stream");
         }
     }
 }
