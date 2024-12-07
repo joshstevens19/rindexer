@@ -113,11 +113,11 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
             // On Windows, we just use Ctrl+C to trigger shutdown
             #[cfg(windows)]
             let shutdown_handle = tokio::spawn(async move {
-                tokio::signal::ctrl_c()
-                    .await
-                    .map_err(|e| StartRindexerError::ShutdownHandlerFailed(e.to_string()))?;
-                handle_shutdown("Ctrl+C").await;
-                Ok::<(), StartRindexerError>(())
+                if let Err(e) = signal::ctrl_c().await {
+                    error!("Failed to register Ctrl+C handler: {}", e);
+                    panic!("Ctrl+C handler failed: {}", e);
+                }
+                handle_shutdown("Ctrl+C").await
             });
 
             let manifest = Arc::new(read_manifest(details.manifest_path)?);
