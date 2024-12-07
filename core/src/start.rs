@@ -1,5 +1,6 @@
 use std::{path::PathBuf, sync::Arc};
 
+use tokio::signal;
 use tracing::{error, info};
 
 use crate::{
@@ -233,7 +234,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
             shutdown_handle.await.map_err(|e| {
                 error!("Shutdown handler failed: {:?}", e);
                 StartRindexerError::ShutdownHandlerFailed(e.to_string())
-            })??;
+            })?;
 
             Ok(())
         }
