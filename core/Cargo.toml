@@ -30,7 +30,6 @@ async-trait = "0.1.77"
 csv = "1.1.0"
 async-std = "1.12.0"
 dotenv = "0.15.0"
-url = "2.5.0"
 bytes = "1.5.0"
 rand = "0.8.5"
 num-format = "0.4.4"
@@ -58,10 +57,15 @@ deadpool-lapin = "0.12"
 teloxide = "0.12"
 serenity = { version = "0.12", features = ["client", "framework"] }
 once_cell = "1.19.0"
-
-# build
-jemallocator = { version = "0.5.0", optional = true }
-jemalloc-ctl = { version = "0.5.0", optional = true }
+url = { version = "2.3", features = ["std"] }
+eyre = "0.6"
+# Update reth dependencies to use v1.1.2
+reth = { git = "https://github.com/paradigmxyz/reth", tag = "v1.1.2" }
+reth-execution-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.1.2" }
+reth-exex = { git = "https://github.com/paradigmxyz/reth", tag = "v1.1.2", features = ["serde"] }
+reth-node-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.1.2" }
+reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.1.2" }
+reth-tracing = { git = "https://github.com/paradigmxyz/reth", tag = "v1.1.2" }
 
 [target.'cfg(not(windows))'.dependencies]
 rdkafka = { version = "0.36", features = ["tokio"] }
@@ -73,6 +77,3 @@ rdkafka = { version = "0.36", features = ["tokio", "cmake-build"] }
 lto = "fat"
 codegen-units = 1
 incremental = false
-
-[features]
-jemalloc = ["dep:jemallocator", "dep:jemalloc-ctl"]

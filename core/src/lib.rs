@@ -33,6 +33,7 @@ mod chat;
 pub mod event;
 pub mod phantom;
 pub mod provider;
+mod reth;
 mod start;
 mod streams;
 mod types;
@@ -43,6 +44,7 @@ pub use colored::Colorize as RindexerColorize;
 pub use futures::FutureExt;
 pub use lazy_static::lazy_static;
 pub use reqwest::header::HeaderMap;
+pub use reth::start_reth;
 pub use start::{
     start_rindexer, start_rindexer_no_code, IndexerNoCodeDetails, IndexingDetails, StartDetails,
     StartNoCodeDetails,

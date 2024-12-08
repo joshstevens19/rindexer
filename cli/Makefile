@@ -28,6 +28,8 @@ phantom_compile:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- phantom --path $(CURDIR)/../examples/rindexer_demo_cli compile --contract-name RocketPoolETH --network ethereum
 phantom_deploy:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- phantom --path $(CURDIR)/../examples/rindexer_demo_cli deploy --contract-name RocketPoolETH --network ethereum
+reth_ex_ex:
+	cargo run -- exex --full --chain holesky --debug.tip 0xe3e40d9bc046435bb4135f5302c5f74d8ca334dee775d91e3e0934447ea0ba92
 help:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- phantom --help
 

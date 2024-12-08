@@ -117,6 +117,12 @@ pub enum Commands {
         #[clap(long, short)]
         path: Option<String>,
     },
+
+    #[clap(name = "exex")] // This sets the command name explicitly
+    ExEx {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]

@@ -19,8 +19,8 @@ serde = { version = "1.0.204", features = ["derive"] }
 serde_json = "1.0.120"
 
 # build
-jemallocator = { version = "0.5.0", optional = true }
-jemalloc-ctl = { version = "0.5.0", optional = true }
+tikv-jemalloc-ctl = { version = "0.6.0", optional = true }
+tikv-jemallocator = { version = "0.6.0", optional = true }
 
 [profile.release]
 lto = "fat"
@@ -28,4 +28,4 @@ codegen-units = 1
 incremental = false
 
 [features]
-jemalloc = ["dep:jemallocator", "dep:jemalloc-ctl"]
+jemalloc = ["dep:tikv-jemallocator", "dep:tikv-jemalloc-ctl"]

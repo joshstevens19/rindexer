@@ -1,7 +1,7 @@
 use std::{backtrace::Backtrace, env, panic};
 
 #[cfg(feature = "jemalloc")]
-use jemallocator::Jemalloc;
+use tikv_jemallocator::Jemalloc;
 
 #[cfg(feature = "jemalloc")]
 #[global_allocator]
@@ -15,7 +15,8 @@ mod rindexer_yaml;
 use std::{path::PathBuf, str::FromStr, sync::Once};
 
 use clap::Parser;
-use rindexer::{load_env_from_project_path, manifest::core::ProjectType};
+use tokio::time::sleep;
+use rindexer::{load_env_from_project_path, manifest::core::ProjectType, start_reth};
 
 use crate::{
     cli_interface::{AddSubcommands, Commands, NewSubcommands, CLI},
@@ -115,6 +116,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;
             load_env_from_project_path(&resolved_path);
             handle_phantom_commands(resolved_path, subcommand).await
+        }
+        Commands::ExEx { args } => {
+            println!("hit me");
+            // Transform the args to replace "exex" with "init"
+            let mut transformed_args: Vec<String> = args.iter()
+                .map(|arg| {
+                    if arg == "exex" {
+                        "init".to_string()
+                    } else {
+                        arg.clone()
+                    }
+                })
+                .collect();
+
+            transformed_args.insert(0, "reth".to_string());
+            transformed_args.insert(1, "node".to_string());
+
+            println!("Final args: {:?}", transformed_args); // Debug print to verify
+
+            start_reth(transformed_args)?;
+
+            // Continue with other async operations
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+
+            Ok(())
         }
     }
 }
