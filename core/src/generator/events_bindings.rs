@@ -156,8 +156,11 @@ fn generate_decoder_match_arms_code(event_type_name: &str, event_info: &[EventIn
                 r#"
                     {event_type_name}::{event_info_name}(_) => {{
                         Arc::new(move |topics: Vec<H256>, data: Bytes| {{
-                            match decoder_contract.decode_event::<{event_info_name}Data>("{event_info_name}", topics, data) {{
-                                Ok(filter) => Arc::new(filter) as Arc<dyn Any + Send + Sync>,
+                            match {event_info_name}Data::decode_log(&ethers::core::abi::RawLog {{ topics, data: data.to_vec() }}) {{
+                                Ok(event) => {{
+                                    let result: {event_info_name}Data = event;
+                                    Arc::new(result) as Arc<dyn Any + Send + Sync>
+                                }}
                                 Err(error) => Arc::new(error) as Arc<dyn Any + Send + Sync>,
                             }}
                         }})
@@ -489,7 +492,7 @@ fn generate_event_bindings_code(
         use std::future::Future;
         use std::pin::Pin;
         use std::path::{{Path, PathBuf}};
-        use ethers::{{providers::{{Http, Provider, RetryClient}}, abi::Address, types::{{Bytes, H256}}}};
+        use ethers::{{providers::{{Http, Provider, RetryClient}}, abi::Address, contract::EthLogDecode, types::{{Bytes, H256}}}};
         use rindexer::{{
             async_trait,
             {csv_import}
