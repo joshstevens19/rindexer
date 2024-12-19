@@ -8,7 +8,7 @@ use ethers::providers::{Http, Provider, RetryClient};
 use ethers::types::U64;
 use rindexer::{
     lazy_static,
-    provider::{create_client, JsonRpcCachedProvider, RetryClientError},
+    provider::{create_jsonrpc_client, JsonRpcCachedProvider, ProviderInterface, RetryClientError},
     public_read_env_value, HeaderMap,
 };
 
@@ -17,27 +17,37 @@ fn create_shadow_client(
     rpc_url: &str,
     compute_units_per_second: Option<u64>,
     max_block_range: Option<U64>,
-) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
+) -> Result<Arc<dyn ProviderInterface>, RetryClientError> {
     let mut header = HeaderMap::new();
     header.insert(
         "X-SHADOW-API-KEY",
         public_read_env_value("RINDEXER_PHANTOM_API_KEY").unwrap().parse().unwrap(),
     );
-    create_client(rpc_url, compute_units_per_second, max_block_range, header)
+    create_jsonrpc_client(
+        rpc_url.parse().unwrap(),
+        compute_units_per_second,
+        max_block_range,
+        header,
+    )
+    .map(|client| client as Arc<dyn ProviderInterface>)
 }
 
 lazy_static! {
-    static ref ETHEREUM_PROVIDER: Arc<JsonRpcCachedProvider> = create_client(
-        &public_read_env_value("https://mainnet.gateway.tenderly.co")
-            .unwrap_or("https://mainnet.gateway.tenderly.co".to_string()),
+    static ref ETHEREUM_PROVIDER: Arc<JsonRpcCachedProvider> = create_jsonrpc_client(
+        public_read_env_value("https://mainnet.gateway.tenderly.co")
+            .unwrap_or("https://mainnet.gateway.tenderly.co".to_string())
+            .parse()
+            .unwrap(),
         None,
         None,
         HeaderMap::new()
     )
     .expect("Error creating provider");
-    static ref BASE_PROVIDER: Arc<JsonRpcCachedProvider> = create_client(
-        &public_read_env_value("https://mainnet.base.org")
-            .unwrap_or("https://mainnet.base.org".to_string()),
+    static ref BASE_PROVIDER: Arc<JsonRpcCachedProvider> = create_jsonrpc_client(
+        public_read_env_value("https://mainnet.base.org")
+            .unwrap_or("https://mainnet.base.org".to_string())
+            .parse()
+            .unwrap(),
         None,
         None,
         HeaderMap::new()
