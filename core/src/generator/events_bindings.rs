@@ -9,7 +9,7 @@ use crate::{
         ParamTypeError, ReadAbiError,
     },
     database::postgres::generate::{
-        generate_column_names_only_with_base_properties, generate_event_table_full_name,
+        generate_column_names_only_with_base_properties,
     },
     helpers::{camel_to_snake, camel_to_snake_advanced, to_pascal_case},
     manifest::{
@@ -18,6 +18,7 @@ use crate::{
     },
     types::code::Code,
 };
+use crate::database::common_sql::generate::generate_event_table_full_name;
 
 pub fn abigen_contract_name(contract: &Contract) -> String {
     format!("Rindexer{}Gen", contract.name)
