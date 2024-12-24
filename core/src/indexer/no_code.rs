@@ -505,7 +505,7 @@ pub async fn process_events(
             if contract.generate_csv.unwrap_or(true) && manifest.storage.csv_enabled() {
                 let csv_path =
                     manifest.storage.csv.as_ref().map_or(PathBuf::from("generated_csv"), |c| {
-                        PathBuf::from((&c.path).strip_prefix("./").unwrap())
+                        PathBuf::from(c.path.strip_prefix("./").unwrap())
                     });
 
                 let headers: Vec<String> = event_info.csv_headers_for_event();
