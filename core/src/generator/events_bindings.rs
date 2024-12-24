@@ -181,7 +181,7 @@ fn generate_csv_instance(
     csv: &Option<CsvDetails>,
 ) -> Result<Code, CreateCsvFileForEvent> {
     let mut csv_path = csv.as_ref().map_or(PathBuf::from("generated_csv"), |c| {
-        PathBuf::from((&c.path).strip_prefix("./").unwrap())
+        PathBuf::from(c.path.strip_prefix("./").unwrap())
     });
 
     csv_path = project_path.join(csv_path);

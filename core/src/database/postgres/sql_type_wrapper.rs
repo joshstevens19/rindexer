@@ -104,6 +104,8 @@ pub enum EthereumSqlTypeWrapper {
     VecBytes(Vec<Bytes>),
 
     DateTime(DateTime<Utc>),
+
+    JSONB(Value),
 }
 
 impl EthereumSqlTypeWrapper {
@@ -196,6 +198,8 @@ impl EthereumSqlTypeWrapper {
             EthereumSqlTypeWrapper::VecBytes(_) => "VecBytes",
 
             EthereumSqlTypeWrapper::DateTime(_) => "DateTime",
+
+            EthereumSqlTypeWrapper::JSONB(_) => "JSONB",
         }
     }
 
@@ -298,6 +302,8 @@ impl EthereumSqlTypeWrapper {
 
             // DateTime
             EthereumSqlTypeWrapper::DateTime(_) => PgType::TIMESTAMPTZ,
+
+            EthereumSqlTypeWrapper::JSONB(_) => PgType::JSONB,
         }
     }
 }
@@ -706,6 +712,7 @@ impl ToSql for EthereumSqlTypeWrapper {
                 }
             }
             EthereumSqlTypeWrapper::DateTime(value) => value.to_sql(ty, out),
+            EthereumSqlTypeWrapper::JSONB(value) => value.to_sql(ty, out),
         }
     }
 
@@ -1395,6 +1402,7 @@ pub fn map_ethereum_wrapper_to_json(
                     EthereumSqlTypeWrapper::DateTime(date_time) => {
                         json!(date_time.to_rfc3339())
                     }
+                    EthereumSqlTypeWrapper::JSONB(json) => json.clone(),
                 };
                 result.insert(abi_input.name.clone(), value);
                 wrappers_index_processed.push(current_wrapper_index);
