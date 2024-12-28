@@ -175,7 +175,7 @@ impl Relationship {
         // CONCURRENTLY is used to avoid locking the table for writes
         Code::new(format!(
             r#"
-                CREATE INDEX CONCURRENTLY {index_name}
+                CREATE INDEX CONCURRENTLY IF NOT EXISTS {index_name}
                 ON {db_table_name} ({db_table_column});
             "#,
             index_name = self.index_name(),
