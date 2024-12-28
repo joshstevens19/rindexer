@@ -31,16 +31,6 @@ networks:
 
 This will skip for you if you only have one network setup.
 
-By setting kind to "Hypersync" you could use [hypersync](https://docs.envio.dev/docs/HyperSync/overview) as a data source.
-
-```yaml
-networks:
-  - name: ethereum // [!code focus]
-    kind: Hypersync
-    chain_id: 1
-    rpc: https://1.hypersync.xyz
-```
-
 2. "Enter Contract Address" - This is the contract address you want to add to your YAML project
 
 It will then download the ABI and put it in the `abis` folder and map it automatically in your YAML file.
@@ -48,5 +38,9 @@ It will then download the ABI and put it in the `abis` folder and map it automat
 Some things to know:
 - If the contract is not verified on Etherscan it will not be able to download the ABI.
 - If the contract is a proxy it try to download the ABI of the implementation contract.
+
+:::info
+You can also use `kind` to set different data sources like hypersync read more about it [here](/docs/start-building/yaml-config/networks#kind).
+:::
 
 
