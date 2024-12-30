@@ -35,14 +35,12 @@ fn map_token_to_raw_values(token: &Token) -> Vec<String> {
         Token::Address(addr) => vec![format!("{:?}", addr)],
         Token::FixedBytes(bytes) | Token::Bytes(bytes) => vec![format!("{:?}", bytes)],
         Token::Int(int) => {
-            // handle two’s complement without adding a new type
+            // handle two’s complement
             let i256_value = u256_to_i256(*int);
             vec![i256_value.to_string()]
         }
         Token::Uint(uint) => {
-            // handle two’s complement without adding a new type
-            let i256_value = u256_to_i256(*uint);
-            vec![i256_value.to_string()]
+            vec![uint.to_string()]
         }
         Token::Bool(b) => vec![b.to_string()],
         Token::String(s) => vec![s.clone()],
