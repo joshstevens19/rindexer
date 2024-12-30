@@ -37,6 +37,19 @@ pub struct WebhookStreamConfig {
     pub events: Vec<StreamEvent>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RedisStreamConfig {
+    pub connection_uri: String,
+    pub streams: Vec<RedisStreamStreamConfig>
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RedisStreamStreamConfig {
+    pub stream_name: String,
+    pub networks: Vec<String>,
+    pub events: Vec<StreamEvent>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ExchangeKindWrapper(pub ExchangeKind);
 
@@ -146,6 +159,9 @@ pub struct StreamsConfig {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kafka: Option<KafkaStreamConfig>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redis: Option<RedisStreamConfig>
 }
 
 impl StreamsConfig {
@@ -167,6 +183,8 @@ impl StreamsConfig {
             path.push_str("webhooks_");
         } else if self.kafka.is_some() {
             path.push_str("kafka_");
+        } else if self.redis.is_some() {
+            path.push_str("redis_");
         }
 
         path.trim_end_matches('_').to_string()
