@@ -912,7 +912,6 @@ fn convert_int(value: &Int, target_type: &EthereumSqlTypeWrapper) -> EthereumSql
             EthereumSqlTypeWrapper::U256(*value)
         }
         EthereumSqlTypeWrapper::I256(_) | EthereumSqlTypeWrapper::VecI256(_) => {
-            // proxy back to U256 which handles I256 to avoid odd parsing issues
             EthereumSqlTypeWrapper::I256(I256::from_raw(*value))
         }
         EthereumSqlTypeWrapper::U128(_) | EthereumSqlTypeWrapper::VecU128(_) => {
