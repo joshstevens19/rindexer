@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type as PgType};
 use tracing::error;
 
-use crate::{abi::ABIInput, event::callback_registry::TxInformation, helpers::u256_to_i256};
+use crate::{abi::ABIInput, event::callback_registry::TxInformation};
 
 #[derive(Debug, Clone)]
 pub enum EthereumSqlTypeWrapper {
@@ -339,17 +339,13 @@ impl ToSql for EthereumSqlTypeWrapper {
             EthereumSqlTypeWrapper::VecU128(values) => serialize_vec_decimal(values, ty, out),
             EthereumSqlTypeWrapper::VecI128(values) => serialize_vec_decimal(values, ty, out),
             EthereumSqlTypeWrapper::U256(value) => {
-                // handle two’s complement without adding a new type
-                let i256_value = u256_to_i256(*value);
-                String::to_sql(&i256_value.to_string(), ty, out)
+                String::to_sql(&value.to_string(), ty, out)
             }
             EthereumSqlTypeWrapper::U256Nullable(value) => {
                 if value.is_zero() {
                     return Ok(IsNull::Yes);
                 }
-                // handle two’s complement without adding a new type
-                let i256_value = u256_to_i256(*value);
-                String::to_sql(&i256_value.to_string(), ty, out)
+                String::to_sql(&value.to_string(), ty, out)
             }
             EthereumSqlTypeWrapper::U256Bytes(value) => {
                 let mut bytes = [0u8; 32];
@@ -373,14 +369,8 @@ impl ToSql for EthereumSqlTypeWrapper {
                 if values.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
-                    let values_strings: Vec<String> = values
-                        .iter()
-                        .map(|v| {
-                            // handle two’s complement without adding a new type
-                            let i256_value = u256_to_i256(*v);
-                            i256_value.to_string()
-                        })
-                        .collect();
+                    let values_strings: Vec<String> =
+                        values.iter().map(|v| v.to_string()).collect();
                     let formatted_str = values_strings.join(",");
                     String::to_sql(&formatted_str, ty, out)
                 }
@@ -922,8 +912,8 @@ fn convert_int(value: &Int, target_type: &EthereumSqlTypeWrapper) -> EthereumSql
             EthereumSqlTypeWrapper::U256(*value)
         }
         EthereumSqlTypeWrapper::I256(_) | EthereumSqlTypeWrapper::VecI256(_) => {
-            // proxy back to U256 which handles I25 to avoid odd parsing issues
-            EthereumSqlTypeWrapper::U256(*value)
+            // proxy back to U256 which handles I256 to avoid odd parsing issues
+            EthereumSqlTypeWrapper::I256(I256::from_raw(*value))
         }
         EthereumSqlTypeWrapper::U128(_) | EthereumSqlTypeWrapper::VecU128(_) => {
             EthereumSqlTypeWrapper::U128(value.low_u128())
@@ -1325,20 +1315,11 @@ pub fn map_ethereum_wrapper_to_json(
                     EthereumSqlTypeWrapper::U256Bytes(u) |
                     EthereumSqlTypeWrapper::U256Nullable(u) |
                     EthereumSqlTypeWrapper::U256BytesNullable(u) => {
-                        // handle two's complement without adding a new type
-                        let i256_value = u256_to_i256(*u);
-                        json!(i256_value.to_string())
+                        json!(u.to_string())
                     }
                     EthereumSqlTypeWrapper::VecU256(u256s) |
                     EthereumSqlTypeWrapper::VecU256Bytes(u256s) => {
-                        json!(u256s
-                            .iter()
-                            .map(|u| {
-                                // handle two's complement without adding a new type
-                                let i256_value = u256_to_i256(*u);
-                                i256_value.to_string()
-                            })
-                            .collect::<Vec<_>>())
+                        json!(u256s.iter().map(|u| u.to_string()).collect::<Vec<_>>())
                     }
                     EthereumSqlTypeWrapper::I256(i) |
                     EthereumSqlTypeWrapper::I256Bytes(i) |
