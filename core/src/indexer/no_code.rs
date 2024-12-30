@@ -16,7 +16,7 @@ use crate::{
     database::postgres::{
         client::PostgresClient,
         generate::{
-            generate_column_names_only_with_base_properties, generate_event_table_full_name,
+            generate_column_names_only_with_base_properties,
         },
         setup::{setup_postgres, SetupPostgresError},
         sql_type_wrapper::{
@@ -44,6 +44,9 @@ use crate::{
     streams::StreamsClients,
     AsyncCsvAppender, FutureExt, IndexingDetails, StartDetails, StartNoCodeDetails,
 };
+use crate::database::clickhouse::client::ClickhouseClient;
+use crate::database::clickhouse::setup::{setup_clickhouse, SetupClickhouseError};
+use crate::database::common_sql::generate::generate_event_table_full_name;
 
 #[derive(thiserror::Error, Debug)]
 pub enum SetupNoCodeError {
@@ -55,6 +58,9 @@ pub enum SetupNoCodeError {
 
     #[error("Could not setup postgres: {0}")]
     SetupPostgresError(#[from] SetupPostgresError),
+
+    #[error("Could not setup clickhouse: {0}")]
+    SetupClickhouseError(#[from] SetupClickhouseError),
 
     #[error("{0}")]
     RetryClientError(#[from] RetryClientError),
@@ -85,6 +91,11 @@ pub async fn setup_no_code(
                 postgres = Some(Arc::new(setup_postgres(project_path, &manifest).await?));
             }
 
+            let mut clickhouse: Option<Arc<ClickhouseClient>> = None;
+            if manifest.storage.clickhouse_enabled() {
+                clickhouse = Some(Arc::new(setup_clickhouse(project_path, &manifest).await?));
+            }
+
             if !details.indexing_details.enabled {
                 return Ok(StartDetails {
                     manifest_path: details.manifest_path,
@@ -104,7 +115,7 @@ pub async fn setup_no_code(
             );
 
             let events =
-                process_events(project_path, &mut manifest, postgres, &network_providers).await?;
+                process_events(project_path, &mut manifest, postgres, clickhouse, &network_providers).await?;
 
             let registry = EventCallbackRegistry { events };
             info!(
@@ -136,8 +147,9 @@ struct NoCodeCallbackParams {
     index_event_in_order: bool,
     csv: Option<Arc<AsyncCsvAppender>>,
     postgres: Option<Arc<PostgresClient>>,
-    postgres_event_table_name: String,
-    postgres_column_names: Vec<String>,
+    sql_event_table_name: String,
+    sql_column_names: Vec<String>,
+    clickhouse: Option<Arc<ClickhouseClient>>,
     streams_clients: Arc<Option<StreamsClients>>,
     chat_clients: Arc<Option<ChatClients>>,
 }
@@ -171,7 +183,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
             let network = results.first().unwrap().tx_information.network.clone();
 
             let mut indexed_count = 0;
-            let mut postgres_bulk_data: Vec<Vec<EthereumSqlTypeWrapper>> = Vec::new();
+            let mut sql_bulk_data: Vec<Vec<EthereumSqlTypeWrapper>> = Vec::new();
             let mut postgres_bulk_column_types: Vec<PgType> = Vec::new();
             let mut csv_bulk_data: Vec<Vec<String>> = Vec::new();
 
@@ -258,13 +270,16 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                 all_params.extend(event_parameters);
                 all_params.extend(end_global_parameters);
 
+
                 // Set column types dynamically based on first result
                 if postgres_bulk_column_types.is_empty() {
                     postgres_bulk_column_types =
                         all_params.iter().map(|param| param.to_type()).collect();
                 }
 
-                postgres_bulk_data.push(all_params);
+                if params.postgres.is_some() || params.clickhouse.is_some() {
+                    sql_bulk_data.push(all_params);
+                }
 
                 if params.csv.is_some() {
                     let mut csv_data: Vec<String> = vec![format!("{:?}", address)];
@@ -287,16 +302,16 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
             }
 
             if let Some(postgres) = &params.postgres {
-                let bulk_data_length = postgres_bulk_data.len();
+                let bulk_data_length = sql_bulk_data.len();
                 if bulk_data_length > 0 {
                     // anything over 100 events is considered bulk and goes the COPY route
                     if bulk_data_length > 100 {
                         if let Err(e) = postgres
                             .bulk_insert_via_copy(
-                                &params.postgres_event_table_name,
-                                &params.postgres_column_names,
+                                &params.sql_event_table_name,
+                                &params.sql_column_names,
                                 &postgres_bulk_column_types,
-                                &postgres_bulk_data,
+                                &sql_bulk_data,
                             )
                             .await
                         {
@@ -308,9 +323,9 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                         }
                     } else if let Err(e) = postgres
                         .bulk_insert(
-                            &params.postgres_event_table_name,
-                            &params.postgres_column_names,
-                            &postgres_bulk_data,
+                            &params.sql_event_table_name,
+                            &params.sql_column_names,
+                            &sql_bulk_data,
                         )
                         .await
                     {
@@ -321,6 +336,14 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                         return Err(e.to_string());
                     }
                 }
+            }
+
+            if let Some(clickhouse) = &params.clickhouse {
+                clickhouse.bulk_insert(
+                    &params.sql_event_table_name,
+                    &params.sql_column_names,
+                    &sql_bulk_data,
+                ).await.expect("TODO: Clickhouse error");
             }
 
             if let Some(csv) = &params.csv {
@@ -460,6 +483,7 @@ pub async fn process_events(
     project_path: &Path,
     manifest: &mut Manifest,
     postgres: Option<Arc<PostgresClient>>,
+    clickhouse: Option<Arc<ClickhouseClient>>,
     network_providers: &[CreateNetworkProvider],
 ) -> Result<Vec<EventCallbackRegistryInformation>, ProcessIndexersError> {
     let mut events: Vec<EventCallbackRegistryInformation> = vec![];
@@ -520,10 +544,11 @@ pub async fn process_events(
                 csv = Some(Arc::new(csv_appender));
             }
 
-            let postgres_column_names =
+            let sql_column_names =
                 generate_column_names_only_with_base_properties(&event_info.inputs);
-            let postgres_event_table_name =
+            let sql_event_table_name =
                 generate_event_table_full_name(&manifest.name, &contract.name, &event_info.name);
+
 
             let streams_client = if let Some(streams) = &contract.streams {
                 Some(StreamsClients::new(streams.clone()).await)
@@ -557,8 +582,9 @@ pub async fn process_events(
                     index_event_in_order,
                     csv,
                     postgres: postgres.clone(),
-                    postgres_event_table_name,
-                    postgres_column_names,
+                    sql_event_table_name,
+                    sql_column_names,
+                    clickhouse: clickhouse.clone(),
                     streams_clients: Arc::new(streams_client),
                     chat_clients: Arc::new(chat_clients),
                 })),
