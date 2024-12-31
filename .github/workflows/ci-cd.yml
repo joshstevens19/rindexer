@@ -9,15 +9,21 @@ on:
     branches:
       - 'master'
       - '**'
+    types: [opened, synchronize, reopened]
 
 jobs:
   build:
     if: |
       (github.event_name == 'push' || github.event_name == 'pull_request') &&
       github.actor != 'github-actions[bot]' &&
-      !(github.event_name == 'pull_request' &&
-        startsWith(github.event.pull_request.head.ref, 'release/') &&
-        github.event.pull_request.base.ref == 'master')
+      (
+        !(github.event_name == 'pull_request' &&
+          startsWith(github.event.pull_request.head.ref, 'release/') &&
+          github.event.pull_request.base.ref == 'master') ||
+        (github.event_name == 'pull_request' &&
+          (contains(github.event.pull_request.head.ref, '/merge') ||
+           startsWith(github.event.pull_request.head.ref, 'merge')))
+      )
     name: ${{ matrix.target }} (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 240
@@ -57,7 +63,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref_name }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
