@@ -1,40 +1,49 @@
-use log::{error, info};
+use std::sync::Arc;
+use bb8_redis::bb8::{Pool, PooledConnection};
+use bb8_redis::{RedisConnectionManager, redis::{cmd, AsyncCommands}};
+use log::{error};
 use thiserror::Error;
-use redis::{cmd, AsyncCommands};
-use redis::aio::MultiplexedConnection;
 use serde_json::Value;
+use crate::manifest::stream::RedisStreamConfig;
 
 #[derive(Error, Debug)]
 pub enum RedisError {
     #[error("Redis error: {0}")]
-    RedisError(#[from] redis::RedisError),
+    RedisError(#[from] bb8_redis::redis::RedisError),
+
+    #[error("Redis pool error: {0}")]
+    PoolError(#[from] bb8_redis::bb8::RunError<bb8_redis::redis::RedisError>),
+
+    #[error("Could not serialize message: {0}")]
+    CouldNotSerialize(#[from] serde_json::Error),
 }
 
 #[derive(Debug, Clone)]
 pub struct Redis {
-    client: redis::Client,
+    client: Arc<Pool<RedisConnectionManager>>
+}
+
+async fn get_pooled_connection(pool: &Arc<Pool<RedisConnectionManager>>) -> Result<PooledConnection<RedisConnectionManager>, RedisError> {
+    match pool.get().await {
+        Ok(c) => Ok(c),
+        Err(err) => {
+            Err(RedisError::PoolError(err))
+        }
+    }
 }
 
 impl Redis {
-    pub fn new(url: &str) -> Self {
-        let client = redis::Client::open(url).unwrap();
-        match client.get_connection() {
-            Ok(mut c) => {
-                match cmd("PING").query::<String>(&mut c) {
-                    Ok(_) => info!("Successfully connected to Redis."),
-                    Err(error) => {
-                        error!("Error connecting to Redis: {}", error);
-                        panic!("Error connecting to Redis: {}", error);
-                    }
-                }
-            },
-            Err(e) => {
-                error!("Error connecting to Redis: {}", e);
-                panic!("Error connecting to Redis: {}", e);
-            }
-        };
+    pub async fn new(config: &RedisStreamConfig) -> Result<Self, RedisError> {
+        let connection_manager = RedisConnectionManager::new(config.connection_uri.as_str())?;
+        let redis_pool = Arc::new(Pool::builder()
+            .max_size(config.max_pool_size)
+            .build(connection_manager).await?
+        );
 
-        Self { client }
+        let mut connection = get_pooled_connection(&redis_pool).await?;
+        let _ = cmd("PING").query_async::<String>(&mut *connection).await?;
+
+        Ok(Self { client: redis_pool.clone() })
     }
 
     pub async fn publish(&self, message_id: &str, stream_name: &str, message: &Value) -> Result<(), RedisError> {
@@ -45,8 +54,8 @@ impl Redis {
             map.insert("message_id".to_string(), Value::String(message_id.to_string()));
         }
 
-        let json_value = serde_json::to_string(&message_with_id).unwrap();
-        let mut con: MultiplexedConnection = self.client.get_multiplexed_async_connection().await?;
+        let json_value = serde_json::to_string(&message_with_id)?;
+        let mut con = get_pooled_connection(&self.client).await?;
         let _: String = con.xadd(stream_name, "*", &[("payload", &json_value)]).await?;
 
         Ok(())

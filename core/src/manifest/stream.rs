@@ -40,7 +40,13 @@ pub struct WebhookStreamConfig {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RedisStreamConfig {
     pub connection_uri: String,
+    #[serde(default = "default_pool_size")]
+    pub max_pool_size: u32,
     pub streams: Vec<RedisStreamStreamConfig>
+}
+
+fn default_pool_size() -> u32 {
+    50
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
