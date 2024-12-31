@@ -126,7 +126,9 @@ impl StreamsClients {
             Some(RedisStream {
                 config: config.clone(),
                 client: Arc::new(
-                    Redis::new(&config.connection_uri)
+                    Redis::new(config)
+                        .await
+                        .unwrap_or_else(|e| panic!("Failed to create Redis client: {:?}", e)),
                 )
             })
         } else {
