@@ -9,6 +9,7 @@ on:
     branches:
       - 'master'
       - '**'
+      - '*/merge*'
 
 jobs:
   build:
