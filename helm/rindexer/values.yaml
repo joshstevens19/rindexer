@@ -1,6 +1,6 @@
 replicaCount: 1
 image:
-  repository: ghcr.io/joshstevens19/rindexer
+  repository: ghcr.io/joshstevens19/rindexer-bundled
   tag: "latest"
   pullPolicy: IfNotPresent
 
@@ -18,11 +18,13 @@ ingress:
 
 resources:
   limits:
-    cpu: 100m
-    memory: 128Mi
+    cpu: 200m
+    memory: 800Mi 
   requests:
     cpu: 100m
-    memory: 128Mi
+    # Minimum amount for graphql. Otherwise it won't start
+    # The actual memory usage is a lot less than this
+    memory: 600Mi 
 
 postgresql:
   enabled: false  # Enable or disable PostgreSQL integration
