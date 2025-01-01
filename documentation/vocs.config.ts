@@ -87,6 +87,7 @@ export default defineConfig({
             { text: 'Kafka', link: '/docs/start-building/streams/kafka' },
             { text: 'Rabbitmq', link: '/docs/start-building/streams/rabbitmq' },
             { text: 'SNS/SQS', link: '/docs/start-building/streams/sns' },
+            { text: "Redis", link: '/docs/start-building/streams/redis' }
           ],
         },
         {
