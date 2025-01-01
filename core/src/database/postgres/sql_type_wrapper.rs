@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use bytes::BytesMut;
+use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, Utc};
 use ethers::{
     abi::{Int, LogParam, Token},
@@ -306,6 +306,99 @@ impl EthereumSqlTypeWrapper {
             EthereumSqlTypeWrapper::JSONB(_) => PgType::JSONB,
         }
     }
+
+    fn serialize_vec_decimal<T: ToString>(
+        values: &Vec<T>,
+        ty: &PgType,
+        out: &mut BytesMut,
+    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        if values.is_empty() {
+            return Ok(IsNull::Yes);
+        }
+
+        let mut buf = BytesMut::new();
+        buf.extend_from_slice(&(1i32.to_be_bytes())); // Number of dimensions
+        buf.extend_from_slice(&(0i32.to_be_bytes())); // Has nulls flag
+        buf.extend_from_slice(&PgType::NUMERIC.oid().to_be_bytes()); // Element type OID for numeric
+
+        // Upper and lower bounds for dimensions
+        buf.extend_from_slice(&(values.len() as i32).to_be_bytes()); // Length of the array
+        buf.extend_from_slice(&(1i32.to_be_bytes())); // Index lower bound
+
+        for value in values {
+            let value_str = value.to_string();
+            let decimal_value = Decimal::from_str(&value_str)?;
+            let mut elem_buf = BytesMut::new();
+            Decimal::to_sql(&decimal_value, ty, &mut elem_buf)?;
+            buf.extend_from_slice(&(elem_buf.len() as i32).to_be_bytes()); // Length of the element
+            buf.extend_from_slice(&elem_buf); // The element itself
+        }
+
+        out.extend_from_slice(&buf);
+        Ok(IsNull::No)
+    }
+
+    fn convert_to_base_10000_numeric_digits<T: Into<u128> + Copy>(value: T) -> Vec<i16> {
+        let mut groups = Vec::new();
+        let mut num: u128 = value.into();
+        while num > 0 {
+            groups.push((num % 10000) as i16);
+            num /= 10000;
+        }
+        groups.reverse();
+        groups
+    }
+
+    fn write_numeric_to_postgres<T>(
+        value: T,
+        is_negative: bool,
+        out: &mut BytesMut,
+    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>>
+    where
+        T: Into<u128> + Copy,
+    {
+        let groups = Self::convert_to_base_10000_numeric_digits(value);
+
+        out.put_i16(groups.len() as i16); // ndigits
+        out.put_i16((groups.len() - 1) as i16); // weight
+        out.put_i16(if is_negative { 0x4000 } else { 0x0000 }); // sign
+        out.put_i16(0); // dscale
+
+        for group in groups {
+            out.put_i16(group);
+        }
+
+        Ok(IsNull::No)
+    }
+
+    fn serialize_numeric_array<T>(
+        values: &[T],
+        out: &mut BytesMut,
+        value_converter: impl Fn(&T) -> (u128, bool), // (absolute value, is_negative)
+    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        if values.is_empty() {
+            return Ok(IsNull::Yes);
+        }
+
+        let mut buf = BytesMut::new();
+        buf.extend_from_slice(&(1i32.to_be_bytes()));
+        buf.extend_from_slice(&(0i32.to_be_bytes()));
+        buf.extend_from_slice(&PgType::NUMERIC.oid().to_be_bytes());
+        buf.extend_from_slice(&(values.len() as i32).to_be_bytes());
+        buf.extend_from_slice(&(1i32.to_be_bytes()));
+
+        for value in values {
+            let (abs_value, is_negative) = value_converter(value);
+            let mut elem_buf = BytesMut::new();
+            Self::write_numeric_to_postgres(abs_value, is_negative, &mut elem_buf)?;
+
+            buf.extend_from_slice(&(elem_buf.len() as i32).to_be_bytes());
+            buf.extend_from_slice(&elem_buf);
+        }
+
+        out.extend_from_slice(&buf);
+        Ok(IsNull::No)
+    }
 }
 
 impl ToSql for EthereumSqlTypeWrapper {
@@ -316,11 +409,10 @@ impl ToSql for EthereumSqlTypeWrapper {
     ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
         match self {
             EthereumSqlTypeWrapper::U64(value) => {
-                let value = value.to_string();
-                Decimal::to_sql(&value.parse::<Decimal>()?, ty, out)
+                Decimal::to_sql(&value.to_string().parse::<Decimal>()?, ty, out)
             }
             EthereumSqlTypeWrapper::I64(value) => value.to_sql(ty, out),
-            EthereumSqlTypeWrapper::VecU64(values) => serialize_vec_decimal(values, ty, out),
+            EthereumSqlTypeWrapper::VecU64(values) => Self::serialize_vec_decimal(values, ty, out),
             EthereumSqlTypeWrapper::VecI64(values) => {
                 if values.is_empty() {
                     Ok(IsNull::Yes)
@@ -329,18 +421,18 @@ impl ToSql for EthereumSqlTypeWrapper {
                 }
             }
             EthereumSqlTypeWrapper::U128(value) => {
-                let value = value.to_string();
-                Decimal::to_sql(&value.parse::<Decimal>()?, ty, out)
+                Self::write_numeric_to_postgres(*value, false, out)
             }
             EthereumSqlTypeWrapper::I128(value) => {
-                let value = value.to_string();
-                Decimal::to_sql(&value.parse::<Decimal>()?, ty, out)
+                Self::write_numeric_to_postgres(value.unsigned_abs(), *value < 0, out)
             }
-            EthereumSqlTypeWrapper::VecU128(values) => serialize_vec_decimal(values, ty, out),
-            EthereumSqlTypeWrapper::VecI128(values) => serialize_vec_decimal(values, ty, out),
-            EthereumSqlTypeWrapper::U256(value) => {
-                String::to_sql(&value.to_string(), ty, out)
+            EthereumSqlTypeWrapper::VecU128(values) => {
+                Self::serialize_numeric_array(values, out, |v| (*v, false))
             }
+            EthereumSqlTypeWrapper::VecI128(values) => {
+                Self::serialize_numeric_array(values, out, |v| (v.unsigned_abs(), *v < 0))
+            }
+            EthereumSqlTypeWrapper::U256(value) => String::to_sql(&value.to_string(), ty, out),
             EthereumSqlTypeWrapper::U256Nullable(value) => {
                 if value.is_zero() {
                     return Ok(IsNull::Yes);
@@ -1217,37 +1309,6 @@ impl From<&Address> for EthereumSqlTypeWrapper {
     fn from(address: &Address) -> Self {
         EthereumSqlTypeWrapper::Address(*address)
     }
-}
-
-fn serialize_vec_decimal<T: ToString>(
-    values: &Vec<T>,
-    ty: &PgType,
-    out: &mut BytesMut,
-) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
-    if values.is_empty() {
-        return Ok(IsNull::Yes);
-    }
-
-    let mut buf = BytesMut::new();
-    buf.extend_from_slice(&(1i32.to_be_bytes())); // Number of dimensions
-    buf.extend_from_slice(&(0i32.to_be_bytes())); // Has nulls flag
-    buf.extend_from_slice(&PgType::NUMERIC.oid().to_be_bytes()); // Element type OID for numeric
-
-    // Upper and lower bounds for dimensions
-    buf.extend_from_slice(&(values.len() as i32).to_be_bytes()); // Length of the array
-    buf.extend_from_slice(&(1i32.to_be_bytes())); // Index lower bound
-
-    for value in values {
-        let value_str = value.to_string();
-        let decimal_value = Decimal::from_str(&value_str)?;
-        let mut elem_buf = BytesMut::new();
-        Decimal::to_sql(&decimal_value, ty, &mut elem_buf)?;
-        buf.extend_from_slice(&(elem_buf.len() as i32).to_be_bytes()); // Length of the element
-        buf.extend_from_slice(&elem_buf); // The element itself
-    }
-
-    out.extend_from_slice(&buf);
-    Ok(IsNull::No)
 }
 
 fn count_components(components: &[ABIInput]) -> usize {

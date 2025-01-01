@@ -319,6 +319,20 @@ impl PostgresClient {
     ) -> Result<u64, PostgresError> {
         let total_columns = column_names.len();
 
+        // Good for debugging
+        // for (i, row) in bulk_data.iter().enumerate() {
+        //     for (j, param) in row.iter().enumerate() {
+        //         info!(
+        //             "Row {} Column {} ({:?}) -> Value: {:?}, Type: {:?}",
+        //             i,
+        //             j,
+        //             column_names.get(j),
+        //             param,
+        //             param.to_type()
+        //         );
+        //     }
+        // }
+
         let mut query = format!(
             "INSERT INTO {} ({}) VALUES ",
             table_name,
@@ -340,6 +354,13 @@ impl PostgresClient {
                 params.push(param as &'a (dyn ToSql + Sync + 'a));
             }
         }
+
+        // Good for debugging
+        // info!("query: {:?}", query);
+        // info!(
+        //     "params original types: {:?}",
+        //     bulk_data.iter().flat_map(|row| row.iter().map(|p| p.to_type())).collect::<Vec<_>>()
+        // );
 
         self.execute(&query, &params).await
     }
