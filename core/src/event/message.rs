@@ -5,5 +5,6 @@ use serde_json::Value;
 pub struct EventMessage {
     pub event_name: String,
     pub event_data: Value,
+    pub event_topic: String,
     pub network: String,
 }
