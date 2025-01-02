@@ -176,7 +176,7 @@ impl StreamsClients {
         let chunk_message = EventMessage {
             event_name: event_message.event_name.clone(),
             event_data: Value::Array(chunk.to_vec()),
-            event_topic: event_message.event_topic.clone(),
+            event_signature_hash: event_message.event_signature_hash.clone(),
             network: event_message.network.clone(),
         };
 
@@ -187,7 +187,7 @@ impl StreamsClients {
         let chunk_message = EventMessage {
             event_name: event_message.event_name.clone(),
             event_data: Value::Array(chunk.to_vec()),
-            event_topic: event_message.event_topic.clone(),
+            event_signature_hash: event_message.event_signature_hash.clone(),
             network: event_message.network.clone(),
         };
 

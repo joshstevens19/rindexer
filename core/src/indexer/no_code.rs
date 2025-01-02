@@ -334,7 +334,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
             let event_message = EventMessage {
                 event_name: params.event_info.name.clone(),
                 event_data: Value::Array(event_message_data),
-                event_topic: params.event.signature(),
+                event_signature_hash: params.event.signature(),
                 network: network.clone(),
             };
 
