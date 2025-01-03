@@ -24,6 +24,13 @@ https://github.com/joshstevens19/rindexer/tree/master/providers/railway
 
 2. Initialize a new Railway project
 
+  Install [Railway CLI](https://docs.railway.com/guides/cli) if not already installed.
+
+  ```bash
+  railway login
+  ```
+
+
   ```bash
   railway init --name rindexer-example
   ```
@@ -44,7 +51,7 @@ https://github.com/joshstevens19/rindexer/tree/master/providers/railway
 4. Create a Postgres database
 
   ```bash
-  railway add --database postgre-sql
+  railway add --database postgres
   ```
 
 5. Configure environment variables
@@ -53,9 +60,15 @@ https://github.com/joshstevens19/rindexer/tree/master/providers/railway
   railway open
   ```
 
-  - then open the service "Variables" tab and click on "Add Variable Reference" and select `DATABASE_URL`,
-  - postfix `?sslmode=disable` to the end of the value. It should look like this: `${{Postgres.DATABASE_URL}}?sslmode=disable`,
-  - hit "Deploy" or Shift+Enter.
+  - Open the service "Variables" tab:
+
+    - Select "Add Variable Reference" and add a reference for `DATABASE_URL` and append ?sslmode=disable to the end of the value. The result should look like `${{Postgres.DATABASE_URL}}?sslmode=disable`.
+
+    - Select "Add Variable Reference" and add a reference for `POSTGRES_PASSWORD`.
+
+    - Select "New Variable" with name `PORT` and value `3001` (This is the default value for the rindexer service, update this variable accordingly if the value is changed in the rindexer Dockerfile).
+
+  - Hit "Deploy" or press Shift+Enter.
 
 6. Create a domain to access GraphQL Playground
 
