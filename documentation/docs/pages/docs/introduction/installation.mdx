@@ -78,7 +78,16 @@ The indexer only image is a slot smaller then the bundled image due to the fact 
 ### Create new project
 To create a new `no-code` project in your current directory, you can run the following:
 
-`docker run -it -v $PWD:/app/project_path ghcr.io/joshstevens19/rindexer new -p /app/project_path no-code`
+:::code-group
+
+```bash [GraphQL and Indexer]
+docker run -it -v $PWD:/app/project_path ghcr.io/joshstevens19/rindexer-bundled new -p /app/project_path no-code
+```
+
+```bash [Indexer only]
+docker run -it -v $PWD:/app/project_path ghcr.io/joshstevens19/rindexer new -p /app/project_path no-code
+```
+:::
 
 ### Use with existing project
 To use it with an existing project and a running postgres instance you can simply invoke:
