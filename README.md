@@ -54,7 +54,8 @@ rindexer and all the commands available to you.
 
 There's a pre-built docker image which can be used to run `rindexer` inside your dockerized infra:
 
-[`ghcr.io/joshstevens19/rindexer`](https://github.com/users/joshstevens19/packages/container/package/rindexer)
+- Running GraphQL and Indexer: [`ghcr.io/joshstevens19/rindexer-bundled`](https://github.com/users/joshstevens19/packages/container/package/rindexer-bundled)
+- Running Indexer only: [`ghcr.io/joshstevens19/rindexer`](https://github.com/users/joshstevens19/packages/container/package/rindexer)
 
 ### Create new project
 To create a new `no-code` project in your current directory, you can run the following:
