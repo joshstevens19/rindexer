@@ -944,6 +944,7 @@ pub fn solidity_type_to_ethereum_sql_type_wrapper(
 pub fn map_log_params_to_ethereum_wrapper(
     abi_inputs: &[ABIInput],
     params: &[LogParam],
+    binary_mode: bool,
 ) -> Vec<EthereumSqlTypeWrapper> {
     let mut wrappers = vec![];
 
@@ -951,6 +952,24 @@ pub fn map_log_params_to_ethereum_wrapper(
         if let Some(abi_input) = abi_inputs.get(index) {
             match &param.value {
                 Token::Tuple(tuple) => {
+                    if binary_mode {
+                        wrappers.extend(process_tuple(
+                            abi_input
+                                .components
+                                .as_ref()
+                                .expect("tuple should have a component ABI on"),
+                            tuple,
+                        ));
+                        map_ethereum_wrapper_to_byte(
+                            abi_input
+                                .components
+                                .as_ref()
+                                .expect("tuple should have component ABI on"),
+                            &wrappers,
+                            true,
+                        );
+                        todo!()
+                    }
                     wrappers.extend(process_tuple(
                         abi_input
                             .components
@@ -960,6 +979,20 @@ pub fn map_log_params_to_ethereum_wrapper(
                     ));
                 }
                 _ => {
+                    if binary_mode {
+                        wrappers.push(map_log_token_to_ethereum_wrapper(abi_input, &param.value));
+                        map_ethereum_wrapper_to_byte(
+                            abi_input
+                                .components
+                                .as_ref()
+                                .expect("value should have component ABI on"),
+                            &wrappers,
+                            false,
+                        );
+
+                        todo!()
+                    }
+
                     wrappers.push(map_log_token_to_ethereum_wrapper(abi_input, &param.value));
                 }
             }
@@ -969,6 +1002,17 @@ pub fn map_log_params_to_ethereum_wrapper(
     }
 
     wrappers
+}
+
+pub fn map_ethereum_wrapper_to_byte(
+    abi_inputs: &[ABIInput],
+    wrapper: &[EthereumSqlTypeWrapper],
+    // transaction_information: &TxInformation,
+    is_within_tuple: bool,
+) -> Bytes {
+    let mut buf = bytes::BytesMut::new();
+    for abi_input in abi_inputs.iter() {}
+    unimplemented!()
 }
 
 fn process_tuple(abi_inputs: &[ABIInput], tokens: &[Token]) -> Vec<EthereumSqlTypeWrapper> {

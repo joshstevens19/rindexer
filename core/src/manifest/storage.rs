@@ -155,9 +155,7 @@ impl Storage {
         if !enabled {
             return false;
         }
-        self.postgres
-            .as_ref()
-            .map_or(false, |details| details.binary_storage.unwrap_or_default())
+        self.postgres.as_ref().map_or(false, |details| details.binary_storage.unwrap_or_default())
     }
 
     pub fn postgres_drop_each_run(&self) -> bool {
