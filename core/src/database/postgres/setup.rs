@@ -41,6 +41,9 @@ pub async fn setup_postgres(
         client.batch_execute(sql.as_str()).await?;
         info!("Dropped all data for {}", manifest.name);
     }
+    if manifest.storage.binary_storage() {
+        info!("storing data in bytes")
+    }
 
     if !disable_event_tables {
         info!("Creating tables for {}", manifest.name);
