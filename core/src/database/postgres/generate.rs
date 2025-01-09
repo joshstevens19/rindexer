@@ -43,6 +43,7 @@ fn generate_event_table_sql_with_comments(
     abi_inputs: &[EventInfo],
     contract_name: &str,
     schema_name: &str,
+    binary_mode: bool,
     apply_full_name_comment_for_events: Vec<String>,
 ) -> String {
     abi_inputs
@@ -53,7 +54,15 @@ fn generate_event_table_sql_with_comments(
             let event_columns = if event_info.inputs.is_empty() {
                 "".to_string()
             } else {
-                generate_columns_with_data_types(&event_info.inputs).join(", ") + ","
+                if binary_mode {
+                    generate_columns_with_data_types(&event_info.inputs)
+                        .iter()
+                        .map(|column| format!("{} BYTEA", column))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                } else {
+                    generate_columns_with_data_types(&event_info.inputs).join(", ")
+                }
             };
 
             let create_table_sql = format!(
@@ -160,6 +169,7 @@ pub fn generate_tables_for_indexer_sql(
     project_path: &Path,
     indexer: &Indexer,
     disable_event_tables: bool,
+    binary_mode: bool,
 ) -> Result<Code, GenerateTablesForIndexerSqlError> {
     let mut sql = "CREATE SCHEMA IF NOT EXISTS rindexer_internal;".to_string();
 
@@ -185,6 +195,7 @@ pub fn generate_tables_for_indexer_sql(
                 &event_names,
                 &contract.name,
                 &schema_name,
+                binary_mode,
                 event_matching_name_on_other,
             ));
         }
