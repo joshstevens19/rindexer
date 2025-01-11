@@ -134,7 +134,7 @@ struct NoCodeCallbackParams {
     contract_name: String,
     event: Event,
     index_event_in_order: bool,
-    binary_mode: bool,
+    max_optimisation: bool,
     csv: Option<Arc<AsyncCsvAppender>>,
     postgres: Option<Arc<PostgresClient>>,
     postgres_event_table_name: String,
@@ -197,7 +197,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                         map_log_params_to_ethereum_wrapper(
                             &params.event_info.inputs,
                             &log.params,
-                            params.binary_mode,
+                            params.max_optimisation,
                         );
 
                     let contract_address = EthereumSqlTypeWrapper::Address(address);
@@ -547,7 +547,7 @@ pub async fn process_events(
                 .index_event_in_order
                 .as_ref()
                 .map_or(false, |vec| vec.contains(&event_info.name));
-            let binary_mode = manifest.storage.binary_storage();
+            let max_optimisation = manifest.storage.max_optimisation();
             let event = EventCallbackRegistryInformation {
                 id: generate_random_id(10),
                 indexer_name: manifest.name.clone(),
@@ -561,7 +561,7 @@ pub async fn process_events(
                     contract_name: contract.name.clone(),
                     event: event.clone(),
                     index_event_in_order,
-                    binary_mode,
+                    max_optimisation,
                     csv,
                     postgres: postgres.clone(),
                     postgres_event_table_name,

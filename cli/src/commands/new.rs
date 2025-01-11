@@ -170,7 +170,7 @@ pub fn handle_new_command(
             postgres: if postgres_enabled {
                 Some(PostgresDetails {
                     enabled: true,
-                    binary_storage: None,
+                    max_optimisation: None,
                     drop_each_run: None,
                     relationships: None,
                     indexes: None,

@@ -43,7 +43,7 @@ fn generate_event_table_sql_with_comments(
     abi_inputs: &[EventInfo],
     contract_name: &str,
     schema_name: &str,
-    binary_mode: bool,
+    max_optimisation: bool,
     apply_full_name_comment_for_events: Vec<String>,
 ) -> String {
     abi_inputs
@@ -54,10 +54,11 @@ fn generate_event_table_sql_with_comments(
             let event_columns = if event_info.inputs.is_empty() {
                 "".to_string()
             } else {
-                if binary_mode {
+                if max_optimisation {
                     generate_columns_with_data_types(&event_info.inputs)
                         .iter()
-                        .map(|column| format!("{} BYTEA", column))
+                        //TODO: filter types to those convertable to bytes
+                        .map(|column| format!("{} BYTEA[]", column))
                         .collect::<Vec<_>>()
                         .join(", ")
                 } else {
