@@ -39,7 +39,6 @@ pub fn generate_column_names_only_with_base_properties(inputs: &[ABIInput]) -> V
     column_names
 }
 
-
 fn generate_event_table_sql_with_comments(
     abi_inputs: &[EventInfo],
     contract_name: &str,
@@ -58,7 +57,7 @@ fn generate_event_table_sql_with_comments(
                 if max_optimisation {
                     generate_columns_with_data_types(&event_info.inputs)
                         .iter()
-                        .filter_map(|( column)|{
+                        .filter_map(|(column)| {
                             if column.contains("CHAR") {
                                 Some(format!("{} BYTEA[]", column))
                             } else {
@@ -102,7 +101,6 @@ fn generate_event_table_sql_with_comments(
         .collect::<Vec<_>>()
         .join("\n")
 }
-
 
 fn generate_internal_event_table_sql(
     abi_inputs: &[EventInfo],
@@ -285,9 +283,33 @@ pub fn drop_tables_for_indexer_sql(project_path: &Path, indexer: &Indexer) -> Co
 }
 
 #[allow(clippy::manual_strip)]
-pub fn solidity_type_to_db_type(abi_type: &str) -> String {
+pub fn solidity_type_to_db_type(abi_type: &str, max_optimisation: bool) -> String {
     let is_array = abi_type.ends_with("[]");
     let base_type = abi_type.trim_end_matches("[]");
+    if max_optimisation {
+        let sql_type: &str = match base_type {
+            "address" => "BYTEA[]",
+            "bool" => "BOOLEAN",
+            "string" => "TEXT",
+            t if t.starts_with("bytes") => "BYTEA",
+            t if t.starts_with("int") || t.starts_with("uint") => {
+                let (prefix, size): (&str, usize) = if t.starts_with("int") {
+                    ("int", t[3..].parse().expect("Invalid intN type"))
+                } else {
+                    ("uint", t[4..].parse().expect("Invalid uintN type"))
+                };
+                match size {
+                    8 | 16 => "SMALLINT",
+                    24 | 32 => "INTEGER",
+                    40 | 48 | 56 | 64 | 72 | 80 | 88 | 96 | 104 | 112 | 120 | 128 => "NUMERIC",
+                    136 | 144 | 152 | 160 | 168 | 176 | 184 | 192 | 200 | 208 | 216 | 224 |
+                    232 | 240 | 248 | 256 => "NUMERIC(80)",
+                    _ => panic!("Unsupported {}N size: {}", prefix, size),
+                }
+            }
+            _ => panic!("Unsupported type: {}", base_type),
+        };
+    }
 
     let sql_type = match base_type {
         "address" => "CHAR(42)",

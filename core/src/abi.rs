@@ -39,6 +39,7 @@ pub enum ParamTypeError {
 #[derive(PartialEq)]
 pub enum GenerateAbiPropertiesType {
     PostgresWithDataTypes,
+    PostgresWithOptimizedDataTypes,
     PostgresColumnsNamesOnly,
     CsvHeaderNames,
     Object,
@@ -101,12 +102,12 @@ impl ABIInput {
                     )
                 } else {
                     match properties_type {
-                        GenerateAbiPropertiesType::PostgresWithDataTypes => {
+                        GenerateAbiPropertiesType::PostgresWithOptimizedDataTypes => {
                             let value = format!(
                                 "\"{}{}\" {}",
                                 prefix.map_or_else(|| "".to_string(), |p| format!("{}_", p)),
                                 camel_to_snake(&input.name),
-                                solidity_type_to_db_type(&input.type_)
+                                solidity_type_to_db_type(&input.type_, true)
                             );
 
                             vec![GenerateAbiNamePropertiesResult::new(
@@ -115,6 +116,21 @@ impl ABIInput {
                                 &input.type_,
                             )]
                         }
+                        GenerateAbiPropertiesType::PostgresWithDataTypes => {
+                            let value = format!(
+                                "\"{}{}\" {}",
+                                prefix.map_or_else(|| "".to_string(), |p| format!("{}_", p)),
+                                camel_to_snake(&input.name),
+                                solidity_type_to_db_type(&input.type_, false)
+                            );
+
+                            vec![GenerateAbiNamePropertiesResult::new(
+                                value,
+                                &input.name,
+                                &input.type_,
+                            )]
+                        }
+
                         GenerateAbiPropertiesType::PostgresColumnsNamesOnly |
                         GenerateAbiPropertiesType::CsvHeaderNames => {
                             let value = format!(
