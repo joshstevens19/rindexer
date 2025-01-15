@@ -39,6 +39,7 @@ pub fn generate_column_names_only_with_base_properties(inputs: &[ABIInput]) -> V
     column_names
 }
 
+
 fn generate_event_table_sql_with_comments(
     abi_inputs: &[EventInfo],
     contract_name: &str,
@@ -57,8 +58,13 @@ fn generate_event_table_sql_with_comments(
                 if max_optimisation {
                     generate_columns_with_data_types(&event_info.inputs)
                         .iter()
-                        //TODO: filter types to those convertable to bytes
-                        .map(|column| format!("{} BYTEA[]", column))
+                        .filter_map(|( column)|{
+                            if column.contains("CHAR") {
+                                Some(format!("{} BYTEA[]", column))
+                            } else {
+                                None
+                            }
+                        })
                         .collect::<Vec<_>>()
                         .join(", ")
                 } else {
@@ -96,6 +102,7 @@ fn generate_event_table_sql_with_comments(
         .collect::<Vec<_>>()
         .join("\n")
 }
+
 
 fn generate_internal_event_table_sql(
     abi_inputs: &[EventInfo],
