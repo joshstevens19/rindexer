@@ -222,7 +222,7 @@ jobs:
 
       - name: Upload artifact
         if: startsWith(github.ref, 'refs/heads/release/') && matrix.target != 'x86_64-pc-windows-msvc'
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform }}-${{ matrix.arch }}
           path: |
@@ -231,7 +231,7 @@ jobs:
 
       - name: Upload artifact for windows
         if: startsWith(github.ref, 'refs/heads/release/') && matrix.target == 'x86_64-pc-windows-msvc'
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform }}-${{ matrix.arch }}
           path: |
