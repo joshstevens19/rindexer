@@ -12,8 +12,7 @@ mod kafka;
 mod clients;
 
 mod redis;
-pub use redis::{Redis, RedisError};
-
 pub use clients::StreamsClients;
+pub use redis::{Redis, RedisError};
 
 pub const STREAM_MESSAGE_ID_KEY: &str = "x-rindexer-id";
