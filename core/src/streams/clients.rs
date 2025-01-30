@@ -14,11 +14,12 @@ use crate::{
     event::{filter_event_data_by_conditions, EventMessage},
     manifest::stream::{
         KafkaStreamConfig, KafkaStreamQueueConfig, RabbitMQStreamConfig, RabbitMQStreamQueueConfig,
-        SNSStreamTopicConfig, StreamEvent, StreamsConfig, WebhookStreamConfig, RedisStreamConfig, RedisStreamStreamConfig
+        RedisStreamConfig, RedisStreamStreamConfig, SNSStreamTopicConfig, StreamEvent,
+        StreamsConfig, WebhookStreamConfig,
     },
     streams::{
         kafka::{Kafka, KafkaError},
-        RabbitMQ, RabbitMQError, Webhook, WebhookError, SNS, Redis, RedisError
+        RabbitMQ, RabbitMQError, Redis, RedisError, Webhook, WebhookError, SNS,
     },
 };
 
@@ -73,7 +74,7 @@ pub struct KafkaStream {
 
 pub struct RedisStream {
     config: RedisStreamConfig,
-    client: Arc<Redis>
+    client: Arc<Redis>,
 }
 
 pub struct StreamsClients {
@@ -129,7 +130,7 @@ impl StreamsClients {
                     Redis::new(config)
                         .await
                         .unwrap_or_else(|e| panic!("Failed to create Redis client: {:?}", e)),
-                )
+                ),
             })
         } else {
             None
@@ -399,20 +400,21 @@ impl StreamsClients {
                 let filtered_chunk: Vec<Value> = self.filter_chunk_event_data_by_conditions(
                     &config.events,
                     event_message,
-                    chunk
+                    chunk,
                 );
 
                 let publish_message_id = self.generate_publish_message_id(id, index, &None);
                 let client = Arc::clone(&client);
                 let stream_name = config.stream_name.clone();
-                let publish_message = self.create_chunk_message_json(event_message, &filtered_chunk);
+                let publish_message =
+                    self.create_chunk_message_json(event_message, &filtered_chunk);
 
                 task::spawn(async move {
-                    client.publish(&publish_message_id, &stream_name, &publish_message)
-                        .await?;
+                    client.publish(&publish_message_id, &stream_name, &publish_message).await?;
                     Ok(filtered_chunk.len())
                 })
-            }).collect();
+            })
+            .collect();
         tasks
     }
 

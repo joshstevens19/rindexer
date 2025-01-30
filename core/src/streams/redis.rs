@@ -1,9 +1,14 @@
 use std::sync::Arc;
-use bb8_redis::bb8::{Pool, PooledConnection};
-use bb8_redis::{RedisConnectionManager, redis::{cmd, AsyncCommands}};
-use log::{error};
-use thiserror::Error;
+
+use bb8_redis::{
+    bb8::{Pool, PooledConnection},
+    redis::{cmd, AsyncCommands},
+    RedisConnectionManager,
+};
+use log::error;
 use serde_json::Value;
+use thiserror::Error;
+
 use crate::manifest::stream::RedisStreamConfig;
 
 #[derive(Error, Debug)]
@@ -20,24 +25,23 @@ pub enum RedisError {
 
 #[derive(Debug, Clone)]
 pub struct Redis {
-    client: Arc<Pool<RedisConnectionManager>>
+    client: Arc<Pool<RedisConnectionManager>>,
 }
 
-async fn get_pooled_connection(pool: &Arc<Pool<RedisConnectionManager>>) -> Result<PooledConnection<RedisConnectionManager>, RedisError> {
+async fn get_pooled_connection(
+    pool: &Arc<Pool<RedisConnectionManager>>,
+) -> Result<PooledConnection<RedisConnectionManager>, RedisError> {
     match pool.get().await {
         Ok(c) => Ok(c),
-        Err(err) => {
-            Err(RedisError::PoolError(err))
-        }
+        Err(err) => Err(RedisError::PoolError(err)),
     }
 }
 
 impl Redis {
     pub async fn new(config: &RedisStreamConfig) -> Result<Self, RedisError> {
         let connection_manager = RedisConnectionManager::new(config.connection_uri.as_str())?;
-        let redis_pool = Arc::new(Pool::builder()
-            .max_size(config.max_pool_size)
-            .build(connection_manager).await?
+        let redis_pool = Arc::new(
+            Pool::builder().max_size(config.max_pool_size).build(connection_manager).await?,
         );
 
         let mut connection = get_pooled_connection(&redis_pool).await?;
@@ -46,7 +50,12 @@ impl Redis {
         Ok(Self { client: redis_pool.clone() })
     }
 
-    pub async fn publish(&self, message_id: &str, stream_name: &str, message: &Value) -> Result<(), RedisError> {
+    pub async fn publish(
+        &self,
+        message_id: &str,
+        stream_name: &str,
+        message: &Value,
+    ) -> Result<(), RedisError> {
         // redis stream message ids need to be a timestamp with guaranteed unique identification
         // so instead, we attach the message_id to the message value.
         let mut message_with_id = message.clone();

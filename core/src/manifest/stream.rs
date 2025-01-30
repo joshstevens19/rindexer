@@ -42,7 +42,7 @@ pub struct RedisStreamConfig {
     pub connection_uri: String,
     #[serde(default = "default_pool_size")]
     pub max_pool_size: u32,
-    pub streams: Vec<RedisStreamStreamConfig>
+    pub streams: Vec<RedisStreamStreamConfig>,
 }
 
 fn default_pool_size() -> u32 {
@@ -167,7 +167,7 @@ pub struct StreamsConfig {
     pub kafka: Option<KafkaStreamConfig>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub redis: Option<RedisStreamConfig>
+    pub redis: Option<RedisStreamConfig>,
 }
 
 impl StreamsConfig {
