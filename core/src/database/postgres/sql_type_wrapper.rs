@@ -41,6 +41,7 @@ pub enum EthereumSqlTypeWrapper {
 
     // 64-bit integers
     U64(U64),
+    U64Nullable(U64),
     I64(i64),
     VecU64(Vec<U64>),
     VecI64(Vec<i64>),
@@ -135,6 +136,7 @@ impl EthereumSqlTypeWrapper {
 
             // 64-bit integers
             EthereumSqlTypeWrapper::U64(_) => "U64",
+            EthereumSqlTypeWrapper::U64Nullable(_) => "U64Nullable",
             EthereumSqlTypeWrapper::I64(_) => "I64",
             EthereumSqlTypeWrapper::VecU64(_) => "VecU64",
             EthereumSqlTypeWrapper::VecI64(_) => "VecI64",
@@ -228,7 +230,7 @@ impl EthereumSqlTypeWrapper {
             EthereumSqlTypeWrapper::VecI32(_) => PgType::INT4_ARRAY,
 
             // 64-bit integers
-            EthereumSqlTypeWrapper::U64(_) => PgType::INT8,
+            EthereumSqlTypeWrapper::U64(_) | EthereumSqlTypeWrapper::U64Nullable(_) => PgType::INT8,
             EthereumSqlTypeWrapper::I64(_) => PgType::INT8,
             EthereumSqlTypeWrapper::VecU64(_) => PgType::INT8_ARRAY,
             EthereumSqlTypeWrapper::VecI64(_) => PgType::INT8_ARRAY,
@@ -359,8 +361,17 @@ impl EthereumSqlTypeWrapper {
     {
         let groups = Self::convert_to_base_10000_numeric_digits(value);
 
+        if groups.is_empty() {
+            // Handle zero case
+            out.put_i16(0); // ndigits
+            out.put_i16(0); // weight
+            out.put_i16(0x0000); // sign
+            out.put_i16(0); // dscale
+            return Ok(IsNull::No);
+        }
+
         out.put_i16(groups.len() as i16); // ndigits
-        out.put_i16((groups.len() - 1) as i16); // weight
+        out.put_i16((groups.len() - 1) as i16); // weight - safe now as we checked for empty
         out.put_i16(if is_negative { 0x4000 } else { 0x0000 }); // sign
         out.put_i16(0); // dscale
 
@@ -409,7 +420,13 @@ impl ToSql for EthereumSqlTypeWrapper {
     ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
         match self {
             EthereumSqlTypeWrapper::U64(value) => {
-                Decimal::to_sql(&value.to_string().parse::<Decimal>()?, ty, out)
+                Decimal::to_sql(&Decimal::from(value.as_u64()), ty, out)
+            }
+            EthereumSqlTypeWrapper::U64Nullable(value) => {
+                if value.is_zero() {
+                    return Ok(IsNull::Yes);
+                }
+                Decimal::to_sql(&Decimal::from(value.as_u64()), ty, out)
             }
             EthereumSqlTypeWrapper::I64(value) => value.to_sql(ty, out),
             EthereumSqlTypeWrapper::VecU64(values) => Self::serialize_vec_decimal(values, ty, out),
@@ -1359,7 +1376,9 @@ pub fn map_ethereum_wrapper_to_json(
                 current_wrapper_index = total_properties;
             } else {
                 let value = match wrapper {
-                    EthereumSqlTypeWrapper::U64(u) => json!(u),
+                    EthereumSqlTypeWrapper::U64(u) | EthereumSqlTypeWrapper::U64Nullable(u) => {
+                        json!(u)
+                    }
                     EthereumSqlTypeWrapper::VecU64(u64s) => json!(u64s),
                     EthereumSqlTypeWrapper::I64(i) => json!(i),
                     EthereumSqlTypeWrapper::VecI64(i64s) => json!(i64s),
