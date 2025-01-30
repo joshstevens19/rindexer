@@ -320,16 +320,18 @@ impl PostgresClient {
         let total_columns = column_names.len();
 
         // Good for debugging
-        // for (i, row) in bulk_data.iter().enumerate() {
-        //     for (j, param) in row.iter().enumerate() {
-        //         info!(
-        //             "Row {} Column {} ({:?}) -> Value: {:?}, Type: {:?}",
-        //             i,
-        //             j,
-        //             column_names.get(j),
-        //             param,
-        //             param.to_type()
-        //         );
+        // if table_name == "sponsorship.rate_limit" {
+        //     for (i, row) in bulk_data.iter().enumerate() {
+        //         for (j, param) in row.iter().enumerate() {
+        //             info!(
+        //                 "Row {} Column {} ({:?}) -> Value: {:?}, Type: {:?}",
+        //                 i,
+        //                 j,
+        //                 column_names.get(j),
+        //                 param,
+        //                 param.to_type()
+        //             );
+        //         }
         //     }
         // }
 
@@ -356,11 +358,13 @@ impl PostgresClient {
         }
 
         // Good for debugging
-        // info!("query: {:?}", query);
-        // info!(
-        //     "params original types: {:?}",
-        //     bulk_data.iter().flat_map(|row| row.iter().map(|p| p.to_type())).collect::<Vec<_>>()
-        // );
+        // if table_name == "sponsorship.rate_limit" {
+        //     info!("query: {:?}", query);
+        //     info!(
+        //         "params original types: {:?}",
+        //         bulk_data.iter().flat_map(|row| row.iter().map(|p|
+        // p.to_type())).collect::<Vec<_>>()     );
+        // }
 
         self.execute(&query, &params).await
     }
