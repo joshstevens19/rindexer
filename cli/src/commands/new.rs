@@ -12,7 +12,7 @@ use rindexer::{
     manifest::{
         contract::{Contract, ContractDetails},
         core::{Manifest, ProjectType},
-        network::Network,
+        network::{Network, ProviderType},
         storage::{CsvDetails, PostgresDetails, Storage},
         yaml::{write_manifest, YAML_CONFIG_NAME},
     },
@@ -136,6 +136,7 @@ pub fn handle_new_command(
         project_type,
         networks: vec![Network {
             name: "ethereum".to_string(),
+            kind: ProviderType::Rpc,
             chain_id: 1,
             rpc: "https://mainnet.gateway.tenderly.co".to_string(),
             compute_units_per_second: None,
