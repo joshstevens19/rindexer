@@ -97,6 +97,11 @@ To use the Helm chart, follow the instructions in the [Helm Chart README](https:
 - Enterprise standard indexing solutions for projects
 - Much more...
 
+## Crate.io
+
+rindexer rust project building is available on crate.io but we strongly recommend using the git repository to install it
+and use it in your project. 
+
 ## What networks do you support?
 
 rindexer supports any EVM chain out of the box. If you have a custom chain, you can easily add support for it by
