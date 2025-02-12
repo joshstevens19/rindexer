@@ -2,6 +2,10 @@
 name = "rindexer"
 version = "0.1.0"
 edition = "2021"
+description = "A no-code or framework to build blazing fast EVM indexers - built in rust."
+license = "MIT"
+repository = "https://github.com/joshstevens19/rindexer"
+readme = "README.md"
 resolver = "2"
 build = "build.rs"
 
