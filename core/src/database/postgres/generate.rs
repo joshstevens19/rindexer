@@ -43,6 +43,7 @@ fn generate_event_table_sql_with_comments(
     abi_inputs: &[EventInfo],
     contract_name: &str,
     schema_name: &str,
+    max_optimisation: bool,
     apply_full_name_comment_for_events: Vec<String>,
 ) -> String {
     abi_inputs
@@ -53,7 +54,21 @@ fn generate_event_table_sql_with_comments(
             let event_columns = if event_info.inputs.is_empty() {
                 "".to_string()
             } else {
-                generate_columns_with_data_types(&event_info.inputs).join(", ") + ","
+                if max_optimisation {
+                    generate_columns_with_data_types(&event_info.inputs)
+                        .iter()
+                        .filter_map(|(column)| {
+                            if column.contains("CHAR") {
+                                Some(format!("{} BYTEA[]", column))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                } else {
+                    generate_columns_with_data_types(&event_info.inputs).join(", ")
+                }
             };
 
             let create_table_sql = format!(
@@ -160,6 +175,7 @@ pub fn generate_tables_for_indexer_sql(
     project_path: &Path,
     indexer: &Indexer,
     disable_event_tables: bool,
+    binary_mode: bool,
 ) -> Result<Code, GenerateTablesForIndexerSqlError> {
     let mut sql = "CREATE SCHEMA IF NOT EXISTS rindexer_internal;".to_string();
 
@@ -185,6 +201,7 @@ pub fn generate_tables_for_indexer_sql(
                 &event_names,
                 &contract.name,
                 &schema_name,
+                binary_mode,
                 event_matching_name_on_other,
             ));
         }
@@ -266,9 +283,33 @@ pub fn drop_tables_for_indexer_sql(project_path: &Path, indexer: &Indexer) -> Co
 }
 
 #[allow(clippy::manual_strip)]
-pub fn solidity_type_to_db_type(abi_type: &str) -> String {
+pub fn solidity_type_to_db_type(abi_type: &str, max_optimisation: bool) -> String {
     let is_array = abi_type.ends_with("[]");
     let base_type = abi_type.trim_end_matches("[]");
+    if max_optimisation {
+        let sql_type: &str = match base_type {
+            "address" => "BYTEA[]",
+            "bool" => "BOOLEAN",
+            "string" => "TEXT",
+            t if t.starts_with("bytes") => "BYTEA",
+            t if t.starts_with("int") || t.starts_with("uint") => {
+                let (prefix, size): (&str, usize) = if t.starts_with("int") {
+                    ("int", t[3..].parse().expect("Invalid intN type"))
+                } else {
+                    ("uint", t[4..].parse().expect("Invalid uintN type"))
+                };
+                match size {
+                    8 | 16 => "SMALLINT",
+                    24 | 32 => "INTEGER",
+                    40 | 48 | 56 | 64 | 72 | 80 | 88 | 96 | 104 | 112 | 120 | 128 => "NUMERIC",
+                    136 | 144 | 152 | 160 | 168 | 176 | 184 | 192 | 200 | 208 | 216 | 224 |
+                    232 | 240 | 248 | 256 => "NUMERIC(80)",
+                    _ => panic!("Unsupported {}N size: {}", prefix, size),
+                }
+            }
+            _ => panic!("Unsupported type: {}", base_type),
+        };
+    }
 
     let sql_type = match base_type {
         "address" => "CHAR(42)",

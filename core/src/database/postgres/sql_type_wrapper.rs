@@ -1,5 +1,6 @@
 use std::str::FromStr;
 
+use async_std::io::ReadExt;
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, Utc};
 use ethers::{
@@ -961,6 +962,7 @@ pub fn solidity_type_to_ethereum_sql_type_wrapper(
 pub fn map_log_params_to_ethereum_wrapper(
     abi_inputs: &[ABIInput],
     params: &[LogParam],
+    max_optimisation: bool,
 ) -> Vec<EthereumSqlTypeWrapper> {
     let mut wrappers = vec![];
 
@@ -975,8 +977,37 @@ pub fn map_log_params_to_ethereum_wrapper(
                             .expect("tuple should have a component ABI on"),
                         tuple,
                     ));
+                    if max_optimisation {
+                        map_ethereum_wrapper_to_byte(
+                            abi_input
+                                .components
+                                .as_ref()
+                                .expect("tuple should have component ABI on"),
+                            &wrappers,
+                            true,
+                        );
+                    }
+                    wrappers.extend(process_tuple(
+                        abi_input
+                            .components
+                            .as_ref()
+                            .expect("tuple should have a component ABI on"),
+                        tuple,
+                    ));
                 }
                 _ => {
+                    wrappers.push(map_log_token_to_ethereum_wrapper(abi_input, &param.value));
+                    if max_optimisation {
+                        map_ethereum_wrapper_to_byte(
+                            abi_input
+                                .components
+                                .as_ref()
+                                .expect("value should have component ABI on"),
+                            &wrappers,
+                            false,
+                        );
+                    }
+
                     wrappers.push(map_log_token_to_ethereum_wrapper(abi_input, &param.value));
                 }
             }
@@ -986,6 +1017,138 @@ pub fn map_log_params_to_ethereum_wrapper(
     }
 
     wrappers
+}
+
+pub fn map_ethereum_wrapper_to_byte(
+    abi_inputs: &[ABIInput],
+    wrappers: &[EthereumSqlTypeWrapper],
+    // transaction_information: &TxInformation,
+    is_within_tuple: bool,
+) -> bytes::Bytes {
+    let mut buf = vec![];
+    let mut current_wrapper_index = 0;
+    let mut wrappers_index_processed = Vec::new();
+
+    for abi_input in abi_inputs.iter() {
+        // tuples will take in multiple wrapper indexes, so we need to skip them if processed
+        if wrappers_index_processed.contains(&current_wrapper_index) {
+            continue;
+        }
+        if let Some(wrapper) = wrappers.get(current_wrapper_index) {
+            if abi_input.type_ == "tuple" {
+                let components =
+                    abi_input.components.as_ref().expect("Tuple should have components defined");
+                let total_properties = count_components(components);
+                let tuple_value = map_ethereum_wrapper_to_byte(
+                    components,
+                    &wrappers[current_wrapper_index..total_properties],
+                    // transaction_information,
+                    true,
+                );
+                buf.extend_from_slice(&abi_input.name.clone().into_bytes());
+                buf.extend_from_slice(&tuple_value);
+                for i in current_wrapper_index..total_properties {
+                    wrappers_index_processed.push(i);
+                }
+                current_wrapper_index = total_properties;
+            } else {
+                let byte = match wrapper {
+                    EthereumSqlTypeWrapper::U256Bytes(u) |
+                    EthereumSqlTypeWrapper::U256BytesNullable(u) => {
+                        let mut bytes = vec![];
+                        bytes.extend_from_slice(&u.low_u64().to_be_bytes());
+                        let bytes = bytes::Bytes::from(bytes);
+                        bytes
+                    }
+                    EthereumSqlTypeWrapper::VecU256Bytes(u256s) => {
+                        let mut bytes = vec![];
+                        for u in u256s {
+                            bytes.extend_from_slice(&u.low_u64().to_be_bytes());
+                        }
+                        let bytes = bytes::Bytes::from(bytes);
+                        bytes
+                    }
+
+                    EthereumSqlTypeWrapper::I256Bytes(i) |
+                    EthereumSqlTypeWrapper::I256BytesNullable(i) => {
+                        let mut bytes = vec![];
+                        bytes.extend_from_slice(&i.low_u64().to_be_bytes());
+                        let bytes = bytes::Bytes::from(bytes);
+                        bytes
+                    }
+                    EthereumSqlTypeWrapper::VecI256Bytes(i256s) => {
+                        let mut bytes = vec![];
+                        for i in i256s {
+                            bytes.extend_from_slice(&i.low_u64().to_be_bytes());
+                        }
+                        let bytes = bytes::Bytes::from(bytes);
+                        bytes
+                    }
+                    EthereumSqlTypeWrapper::H256Bytes(h) => {
+                        let bytes = bytes::Bytes::from(h.as_bytes().to_vec());
+                        bytes
+                    }
+                    EthereumSqlTypeWrapper::VecH256Bytes(h256s) => {
+                        let mut bytes = vec![];
+                        for h in h256s {
+                            bytes.extend_from_slice(h.as_bytes());
+                        }
+                        let bytes = bytes::Bytes::from(bytes);
+                        bytes
+                    }
+
+                    EthereumSqlTypeWrapper::AddressBytes(address) |
+                    EthereumSqlTypeWrapper::AddressBytesNullable(address) => {
+                        let bytes = bytes::Bytes::from(address.as_bytes().to_vec());
+                        bytes
+                    }
+
+                    EthereumSqlTypeWrapper::VecAddressBytes(addresses) => {
+                        let mut bytes = vec![];
+                        for address in addresses {
+                            bytes.extend_from_slice(address.as_bytes());
+                        }
+                        let bytes = bytes::Bytes::from(bytes);
+                        bytes
+                    }
+
+                    EthereumSqlTypeWrapper::Bytes(bytes) |
+                    EthereumSqlTypeWrapper::BytesNullable(bytes) => {
+                        for byte in bytes {
+                            buf.push(*byte);
+                        }
+                        let bytes = bytes::Bytes::from(buf.clone());
+                        bytes
+                    }
+                    EthereumSqlTypeWrapper::VecBytes(bytes) => {
+                        let mut buf = vec![];
+                        for byte in bytes {
+                            buf.extend_from_slice(byte);
+                        }
+                        let bytes = bytes::Bytes::from(buf);
+                        bytes
+                    }
+                    _ => panic!("Wrapper types can't be converted to bytes"),
+                };
+
+                buf.extend_from_slice(&byte);
+
+                wrappers_index_processed.push(current_wrapper_index);
+                current_wrapper_index += 1;
+            }
+        } else {
+            panic!("No wrapper found for ABI input at index: {}", current_wrapper_index)
+        }
+    }
+    // if !is_within_tuple {
+    //     let mut bytes: Vec<bytes::Bytes> = vec![];
+    //     buf.extend_from_slice("transaction_information".to_bytes());
+    //     buf.extend_from_slice(transaction_information.transaction_hash.as_bytes());
+    //     let bytes = bytes::Bytes::from(buf);
+    //     return bytes
+
+    // }
+    bytes::Bytes::from(buf)
 }
 
 fn process_tuple(abi_inputs: &[ABIInput], tokens: &[Token]) -> Vec<EthereumSqlTypeWrapper> {
