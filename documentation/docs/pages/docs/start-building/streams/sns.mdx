@@ -42,6 +42,8 @@ contracts:
         secret_key: ${AWS_SECRET_ACCESS_KEY} // [!code focus]
         # session_token is optional // [!code focus]
         session_token: ${AWS_SESSION_TOKEN} // [!code focus]
+        # endpoint_url is optional // [!code focus]
+        endpoint_url: ${ENDPOINT_URL} // ![code focus]
       topics: // [!code focus]
         - topic_arn: "arn:aws:sns:us-east-1:664643779377:test" // [!code focus]
           networks: // [!code focus]
@@ -202,6 +204,41 @@ contracts:
         session_token: ${AWS_SESSION_TOKEN} // [!code focus]
 ```
 
+### endpoint_url
+
+:::info
+This is optional
+:::
+
+:::info
+We advise you to put this in a environment variables.
+:::
+
+
+The AWS endpoint to connect to.
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    sns: // [!code focus]
+      aws_config: // [!code focus]
+        region: us-east-1
+        access_key: ${AWS_ACCESS_KEY_ID}
+        secret_key: ${AWS_SECRET_ACCESS_KEY}
+        session_token: ${AWS_SESSION_TOKEN}
+        endpoint_url: ${ENDPOINT_URL} // ![code focus]
+```
+
 ## topics
 
 This is an array of topics you want to stream to this sns.
@@ -233,6 +270,8 @@ contracts:
         secret_key: ${AWS_SECRET_ACCESS_KEY}
         # session_token is optional
         session_token: ${AWS_SESSION_TOKEN}
+        # endpoint_url is optional
+        endpoint_url: ${ENDPOINT_URL}
       topics: // [!code focus]
         - topic_arn: "arn:aws:sns:us-east-1:664643779377:test" // [!code focus]
 ```
@@ -257,6 +296,8 @@ contracts:
         secret_key: ${AWS_SECRET_ACCESS_KEY}
         # session_token is optional
         session_token: ${AWS_SESSION_TOKEN}
+        # endpoint_url is optional
+        endpoint_url: ${ENDPOINT_URL}
       topics: // [!code focus]
         - topic_arn: "arn:aws:sns:us-east-1:664643779377:test.fifo" // [!code focus]
 ```
@@ -287,6 +328,8 @@ contracts:
         secret_key: ${AWS_SECRET_ACCESS_KEY}
         # session_token is optional
         session_token: ${AWS_SESSION_TOKEN}
+        # endpoint_url is optional
+        endpoint_url: ${ENDPOINT_URL}
       topics: // [!code focus]
         - topic_arn: "arn:aws:sns:us-east-1:664643779377:test"
           networks: // [!code focus]
@@ -321,6 +364,8 @@ contracts:
         secret_key: ${AWS_SECRET_ACCESS_KEY}
         # session_token is optional
         session_token: ${AWS_SESSION_TOKEN}
+        # endpoint_url is optional
+        endpoint_url: ${ENDPOINT_URL}
       topics: // [!code focus]
         - topic_arn: "arn:aws:sns:us-east-1:664643779377:test"
           networks:
@@ -373,6 +418,8 @@ contracts:
         secret_key: ${AWS_SECRET_ACCESS_KEY}
         # session_token is optional
         session_token: ${AWS_SESSION_TOKEN}
+        # endpoint_url is optional
+        endpoint_url: ${ENDPOINT_URL}
       topics: // [!code focus]
         - topic_arn: "arn:aws:sns:us-east-1:664643779377:test"
           networks:
@@ -435,6 +482,8 @@ contracts:
         secret_key: ${AWS_SECRET_ACCESS_KEY}
         # session_token is optional
         session_token: ${AWS_SESSION_TOKEN}
+        # endpoint_url is optional
+        endpoint_url: ${ENDPOINT_URL}
       topics: // [!code focus]
         - topic_arn: "arn:aws:sns:us-east-1:664643779377:test"
           networks:
@@ -467,6 +516,8 @@ contracts:
         secret_key: ${AWS_SECRET_ACCESS_KEY}
         # session_token is optional
         session_token: ${AWS_SESSION_TOKEN}
+        # endpoint_url is optional
+        endpoint_url: ${ENDPOINT_URL}
       topics: // [!code focus]
         - topic_arn: "arn:aws:sns:us-east-1:664643779377:test"
           networks:
@@ -533,6 +584,8 @@ contracts:
         secret_key: ${AWS_SECRET_ACCESS_KEY}
         # session_token is optional
         session_token: ${AWS_SESSION_TOKEN}
+        # endpoint_url is optional
+        endpoint_url: ${ENDPOINT_URL}
       topics: // [!code focus]
         - topic_arn: "arn:aws:sns:us-east-1:664643779377:test"
           networks:
