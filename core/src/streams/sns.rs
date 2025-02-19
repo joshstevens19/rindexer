@@ -27,12 +27,22 @@ impl SNS {
             "manual",
         );
 
-        let config = aws_config::defaults(BehaviorVersion::latest())
+        let mut sdk_config = aws_config::defaults(BehaviorVersion::latest())
             .region(region_provider)
             .credentials_provider(credentials_provider)
             .load()
             .await;
-        let client = Client::new(&config);
+
+        // Conditionally set endpoint if it exists
+        if let Some(endpoint_url) = &config.endpoint_url {
+            if !endpoint_url.trim().is_empty() {
+                sdk_config = sdk_config.to_builder()
+                    .endpoint_url(endpoint_url)
+                    .build();
+            }
+        }
+
+        let client = Client::new(&sdk_config);
 
         // Test the connection by listing SNS topics
         match client.list_topics().send().await {
