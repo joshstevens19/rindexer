@@ -31,7 +31,7 @@ pub async fn setup_postgres(
     let client = PostgresClient::new().await?;
 
     let disable_event_tables = manifest.storage.postgres_disable_create_tables();
-
+    let binary_mode = manifest.storage.max_optimisation();
     if manifest.storage.postgres_drop_each_run() {
         info!(
             "`drop_each_run` enabled so dropping all data for {} before starting",
@@ -40,6 +40,9 @@ pub async fn setup_postgres(
         let sql = drop_tables_for_indexer_sql(project_path, &manifest.to_indexer());
         client.batch_execute(sql.as_str()).await?;
         info!("Dropped all data for {}", manifest.name);
+    }
+    if manifest.storage.max_optimisation() {
+        info!("storing data in bytes")
     }
 
     if !disable_event_tables {
@@ -51,6 +54,7 @@ pub async fn setup_postgres(
         project_path,
         &manifest.to_indexer(),
         disable_event_tables,
+        binary_mode,
     )?;
     debug!("{}", sql);
     client.batch_execute(sql.as_str()).await?;
