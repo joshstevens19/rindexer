@@ -253,11 +253,23 @@ impl StreamsClients {
                     chunk,
                 );
 
+                let alias_name = config
+                    .events
+                    .iter()
+                    .find(|n| n.event_name == event_message.event_name)
+                    .and_then(|n| n.alias.clone());
+
+                let event_message = EventMessage {
+                    event_name: alias_name.unwrap_or(event_message.event_name.clone()),
+                    ..event_message.clone()
+                };
+
                 let publish_message_id =
                     self.generate_publish_message_id(id, index, &config.prefix_id);
                 let client = Arc::clone(&client);
                 let topic_arn = config.topic_arn.clone();
-                let publish_message = self.create_chunk_message_raw(event_message, &filtered_chunk);
+                let publish_message =
+                    self.create_chunk_message_raw(&event_message, &filtered_chunk);
                 task::spawn(async move {
                     let _ =
                         client.publish(&publish_message_id, &topic_arn, &publish_message).await?;
