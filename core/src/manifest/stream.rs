@@ -13,6 +13,9 @@ pub struct StreamEvent {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conditions: Option<Vec<Map<String, Value>>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
