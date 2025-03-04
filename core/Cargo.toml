@@ -64,6 +64,7 @@ serenity = { version = "0.12", features = ["client", "framework"] }
 once_cell = "1.19.0"
 redis = { version = "0.27.6", features = ["streams"] }
 bb8-redis = "0.18.0"
+eyre = { version = "0.6.10" }
 
 # build
 jemallocator = { version = "0.6.0", package = "tikv-jemallocator", optional = true }
@@ -84,6 +85,7 @@ reth-network = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0", fe
 reth-network-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0" }
 reth-network-peers = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0" }
 reth-node-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0" }
+reth-node-core = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0" }
 reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0" }
 reth-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0" }
 reth-provider = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0" }

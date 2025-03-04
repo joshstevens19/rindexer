@@ -1,5 +1,6 @@
 use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
 
+use alloy_rpc_types::{FilteredParams, Log};
 use ethers::{
     addressbook::Address,
     middleware::MiddlewareError,
@@ -7,7 +8,7 @@ use ethers::{
 };
 use regex::Regex;
 use tokio::{
-    sync::{mpsc, Semaphore},
+    sync::{mpsc, oneshot, Semaphore},
     time::Instant,
 };
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -17,6 +18,7 @@ use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
     indexer::{log_helpers::is_relevant_block, IndexingEventProgressStatus},
     provider::{JsonRpcCachedProvider, WrappedLog},
+    reth::{BackfillMessage, BackfillMode, RethBlockWithReceipts},
 };
 
 pub struct FetchLogsResult {
@@ -28,6 +30,7 @@ pub struct FetchLogsResult {
 pub fn fetch_logs_stream(
     config: Arc<EventProcessingConfig>,
     force_no_live_indexing: bool,
+    backfill_tx: Option<mpsc::UnboundedSender<BackfillMessage>>,
 ) -> impl tokio_stream::Stream<Item = Result<FetchLogsResult, Box<dyn Error + Send>>> + Send + Unpin
 {
     let (tx, rx) = mpsc::unbounded_channel();
@@ -36,99 +39,271 @@ pub fn fetch_logs_stream(
     let contract_address = initial_filter.contract_address();
 
     tokio::spawn(async move {
-        let snapshot_to_block = initial_filter.get_to_block();
-        let from_block = initial_filter.get_from_block();
-        let mut current_filter = initial_filter;
+        // if we have a, exex backfill tx, we need to process the exex stream instead of using the
+        // rpc provider
+        if let Some(backfill_tx) = backfill_tx {
+            // Process ExEx stream for both historical and live data
+            process_exex_stream(backfill_tx, &tx, &config).await;
+        } else {
+            let snapshot_to_block = initial_filter.get_to_block();
+            let from_block = initial_filter.get_from_block();
+            let mut current_filter = initial_filter;
 
-        // add any max block range limitation before we start processing
-        let mut max_block_range_limitation =
-            config.network_contract.cached_provider.max_block_range;
-        if max_block_range_limitation.is_some() {
-            current_filter = current_filter.set_to_block(calculate_process_historic_log_to_block(
-                &from_block,
-                &snapshot_to_block,
-                &max_block_range_limitation,
-            ));
-            warn!(
+            // add any max block range limitation before we start processing
+            let mut max_block_range_limitation =
+                config.network_contract.cached_provider.max_block_range;
+            if max_block_range_limitation.is_some() {
+                current_filter =
+                    current_filter.set_to_block(calculate_process_historic_log_to_block(
+                        &from_block,
+                        &snapshot_to_block,
+                        &max_block_range_limitation,
+                    ));
+                warn!(
                 "{} - {} - max block range limitation of {} blocks applied - block range indexing will be slower then RPC providers supplying the optimal ranges - https://rindexer.xyz/docs/references/rpc-node-providers#rpc-node-providers",
                 config.info_log_name,
                 IndexingEventProgressStatus::Syncing.log(),
                 max_block_range_limitation.unwrap()
             );
-        }
-        while current_filter.get_from_block() <= snapshot_to_block {
-            let semaphore_client = Arc::clone(&config.semaphore);
-            let permit = semaphore_client.acquire_owned().await;
+            }
+            while current_filter.get_from_block() <= snapshot_to_block {
+                let semaphore_client = Arc::clone(&config.semaphore);
+                let permit = semaphore_client.acquire_owned().await;
 
-            match permit {
-                Ok(permit) => {
-                    let result = fetch_historic_logs_stream(
-                        &config.network_contract.cached_provider,
-                        &tx,
-                        &config.topic_id,
-                        current_filter.clone(),
-                        max_block_range_limitation,
-                        snapshot_to_block,
-                        &config.info_log_name,
-                    )
-                    .await;
+                match permit {
+                    Ok(permit) => {
+                        let result = fetch_historic_logs_stream(
+                            &config.network_contract.cached_provider,
+                            &tx,
+                            &config.topic_id,
+                            current_filter.clone(),
+                            max_block_range_limitation,
+                            snapshot_to_block,
+                            &config.info_log_name,
+                        )
+                        .await;
 
-                    drop(permit);
+                        drop(permit);
 
-                    // slow indexing warn user
-                    if let Some(range) = max_block_range_limitation {
-                        warn!(
+                        // slow indexing warn user
+                        if let Some(range) = max_block_range_limitation {
+                            warn!(
                             "{} - RPC PROVIDER IS SLOW - Slow indexing mode enabled, max block range limitation: {} blocks - we advise using a faster provider who can predict the next block ranges.",
                             &config.info_log_name,
                             range
                         );
-                    }
+                        }
 
-                    if let Some(result) = result {
-                        current_filter = result.next;
-                        max_block_range_limitation = result.max_block_range_limitation;
-                    } else {
-                        break;
+                        if let Some(result) = result {
+                            current_filter = result.next;
+                            max_block_range_limitation = result.max_block_range_limitation;
+                        } else {
+                            break;
+                        }
                     }
-                }
-                Err(e) => {
-                    error!(
-                        "{} - {} - Semaphore error: {}",
-                        &config.info_log_name,
-                        IndexingEventProgressStatus::Syncing.log(),
-                        e
-                    );
-                    continue;
+                    Err(e) => {
+                        error!(
+                            "{} - {} - Semaphore error: {}",
+                            &config.info_log_name,
+                            IndexingEventProgressStatus::Syncing.log(),
+                            e
+                        );
+                        continue;
+                    }
                 }
             }
-        }
 
-        info!(
-            "{} - {} - Finished indexing historic events",
-            &config.info_log_name,
-            IndexingEventProgressStatus::Completed.log()
-        );
-
-        // Live indexing mode
-        if config.live_indexing && !force_no_live_indexing {
-            live_indexing_stream(
-                &config.network_contract.cached_provider,
-                &tx,
-                &contract_address,
-                &config.topic_id,
-                &config.indexing_distance_from_head,
-                current_filter,
+            info!(
+                "{} - {} - Finished indexing historic events",
                 &config.info_log_name,
-                &config.semaphore,
-                config.network_contract.disable_logs_bloom_checks,
-            )
-            .await;
+                IndexingEventProgressStatus::Completed.log()
+            );
+
+            // Live indexing mode
+            if config.live_indexing && !force_no_live_indexing {
+                live_indexing_stream(
+                    &config.network_contract.cached_provider,
+                    &tx,
+                    &contract_address,
+                    &config.topic_id,
+                    &config.indexing_distance_from_head,
+                    current_filter,
+                    &config.info_log_name,
+                    &config.semaphore,
+                    config.network_contract.disable_logs_bloom_checks,
+                )
+                .await;
+            }
         }
     });
 
     UnboundedReceiverStream::new(rx)
 }
 
+async fn process_exex_block(
+    block_receipts: &RethBlockWithReceipts,
+    filtered_params: &FilteredParams,
+) -> Option<WrappedLog> {
+    let RethBlockWithReceipts { block_receipts, block_timestamp, .. } = block_receipts;
+    let block = &block_receipts.block;
+
+    // Early return if no receipts
+    if block_receipts.tx_receipts.is_empty() {
+        return None;
+    }
+
+    // Process each transaction receipt
+    for (tx_index, (tx_hash, receipt)) in block_receipts.tx_receipts.iter().enumerate() {
+        // Skip failed transactions
+        if !receipt.success {
+            continue;
+        }
+
+        // Process logs in successful transactions
+        for (log_index, log) in receipt.logs.iter().enumerate() {
+            let log_topics = log.topics();
+
+            // Check if log matches our filter criteria
+            if filtered_params.filter_address(&log.address) &&
+                filtered_params.filter_topics(&log_topics)
+            {
+                return Some(WrappedLog::from_alloy_log(
+                    log,
+                    *block_timestamp,
+                    block.hash,
+                    block.number,
+                    tx_hash,
+                    tx_index as u64,
+                    log_index,
+                    None,
+                    false,
+                ));
+            }
+        }
+    }
+
+    None
+}
+
+async fn process_exex_stream(
+    backfill_tx: mpsc::UnboundedSender<BackfillMessage>,
+    tx: &mpsc::UnboundedSender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
+    config: &EventProcessingConfig,
+) {
+    let backfill_tx = backfill_tx.clone();
+    // TODO: Since most of the codebase uses ethers types, and we want reth types here,
+    // we are converting ethers types to reth types here.
+    // we should move towards using reth types throughout the codebase.
+    let filter = config.to_event_filter().unwrap().to_alloy_filter();
+    let filtered_params = FilteredParams::new(Some(filter));
+
+    // Phase 1: Process backfill data
+    let from_block = config.to_event_filter().unwrap().get_from_block().as_u64();
+    let to_block = config.to_event_filter().unwrap().get_to_block().as_u64();
+
+    let (response_tx, response_rx) = oneshot::channel();
+
+    let res = backfill_tx.send(BackfillMessage::Start {
+        from_block,
+        to_block: Some(to_block),
+        mode: BackfillMode::PureBackfill,
+        response_tx,
+    });
+    if let Err(e) = res {
+        error!(
+            "{} - {} - Failed to start backfill: {}",
+            config.info_log_name,
+            IndexingEventProgressStatus::Syncing.log(),
+            e
+        );
+        return;
+    };
+
+    let (job_id, mut stream) = if let Ok(Ok(res)) = response_rx.await {
+        res
+    } else {
+        error!(
+            "{} - {} - Failed to start backfill",
+            config.info_log_name,
+            IndexingEventProgressStatus::Syncing.log(),
+        );
+        return;
+    };
+    let mut wrapped_logs: Vec<WrappedLog> = Vec::new();
+    while let Some(block) = stream.recv().await {
+        info!("Pure backfill block: {}", block.block_receipts.block.number);
+        let logs = process_exex_block(&block, &filtered_params).await;
+        if let Some(logs) = logs {
+            wrapped_logs.push(logs);
+        }
+    }
+    if !wrapped_logs.is_empty() {
+        tx.send(Ok(FetchLogsResult {
+            logs: wrapped_logs,
+            from_block: U64::from(from_block),
+            to_block: U64::from(to_block),
+        }));
+    }
+
+    info!("Pure backfill complete for job {}", job_id);
+
+    if config.live_indexing {
+        let next_from_block = to_block + 1;
+        let (response_tx, response_rx) = oneshot::channel();
+        let res = backfill_tx.send(BackfillMessage::Start {
+            from_block: next_from_block,
+            to_block: None,
+            mode: BackfillMode::BackfillWithLive,
+            response_tx,
+        });
+        if let Err(e) = res {
+            error!(
+                "{} - {} - Failed to start live backfill: {}",
+                config.info_log_name,
+                IndexingEventProgressStatus::Syncing.log(),
+                e
+            );
+            return;
+        }
+
+        let (job_id, mut stream) = if let Ok(Ok(res)) = response_rx.await {
+            res
+        } else {
+            error!(
+                "{} - {} - Failed to start live backfill",
+                config.info_log_name,
+                IndexingEventProgressStatus::Syncing.log()
+            );
+            return;
+        };
+        info!("Live backfill started for job {}", job_id);
+
+        while let Some(block) = stream.recv().await {
+            info!("Live backfill block: {}", block.block_receipts.block.number);
+            let logs = process_exex_block(&block, &filtered_params).await;
+            if let Some(logs) = logs {
+                let mut logs_vec = vec![];
+                logs_vec.push(logs);
+                //we can directly send the logs to the tx channel here
+                if tx
+                    .send(Ok(FetchLogsResult {
+                        logs: logs_vec,
+                        from_block: U64::from(block.block_receipts.block.number),
+                        to_block: U64::from(block.block_receipts.block.number),
+                    }))
+                    .is_err()
+                {
+                    error!(
+                        "{} - {} - Failed to send logs to stream consumer!",
+                        config.info_log_name,
+                        IndexingEventProgressStatus::Syncing.log()
+                    );
+                    return;
+                }
+            }
+        }
+    }
+}
 struct ProcessHistoricLogsStreamResult {
     pub next: RindexerEventFilter,
     pub max_block_range_limitation: Option<U64>,

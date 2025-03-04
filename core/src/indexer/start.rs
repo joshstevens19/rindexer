@@ -3,7 +3,7 @@ use std::{path::Path, sync::Arc};
 use ethers::{providers::ProviderError, types::U64};
 use futures::future::try_join_all;
 use tokio::{
-    sync::Semaphore,
+    sync::{mpsc, Mutex, Semaphore},
     task::{JoinError, JoinHandle},
     time::Instant,
 };
@@ -27,6 +27,7 @@ use crate::{
         ContractEventDependencies,
     },
     manifest::core::Manifest,
+    reth::RethChannels,
     PostgresClient,
 };
 
@@ -81,6 +82,7 @@ pub async fn start_indexing(
     dependencies: &[ContractEventDependencies],
     no_live_indexing_forced: bool,
     registry: Arc<EventCallbackRegistry>,
+    reth_channels: &RethChannels,
 ) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
     let start = Instant::now();
 
@@ -246,7 +248,9 @@ pub async fn start_indexing(
                     dependencies,
                 );
             } else {
-                let process_event = tokio::spawn(process_event(event_processing_config, false));
+                let backfill_tx = reth_channels.get(&network_contract.network).unwrap().clone();
+                let process_event =
+                    tokio::spawn(process_event(event_processing_config, false, Some(backfill_tx)));
                 non_blocking_process_events.push(process_event);
             }
         }
@@ -262,9 +266,11 @@ pub async fn start_indexing(
         );
     }
 
+    let exex_channels = reth_channels.clone();
     let dependency_handle: JoinHandle<Result<(), ProcessContractsEventsWithDependenciesError>> =
         tokio::spawn(process_contracts_events_with_dependencies(
             dependency_event_processing_configs,
+            exex_channels,
         ));
 
     let mut handles: Vec<JoinHandle<Result<(), CombinedLogEventProcessingError>>> = Vec::new();

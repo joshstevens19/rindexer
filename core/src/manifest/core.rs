@@ -5,8 +5,12 @@ use serde_yaml::Value;
 use crate::{
     indexer::Indexer,
     manifest::{
-        contract::Contract, global::Global, graphql::GraphQLSettings, network::Network,
-        phantom::Phantom, storage::Storage,
+        contract::{Contract, ContractDetails},
+        global::Global,
+        graphql::GraphQLSettings,
+        network::Network,
+        phantom::Phantom,
+        storage::Storage,
     },
 };
 
@@ -106,6 +110,10 @@ impl Manifest {
             }
         }
         headers
+    }
+
+    pub fn reth_enabled_networks(&self) -> Vec<&Network> {
+        self.networks.iter().filter(|n| n.reth.is_some()).map(|network| network).collect()
     }
 }
 

@@ -1,6 +1,9 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
-use tokio::signal;
+use tokio::{
+    signal,
+    sync::{mpsc, Mutex},
+};
 use tracing::{error, info};
 
 use crate::{
@@ -24,9 +27,9 @@ use crate::{
         storage::RelationshipsAndIndexersError,
         yaml::{read_manifest, ReadManifestError},
     },
+    reth::{start_reth_node_with_exex, RethBlockWithReceipts, RethChannels},
     setup_info_logger,
 };
-
 pub struct IndexingDetails {
     pub registry: EventCallbackRegistry,
 }
@@ -76,6 +79,9 @@ pub enum StartRindexerError {
 
     #[error("Shutdown handler failed with error: {0}")]
     ShutdownHandlerFailed(String),
+
+    #[error("Could not start Reth node: {0}")]
+    CouldNotStartRethNode(#[from] eyre::Error),
 }
 
 async fn handle_shutdown(signal: &str) {
@@ -121,6 +127,23 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
             });
 
             let manifest = Arc::new(read_manifest(details.manifest_path)?);
+
+            // Channels for Reth block data
+            let mut reth_channels = RethChannels::new();
+
+            // Start Reth nodes for enabled networks
+            for network in manifest.reth_enabled_networks() {
+                let reth_config = network.reth.as_ref().unwrap();
+                let backfill_tx = start_reth_node_with_exex(
+                    network.chain_id,
+                    reth_config.data_dir.clone().unwrap_or_else(|| PathBuf::from("./data")),
+                    network.name.clone(),
+                )
+                .await
+                .map_err(StartRindexerError::CouldNotStartRethNode)?;
+
+                reth_channels.insert(network.name.clone(), backfill_tx);
+            }
 
             if manifest.project_type != ProjectType::NoCode {
                 setup_info_logger();
@@ -176,6 +199,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     // we index all the historic data first before then applying FKs
                     !relationships.is_empty(),
                     indexing_details.registry.complete(),
+                    &reth_channels,
                 )
                 .await?;
 
@@ -210,6 +234,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                             indexing_details
                                 .registry
                                 .reapply_after_historic(processed_network_contracts),
+                            &reth_channels,
                         )
                         .await
                         .map_err(StartRindexerError::CouldNotStartIndexing)?;

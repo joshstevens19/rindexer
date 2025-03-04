@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use ethers::prelude::U64;
 use serde::{Deserialize, Serialize};
 
@@ -24,4 +26,20 @@ pub struct Network {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disable_logs_bloom_checks: Option<bool>,
+
+    /// Reth configuration for this network
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reth: Option<RethConfig>,
+}
+
+/// Configuration for Reth node and ExEx
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RethConfig {
+    /// Whether to enable Reth integration
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Path to the Reth data directory
+    #[serde(default)]
+    pub data_dir: Option<PathBuf>,
 }

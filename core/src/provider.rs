@@ -3,13 +3,15 @@ use std::{
     time::{Duration, Instant},
 };
 
+use alloy_primitives::{Address as AlloyAddress, FixedBytes, Log as AlloyLog, B256};
 use ethers::{
     middleware::Middleware,
     prelude::Log,
     providers::{Http, Provider, ProviderError, RetryClient, RetryClientBuilder},
-    types::{Block, BlockNumber, H256, U256, U64},
+    types::{Address as EthersAddress, Block, BlockNumber, Bytes as EthersBytes, H256, U256, U64},
 };
 use reqwest::header::HeaderMap;
+use reth::primitives::SealedBlock;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -32,6 +34,58 @@ pub struct WrappedLog {
     #[serde(rename = "blockTimestamp")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub block_timestamp: Option<U256>,
+}
+
+impl WrappedLog {
+    /// Creates a `WrappedLog` from an `alloy::Log` with an optional block timestamp.
+    pub fn from_alloy_log(
+        alloy_log: &AlloyLog,
+        block_timestamp: u64,
+        block_hash: FixedBytes<32>,
+        block_number: u64,
+        tx_hash: &FixedBytes<32>,
+        tx_index: u64,
+        log_index: usize,
+        log_type: Option<String>,
+        removed: bool,
+    ) -> Self {
+        let log_topics = alloy_log.topics();
+        let address = alloy_log.address;
+        let address_bytes: [u8; 20] = address.into_array();
+        let block_hash = H256::from(block_hash.0);
+        let tx_hash = H256::from(tx_hash.0);
+
+        let ethers_log = Log {
+            // Convert Alloy Address to Ethers Address
+            address: EthersAddress::from(address_bytes),
+
+            // Convert Alloy topics (Vec<FixedBytes<32>>) to Ethers topics (Vec<H256>)
+            topics: log_topics
+                .iter()
+                .map(|fixed_bytes| {
+                    let bytes: [u8; 32] = (*fixed_bytes).into();
+                    H256::from(bytes)
+                })
+                .collect(),
+
+            // Convert Alloy Bytes to Ethers Bytes
+            data: EthersBytes::from(alloy_log.data.data.to_vec()),
+
+            // Set optional metadata fields to None (not provided by AlloyLog)
+            block_hash: Some(block_hash),
+            block_number: Some(U64::from(block_number)),
+            transaction_hash: Some(tx_hash),
+            transaction_index: Some(U64::from(tx_index)),
+            log_index: Some(U256::from(log_index)),
+            transaction_log_index: Some(U256::from(tx_index)),
+            log_type: log_type.map(|s| s.to_string()),
+            removed: Some(removed),
+        };
+
+        let block_timestamp = Some(U256::from(block_timestamp));
+
+        WrappedLog { inner: ethers_log, block_timestamp }
+    }
 }
 
 impl JsonRpcCachedProvider {
