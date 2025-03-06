@@ -36,9 +36,7 @@ impl SNS {
         // Conditionally set endpoint if it exists
         if let Some(endpoint_url) = &config.endpoint_url {
             if !endpoint_url.trim().is_empty() {
-                sdk_config = sdk_config.to_builder()
-                    .endpoint_url(endpoint_url)
-                    .build();
+                sdk_config = sdk_config.to_builder().endpoint_url(endpoint_url).build();
             }
         }
 
