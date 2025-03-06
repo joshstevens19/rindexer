@@ -173,9 +173,24 @@ impl StreamsClients {
         chunks
     }
 
-    fn create_chunk_message_raw(&self, event_message: &EventMessage, chunk: &[Value]) -> String {
+    /// Gets event name, which may be an optional alias, or the contract's event name.
+    fn get_event_name(&self, events: &Vec<StreamEvent>, event_message: &EventMessage) -> String {
+        let alias_name = events
+            .iter()
+            .find(|n| n.event_name == event_message.event_name)
+            .and_then(|n| n.alias.clone());
+
+        alias_name.unwrap_or(event_message.event_name.clone())
+    }
+
+    fn create_chunk_message_raw(
+        &self,
+        events: &Vec<StreamEvent>,
+        event_message: &EventMessage,
+        chunk: &[Value],
+    ) -> String {
         let chunk_message = EventMessage {
-            event_name: event_message.event_name.clone(),
+            event_name: self.get_event_name(events, event_message),
             event_data: Value::Array(chunk.to_vec()),
             event_signature_hash: event_message.event_signature_hash.clone(),
             network: event_message.network.clone(),
@@ -184,9 +199,14 @@ impl StreamsClients {
         serde_json::to_string(&chunk_message).unwrap()
     }
 
-    fn create_chunk_message_json(&self, event_message: &EventMessage, chunk: &[Value]) -> Value {
+    fn create_chunk_message_json(
+        &self,
+        events: &Vec<StreamEvent>,
+        event_message: &EventMessage,
+        chunk: &[Value],
+    ) -> Value {
         let chunk_message = EventMessage {
-            event_name: event_message.event_name.clone(),
+            event_name: self.get_event_name(events, event_message),
             event_data: Value::Array(chunk.to_vec()),
             event_signature_hash: event_message.event_signature_hash.clone(),
             network: event_message.network.clone(),
@@ -253,23 +273,12 @@ impl StreamsClients {
                     chunk,
                 );
 
-                let alias_name = config
-                    .events
-                    .iter()
-                    .find(|n| n.event_name == event_message.event_name)
-                    .and_then(|n| n.alias.clone());
-
-                let event_message = EventMessage {
-                    event_name: alias_name.unwrap_or(event_message.event_name.clone()),
-                    ..event_message.clone()
-                };
-
                 let publish_message_id =
                     self.generate_publish_message_id(id, index, &config.prefix_id);
                 let client = Arc::clone(&client);
                 let topic_arn = config.topic_arn.clone();
                 let publish_message =
-                    self.create_chunk_message_raw(&event_message, &filtered_chunk);
+                    self.create_chunk_message_raw(&config.events, &event_message, &filtered_chunk);
                 task::spawn(async move {
                     let _ =
                         client.publish(&publish_message_id, &topic_arn, &publish_message).await?;
@@ -305,7 +314,7 @@ impl StreamsClients {
                 let shared_secret = config.shared_secret.clone();
                 let client = Arc::clone(&client);
                 let publish_message =
-                    self.create_chunk_message_json(event_message, &filtered_chunk);
+                    self.create_chunk_message_json(&config.events, event_message, &filtered_chunk);
                 task::spawn(async move {
                     client
                         .publish(&publish_message_id, &endpoint, &shared_secret, &publish_message)
@@ -343,7 +352,7 @@ impl StreamsClients {
                 let exchange_type = config.exchange_type.clone();
                 let routing_key = config.routing_key.clone();
                 let publish_message =
-                    self.create_chunk_message_json(event_message, &filtered_chunk);
+                    self.create_chunk_message_json(&config.events, event_message, &filtered_chunk);
 
                 task::spawn(async move {
                     client
@@ -385,7 +394,7 @@ impl StreamsClients {
                 let exchange = config.topic.clone();
                 let routing_key = config.key.clone();
                 let publish_message =
-                    self.create_chunk_message_json(event_message, &filtered_chunk);
+                    self.create_chunk_message_json(&config.events, event_message, &filtered_chunk);
                 task::spawn(async move {
                     client
                         .publish(&publish_message_id, &exchange, &routing_key, &publish_message)
@@ -419,7 +428,7 @@ impl StreamsClients {
                 let client = Arc::clone(&client);
                 let stream_name = config.stream_name.clone();
                 let publish_message =
-                    self.create_chunk_message_json(event_message, &filtered_chunk);
+                    self.create_chunk_message_json(&config.events, event_message, &filtered_chunk);
 
                 task::spawn(async move {
                     client.publish(&publish_message_id, &stream_name, &publish_message).await?;

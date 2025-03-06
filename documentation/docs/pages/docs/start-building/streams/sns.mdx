@@ -50,6 +50,7 @@ contracts:
             - ethereum // [!code focus]
           events: // [!code focus]
             - event_name: Transfer // [!code focus]
+              alias: RocketPoolTransfer
 ```
 
 ## Response
@@ -378,8 +379,8 @@ contracts:
 
 This is an optional `alias` you wish to assign to the event you want to stream to this SNS topic.
 
-It is paired with the event name and allows consumers to have unique discriminator keys in the event of 
-naming conflicts on any shared consumer queues. E.g Transfer (ERC20) and Transfer (ERC721).
+It is paired with the event name and allows consumers to have unique discriminator keys in the event of
+naming conflicts. E.g Transfer (ERC20) and Transfer (ERC721).
 
 ```yaml [rindexer.yaml]
 ...
@@ -409,7 +410,7 @@ contracts:
             - ethereum
           events: // [!code focus]
             - event_name: Transfer // [!code focus]
-              alias: RocketPoolTransfer
+              alias: RocketPoolTransfer // [!code focus]
 ```
 
 #### conditions
