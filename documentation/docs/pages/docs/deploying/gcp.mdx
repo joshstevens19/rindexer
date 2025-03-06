@@ -1,1 +1,170 @@
 # GCP
+
+## Prerequisites
+
+Ensure that you have the following installed and configured:
+
+- **[Google Cloud SDK](https://cloud.google.com/sdk/docs/install)**: Installed and configured with necessary permissions.
+- **[kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl/)**: Installed and configured.
+- **[Helm](https://helm.sh/docs/intro/install/)**: Installed.
+
+## 1. Create a GKE Cluster
+
+This command creates a new GKE cluster. Adjust the --zone, --machine-type, and node count options as needed.
+
+```bash
+gcloud container clusters create my-cluster --zone us-west1-a --machine-type n1-standard-1 --num-nodes=1 --enable-autoscaling --min-nodes=1 --max-nodes=3
+```
+
+Output:
+
+```bash
+Creating cluster my-cluster in us-west1-a... Cluster is being created.                                                                                                                                                                                                            
+Created [https://container.googleapis.com/v1/projects/my-project/zones/us-west1-a/clusters/my-cluster].                                                                                                                           
+To inspect the contents of your cluster, go to: https://console.cloud.google.com/kubernetes/workload_/gcloud/us-west1-a/my-cluster?project=my-project
+kubeconfig entry generated for my-cluster.
+NAME        LOCATION    MASTER_VERSION    MASTER_IP     MACHINE_TYPE   NODE_VERSION      NUM_NODES  STATUS
+my-cluster  us-west1-a  v1.30.2-gke.100  35.233.164.24 n1-standard-1  v1.30.2-gke.100  1          RUNNING
+```
+
+`gcloud` automatically configures your `kubeconfig` file. To check your nodes:
+
+```bash
+kubectl get nodes
+```
+
+Output:
+
+```bash
+NAME                                          STATUS   ROLES    AGE     VERSION
+gke-my-cluster-default-pool-1a2b3c4d-e123     Ready    <none>   6m33s   v1.30.2-gke.100
+```
+
+## 2. Deploy the Helm Chart
+
+### 2.1. Download the rindexer repository
+
+```bash
+git clone https://github.com/joshstevens19/rindexer.git
+```
+
+### 2.2. Configure the `values.yaml` File
+
+Customize the `values.yaml` for your deployment:
+
+```yaml
+replicaCount: 2
+
+image:
+  repository: ghcr.io/joshstevens19/rindexer
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 3001
+
+ingress:
+  enabled: false
+
+postgresql:
+  enabled: false
+```
+
+### 2.3. Install the Helm Chart
+
+```bash
+helm install rindexer ./helm/rindexer -f helm/rindexer/values.yaml
+```
+
+Output:
+
+```bash
+NAME: rindexer
+LAST DEPLOYED: Tue Aug 21 18:23:34 2024
+NAMESPACE: default
+STATUS: deployed
+REVISION: 1
+TEST SUITE: None
+NOTES:
+1. Get the application URL by running these commands:
+  export POD_NAME=$(kubectl get pods --namespace default -l "app.kubernetes.io/name=rindexer,app.kubernetes.io/instance=rindexer" -o jsonpath="{.items[0].metadata.name}")
+  export CONTAINER_PORT=$(kubectl get pod --namespace default $POD_NAME -o jsonpath="{.spec.containers[0].ports[0].containerPort}")
+  echo "Visit http://127.0.0.1:8080 to use your application"
+  kubectl --namespace default port-forward $POD_NAME 8080:$CONTAINER_PORT
+```
+
+### 2.4. Verify the Deployment
+
+```bash
+kubectl get pods
+```
+
+Output:
+
+```bash
+NAME                                READY   STATUS    RESTARTS     AGE
+rindexer-rindexer-35bb35619-t9r2l   1/1     Running   1 (7s ago)   17s
+```
+
+## 3. Monitor and Manage the Deployment
+
+### 3.1. View Logs
+
+```bash
+kubectl logs -l app.kubernetes.io/name=rindexer
+```
+
+Output:
+
+```bash
+21 August - 17:32:17.710908  INFO RocketPoolETH::Transfer - network ethereum - 100.00% progress
+21 August - 17:32:17.779423  INFO RocketPoolETH::Transfer - No events found between blocks 18999946 - 19000000
+21 August - 17:32:17.779458  INFO RocketPoolETH::Transfer - COMPLETED - Finished indexing historic events
+21 August - 17:32:18.825983  INFO RocketPoolETH::Approval - INDEXED - 4884 events - blocks: 18900000 - 19000000 - network: ethereum
+21 August - 17:32:18.827845  INFO RocketPoolETH::Approval - network ethereum - 100.00% progress
+21 August - 17:32:18.906260  INFO RocketPoolETH::Approval - No events found between blocks 18999896 - 19000000
+21 August - 17:32:18.906299  INFO RocketPoolETH::Approval - COMPLETED - Finished indexing historic events
+21 August - 17:32:18.906347  INFO Historical indexing complete - time taken: 2.599786906s
+21 August - 17:32:18.906407  INFO Applying indexes if any back to the database as historic resync is complete
+21 August - 17:32:18.906414  INFO rindexer resync is complete
+```
+
+### 3.2. Upgrade the Helm Chart
+
+```bash
+helm upgrade rindexer ./rindexer -f values.yaml
+```
+
+## 4. Clean Up
+
+### 4.1. Uninstall the Helm Chart
+
+```bash
+helm uninstall rindexer
+```
+
+Output:
+
+```bash
+release "rindexer" uninstalled
+```
+
+### 4.2. Delete the EKS cluster
+
+```bash
+gcloud container clusters delete my-cluster --zone us-west1-a
+```
+
+Ouput:
+
+```bash
+The following clusters will be deleted.
+ - [my-cluster] in [us-west1-a]
+
+Do you want to continue (Y/n)?  Y
+Deleting cluster my-cluster...done.
+Deleted [https://container.googleapis.com/v1/projects/my-project/zones/us-west1-a/clusters/my-cluster].
+```
+
+This guide provides the necessary steps to deploy the rindexer Helm chart on Google Kubernetes Engine (GKE) using gcloud and kubectl.

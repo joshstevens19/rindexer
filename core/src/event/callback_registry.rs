@@ -6,14 +6,15 @@ use ethers::{
     types::{Bytes, Log, H256, U256, U64},
 };
 use futures::future::BoxFuture;
-use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use crate::{
     event::contract_setup::{ContractInformation, NetworkContract},
     indexer::start::ProcessedNetworkContract,
+    is_running,
+    provider::WrappedLog,
 };
 
 pub type Decoder = Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync>;
@@ -30,6 +31,7 @@ pub struct TxInformation {
     pub address: Address,
     pub block_hash: H256,
     pub block_number: U64,
+    pub block_timestamp: Option<U256>,
     pub transaction_hash: H256,
     pub log_index: U256,
     pub transaction_index: U64,
@@ -52,20 +54,21 @@ pub struct EventResult {
 impl EventResult {
     pub fn new(
         network_contract: Arc<NetworkContract>,
-        log: Log,
+        log: WrappedLog,
         start_block: U64,
         end_block: U64,
     ) -> Self {
-        let log_meta = LogMeta::from(&log);
-        let log_address = log.address;
+        let log_meta = LogMeta::from(&log.inner);
+        let log_address = log.inner.address;
         Self {
-            log: log.clone(),
-            decoded_data: network_contract.decode_log(log),
+            log: log.inner.clone(),
+            decoded_data: network_contract.decode_log(log.inner),
             tx_information: TxInformation {
                 network: network_contract.network.to_string(),
                 address: log_address,
                 block_hash: log_meta.block_hash,
                 block_number: log_meta.block_number,
+                block_timestamp: log.block_timestamp,
                 transaction_hash: log_meta.transaction_hash,
                 transaction_index: log_meta.transaction_index,
                 log_index: log_meta.log_index,
@@ -141,6 +144,11 @@ impl EventCallbackRegistry {
             debug!("{} - Pushed {} events", data.len(), event_information.info_log_name());
 
             loop {
+                if !is_running() {
+                    info!("Detected shutdown, stopping event trigger");
+                    break;
+                }
+
                 match (event_information.callback)(data.clone()).await {
                     Ok(_) => {
                         debug!(
@@ -150,18 +158,19 @@ impl EventCallbackRegistry {
                         break;
                     }
                     Err(e) => {
+                        if !is_running() {
+                            info!("Detected shutdown, stopping event trigger");
+                            break;
+                        }
                         attempts += 1;
                         error!(
                             "{} Event processing failed - id: {} - topic_id: {}. Retrying... (attempt {}). Error: {}",
                             event_information.info_log_name(), id, event_information.topic_id, attempts, e
                         );
 
-                        sleep(delay).await;
-                        delay = (delay * 2).min(Duration::from_secs(15)); // Max delay of 15 seconds
+                        delay = (delay * 2).min(Duration::from_secs(15));
 
-                        // add some jitter to the delay to avoid thundering herd problem
-                        let jitter = Duration::from_millis(rand::thread_rng().gen_range(0..1000));
-                        sleep(delay + jitter).await;
+                        sleep(delay).await;
                     }
                 }
             }

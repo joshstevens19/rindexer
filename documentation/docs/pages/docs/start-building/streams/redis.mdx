@@ -1,0 +1,387 @@
+# Redis Streams
+
+:::info
+rindexer streams can be used without any other storage providers. It can also be used with storage providers.
+:::
+
+rindexer allows you to configure [Redis Streams](https://redis.io/docs/latest/develop/data-types/streams/) to stream any data to. This goes under
+the [contracts](docs/start-building/yaml-config/contracts) section.
+
+Found out more about [Redis Streams](https://redis.io/docs/latest/develop/data-types/streams/).
+
+## Configuration with rindexer
+`redis` `streams` property accepts an array allowing you to split up the streams any way you wish.
+
+## Example
+```yaml [rindexer.yaml]
+name: RocketPoolETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    redis: // [!code focus]
+      connection_uri: ${REDIS_CONNECTION_URI} // [!code focus]
+      streams: // [!code focus]
+        - stream_name: "ethereum_rocketpool_transfer_stream" // [!code focus]
+          networks: // [!code focus]
+            - ethereum // [!code focus]
+          events: // [!code focus]
+            - event_name: Transfer // [!code focus]
+              alias: RocketPoolTransfer
+```
+
+## Response
+
+:::info
+Redis streams may wrap the message body into their own object so the below is just what we send to the stream.
+:::
+
+The response sent to you is already decoded and parsed into a JSON stringify object.
+
+- `event_name` - The name of the event
+- `event_signature_hash` - The event signature hash example the keccak256 hash of "Transfer(address,address,uint256)", this is topics[0] in the logs
+- `event_data` - The event data which has all the event fields decoded and the transaction information which is under `transaction_information`
+- `network` - The network the event was emitted on
+
+For example a transfer event would look like:
+
+```json
+{
+    "event_name": "Transfer",
+    "event_signature_hash": "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+    "event_data": {
+        "from": "0x0338ce5020c447f7e668dc2ef778025ce3982662",
+        "to": "0x0338ce5020c447f7e668dc2ef778025ce3982662",
+        "value": "1000000000000000000",
+        "transaction_information": {
+            "address": "0xae78736cd615f374d3085123a210448e74fc6393",
+            "block_hash": "0x8461da7a1d4b47190a01fa6eae219be40aacffab0dd64af7259b2d404572c3d9",
+            "block_number": "18718011",
+            "log_index": "0",
+            "network": "ethereum",
+            "transaction_hash": "0x145c6705ffbf461e85d08b4a7f5850d6b52a7364d93a057722ca1194034f3ba4",
+            "transaction_index": "0"
+        }
+    },
+    "network": "ethereum"
+}
+```
+
+## connection_uri
+
+This is the Redis connection url we advise to put this in a environment variable.
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    redis: // [!code focus]
+      # we advise to put this in a environment variables // [!code focus]
+      connection_uri: ${REDIS_CONNECTION_URI} // [!code focus]
+```
+
+## streams
+
+This is where you configure each of the Redis Streams you want to push to.
+
+### stream_name
+
+The name of the stream that you are streaming events to.
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    redis: // [!code focus]
+      connection_uri: ${REDIS_CONNECTION_URI}
+      streams: // [!code focus]
+        - stream_name: "ethereum_rocketpool_transfer_stream" // [!code focus]
+```
+
+### events
+
+This is an array of events you want to stream to this Redis Stream..
+
+#### event_name
+
+This is the name of the event you want to stream to this Redis Stream, must match the ABI event name.
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    redis: // [!code focus]
+      connection_uri: ${REDIS_CONNECTION_URI}
+      streams: // [!code focus]
+        - stream_name: "ethereum_rocketpool_transfer_stream"
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer // [!code focus]
+```
+
+#### alias
+
+This is an optional `alias` you wish to assign to the event you want to stream to this Redis Stream.
+
+It is paired with the event name and allows consumers to have unique discriminator keys in the event of
+naming conflicts. E.g Transfer (ERC20) and Transfer (ERC721).
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    redis: // [!code focus]
+      connection_uri: ${REDIS_CONNECTION_URI}
+      streams: // [!code focus]
+        - stream_name: "ethereum_rocketpool_transfer_stream"
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer // [!code focus]
+              alias: RocketPoolTransfer // [!code focus]
+```
+
+#### conditions
+
+This accepts an array of conditions you want to apply to the event data before streaming to this Redis Stream topic.
+
+:::info
+This is optional, if you do not provide any conditions all data will be streamed.
+:::
+
+You may want to filter on the stream based on the event data, if the event data has not got an index on the on the
+solidity event you can not filter it over the logs. The `conditions` filter is here to help you with this,
+based on your ABI you can filter on the event data.
+
+rindexer has enabled a special syntax which allows you to define on your ABI fields what you want to filter on.
+
+1. `>` - higher then (for numbers only)
+2. `<` - lower then (for numbers only)
+3. `=` - equals
+4. `>=` - higher then or equals (for numbers only)
+5. `<=` - lower then or equals (for numbers only)
+6. `||` - or
+7. `&&` - and
+
+So lets look at an example lets say i only want to get transfer events which are higher then `2000000000000000000` RETH wei
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    redis: // [!code focus]
+      connection_uri: ${REDIS_CONNECTION_URI}
+      streams: // [!code focus]
+        - stream_name: "ethereum_rocketpool_transfer_stream"
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer
+              conditions: // [!code focus]
+                - "value": ">=2000000000000000000" // [!code focus]
+```
+
+We use the ABI input name `value` to filter on the value field, you can find these names in the ABI file.
+
+```json
+{
+    "anonymous":false,
+    "inputs":[
+      {
+        "indexed":true,
+        "internalType":"address",
+        "name":"from",
+        "type":"address"
+      },
+      {
+        "indexed":true,
+        "internalType":"address",
+        "name":"to",
+        "type":"address"
+      },
+      {
+        "indexed":false,
+        "internalType":"uint256",
+        "name":"value", // [!code focus]
+        "type":"uint256"
+      }
+    ],
+    "name":"Transfer",
+    "type":"event"
+}
+```
+
+You can use the `||` or `&&` to combine conditions.
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    redis: // [!code focus]
+      connection_uri: ${REDIS_CONNECTION_URI}
+      streams: // [!code focus]
+        - stream_name: "ethereum_rocketpool_transfer_stream"
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer
+              conditions: // [!code focus]
+                - "value": ">=2000000000000000000 && value <=4000000000000000000" // [!code focus]
+```
+
+You can use the `=` to filter on other aspects like the `from` or `to` address.
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    redis: // [!code focus]
+      connection_uri: ${REDIS_CONNECTION_URI}
+      streams: // [!code focus]
+        - stream_name: "ethereum_rocketpool_transfer_stream"
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer
+              conditions: // [!code focus]
+                - "from": "0x0338ce5020c447f7e668dc2ef778025ce3982662 || 0x0338ce5020c447f7e668dc2ef778025ce398266u" // [!code focus]
+                - "value": ">=2000000000000000000 || value <=4000000000000000000" // [!code focus]
+```
+
+:::info
+Note we advise you to filer any `indexed` fields in the contract details in the `rindexer.yaml` file.
+As these can be filtered out on the request level and not filtered out in rindexer itself.
+You can read more about it [here](/docs/start-building/yaml-config/contracts#indexed_1-indexed_2-indexed_3).
+:::
+
+If you have a tuple and you want to get that value you just use the object notation.
+
+For example lets say we want to only get the events for `profileId` from the `quoteParams` tuple which equals `1`:
+
+```json
+{
+     "anonymous": false,
+     "inputs": [
+       {
+         "components": [
+           {
+             "internalType": "uint256",
+             "name": "profileId", // [!code focus]
+             "type": "uint256"
+           },
+           ...
+         ],
+         "indexed": false,
+         "internalType": "struct Types.QuoteParams",
+         "name": "quoteParams", // [!code focus]
+         "type": "tuple"
+       },
+       ...
+     ],
+     "name": "QuoteCreated", // [!code focus]
+     "type": "event"
+}
+```
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    redis: // [!code focus]
+      connection_uri: ${REDIS_CONNECTION_URI}
+      streams: // [!code focus]
+        - stream_name: "ethereum_rocketpool_transfer_stream"
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer
+              conditions: // [!code focus]
+                - "quoteParams.profileId": "=1" // [!code focus]
+```

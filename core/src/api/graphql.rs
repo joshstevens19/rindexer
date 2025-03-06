@@ -141,7 +141,8 @@ pub async fn start_graphql_server(
         settings.disable_advanced_filters,
     );
 
-    setup_ctrlc_handler(Arc::new(Mutex::new(None::<Child>)));
+    // Do not need now with the main shutdown keeping around in-case
+    // setup_ctrlc_handler(Arc::new(Mutex::new(None::<Child>)));
 
     // Wait for the initial server startup
     let pid = rx.await.map_err(|e| {
@@ -273,23 +274,6 @@ async fn start_server(
         .map_err(|e| e.to_string())
 }
 
-fn setup_ctrlc_handler(child_arc: Arc<Mutex<Option<Child>>>) {
-    ctrlc::set_handler(move || {
-        MANUAL_STOP.store(true, Ordering::SeqCst);
-        if let Ok(mut guard) = child_arc.lock() {
-            if let Some(child) = guard.as_mut() {
-                if let Err(e) = kill_process_tree(child.id()) {
-                    error!("Failed to kill child process: {}", e);
-                } else {
-                    info!("GraphQL server process killed");
-                }
-            }
-        }
-        std::process::exit(0);
-    })
-    .expect("Error setting Ctrl-C handler");
-}
-
 async fn perform_health_check(
     graphql_endpoint: &str,
     graphql_playground: &str,
@@ -336,17 +320,36 @@ async fn perform_health_check(
     Ok(())
 }
 
-fn kill_process_tree(pid: u32) -> Result<(), String> {
-    if cfg!(target_os = "windows") {
-        Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .output()
-            .map_err(|e| e.to_string())?;
-    } else {
-        Command::new("pkill")
-            .args(["-TERM", "-P", &pid.to_string()])
-            .output()
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
+// Do not need now with the main shutdown keeping around in-case
+// fn setup_ctrlc_handler(child_arc: Arc<Mutex<Option<Child>>>) {
+//     ctrlc::set_handler(move || {
+//         MANUAL_STOP.store(true, Ordering::SeqCst);
+//         if let Ok(mut guard) = child_arc.lock() {
+//             if let Some(child) = guard.as_mut() {
+//                 if let Err(e) = kill_process_tree(child.id()) {
+//                     error!("Failed to kill child process: {}", e);
+//                 } else {
+//                     info!("GraphQL server process killed");
+//                 }
+//             }
+//         }
+//         std::process::exit(0);
+//     })
+//     .expect("Error setting Ctrl-C handler");
+// }
+
+// Do not need now with the main shutdown keeping around in-case
+// fn kill_process_tree(pid: u32) -> Result<(), String> {
+//     if cfg!(target_os = "windows") {
+//         Command::new("taskkill")
+//             .args(["/PID", &pid.to_string(), "/T", "/F"])
+//             .output()
+//             .map_err(|e| e.to_string())?;
+//     } else {
+//         Command::new("pkill")
+//             .args(["-TERM", "-P", &pid.to_string()])
+//             .output()
+//             .map_err(|e| e.to_string())?;
+//     }
+//     Ok(())
+// }

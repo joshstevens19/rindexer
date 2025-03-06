@@ -60,6 +60,7 @@ contracts:
             - ethereum // [!code focus]
           events: // [!code focus]
             - event_name: Transfer // [!code focus]
+              alias: RocketPoolTransfer
 ```
 
 ```yaml [ssl]
@@ -112,6 +113,7 @@ Note SNS/SQS may wrap the message body into their own object so the below is jus
 The response sent to you is already decoded and parsed into a JSON object.
 
 - `event_name` - The name of the event
+- `event_signature_hash` - The event signature hash example the keccak256 hash of "Transfer(address,address,uint256)", this is topics[0] in the logs
 - `event_data` - The event data which has all the event fields decoded and the transaction information which is under `transaction_information`
 - `network` - The network the event was emitted on
 
@@ -120,6 +122,7 @@ For example a transfer event would look like:
 ```json
 {
     "event_name": "Transfer",
+    "event_signature_hash": "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
     "event_data": {
         "from": "0x0338ce5020c447f7e668dc2ef778025ce3982662",
         "to": "0x0338ce5020c447f7e668dc2ef778025ce3982662",
@@ -457,6 +460,45 @@ contracts:
             - ethereum
           events: // [!code focus]
             - event_name: Transfer // [!code focus]
+```
+
+#### alias
+
+This is an optional `alias` you wish to assign to the event you want to stream to this Kafka topic.
+
+It is paired with the event name and allows consumers to have unique discriminator keys in the event of
+naming conflicts. E.g Transfer (ERC20) and Transfer (ERC721).
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    kafka: // [!code focus]
+      brokers:
+        - ${KAFKA_BROKER_URL_1}
+        - ${KAFKA_BROKER_URL_2}
+      acks: all
+      security_protocol: SASL_SSL
+      sasl_mechanisms: PLAIN
+      sasl_username: $<CLUSTER_API_KEY>
+      sasl_password: $<CLUSTER_API_SECRET>
+      topics:
+        - topic: test-topic
+          key: my-routing-key
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer // [!code focus]
+              alias: RocketPoolTransfer // [!code focus]
 ```
 
 ### conditions

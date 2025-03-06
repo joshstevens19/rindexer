@@ -272,6 +272,7 @@ pub struct TxInformation {
     pub address: Address,
     pub block_hash: H256,
     pub block_number: U64,
+    pub block_timestamp: Option<U256>,
     pub transaction_hash: H256,
     pub log_index: U256,
     pub transaction_index: U64,
@@ -760,36 +761,93 @@ called EthereumSqlTypeWrapper which has all the types you need to pass into the 
 ```rs
 #[derive(Debug, Clone)]
 pub enum EthereumSqlTypeWrapper {
-    U64(U64),
-    VecU64(Vec<U64>),
-    U128(U128),
-    VecU128(Vec<U128>),
-    U256(U256),
-    VecU256(Vec<U256>),
-    U512(U512),
-    VecU512(Vec<U512>),
-    H128(H128),
-    VecH128(Vec<H128>),
-    H160(H160),
-    VecH160(Vec<H160>),
-    H256(H256),
-    VecH256(Vec<H256>),
-    H512(H512),
-    VecH512(Vec<H512>),
-    Address(Address),
-    VecAddress(Vec<Address>),
+    // Boolean
     Bool(bool),
     VecBool(Vec<bool>),
-    U32(u32),
-    VecU32(Vec<u32>),
-    U16(u16),
-    VecU16(Vec<u16>),
+
+    // 8-bit integers
     U8(u8),
+    I8(i8),
     VecU8(Vec<u8>),
+    VecI8(Vec<i8>),
+
+    // 16-bit integers
+    U16(u16),
+    I16(i16),
+    VecU16(Vec<u16>),
+    VecI16(Vec<i16>),
+
+    // 32-bit integers
+    U32(u32),
+    I32(i32),
+    VecU32(Vec<u32>),
+    VecI32(Vec<i32>),
+
+    // 64-bit integers
+    U64(U64),
+    I64(i64),
+    VecU64(Vec<U64>),
+    VecI64(Vec<i64>),
+
+    // 128-bit integers
+    U128(u128),
+    I128(i128),
+    VecU128(Vec<u128>),
+    VecI128(Vec<i128>),
+
+    // 256-bit integers
+    U256(U256),
+    U256Nullable(U256),
+    U256Bytes(U256),
+    U256BytesNullable(U256),
+    I256(I256),
+    I256Nullable(I256),
+    I256Bytes(I256),
+    I256BytesNullable(I256),
+    VecU256(Vec<U256>),
+    VecU256Bytes(Vec<U256>),
+    VecI256(Vec<I256>),
+    VecI256Bytes(Vec<I256>),
+
+    // 512-bit integers
+    U512(U512),
+    VecU512(Vec<U512>),
+
+    // Hashes
+    H128(H128),
+    H160(H160),
+    H256(H256),
+    H256Bytes(H256),
+    H512(H512),
+    VecH128(Vec<H128>),
+    VecH160(Vec<H160>),
+    VecH256(Vec<H256>),
+    VecH256Bytes(Vec<H256>),
+    VecH512(Vec<H512>),
+
+    // Address
+    Address(Address),
+    AddressNullable(Address),
+    AddressBytes(Address),
+    AddressBytesNullable(Address),
+    VecAddress(Vec<Address>),
+    VecAddressBytes(Vec<Address>),
+
+    // Strings and Bytes
     String(String),
+    StringVarchar(String),
+    StringChar(String),
+    StringNullable(String),
+    StringVarcharNullable(String),
+    StringCharNullable(String),
     VecString(Vec<String>),
+    VecStringVarchar(Vec<String>),
+    VecStringChar(Vec<String>),
     Bytes(Bytes),
+    BytesNullable(Bytes),
     VecBytes(Vec<Bytes>),
+
+    DateTime(DateTime<Utc>),
 }
 
 // to use it you just pass the value in the enum

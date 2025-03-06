@@ -32,15 +32,15 @@ lazy_static! {
             .unwrap_or("https://mainnet.gateway.tenderly.co".to_string()),
         None,
         None,
-        HeaderMap::new(),
+        HeaderMap::new()
     )
     .expect("Error creating provider");
-    static ref YOMINET_PROVIDER: Arc<JsonRpcCachedProvider> = create_client(
-        &public_read_env_value("https://yominet.rpc.caldera.xyz/http")
-            .unwrap_or("https://yominet.rpc.caldera.xyz/http".to_string()),
+    static ref BASE_PROVIDER: Arc<JsonRpcCachedProvider> = create_client(
+        &public_read_env_value("https://mainnet.base.org")
+            .unwrap_or("https://mainnet.base.org".to_string()),
         None,
-        Some(U64::from(10000)),
-        HeaderMap::new(),
+        None,
+        HeaderMap::new()
     )
     .expect("Error creating provider");
 }
@@ -52,12 +52,12 @@ pub fn get_ethereum_provider() -> Arc<Provider<RetryClient<Http>>> {
     ETHEREUM_PROVIDER.get_inner_provider()
 }
 
-pub fn get_yominet_provider_cache() -> Arc<JsonRpcCachedProvider> {
-    Arc::clone(&YOMINET_PROVIDER)
+pub fn get_base_provider_cache() -> Arc<JsonRpcCachedProvider> {
+    Arc::clone(&BASE_PROVIDER)
 }
 
-pub fn get_yominet_provider() -> Arc<Provider<RetryClient<Http>>> {
-    YOMINET_PROVIDER.get_inner_provider()
+pub fn get_base_provider() -> Arc<Provider<RetryClient<Http>>> {
+    BASE_PROVIDER.get_inner_provider()
 }
 
 pub fn get_provider_cache_for_network(network: &str) -> Arc<JsonRpcCachedProvider> {
@@ -65,8 +65,8 @@ pub fn get_provider_cache_for_network(network: &str) -> Arc<JsonRpcCachedProvide
         return get_ethereum_provider_cache();
     }
 
-    if network == "yominet" {
-        return get_yominet_provider_cache();
+    if network == "base" {
+        return get_base_provider_cache();
     }
     panic!("Network not supported")
 }

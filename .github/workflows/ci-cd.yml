@@ -9,15 +9,21 @@ on:
     branches:
       - 'master'
       - '**'
+    types: [opened, synchronize, reopened]
 
 jobs:
   build:
     if: |
       (github.event_name == 'push' || github.event_name == 'pull_request') &&
       github.actor != 'github-actions[bot]' &&
-      !(github.event_name == 'pull_request' &&
-        startsWith(github.event.pull_request.head.ref, 'release/') &&
-        github.event.pull_request.base.ref == 'master')
+      (
+        !(github.event_name == 'pull_request' &&
+          startsWith(github.event.pull_request.head.ref, 'release/') &&
+          github.event.pull_request.base.ref == 'master') ||
+        (github.event_name == 'pull_request' &&
+          (contains(github.event.pull_request.head.ref, '/merge') ||
+           startsWith(github.event.pull_request.head.ref, 'merge')))
+      )
     name: ${{ matrix.target }} (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 240
@@ -35,7 +41,7 @@ jobs:
 #            svm_target_platform: linux-aarch64
 #            platform: linux
 #            arch: arm64
-          - runner: macos-12
+          - runner: macos-13
             target: x86_64-apple-darwin
             svm_target_platform: macosx-amd64
             platform: darwin
@@ -57,7 +63,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref_name }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -216,7 +222,7 @@ jobs:
 
       - name: Upload artifact
         if: startsWith(github.ref, 'refs/heads/release/') && matrix.target != 'x86_64-pc-windows-msvc'
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform }}-${{ matrix.arch }}
           path: |
@@ -225,7 +231,7 @@ jobs:
 
       - name: Upload artifact for windows
         if: startsWith(github.ref, 'refs/heads/release/') && matrix.target == 'x86_64-pc-windows-msvc'
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform }}-${{ matrix.arch }}
           path: |
@@ -243,7 +249,7 @@ jobs:
           ref: ${{ github.ref_name }}
 
       - name: Download artifacts
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v4
         with:
           path: ${{ github.workspace }}/documentation/docs/public/releases
 

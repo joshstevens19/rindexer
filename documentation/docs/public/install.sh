@@ -119,7 +119,15 @@ fi
 PROFILE="${HOME}/.profile"  # Default to .profile
 case $SHELL in
     */zsh) PROFILE="${ZDOTDIR:-"$HOME"}/.zshenv" ;;
-    */bash) PROFILE="$HOME/.bashrc" ;;
+    */bash)
+        PROFILE="$HOME/.bashrc"
+        if [ -f "$HOME/.bash_profile" ]; then
+            grep -q 'source ~/.bashrc' "$HOME/.bash_profile" || { 
+                echo -e "# Source .bashrc if it exists\nif [ -f ~/.bashrc ]; then\n    source ~/.bashrc\nfi" >> "$HOME/.bash_profile"; 
+                log "Updated .bash_profile to source .bashrc";
+            }
+        fi
+        ;;
     */fish) PROFILE="$HOME/.config/fish/config.fish" ;;
 esac
 

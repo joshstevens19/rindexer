@@ -190,6 +190,12 @@ impl IndexingEventsProgressState {
 
                     if new_last_synced_block >= event.syncing_to_block {
                         event.progress = 1.0;
+                        info!(
+                            "{} - network {} - {:.2}% progress",
+                            event.info_log,
+                            event.network,
+                            event.progress * 100.0
+                        );
                         event.status = if event.live_indexing {
                             IndexingEventProgressStatus::Live
                         } else {
@@ -197,12 +203,14 @@ impl IndexingEventsProgressState {
                         };
                     }
 
-                    info!(
-                        "{} - network {} - {:.2}% progress",
-                        event.info_log,
-                        event.network,
-                        event.progress * 100.0
-                    );
+                    if event.progress != 1.0 {
+                        info!(
+                            "{} - network {} - {:.2}% progress",
+                            event.info_log,
+                            event.network,
+                            event.progress * 100.0
+                        );
+                    }
                 }
 
                 event.last_synced_block = new_last_synced_block;

@@ -1,6 +1,7 @@
 const express = require('express')
+const cors = require('cors')
 const { postgraphile } = require("postgraphile");
-const {makeWrapResolversPlugin} = require("graphile-utils");
+const { makeWrapResolversPlugin } = require("graphile-utils");
 const PgSimplifyInflectorPlugin = require("@graphile-contrib/pg-simplify-inflector");
 const ConnectionFilterPlugin = require("postgraphile-plugin-connection-filter");
 
@@ -19,7 +20,7 @@ let graphqlTimeout = parseInt(args[4]);
 let filterOnlyOnIndexedColumns = args[5] === "true";
 let disableAdvancedFilters = args[6] === "true";
 
-const byteaToHex =  makeWrapResolversPlugin(
+const byteaToHex = makeWrapResolversPlugin(
     (context) => {
         return context;
     },
@@ -109,6 +110,7 @@ const htmlContent = (endpoint) => `
 `;
 
 const app = express()
+app.use(cors())
 app.use(express.json())
 app.use(postgraphile(connectionString, schemas, options))
 

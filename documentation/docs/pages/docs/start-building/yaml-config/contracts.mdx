@@ -142,12 +142,9 @@ contracts: // [!code focus]
           event_name: Transfer // [!code focus]
 ```
 
-#### Index more then 1 filter
+#### Index more then 1 filter for the contract
 
-To use more then 1 filter at the moment you have to add a new entry in the details, we will merge this into `event_name`
-soon which will turn this into accepting an singular filter details or an array of filter details https://github.com/joshstevens19/rindexer/issues/40.
-
-For now you have to do it like this:
+You can just pass in an array of events names to index on the filter.
 
 ```yaml [rindexer.yaml]
 name: rETHIndexer
@@ -166,10 +163,8 @@ contracts: // [!code focus]
     details:
       - network: ethereum
         filter: // [!code focus]
-          event_name: Transfer // [!code focus]
-      - network: ethereum
-        filter: // [!code focus]
-          event_name: Approval // [!code focus]
+          - event_name: Transfer // [!code focus]
+          - event_name: Approval // [!code focus]
 ```
 
 ### indexed_1, indexed_2, indexed_3
@@ -392,6 +387,35 @@ contracts: // [!code focus]
     abi: ./abis/RocketTokenRETH.abi.json // [!code focus]
 ```
 
+### Many ABIs
+
+If you need to use many ABIs in the single contract you can pass in an array 
+this is useful if you have a contract which has several different implementations ABIs.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+contracts: // [!code focus]
+  - name: RocketPoolETH
+    details:
+      - network: ethereum
+        address: "0xae78736cd615f374d3085123a210448e74fc6393"
+        start_block: 18600000
+        end_block: 18718056
+    abi: 
+      - ./abis/RocketTokenRETH.abi.json // [!code focus]
+      - ./abis/RocketTokenRETH2.abi.json // [!code focus]
+```
+
 ## include_events
 
 The events you wish to include in the indexer.
@@ -519,8 +543,8 @@ contracts: // [!code focus]
       events:
         - Transfer // [!code focus]
       then:
-        - events:
-            - Approval // [!code focus]
+        events:
+          - Approval // [!code focus]
 ```
 
 ### Cross Contract Dependency Events
@@ -567,9 +591,9 @@ contracts: // [!code focus]
       events:
         - Transfer // [!code focus]
       then:
-        - events:
-            - contract_name: WrappedRocketPoolETH // [!code focus]
-              event_name: Approval // [!code focus]
+        events:
+          - contract_name: WrappedRocketPoolETH // [!code focus]
+            event_name: Approval // [!code focus]
 ```
 
 So now `WrappedRocketPoolETH` > `Approval` will not be processed until `RocketPoolETH` > `Transfer` is processed.

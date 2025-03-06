@@ -4,10 +4,9 @@ networks:
   - name: ethereum
     chain_id: 1
     rpc: https://mainnet.gateway.tenderly.co
-  - name: yominet
-    chain_id: 5264468217
-    rpc: https://yominet.rpc.caldera.xyz/http
-    max_block_range: 10000
+  - name: base
+    chain_id: 8453
+    rpc: https://mainnet.base.org
 storage:
   postgres:
     enabled: true
@@ -28,17 +27,37 @@ contracts:
   - name: ERC20
     details:
       - filter:
-            event_name: Transfer
+            - event_name: Transfer
+            - event_name: Approval
         network: ethereum
-        #start_block: 56399431
     abi: ./abis/erc20-abi.json
     generate_csv: true
-  - name: World
+  - name: UniswapV3Pool
     details:
-      - network: yominet
-        address: 0x441e13a25caecad50028e7623a39b91a507bca02
-        start_block: '1077466'
-        end_block: '1650276'
-    abi: ./abis/world.abi.json
+      - network: base
+        filter:
+          event_name: Swap
+        start_block: 19953475
+        end_block: 19953475
+    abi: ./abis/uniswap-v3-pool-abi.json
     include_events:
-      - ComponentValueSet
+      - Swap
+  - name: PlaygroundTypes
+    details:
+      - network: base
+        filter:
+          event_name: Swap
+        start_block: 19953475
+        end_block: 19953475
+    abi: ./abis/playground-types-abi.json
+    include_events:
+      - Swap
+global:
+  contracts:
+    - name: USDT
+      details:
+        - address: 0xdac17f958d2ee523a2206206994597c13d831ec7
+          network: ethereum
+        - address: 0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2
+          network: base
+      abi: ./abis/erc20-abi.json

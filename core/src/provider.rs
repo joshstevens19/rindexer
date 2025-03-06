@@ -10,6 +10,7 @@ use ethers::{
     types::{Block, BlockNumber, H256, U256, U64},
 };
 use reqwest::header::HeaderMap;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::Mutex;
 use url::Url;
@@ -21,6 +22,16 @@ pub struct JsonRpcCachedProvider {
     provider: Arc<Provider<RetryClient<Http>>>,
     cache: Mutex<Option<(Instant, Arc<Block<H256>>)>>,
     pub max_block_range: Option<U64>,
+}
+
+/// TODO: This is a temporary type until we migrate to alloy
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WrappedLog {
+    #[serde(flatten)]
+    pub inner: Log,
+    #[serde(rename = "blockTimestamp")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block_timestamp: Option<U256>,
 }
 
 impl JsonRpcCachedProvider {
@@ -58,8 +69,20 @@ impl JsonRpcCachedProvider {
         self.provider.get_block_number().await
     }
 
-    pub async fn get_logs(&self, filter: &RindexerEventFilter) -> Result<Vec<Log>, ProviderError> {
-        self.provider.get_logs(filter.raw_filter()).await
+    pub async fn get_logs(
+        &self,
+        filter: &RindexerEventFilter,
+    ) -> Result<Vec<WrappedLog>, ProviderError> {
+        // rindexer_info!("get_logs DEBUG [{:?}]", filter.raw_filter());
+        // LEAVING FOR NOW CONTEXT: TEMP FIX TO MAKE SURE FROM BLOCK IS ALWAYS SET
+        // let mut filter = filter.raw_filter().clone();
+        // if filter.get_from_block().is_none() {
+        //     filter = filter.from_block(BlockNumber::Earliest);
+        // }
+        // rindexer_info!("get_logs DEBUG AFTER [{:?}]", filter);
+        let result = self.provider.request("eth_getLogs", [filter.raw_filter()]).await?;
+        // rindexer_info!("get_logs RESULT [{:?}]", result);
+        Ok(result)
     }
 
     pub async fn get_chain_id(&self) -> Result<U256, ProviderError> {

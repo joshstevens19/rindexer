@@ -13,6 +13,9 @@ pub struct StreamEvent {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conditions: Option<Vec<Map<String, Value>>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -33,6 +36,25 @@ pub struct SNSStreamConfig {
 pub struct WebhookStreamConfig {
     pub endpoint: String,
     pub shared_secret: String,
+    pub networks: Vec<String>,
+    pub events: Vec<StreamEvent>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RedisStreamConfig {
+    pub connection_uri: String,
+    #[serde(default = "default_pool_size")]
+    pub max_pool_size: u32,
+    pub streams: Vec<RedisStreamStreamConfig>,
+}
+
+fn default_pool_size() -> u32 {
+    50
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RedisStreamStreamConfig {
+    pub stream_name: String,
     pub networks: Vec<String>,
     pub events: Vec<StreamEvent>,
 }
@@ -146,6 +168,9 @@ pub struct StreamsConfig {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kafka: Option<KafkaStreamConfig>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redis: Option<RedisStreamConfig>,
 }
 
 impl StreamsConfig {
@@ -167,6 +192,8 @@ impl StreamsConfig {
             path.push_str("webhooks_");
         } else if self.kafka.is_some() {
             path.push_str("kafka_");
+        } else if self.redis.is_some() {
+            path.push_str("redis_");
         }
 
         path.trim_end_matches('_').to_string()
@@ -177,12 +204,12 @@ impl StreamsConfig {
         project_path: &Path,
         contract_name: &str,
     ) {
-        let path =
-            self.get_streams_last_synced_block_path() + "/" + contract_name + "/last-synced-blocks";
-
+        let streams_last_synced_block_path = self.get_streams_last_synced_block_path();
+        let base_path = Path::new(&streams_last_synced_block_path);
+        let path = base_path.join(contract_name).join("last-synced-blocks");
         let full_path = project_path.join(path);
 
-        if !Path::new(&full_path).exists() {
+        if !full_path.exists() {
             fs::create_dir_all(&full_path).await.expect("Failed to create directory for stream");
         }
     }

@@ -8,6 +8,8 @@ use ethers::{
     utils::keccak256,
 };
 
+use crate::helpers::u256_to_i256;
+
 pub fn parse_log(event: &Event, log: &Log) -> Option<ParsedLog> {
     let raw_log = RawLog { topics: log.topics.clone(), data: log.data.to_vec() };
 
@@ -32,8 +34,14 @@ fn map_token_to_raw_values(token: &Token) -> Vec<String> {
     match token {
         Token::Address(addr) => vec![format!("{:?}", addr)],
         Token::FixedBytes(bytes) | Token::Bytes(bytes) => vec![format!("{:?}", bytes)],
-        Token::Int(int) => vec![int.to_string()],
-        Token::Uint(uint) => vec![uint.to_string()],
+        Token::Int(int) => {
+            // handle two’s complement
+            let i256_value = u256_to_i256(*int);
+            vec![i256_value.to_string()]
+        }
+        Token::Uint(uint) => {
+            vec![uint.to_string()]
+        }
         Token::Bool(b) => vec![b.to_string()],
         Token::String(s) => vec![s.clone()],
         Token::FixedArray(tokens) | Token::Array(tokens) => {

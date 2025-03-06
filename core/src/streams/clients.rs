@@ -14,11 +14,12 @@ use crate::{
     event::{filter_event_data_by_conditions, EventMessage},
     manifest::stream::{
         KafkaStreamConfig, KafkaStreamQueueConfig, RabbitMQStreamConfig, RabbitMQStreamQueueConfig,
-        SNSStreamTopicConfig, StreamEvent, StreamsConfig, WebhookStreamConfig,
+        RedisStreamConfig, RedisStreamStreamConfig, SNSStreamTopicConfig, StreamEvent,
+        StreamsConfig, WebhookStreamConfig,
     },
     streams::{
         kafka::{Kafka, KafkaError},
-        RabbitMQ, RabbitMQError, Webhook, WebhookError, SNS,
+        RabbitMQ, RabbitMQError, Redis, RedisError, Webhook, WebhookError, SNS,
     },
 };
 
@@ -48,6 +49,9 @@ pub enum StreamError {
     #[error("Kafka could not publish: {0}")]
     KafkaCouldNotPublish(#[from] KafkaError),
 
+    #[error("Redis could not publish: {0}")]
+    RedisCouldNotPublish(#[from] RedisError),
+
     #[error("Task failed: {0}")]
     JoinError(JoinError),
 }
@@ -68,11 +72,17 @@ pub struct KafkaStream {
     client: Arc<Kafka>,
 }
 
+pub struct RedisStream {
+    config: RedisStreamConfig,
+    client: Arc<Redis>,
+}
+
 pub struct StreamsClients {
     sns: Option<SNSStream>,
     webhook: Option<WebhookStream>,
     rabbitmq: Option<RabbitMQStream>,
     kafka: Option<KafkaStream>,
+    redis: Option<RedisStream>,
 }
 
 impl StreamsClients {
@@ -113,14 +123,28 @@ impl StreamsClients {
             None
         };
 
-        Self { sns, webhook, rabbitmq, kafka }
+        let redis = if let Some(config) = stream_config.redis.as_ref() {
+            Some(RedisStream {
+                config: config.clone(),
+                client: Arc::new(
+                    Redis::new(config)
+                        .await
+                        .unwrap_or_else(|e| panic!("Failed to create Redis client: {:?}", e)),
+                ),
+            })
+        } else {
+            None
+        };
+
+        Self { sns, webhook, rabbitmq, kafka, redis }
     }
 
     fn has_any_streams(&self) -> bool {
         self.sns.is_some() ||
             self.webhook.is_some() ||
             self.rabbitmq.is_some() ||
-            self.kafka.is_some()
+            self.kafka.is_some() ||
+            self.redis.is_some()
     }
 
     fn chunk_data(&self, data_array: &Vec<Value>) -> Vec<Vec<Value>> {
@@ -149,20 +173,42 @@ impl StreamsClients {
         chunks
     }
 
-    fn create_chunk_message_raw(&self, event_message: &EventMessage, chunk: &[Value]) -> String {
+    /// Gets event name, which may be an optional alias, or the contract's event name.
+    fn get_event_name(&self, events: &Vec<StreamEvent>, event_message: &EventMessage) -> String {
+        let alias_name = events
+            .iter()
+            .find(|n| n.event_name == event_message.event_name)
+            .and_then(|n| n.alias.clone());
+
+        alias_name.unwrap_or_else(|| event_message.event_name.clone())
+    }
+
+    fn create_chunk_message_raw(
+        &self,
+        events: &Vec<StreamEvent>,
+        event_message: &EventMessage,
+        chunk: &[Value],
+    ) -> String {
         let chunk_message = EventMessage {
-            event_name: event_message.event_name.clone(),
+            event_name: self.get_event_name(events, event_message),
             event_data: Value::Array(chunk.to_vec()),
+            event_signature_hash: event_message.event_signature_hash.clone(),
             network: event_message.network.clone(),
         };
 
         serde_json::to_string(&chunk_message).unwrap()
     }
 
-    fn create_chunk_message_json(&self, event_message: &EventMessage, chunk: &[Value]) -> Value {
+    fn create_chunk_message_json(
+        &self,
+        events: &Vec<StreamEvent>,
+        event_message: &EventMessage,
+        chunk: &[Value],
+    ) -> Value {
         let chunk_message = EventMessage {
-            event_name: event_message.event_name.clone(),
+            event_name: self.get_event_name(events, event_message),
             event_data: Value::Array(chunk.to_vec()),
+            event_signature_hash: event_message.event_signature_hash.clone(),
             network: event_message.network.clone(),
         };
 
@@ -231,7 +277,8 @@ impl StreamsClients {
                     self.generate_publish_message_id(id, index, &config.prefix_id);
                 let client = Arc::clone(&client);
                 let topic_arn = config.topic_arn.clone();
-                let publish_message = self.create_chunk_message_raw(event_message, &filtered_chunk);
+                let publish_message =
+                    self.create_chunk_message_raw(&config.events, &event_message, &filtered_chunk);
                 task::spawn(async move {
                     let _ =
                         client.publish(&publish_message_id, &topic_arn, &publish_message).await?;
@@ -267,7 +314,7 @@ impl StreamsClients {
                 let shared_secret = config.shared_secret.clone();
                 let client = Arc::clone(&client);
                 let publish_message =
-                    self.create_chunk_message_json(event_message, &filtered_chunk);
+                    self.create_chunk_message_json(&config.events, event_message, &filtered_chunk);
                 task::spawn(async move {
                     client
                         .publish(&publish_message_id, &endpoint, &shared_secret, &publish_message)
@@ -305,7 +352,7 @@ impl StreamsClients {
                 let exchange_type = config.exchange_type.clone();
                 let routing_key = config.routing_key.clone();
                 let publish_message =
-                    self.create_chunk_message_json(event_message, &filtered_chunk);
+                    self.create_chunk_message_json(&config.events, event_message, &filtered_chunk);
 
                 task::spawn(async move {
                     client
@@ -347,11 +394,44 @@ impl StreamsClients {
                 let exchange = config.topic.clone();
                 let routing_key = config.key.clone();
                 let publish_message =
-                    self.create_chunk_message_json(event_message, &filtered_chunk);
+                    self.create_chunk_message_json(&config.events, event_message, &filtered_chunk);
                 task::spawn(async move {
                     client
                         .publish(&publish_message_id, &exchange, &routing_key, &publish_message)
                         .await?;
+                    Ok(filtered_chunk.len())
+                })
+            })
+            .collect();
+        tasks
+    }
+
+    fn redis_stream_tasks(
+        &self,
+        config: &RedisStreamStreamConfig,
+        client: Arc<Redis>,
+        id: &str,
+        event_message: &EventMessage,
+        chunks: Arc<Vec<Vec<Value>>>,
+    ) -> StreamPublishes {
+        let tasks: Vec<_> = chunks
+            .iter()
+            .enumerate()
+            .map(|(index, chunk)| {
+                let filtered_chunk: Vec<Value> = self.filter_chunk_event_data_by_conditions(
+                    &config.events,
+                    event_message,
+                    chunk,
+                );
+
+                let publish_message_id = self.generate_publish_message_id(id, index, &None);
+                let client = Arc::clone(&client);
+                let stream_name = config.stream_name.clone();
+                let publish_message =
+                    self.create_chunk_message_json(&config.events, event_message, &filtered_chunk);
+
+                task::spawn(async move {
+                    client.publish(&publish_message_id, &stream_name, &publish_message).await?;
                     Ok(filtered_chunk.len())
                 })
             })
@@ -430,6 +510,22 @@ impl StreamsClients {
                         streams.push(self.kafka_stream_tasks(
                             config,
                             Arc::clone(&kafka.client),
+                            &id,
+                            event_message,
+                            Arc::clone(&chunks),
+                        ));
+                    }
+                }
+            }
+
+            if let Some(redis) = &self.redis {
+                for config in &redis.config.streams {
+                    if config.events.iter().any(|e| e.event_name == event_message.event_name) &&
+                        config.networks.contains(&event_message.network)
+                    {
+                        streams.push(self.redis_stream_tasks(
+                            config,
+                            Arc::clone(&redis.client),
                             &id,
                             event_message,
                             Arc::clone(&chunks),

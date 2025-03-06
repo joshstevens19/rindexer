@@ -26,22 +26,33 @@ impl SNS {
             }
         }
 
-        // Set explicit credentials only if both access_key and secret_key are provided
-        if let (Some(access_key), Some(secret_key)) = (&config.access_key, &config.secret_key) {
+        // Define region_provider and credentials_provider
+        let region_provider = Region::new(config.region.clone().unwrap_or_default());
+        let credentials_provider = if let (Some(access_key), Some(secret_key)) = (&config.access_key, &config.secret_key) {
             if !access_key.trim().is_empty() && !secret_key.trim().is_empty() {
-                let credentials_provider = Credentials::new(
+                Some(Credentials::new(
                     access_key,
                     secret_key,
                     config.session_token.clone(),
                     None,
                     "manual",
-                );
-                aws_config_builder = aws_config_builder.credentials_provider(credentials_provider);
+                ))
+            } else {
+                None
             }
+        } else {
+            None
+        };
+
+        // Use the credentials_provider if available, otherwise use a default or handle the None case
+        if let Some(credentials) = credentials_provider {
+            aws_config_builder = aws_config_builder.credentials_provider(credentials);
         }
 
-        // Load the configuration
-        let mut sdk_config = aws_config_builder.load().await;
+        let mut sdk_config = aws_config_builder
+            .region(region_provider)
+            .load()
+            .await;
 
         // Conditionally set endpoint if it exists
         if let Some(endpoint_url) = &config.endpoint_url {

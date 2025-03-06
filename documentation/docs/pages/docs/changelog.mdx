@@ -17,6 +17,234 @@
 
 all release branches are deployed through `release/VERSION_NUMBER` branches
 
+## 0.14.0-beta - 6th March 2025
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.14.0
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.14.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.14.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.14.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.14.0/rindexer_win32-amd64.zip
+
+### Features
+-------------------------------------------------
+- feat: add support for alias in streams
+
+## 0.13.0-beta - 20th Feb 2025
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.13.0
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.13.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.13.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.13.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.13.0/rindexer_win32-amd64.zip
+
+### Features
+-------------------------------------------------
+- feat: add a `U64Nullable` type to handle zero values
+- feat: support custom AWS endpoints
+- feat: forward event signature for all events streamed
+
+## 0.12.0-beta - 1st Jan 2025
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.12.0
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.12.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.12.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.12.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.12.0/rindexer_win32-amd64.zip
+
+### Features
+-------------------------------------------------
+- feat: Redis Streams
+
+### Bug fixes
+-------------------------------------------------
+- fix: issue two's complement on large u256 values
+- fix: resolve building the project on a PR branch
+- fix: resolve numeric type parsing issues on out of range rust decimals
+
+## 0.11.3-beta - 28th December 2024
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.11.3
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.11.3/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.11.3/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.11.3/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.11.3/rindexer_win32-amd64.zip
+
+### Bug fixes
+-------------------------------------------------
+- fix: index throws on multiple relationships with same input name
+
+## 0.11.2-beta - 19th December 2024
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.11.2
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.11.2/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.11.2/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.11.2/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.11.2/rindexer_win32-amd64.zip
+
+### Bug fixes
+-------------------------------------------------
+- fix: cors when accessing rindexer graphql api from different host
+
+### Breaking changes
+-------------------------------------------------
+- rindexerdown and then `curl -L https://rindexer.xyz/install.sh | bash` to reinstall rindexer
+
+## 0.11.1-beta - 10th December 2024
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.11.1
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.11.1/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.11.1/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.11.1/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.11.1/rindexer_win32-amd64.zip
+
+### Bug fixes
+-------------------------------------------------
+- fix: resolve bad typings generated for decoding if only 1 parameter in rust project
+
+## 0.11.0-beta - 7th December 2024
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.11.0
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.11.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.11.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.11.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.11.0/rindexer_win32-amd64.zip
+
+### Features
+-------------------------------------------------
+- feat: handle graceful shutdowns
+
+### Bug fixes
+-------------------------------------------------
+- fix: resolve race condition of dependency blocking indexing
+- fix: add new type for EthereumSqlTypeWrapper to handle VARCHAR strings
+- fix: error on startup not +1 onto the next block causing duplicates logs sometimes
+- fix: issue with it working on windows
+
+## 0.10.0-beta - 15th October 2024
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.10.0
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.10.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.10.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.10.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.10.0/rindexer_win32-amd64.zip
+
+### Features
+-------------------------------------------------
+- feat: expose an insert_bulk new postgres function to make inserting bulk data easier
+- feat: expose new ethereum sql type wrappers for bytes types#
+- feat: expose postgres ToSql trait
+- feat: support with_transaction in postgres client
+- feat: get the block timestamp from the RPC call (its an option as not all providers expose it)
+- feat: allow you to override environment file path
+
+### Bug fixes
+-------------------------------------------------
+- fix: dependency events not being applied to the correct contract
+- fix: resolve defining environment variables in contract address fields in the yaml
+- fix: resolve topic_id packing issues
+
+## 0.9.0-beta - 19th September 2024
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.9.0
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.9.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.9.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.9.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.9.0/rindexer_win32-amd64.zip
+
+### Features
+-------------------------------------------------
+- feat: allow some other attributes on the generated event typings
+
+### Bug fixes
+-------------------------------------------------
+- fix: handle signed integers throughout rindexer
+- fix: generating global types would repeat the same code on a regenerate causing issues
+
+### Breaking changes
+-------------------------------------------------
+- breaking: rindexer had an parsing error meaning stuff like `UniswapV3Pool` would parse to uniswap_v_3_pool. This caused
+some other issues with mapping to object names so now it has been fixed and in the example above it will be `uniswap_v3_pool`,
+if you have any running indexers with these buggy names in your db you just need to rename them and same with the `rindexer.internal` tables which will
+have these odd names as well.
+
+## 0.8.0-beta - 17th September 2024
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.8.0
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.8.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.8.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.8.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.8.0/rindexer_win32-amd64.zip
+
+### Features
+-------------------------------------------------
+- feat: info log if no new blocks are published in the last 20 seconds to avoid people thinking rindexer is stuck
+
+### Bug fixes
+-------------------------------------------------
+- fix: pascal case still has some edge cases on parsing
+- fix: allow #![allow(non_snake_case)] in indexer code
+- fix: still generate internal tables for rindexer even if creating new event tables is disabled
+
+## 0.7.1-beta - 17th September 2024
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.7.1
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.7.1/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.7.1/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.7.1/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.7.1/rindexer_win32-amd64.zip
+
+### Bug fixes
+-------------------------------------------------
+- fix: throw error if contract names are not unique
+- fix: allow non camel case types in generated code
+- fix: pascal case not parsing capitals full words correctly
+
+## 0.7.0-beta - 16th September 2024
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.7.0
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.7.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.7.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.7.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.7.0/rindexer_win32-amd64.zip
+
+### Features
+-------------------------------------------------
+- feat: support multiple abis in a single contract
+- feat: allow array of filters in the same contract without repeating
+
+### Bug fixes
+-------------------------------------------------
+- fix: running rust project should only start indexer or graphql passed on args passed
+- fix: resolve issue of paths in generated typings
+- fix: when running rindexer codegen typings csv folder created
+- fix: underscores in events within a rust project maps it wrong in typings
+- fix: share a postgres instance across rust project
+
+## 0.6.2-beta - 24th August 2024
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.6.2
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.6.2/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.6.2/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.6.2/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.6.2/rindexer_win32-amd64.zip
+
+### Bug fixes
+-------------------------------------------------
+- fix: Use the prefix when generating abi name properties.
+
 ## 0.6.1-beta - 15th August 2024
 
 github branch - https://github.com/joshstevens19/rindexer/tree/release/0.6.1
@@ -44,7 +272,7 @@ github branch - https://github.com/joshstevens19/rindexer/tree/release/0.6.0
 ### Features
 -------------------------------------------------
 
-feat: add a disable_logs_bloom_checks field to the network section of the [YAML configuration file](https://rindexer.xyz/docs/start-building/yaml-config/networks#disable_logs_bloom_checks)
+- feat: add a disable_logs_bloom_checks field to the network section of the [YAML configuration file](https://rindexer.xyz/docs/start-building/yaml-config/networks#disable_logs_bloom_checks)
 
 
 ## 0.5.1-beta - 7th August 2024

@@ -1,4 +1,4 @@
-use std::{env, time::Duration};
+use std::{env, future::Future, time::Duration};
 
 use bb8::{Pool, RunError};
 use bb8_postgres::PostgresConnectionManager;
@@ -8,12 +8,10 @@ use futures::pin_mut;
 use native_tls::TlsConnector;
 use postgres_native_tls::MakeTlsConnector;
 use tokio::{task, time::timeout};
+pub use tokio_postgres::types::{ToSql, Type as PgType};
 use tokio_postgres::{
-    binary_copy::BinaryCopyInWriter,
-    config::SslMode,
-    types::{ToSql, Type as PgType},
-    Config, CopyInSink, Error as PgError, Row, Statement, ToStatement,
-    Transaction as PgTransaction,
+    binary_copy::BinaryCopyInWriter, config::SslMode, Config, CopyInSink, Error as PgError, Row,
+    Statement, ToStatement, Transaction as PgTransaction,
 };
 use tracing::{debug, error};
 
@@ -57,8 +55,25 @@ pub enum PostgresError {
     ConnectionPoolError(#[from] RunError<tokio_postgres::Error>),
 }
 
-pub struct PostgresTransaction {
-    pub transaction: PgTransaction<'static>,
+pub struct PostgresTransaction<'a> {
+    pub transaction: PgTransaction<'a>,
+}
+impl<'a> PostgresTransaction<'a> {
+    pub async fn execute(
+        &mut self,
+        query: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<u64, PostgresError> {
+        self.transaction.execute(query, params).await.map_err(PostgresError::PgError)
+    }
+
+    pub async fn commit(self) -> Result<(), PostgresError> {
+        self.transaction.commit().await.map_err(PostgresError::PgError)
+    }
+
+    pub async fn rollback(self) -> Result<(), PostgresError> {
+        self.transaction.rollback().await.map_err(PostgresError::PgError)
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -167,14 +182,27 @@ impl PostgresClient {
         conn.prepare_typed(query, parameter_types).await.map_err(PostgresError::PgError)
     }
 
-    pub async fn transaction(&self) -> Result<PostgresTransaction, PostgresError> {
-        let mut conn = self.pool.get().await?;
+    pub async fn with_transaction<F, Fut, T, Q>(
+        &self,
+        query: &Q,
+        params: &[&(dyn ToSql + Sync)],
+        f: F,
+    ) -> Result<T, PostgresError>
+    where
+        F: FnOnce(u64) -> Fut + Send,
+        Fut: Future<Output = Result<T, PostgresError>> + Send,
+        Q: ?Sized + ToStatement,
+    {
+        let mut conn = self.pool.get().await.map_err(PostgresError::ConnectionPoolError)?;
         let transaction = conn.transaction().await.map_err(PostgresError::PgError)?;
 
-        // Wrap the transaction in a static lifetime
-        let boxed_transaction: Box<PgTransaction<'static>> =
-            unsafe { std::mem::transmute(Box::new(transaction)) };
-        Ok(PostgresTransaction { transaction: *boxed_transaction })
+        let count = transaction.execute(query, params).await.map_err(PostgresError::PgError)?;
+
+        let result = f(count).await?;
+
+        transaction.commit().await.map_err(PostgresError::PgError)?;
+
+        Ok(result)
     }
 
     pub async fn query<T>(
@@ -291,6 +319,22 @@ impl PostgresClient {
     ) -> Result<u64, PostgresError> {
         let total_columns = column_names.len();
 
+        // Good for debugging
+        // if table_name == "sponsorship.rate_limit" {
+        //     for (i, row) in bulk_data.iter().enumerate() {
+        //         for (j, param) in row.iter().enumerate() {
+        //             info!(
+        //                 "Row {} Column {} ({:?}) -> Value: {:?}, Type: {:?}",
+        //                 i,
+        //                 j,
+        //                 column_names.get(j),
+        //                 param,
+        //                 param.to_type()
+        //             );
+        //         }
+        //     }
+        // }
+
         let mut query = format!(
             "INSERT INTO {} ({}) VALUES ",
             table_name,
@@ -313,6 +357,43 @@ impl PostgresClient {
             }
         }
 
+        // Good for debugging
+        // if table_name == "sponsorship.rate_limit" {
+        //     info!("query: {:?}", query);
+        //     info!(
+        //         "params original types: {:?}",
+        //         bulk_data.iter().flat_map(|row| row.iter().map(|p|
+        // p.to_type())).collect::<Vec<_>>()     );
+        // }
+
         self.execute(&query, &params).await
+    }
+
+    /// This will use COPY to insert the data into the database
+    /// or use the normal bulk inserts if the data is not large enough to
+    /// need a COPY. This uses `bulk_insert` and `bulk_insert_via_copy` under the hood
+    pub async fn insert_bulk(
+        &self,
+        table_name: &str,
+        columns: &[String],
+        postgres_bulk_data: &[Vec<EthereumSqlTypeWrapper>],
+    ) -> Result<(), String> {
+        if postgres_bulk_data.is_empty() {
+            return Ok(());
+        }
+
+        if postgres_bulk_data.len() > 100 {
+            let column_types: Vec<PgType> =
+                postgres_bulk_data[0].iter().map(|param| param.to_type()).collect();
+
+            self.bulk_insert_via_copy(table_name, columns, &column_types, postgres_bulk_data)
+                .await
+                .map_err(|e| e.to_string())
+        } else {
+            self.bulk_insert(table_name, columns, postgres_bulk_data)
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        }
     }
 }

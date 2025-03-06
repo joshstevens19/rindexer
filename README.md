@@ -54,7 +54,8 @@ rindexer and all the commands available to you.
 
 There's a pre-built docker image which can be used to run `rindexer` inside your dockerized infra:
 
-[`ghcr.io/joshstevens19/rindexer`](https://github.com/users/joshstevens19/packages/container/package/rindexer)
+- Running GraphQL and Indexer: [`ghcr.io/joshstevens19/rindexer-bundled`](https://github.com/users/joshstevens19/packages/container/package/rindexer-bundled)
+- Running Indexer only: [`ghcr.io/joshstevens19/rindexer`](https://github.com/users/joshstevens19/packages/container/package/rindexer)
 
 ### Create new project
 To create a new `no-code` project in your current directory, you can run the following:
@@ -75,6 +76,15 @@ This will start all local indexing and if you have enabled the graphql endpoint,
 
 http://localhost:3001
 
+## Helm Chart
+
+We also provide a Helm chart for deploying `rindexer` in Kubernetes environments. The Helm chart simplifies the deployment process and allows for easy customization of the deployment parameters.
+
+You can find the Helm chart in the following directory:
+
+- **[rindexer Helm Chart](https://github.com/joshstevens19/rindexer/tree/master/helm/rindexer)**
+
+To use the Helm chart, follow the instructions in the [Helm Chart README](https://github.com/joshstevens19/rindexer/tree/master/helm/rindexer/README.md) to deploy `rindexer` to your Kubernetes cluster.
 
 ## What can I use rindexer for?
 
@@ -86,6 +96,13 @@ http://localhost:3001
 - Quick proof-of-concept projects
 - Enterprise standard indexing solutions for projects
 - Much more...
+
+## Crate.io
+
+rindexer rust project building is available on crate.io but we strongly recommend using the git repository to install it
+and use it in your project. To use the CLI please install it using the above instructions.
+
+https://crates.io/crates/rindexer
 
 ## What networks do you support?
 

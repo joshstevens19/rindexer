@@ -1,6 +1,9 @@
-use std::{fs, iter::Map, path::Path};
+use std::{collections::HashSet, fs, path::Path};
 
-use ethers::{types::H256, utils::keccak256};
+use ethers::{
+    types::{ValueOrArray, H256},
+    utils::keccak256,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -9,8 +12,8 @@ use crate::{
         sql_type_wrapper::{solidity_type_to_ethereum_sql_type_wrapper, EthereumSqlTypeWrapper},
     },
     event::contract_setup::IndexingContractSetup,
-    helpers::{camel_to_snake, get_full_path},
-    manifest::contract::Contract,
+    helpers::camel_to_snake,
+    manifest::contract::{Contract, ParseAbiError},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,10 +90,14 @@ impl ABIInput {
             .iter()
             .flat_map(|input| {
                 if let Some(components) = &input.components {
+                    let new_prefix = match prefix {
+                        Some(p) => format!("{}_{}", p, camel_to_snake(&input.name)),
+                        None => camel_to_snake(&input.name),
+                    };
                     ABIInput::generate_abi_name_properties(
                         components,
                         properties_type,
-                        Some(&camel_to_snake(&input.name)),
+                        Some(&new_prefix),
                     )
                 } else {
                     match properties_type {
@@ -164,16 +171,44 @@ pub enum ReadAbiError {
 
     #[error("Could not read ABI JSON: {0}")]
     CouldNotReadAbiJson(#[from] serde_json::Error),
+
+    #[error("{0}")]
+    ParseAbiError(#[from] ParseAbiError),
 }
 
 impl ABIItem {
     pub fn format_event_signature(&self) -> Result<String, ParamTypeError> {
-        let formatted_inputs = self
+        let name = &self.name;
+        let params = self
             .inputs
             .iter()
-            .map(|component| component.format_param_type())
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(formatted_inputs.join(","))
+            .map(Self::format_param_type)
+            .collect::<Result<Vec<_>, _>>()?
+            .join(",");
+
+        Ok(format!("{}({})", name, params))
+    }
+
+    fn format_param_type(input: &ABIInput) -> Result<String, ParamTypeError> {
+        let base_type = input.type_.split('[').next().unwrap_or(&input.type_);
+        let array_suffix = input.type_.strip_prefix(base_type).unwrap_or("");
+
+        let type_str = match base_type {
+            "tuple" => {
+                let inner = input
+                    .components
+                    .as_ref()
+                    .ok_or(ParamTypeError::MissingComponents)?
+                    .iter()
+                    .map(Self::format_param_type)
+                    .collect::<Result<Vec<_>, _>>()?
+                    .join(",");
+                format!("({})", inner)
+            }
+            _ => base_type.to_string(),
+        };
+
+        Ok(format!("{}{}", type_str, array_suffix))
     }
 
     pub fn extract_event_names_and_signatures_from_abi(
@@ -183,6 +218,7 @@ impl ABIItem {
         for item in abi_json.into_iter() {
             if item.type_ == "event" {
                 let signature = item.format_event_signature()?;
+                // println!("signature {}", signature);
                 events.push(EventInfo::new(item, signature));
             }
         }
@@ -193,9 +229,7 @@ impl ABIItem {
         project_path: &Path,
         contract: &Contract,
     ) -> Result<Vec<ABIItem>, ReadAbiError> {
-        let full_path = get_full_path(project_path, &contract.abi)
-            .map_err(|_| ReadAbiError::AbiPathDoesNotExist(contract.abi.clone()))?;
-        let abi_str = fs::read_to_string(full_path)?;
+        let abi_str = contract.parse_abi(project_path)?;
         let abi_items: Vec<ABIItem> = serde_json::from_str(&abi_str)?;
 
         let filtered_abi_items = match &contract.include_events {
@@ -216,16 +250,20 @@ impl ABIItem {
     ) -> Result<Vec<ABIItem>, ReadAbiError> {
         let mut abi_items = ABIItem::read_abi_items(project_path, contract)?;
         if is_filter {
-            let filter_event_names: Vec<String> = contract
+            let filter_event_names: HashSet<String> = contract
                 .details
                 .iter()
                 .filter_map(|detail| {
                     if let IndexingContractSetup::Filter(filter) = &detail.indexing_contract_setup()
                     {
-                        Some(filter.event_name.clone())
+                        Some(filter.events.clone())
                     } else {
                         None
                     }
+                })
+                .flat_map(|events| match events {
+                    ValueOrArray::Value(event) => vec![event.clone()],
+                    ValueOrArray::Array(event_array) => event_array.clone(),
                 })
                 .collect();
 
@@ -263,13 +301,12 @@ impl EventInfo {
     }
 
     pub fn topic_id(&self) -> H256 {
-        let event_signature = format!("{}({})", self.name, self.signature);
+        let event_signature = self.signature.clone();
         H256::from_slice(&keccak256(event_signature))
     }
 
     pub fn topic_id_as_hex_string(&self) -> String {
-        let event_signature = format!("{}({})", self.name, self.signature);
-        Map::collect(keccak256(event_signature).iter().map(|byte| format!("{:02x}", byte)))
+        format!("{:x}", self.topic_id())
     }
 
     pub fn struct_result(&self) -> &str {
@@ -308,7 +345,7 @@ impl EventInfo {
         csv_path: &str,
     ) -> Result<String, CreateCsvFileForEvent> {
         let csv_file_name = format!("{}-{}.csv", contract.name, self.name).to_lowercase();
-        let csv_folder = project_path.join(format!("{}/{}", csv_path, contract.name));
+        let csv_folder = project_path.join(csv_path).join(&contract.name);
 
         // Create directory if it does not exist.
         if let Err(e) = fs::create_dir_all(&csv_folder) {
@@ -320,7 +357,7 @@ impl EventInfo {
             return Err(CreateCsvFileForEvent::CreateDirFailed(e));
         }
 
-        Ok(format!("{}/{}", csv_folder.display(), csv_file_name))
+        Ok(csv_folder.join(csv_file_name).display().to_string())
     }
 }
 

@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::path::{Path, PathBuf};
 
 use ethers::types::ValueOrArray;
 use serde_json::Value;
@@ -11,9 +11,9 @@ use crate::{
     database::postgres::generate::{
         generate_column_names_only_with_base_properties, generate_event_table_full_name,
     },
-    helpers::{camel_to_snake, camel_to_snake_advanced, get_full_path},
+    helpers::{camel_to_snake, camel_to_snake_advanced, to_pascal_case},
     manifest::{
-        contract::{Contract, ContractDetails},
+        contract::{Contract, ContractDetails, ParseAbiError},
         storage::{CsvDetails, Storage},
     },
     types::code::Code,
@@ -42,8 +42,8 @@ pub enum GenerateStructsError {
     #[error("Invalid ABI JSON format")]
     InvalidAbiJsonFormat,
 
-    #[error("Could not find ABI path: {0}")]
-    AbiPathDoesNotExist(String),
+    #[error("{0}")]
+    ParseAbiError(#[from] ParseAbiError),
 }
 
 fn generate_structs(
@@ -51,9 +51,8 @@ fn generate_structs(
     contract: &Contract,
 ) -> Result<Code, GenerateStructsError> {
     // TODO - this could be shared with `get_abi_items`
-    let full_path = get_full_path(project_path, &contract.abi)
-        .map_err(|_| GenerateStructsError::AbiPathDoesNotExist(contract.abi.clone()))?;
-    let abi_str = fs::read_to_string(full_path)?;
+    let abi_str = contract.parse_abi(project_path)?;
+
     let abi_json: Value = serde_json::from_str(&abi_str)?;
 
     let mut structs = Code::blank();
@@ -66,7 +65,7 @@ fn generate_structs(
 
             structs.push_str(&Code::new(format!(
                 r#"
-                    pub type {struct_data} = {abigen_mod_name}::{event_name}Filter;
+                    pub type {struct_data} = {abigen_mod_name}::{pascal_event_name}Filter;
 
                     #[derive(Debug, Clone)]
                     pub struct {struct_result} {{
@@ -77,7 +76,7 @@ fn generate_structs(
                 struct_result = struct_result,
                 struct_data = struct_data,
                 abigen_mod_name = abigen_contract_mod_name(contract),
-                event_name = event_name
+                pascal_event_name = to_pascal_case(event_name)
             )));
         }
     }
@@ -157,8 +156,11 @@ fn generate_decoder_match_arms_code(event_type_name: &str, event_info: &[EventIn
                 r#"
                     {event_type_name}::{event_info_name}(_) => {{
                         Arc::new(move |topics: Vec<H256>, data: Bytes| {{
-                            match decoder_contract.decode_event::<{event_info_name}Data>("{event_info_name}", topics, data) {{
-                                Ok(filter) => Arc::new(filter) as Arc<dyn Any + Send + Sync>,
+                            match {event_info_name}Data::decode_log(&ethers::core::abi::RawLog {{ topics, data: data.to_vec() }}) {{
+                                Ok(event) => {{
+                                    let result: {event_info_name}Data = event;
+                                    Arc::new(result) as Arc<dyn Any + Send + Sync>
+                                }}
                                 Err(error) => Arc::new(error) as Arc<dyn Any + Send + Sync>,
                             }}
                         }})
@@ -178,30 +180,38 @@ fn generate_csv_instance(
     event_info: &EventInfo,
     csv: &Option<CsvDetails>,
 ) -> Result<Code, CreateCsvFileForEvent> {
-    let csv_path = csv.as_ref().map_or("./generated_csv", |c| &c.path);
+    let mut csv_path = csv.as_ref().map_or(PathBuf::from("generated_csv"), |c| {
+        PathBuf::from(c.path.strip_prefix("./").unwrap())
+    });
+
+    csv_path = project_path.join(csv_path);
 
     if !contract.generate_csv.unwrap_or(true) {
         return Ok(Code::new(format!(
-            r#"let csv = AsyncCsvAppender::new("{csv_path}");"#,
-            csv_path = csv_path,
+            r#"let csv = AsyncCsvAppender::new(r"{}");"#,
+            csv_path.display(),
         )));
     }
 
-    let csv_path = event_info.create_csv_file_for_event(project_path, contract, csv_path)?;
+    let csv_path_str = csv_path.to_str().expect("Failed to convert csv path to string");
+    let csv_path = event_info.create_csv_file_for_event(project_path, contract, csv_path_str)?;
     let headers: Vec<String> =
         event_info.csv_headers_for_event().iter().map(|h| format!("\"{}\"", h)).collect();
 
+    let headers_with_into: Vec<String> = headers.iter().map(|h| format!("{}.into()", h)).collect();
+
     Ok(Code::new(format!(
         r#"
-        let csv = AsyncCsvAppender::new("{csv_path}");
-        if !Path::new("{csv_path}").exists() {{
-            csv.append_header(vec![{headers}.into()])
+        let csv = AsyncCsvAppender::new(r"{}");
+        if !Path::new(r"{}").exists() {{
+            csv.append_header(vec![{}].into())
                 .await
                 .expect("Failed to write CSV header");
         }}
     "#,
-        csv_path = csv_path,
-        headers = headers.join(".into(), ")
+        csv_path,
+        csv_path,
+        headers_with_into.join(", ")
     )))
 }
 
@@ -218,12 +228,17 @@ fn generate_event_callback_structs_code(
     storage: &Storage,
 ) -> Result<Code, GenerateEventCallbackStructsError> {
     let databases_enabled = storage.postgres_enabled();
+    let csv_enabled = storage.csv_enabled();
     let is_filter = contract.is_filter();
 
     let mut parts = Vec::new();
 
     for info in event_info {
-        let csv_generator = generate_csv_instance(project_path, contract, info, &storage.csv)?;
+        let csv_generator = if csv_enabled {
+            generate_csv_instance(project_path, contract, info, &storage.csv)?
+        } else {
+            Code::blank()
+        };
 
         let part = format!(
             r#"
@@ -271,12 +286,12 @@ fn generate_event_callback_structs_code(
                     Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
                 {{
                     {csv_generator}
-            
+
                     Self {{
                         callback: {lower_name}_handler(closure),
                         context: Arc::new(EventContext {{
                             {database}
-                            csv: Arc::new(csv),
+                            {csv}
                             extensions: Arc::new(extensions),
                         }}),
                     }}
@@ -313,10 +328,11 @@ fn generate_event_callback_structs_code(
             struct_result = info.struct_result(),
             struct_data = info.struct_data(),
             database = if databases_enabled {
-                r#"database: Arc::new(PostgresClient::new().await.expect("Failed to connect to Postgres")),"#
+                "database: get_or_init_postgres_client().await,"
             } else {
                 ""
             },
+            csv = if csv_enabled { r#"csv: Arc::new(csv),"# } else { "" },
             csv_generator = csv_generator,
             event_callback_events_len =
                 if !is_filter { "let events_len = events.len();" } else { "" },
@@ -417,7 +433,7 @@ fn build_pub_contract_fn(
             }
             Some(value) => match value {
                 ValueOrArray::Value(address) => {
-                    let address = format!("{}", address);
+                    let address = format!("{:?}", address);
                     Code::new(format!(
                         r#"pub fn {contract_name}_contract(network: &str) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> {{
                                 let address: Address = "{address}".parse().expect("Invalid address");
@@ -464,7 +480,7 @@ fn generate_event_bindings_code(
 ) -> Result<Code, GenerateEventBindingCodeError> {
     let event_type_name = generate_event_type_name(&contract.name);
     let code = Code::new(format!(
-        r#"
+        r#"#![allow(non_camel_case_types, clippy::enum_variant_names, clippy::too_many_arguments, clippy::upper_case_acronyms, clippy::type_complexity, dead_code)]
         /// THIS IS A GENERATED FILE. DO NOT MODIFY MANUALLY.
         ///
         /// This file was auto generated by rindexer - https://github.com/joshstevens19/rindexer.
@@ -476,10 +492,10 @@ fn generate_event_bindings_code(
         use std::future::Future;
         use std::pin::Pin;
         use std::path::{{Path, PathBuf}};
-        use ethers::{{providers::{{Http, Provider, RetryClient}}, abi::Address, types::{{Bytes, H256}}}};
+        use ethers::{{providers::{{Http, Provider, RetryClient}}, abi::Address, contract::EthLogDecode, types::{{Bytes, H256}}}};
         use rindexer::{{
             async_trait,
-            AsyncCsvAppender,
+            {csv_import}
             generate_random_id,
             FutureExt,
             event::{{
@@ -493,10 +509,11 @@ fn generate_event_bindings_code(
                 contract::{{Contract, ContractDetails}},
                 yaml::read_manifest,
             }},
-            {client_import}
-            provider::JsonRpcCachedProvider
+            provider::JsonRpcCachedProvider,
+            {postgres_client_import}
         }};
         use super::super::super::super::typings::networks::get_provider_cache_for_network;
+        {postgres_import}
 
         {structs}
 
@@ -509,7 +526,7 @@ fn generate_event_bindings_code(
 
         pub struct EventContext<TExtensions> where TExtensions: Send + Sync {{
             {event_context_database}
-            pub csv: Arc<AsyncCsvAppender>,
+            {event_context_csv}
             pub extensions: Arc<TExtensions>,
         }}
 
@@ -618,7 +635,13 @@ fn generate_event_bindings_code(
             }}
         }}
         "#,
-        client_import = if storage.postgres_enabled() { "PostgresClient," } else { "" },
+        postgres_import = if storage.postgres_enabled() {
+            "use super::super::super::super::typings::database::get_or_init_postgres_client;"
+        } else {
+            ""
+        },
+        postgres_client_import = if storage.postgres_enabled() { "PostgresClient," } else { "" },
+        csv_import = if storage.csv_enabled() { "AsyncCsvAppender," } else { "" },
         abigen_mod_name = abigen_contract_mod_name(contract),
         abigen_file_name = abigen_contract_file_name(contract),
         abigen_name = abigen_contract_name(contract),
@@ -626,6 +649,8 @@ fn generate_event_bindings_code(
         event_type_name = &event_type_name,
         event_context_database =
             if storage.postgres_enabled() { "pub database: Arc<PostgresClient>," } else { "" },
+        event_context_csv =
+            if storage.csv_enabled() { "pub csv: Arc<AsyncCsvAppender>," } else { "" },
         event_callback_structs =
             generate_event_callback_structs_code(project_path, &event_info, contract, storage)?,
         event_enums = generate_event_enums_code(&event_info),
@@ -694,7 +719,7 @@ pub fn generate_event_handlers(
 
     let mut imports = String::new();
     imports.push_str(
-        r#"
+        r#"#![allow(non_snake_case)]
             use rindexer::{
                 event::callback_registry::EventCallbackRegistry,
                 EthereumSqlTypeWrapper, PgType, RindexerColorize, rindexer_error, rindexer_info

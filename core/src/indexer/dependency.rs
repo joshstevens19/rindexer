@@ -272,6 +272,17 @@ impl ContractEventDependencies {
                     if has_dependency {
                         return Some(d.contract_name.to_string());
                     }
+
+                    // check if it's a filter event
+                    let has_dependency =
+                        d.event_dependencies.has_dependency(&ContractEventMapping {
+                            // TODO - this is a hacky way to check if it's a filter event
+                            contract_name: contract_name.to_string().replace("Filter", ""),
+                            event_name: event_name.to_string(),
+                        });
+                    if has_dependency {
+                        return Some(d.contract_name.to_string());
+                    }
                 }
                 None
             })
@@ -293,24 +304,23 @@ impl ContractEventsDependenciesConfig {
     }
 
     pub fn add_to_event_or_new_entry(
-        contract_name: &str,
         dependency_event_processing_configs: &mut Vec<ContractEventsDependenciesConfig>,
         event_processing_config: Arc<EventProcessingConfig>,
         dependencies: &[ContractEventDependencies],
     ) {
         match dependency_event_processing_configs
             .iter_mut()
-            .find(|c| c.contract_name == contract_name)
+            .find(|c| c.contract_name == event_processing_config.contract_name)
         {
             Some(contract_events_config) => {
                 contract_events_config.add_event_config(event_processing_config)
             }
             None => {
                 dependency_event_processing_configs.push(ContractEventsDependenciesConfig {
-                    contract_name: contract_name.to_string(),
+                    contract_name: event_processing_config.contract_name.clone(),
                     event_dependencies: dependencies
                         .iter()
-                        .find(|d| d.contract_name == contract_name)
+                        .find(|d| d.contract_name == event_processing_config.contract_name)
                         .expect("Failed to find contract dependencies")
                         .event_dependencies
                         .clone(),

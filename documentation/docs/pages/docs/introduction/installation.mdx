@@ -67,14 +67,27 @@ rindexerdown
 
 ## Docker pre-built image
 
-There's a pre-built docker image which can be used to run `rindexer` inside your dockerized infra:
+There's is pre-built docker images which can be used to run `rindexer` inside your dockerized infra:
 
-[`ghcr.io/joshstevens19/rindexer`](https://github.com/users/joshstevens19/packages/container/package/rindexer)
+- Running GraphQL and Indexer: [`ghcr.io/joshstevens19/rindexer-bundled`](https://github.com/users/joshstevens19/packages/container/package/rindexer-bundled)
+- Running Indexer only: [`ghcr.io/joshstevens19/rindexer`](https://github.com/users/joshstevens19/packages/container/package/rindexer)
+
+Note its important you pick the correct image to use as if you run the indexer without the graphql it wont expose the graphql endpoints.
+The indexer only image is a slot smaller then the bundled image due to the fact that it only contains the indexer.
 
 ### Create new project
 To create a new `no-code` project in your current directory, you can run the following:
 
-`docker run -it -v $PWD:/app/project_path ghcr.io/joshstevens19/rindexer new -p /app/project_path no-code`
+:::code-group
+
+```bash [GraphQL and Indexer]
+docker run -it -v $PWD:/app/project_path ghcr.io/joshstevens19/rindexer-bundled new -p /app/project_path no-code
+```
+
+```bash [Indexer only]
+docker run -it -v $PWD:/app/project_path ghcr.io/joshstevens19/rindexer new -p /app/project_path no-code
+```
+:::
 
 ### Use with existing project
 To use it with an existing project and a running postgres instance you can simply invoke:

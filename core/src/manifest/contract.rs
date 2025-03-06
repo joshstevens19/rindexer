@@ -1,18 +1,21 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, collections::HashSet, fs, path::Path};
 
 use ethers::{
     addressbook::Address,
     prelude::{Filter, ValueOrArray, U64},
 };
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 use super::core::{deserialize_option_u64_from_string, serialize_option_u64_as_string};
 use crate::{
     event::contract_setup::{
         AddressDetails, ContractEventMapping, FilterDetails, IndexingContractSetup,
     },
+    helpers::get_full_path,
     indexer::parse_topic,
     manifest::{chat::ChatConfig, stream::StreamsConfig},
+    types::single_or_array::StringOrArray,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -57,7 +60,7 @@ pub struct ContractDetails {
     address: Option<ValueOrArray<Address>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub filter: Option<FilterDetailsYaml>,
+    pub filter: Option<ValueOrArray<FilterDetailsYaml>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub indexed_filters: Option<Vec<EventInputIndexedFilters>>,
@@ -91,10 +94,18 @@ impl ContractDetails {
             // } else if let Some(factory) = &self.factory {
             //     IndexingContractSetup::Factory(factory.clone())
         } else if let Some(filter) = &self.filter {
-            IndexingContractSetup::Filter(FilterDetails {
-                event_name: filter.event_name.clone(),
-                indexed_filters: self.indexed_filters.as_ref().and_then(|f| f.first().cloned()),
-            })
+            return match filter {
+                ValueOrArray::Value(filter) => IndexingContractSetup::Filter(FilterDetails {
+                    events: ValueOrArray::Value(filter.event_name.clone()),
+                    indexed_filters: self.indexed_filters.as_ref().and_then(|f| f.first().cloned()),
+                }),
+                ValueOrArray::Array(filters) => IndexingContractSetup::Filter(FilterDetails {
+                    events: ValueOrArray::Array(
+                        filters.iter().map(|f| f.event_name.clone()).collect(),
+                    ),
+                    indexed_filters: self.indexed_filters.as_ref().and_then(|f| f.first().cloned()),
+                }),
+            }
         } else {
             panic!("Contract details must have an address, factory or filter");
         }
@@ -121,24 +132,6 @@ impl ContractDetails {
             network,
             address: Some(address),
             filter: None,
-            indexed_filters,
-            //factory: None,
-            start_block,
-            end_block,
-        }
-    }
-
-    pub fn new_with_filter(
-        network: String,
-        filter: FilterDetailsYaml,
-        indexed_filters: Option<Vec<EventInputIndexedFilters>>,
-        start_block: Option<U64>,
-        end_block: Option<U64>,
-    ) -> Self {
-        Self {
-            network,
-            address: None,
-            filter: Some(filter),
             indexed_filters,
             //factory: None,
             start_block,
@@ -206,7 +199,7 @@ pub struct Contract {
 
     pub details: Vec<ContractDetails>,
 
-    pub abi: String,
+    pub abi: StringOrArray,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_events: Option<Vec<String>>,
@@ -230,9 +223,62 @@ pub struct Contract {
     pub chat: Option<ChatConfig>,
 }
 
+#[derive(thiserror::Error, Debug)]
+
+pub enum ParseAbiError {
+    #[error("Could not read ABI string: {0}")]
+    CouldNotReadAbiString(String),
+
+    #[error("Could not get full path: {0}")]
+    CouldNotGetFullPath(#[from] std::io::Error),
+
+    #[error("Invalid ABI format: {0}")]
+    InvalidAbiFormat(String),
+
+    #[error("Could not merge ABI: {0}")]
+    CouldNotMergeAbis(#[from] serde_json::Error),
+}
+
 impl Contract {
     pub fn override_name(&mut self, name: String) {
         self.name = name;
+    }
+
+    pub fn parse_abi(&self, project_path: &Path) -> Result<String, ParseAbiError> {
+        match &self.abi {
+            StringOrArray::Single(abi_path) => {
+                let full_path = get_full_path(project_path, abi_path)?;
+                let abi_str = fs::read_to_string(full_path)?;
+                Ok(abi_str)
+            }
+            StringOrArray::Multiple(abis) => {
+                let mut unique_entries = HashSet::new();
+                let mut merged_abi_value = Vec::new();
+
+                for abi_path in abis {
+                    let full_path = get_full_path(project_path, abi_path)?;
+                    let abi_str = fs::read_to_string(full_path)?;
+                    let abi_value: Value = serde_json::from_str(&abi_str)?;
+
+                    if let Value::Array(abi_arr) = abi_value {
+                        for entry in abi_arr {
+                            let entry_str = serde_json::to_string(&entry)?;
+                            if unique_entries.insert(entry_str) {
+                                merged_abi_value.push(entry);
+                            }
+                        }
+                    } else {
+                        return Err(ParseAbiError::InvalidAbiFormat(format!(
+                            "Expected an array but got a single value: {}",
+                            abi_value
+                        )));
+                    }
+                }
+
+                let merged_abi_str = serde_json::to_string(&json!(merged_abi_value))?;
+                Ok(merged_abi_str)
+            }
+        }
     }
 
     pub fn convert_dependency_event_tree_yaml(

@@ -1,6 +1,9 @@
-use std::env;
+use std::{env, path::PathBuf, str::FromStr};
 
-use rindexer::{start_rindexer, GraphqlOverrideSettings, IndexingDetails, StartDetails};
+use rindexer::{
+    manifest::yaml::read_manifest, start_rindexer, GraphqlOverrideSettings, IndexingDetails,
+    StartDetails,
+};
 
 use self::rindexer_lib::indexers::all_handlers::register_all_handlers;
 
@@ -15,7 +18,13 @@ async fn main() {
 
     let mut port: Option<u16> = None;
 
-    for arg in args.iter() {
+    let args = args.iter();
+    if args.len() == 0 {
+        enable_graphql = true;
+        enable_indexer = true;
+    }
+
+    for arg in args {
         match arg.as_str() {
             "--graphql" => enable_graphql = true,
             "--indexer" => enable_indexer = true,
@@ -31,13 +40,14 @@ async fn main() {
                     }
                 }
             }
-            _ => {
-                // default run both
-                enable_graphql = true;
-                enable_indexer = true;
-            }
+            _ => {}
         }
     }
+
+    println!(
+        "Starting rindexer rust project - graphql {} indexer {}",
+        enable_graphql, enable_indexer
+    );
 
     let path = env::current_dir();
     match path {
@@ -71,55 +81,55 @@ async fn main() {
     }
 }
 
-// #[allow(dead_code)]
-// fn generate() {
-//     let path = PathBuf::from_str(
-//         "/Users/joshstevens/code/rindexer/rindexer_rust_playground/rindexer.yaml",
-//     )
-//     .expect("Invalid path");
-//     let manifest = read_manifest(&path).expect("Failed to read manifest");
-//     rindexer::generator::build::generate_rindexer_typings(&manifest, &path, true)
-//         .expect("Failed to generate typings");
-// }
-//
-// #[allow(dead_code)]
-// fn generate_code_test() {
-//     let path = PathBuf::from_str(
-//         "/Users/joshstevens/code/rindexer/rindexer_rust_playground/rindexer.yaml",
-//     )
-//     .expect("Invalid path");
-//     let manifest = read_manifest(&path).expect("Failed to read manifest");
-//
-//     rindexer::generator::build::generate_rindexer_handlers(manifest, &path, true)
-//         .expect("Failed to generate handlers");
-// }
-//
-// #[allow(dead_code)]
-// fn generate_all() {
-//     let path = PathBuf::from_str(
-//         "/Users/joshstevens/code/rindexer/rindexer_rust_playground/rindexer.yaml",
-//     )
-//     .expect("Invalid path");
-//     rindexer::generator::build::generate_rindexer_typings_and_handlers(&path)
-//         .expect("Failed to generate typings and handlers");
-// }
-//
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//
-//     #[test]
-//     fn test_generate() {
-//         generate();
-//     }
-//
-//     #[test]
-//     fn test_code_generate() {
-//         generate_code_test();
-//     }
-//
-//     #[test]
-//     fn test_generate_all() {
-//         generate_all();
-//     }
-// }
+#[allow(dead_code)]
+fn generate() {
+    let path = PathBuf::from_str(
+        "/Users/joshstevens/code/rindexer/rindexer_rust_playground/rindexer.yaml",
+    )
+    .expect("Invalid path");
+    let manifest = read_manifest(&path).expect("Failed to read manifest");
+    rindexer::generator::build::generate_rindexer_typings(&manifest, &path, true)
+        .expect("Failed to generate typings");
+}
+
+#[allow(dead_code)]
+fn generate_code_test() {
+    let path = PathBuf::from_str(
+        "/Users/joshstevens/code/rindexer/rindexer_rust_playground/rindexer.yaml",
+    )
+    .expect("Invalid path");
+    let manifest = read_manifest(&path).expect("Failed to read manifest");
+
+    rindexer::generator::build::generate_rindexer_handlers(manifest, &path, true)
+        .expect("Failed to generate handlers");
+}
+
+#[allow(dead_code)]
+fn generate_all() {
+    let path = PathBuf::from_str(
+        "/Users/joshstevens/code/rindexer/rindexer_rust_playground/rindexer.yaml",
+    )
+    .expect("Invalid path");
+    rindexer::generator::build::generate_rindexer_typings_and_handlers(&path)
+        .expect("Failed to generate typings and handlers");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_generate() {
+        generate();
+    }
+
+    #[test]
+    fn test_code_generate() {
+        generate_code_test();
+    }
+
+    #[test]
+    fn test_generate_all() {
+        generate_all();
+    }
+}

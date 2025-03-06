@@ -1,23 +1,26 @@
-use std::{error::Error, str::FromStr, sync::Arc};
+use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
 
 use ethers::{
     addressbook::Address,
     middleware::MiddlewareError,
-    prelude::{BlockNumber, JsonRpcError, Log, ValueOrArray, H256, U64},
+    prelude::{BlockNumber, JsonRpcError, ValueOrArray, H256, U64},
 };
 use regex::Regex;
-use tokio::sync::{mpsc, Semaphore};
+use tokio::{
+    sync::{mpsc, Semaphore},
+    time::Instant,
+};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, error, info, warn};
 
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
     indexer::{log_helpers::is_relevant_block, IndexingEventProgressStatus},
-    provider::JsonRpcCachedProvider,
+    provider::{JsonRpcCachedProvider, WrappedLog},
 };
 
 pub struct FetchLogsResult {
-    pub logs: Vec<Log>,
+    pub logs: Vec<WrappedLog>,
     pub from_block: U64,
     pub to_block: U64,
 }
@@ -240,6 +243,7 @@ async fn fetch_historic_logs_stream(
 
             if let Some(last_log) = last_log {
                 let next_from_block = last_log
+                    .inner
                     .block_number
                     .expect("block number should always be present in a log") +
                     U64::from(1);
@@ -325,6 +329,11 @@ async fn live_indexing_stream(
     disable_logs_bloom_checks: bool,
 ) {
     let mut last_seen_block_number = U64::from(0);
+
+    // this is used for less busy chains to make sure they know rindexer is still alive
+    let mut last_no_new_block_log_time = Instant::now();
+    let log_no_new_block_interval = Duration::from_secs(300);
+
     loop {
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
@@ -339,9 +348,18 @@ async fn live_indexing_stream(
                                 info_log_name,
                                 IndexingEventProgressStatus::Live.log()
                             );
+                            if last_no_new_block_log_time.elapsed() >= log_no_new_block_interval {
+                                info!(
+                                    "{} - {} - No new blocks published in the last 5 minutes - latest block number {}",
+                                    info_log_name,
+                                    IndexingEventProgressStatus::Live.log(),
+                                    last_seen_block_number,
+                                );
+                                last_no_new_block_log_time = Instant::now();
+                            }
                             continue;
                         }
-                        info!(
+                        debug!(
                             "{} - {} - New block seen {} - Last seen block {}",
                             info_log_name,
                             IndexingEventProgressStatus::Live.log(),
@@ -374,7 +392,7 @@ async fn live_indexing_stream(
                                 IndexingEventProgressStatus::Live.log(),
                                 from_block
                             );
-                            info!(
+                            debug!(
                                 "{} - {} - Did not need to hit RPC as no events in {} block - LogsBloom for block checked",
                                 info_log_name,
                                 IndexingEventProgressStatus::Live.log(),
@@ -449,7 +467,9 @@ async fn live_indexing_stream(
                                             to_block
                                         );
                                     } else if let Some(last_log) = last_log {
-                                        if let Some(last_log_block_number) = last_log.block_number {
+                                        if let Some(last_log_block_number) =
+                                            last_log.inner.block_number
+                                        {
                                             current_filter = current_filter.set_from_block(
                                                 last_log_block_number + U64::from(1),
                                             );

@@ -16,7 +16,7 @@ use rindexer::{
         storage::{CsvDetails, PostgresDetails, Storage},
         yaml::{write_manifest, YAML_CONFIG_NAME},
     },
-    write_file, WriteFileError,
+    write_file, StringOrArray, WriteFileError,
 };
 
 use crate::console::{
@@ -155,7 +155,7 @@ pub fn handle_new_command(
                 Some(U64::from(18900000)),
                 Some(U64::from(19000000)),
             )],
-            abi: abi_example_path.display().to_string(),
+            abi: StringOrArray::Single(abi_example_path.display().to_string()),
             include_events: Some(vec!["Transfer".to_string(), "Approval".to_string()]),
             index_event_in_order: None,
             dependency_events: None,

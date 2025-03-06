@@ -42,12 +42,15 @@ contracts:
         secret_key: ${AWS_SECRET_ACCESS_KEY} // [!code focus]
         # session_token is optional // [!code focus]
         session_token: ${AWS_SESSION_TOKEN} // [!code focus]
+        # endpoint_url is optional // [!code focus]
+        endpoint_url: ${ENDPOINT_URL} // ![code focus]
       topics: // [!code focus]
         - topic_arn: "arn:aws:sns:us-east-1:664643779377:test" // [!code focus]
           networks: // [!code focus]
             - ethereum // [!code focus]
           events: // [!code focus]
             - event_name: Transfer // [!code focus]
+              alias: RocketPoolTransfer
 ```
 
 ## Response
@@ -59,6 +62,7 @@ Note SNS/SQS may wrap the message body into their own object so the below is jus
 The response sent to you is already decoded and parsed into a JSON stringify object.
 
 - `event_name` - The name of the event
+- `event_signature_hash` - The event signature hash example the keccak256 hash of "Transfer(address,address,uint256)", this is topics[0] in the logs
 - `event_data` - The event data which has all the event fields decoded and the transaction information which is under `transaction_information`
 - `network` - The network the event was emitted on
 
@@ -67,6 +71,7 @@ For example a transfer event would look like:
 ```json
 {
     "event_name": "Transfer",
+    "event_signature_hash": "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
     "event_data": {
         "from": "0x0338ce5020c447f7e668dc2ef778025ce3982662",
         "to": "0x0338ce5020c447f7e668dc2ef778025ce3982662",
@@ -200,6 +205,41 @@ contracts:
         session_token: ${AWS_SESSION_TOKEN} // [!code focus]
 ```
 
+### endpoint_url
+
+:::info
+This is optional
+:::
+
+:::info
+We advise you to put this in a environment variables.
+:::
+
+
+The AWS endpoint to connect to.
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    sns: // [!code focus]
+      aws_config: // [!code focus]
+        region: us-east-1
+        access_key: ${AWS_ACCESS_KEY_ID}
+        secret_key: ${AWS_SECRET_ACCESS_KEY}
+        session_token: ${AWS_SESSION_TOKEN}
+        endpoint_url: ${ENDPOINT_URL} // ![code focus]
+```
+
 ## topics
 
 This is an array of topics you want to stream to this sns.
@@ -231,6 +271,8 @@ contracts:
         secret_key: ${AWS_SECRET_ACCESS_KEY}
         # session_token is optional
         session_token: ${AWS_SESSION_TOKEN}
+        # endpoint_url is optional
+        endpoint_url: ${ENDPOINT_URL}
       topics: // [!code focus]
         - topic_arn: "arn:aws:sns:us-east-1:664643779377:test" // [!code focus]
 ```
@@ -255,6 +297,8 @@ contracts:
         secret_key: ${AWS_SECRET_ACCESS_KEY}
         # session_token is optional
         session_token: ${AWS_SESSION_TOKEN}
+        # endpoint_url is optional
+        endpoint_url: ${ENDPOINT_URL}
       topics: // [!code focus]
         - topic_arn: "arn:aws:sns:us-east-1:664643779377:test.fifo" // [!code focus]
 ```
@@ -285,6 +329,8 @@ contracts:
         secret_key: ${AWS_SECRET_ACCESS_KEY}
         # session_token is optional
         session_token: ${AWS_SESSION_TOKEN}
+        # endpoint_url is optional
+        endpoint_url: ${ENDPOINT_URL}
       topics: // [!code focus]
         - topic_arn: "arn:aws:sns:us-east-1:664643779377:test"
           networks: // [!code focus]
@@ -319,12 +365,52 @@ contracts:
         secret_key: ${AWS_SECRET_ACCESS_KEY}
         # session_token is optional
         session_token: ${AWS_SESSION_TOKEN}
+        # endpoint_url is optional
+        endpoint_url: ${ENDPOINT_URL}
       topics: // [!code focus]
         - topic_arn: "arn:aws:sns:us-east-1:664643779377:test"
           networks:
             - ethereum
           events: // [!code focus]
             - event_name: Transfer // [!code focus]
+```
+
+#### alias
+
+This is an optional `alias` you wish to assign to the event you want to stream to this SNS topic.
+
+It is paired with the event name and allows consumers to have unique discriminator keys in the event of
+naming conflicts. E.g Transfer (ERC20) and Transfer (ERC721).
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    sns: // [!code focus]
+      aws_config:
+        region: us-east-1
+        access_key: ${AWS_ACCESS_KEY_ID}
+        secret_key: ${AWS_SECRET_ACCESS_KEY}
+        # session_token is optional
+        session_token: ${AWS_SESSION_TOKEN}
+        # endpoint_url is optional
+        endpoint_url: ${ENDPOINT_URL}
+      topics: // [!code focus]
+        - topic_arn: "arn:aws:sns:us-east-1:664643779377:test"
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer // [!code focus]
+              alias: RocketPoolTransfer // [!code focus]
 ```
 
 #### conditions
@@ -371,6 +457,8 @@ contracts:
         secret_key: ${AWS_SECRET_ACCESS_KEY}
         # session_token is optional
         session_token: ${AWS_SESSION_TOKEN}
+        # endpoint_url is optional
+        endpoint_url: ${ENDPOINT_URL}
       topics: // [!code focus]
         - topic_arn: "arn:aws:sns:us-east-1:664643779377:test"
           networks:
@@ -433,6 +521,8 @@ contracts:
         secret_key: ${AWS_SECRET_ACCESS_KEY}
         # session_token is optional
         session_token: ${AWS_SESSION_TOKEN}
+        # endpoint_url is optional
+        endpoint_url: ${ENDPOINT_URL}
       topics: // [!code focus]
         - topic_arn: "arn:aws:sns:us-east-1:664643779377:test"
           networks:
@@ -465,6 +555,8 @@ contracts:
         secret_key: ${AWS_SECRET_ACCESS_KEY}
         # session_token is optional
         session_token: ${AWS_SESSION_TOKEN}
+        # endpoint_url is optional
+        endpoint_url: ${ENDPOINT_URL}
       topics: // [!code focus]
         - topic_arn: "arn:aws:sns:us-east-1:664643779377:test"
           networks:
@@ -531,6 +623,8 @@ contracts:
         secret_key: ${AWS_SECRET_ACCESS_KEY}
         # session_token is optional
         session_token: ${AWS_SESSION_TOKEN}
+        # endpoint_url is optional
+        endpoint_url: ${ENDPOINT_URL}
       topics: // [!code focus]
         - topic_arn: "arn:aws:sns:us-east-1:664643779377:test"
           networks:

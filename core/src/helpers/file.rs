@@ -119,8 +119,14 @@ pub fn create_mod_file(
     Ok(())
 }
 
-pub fn load_env_from_path(project_path: &Path) {
+pub fn load_env_from_project_path(project_path: &Path) {
     if from_path(project_path.join(".env")).is_err() {
+        dotenv().ok();
+    }
+}
+
+pub fn load_env_from_full_path(path: &Path) {
+    if from_path(path).is_err() {
         dotenv().ok();
     }
 }

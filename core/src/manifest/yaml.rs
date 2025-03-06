@@ -1,17 +1,24 @@
 use std::{
+    collections::HashSet,
     env,
     fs::File,
     io::{Read, Write},
     path::{Path, PathBuf},
 };
 
+use ethers::types::ValueOrArray;
 use regex::{Captures, Regex};
+use serde::{Deserialize, Serialize};
 use tracing::error;
 
 use crate::{
     abi::ABIItem,
-    helpers::replace_env_variable_to_raw_name,
-    manifest::core::{Manifest, ProjectType},
+    helpers::{load_env_from_full_path, replace_env_variable_to_raw_name},
+    manifest::{
+        core::{Manifest, ProjectType},
+        network::Network,
+    },
+    StringOrArray,
 };
 
 pub const YAML_CONFIG_NAME: &str = "rindexer.yaml";
@@ -33,6 +40,12 @@ fn substitute_env_variables(contents: &str) -> Result<String, regex::Error> {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ValidateManifestError {
+    #[error("Contract names {0} must be unique")]
+    ContractNameMustBeUnique(String),
+
+    #[error("Contract name {0} can not include 'Filter' in the name as it is a reserved word")]
+    ContractNameCanNotIncludeFilter(String),
+
     #[error("Invalid network mapped to contract: network - {0} contract - {1}")]
     InvalidNetworkMappedToContract(String, String),
 
@@ -59,13 +72,35 @@ pub enum ValidateManifestError {
 
     #[error("Streams config is invalid: {0}")]
     StreamsConfigValidationError(String),
+
+    #[error("Global ABI can only be a single string")]
+    GlobalAbiCanOnlyBeASingleString(String),
 }
 
 fn validate_manifest(
     project_path: &Path,
     manifest: &Manifest,
 ) -> Result<(), ValidateManifestError> {
+    let mut seen = HashSet::new();
+    let duplicates_contract_names: Vec<String> = manifest
+        .contracts
+        .iter()
+        .filter_map(|c| if seen.insert(&c.name) { None } else { Some(c.name.clone()) })
+        .collect();
+
+    if !duplicates_contract_names.is_empty() {
+        return Err(ValidateManifestError::ContractNameMustBeUnique(
+            duplicates_contract_names.join(", "),
+        ));
+    }
+
     for contract in &manifest.contracts {
+        if contract.name.to_lowercase().contains("filter") {
+            return Err(ValidateManifestError::ContractNameCanNotIncludeFilter(
+                contract.name.clone(),
+            ));
+        }
+
         let events = ABIItem::read_abi_items(project_path, contract)
             .map_err(|e| ValidateManifestError::InvalidABI(contract.name.clone(), e.to_string()))?;
 
@@ -78,12 +113,30 @@ fn validate_manifest(
                 ));
             }
 
-            if let Some(address) = &detail.filter {
-                if !events.iter().any(|e| e.name == *address.event_name) {
-                    return Err(ValidateManifestError::InvalidFilterEventNameDoesntExistInABI(
-                        address.event_name.clone(),
-                        contract.name.clone(),
-                    ));
+            if let Some(filter_details) = &detail.filter {
+                match filter_details {
+                    ValueOrArray::Value(filter_details) => {
+                        if !events.iter().any(|e| e.name == *filter_details.event_name) {
+                            return Err(
+                                ValidateManifestError::InvalidFilterEventNameDoesntExistInABI(
+                                    filter_details.event_name.clone(),
+                                    contract.name.clone(),
+                                ),
+                            );
+                        }
+                    }
+                    ValueOrArray::Array(filters) => {
+                        for filter_details in filters {
+                            if !events.iter().any(|e| e.name == *filter_details.event_name) {
+                                return Err(
+                                    ValidateManifestError::InvalidFilterEventNameDoesntExistInABI(
+                                        filter_details.event_name.clone(),
+                                        contract.name.clone(),
+                                    ),
+                                );
+                            }
+                        }
+                    }
                 }
             }
 
@@ -160,6 +213,24 @@ fn validate_manifest(
         }
     }
 
+    if let Some(global) = &manifest.global {
+        if let Some(contracts) = &global.contracts {
+            for contract in contracts {
+                match &contract.abi {
+                    StringOrArray::Single(_) => {}
+                    StringOrArray::Multiple(value) => {
+                        return Err(ValidateManifestError::GlobalAbiCanOnlyBeASingleString(
+                            format!(
+                                "Global ABI can only be a single string but found multiple: {:?}",
+                                value
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -199,13 +270,33 @@ pub fn read_manifest_raw(file_path: &PathBuf) -> Result<Manifest, ReadManifestEr
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct ManifestNetworksOnly {
+    pub networks: Vec<Network>,
+}
+
+fn extract_environment_path(contents: &str, file_path: &Path) -> Option<PathBuf> {
+    let re = Regex::new(r"(?m)^environment_path:\s*(.+)$").unwrap();
+    re.captures(contents).and_then(|cap| cap.get(1)).map(|m| {
+        let path_str = m.as_str().trim().replace('\"', ""); // Remove any quotes
+        let base_dir = file_path.parent().unwrap_or(Path::new(""));
+        let full_path = base_dir.join(path_str);
+        full_path.canonicalize().unwrap_or(full_path)
+    })
+}
+
 pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError> {
     let mut file = File::open(file_path)?;
     let mut contents = String::new();
 
     file.read_to_string(&mut contents)?;
 
-    let manifest_before_transform: Manifest = serde_yaml::from_str(&contents)?;
+    let environment_path = extract_environment_path(&contents, file_path);
+    if let Some(ref path) = environment_path {
+        load_env_from_full_path(path);
+    }
+
+    let contents_before_transform = contents.clone();
 
     contents = substitute_env_variables(&contents)?;
 
@@ -214,8 +305,10 @@ pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError>
     // as we don't want to inject the RPC URL in rust projects in clear text we should change
     // the networks.rpc back to what it was before and the generated code will handle it
     if manifest_after_transform.project_type == ProjectType::Rust {
+        let manifest_networks_only: ManifestNetworksOnly =
+            serde_yaml::from_str(&contents_before_transform)?;
         for network in &mut manifest_after_transform.networks {
-            network.rpc = manifest_before_transform
+            network.rpc = manifest_networks_only
                 .networks
                 .iter()
                 .find(|n| n.name == network.name)

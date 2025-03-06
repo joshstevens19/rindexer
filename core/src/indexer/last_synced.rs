@@ -55,14 +55,14 @@ fn build_last_synced_block_number_file(
     network: &str,
     event_name: &str,
 ) -> String {
-    format!(
-        "{}/{}/last-synced-blocks/{}-{}-{}.txt",
-        full_path.display(),
-        contract_name,
+    let path = full_path.join(contract_name).join("last-synced-blocks").join(format!(
+        "{}-{}-{}.txt",
         contract_name.to_lowercase(),
         network.to_lowercase(),
         event_name.to_lowercase()
-    )
+    ));
+
+    path.to_string_lossy().into_owned()
 }
 
 pub struct SyncConfig<'a> {
@@ -215,7 +215,11 @@ async fn update_last_synced_block_number_for_file(
     Ok(())
 }
 
-pub fn update_progress_and_last_synced(config: Arc<EventProcessingConfig>, to_block: U64) {
+pub fn update_progress_and_last_synced_task(
+    config: Arc<EventProcessingConfig>,
+    to_block: U64,
+    on_complete: impl FnOnce() + Send + 'static,
+) {
     tokio::spawn(async move {
         let update_last_synced_block_result = config
             .progress
@@ -281,5 +285,7 @@ pub fn update_progress_and_last_synced(config: Arc<EventProcessingConfig>, to_bl
                 );
             }
         }
+
+        on_complete();
     });
 }

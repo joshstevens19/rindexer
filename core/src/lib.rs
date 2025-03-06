@@ -3,9 +3,14 @@ pub mod generator;
 pub mod indexer;
 pub mod manifest;
 
+mod system_state;
+pub use system_state::{initiate_shutdown, is_running};
+
 mod database;
 pub use database::postgres::{
-    client::PostgresClient, generate::drop_tables_for_indexer_sql, setup::setup_postgres,
+    client::{PostgresClient, ToSql},
+    generate::drop_tables_for_indexer_sql,
+    setup::setup_postgres,
     sql_type_wrapper::EthereumSqlTypeWrapper,
 };
 
@@ -14,8 +19,8 @@ pub use simple_file_formatters::csv::AsyncCsvAppender;
 
 mod helpers;
 pub use helpers::{
-    format_all_files_for_project, generate_random_id, load_env_from_path, public_read_env_value,
-    write_file, WriteFileError,
+    format_all_files_for_project, generate_random_id, load_env_from_project_path,
+    public_read_env_value, write_file, WriteFileError,
 };
 mod api;
 pub use api::{generate_graphql_queries, GraphqlOverrideSettings};
@@ -45,3 +50,4 @@ pub use start::{
 pub use tokio::main as rindexer_main;
 pub use tokio_postgres::types::Type as PgType;
 pub use tracing::{error as rindexer_error, info as rindexer_info};
+pub use types::single_or_array::StringOrArray;

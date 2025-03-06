@@ -14,12 +14,14 @@ use super::{
     networks_bindings::generate_networks_code,
 };
 use crate::{
+    generator::database_bindings::generate_database_code,
     helpers::{
-        camel_to_snake, create_mod_file, format_all_files_for_project, get_full_path, write_file,
+        camel_to_snake, create_mod_file, format_all_files_for_project, write_file,
         CreateModFileError, WriteFileError,
     },
     indexer::Indexer,
     manifest::{
+        contract::ParseAbiError,
         core::Manifest,
         global::Global,
         network::Network,
@@ -51,6 +53,9 @@ fn write_networks(output: &Path, networks: &[Network]) -> Result<(), WriteNetwor
 pub enum WriteGlobalError {
     #[error("{0}")]
     CanNotWriteGlobalCode(#[from] WriteFileError),
+
+    #[error("{0}")]
+    CouldNotDeleteGlobalContractFile(#[from] std::io::Error),
 }
 
 fn write_global(
@@ -58,8 +63,20 @@ fn write_global(
     global: &Global,
     networks: &[Network],
 ) -> Result<(), WriteGlobalError> {
+    let global_contract_file_path = generate_file_location(output, "global_contracts");
+    if global_contract_file_path.exists() {
+        fs::remove_file(&global_contract_file_path)?;
+    }
+
     let context_code = generate_context_code(&global.contracts, networks);
-    write_file(&generate_file_location(output, "global_contracts"), context_code.as_str())?;
+    write_file(&global_contract_file_path, context_code.as_str())?;
+
+    Ok(())
+}
+
+fn write_database(output: &Path) -> Result<(), WriteGlobalError> {
+    let database_code = generate_database_code();
+    write_file(&generate_file_location(output, "database"), database_code.as_str())?;
 
     Ok(())
 }
@@ -84,8 +101,8 @@ pub enum WriteIndexerEvents {
     #[error("{0}")]
     GenerateEventBindingCodeError(#[from] GenerateEventBindingsError),
 
-    #[error("Could not find ABI path: {0}")]
-    AbiPathDoesNotExist(String),
+    #[error("Could not parse ABI: {0}")]
+    CouldNotParseAbi(#[from] ParseAbiError),
 }
 
 fn write_indexer_events(
@@ -103,30 +120,25 @@ fn write_indexer_events(
             format!("{}/events/{}", camel_to_snake(&indexer.name), camel_to_snake(&contract.name));
         write_file(&generate_file_location(output, &event_path), events_code.as_str())?;
 
-        let abi_full_path = get_full_path(project_path, &contract.abi)
-            .map_err(|_| WriteIndexerEvents::AbiPathDoesNotExist(contract.abi.clone()))?;
-        match abi_full_path.to_str() {
-            None => return Err(WriteIndexerEvents::CouldNotCreateAbigenInstance),
-            Some(abi_full_path) => {
-                let abi_gen = Abigen::new(abigen_contract_name(&contract), abi_full_path)
-                    .map_err(|_| WriteIndexerEvents::CouldNotCreateAbigenInstance)?
-                    .generate()
-                    .map_err(|_| WriteIndexerEvents::CouldNotGenerateAbi)?;
+        let abi_string = contract.parse_abi(project_path)?;
 
-                write_file(
-                    &generate_file_location(
-                        output,
-                        &format!(
-                            "{}/events/{}",
-                            camel_to_snake(&indexer.name),
-                            abigen_contract_file_name(&contract)
-                        ),
-                    ),
-                    &abi_gen.to_string(),
-                )
-                .map_err(WriteIndexerEvents::CouldNotWriteAbigenCodeCode)?;
-            }
-        }
+        let abi_gen = Abigen::new(abigen_contract_name(&contract), abi_string)
+            .map_err(|_| WriteIndexerEvents::CouldNotCreateAbigenInstance)?
+            .generate()
+            .map_err(|_| WriteIndexerEvents::CouldNotGenerateAbi)?;
+
+        write_file(
+            &generate_file_location(
+                output,
+                &format!(
+                    "{}/events/{}",
+                    camel_to_snake(&indexer.name),
+                    abigen_contract_file_name(&contract)
+                ),
+            ),
+            &abi_gen.to_string(),
+        )
+        .map_err(WriteIndexerEvents::CouldNotWriteAbigenCodeCode)?;
     }
     Ok(())
 }
@@ -165,6 +177,10 @@ pub fn generate_rindexer_typings(
             write_networks(&output, &manifest.networks)?;
             if let Some(global) = &manifest.global {
                 write_global(&output, global, &manifest.networks)?;
+            }
+
+            if manifest.storage.postgres_enabled() {
+                write_database(&output)?;
             }
 
             write_indexer_events(project_path, &output, manifest.to_indexer(), &manifest.storage)?;
@@ -392,7 +408,13 @@ serde = {{ version = "1.0.194", features = ["derive"] }}
                 
                 let mut port: Option<u16> = None;
 
-                for arg in args.iter() {
+                let args = args.iter();
+                if args.len() == 0 {
+                    enable_graphql = true;
+                    enable_indexer = true;
+                }
+
+                for arg in args {
                     match arg.as_str() {
                         "--graphql" => enable_graphql = true,
                         "--indexer" => enable_indexer = true,
@@ -408,11 +430,7 @@ serde = {{ version = "1.0.194", features = ["derive"] }}
                                 }
                             }
                         },
-                        _ => {
-                            // default run both
-                            enable_graphql = true;
-                            enable_indexer = true;
-                        }
+                        _ => {}
                     }
                 }
 
