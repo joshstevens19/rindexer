@@ -180,7 +180,7 @@ impl StreamsClients {
             .find(|n| n.event_name == event_message.event_name)
             .and_then(|n| n.alias.clone());
 
-        alias_name.unwrap_or(event_message.event_name.clone())
+        alias_name.unwrap_or_else(|| event_message.event_name.clone())
     }
 
     fn create_chunk_message_raw(
