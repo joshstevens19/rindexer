@@ -42,6 +42,7 @@ pub fn fetch_logs_stream(
         // if we have a, exex backfill tx, we need to process the exex stream instead of using the
         // rpc provider
         if let Some(backfill_tx) = backfill_tx {
+            info!("Processing ExEx stream");
             // Process ExEx stream for both historical and live data
             process_exex_stream(backfill_tx, &tx, &config).await;
         } else {
