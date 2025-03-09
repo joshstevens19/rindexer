@@ -1,21 +1,22 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    ops::RangeInclusive,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc, thread};
 
 use alloy_primitives::BlockNumber;
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
 use reth_ethereum::{node::api::NodeTypes, provider::BlockNumReader, EthPrimitives};
 use reth_execution_types::Chain;
 use reth_exex::{BackfillJob, BackfillJobFactory, ExExContext, ExExEvent, ExExNotification};
 use reth_node_api::FullNodeComponents;
 use reth_node_ethereum::EthereumNode;
 use reth_tracing::tracing::{error, info};
-use tokio::sync::{mpsc, oneshot, watch, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{mpsc, oneshot, OwnedSemaphorePermit, Semaphore};
 
-use crate::reth::{BackfillMessage, BackfillMode, ExexType, RethBlockWithReceipts};
+use crate::{
+    manifest::network::RethConfig,
+    reth::{BackfillMessage, BackfillMode, ExexType, RethBlockWithReceipts},
+};
+
+const DEFAULT_PARALLELISM: usize = 8;
+const DEFAULT_BATCH_SIZE: usize = 100;
 
 /// The ExEx that consumes new [`ExExNotification`]s and processes new backfill requests.
 struct BackfillExEx<Node: FullNodeComponents> {
@@ -49,7 +50,8 @@ where
         backfill_limit: usize,
     ) -> Self {
         let backfill_job_factory =
-            BackfillJobFactory::new(ctx.block_executor().clone(), ctx.provider().clone());
+            BackfillJobFactory::new(ctx.block_executor().clone(), ctx.provider().clone())
+                .with_stream_parallelism(DEFAULT_PARALLELISM);
 
         Self {
             ctx,
@@ -147,7 +149,6 @@ where
 
         // Create channels for this job
         let (rindexer_tx, rindexer_rx) = mpsc::unbounded_channel();
-        let (block_tx, block_rx) = mpsc::unbounded_channel();
 
         // Determine backfill range
         let backfill_to = match mode {
@@ -163,20 +164,11 @@ where
             eyre::bail!("to_block must be >= from_block");
         }
 
-        // Spawn ordering task
-        self.ctx.task_executor().spawn(ordering_task(
-            block_rx,
-            rindexer_tx,
-            from_block,
-            backfill_to,
-            mode,
-        ));
-
         // Spawn backfill job
         let range = from_block..=backfill_to;
         let job = self.backfill_job_factory.backfill(range);
         let backfill_tx = self.backfill_tx.clone();
-        let backfill_block_tx = block_tx.clone();
+        let backfill_block_tx = rindexer_tx.clone();
         let (cancel_tx, cancel_rx) = oneshot::channel();
         self.backfill_jobs.insert(job_id, cancel_tx);
 
@@ -186,7 +178,7 @@ where
 
         // Register live channel for BackfillWithLive mode
         if matches!(mode, BackfillMode::BackfillWithLive) {
-            self.live_channels.insert(job_id, block_tx.clone());
+            self.live_channels.insert(job_id, rindexer_tx.clone());
         }
 
         Ok((job_id, rindexer_rx))
@@ -213,7 +205,12 @@ where
         cancel_rx: oneshot::Receiver<oneshot::Sender<()>>,
         block_tx: mpsc::UnboundedSender<RethBlockWithReceipts>,
     ) {
-        let backfill = backfill_with_job(job.into_stream(), block_tx);
+        let backfill = backfill_with_job(
+            job.into_stream()
+                .with_batch_size(DEFAULT_BATCH_SIZE)
+                .with_parallelism(DEFAULT_PARALLELISM),
+            block_tx,
+        );
 
         tokio::select! {
             result = backfill => {
@@ -228,39 +225,6 @@ where
 
                 if let Ok(sender) = sender {
                     let _ = sender.send(());
-                }
-            }
-        }
-    }
-}
-
-async fn ordering_task(
-    mut block_rx: mpsc::UnboundedReceiver<RethBlockWithReceipts>,
-    rindexer_tx: mpsc::UnboundedSender<RethBlockWithReceipts>,
-    from_block: u64,
-    to_block: u64,
-    mode: BackfillMode,
-) {
-    let mut next_block_to_send = from_block;
-    let mut blocks = BTreeMap::new();
-
-    while let Some(block) = block_rx.recv().await {
-        let block_number = block.block_receipts.block.number;
-        if block_number >= next_block_to_send {
-            if matches!(mode, BackfillMode::PureBackfill) && block_number > to_block {
-                continue; // Ignore blocks beyond to_block in PureBackfill
-            }
-            blocks.insert(block_number, block);
-
-            while let Some(block) = blocks.remove(&next_block_to_send) {
-                if let Err(e) = rindexer_tx.send(block) {
-                    error!("Failed to send block: {}", e);
-                    return;
-                }
-                next_block_to_send += 1;
-                if matches!(mode, BackfillMode::PureBackfill) && next_block_to_send > to_block {
-                    drop(rindexer_tx);
-                    return; // Stop after to_block in PureBackfill
                 }
             }
         }
@@ -315,33 +279,40 @@ fn process_committed_chain(
 
 /// Starts a Reth node with the execution extension that forwards blocks to the provided channel.
 pub async fn start_reth_node_with_exex(
-    chain_id: u64,
-    data_dir: PathBuf,
-    network_name: String,
+    reth_config: &RethConfig,
 ) -> eyre::Result<mpsc::UnboundedSender<BackfillMessage>> {
-    info!("Starting Reth node for network {} with chain ID {}", network_name, chain_id);
+    let cli = reth_config.cli_config.to_reth_cli();
 
-    let data_dir = data_dir.to_str().unwrap();
-    let chain_id = chain_id.to_string();
-
-    let args = vec!["reth", "node", "--data-dir", data_dir, "--chain-id", &chain_id];
-    // Create a channel for backfill requests. Sender will go to the RPC server, receiver
+    // Create a channel for backfill requests. Sender will go to rindexer, receiver
     // will be used by the ExEx.
     let (backfill_tx, backfill_rx) = mpsc::unbounded_channel();
     let rindexer_backfill_tx = backfill_tx.clone();
     let exex_backfill_tx = backfill_tx.clone();
 
-    reth::cli::Cli::try_parse_args_from(args).unwrap().run(|builder, _| async move {
-        let handle = builder
-            .node(EthereumNode::default())
-            // Install the backfill ExEx.
-            .install_exex("Backfill", |ctx| async move {
-                Ok(BackfillExEx::new(ctx, exex_backfill_tx, backfill_rx, 10).start())
-            })
-            .launch()
-            .await?;
-        handle.wait_for_node_exit().await
-    })?;
+    // Spawn the node with a larger stack size, otherwise it will crash with a stack overflow
+    let builder = thread::Builder::new().stack_size(32 * 1024 * 1024); // 32 MB
+
+    let _ = builder.spawn(move || {
+        let result = cli.run(|builder, _| async move {
+            let handle = builder
+                .node(EthereumNode::default())
+                .install_exex("rindexer", move |ctx| {
+                    tokio::task::spawn_blocking(move || {
+                        tokio::runtime::Handle::current().block_on(async move {
+                            let exex = BackfillExEx::new(ctx, exex_backfill_tx, backfill_rx, 10);
+                            eyre::Ok(exex.start())
+                        })
+                    })
+                    .map(|result| result.map_err(Into::into).and_then(|result| result))
+                })
+                .launch()
+                .await?;
+            handle.wait_for_node_exit().await
+        });
+        if let Err(e) = result {
+            eprintln!("Node thread error: {:?}", e);
+        }
+    });
 
     Ok(rindexer_backfill_tx)
 }
