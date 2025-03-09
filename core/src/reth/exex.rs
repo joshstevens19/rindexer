@@ -278,7 +278,7 @@ fn process_committed_chain(
 }
 
 /// Starts a Reth node with the execution extension that forwards blocks to the provided channel.
-pub async fn start_reth_node_with_exex(
+pub fn start_reth_node_with_exex(
     reth_config: &RethConfig,
 ) -> eyre::Result<mpsc::UnboundedSender<BackfillMessage>> {
     let cli = reth_config.cli_config.to_reth_cli();
