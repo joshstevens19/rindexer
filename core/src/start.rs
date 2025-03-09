@@ -134,8 +134,8 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
             // Start Reth nodes for enabled networks
             for network in manifest.reth_enabled_networks() {
                 let reth_config = network.reth.as_ref().unwrap();
-                let backfill_tx = start_reth_node_with_exex(reth_config)
-                    .map_err(StartRindexerError::CouldNotStartRethNode)?;
+                info!("Starting Reth node for network: {}", network.name);
+                let backfill_tx = start_reth_node_with_exex(reth_config)?;
                 info!("Started Reth node for network: {}", network.name);
 
                 reth_channels.insert(network.name.clone(), backfill_tx);
