@@ -71,42 +71,44 @@ jemallocator = { version = "0.6.0", package = "tikv-jemallocator", optional = tr
 jemalloc-ctl = { version = "0.6.0", package = "tikv-jemalloc-ctl", optional = true }
 
 # reth
-reth = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0" }
-reth-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0", features = ["full"] }
-reth-chainspec = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0" }
-reth-ethereum-cli = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0" }
-reth-discv5 = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0" }
-reth-execution-errors = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0" }
-reth-execution-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0" }
-reth-exex = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0", features = ["serde"] }
-reth-eth-wire = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0" }
-reth-evm = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0" }
-reth-network = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0", features = ["test-utils"] }
-reth-network-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0" }
-reth-network-peers = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0" }
-reth-node-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0" }
-reth-node-core = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0" }
-reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0" }
-reth-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0" }
-reth-provider = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0" }
-reth-revm = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0" }
-reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0" }
-reth-tracing = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.0" }
+reth = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.2" }
+reth-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.2", features = ["full"] }
+reth-chainspec = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.2" }
+reth-ethereum-cli = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.2" }
+reth-discv5 = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.2" }
+reth-execution-errors = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.2" }
+reth-execution-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.2" }
+reth-exex = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.2", features = ["serde"] }
+reth-eth-wire = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.2" }
+reth-evm = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.2" }
+reth-network = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.2", features = ["test-utils"] }
+reth-network-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.2" }
+reth-network-peers = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.2" }
+reth-node-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.2" }
+reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.2" }
+reth-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.2" }
+reth-provider = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.2" }
+reth-revm = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.2" }
+reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.2" }
+reth-tracing = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.2" }
+reth-stages-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.2.2" }
 
 # alloy
-alloy-eips = { version = "0.11", default-features = false }
-alloy-genesis = { version = "0.11", default-features = false }
-alloy-consensus = { version = "0.11", default-features = false }
-alloy-rlp = "0.3.4"
-alloy-rpc-types = { version = "0.11", features = [
+alloy-eips = { version = "0.11.1", default-features = false }
+alloy-genesis = { version = "0.11.1", default-features = false }
+alloy-consensus = { version = "0.11.1", default-features = false }
+alloy-rlp = "0.3.10"
+alloy-rpc-types = { version = "0.11.1", features = [
     "eth",
 ], default-features = false }
-alloy-signer = { version = "0.11", default-features = false }
-alloy-signer-local = { version = "0.11", default-features = false }
+alloy-signer = { version = "0.11.1", default-features = false }
+alloy-signer-local = { version = "0.11.1", default-features = false }
 
-alloy-primitives = { version = "0.8", default-features = false }
-alloy-sol-types  = { version = "0.8", features = ["json"] }
+alloy-primitives = { version = "0.8.20", default-features = false, features = ["map-foldhash"] }
 
+alloy-sol-types  = { version = "0.8.20", features = ["json"] }
+
+alloy-trie = { version = "0.7.9", default-features = false, features = ["ethereum"]}
 
 [target.'cfg(not(windows))'.dependencies]
 rdkafka = { version = "0.36", features = ["tokio"] }
