@@ -15,8 +15,8 @@ use crate::{
     reth::{BackfillMessage, BackfillMode, ExexType, RethBlockWithReceipts},
 };
 
-const DEFAULT_PARALLELISM: usize = 8;
-const DEFAULT_BATCH_SIZE: usize = 100;
+const DEFAULT_PARALLELISM: usize = 32;
+const DEFAULT_BATCH_SIZE: usize = 8;
 
 /// The ExEx that consumes new [`ExExNotification`]s and processes new backfill requests.
 struct BackfillExEx<Node: FullNodeComponents> {
