@@ -267,6 +267,10 @@ fn process_committed_chain(
         let block_data = chain.blocks().get(&block_number).expect("Block should exist in chain");
         let block_timestamp = block_data.header().timestamp;
 
+        if block_receipts.tx_receipts.is_empty() {
+            continue;
+        }
+
         block_tx.send(RethBlockWithReceipts {
             block_receipts,
             block_timestamp,
