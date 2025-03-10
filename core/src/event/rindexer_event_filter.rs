@@ -1,4 +1,4 @@
-use alloy_primitives::{map::HashSet, Address as AlloyAddress, B256};
+use alloy_primitives::{Address as AlloyAddress, B256};
 use alloy_rpc_types::{
     BlockNumberOrTag as AlloyBlockNumberOrTag, Filter as AlloyFilter,
     FilterBlockOption as AlloyBlockOption, FilterSet, ValueOrArray as AlloyValueOrArray,

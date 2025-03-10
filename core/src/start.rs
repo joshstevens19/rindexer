@@ -1,9 +1,6 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
-use tokio::{
-    signal,
-    sync::{mpsc, Mutex},
-};
+use tokio::signal;
 use tracing::{error, info};
 
 use crate::{
@@ -27,7 +24,7 @@ use crate::{
         storage::RelationshipsAndIndexersError,
         yaml::{read_manifest, ReadManifestError},
     },
-    reth::{start_reth_node_with_exex, RethBlockWithReceipts, RethChannels},
+    reth::{start_reth_node_with_exex, RethChannels},
     setup_info_logger,
 };
 pub struct IndexingDetails {

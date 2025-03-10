@@ -1,11 +1,11 @@
 // Module for integrating Reth with ExEx into rindexer
 pub mod exex;
-use std::{collections::HashMap, ops::RangeInclusive, sync::Arc};
+use std::collections::HashMap;
 
 use alloy_primitives::BlockNumber;
 pub use exex::start_reth_node_with_exex;
 use reth_ethereum::provider::BlockReceipts;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot};
 
 /// The type of ExEx stream to use.
 #[derive(Clone, Debug)]

@@ -1,6 +1,6 @@
 use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
 
-use alloy_rpc_types::{FilteredParams, Log};
+use alloy_rpc_types::FilteredParams;
 use ethers::{
     addressbook::Address,
     middleware::MiddlewareError,
@@ -230,20 +230,24 @@ async fn process_exex_stream(
         );
         return;
     };
-    let mut wrapped_logs: Vec<WrappedLog> = Vec::new();
     while let Some(block) = stream.recv().await {
-        info!("Pure backfill block: {}", block.block_receipts.block.number);
+        let current_block = block.block_receipts.block.number;
         let logs = process_exex_block(&block, &filtered_params).await;
         if let Some(logs) = logs {
-            wrapped_logs.push(logs);
+            if let Err(e) = tx.send(Ok(FetchLogsResult {
+                logs: vec![logs],
+                from_block: U64::from(current_block),
+                to_block: U64::from(current_block),
+            })) {
+                error!(
+                    "{} - {} - Failed to send logs to stream consumer: {}",
+                    config.info_log_name,
+                    IndexingEventProgressStatus::Syncing.log(),
+                    e
+                );
+                return;
+            }
         }
-    }
-    if !wrapped_logs.is_empty() {
-        tx.send(Ok(FetchLogsResult {
-            logs: wrapped_logs,
-            from_block: U64::from(from_block),
-            to_block: U64::from(to_block),
-        }));
     }
 
     info!("Pure backfill complete for job {}", job_id);

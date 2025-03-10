@@ -3,7 +3,7 @@ use std::{path::Path, sync::Arc};
 use ethers::{providers::ProviderError, types::U64};
 use futures::future::try_join_all;
 use tokio::{
-    sync::{mpsc, Mutex, Semaphore},
+    sync::Semaphore,
     task::{JoinError, JoinHandle},
     time::Instant,
 };
@@ -248,7 +248,13 @@ pub async fn start_indexing(
                     dependencies,
                 );
             } else {
-                let backfill_tx = reth_channels.get(&network_contract.network).unwrap().clone();
+                let backfill_tx = match reth_channels.get(&network_contract.network) {
+                    Some(tx) => tx.clone(),
+                    None => {
+                        info!("No reth channel found for network: {}", network_contract.network);
+                        continue;
+                    }
+                };
                 let process_event =
                     tokio::spawn(process_event(event_processing_config, false, Some(backfill_tx)));
                 non_blocking_process_events.push(process_event);

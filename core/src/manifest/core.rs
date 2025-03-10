@@ -5,12 +5,8 @@ use serde_yaml::Value;
 use crate::{
     indexer::Indexer,
     manifest::{
-        contract::{Contract, ContractDetails},
-        global::Global,
-        graphql::GraphQLSettings,
-        network::Network,
-        phantom::Phantom,
-        storage::Storage,
+        contract::Contract, global::Global, graphql::GraphQLSettings, network::Network,
+        phantom::Phantom, storage::Storage,
     },
 };
 

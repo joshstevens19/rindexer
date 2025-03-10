@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use alloy_primitives::{Address as AlloyAddress, FixedBytes, Log as AlloyLog, B256};
+use alloy_primitives::{FixedBytes, Log as AlloyLog};
 use ethers::{
     middleware::Middleware,
     prelude::Log,
@@ -11,7 +11,6 @@ use ethers::{
     types::{Address as EthersAddress, Block, BlockNumber, Bytes as EthersBytes, H256, U256, U64},
 };
 use reqwest::header::HeaderMap;
-use reth::primitives::SealedBlock;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::Mutex;
