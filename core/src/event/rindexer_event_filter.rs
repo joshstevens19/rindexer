@@ -176,13 +176,13 @@ impl RindexerEventFilter {
                 Some(ValueOrArray::Value(Some(h256))) => {
                     AlloyValueOrArray::Value(B256::from(h256.0))
                 }
-                Some(ValueOrArray::Value(None)) => AlloyValueOrArray::Value(Default::default()),
+                Some(ValueOrArray::Value(None)) => AlloyValueOrArray::Array(vec![]),
                 Some(ValueOrArray::Array(arr)) => AlloyValueOrArray::Array(
                     arr.iter()
                         .filter_map(|opt_h256| opt_h256.as_ref().map(|h256| B256::from(h256.0)))
                         .collect(),
                 ),
-                None => AlloyValueOrArray::Value(Default::default()),
+                None => AlloyValueOrArray::Array(vec![]),
             });
 
         let topics = topics_value_or_array.map(|topic| FilterSet::from(topic));
