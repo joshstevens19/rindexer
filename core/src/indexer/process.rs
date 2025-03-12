@@ -27,7 +27,7 @@ use crate::{
         task_tracker::{indexing_event_processed, indexing_event_processing},
     },
     is_running,
-    reth::{BackfillMessage, RethChannels},
+    reth::types::{ExExRequest, ExExTx, RethChannels},
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -42,7 +42,7 @@ pub enum ProcessEventError {
 pub async fn process_event(
     config: EventProcessingConfig,
     block_until_indexed: bool,
-    backfill_tx: Option<mpsc::UnboundedSender<BackfillMessage>>,
+    backfill_tx: Option<Arc<ExExTx>>,
 ) -> Result<(), ProcessEventError> {
     debug!("{} - Processing events", config.info_log_name);
 
@@ -58,7 +58,7 @@ async fn process_event_logs(
     config: Arc<EventProcessingConfig>,
     force_no_live_indexing: bool,
     block_until_indexed: bool,
-    backfill_tx: Option<mpsc::UnboundedSender<BackfillMessage>>,
+    backfill_tx: Option<Arc<ExExTx>>,
 ) -> Result<(), Box<ProviderError>> {
     let mut logs_stream =
         fetch_logs_stream(Arc::clone(&config), force_no_live_indexing, backfill_tx);

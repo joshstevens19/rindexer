@@ -1,11 +1,11 @@
 use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
 
-use alloy_rpc_types::FilteredParams;
 use ethers::{
     addressbook::Address,
     middleware::MiddlewareError,
     prelude::{BlockNumber, JsonRpcError, ValueOrArray, H256, U64},
 };
+use futures::stream::StreamExt;
 use regex::Regex;
 use tokio::{
     sync::{mpsc, oneshot, Semaphore},
@@ -18,7 +18,7 @@ use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
     indexer::{log_helpers::is_relevant_block, IndexingEventProgressStatus},
     provider::{JsonRpcCachedProvider, WrappedLog},
-    reth::{BackfillMessage, BackfillMode, RethBlockWithReceipts},
+    reth::types::{ExExDataType, ExExMode, ExExRequest, ExExReturnData, ExExTx},
 };
 
 pub struct FetchLogsResult {
@@ -30,7 +30,7 @@ pub struct FetchLogsResult {
 pub fn fetch_logs_stream(
     config: Arc<EventProcessingConfig>,
     force_no_live_indexing: bool,
-    backfill_tx: Option<mpsc::UnboundedSender<BackfillMessage>>,
+    backfill_tx: Option<Arc<ExExTx>>,
 ) -> impl tokio_stream::Stream<Item = Result<FetchLogsResult, Box<dyn Error + Send>>> + Send + Unpin
 {
     let (tx, rx) = mpsc::unbounded_channel();
@@ -46,6 +46,7 @@ pub fn fetch_logs_stream(
             // Process ExEx stream for both historical and live data
             process_exex_stream(backfill_tx, &tx, &config).await;
         } else {
+            info!("Starting backfill using rpc from block:");
             let snapshot_to_block = initial_filter.get_to_block();
             let from_block = initial_filter.get_from_block();
             let mut current_filter = initial_filter;
@@ -73,6 +74,7 @@ pub fn fetch_logs_stream(
 
                 match permit {
                     Ok(permit) => {
+                        info!("Fetching historic logs stream");
                         let result = fetch_historic_logs_stream(
                             &config.network_contract.cached_provider,
                             &tx,
@@ -141,53 +143,8 @@ pub fn fetch_logs_stream(
     UnboundedReceiverStream::new(rx)
 }
 
-async fn process_exex_block(
-    block_receipts: &RethBlockWithReceipts,
-    filtered_params: &FilteredParams,
-) -> Option<WrappedLog> {
-    let RethBlockWithReceipts { block_receipts, block_timestamp, .. } = block_receipts;
-    let block = &block_receipts.block;
-
-    // Early return if no receipts
-    if block_receipts.tx_receipts.is_empty() {
-        return None;
-    }
-
-    // Process each transaction receipt
-    for (tx_index, (tx_hash, receipt)) in block_receipts.tx_receipts.iter().enumerate() {
-        // Skip failed transactions
-        if !receipt.success {
-            continue;
-        }
-
-        // Process logs in successful transactions
-        for (log_index, log) in receipt.logs.iter().enumerate() {
-            let log_topics = log.topics();
-
-            // Check if log matches our filter criteria
-            if filtered_params.filter_address(&log.address) &&
-                filtered_params.filter_topics(&log_topics)
-            {
-                return Some(WrappedLog::from_alloy_log(
-                    log,
-                    *block_timestamp,
-                    block.hash,
-                    block.number,
-                    tx_hash,
-                    tx_index as u64,
-                    log_index,
-                    None,
-                    false,
-                ));
-            }
-        }
-    }
-
-    None
-}
-
 async fn process_exex_stream(
-    backfill_tx: mpsc::UnboundedSender<BackfillMessage>,
+    backfill_tx: Arc<ExExTx>,
     tx: &mpsc::UnboundedSender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
     config: &EventProcessingConfig,
 ) {
@@ -196,7 +153,6 @@ async fn process_exex_stream(
     // we are converting ethers types to reth types here.
     // we should move towards using reth types throughout the codebase.
     let filter = config.to_event_filter().unwrap().to_alloy_filter();
-    let filtered_params = FilteredParams::new(Some(filter));
 
     // Phase 1: Process backfill data
     let from_block = config.to_event_filter().unwrap().get_from_block().as_u64();
@@ -204,10 +160,9 @@ async fn process_exex_stream(
 
     let (response_tx, response_rx) = oneshot::channel();
 
-    let res = backfill_tx.send(BackfillMessage::Start {
-        from_block,
-        to_block: Some(to_block),
-        mode: BackfillMode::PureBackfill,
+    let res = backfill_tx.send(ExExRequest::Start {
+        mode: ExExMode::HistoricOnly { from: from_block, to: to_block },
+        data_type: ExExDataType::FilteredLogs { filter: filter.clone() },
         response_tx,
     });
     if let Err(e) = res {
@@ -220,7 +175,7 @@ async fn process_exex_stream(
         return;
     };
 
-    let (job_id, mut stream) = if let Ok(Ok(res)) = response_rx.await {
+    let (job_id, rx) = if let Ok(Ok(res)) = response_rx.await {
         res
     } else {
         error!(
@@ -230,23 +185,46 @@ async fn process_exex_stream(
         );
         return;
     };
-    while let Some(block) = stream.recv().await {
-        let current_block = block.block_receipts.block.number;
-        let logs = process_exex_block(&block, &filtered_params).await;
-        if let Some(logs) = logs {
-            if let Err(e) = tx.send(Ok(FetchLogsResult {
-                logs: vec![logs],
-                from_block: U64::from(current_block),
-                to_block: U64::from(current_block),
-            })) {
-                error!(
-                    "{} - {} - Failed to send logs to stream consumer: {}",
-                    config.info_log_name,
-                    IndexingEventProgressStatus::Syncing.log(),
-                    e
-                );
-                return;
+    info!("Backfill started for job {}", job_id);
+    let mut batched_stream = UnboundedReceiverStream::new(rx).chunks(1000);
+    while let Some(logs) = batched_stream.next().await {
+        let mut from_block: u64 = u64::MAX;
+        let mut to_block: u64 = u64::MIN;
+        let mut wrapped_logs = Vec::new();
+        for log in logs {
+            match log {
+                ExExReturnData::Log { log: (log, log_metadata), .. } => {
+                    from_block = from_block.min(log_metadata.block_number);
+                    to_block = to_block.max(log_metadata.block_number);
+                    let wrapped_log = WrappedLog::from_alloy_log(
+                        &log,
+                        log_metadata.block_timestamp,
+                        log_metadata.block_hash,
+                        log_metadata.block_number,
+                        &log_metadata.tx_hash,
+                        log_metadata.tx_index,
+                        log_metadata.log_index,
+                        None,
+                        false,
+                    );
+                    wrapped_logs.push(wrapped_log);
+                }
+                ExExReturnData::Chain { .. } => {
+                    debug!("Doing nothing as we are not interested in chain data");
+                }
             }
+        }
+        if let Err(e) = tx.send(Ok(FetchLogsResult {
+            logs: wrapped_logs,
+            from_block: U64::from(from_block),
+            to_block: U64::from(to_block),
+        })) {
+            error!(
+                "{} - {} - Failed to send logs to stream consumer: {}",
+                config.info_log_name,
+                IndexingEventProgressStatus::Syncing.log(),
+                e
+            );
         }
     }
 
@@ -255,10 +233,9 @@ async fn process_exex_stream(
     if config.live_indexing {
         let next_from_block = to_block + 1;
         let (response_tx, response_rx) = oneshot::channel();
-        let res = backfill_tx.send(BackfillMessage::Start {
-            from_block: next_from_block,
-            to_block: None,
-            mode: BackfillMode::BackfillWithLive,
+        let res = backfill_tx.send(ExExRequest::Start {
+            mode: ExExMode::HistoricThenLive { from: next_from_block },
+            data_type: ExExDataType::FilteredLogs { filter: filter.clone() },
             response_tx,
         });
         if let Err(e) = res {
@@ -283,27 +260,37 @@ async fn process_exex_stream(
         };
         info!("Live backfill started for job {}", job_id);
 
-        while let Some(block) = stream.recv().await {
-            info!("Live backfill block: {}", block.block_receipts.block.number);
-            let logs = process_exex_block(&block, &filtered_params).await;
-            if let Some(logs) = logs {
-                let mut logs_vec = vec![];
-                logs_vec.push(logs);
-                //we can directly send the logs to the tx channel here
-                if tx
-                    .send(Ok(FetchLogsResult {
-                        logs: logs_vec,
-                        from_block: U64::from(block.block_receipts.block.number),
-                        to_block: U64::from(block.block_receipts.block.number),
-                    }))
-                    .is_err()
-                {
-                    error!(
-                        "{} - {} - Failed to send logs to stream consumer!",
-                        config.info_log_name,
-                        IndexingEventProgressStatus::Syncing.log()
+        while let Some(return_data) = stream.recv().await {
+            match return_data {
+                ExExReturnData::Log { log: (log, log_metadata), source } => {
+                    debug!("Received log from {:?}", source);
+                    let wrapped_log = WrappedLog::from_alloy_log(
+                        &log,
+                        log_metadata.block_timestamp,
+                        log_metadata.block_hash,
+                        log_metadata.block_number,
+                        &log_metadata.tx_hash,
+                        log_metadata.tx_index,
+                        log_metadata.log_index,
+                        None,
+                        false,
                     );
-                    return;
+                    if let Err(e) = tx.send(Ok(FetchLogsResult {
+                        logs: vec![wrapped_log],
+                        from_block: U64::from(log_metadata.block_number),
+                        to_block: U64::from(log_metadata.block_number),
+                    })) {
+                        error!(
+                            "{} - {} - Failed to send logs to stream consumer: {}",
+                            config.info_log_name,
+                            IndexingEventProgressStatus::Syncing.log(),
+                            e
+                        );
+                        return;
+                    }
+                }
+                ExExReturnData::Chain { .. } => {
+                    debug!("Doing nothing as we are not interested in chain data");
                 }
             }
         }

@@ -27,7 +27,7 @@ use crate::{
         ContractEventDependencies,
     },
     manifest::core::Manifest,
-    reth::RethChannels,
+    reth::types::RethChannels,
     PostgresClient,
 };
 
@@ -249,14 +249,14 @@ pub async fn start_indexing(
                 );
             } else {
                 let backfill_tx = match reth_channels.get(&network_contract.network) {
-                    Some(tx) => tx.clone(),
+                    Some(tx) => Some(tx.clone()),
                     None => {
                         info!("No reth channel found for network: {}", network_contract.network);
-                        continue;
+                        None
                     }
                 };
                 let process_event =
-                    tokio::spawn(process_event(event_processing_config, false, Some(backfill_tx)));
+                    tokio::spawn(process_event(event_processing_config, false, backfill_tx));
                 non_blocking_process_events.push(process_event);
             }
         }

@@ -1,52 +1,63 @@
-use std::{collections::HashMap, sync::Arc, thread};
+use std::{collections::HashMap, ops::RangeInclusive, sync::Arc, time::Instant};
 
 use alloy_primitives::BlockNumber;
-use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
-use reth_ethereum::{node::api::NodeTypes, provider::BlockNumReader, EthPrimitives};
+use alloy_rpc_types::{BlockHashOrNumber, Filter, FilteredParams};
+use futures::{StreamExt, TryStreamExt};
+use reth::{
+    builder::Node,
+    providers::{DatabaseProviderFactory, HeaderProvider, ReceiptProvider, TransactionsProvider},
+};
+use reth_ethereum::{
+    node::api::NodeTypes, primitives::AlloyBlockHeader, provider::BlockNumReader,
+    storage::TransactionsProviderExt, EthPrimitives, TransactionSigned,
+};
 use reth_execution_types::Chain;
-use reth_exex::{BackfillJob, BackfillJobFactory, ExExContext, ExExEvent, ExExNotification};
+use reth_exex::{BackfillJobFactory, ExExContext, ExExEvent, ExExNotification};
 use reth_node_api::FullNodeComponents;
-use reth_node_ethereum::EthereumNode;
 use reth_tracing::tracing::{error, info};
 use tokio::sync::{mpsc, oneshot, OwnedSemaphorePermit, Semaphore};
 
-use crate::{
-    manifest::network::RethConfig,
-    reth::{BackfillMessage, BackfillMode, ExexType, RethBlockWithReceipts},
+use crate::reth::types::{
+    BlockRangeInclusiveIter, DataSource, ExExDataType, ExExMode, ExExRequest, ExExReturnData,
+    LogMetadata,
 };
 
+/// The default parallelism for the ExEx backfill jobs.
 const DEFAULT_PARALLELISM: usize = 32;
+/// The default batch size for the ExEx backfill jobs.
 const DEFAULT_BATCH_SIZE: usize = 8;
+/// The maximum number of headers we read at once when handling a range filter.
+const MAX_HEADERS_RANGE: u64 = 1_000; // with ~530bytes per header this is ~500kb
 
 /// The ExEx that consumes new [`ExExNotification`]s and processes new backfill requests.
-struct BackfillExEx<Node: FullNodeComponents> {
+pub(crate) struct RindexerExEx<Node: FullNodeComponents> {
     /// The context of the ExEx.
     ctx: ExExContext<Node>,
-    /// Sender for backfill messages.
-    backfill_tx: mpsc::UnboundedSender<BackfillMessage>,
-    /// Receiver for backfill messages.
-    backfill_rx: mpsc::UnboundedReceiver<BackfillMessage>,
+    /// Sender for exex requests.
+    request_tx: mpsc::UnboundedSender<ExExRequest>,
+    /// Receiver for exex requests.
+    request_rx: mpsc::UnboundedReceiver<ExExRequest>,
     /// Factory for backfill jobs.
     backfill_job_factory: BackfillJobFactory<Node::Executor, Node::Provider>,
     /// Semaphore to limit the number of concurrent backfills.
     backfill_semaphore: Arc<Semaphore>,
-    /// Next backfill job ID.
-    next_backfill_job_id: u64,
-    /// Mapping of backfill job IDs to backfill jobs.
-    backfill_jobs: HashMap<u64, oneshot::Sender<oneshot::Sender<()>>>,
+    /// Next job ID.
+    next_job_id: u64,
+    /// Mapping of job IDs to backfill jobs.
+    jobs: HashMap<u64, oneshot::Sender<oneshot::Sender<()>>>,
     /// Mapping of live channels so that we can send blocks to the correct channel
-    live_channels: HashMap<u64, mpsc::UnboundedSender<RethBlockWithReceipts>>,
+    live_channels: HashMap<u64, (ExExDataType, mpsc::UnboundedSender<ExExReturnData>)>,
 }
 
-impl<Node> BackfillExEx<Node>
+impl<Node> RindexerExEx<Node>
 where
     Node: FullNodeComponents<Types: NodeTypes<Primitives = EthPrimitives>>,
 {
     /// Creates a new instance of the ExEx.
-    fn new(
+    pub(crate) fn new(
         ctx: ExExContext<Node>,
-        backfill_tx: mpsc::UnboundedSender<BackfillMessage>,
-        backfill_rx: mpsc::UnboundedReceiver<BackfillMessage>,
+        request_tx: mpsc::UnboundedSender<ExExRequest>,
+        request_rx: mpsc::UnboundedReceiver<ExExRequest>,
         backfill_limit: usize,
     ) -> Self {
         let backfill_job_factory =
@@ -55,25 +66,25 @@ where
 
         Self {
             ctx,
-            backfill_tx,
-            backfill_rx,
+            request_tx,
+            request_rx,
             backfill_job_factory,
             backfill_semaphore: Arc::new(Semaphore::new(backfill_limit)),
-            next_backfill_job_id: 0,
-            backfill_jobs: HashMap::new(),
+            next_job_id: 0,
+            jobs: HashMap::new(),
             live_channels: HashMap::new(),
         }
     }
 
     /// Starts listening for notifications and backfill requests.
-    async fn start(mut self) -> eyre::Result<()> {
+    pub(crate) async fn start(mut self) -> eyre::Result<()> {
         loop {
             tokio::select! {
                 Some(notification) = self.ctx.notifications.next() => {
                     self.handle_notification(notification?).await?;
                 }
-                Some(message) = self.backfill_rx.recv() => {
-                    self.handle_backfill_message(message).await;
+                Some(message) = self.request_rx.recv() => {
+                    self.handle_request(message).await;
                 }
             }
         }
@@ -95,29 +106,87 @@ where
         };
 
         if let Some(committed_chain) = notification.committed_chain() {
-            for (_, channel) in self.live_channels.iter() {
-                process_committed_chain(&committed_chain, channel.clone(), ExexType::Live)?;
+            for (_, (data_type, sender)) in &self.live_channels {
+                match data_type {
+                    ExExDataType::Chain => {
+                        sender.send(ExExReturnData::Chain {
+                            chain: (*committed_chain).clone(),
+                            source: DataSource::Live,
+                        })?;
+                    }
+                    ExExDataType::FilteredLogs { filter } => {
+                        self.filter_logs_from_chain_and_send(
+                            &committed_chain,
+                            &filter,
+                            sender.clone(),
+                        )
+                        .await?;
+                    }
+                }
             }
-
             self.ctx.events.send(ExExEvent::FinishedHeight(committed_chain.tip().num_hash()))?;
         }
 
         Ok(())
     }
 
-    /// Handles the given backfill message.
-    async fn handle_backfill_message(&mut self, message: BackfillMessage) {
-        match message {
-            BackfillMessage::Start { from_block, to_block, mode, response_tx } => {
-                let result = self.start_backfill(from_block, to_block, mode).await;
+    async fn filter_logs_from_chain_and_send(
+        &self,
+        chain: &Chain,
+        filter: &Filter,
+        sender: mpsc::UnboundedSender<ExExReturnData>,
+    ) -> eyre::Result<()> {
+        let filter_params = FilteredParams::new(Some(filter.clone()));
+        let blocks = chain.clone().into_blocks();
+        for (block_number, block) in blocks.into_iter() {
+            let transactions = self
+                .ctx
+                .provider()
+                .transactions_by_block(BlockHashOrNumber::Number(block_number))
+                .unwrap()
+                .unwrap();
+            for (tx_idx, transaction) in transactions.iter().enumerate() {
+                let receipts =
+                    self.ctx.provider().receipt_by_hash(*transaction.hash()).unwrap().unwrap();
+                for (log_idx, log) in receipts.logs.iter().enumerate() {
+                    if filter_params.filter_address(&log.address) &&
+                        filter_params.filter_topics(log.topics())
+                    {
+                        let block_hash = block.hash();
+                        let header = block.header();
+                        let log_metadata = LogMetadata {
+                            block_timestamp: header.timestamp,
+                            block_hash,
+                            block_number: header.number,
+                            tx_hash: *transaction.hash(),
+                            tx_index: tx_idx as u64,
+                            log_index: log_idx,
+                            log_type: None,
+                            removed: false,
+                        };
+                        sender.send(ExExReturnData::Log {
+                            log: (log.clone(), log_metadata),
+                            source: DataSource::Live,
+                        })?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Handles the given exex request.
+    async fn handle_request(&mut self, request: ExExRequest) {
+        match request {
+            ExExRequest::Start { mode, data_type, response_tx } => {
+                let result = self.start_job(mode, data_type).await;
                 let _ = response_tx.send(result);
             }
-            BackfillMessage::Cancel { job_id, response_tx } => {
+            ExExRequest::Cancel { job_id } => {
                 self.live_channels.remove(&job_id);
-                let _ = response_tx.send(self.cancel_backfill(job_id).await);
             }
-            BackfillMessage::Finish { job_id } => {
-                self.backfill_jobs.remove(&job_id);
+            ExExRequest::Finish { job_id } => {
+                self.jobs.remove(&job_id);
                 if self.live_channels.contains_key(&job_id) {
                     info!("Job {}: Backfill complete, continuing in live mode", job_id);
                 } else {
@@ -132,60 +201,50 @@ where
     /// spawned in a separate task.
     ///
     /// Returns the backfill job ID or an error if the semaphore permit could not be acquired.
-    async fn start_backfill(
+    async fn start_job(
         &mut self,
-        from_block: BlockNumber,
-        to_block: Option<BlockNumber>,
-        mode: BackfillMode,
-    ) -> eyre::Result<(u64, mpsc::UnboundedReceiver<RethBlockWithReceipts>)> {
+        mode: ExExMode,
+        data_type: ExExDataType,
+    ) -> eyre::Result<(u64, mpsc::UnboundedReceiver<ExExReturnData>)> {
         let permit = self
             .backfill_semaphore
             .clone()
             .try_acquire_owned()
             .map_err(|err| eyre::eyre!("concurrent backfills limit reached: {err:?}"))?;
 
-        let job_id = self.next_backfill_job_id;
-        self.next_backfill_job_id += 1;
+        let job_id = self.next_job_id;
+        self.next_job_id += 1;
 
         // Create channels for this job
-        let (rindexer_tx, rindexer_rx) = mpsc::unbounded_channel();
+        let (sender, receiver) = mpsc::unbounded_channel();
 
-        // Determine backfill range
-        let backfill_to = match mode {
-            BackfillMode::PureBackfill => {
-                to_block.ok_or_else(|| eyre::eyre!("to_block required for PureBackfill mode"))?
+        match mode {
+            ExExMode::HistoricOnly { from, to } => {
+                if let Err(e) = self.backfill(permit, from..=to, &data_type, sender).await {
+                    error!("Failed to backfill: {}", e);
+                }
             }
-            BackfillMode::BackfillWithLive => {
-                to_block.unwrap_or(self.ctx.provider().best_block_number()?)
+            ExExMode::HistoricThenLive { from } => {
+                let to = self.ctx.provider().best_block_number()?;
+                let data_type_clone = data_type.clone();
+                let sender_clone = sender.clone();
+                if let Err(e) =
+                    self.backfill(permit, from..=to, &data_type_clone, sender_clone).await
+                {
+                    error!("Failed to backfill: {}", e);
+                }
+                self.live_channels.insert(job_id, (data_type, sender));
+            }
+            ExExMode::LiveOnly => {
+                self.live_channels.insert(job_id, (data_type.clone(), sender.clone()));
             }
         };
 
-        if backfill_to < from_block {
-            eyre::bail!("to_block must be >= from_block");
-        }
-
-        // Spawn backfill job
-        let range = from_block..=backfill_to;
-        let job = self.backfill_job_factory.backfill(range);
-        let backfill_tx = self.backfill_tx.clone();
-        let backfill_block_tx = rindexer_tx.clone();
-        let (cancel_tx, cancel_rx) = oneshot::channel();
-        self.backfill_jobs.insert(job_id, cancel_tx);
-
-        self.ctx.task_executor().spawn(async move {
-            Self::backfill(permit, job_id, job, backfill_tx, cancel_rx, backfill_block_tx).await;
-        });
-
-        // Register live channel for BackfillWithLive mode
-        if matches!(mode, BackfillMode::BackfillWithLive) {
-            self.live_channels.insert(job_id, rindexer_tx.clone());
-        }
-
-        Ok((job_id, rindexer_rx))
+        Ok((job_id, receiver))
     }
 
     async fn cancel_backfill(&mut self, job_id: u64) -> eyre::Result<()> {
-        let Some(cancel_tx) = self.backfill_jobs.remove(&job_id) else {
+        let Some(cancel_tx) = self.jobs.remove(&job_id) else {
             eyre::bail!("backfill job not found");
         };
         let (tx, rx) = oneshot::channel();
@@ -198,125 +257,131 @@ where
     ///
     /// Listens on the `cancel_rx` channel for cancellation requests.
     async fn backfill(
+        self: &mut Self,
         _permit: OwnedSemaphorePermit,
-        job_id: u64,
-        job: BackfillJob<Node::Executor, Node::Provider>,
-        backfill_tx: mpsc::UnboundedSender<BackfillMessage>,
-        cancel_rx: oneshot::Receiver<oneshot::Sender<()>>,
-        block_tx: mpsc::UnboundedSender<RethBlockWithReceipts>,
-    ) {
-        let backfill = backfill_with_job(
-            job.into_stream()
-                .with_batch_size(DEFAULT_BATCH_SIZE)
-                .with_parallelism(DEFAULT_PARALLELISM),
-            block_tx,
-        );
-
-        tokio::select! {
-            result = backfill => {
-                if let Err(err) = result {
-                    error!(%err, "Backfill error occurred");
-                }
-
-                let _ = backfill_tx.send(BackfillMessage::Finish { job_id });
-            }
-            sender = cancel_rx => {
-                info!("Backfill job cancelled");
-
-                if let Ok(sender) = sender {
-                    let _ = sender.send(());
-                }
-            }
-        }
-    }
-}
-
-/// Backfills the given range of blocks in parallel, calling the
-/// [`process_committed_chain`] method for each block.
-async fn backfill_with_job<S, E>(
-    st: S,
-    block_tx: mpsc::UnboundedSender<RethBlockWithReceipts>,
-) -> eyre::Result<()>
-where
-    S: Stream<Item = Result<Chain, E>>,
-    E: Into<eyre::Error>,
-{
-    st
-        // Covert the block execution error into `eyre`
-        .map_err(Into::into)
-        // Process each block, returning early if an error occurs
-        .try_for_each(|chain| {
-            let tx = block_tx.clone();
-            async move { process_committed_chain(&chain, tx, ExexType::Backfill) }
-        })
-        .await
-}
-
-fn process_committed_chain(
-    chain: &Chain,
-    block_tx: mpsc::UnboundedSender<RethBlockWithReceipts>,
-    exex_type: ExexType,
-) -> eyre::Result<()> {
-    let receipts_with_attachment = chain.receipts_with_attachment();
-
-    for block_receipts in receipts_with_attachment {
-        let block = block_receipts.block;
-        let block_number = block.number;
-
-        // Get the block timestamp
-        let block_data = chain.blocks().get(&block_number).expect("Block should exist in chain");
-        let block_timestamp = block_data.header().timestamp;
-
-        if block_receipts.tx_receipts.is_empty() {
-            continue;
-        }
-
-        block_tx.send(RethBlockWithReceipts {
-            block_receipts,
-            block_timestamp,
-            exex_type: exex_type.clone(),
-        })?;
-    }
-
-    Ok(())
-}
-
-/// Starts a Reth node with the execution extension that forwards blocks to the provided channel.
-pub fn start_reth_node_with_exex(
-    reth_config: &RethConfig,
-) -> eyre::Result<mpsc::UnboundedSender<BackfillMessage>> {
-    let cli = reth_config.cli_config.to_reth_cli();
-
-    // Create a channel for backfill requests. Sender will go to rindexer, receiver
-    // will be used by the ExEx.
-    let (backfill_tx, backfill_rx) = mpsc::unbounded_channel();
-    let rindexer_backfill_tx = backfill_tx.clone();
-    let exex_backfill_tx = backfill_tx.clone();
-
-    // Spawn the node with a larger stack size, otherwise it will crash with a stack overflow
-    let builder = thread::Builder::new().stack_size(32 * 1024 * 1024); // 32 MB
-
-    let _ = builder.spawn(move || {
-        let result = cli.run(|builder, _| async move {
-            let handle = builder
-                .node(EthereumNode::default())
-                .install_exex("rindexer", move |ctx| {
-                    tokio::task::spawn_blocking(move || {
-                        tokio::runtime::Handle::current().block_on(async move {
-                            let exex = BackfillExEx::new(ctx, exex_backfill_tx, backfill_rx, 10);
-                            eyre::Ok(exex.start())
+        range: RangeInclusive<BlockNumber>,
+        data_type: &ExExDataType,
+        sender: mpsc::UnboundedSender<ExExReturnData>,
+    ) -> eyre::Result<()> {
+        match data_type.clone() {
+            ExExDataType::Chain => {
+                let job = self.backfill_job_factory.backfill(range);
+                self.ctx.task_executor().spawn(async move {
+                    let stream = job
+                        .into_stream()
+                        .with_batch_size(DEFAULT_BATCH_SIZE)
+                        .with_parallelism(DEFAULT_PARALLELISM);
+                    if let Err(e) = stream
+                        .map_err(|e| -> eyre::Error { e.into() })
+                        .try_for_each(|chain| {
+                            let sender = sender.clone();
+                            async move {
+                                sender.send(ExExReturnData::Chain {
+                                    chain,
+                                    source: DataSource::Backfill,
+                                })?;
+                                Ok(())
+                            }
                         })
-                    })
-                    .map(|result| result.map_err(Into::into).and_then(|result| result))
-                })
-                .launch()
-                .await?;
-            handle.wait_for_node_exit().await
-        });
-        if let Err(e) = result {
-            eprintln!("Node thread error: {:?}", e);
+                        .await
+                    {
+                        error!("Failed to backfill: {}", e);
+                    }
+                });
+            }
+            ExExDataType::FilteredLogs { filter } => {
+                let provider = self.ctx.provider().clone();
+                self.ctx.task_executor().spawn(async move {
+                    if let Err(e) =
+                        Self::backfill_with_filter_and_send(&provider, &filter, sender).await
+                    {
+                        error!("Failed to backfill: {}", e);
+                    }
+                });
+            }
         }
-    });
+        Ok(())
+    }
 
-    Ok(rindexer_backfill_tx)
+    async fn backfill_with_filter_and_send<
+        T: ReceiptProvider<Receipt = reth_ethereum::Receipt>
+            + TransactionsProvider<Transaction = TransactionSigned>
+            + HeaderProvider,
+    >(
+        provider: T,
+        filter: &Filter,
+        sender: mpsc::UnboundedSender<ExExReturnData>,
+    ) -> eyre::Result<()> {
+        let from_block = filter.block_option.get_from_block().unwrap().as_number().unwrap();
+        let to_block = filter.block_option.get_to_block().unwrap().as_number().unwrap();
+
+        let start_time = Instant::now();
+
+        // loop over the range of new blocks and check logs if the filter matches the log's bloom
+        // filter
+        for (from, to) in BlockRangeInclusiveIter::new(from_block..=to_block, MAX_HEADERS_RANGE) {
+            let headers = provider.headers_range(from..=to).unwrap();
+
+            let filter_params = FilteredParams::new(Some(filter.clone()));
+
+            // derive bloom filters from filter input, so we can check headers for matching logs
+            let address_filter = FilteredParams::address_filter(&filter.address);
+            let topics_filter = FilteredParams::topics_filter(&filter.topics);
+
+            for header in headers.iter() {
+                if FilteredParams::matches_address(header.logs_bloom(), &address_filter) &&
+                    FilteredParams::matches_topics(header.logs_bloom(), &topics_filter)
+                {
+                    let sealed_header = provider.sealed_header(header.number()).unwrap().unwrap();
+
+                    let block_hash = sealed_header.hash();
+                    let block_timestamp = sealed_header.timestamp();
+                    let block_number = sealed_header.number();
+
+                    let receipts = provider
+                        .receipts_by_block(BlockHashOrNumber::Number(header.number()))
+                        .unwrap()
+                        .unwrap();
+
+                    let transactions = provider
+                        .transactions_by_block(BlockHashOrNumber::Number(header.number()))
+                        .unwrap()
+                        .unwrap();
+
+                    for (tx_index, (receipt, transaction)) in
+                        receipts.iter().zip(transactions.iter()).enumerate()
+                    {
+                        let tx_hash = transaction.hash();
+                        for (log_index, log) in receipt.logs.iter().enumerate() {
+                            if filter_params.filter_address(&log.address) &&
+                                filter_params.filter_topics(log.topics())
+                            {
+                                let log_metadata = LogMetadata {
+                                    block_timestamp,
+                                    block_hash,
+                                    block_number,
+                                    tx_hash: *tx_hash,
+                                    tx_index: tx_index as u64,
+                                    log_index,
+                                    log_type: None,
+                                    removed: false,
+                                };
+
+                                let result = sender.send(ExExReturnData::Log {
+                                    log: (log.clone(), log_metadata),
+                                    source: DataSource::Backfill,
+                                });
+                                if let Err(e) = result {
+                                    error!("Failed to send log to stream consumer: {}", e);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let duration = start_time.elapsed();
+        info!("Time taken: {:?}", duration);
+        Ok(())
+    }
 }

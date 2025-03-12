@@ -24,7 +24,7 @@ use crate::{
         storage::RelationshipsAndIndexersError,
         yaml::{read_manifest, ReadManifestError},
     },
-    reth::{start_reth_node_with_exex, RethChannels},
+    reth::{node::start_reth_node_with_exex, types::RethChannels},
     setup_info_logger,
 };
 pub struct IndexingDetails {
@@ -130,9 +130,9 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
 
             // Start Reth nodes for enabled networks
             for network in manifest.reth_enabled_networks() {
-                let reth_config = network.reth.as_ref().unwrap();
+                let reth_cli = network.reth.as_ref().unwrap().cli_config.to_reth_cli();
                 info!("Starting Reth node for network: {}", network.name);
-                let backfill_tx = start_reth_node_with_exex(reth_config)?;
+                let backfill_tx = start_reth_node_with_exex(reth_cli)?;
                 info!("Started Reth node for network: {}", network.name);
 
                 reth_channels.insert(network.name.clone(), backfill_tx);
