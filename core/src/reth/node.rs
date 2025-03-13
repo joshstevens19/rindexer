@@ -36,12 +36,7 @@ pub fn start_reth_node_with_exex(cli: Cli) -> eyre::Result<RethTx> {
                 .install_exex(EXECUTION_EXTENSION_NAME, move |ctx| {
                     tokio::task::spawn_blocking(move || {
                         tokio::runtime::Handle::current().block_on(async move {
-                            let exex = RindexerExEx::new(
-                                ctx,
-                                request_tx_clone,
-                                request_rx,
-                                CONCURRENT_BACKFILLS,
-                            );
+                            let exex = RindexerExEx::new(ctx, request_tx_clone, request_rx);
                             eyre::Ok(exex.start())
                         })
                     })

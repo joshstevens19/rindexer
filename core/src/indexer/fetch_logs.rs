@@ -18,7 +18,7 @@ use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
     indexer::{log_helpers::is_relevant_block, IndexingEventProgressStatus},
     provider::{JsonRpcCachedProvider, WrappedLog},
-    reth::types::{ExExDataType, ExExMode, ExExRequest, ExExReturnData, ExExTx},
+    reth::types::{ExExMode, ExExRequest, ExExReturnData, ExExTx},
 };
 
 pub struct FetchLogsResult {
@@ -161,8 +161,8 @@ async fn process_exex_stream(
     let (response_tx, response_rx) = oneshot::channel();
 
     let res = backfill_tx.send(ExExRequest::Start {
-        mode: ExExMode::HistoricOnly { from: from_block, to: to_block },
-        data_type: ExExDataType::FilteredLogs { filter: filter.clone() },
+        mode: ExExMode::HistoricOnly,
+        filter: filter.clone(),
         response_tx,
     });
     if let Err(e) = res {
@@ -186,33 +186,26 @@ async fn process_exex_stream(
         return;
     };
     info!("Backfill started for job {}", job_id);
-    let mut batched_stream = UnboundedReceiverStream::new(rx).chunks(1000);
+    let mut batched_stream = UnboundedReceiverStream::new(rx).chunks(100);
     while let Some(logs) = batched_stream.next().await {
         let mut from_block: u64 = u64::MAX;
         let mut to_block: u64 = u64::MIN;
         let mut wrapped_logs = Vec::new();
-        for log in logs {
-            match log {
-                ExExReturnData::Log { log: (log, log_metadata), .. } => {
-                    from_block = from_block.min(log_metadata.block_number);
-                    to_block = to_block.max(log_metadata.block_number);
-                    let wrapped_log = WrappedLog::from_alloy_log(
-                        &log,
-                        log_metadata.block_timestamp,
-                        log_metadata.block_hash,
-                        log_metadata.block_number,
-                        &log_metadata.tx_hash,
-                        log_metadata.tx_index,
-                        log_metadata.log_index,
-                        None,
-                        false,
-                    );
-                    wrapped_logs.push(wrapped_log);
-                }
-                ExExReturnData::Chain { .. } => {
-                    debug!("Doing nothing as we are not interested in chain data");
-                }
-            }
+        for ExExReturnData { log, metadata } in logs {
+            from_block = from_block.min(metadata.block_number);
+            to_block = to_block.max(metadata.block_number);
+            let wrapped_log = WrappedLog::from_alloy_log(
+                &log,
+                metadata.block_timestamp,
+                metadata.block_hash,
+                metadata.block_number,
+                &metadata.tx_hash,
+                metadata.tx_index,
+                metadata.log_index,
+                None,
+                false,
+            );
+            wrapped_logs.push(wrapped_log);
         }
         if let Err(e) = tx.send(Ok(FetchLogsResult {
             logs: wrapped_logs,
@@ -232,10 +225,11 @@ async fn process_exex_stream(
 
     if config.live_indexing {
         let next_from_block = to_block + 1;
+        let filter = filter.from_block(next_from_block);
         let (response_tx, response_rx) = oneshot::channel();
         let res = backfill_tx.send(ExExRequest::Start {
-            mode: ExExMode::HistoricThenLive { from: next_from_block },
-            data_type: ExExDataType::FilteredLogs { filter: filter.clone() },
+            mode: ExExMode::HistoricThenLive,
+            filter: filter.clone(),
             response_tx,
         });
         if let Err(e) = res {
@@ -260,38 +254,30 @@ async fn process_exex_stream(
         };
         info!("Live backfill started for job {}", job_id);
 
-        while let Some(return_data) = stream.recv().await {
-            match return_data {
-                ExExReturnData::Log { log: (log, log_metadata), source } => {
-                    debug!("Received log from {:?}", source);
-                    let wrapped_log = WrappedLog::from_alloy_log(
-                        &log,
-                        log_metadata.block_timestamp,
-                        log_metadata.block_hash,
-                        log_metadata.block_number,
-                        &log_metadata.tx_hash,
-                        log_metadata.tx_index,
-                        log_metadata.log_index,
-                        None,
-                        false,
-                    );
-                    if let Err(e) = tx.send(Ok(FetchLogsResult {
-                        logs: vec![wrapped_log],
-                        from_block: U64::from(log_metadata.block_number),
-                        to_block: U64::from(log_metadata.block_number),
-                    })) {
-                        error!(
-                            "{} - {} - Failed to send logs to stream consumer: {}",
-                            config.info_log_name,
-                            IndexingEventProgressStatus::Syncing.log(),
-                            e
-                        );
-                        return;
-                    }
-                }
-                ExExReturnData::Chain { .. } => {
-                    debug!("Doing nothing as we are not interested in chain data");
-                }
+        while let Some(ExExReturnData { log, metadata }) = stream.recv().await {
+            let wrapped_log = WrappedLog::from_alloy_log(
+                &log,
+                metadata.block_timestamp,
+                metadata.block_hash,
+                metadata.block_number,
+                &metadata.tx_hash,
+                metadata.tx_index,
+                metadata.log_index,
+                None,
+                false,
+            );
+            if let Err(e) = tx.send(Ok(FetchLogsResult {
+                logs: vec![wrapped_log],
+                from_block: U64::from(metadata.block_number),
+                to_block: U64::from(metadata.block_number),
+            })) {
+                error!(
+                    "{} - {} - Failed to send logs to stream consumer: {}",
+                    config.info_log_name,
+                    IndexingEventProgressStatus::Syncing.log(),
+                    e
+                );
+                return;
             }
         }
     }

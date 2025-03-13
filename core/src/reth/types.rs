@@ -1,9 +1,8 @@
 // Module for integrating Reth with ExEx into rindexer
 use std::{collections::HashMap, iter::StepBy, ops::RangeInclusive, sync::Arc};
 
-use alloy_primitives::{BlockNumber, FixedBytes, Log};
+use alloy_primitives::{FixedBytes, Log};
 use alloy_rpc_types::Filter;
-use reth::providers::Chain;
 use tokio::sync::{mpsc, oneshot};
 
 /// The response to an ExExRequest
@@ -13,8 +12,8 @@ pub type ExExTx = mpsc::UnboundedSender<ExExRequest>;
 
 /// ExExRequest is a request to the Execution Engine
 pub enum ExExRequest {
-    /// Starts a new execution job with the given mode and data type
-    Start { mode: ExExMode, data_type: ExExDataType, response_tx: oneshot::Sender<ExExResponse> },
+    /// Starts a new execution job with the given mode and filter
+    Start { mode: ExExMode, filter: Filter, response_tx: oneshot::Sender<ExExResponse> },
     /// Cancels a job with the given ID
     Cancel { job_id: u64 },
     /// Finish a job with the given ID
@@ -24,21 +23,12 @@ pub enum ExExRequest {
 /// The mode of the execution job
 #[derive(Clone)]
 pub enum ExExMode {
-    /// Backfill only from a specific block to a specific block
-    HistoricOnly { from: BlockNumber, to: BlockNumber },
+    /// Backfill only
+    HistoricOnly,
     /// Backfill from a specific block to the latest block and then switch to live mode
-    HistoricThenLive { from: BlockNumber },
+    HistoricThenLive,
     /// Live only mode
     LiveOnly,
-}
-
-/// The type of data that is being requested
-#[derive(Clone)]
-pub enum ExExDataType {
-    /// return the Chain. used for forwarding exex returns to the client as is.
-    Chain,
-    /// Filtered logs.
-    FilteredLogs { filter: Filter },
 }
 
 /// Log metadata for each returned log
@@ -54,22 +44,10 @@ pub struct LogMetadata {
     pub removed: bool,
 }
 
-/// The type of data that is being returned
-#[derive(Clone)]
-pub enum ExExReturnData {
-    /// return the Chain. used for forwarding exex returns to the client as is.
-    Chain { chain: Chain, source: DataSource },
-    /// Filtered logs.
-    Log { log: (Log, LogMetadata), source: DataSource },
-}
-
-/// The source of the data from the exex
-#[derive(Clone, Debug)]
-pub enum DataSource {
-    /// Backfill
-    Backfill,
-    /// Live
-    Live,
+/// The data that is being returned
+pub struct ExExReturnData {
+    pub log: Log,
+    pub metadata: LogMetadata,
 }
 
 #[derive(Clone)]
