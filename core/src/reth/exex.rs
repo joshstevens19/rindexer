@@ -1,15 +1,12 @@
-use std::{collections::HashMap, ops::RangeInclusive, sync::Arc, time::Instant};
+use std::{collections::HashMap, ops::RangeInclusive, sync::Arc};
 
 use alloy_primitives::BlockNumber;
 use alloy_rpc_types::{BlockHashOrNumber, Filter, FilteredParams};
 use futures::{StreamExt, TryStreamExt};
-use reth::{
-    builder::Node,
-    providers::{DatabaseProviderFactory, HeaderProvider, ReceiptProvider, TransactionsProvider},
-};
+use reth::providers::{HeaderProvider, ReceiptProvider, TransactionsProvider};
 use reth_ethereum::{
-    node::api::NodeTypes, primitives::AlloyBlockHeader, provider::BlockNumReader,
-    storage::TransactionsProviderExt, EthPrimitives, TransactionSigned,
+    node::api::NodeTypes, primitives::AlloyBlockHeader, provider::BlockNumReader, EthPrimitives,
+    TransactionSigned,
 };
 use reth_execution_types::Chain;
 use reth_exex::{BackfillJobFactory, ExExContext, ExExEvent, ExExNotification};
@@ -17,11 +14,13 @@ use reth_node_api::FullNodeComponents;
 use reth_tracing::tracing::{error, info};
 use tokio::sync::{mpsc, oneshot, OwnedSemaphorePermit, Semaphore};
 
-use crate::reth::types::{
-    BlockRangeInclusiveIter, DataSource, ExExDataType, ExExMode, ExExRequest, ExExReturnData,
-    LogMetadata,
+use crate::reth::{
+    helpers::extract_block_range,
+    types::{
+        BlockRangeInclusiveIter, DataSource, ExExDataType, ExExMode, ExExRequest, ExExReturnData,
+        LogMetadata,
+    },
 };
-
 /// The default parallelism for the ExEx backfill jobs.
 const DEFAULT_PARALLELISM: usize = 32;
 /// The default batch size for the ExEx backfill jobs.
@@ -59,10 +58,11 @@ where
         request_tx: mpsc::UnboundedSender<ExExRequest>,
         request_rx: mpsc::UnboundedReceiver<ExExRequest>,
         backfill_limit: usize,
+        stream_parallelism: Option<usize>,
     ) -> Self {
         let backfill_job_factory =
             BackfillJobFactory::new(ctx.block_executor().clone(), ctx.provider().clone())
-                .with_stream_parallelism(DEFAULT_PARALLELISM);
+                .with_stream_parallelism(stream_parallelism.unwrap_or(DEFAULT_PARALLELISM));
 
         Self {
             ctx,
@@ -106,23 +106,9 @@ where
         };
 
         if let Some(committed_chain) = notification.committed_chain() {
-            for (_, (data_type, sender)) in &self.live_channels {
-                match data_type {
-                    ExExDataType::Chain => {
-                        sender.send(ExExReturnData::Chain {
-                            chain: (*committed_chain).clone(),
-                            source: DataSource::Live,
-                        })?;
-                    }
-                    ExExDataType::FilteredLogs { filter } => {
-                        self.filter_logs_from_chain_and_send(
-                            &committed_chain,
-                            &filter,
-                            sender.clone(),
-                        )
-                        .await?;
-                    }
-                }
+            for (job_id, (data_type, sender)) in &self.live_channels {
+                info!("Processing committed chain for job {}", job_id);
+                self.process_committed_chain(&committed_chain, data_type, sender.clone()).await?;
             }
             self.ctx.events.send(ExExEvent::FinishedHeight(committed_chain.tip().num_hash()))?;
         }
@@ -130,46 +116,32 @@ where
         Ok(())
     }
 
-    async fn filter_logs_from_chain_and_send(
+    async fn process_committed_chain(
         &self,
-        chain: &Chain,
-        filter: &Filter,
+        committed_chain: &Chain,
+        data_type: &ExExDataType,
         sender: mpsc::UnboundedSender<ExExReturnData>,
     ) -> eyre::Result<()> {
-        let filter_params = FilteredParams::new(Some(filter.clone()));
-        let blocks = chain.clone().into_blocks();
-        for (block_number, block) in blocks.into_iter() {
-            let transactions = self
-                .ctx
-                .provider()
-                .transactions_by_block(BlockHashOrNumber::Number(block_number))
-                .unwrap()
-                .unwrap();
-            for (tx_idx, transaction) in transactions.iter().enumerate() {
-                let receipts =
-                    self.ctx.provider().receipt_by_hash(*transaction.hash()).unwrap().unwrap();
-                for (log_idx, log) in receipts.logs.iter().enumerate() {
-                    if filter_params.filter_address(&log.address) &&
-                        filter_params.filter_topics(log.topics())
-                    {
-                        let block_hash = block.hash();
-                        let header = block.header();
-                        let log_metadata = LogMetadata {
-                            block_timestamp: header.timestamp,
-                            block_hash,
-                            block_number: header.number,
-                            tx_hash: *transaction.hash(),
-                            tx_index: tx_idx as u64,
-                            log_index: log_idx,
-                            log_type: None,
-                            removed: false,
-                        };
-                        sender.send(ExExReturnData::Log {
-                            log: (log.clone(), log_metadata),
-                            source: DataSource::Live,
-                        })?;
-                    }
-                }
+        match data_type {
+            ExExDataType::Chain => {
+                sender
+                    .send(ExExReturnData::Chain {
+                        chain: (*committed_chain).clone(),
+                        source: DataSource::Live,
+                    })
+                    .map_err(|e| eyre::eyre!("failed to send chain to stream consumer: {}", e))?;
+            }
+            ExExDataType::FilteredLogs { filter } => {
+                let range = committed_chain.range();
+
+                process_blocks_with_filter(
+                    &self.ctx.provider(),
+                    range,
+                    filter,
+                    &sender,
+                    DataSource::Live,
+                )
+                .await?;
             }
         }
         Ok(())
@@ -179,7 +151,7 @@ where
     async fn handle_request(&mut self, request: ExExRequest) {
         match request {
             ExExRequest::Start { mode, data_type, response_tx } => {
-                let result = self.start_job(mode, data_type).await;
+                let result = self.start_request(mode, data_type).await;
                 let _ = response_tx.send(result);
             }
             ExExRequest::Cancel { job_id } => {
@@ -201,7 +173,7 @@ where
     /// spawned in a separate task.
     ///
     /// Returns the backfill job ID or an error if the semaphore permit could not be acquired.
-    async fn start_job(
+    async fn start_request(
         &mut self,
         mode: ExExMode,
         data_type: ExExDataType,
@@ -243,16 +215,6 @@ where
         Ok((job_id, receiver))
     }
 
-    async fn cancel_backfill(&mut self, job_id: u64) -> eyre::Result<()> {
-        let Some(cancel_tx) = self.jobs.remove(&job_id) else {
-            eyre::bail!("backfill job not found");
-        };
-        let (tx, rx) = oneshot::channel();
-        cancel_tx.send(tx).map_err(|_| eyre::eyre!("failed to send cancel signal"))?;
-        rx.await.map_err(|_| eyre::eyre!("failed to receive cancel confirmation"))?;
-        Ok(())
-    }
-
     /// Calls the [`process_committed_chain`] method for each backfilled block.
     ///
     /// Listens on the `cancel_rx` channel for cancellation requests.
@@ -292,96 +254,104 @@ where
             ExExDataType::FilteredLogs { filter } => {
                 let provider = self.ctx.provider().clone();
                 self.ctx.task_executor().spawn(async move {
-                    if let Err(e) =
-                        Self::backfill_with_filter_and_send(&provider, &filter, sender).await
-                    {
-                        error!("Failed to backfill: {}", e);
+                    // Process filter logs with error handling
+                    if let Ok(block_range) = extract_block_range(&filter) {
+                        if let Err(e) = process_blocks_with_filter(
+                            &provider,
+                            block_range,
+                            &filter,
+                            &sender,
+                            DataSource::Backfill,
+                        )
+                        .await
+                        {
+                            error!("Failed to process blocks with filter: {}", e);
+                        }
+                    } else {
+                        error!("Failed to extract block range from filter");
                     }
                 });
             }
         }
         Ok(())
     }
+}
 
-    async fn backfill_with_filter_and_send<
-        T: ReceiptProvider<Receipt = reth_ethereum::Receipt>
-            + TransactionsProvider<Transaction = TransactionSigned>
-            + HeaderProvider,
-    >(
-        provider: T,
-        filter: &Filter,
-        sender: mpsc::UnboundedSender<ExExReturnData>,
-    ) -> eyre::Result<()> {
-        let from_block = filter.block_option.get_from_block().unwrap().as_number().unwrap();
-        let to_block = filter.block_option.get_to_block().unwrap().as_number().unwrap();
+/// Process a range of blocks, filtering logs by the provided filter and sending results through
+/// the sender
+async fn process_blocks_with_filter<
+    T: ReceiptProvider<Receipt = reth_ethereum::Receipt>
+        + TransactionsProvider<Transaction = TransactionSigned>
+        + HeaderProvider,
+>(
+    provider: &T,
+    block_range: RangeInclusive<BlockNumber>,
+    filter: &Filter,
+    sender: &mpsc::UnboundedSender<ExExReturnData>,
+    source: DataSource,
+) -> eyre::Result<()> {
+    let (from_block, to_block) = (*block_range.start(), *block_range.end());
 
-        let start_time = Instant::now();
+    // Loop over the range of blocks and check logs if the filter matches the log's bloom filter
+    for (from, to) in BlockRangeInclusiveIter::new(from_block..=to_block, MAX_HEADERS_RANGE) {
+        let headers = provider.sealed_headers_range(from..=to).unwrap();
 
-        // loop over the range of new blocks and check logs if the filter matches the log's bloom
-        // filter
-        for (from, to) in BlockRangeInclusiveIter::new(from_block..=to_block, MAX_HEADERS_RANGE) {
-            let headers = provider.headers_range(from..=to).unwrap();
+        let filter_params = FilteredParams::new(Some(filter.clone()));
 
-            let filter_params = FilteredParams::new(Some(filter.clone()));
+        // Derive bloom filters from filter input, so we can check headers for matching logs
+        let address_filter = FilteredParams::address_filter(&filter.address);
+        let topics_filter = FilteredParams::topics_filter(&filter.topics);
 
-            // derive bloom filters from filter input, so we can check headers for matching logs
-            let address_filter = FilteredParams::address_filter(&filter.address);
-            let topics_filter = FilteredParams::topics_filter(&filter.topics);
+        for header in headers.iter() {
+            if FilteredParams::matches_address(header.logs_bloom(), &address_filter) &&
+                FilteredParams::matches_topics(header.logs_bloom(), &topics_filter)
+            {
+                let block_hash = header.hash();
+                let block_timestamp = header.timestamp();
+                let block_number = header.number();
 
-            for header in headers.iter() {
-                if FilteredParams::matches_address(header.logs_bloom(), &address_filter) &&
-                    FilteredParams::matches_topics(header.logs_bloom(), &topics_filter)
+                let transactions = provider
+                    .transactions_by_block(BlockHashOrNumber::Number(block_number))
+                    .unwrap()
+                    .unwrap();
+
+                let receipts = provider
+                    .receipts_by_block(BlockHashOrNumber::Number(block_number))
+                    .unwrap()
+                    .unwrap();
+
+                for (tx_index, (transaction, receipt)) in
+                    transactions.iter().zip(receipts.iter()).enumerate()
                 {
-                    let sealed_header = provider.sealed_header(header.number()).unwrap().unwrap();
+                    let tx_hash = transaction.hash();
+                    for (log_index, log) in receipt.logs.iter().enumerate() {
+                        if filter_params.filter_address(&log.address) &&
+                            filter_params.filter_topics(log.topics())
+                        {
+                            let log_metadata = LogMetadata {
+                                block_timestamp,
+                                block_hash,
+                                block_number,
+                                tx_hash: *tx_hash,
+                                tx_index: tx_index as u64,
+                                log_index,
+                                log_type: None,
+                                removed: false,
+                            };
 
-                    let block_hash = sealed_header.hash();
-                    let block_timestamp = sealed_header.timestamp();
-                    let block_number = sealed_header.number();
-
-                    let receipts = provider
-                        .receipts_by_block(BlockHashOrNumber::Number(header.number()))
-                        .unwrap()
-                        .unwrap();
-
-                    let transactions = provider
-                        .transactions_by_block(BlockHashOrNumber::Number(header.number()))
-                        .unwrap()
-                        .unwrap();
-
-                    for (tx_index, (receipt, transaction)) in
-                        receipts.iter().zip(transactions.iter()).enumerate()
-                    {
-                        let tx_hash = transaction.hash();
-                        for (log_index, log) in receipt.logs.iter().enumerate() {
-                            if filter_params.filter_address(&log.address) &&
-                                filter_params.filter_topics(log.topics())
-                            {
-                                let log_metadata = LogMetadata {
-                                    block_timestamp,
-                                    block_hash,
-                                    block_number,
-                                    tx_hash: *tx_hash,
-                                    tx_index: tx_index as u64,
-                                    log_index,
-                                    log_type: None,
-                                    removed: false,
-                                };
-
-                                let result = sender.send(ExExReturnData::Log {
-                                    log: (log.clone(), log_metadata),
-                                    source: DataSource::Backfill,
-                                });
-                                if let Err(e) = result {
-                                    error!("Failed to send log to stream consumer: {}", e);
-                                }
+                            let result = sender.send(ExExReturnData::Log {
+                                log: (log.clone(), log_metadata),
+                                source: source.clone(),
+                            });
+                            if let Err(e) = result {
+                                error!("Failed to send log to stream consumer: {}", e);
                             }
                         }
                     }
                 }
             }
         }
-        let duration = start_time.elapsed();
-        info!("Time taken: {:?}", duration);
-        Ok(())
     }
+
+    Ok(())
 }
