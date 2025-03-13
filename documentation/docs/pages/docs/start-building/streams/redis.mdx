@@ -41,6 +41,7 @@ contracts:
             - ethereum // [!code focus]
           events: // [!code focus]
             - event_name: Transfer // [!code focus]
+              alias: RocketPoolTransfer
 ```
 
 ## Response
@@ -158,6 +159,37 @@ contracts:
             - ethereum
           events: // [!code focus]
             - event_name: Transfer // [!code focus]
+```
+
+#### alias
+
+This is an optional `alias` you wish to assign to the event you want to stream to this Redis Stream.
+
+It is paired with the event name and allows consumers to have unique discriminator keys in the event of
+naming conflicts. E.g Transfer (ERC20) and Transfer (ERC721).
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    redis: // [!code focus]
+      connection_uri: ${REDIS_CONNECTION_URI}
+      streams: // [!code focus]
+        - stream_name: "ethereum_rocketpool_transfer_stream"
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer // [!code focus]
+              alias: RocketPoolTransfer // [!code focus]
 ```
 
 #### conditions
