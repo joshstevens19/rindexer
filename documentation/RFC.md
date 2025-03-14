@@ -72,13 +72,8 @@ block_traces:
       - "input": "0x",
       - "call_type": "call || delegateCall"
     transform:
-      include_fields:  # Optional fields to include
+      include_fields:
         - "from"
         - "to"
         - "value"
-        - "input"
-        - "gas"
-        - "gasUsed"
-        - "output"
-        - "error"
 ```
