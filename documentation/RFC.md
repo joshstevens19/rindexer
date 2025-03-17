@@ -50,30 +50,39 @@ project_type: no-code
 networks:
   - name: ethereum
     chain_id: 1
-    rpc: ${RPC_URL} // [!code focus]
+    rpc: ${RPC_URL}
   - name: optimism
     chain_id: 10
-    rpc: ${RPC_URL} // [!code focus]
+    rpc: ${RPC_URL}
 storage:
   postgres:
     enabled: true
-block_traces:
-  - name: NativeBalanceChangeTraces
-    network: ethereum
-    start_block: 18600000
-    end_block: 18718056  # Optional, for historic indexing
-    trace_config:
-      tracer: "call_tracer" # Or other available tracers: "pre_state_tracer", defaults to "call_tracer"
-      only_top_call: true # [default: true] When set to true, this will only trace the primary (top-level) call and not any sub-calls.
-    conditions:
-      - "from": "0x0338ce5020c447f7e668dc2ef778025ce3982662 || 0x0338ce5020c447f7e668dc2ef778025ce398266d"
-      - "value": ">0"
-      - "gas": "0"
-      - "input": "0x",
-      - "call_type": "call || delegateCall"
-    transform:
-      include_fields:
-        - "from"
-        - "to"
-        - "value"
+native_transfers:
+  enabled: true
+  details:
+    - network: ethereum
+      start_block: 18600000  # Optional
+      end_block: 18718056  # Optional
+    - network: optimism
+      start_block: 100  # Optional
+      end_block: 1000  # Optional
+contracts:
+  - name: ERC20
+    details:
+      - network: ethereum
+        filter:
+          - event_name: Transfer
+          - event_name: Approval
+
+
+########
+#
+# The conditions can be defined on the Stream publish mechanism rather than the ingest config.
+# 
+# conditions:
+#     - "from": "0x0338ce5020c447f7e668dc2ef778025ce3982662 || 0x0338ce5020c447f7e668dc2ef778025ce398266d"
+#     - "value": ">0"
+#     - "gas": "0"
+#     - "input": "0x",
+#     - "call_type": "call || delegateCall"
 ```
