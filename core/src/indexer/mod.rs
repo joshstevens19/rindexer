@@ -17,11 +17,13 @@ pub mod task_tracker;
 
 pub use dependency::{ContractEventDependencies, EventDependencies, EventsDependencyTree};
 
-use crate::manifest::contract::Contract;
+use crate::manifest::{contract::Contract, native_transfer::NativeTransfers};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Indexer {
     pub name: String,
 
     pub contracts: Vec<Contract>,
+
+    pub native_transfers: NativeTransfers,
 }

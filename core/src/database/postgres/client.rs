@@ -55,10 +55,12 @@ pub enum PostgresError {
     ConnectionPoolError(#[from] RunError<tokio_postgres::Error>),
 }
 
+#[allow(unused)]
 pub struct PostgresTransaction<'a> {
     pub transaction: PgTransaction<'a>,
 }
 impl<'a> PostgresTransaction<'a> {
+    #[allow(unused)]
     pub async fn execute(
         &mut self,
         query: &str,
@@ -67,10 +69,12 @@ impl<'a> PostgresTransaction<'a> {
         self.transaction.execute(query, params).await.map_err(PostgresError::PgError)
     }
 
+    #[allow(unused)]
     pub async fn commit(self) -> Result<(), PostgresError> {
         self.transaction.commit().await.map_err(PostgresError::PgError)
     }
 
+    #[allow(unused)]
     pub async fn rollback(self) -> Result<(), PostgresError> {
         self.transaction.rollback().await.map_err(PostgresError::PgError)
     }

@@ -5,8 +5,13 @@ use serde_yaml::Value;
 use crate::{
     indexer::Indexer,
     manifest::{
-        contract::Contract, global::Global, graphql::GraphQLSettings, network::Network,
-        phantom::Phantom, storage::Storage,
+        contract::Contract,
+        global::Global,
+        graphql::GraphQLSettings,
+        native_transfer::{deserialize_native_transfers, NativeTransfers},
+        network::Network,
+        phantom::Phantom,
+        storage::Storage,
     },
 };
 
@@ -66,6 +71,10 @@ pub struct Manifest {
     #[serde(default = "default_storage")]
     pub storage: Storage,
 
+    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_native_transfers")]
+    pub native_transfers: NativeTransfers,
+
     pub contracts: Vec<Contract>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -80,7 +89,11 @@ pub struct Manifest {
 
 impl Manifest {
     pub fn to_indexer(&self) -> Indexer {
-        Indexer { name: self.name.clone(), contracts: self.contracts.clone() }
+        Indexer {
+            name: self.name.clone(),
+            contracts: self.contracts.clone(),
+            native_transfers: self.native_transfers.clone(),
+        }
     }
 
     pub fn has_any_contracts_live_indexing(&self) -> bool {
@@ -130,5 +143,69 @@ where
     match *value {
         Some(ref u64_value) => serializer.serialize_some(&u64_value.as_u64().to_string()),
         None => serializer.serialize_none(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_yaml;
+
+    use super::*;
+
+    #[test]
+    fn test_native_transfers() {
+        let yaml = r#"
+        name: test
+        project_type: no-code
+        networks: []
+        contracts: []
+        native_transfers:
+          networks:
+            - network: ethereum
+              start_block: "100"
+              end_block: "200"
+        "#;
+
+        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+        assert!(manifest.native_transfers.enabled);
+        let networks = manifest.native_transfers.networks.unwrap();
+        assert_eq!(networks[0].network, "ethereum");
+        assert_eq!(networks[0].start_block.unwrap().as_u64(), 100);
+        assert_eq!(networks[0].end_block.unwrap().as_u64(), 200);
+    }
+
+    #[test]
+    fn test_native_transfers_simple() {
+        let yaml = r#"
+        name: test
+        project_type: no-code
+        networks: []
+        contracts: []
+        native_transfers: true
+        "#;
+
+        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+        assert!(manifest.native_transfers.enabled);
+
+        let yaml = r#"
+        name: test
+        project_type: no-code
+        networks: []
+        contracts: []
+        native_transfers: false
+        "#;
+
+        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(manifest.native_transfers.enabled, false);
+
+        let yaml = r#"
+        name: test
+        project_type: no-code
+        networks: []
+        contracts: []
+        "#;
+
+        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(manifest.native_transfers.enabled, false);
     }
 }
