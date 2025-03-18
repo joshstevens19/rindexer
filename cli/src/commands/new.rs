@@ -152,11 +152,11 @@ pub fn handle_new_command(
             reth: Some(RethConfig {
                 enabled: true,
                 cli_config: RethCliConfig {
-                    data_dir: Some(PathBuf::from("/Volumes/T9/reth")),
-                    authrpc_jwtsecret: Some("/Users/skanda/secrets/jwt.hex".to_string()),
+                    data_dir: Some(PathBuf::from("/path/to/datadir")),
+                    authrpc_jwtsecret: Some("/path/to/jwt.hex".to_string()),
                     authrpc_addr: Some("127.0.0.1".to_string()),
                     authrpc_port: Some(8551),
-                    chain: Some("holesky".to_string()),
+                    chain: Some("mainnet".to_string()),
                     http: true,
                     full: false,
                     metrics: None,
