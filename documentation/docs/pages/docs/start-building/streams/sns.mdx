@@ -50,6 +50,7 @@ contracts:
             - ethereum // [!code focus]
           events: // [!code focus]
             - event_name: Transfer // [!code focus]
+              alias: RocketPoolTransfer
 ```
 
 ## Response
@@ -372,6 +373,44 @@ contracts:
             - ethereum
           events: // [!code focus]
             - event_name: Transfer // [!code focus]
+```
+
+#### alias
+
+This is an optional `alias` you wish to assign to the event you want to stream to this SNS topic.
+
+It is paired with the event name and allows consumers to have unique discriminator keys in the event of
+naming conflicts. E.g Transfer (ERC20) and Transfer (ERC721).
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    sns: // [!code focus]
+      aws_config:
+        region: us-east-1
+        access_key: ${AWS_ACCESS_KEY_ID}
+        secret_key: ${AWS_SECRET_ACCESS_KEY}
+        # session_token is optional
+        session_token: ${AWS_SESSION_TOKEN}
+        # endpoint_url is optional
+        endpoint_url: ${ENDPOINT_URL}
+      topics: // [!code focus]
+        - topic_arn: "arn:aws:sns:us-east-1:664643779377:test"
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer // [!code focus]
+              alias: RocketPoolTransfer // [!code focus]
 ```
 
 #### conditions
