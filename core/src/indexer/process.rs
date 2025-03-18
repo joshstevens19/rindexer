@@ -254,9 +254,10 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
 
     // this is used for less busy chains to make sure they know rindexer is still alive
     let log_no_new_block_interval = Duration::from_secs(300);
+    let target_iteration_duration = Duration::from_millis(200);
 
     loop {
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        let iteration_start = Instant::now();
 
         for (config, _) in live_indexing_events.iter() {
             let mut ordering_live_indexing_details = ordering_live_indexing_details_map
@@ -499,6 +500,11 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                     );
                 }
             }
+        }
+
+        let elapsed = iteration_start.elapsed();
+        if elapsed < target_iteration_duration {
+            tokio::time::sleep(target_iteration_duration - elapsed).await;
         }
     }
 }
