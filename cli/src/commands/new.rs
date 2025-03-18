@@ -12,7 +12,7 @@ use rindexer::{
     manifest::{
         contract::{Contract, ContractDetails},
         core::{Manifest, ProjectType},
-        network::Network,
+        network::{Network, RethCliConfig, RethConfig},
         storage::{CsvDetails, PostgresDetails, Storage},
         yaml::{write_manifest, YAML_CONFIG_NAME},
     },
@@ -96,6 +96,14 @@ pub fn handle_new_command(
         postgres_docker_enable = postgres_docker == "yes";
     }
 
+    let mut reth_enabled = false;
+    let reth_choice = prompt_for_input_list(
+        "Enable Reth Support? (Warning: This requires a fully synced reth node. If you do not have one, or do not know what this means, choose no)",
+        &["yes".to_string(), "no".to_string()],
+        None,
+    );
+    reth_enabled = reth_choice == "yes";
+
     let postgres_enabled = storage_choice == "postgres" || storage_choice == "both";
     let csv_enabled = storage_choice == "csv" || storage_choice == "both";
 
@@ -141,7 +149,19 @@ pub fn handle_new_command(
             compute_units_per_second: None,
             max_block_range: None,
             disable_logs_bloom_checks: None,
-            reth: None,
+            reth: Some(RethConfig {
+                enabled: true,
+                cli_config: RethCliConfig {
+                    data_dir: Some(PathBuf::from("/Volumes/T9/reth")),
+                    authrpc_jwtsecret: Some("/Users/skanda/secrets/jwt.hex".to_string()),
+                    authrpc_addr: Some("127.0.0.1".to_string()),
+                    authrpc_port: Some(8551),
+                    chain: Some("holesky".to_string()),
+                    http: true,
+                    full: false,
+                    metrics: None,
+                },
+            }),
         }],
         contracts: vec![Contract {
             name: "RocketPoolETH".to_string(),
