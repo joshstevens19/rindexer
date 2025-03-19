@@ -345,7 +345,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                 );
 
                 match streams_clients
-                    .stream(stream_id, &event_message, params.index_event_in_order)
+                    .stream(stream_id, &event_message, params.index_event_in_order, false)
                     .await
                 {
                     Ok(streamed) => {

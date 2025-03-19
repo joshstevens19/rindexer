@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use aws_sdk_sns::{config::http::HttpResponse, error::SdkError, operation::publish::PublishError};
 use futures::future::join_all;
+use log::info;
 use serde_json::Value;
 use thiserror::Error;
 use tokio::{
@@ -62,21 +63,25 @@ struct WebhookStream {
     client: Arc<Webhook>,
 }
 
+#[derive(Debug)]
 pub struct RabbitMQStream {
     config: RabbitMQStreamConfig,
     client: Arc<RabbitMQ>,
 }
 
+#[derive(Debug)]
 pub struct KafkaStream {
     config: KafkaStreamConfig,
     client: Arc<Kafka>,
 }
 
+#[derive(Debug)]
 pub struct RedisStream {
     config: RedisStreamConfig,
     client: Arc<Redis>,
 }
 
+#[derive(Debug)]
 pub struct StreamsClients {
     sns: Option<SNSStream>,
     webhook: Option<WebhookStream>,
@@ -423,7 +428,10 @@ impl StreamsClients {
         id: String,
         event_message: &EventMessage,
         index_event_in_order: bool,
+        is_trace_event: bool,
     ) -> Result<usize, StreamError> {
+        info!("self.has_any_streams {}", self.has_any_streams());
+
         if !self.has_any_streams() {
             return Ok(0);
         }
@@ -435,7 +443,17 @@ impl StreamsClients {
 
             if let Some(sns) = &self.sns {
                 for config in &sns.config {
-                    if config.events.iter().any(|e| e.event_name == event_message.event_name) &&
+                    let is_user_event =
+                        config.events.iter().any(|e| e.event_name == event_message.event_name);
+
+                    // TODO
+                    //
+                    // We need to determine how we want to handle "Native_Transfer" Events.
+                    // We could allow the user to alias it by giving the event a name and just pick
+                    // it. Then we would just want to ensure it's only "one"
+                    // event name defined, or pick the first. Otherwise default
+                    // to "NativeTransfer" as the event name.
+                    if (is_user_event || is_trace_event) &&
                         config.networks.contains(&event_message.network)
                     {
                         streams.push(self.sns_stream_tasks(

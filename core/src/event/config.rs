@@ -51,3 +51,18 @@ impl EventProcessingConfig {
         self.registry.trigger_event(&self.id, fn_data).await;
     }
 }
+
+pub struct TraceProcessingConfig {
+    pub id: String,
+    pub project_path: PathBuf,
+    pub network_contract: Arc<NetworkContract>,
+    pub start_block: U64,
+    pub end_block: U64,
+    pub registry: Arc<EventCallbackRegistry>,
+}
+
+impl TraceProcessingConfig {
+    pub async fn trigger_event(&self, fn_data: Vec<EventResult>) {
+        self.registry.trigger_event(&self.id, fn_data).await;
+    }
+}

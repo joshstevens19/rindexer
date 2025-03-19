@@ -39,6 +39,7 @@ pub struct NativeTransfers {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub networks: Option<Vec<NativeTransferDetails>>,
 
+    /// For now `NativeTokenTransfer` must be the defined "Event" name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub streams: Option<StreamsConfig>,
 }

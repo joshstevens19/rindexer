@@ -1,4 +1,7 @@
-use std::time::Duration;
+use std::{
+    fmt::{Debug, Formatter},
+    time::Duration,
+};
 
 #[cfg(not(windows))]
 use rdkafka::{
@@ -25,6 +28,12 @@ pub enum KafkaError {
 pub struct Kafka {
     #[cfg(not(windows))]
     producer: FutureProducer,
+}
+
+impl Debug for Kafka {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Kafka { .. }").finish()
+    }
 }
 
 impl Kafka {

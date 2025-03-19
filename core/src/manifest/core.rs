@@ -102,16 +102,8 @@ impl Manifest {
     }
 
     /// Check if the manifest has opted-in to indexing native transfers. It is off by default.
-    pub fn has_enabled_native_transfers_backfill(&self) -> bool {
-        let with_non_empty_start = self
-            .native_transfers
-            .networks
-            .iter()
-            .map(|s| s.iter().any(|n| n.start_block.is_some()))
-            .count() >
-            0;
-
-        self.native_transfers.enabled && with_non_empty_start
+    pub fn has_enabled_native_transfers(&self) -> bool {
+        self.native_transfers.enabled
     }
 
     /// Determine if native transfers are opted in to live indexing as well. This would happen any
@@ -202,6 +194,15 @@ mod tests {
         assert_eq!(networks[0].end_block.unwrap().as_u64(), 200);
     }
 
+    /// FIXME
+    ///
+    /// What would be the expected behaviour in the stream-processing for `native_transfers: true`?
+    ///
+    /// 1. Don't publish anything, just index no-op
+    /// 2. Persist to PG is storage available?
+    /// 3. Write to CSV?
+    ///
+    /// What is the current behavior if we don't define any storage/csv/stream option for the code?
     #[test]
     fn test_native_transfers_simple() {
         let yaml = r#"

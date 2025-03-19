@@ -335,7 +335,7 @@ async fn live_indexing_stream(
     let log_no_new_block_interval = Duration::from_secs(300);
 
     loop {
-        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
 
         let latest_block = cached_provider.get_latest_block().await;
         match latest_block {

@@ -1,19 +1,30 @@
-use std::{path::Path, sync::Arc};
+use std::{collections::HashMap, path::Path, str::FromStr, sync::Arc, time::Duration};
 
-use ethers::{providers::ProviderError, types::U64};
+use colored::Colorize;
+use ethers::{
+    abi::Hash,
+    providers::ProviderError,
+    types::{Address, Bytes, U256, U64},
+};
 use futures::future::try_join_all;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use tokio::{
     sync::Semaphore,
     task::{JoinError, JoinHandle},
-    time::Instant,
+    time::{sleep, Instant},
 };
 use tracing::{error, info};
 
 use crate::{
-    database::postgres::client::PostgresConnectionError,
+    database::postgres::{
+        client::PostgresConnectionError, sql_type_wrapper::map_ethereum_wrapper_to_json,
+    },
     event::{
-        callback_registry::EventCallbackRegistry, config::EventProcessingConfig,
+        callback_registry::{EventCallbackRegistry, TxInformation},
+        config::EventProcessingConfig,
         contract_setup::NetworkContract,
+        EventMessage,
     },
     indexer::{
         dependency::ContractEventsDependenciesConfig,
@@ -27,6 +38,8 @@ use crate::{
         ContractEventDependencies,
     },
     manifest::core::Manifest,
+    provider::CreateNetworkProvider,
+    streams::StreamsClients,
     PostgresClient,
 };
 
@@ -68,12 +81,23 @@ pub enum StartIndexingError {
 
     #[error("The end block set for {0} is higher than the latest block: {1} - end block: {2}")]
     EndBlockIsHigherThanLatestBlockError(String, U64, U64),
+
+    #[error("Encountered unknown error: {0}")]
+    UnknownError(String),
 }
 
 #[derive(Clone)]
 pub struct ProcessedNetworkContract {
     pub id: String,
     pub processed_up_to: U64,
+}
+
+#[derive(Serialize)]
+pub struct NativeTransfer {
+    pub from: Address,
+    pub to: Address,
+    pub value: U256,
+    pub transaction_information: TxInformation,
 }
 
 pub async fn start_indexing(
@@ -101,6 +125,164 @@ pub async fn start_indexing(
     let mut apply_cross_contract_dependency_events_config_after_processing = Vec::new();
 
     let mut processed_network_contracts: Vec<ProcessedNetworkContract> = Vec::new();
+
+    if manifest.has_enabled_native_transfers() {
+        // We could do this inside the `no_code` setup as well
+        let providers = CreateNetworkProvider::create(&manifest)
+            .expect("handle this createnetwork ERR")
+            .into_iter()
+            .map(|p| (p.network_name, p.client))
+            .collect::<HashMap<_, _>>();
+
+        let networks = manifest.clone().native_transfers.networks.unwrap_or_default();
+
+        for network in networks.into_iter() {
+            let provider = providers.get(&network.network).expect("must have provider");
+            let (block_tx, mut block_rx) = tokio::sync::mpsc::unbounded_channel();
+
+            let network_name = network.network.clone();
+            let latest_block = provider.get_block_number().await?;
+            let start_block = network.start_block.unwrap_or(latest_block);
+            let publisher_provider = provider.clone();
+
+            // Block publisher
+            //
+            // Can ultimately try and share logic with `live_indexing_stream` which is currently
+            // handling extra protections and optimisations, but is tightly coupled to
+            // "log" fetching.
+            //
+            // For now implement a simpler naive variant.
+            let _handle = tokio::spawn(async move {
+                let mut last_seen_block = start_block;
+                let push_range = |last: U64, latest: U64| {
+                    for block in last.as_u64()..=latest.as_u64() {
+                        block_tx.send(U64::from(block)).expect("failed to send block");
+                    }
+                };
+
+                loop {
+                    sleep(Duration::from_millis(200)).await;
+                    let latest_block = publisher_provider.get_latest_block().await;
+
+                    match latest_block {
+                        Ok(Some(latest_block)) => {
+                            if let Some(block) = latest_block.number {
+                                push_range(last_seen_block + 1, block);
+                                last_seen_block = block;
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            error!("Error fetching trace_block: {}", e.to_string());
+                            sleep(Duration::from_secs(1)).await;
+                        }
+                    }
+                }
+            });
+
+            // Register streams client
+            //
+            // This is the only `dev` support publishing method for now for PoC.
+            let streams_client = if let Some(streams) = &manifest.native_transfers.streams {
+                Some(StreamsClients::new(streams.clone()).await)
+            } else {
+                None
+            };
+
+            // Block consumer
+            //
+            // Fetches the incoming debug traces for a block and handles stream-callbacks for the
+            // publishing of the "NativeTransfer" event.
+            //
+            // TODO - Need to optimise this to consume up to `x` in a parallel.
+            let provider = provider.clone();
+            let _handle_2 = tokio::spawn(async move {
+                while let Some(block_number) = block_rx.recv().await {
+                    let trace_call = provider.debug_trace_block_by_number(block_number).await?;
+
+                    let native_transfers = trace_call
+                        .into_iter()
+                        .enumerate()
+                        .filter_map(|(idx, transfer)| {
+                            let is_call = transfer.result.typ == "CALL";
+                            let has_value = !transfer.result.value.is_zero();
+                            let no_input = transfer.result.input == Bytes::from_str("0x").unwrap();
+
+                            if is_call && has_value && no_input {
+                                let tx = TxInformation {
+                                    network: network_name.to_owned(),
+                                    address: Address::zero(),
+                                    block_number,
+                                    block_timestamp: None,
+                                    transaction_hash: transfer.tx_hash,
+
+                                    // TODO: This probably should be `None`, but skip it for now
+                                    block_hash: Default::default(),
+
+                                    // TODO: Verify below is accurate
+                                    transaction_index: U64::from(idx),
+                                    log_index: U256::from(0),
+                                };
+
+                                let transfer = transfer.result;
+
+                                Some(NativeTransfer {
+                                    from: transfer.from,
+                                    to: transfer.to,
+                                    value: transfer.value,
+                                    transaction_information: tx,
+                                })
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>();
+
+                    if let Some(client) = streams_client.as_ref() {
+                        let contract_name = "EvmDebugTrace";
+                        let event_name = "NativeTokenTransfer";
+                        let stream_id = format!(
+                            "{}-{}-{}-{}-{}",
+                            contract_name, event_name, network_name, block_number, block_number
+                        );
+
+                        let event_message = EventMessage {
+                            event_name: event_name.to_string(),
+                            event_data: json!(native_transfers),
+                            event_signature_hash: Hash::zero(),
+                            network: network_name.to_string(),
+                        };
+
+                        match client.stream(stream_id, &event_message, false, true).await {
+                            Ok(streamed) => {
+                                info!("Streamed... {}", streamed);
+
+                                if streamed > 0 {
+                                    info!(
+                                        "{}::{} - {} - {} events {}",
+                                        contract_name,
+                                        event_name,
+                                        "STREAMED".green(),
+                                        streamed,
+                                        format!(
+                                            "- trace block: {} - network: {}",
+                                            block_number, network_name
+                                        )
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                error!("Error streaming event: {}", e);
+                                return Err(StartIndexingError::UnknownError(e.to_string()));
+                            }
+                        }
+                    }
+                }
+
+                Ok(())
+            });
+        }
+    }
 
     for event in registry.events.iter() {
         let stream_details = manifest
