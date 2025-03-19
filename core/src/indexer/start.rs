@@ -70,6 +70,7 @@ pub enum StartIndexingError {
     EndBlockIsHigherThanLatestBlockError(String, U64, U64),
 }
 
+#[derive(Clone)]
 pub struct ProcessedNetworkContract {
     pub id: String,
     pub processed_up_to: U64,
@@ -301,7 +302,7 @@ pub async fn start_indexing(
     Ok(processed_network_contracts)
 }
 
-async fn initialize_database(
+pub async fn initialize_database(
     manifest: &Manifest,
 ) -> Result<Option<Arc<PostgresClient>>, StartIndexingError> {
     if manifest.storage.postgres_enabled() {
@@ -317,7 +318,7 @@ async fn initialize_database(
     }
 }
 
-async fn calculate_safe_block_number(
+pub async fn calculate_safe_block_number(
     reorg_safe_distance: bool,
     network_contract: &NetworkContract,
     latest_block: U64,

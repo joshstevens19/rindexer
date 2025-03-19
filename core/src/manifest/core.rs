@@ -101,6 +101,34 @@ impl Manifest {
             0
     }
 
+    /// Check if the manifest has opted-in to indexing native transfers. It is off by default.
+    pub fn has_enabled_native_transfers_backfill(&self) -> bool {
+        let with_non_empty_start = self
+            .native_transfers
+            .networks
+            .iter()
+            .map(|s| s.iter().any(|n| n.start_block.is_some()))
+            .count() >
+            0;
+
+        self.native_transfers.enabled && with_non_empty_start
+    }
+
+    /// Determine if native transfers are opted in to live indexing as well. This would happen any
+    /// time an end-block is not specified for any network.
+    pub fn has_native_transfers_live_indexing(&self) -> bool {
+        let enabled = self.native_transfers.enabled;
+        let any_network_is_live = self
+            .native_transfers
+            .networks
+            .iter()
+            .map(|s| s.iter().any(|n| n.end_block.is_none()))
+            .count() >
+            0;
+
+        enabled && any_network_is_live
+    }
+
     pub fn contract_csv_enabled(&self, contract_name: &str) -> bool {
         let contract_csv_enabled = self
             .contracts

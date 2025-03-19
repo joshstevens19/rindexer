@@ -4,7 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use super::core::{deserialize_option_u64_from_string, serialize_option_u64_as_string};
 use crate::manifest::stream::StreamsConfig;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub struct NativeTransferDetails {
     pub network: String,
 
