@@ -19,10 +19,7 @@ pub fn parse_log(event: &Event, log: &Log) -> Option<ParsedLog> {
 
     // check if topics and data match the event
     if topics_length == indexed_inputs_abi_length {
-        let log = match event.parse_log(raw_log) {
-            Ok(log) => Some(log),
-            Err(_) => None,
-        };
+        let log = event.parse_log(raw_log).ok();
 
         return log;
     }

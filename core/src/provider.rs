@@ -1,25 +1,20 @@
 use std::{
-    hash::Hash,
     sync::Arc,
     time::{Duration, Instant},
 };
 
 use ethers::{
     middleware::Middleware,
-    prelude::{Bytes, CallFrame, GethTrace, Log},
+    prelude::{Bytes, Log},
     providers::{Http, Provider, ProviderError, RetryClient, RetryClientBuilder},
-    types::{
-        Address, Block, BlockNumber, CallConfig, GethDebugBuiltInTracerConfig,
-        GethDebugBuiltInTracerType, GethDebugTracerConfig, GethDebugTracerType,
-        GethDebugTracingOptions, GethTraceFrame, H256, U256, U64,
-    },
+    types::{Address, Block, BlockNumber, H256, U256, U64},
 };
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
 use tokio::sync::Mutex;
-use tracing::{error, info};
+use tracing::error;
 use url::Url;
 
 use crate::{event::RindexerEventFilter, manifest::core::Manifest};

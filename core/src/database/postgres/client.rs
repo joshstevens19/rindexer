@@ -59,7 +59,7 @@ pub enum PostgresError {
 pub struct PostgresTransaction<'a> {
     pub transaction: PgTransaction<'a>,
 }
-impl<'a> PostgresTransaction<'a> {
+impl PostgresTransaction<'_> {
     #[allow(unused)]
     pub async fn execute(
         &mut self,

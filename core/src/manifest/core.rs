@@ -114,7 +114,7 @@ impl Manifest {
             .native_transfers
             .networks
             .iter()
-            .map(|s| s.iter().any(|n| n.end_block.is_none()))
+            .filter(|s| s.iter().any(|n| n.end_block.is_none()))
             .count() >
             0;
 
@@ -126,7 +126,7 @@ impl Manifest {
             .contracts
             .iter()
             .find(|c| c.name == contract_name)
-            .map_or(false, |c| c.generate_csv.unwrap_or(true));
+            .is_some_and(|c| c.generate_csv.unwrap_or(true));
 
         self.storage.csv_enabled() && contract_csv_enabled
     }
@@ -225,7 +225,7 @@ mod tests {
         "#;
 
         let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(manifest.native_transfers.enabled, false);
+        assert!(!manifest.native_transfers.enabled);
 
         let yaml = r#"
         name: test
@@ -235,6 +235,6 @@ mod tests {
         "#;
 
         let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(manifest.native_transfers.enabled, false);
+        assert!(!manifest.native_transfers.enabled);
     }
 }

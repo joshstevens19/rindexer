@@ -7,8 +7,8 @@ use ethers::{
     types::{Address, Bytes, U256, U64},
 };
 use futures::future::try_join_all;
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde::Serialize;
+use serde_json::json;
 use tokio::{
     sync::Semaphore,
     task::{JoinError, JoinHandle},
@@ -17,9 +17,7 @@ use tokio::{
 use tracing::{error, info};
 
 use crate::{
-    database::postgres::{
-        client::PostgresConnectionError, sql_type_wrapper::map_ethereum_wrapper_to_json,
-    },
+    database::postgres::client::PostgresConnectionError,
     event::{
         callback_registry::{EventCallbackRegistry, TxInformation},
         config::EventProcessingConfig,
@@ -128,7 +126,7 @@ pub async fn start_indexing(
 
     if manifest.has_enabled_native_transfers() {
         // We could do this inside the `no_code` setup as well
-        let providers = CreateNetworkProvider::create(&manifest)
+        let providers = CreateNetworkProvider::create(manifest)
             .expect("handle this createnetwork ERR")
             .into_iter()
             .map(|p| (p.network_name, p.client))

@@ -541,7 +541,7 @@ pub async fn process_events(
             let index_event_in_order = contract
                 .index_event_in_order
                 .as_ref()
-                .map_or(false, |vec| vec.contains(&event_info.name));
+                .is_some_and(|vec| vec.contains(&event_info.name));
 
             let event = EventCallbackRegistryInformation {
                 id: generate_random_id(10),

@@ -90,8 +90,7 @@ mod tests {
         "#;
 
         let transfer: NativeTransfers = serde_yaml::from_str(yaml).unwrap();
-        let networks: Vec<NativeTransferDetails> =
-            transfer.networks.unwrap().into_iter().map(Into::into).collect();
+        let networks: Vec<NativeTransferDetails> = transfer.networks.unwrap().into_iter().collect();
 
         assert!(transfer.enabled);
         assert_eq!(networks[0].network, "ethereum");
