@@ -136,11 +136,14 @@ pub async fn start_indexing(
 
         for network in networks.into_iter() {
             let provider = providers.get(&network.network).expect("must have provider");
-            let (block_tx, mut block_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (block_tx, mut block_rx) = tokio::sync::mpsc::channel(8192);
 
             let network_name = network.network.clone();
             let latest_block = provider.get_block_number().await?;
             let start_block = network.start_block.unwrap_or(latest_block);
+
+            info!("starting at {}", start_block);
+
             let publisher_provider = provider.clone();
 
             // Block publisher
@@ -152,9 +155,10 @@ pub async fn start_indexing(
             // For now implement a simpler naive variant.
             let _handle = tokio::spawn(async move {
                 let mut last_seen_block = start_block;
-                let push_range = |last: U64, latest: U64| {
+
+                let push_range = async |last: U64, latest: U64| {
                     for block in last.as_u64()..=latest.as_u64() {
-                        block_tx.send(U64::from(block)).expect("failed to send block");
+                        block_tx.send(U64::from(block)).await.expect("should send");
                     }
                 };
 
@@ -165,8 +169,13 @@ pub async fn start_indexing(
                     match latest_block {
                         Ok(Some(latest_block)) => {
                             if let Some(block) = latest_block.number {
-                                push_range(last_seen_block + 1, block);
-                                last_seen_block = block;
+                                if block > last_seen_block {
+                                    let from_block = std::cmp::min(last_seen_block + 1, block);
+                                    info!("Pushing blocks {} - {}", from_block, block);
+
+                                    push_range(from_block, block).await;
+                                    last_seen_block = block;
+                                }
                             }
                         }
                         Ok(None) => {}
@@ -192,10 +201,14 @@ pub async fn start_indexing(
             // Fetches the incoming debug traces for a block and handles stream-callbacks for the
             // publishing of the "NativeTransfer" event.
             //
+            // TODO: !!!!!!!!!!!!!!!!!!!!!!
             // TODO - Need to optimise this to consume up to `x` in a parallel.
+            // TODO: !!!!!!!!!!!!!!!!!!!!!!
             let provider = provider.clone();
             let _handle_2 = tokio::spawn(async move {
                 while let Some(block_number) = block_rx.recv().await {
+                    info!("Recv block: {}. {} remaining.", block_number, block_rx.len());
+
                     let trace_call = provider.debug_trace_block_by_number(block_number).await?;
 
                     let native_transfers = trace_call

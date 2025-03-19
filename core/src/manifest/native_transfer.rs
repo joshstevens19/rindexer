@@ -82,6 +82,7 @@ mod tests {
 
     #[test]
     fn test_native_transfer_full() {
+        // TODO: Right now, "100" will pass but 100 as a numeric will not...
         let yaml = r#"
           networks:
             - network: ethereum

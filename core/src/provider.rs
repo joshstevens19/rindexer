@@ -9,9 +9,11 @@ use ethers::{
     providers::{Http, Provider, ProviderError, RetryClient, RetryClientBuilder},
     types::{Address, Block, BlockNumber, H256, U256, U64},
 };
+use log::info;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use teloxide::payloads::GetUpdatesSetters;
 use thiserror::Error;
 use tokio::sync::Mutex;
 use tracing::error;
@@ -100,6 +102,7 @@ impl JsonRpcCachedProvider {
         &self,
         block_number: U64,
     ) -> Result<Vec<TraceCallFrame>, ProviderError> {
+        info!("Mk call: {}", "ssss");
         let block = json!(serde_json::to_string_pretty(&block_number)?.replace("\"", ""));
         let options = json!({
             "tracer": "callTracer",
@@ -108,8 +111,12 @@ impl JsonRpcCachedProvider {
             }
         });
 
+        info!("Mk call: {}", block);
+
         let valid_traces: Vec<TraceCallFrame> =
             self.provider.request("debug_traceBlockByNumber", [block, options]).await?;
+
+        info!("Made call: {}", valid_traces.len());
 
         Ok(valid_traces)
     }
