@@ -100,6 +100,26 @@ networks:
   max_block_range: 10000 // [!code focus]
 ```
 
+### kind
+
+The kind of provider to use, this can be either `Hypersync` or `Rpc`. By default it will use `Rpc` if you do not provide this.
+
+#### Hypersync
+
+By setting kind to "Hypersync" you could use [hypersync](https://docs.envio.dev/docs/HyperSync/overview) as a data source.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  kind: Hypersync // [!code focus]
+  chain_id: 1
+  rpc: https://1.hypersync.xyz
+```
+
 ### compute_units_per_second
 
 :::info
