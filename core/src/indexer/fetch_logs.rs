@@ -30,7 +30,7 @@ pub struct FetchLogsResult {
 pub fn fetch_logs_stream(
     config: Arc<EventProcessingConfig>,
     force_no_live_indexing: bool,
-    backfill_tx: Option<Arc<ExExTx>>,
+    reth_tx: Option<Arc<ExExTx>>,
 ) -> impl tokio_stream::Stream<Item = Result<FetchLogsResult, Box<dyn Error + Send>>> + Send + Unpin
 {
     let (tx, rx) = mpsc::unbounded_channel();
@@ -39,12 +39,13 @@ pub fn fetch_logs_stream(
     let contract_address = initial_filter.contract_address();
 
     tokio::spawn(async move {
-        // if we have a, exex backfill tx, we need to process the exex stream instead of using the
+        // if we have a reth exex tx, we need to process the exex stream instead of using the
         // rpc provider
-        if let Some(backfill_tx) = backfill_tx {
+        if config.is_reth_exex && reth_tx.is_some() {
             info!("Processing ExEx stream");
+            let reth_tx = reth_tx.unwrap();
             // Process ExEx stream for both historical and live data
-            process_exex_stream(backfill_tx, &tx, &config).await;
+            process_exex_stream(reth_tx, &tx, &config).await;
         } else {
             info!("Starting backfill using rpc from block:");
             let snapshot_to_block = initial_filter.get_to_block();
@@ -144,23 +145,22 @@ pub fn fetch_logs_stream(
 }
 
 async fn process_exex_stream(
-    backfill_tx: Arc<ExExTx>,
+    reth_tx: Arc<ExExTx>,
     tx: &mpsc::UnboundedSender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
     config: &EventProcessingConfig,
 ) {
-    let backfill_tx = backfill_tx.clone();
+    let reth_tx = reth_tx.clone();
     // TODO: Since most of the codebase uses ethers types, and we want reth types here,
     // we are converting ethers types to reth types here.
     // we should move towards using reth types throughout the codebase.
     let filter = config.to_event_filter().unwrap().to_alloy_filter();
 
-    // Phase 1: Process backfill data
-    let from_block = config.to_event_filter().unwrap().get_from_block().as_u64();
+    // Process backfill data
     let to_block = config.to_event_filter().unwrap().get_to_block().as_u64();
 
     let (response_tx, response_rx) = oneshot::channel();
 
-    let res = backfill_tx.send(ExExRequest::Start {
+    let res = reth_tx.send(ExExRequest::Start {
         mode: ExExMode::HistoricOnly,
         filter: filter.clone(),
         response_tx,
@@ -227,7 +227,7 @@ async fn process_exex_stream(
         let next_from_block = to_block + 1;
         let filter = filter.from_block(next_from_block);
         let (response_tx, response_rx) = oneshot::channel();
-        let res = backfill_tx.send(ExExRequest::Start {
+        let res = reth_tx.send(ExExRequest::Start {
             mode: ExExMode::HistoricThenLive,
             filter: filter.clone(),
             response_tx,

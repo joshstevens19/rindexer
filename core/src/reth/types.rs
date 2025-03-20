@@ -61,12 +61,8 @@ impl RethChannels {
         Self { channels: HashMap::new() }
     }
 
-    pub fn insert(
-        &mut self,
-        network_name: String,
-        backfill_tx: mpsc::UnboundedSender<ExExRequest>,
-    ) {
-        self.channels.insert(network_name, Arc::new(backfill_tx));
+    pub fn insert(&mut self, network_name: String, reth_tx: mpsc::UnboundedSender<ExExRequest>) {
+        self.channels.insert(network_name, Arc::new(reth_tx));
     }
 
     pub fn get(&self, network_name: &str) -> Option<&Arc<ExExTx>> {

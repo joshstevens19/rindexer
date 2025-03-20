@@ -132,10 +132,10 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
             for network in manifest.reth_enabled_networks() {
                 let reth_cli = network.reth.as_ref().unwrap().cli_config.to_reth_cli();
                 info!("Starting Reth node for network: {}", network.name);
-                let backfill_tx = start_reth_node_with_exex(reth_cli)?;
+                let reth_tx = start_reth_node_with_exex(reth_cli)?;
                 info!("Started Reth node for network: {}", network.name);
 
-                reth_channels.insert(network.name.clone(), backfill_tx);
+                reth_channels.insert(network.name.clone(), reth_tx);
             }
 
             if manifest.project_type != ProjectType::NoCode {

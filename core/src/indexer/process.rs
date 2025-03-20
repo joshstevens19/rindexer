@@ -27,7 +27,7 @@ use crate::{
         task_tracker::{indexing_event_processed, indexing_event_processing},
     },
     is_running,
-    reth::types::{ExExRequest, ExExTx, RethChannels},
+    reth::types::{ExExTx, RethChannels},
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -42,11 +42,11 @@ pub enum ProcessEventError {
 pub async fn process_event(
     config: EventProcessingConfig,
     block_until_indexed: bool,
-    backfill_tx: Option<Arc<ExExTx>>,
+    reth_tx: Option<Arc<ExExTx>>,
 ) -> Result<(), ProcessEventError> {
     debug!("{} - Processing events", config.info_log_name);
 
-    process_event_logs(Arc::new(config), false, block_until_indexed, backfill_tx).await?;
+    process_event_logs(Arc::new(config), false, block_until_indexed, reth_tx).await?;
 
     Ok(())
 }
@@ -58,10 +58,9 @@ async fn process_event_logs(
     config: Arc<EventProcessingConfig>,
     force_no_live_indexing: bool,
     block_until_indexed: bool,
-    backfill_tx: Option<Arc<ExExTx>>,
+    reth_tx: Option<Arc<ExExTx>>,
 ) -> Result<(), Box<ProviderError>> {
-    let mut logs_stream =
-        fetch_logs_stream(Arc::clone(&config), force_no_live_indexing, backfill_tx);
+    let mut logs_stream = fetch_logs_stream(Arc::clone(&config), force_no_live_indexing, reth_tx);
     let mut tasks = Vec::new();
 
     while let Some(result) = logs_stream.next().await {
@@ -179,19 +178,14 @@ async fn process_contract_events_with_dependencies(
                         dependency.event_name,
                     ))?;
 
-                let backfill_tx = reth_channels
+                let reth_tx = reth_channels
                     .get(&event_processing_config.network_contract.network)
                     .unwrap()
                     .clone();
 
                 // forces live indexing off as it has to handle it a bit differently
-                process_event_logs(
-                    Arc::clone(event_processing_config),
-                    true,
-                    true,
-                    Some(backfill_tx),
-                )
-                .await?;
+                process_event_logs(Arc::clone(event_processing_config), true, true, Some(reth_tx))
+                    .await?;
 
                 if event_processing_config.live_indexing {
                     let rindexer_event_filter = event_processing_config.to_event_filter()?;

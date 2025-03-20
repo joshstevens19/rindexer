@@ -191,6 +191,14 @@ pub async fn start_indexing(
                 processed_up_to: end_block,
             });
 
+            let (reth_tx, is_reth_exex) = match reth_channels.get(&network_contract.network) {
+                Some(tx) => (Some(tx.clone()), true),
+                None => {
+                    info!("No reth channel found for network: {}", network_contract.network);
+                    (None, false)
+                }
+            };
+
             let event_processing_config = EventProcessingConfig {
                 id: event.id.clone(),
                 project_path: project_path.to_path_buf(),
@@ -217,6 +225,7 @@ pub async fn start_indexing(
                 },
                 index_event_in_order: event.index_event_in_order,
                 indexing_distance_from_head,
+                is_reth_exex,
             };
 
             let dependencies_status = ContractEventDependencies::dependencies_status(
@@ -248,15 +257,8 @@ pub async fn start_indexing(
                     dependencies,
                 );
             } else {
-                let backfill_tx = match reth_channels.get(&network_contract.network) {
-                    Some(tx) => Some(tx.clone()),
-                    None => {
-                        info!("No reth channel found for network: {}", network_contract.network);
-                        None
-                    }
-                };
                 let process_event =
-                    tokio::spawn(process_event(event_processing_config, false, backfill_tx));
+                    tokio::spawn(process_event(event_processing_config, false, reth_tx));
                 non_blocking_process_events.push(process_event);
             }
         }
