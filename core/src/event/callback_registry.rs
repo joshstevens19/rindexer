@@ -3,7 +3,7 @@ use std::{any::Any, sync::Arc, time::Duration};
 use ethers::{
     addressbook::Address,
     contract::LogMeta,
-    types::{Bytes, Log, H256, U256, U64},
+    types::{Action, Bytes, Log, H256, U256, U64},
 };
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -208,5 +208,86 @@ impl EventCallbackRegistry {
         self.events.retain(|e| !e.contract.details.is_empty());
 
         self.complete()
+    }
+}
+
+// --------------------------------
+// "Native" Trace Callback Registry
+// --------------------------------
+
+#[derive(Debug, Clone)]
+pub struct TraceResult {
+    pub decoded_data: Arc<dyn Any + Send + Sync>,
+    pub tx_information: TxInformation,
+    pub found_in_request: LogFoundInRequest,
+}
+
+impl TraceResult {
+    /// Create a "NativeTokenTransfer" TraceResult to be published to the sinks and stream processors.
+    pub fn new_native_transfer(
+        // network_contract: Arc<NetworkContract>,
+        // action: Action,
+        // start_block: U64,
+        // end_block: U64,
+    ) -> Self {
+        // Self {
+        //     decoded_data: network_contract.decode_log(log.inner),
+        //     tx_information: TxInformation {
+        //         network: network_name.to_owned(),
+        //         address: Address::zero(),
+        //         block_number: U64::from(trace.block_number),
+        //         block_timestamp: None,
+        //         transaction_hash: trace.transaction_hash.expect("checked prior"),
+        //         block_hash: trace.block_hash,
+        //         transaction_index: U64::from(trace.transaction_position.unwrap_or(0)),
+        //         log_index: U256::from(0),
+        //     },
+        //     found_in_request: LogFoundInRequest { from_block: start_block, to_block: end_block },
+        // }
+        todo!()
+    }
+}
+
+pub type TraceCallbackResult<T> = Result<T, String>;
+
+#[derive(Clone)]
+pub struct TraceCallbackRegistryInformation {
+    pub id: String,
+    pub indexer_name: String,
+    pub event_name: String,
+    pub contract_name: String,
+    pub callback: EventCallbackType,
+}
+
+impl TraceCallbackRegistryInformation {
+    pub fn info_log_name(&self) -> String {
+        format!("{}::{}", self.indexer_name, self.event_name)
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct TraceCallbackRegistry {
+    pub events: Vec<TraceCallbackRegistryInformation>,
+}
+
+impl TraceCallbackRegistry {
+    pub fn new() -> Self {
+        TraceCallbackRegistry { events: Vec::new() }
+    }
+
+    pub fn find_event(&self, id: &String) -> Option<&TraceCallbackRegistryInformation> {
+        self.events.iter().find(|e| e.id == *id)
+    }
+
+    pub fn register_event(&mut self, event: TraceCallbackRegistryInformation) {
+        self.events.push(event);
+    }
+
+    pub async fn trigger_event(&self, id: &String, data: Vec<TraceResult>) {
+        todo!()
+    }
+
+    pub fn complete(&self) -> Arc<Self> {
+        Arc::new(self.clone())
     }
 }

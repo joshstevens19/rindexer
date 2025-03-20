@@ -12,7 +12,8 @@ use tracing::{error, info};
 use crate::{
     database::postgres::client::PostgresConnectionError,
     event::{
-        callback_registry::EventCallbackRegistry, config::EventProcessingConfig,
+        callback_registry::{EventCallbackRegistry, TraceCallbackRegistry},
+        config::{EventProcessingConfig, TraceProcessingConfig},
         contract_setup::NetworkContract,
     },
     indexer::{
@@ -88,6 +89,7 @@ pub async fn start_indexing(
     dependencies: &[ContractEventDependencies],
     no_live_indexing_forced: bool,
     registry: Arc<EventCallbackRegistry>,
+    trace_registry: Arc<TraceCallbackRegistry>,
 ) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
     let start = Instant::now();
 
@@ -108,13 +110,22 @@ pub async fn start_indexing(
 
     let mut processed_network_contracts: Vec<ProcessedNetworkContract> = Vec::new();
 
-    if manifest.has_enabled_native_transfers() {
+    for event in trace_registry.events.iter() {
         // We could do this inside the `no_code` setup as well
         let providers = CreateNetworkProvider::create(manifest)
             .expect("handle this createnetwork ERR")
             .into_iter()
             .map(|p| (p.network_name, p.client))
             .collect::<HashMap<_, _>>();
+
+        let config = TraceProcessingConfig {
+            id: event.id.to_string(),
+            project_path: Default::default(),
+            start_block: Default::default(),
+            end_block: Default::default(),
+            registry: trace_registry.clone(),
+        };
+
 
         let networks = manifest.clone().native_transfers.networks.unwrap_or_default();
 
@@ -142,6 +153,7 @@ pub async fn start_indexing(
             // "log" fetching.
             //
             // For now implement a simpler naive variant.
+            let n = network_name.clone();
             let _handle = tokio::spawn(async move {
                 let mut last_seen_block = start_block;
 
@@ -166,6 +178,7 @@ pub async fn start_indexing(
                                         .unwrap_or(block);
 
                                     let from_block = block.min(last_seen_block + 1);
+
                                     info!("Pushing blocks {} - {}", from_block, to_block);
 
                                     push_range(from_block, to_block).await;
@@ -175,7 +188,7 @@ pub async fn start_indexing(
                                 if network.end_block.is_some() &&
                                     block > network.end_block.expect("must have block")
                                 {
-                                    info!("Finished HISTORICAL INDEXING NativeEvmTraces. No more blocks to push.");
+                                    info!("Finished {} HISTORICAL INDEXING NativeEvmTraces. No more blocks to push.", &n);
                                     break;
                                 }
                             }
@@ -189,20 +202,12 @@ pub async fn start_indexing(
                 }
             });
 
-            // Register streams client
-            //
-            // This is the only `dev` support publishing method for now for PoC.
-            let streams_client = if let Some(streams) = &manifest.native_transfers.streams {
-                Some(StreamsClients::new(streams.clone()).await)
-            } else {
-                None
-            };
-
             // Block consumer
             //
             // Fetches the incoming debug traces for a block and handles stream-callbacks for the
             // publishing of the "NativeTransfer" event.
             let provider = provider.clone();
+            let config = config.clone();
             let _handle_2 = tokio::spawn(async move {
                 const MAX_CONCURRENT_REQUESTS: usize = 20;
                 let mut buffer: Vec<U64> = Vec::with_capacity(MAX_CONCURRENT_REQUESTS);
@@ -222,7 +227,7 @@ pub async fn start_indexing(
                         provider.clone(),
                         &buffer[..recv],
                         &network_name,
-                        streams_client.as_ref(),
+                        &config
                     )
                     .await;
 

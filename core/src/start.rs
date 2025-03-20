@@ -26,9 +26,11 @@ use crate::{
     },
     setup_info_logger,
 };
+use crate::event::callback_registry::TraceCallbackRegistry;
 
 pub struct IndexingDetails {
     pub registry: EventCallbackRegistry,
+    pub trace_registry: TraceCallbackRegistry
 }
 
 pub struct StartDetails<'a> {
@@ -176,6 +178,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     // we index all the historic data first before then applying FKs
                     !relationships.is_empty(),
                     indexing_details.registry.complete(),
+                    indexing_details.trace_registry.complete(),
                 )
                 .await?;
 
@@ -210,6 +213,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                             indexing_details
                                 .registry
                                 .reapply_after_historic(processed_network_contracts),
+                            indexing_details.trace_registry.complete()
                         )
                         .await
                         .map_err(StartRindexerError::CouldNotStartIndexing)?;

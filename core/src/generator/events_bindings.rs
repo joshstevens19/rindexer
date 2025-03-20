@@ -194,7 +194,7 @@ fn generate_csv_instance(
     }
 
     let csv_path_str = csv_path.to_str().expect("Failed to convert csv path to string");
-    let csv_path = event_info.create_csv_file_for_event(project_path, contract, csv_path_str)?;
+    let csv_path = event_info.create_csv_file_for_event(project_path, &contract.name, csv_path_str)?;
     let headers: Vec<String> =
         event_info.csv_headers_for_event().iter().map(|h| format!("\"{}\"", h)).collect();
 

@@ -12,7 +12,11 @@ use tracing::{error, info};
 
 use super::start::StartIndexingError;
 use crate::{
-    event::{callback_registry::TxInformation, EventMessage},
+    event::{
+        callback_registry::{EventResult, TraceResult, TxInformation},
+        config::TraceProcessingConfig,
+        EventMessage,
+    },
     provider::JsonRpcCachedProvider,
     streams::StreamsClients,
 };
@@ -29,7 +33,7 @@ pub async fn native_transfer_block_consumer(
     provider: Arc<JsonRpcCachedProvider>,
     block_numbers: &[U64],
     network_name: &str,
-    streams_client: Option<&StreamsClients>,
+    config: &TraceProcessingConfig,
 ) -> Result<(), StartIndexingError> {
     let trace_futures: Vec<_> = block_numbers.iter().map(|n| provider.trace_block(*n)).collect();
 
@@ -79,52 +83,60 @@ pub async fn native_transfer_block_consumer(
         return Ok(());
     }
 
-    if let Some(client) = streams_client {
-        let contract_name = "EvmDebugTrace";
-        let event_name = "NativeTokenTransfer";
-        let from_block = native_transfers
-            .first()
-            .map(|b| b.transaction_information.block_number)
-            .unwrap_or_default();
-        let to_block = native_transfers
-            .last()
-            .map(|b| b.transaction_information.block_number)
-            .unwrap_or_default();
+    let from_block = native_transfers.first().map(|n| n.transaction_information.block_number);
+    let to_block = native_transfers.first().map(|n| n.transaction_information.block_number);
 
-        let stream_id = format!(
-            "{}-{}-{}-{}-{}",
-            contract_name, event_name, network_name, from_block, to_block
-        );
+    let fn_data =
+        native_transfers.into_iter().map(|_| TraceResult::new_native_transfer()).collect::<Vec<_>>();
 
-        let event_message = EventMessage {
-            event_name: event_name.to_string(),
-            event_data: json!(native_transfers),
-            event_signature_hash: Hash::zero(),
-            network: network_name.to_string(),
-        };
+    config.trigger_event(fn_data).await;
 
-        match client.stream(stream_id, &event_message, false, true).await {
-            Ok(streamed) => {
-                if streamed > 0 {
-                    info!(
-                        "{}::{} - {} - {} events {}",
-                        contract_name,
-                        event_name,
-                        "STREAMED".green(),
-                        streamed,
-                        format!(
-                            "- trace block: {} - {} - network: {}",
-                            from_block, to_block, network_name
-                        )
-                    );
-                }
-            }
-            Err(e) => {
-                error!("Error streaming event: {}", e);
-                return Err(StartIndexingError::UnknownError(e.to_string()));
-            }
-        }
-    }
+    // if let Some(client) = streams_client {
+    //     let contract_name = "EvmDebugTrace";
+    //     let event_name = "NativeTokenTransfer";
+    //     let from_block = native_transfers
+    //         .first()
+    //         .map(|b| b.transaction_information.block_number)
+    //         .unwrap_or_default();
+    //     let to_block = native_transfers
+    //         .last()
+    //         .map(|b| b.transaction_information.block_number)
+    //         .unwrap_or_default();
+    //
+    //     let stream_id = format!(
+    //         "{}-{}-{}-{}-{}",
+    //         contract_name, event_name, network_name, from_block, to_block
+    //     );
+    //
+    //     let event_message = EventMessage {
+    //         event_name: event_name.to_string(),
+    //         event_data: json!(native_transfers),
+    //         event_signature_hash: Hash::zero(),
+    //         network: network_name.to_string(),
+    //     };
+    //
+    //     match client.stream(stream_id, &event_message, false, true).await {
+    //         Ok(streamed) => {
+    //             if streamed > 0 {
+    //                 info!(
+    //                     "{}::{} - {} - {} events {}",
+    //                     contract_name,
+    //                     event_name,
+    //                     "STREAMED".green(),
+    //                     streamed,
+    //                     format!(
+    //                         "- trace block: {} - {} - network: {}",
+    //                         from_block, to_block, network_name
+    //                     )
+    //                 );
+    //             }
+    //         }
+    //         Err(e) => {
+    //             error!("Error streaming event: {}", e);
+    //             return Err(StartIndexingError::UnknownError(e.to_string()));
+    //         }
+    //     }
+    // }
 
     Ok(())
 }
