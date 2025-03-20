@@ -3,13 +3,15 @@ use std::{collections::HashMap, path::Path, str::FromStr, sync::Arc, time::Durat
 use colored::Colorize;
 use ethers::{
     abi::Hash,
+    prelude::ActionType,
     providers::ProviderError,
-    types::{Address, Bytes, U256, U64},
+    types::{Action, Address, Bytes, U256, U64},
 };
 use futures::future::try_join_all;
 use serde::Serialize;
 use serde_json::json;
 use tokio::{
+    join,
     sync::Semaphore,
     task::{JoinError, JoinHandle},
     time::{sleep, Instant},
@@ -36,7 +38,7 @@ use crate::{
         ContractEventDependencies,
     },
     manifest::core::Manifest,
-    provider::CreateNetworkProvider,
+    provider::{CreateNetworkProvider, JsonRpcCachedProvider},
     streams::StreamsClients,
     PostgresClient,
 };
@@ -98,6 +100,111 @@ pub struct NativeTransfer {
     pub transaction_information: TxInformation,
 }
 
+async fn consumer_logic(
+    provider: Arc<JsonRpcCachedProvider>,
+    block_numbers: &[U64],
+    network_name: &str,
+    streams_client: Option<&StreamsClients>,
+) -> Result<(), StartIndexingError> {
+    let trace_futures: Vec<_> =
+        block_numbers.into_iter().map(|n| provider.trace_block(*n)).collect();
+
+    let trace_calls = try_join_all(trace_futures).await?;
+
+    let native_transfers = trace_calls
+        .into_iter()
+        .flatten()
+        .filter_map(|trace| {
+            let action = match trace.action {
+                Action::Call(call) => Some(call),
+                _ => None,
+            }?;
+
+            let has_value = !action.value.is_zero();
+            let no_input = action.input == Bytes::from_str("0x").unwrap();
+            let is_native_transfer = has_value && no_input;
+
+            if is_native_transfer {
+                if trace.transaction_hash.is_none() {
+                    error!("Transaction hash should exist for block trace {}", trace.block_number);
+                    return None;
+                }
+
+                Some(NativeTransfer {
+                    from: action.from,
+                    to: action.to,
+                    value: action.value,
+                    transaction_information: TxInformation {
+                        network: network_name.to_owned(),
+                        address: Address::zero(),
+                        block_number: U64::from(trace.block_number),
+                        block_timestamp: None,
+                        transaction_hash: trace.transaction_hash.expect("checked prior"),
+                        block_hash: trace.block_hash,
+                        transaction_index: U64::from(trace.transaction_position.unwrap_or(0)),
+                        log_index: U256::from(0),
+                    },
+                })
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if native_transfers.is_empty() {
+        return Ok(());
+    }
+
+    if let Some(client) = streams_client {
+        let contract_name = "EvmDebugTrace";
+        let event_name = "NativeTokenTransfer";
+        let from_block = native_transfers
+            .first()
+            .map(|b| b.transaction_information.block_number)
+            .unwrap_or_default();
+        let to_block = native_transfers
+            .last()
+            .map(|b| b.transaction_information.block_number)
+            .unwrap_or_default();
+
+        let stream_id = format!(
+            "{}-{}-{}-{}-{}",
+            contract_name, event_name, network_name, from_block, to_block
+        );
+
+        let event_message = EventMessage {
+            event_name: event_name.to_string(),
+            event_data: json!(native_transfers),
+            event_signature_hash: Hash::zero(),
+            network: network_name.to_string(),
+        };
+
+        match client.stream(stream_id, &event_message, false, true).await {
+            Ok(streamed) => {
+                if streamed > 0 {
+                    info!(
+                        "{}::{} - {} - {} events {}",
+                        contract_name,
+                        event_name,
+                        "STREAMED".green(),
+                        streamed,
+                        format!(
+                            "- trace block: {} - {} - network: {}",
+                            from_block, to_block, network_name
+                        )
+                    );
+                }
+            }
+            Err(e) => {
+                error!("Error streaming event: {}", e);
+                return Err(StartIndexingError::UnknownError(e.to_string()));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub async fn start_indexing(
     manifest: &Manifest,
     project_path: &Path,
@@ -138,11 +245,16 @@ pub async fn start_indexing(
             let provider = providers.get(&network.network).expect("must have provider");
             let (block_tx, mut block_rx) = tokio::sync::mpsc::channel(8192);
 
+            // TODO
+            //
+            // 1. Need validations
+            //    - End block without start block
+            //    - End block less than start block
+
             let network_name = network.network.clone();
             let latest_block = provider.get_block_number().await?;
-            let start_block = network.start_block.unwrap_or(latest_block);
-
-            info!("starting at {}", start_block);
+            let start_block =
+                network.start_block.unwrap_or(network.end_block.unwrap_or(latest_block));
 
             let publisher_provider = provider.clone();
 
@@ -157,7 +269,8 @@ pub async fn start_indexing(
                 let mut last_seen_block = start_block;
 
                 let push_range = async |last: U64, latest: U64| {
-                    for block in last.as_u64()..=latest.as_u64() {
+                    let range = last.as_u64()..=latest.as_u64();
+                    for block in range {
                         block_tx.send(U64::from(block)).await.expect("should send");
                     }
                 };
@@ -170,11 +283,23 @@ pub async fn start_indexing(
                         Ok(Some(latest_block)) => {
                             if let Some(block) = latest_block.number {
                                 if block > last_seen_block {
-                                    let from_block = std::cmp::min(last_seen_block + 1, block);
-                                    info!("Pushing blocks {} - {}", from_block, block);
+                                    let to_block = network
+                                        .end_block
+                                        .map(|end| block.min(end))
+                                        .unwrap_or(block);
 
-                                    push_range(from_block, block).await;
-                                    last_seen_block = block;
+                                    let from_block = block.min(last_seen_block + 1);
+                                    info!("Pushing blocks {} - {}", from_block, to_block);
+
+                                    push_range(from_block, to_block).await;
+                                    last_seen_block = to_block;
+                                }
+
+                                if network.end_block.is_some() &&
+                                    block > network.end_block.expect("must have block")
+                                {
+                                    info!("Finished HISTORICAL INDEXING NativeEvmTraces. No more blocks to push.");
+                                    break;
                                 }
                             }
                         }
@@ -200,97 +325,37 @@ pub async fn start_indexing(
             //
             // Fetches the incoming debug traces for a block and handles stream-callbacks for the
             // publishing of the "NativeTransfer" event.
-            //
-            // TODO: !!!!!!!!!!!!!!!!!!!!!!
-            // TODO - Need to optimise this to consume up to `x` in a parallel.
-            // TODO: !!!!!!!!!!!!!!!!!!!!!!
             let provider = provider.clone();
             let _handle_2 = tokio::spawn(async move {
-                while let Some(block_number) = block_rx.recv().await {
-                    info!("Recv block: {}. {} remaining.", block_number, block_rx.len());
+                const MAX_CONCURRENT_REQUESTS: usize = 20;
+                let mut buffer: Vec<U64> = Vec::with_capacity(MAX_CONCURRENT_REQUESTS);
 
-                    let trace_call = provider.debug_trace_block_by_number(block_number).await?;
+                loop {
+                    let recv = block_rx.recv_many(&mut buffer, MAX_CONCURRENT_REQUESTS).await;
 
-                    let native_transfers = trace_call
-                        .into_iter()
-                        .enumerate()
-                        .filter_map(|(idx, transfer)| {
-                            let is_call = transfer.result.typ == "CALL";
-                            let has_value = !transfer.result.value.is_zero();
-                            let no_input = transfer.result.input == Bytes::from_str("0x").unwrap();
-
-                            if is_call && has_value && no_input {
-                                let tx = TxInformation {
-                                    network: network_name.to_owned(),
-                                    address: Address::zero(),
-                                    block_number,
-                                    block_timestamp: None,
-                                    transaction_hash: transfer.tx_hash,
-
-                                    // TODO: This probably should be `None`, but skip it for now
-                                    block_hash: Default::default(),
-
-                                    // TODO: Verify below is accurate
-                                    transaction_index: U64::from(idx),
-                                    log_index: U256::from(0),
-                                };
-
-                                let transfer = transfer.result;
-
-                                Some(NativeTransfer {
-                                    from: transfer.from,
-                                    to: transfer.to,
-                                    value: transfer.value,
-                                    transaction_information: tx,
-                                })
-                            } else {
-                                None
-                            }
-                        })
-                        .collect::<Vec<_>>();
-
-                    if let Some(client) = streams_client.as_ref() {
-                        let contract_name = "EvmDebugTrace";
-                        let event_name = "NativeTokenTransfer";
-                        let stream_id = format!(
-                            "{}-{}-{}-{}-{}",
-                            contract_name, event_name, network_name, block_number, block_number
-                        );
-
-                        let event_message = EventMessage {
-                            event_name: event_name.to_string(),
-                            event_data: json!(native_transfers),
-                            event_signature_hash: Hash::zero(),
-                            network: network_name.to_string(),
-                        };
-
-                        match client.stream(stream_id, &event_message, false, true).await {
-                            Ok(streamed) => {
-                                info!("Streamed... {}", streamed);
-
-                                if streamed > 0 {
-                                    info!(
-                                        "{}::{} - {} - {} events {}",
-                                        contract_name,
-                                        event_name,
-                                        "STREAMED".green(),
-                                        streamed,
-                                        format!(
-                                            "- trace block: {} - network: {}",
-                                            block_number, network_name
-                                        )
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                error!("Error streaming event: {}", e);
-                                return Err(StartIndexingError::UnknownError(e.to_string()));
-                            }
-                        }
+                    // FIXME: Right now we have no clear shutdown mechanism for this loop
+                    //
+                    // It will simply "recv" 0, infinitely!
+                    if recv == 0 {
+                        sleep(Duration::from_secs(1)).await;
+                        continue;
                     }
-                }
 
-                Ok(())
+                    let processed_block = consumer_logic(
+                        provider.clone(),
+                        &buffer[..recv],
+                        &network_name,
+                        streams_client.as_ref(),
+                    )
+                    .await;
+
+                    // TODO If this errors we need to retry and reconsume the blocks
+                    if let Err(e) = processed_block {
+                        error!("Error consuming trace_block: {}", e);
+                    };
+
+                    buffer.clear();
+                }
             });
         }
     }

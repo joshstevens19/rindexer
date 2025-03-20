@@ -7,16 +7,14 @@ use ethers::{
     middleware::Middleware,
     prelude::{Bytes, Log},
     providers::{Http, Provider, ProviderError, RetryClient, RetryClientBuilder},
-    types::{Address, Block, BlockNumber, H256, U256, U64},
+    types::{Address, Block, BlockNumber, Trace, H256, U256, U64},
 };
-use log::info;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use teloxide::payloads::GetUpdatesSetters;
 use thiserror::Error;
 use tokio::sync::Mutex;
-use tracing::error;
+use tracing::{error, info};
 use url::Url;
 
 use crate::{event::RindexerEventFilter, manifest::core::Manifest};
@@ -93,6 +91,9 @@ impl JsonRpcCachedProvider {
         self.provider.get_block_number().await
     }
 
+    /// TODO: Replaced with `trace_block` as provides info we need as is as-fast or faster, and is
+    ///       less overall boilerplate with custom query.
+    ///
     /// Request a `debug_traceBlockByNumber` RPC response with a config designed to return only a
     /// lightweight response of required top-level data.
     ///
@@ -102,7 +103,7 @@ impl JsonRpcCachedProvider {
         &self,
         block_number: U64,
     ) -> Result<Vec<TraceCallFrame>, ProviderError> {
-        info!("Mk call: {}", "ssss");
+        let now = Instant::now();
         let block = json!(serde_json::to_string_pretty(&block_number)?.replace("\"", ""));
         let options = json!({
             "tracer": "callTracer",
@@ -111,14 +112,19 @@ impl JsonRpcCachedProvider {
             }
         });
 
-        info!("Mk call: {}", block);
-
         let valid_traces: Vec<TraceCallFrame> =
             self.provider.request("debug_traceBlockByNumber", [block, options]).await?;
 
-        info!("Made call: {}", valid_traces.len());
+        let fin = Instant::now().duration_since(now);
+
+        info!("called debug_trace in {}ms", fin.as_millis());
 
         Ok(valid_traces)
+    }
+
+    /// Request `trace_block` information. This currently does not support batched multi-calls.
+    pub async fn trace_block(&self, block_number: U64) -> Result<Vec<Trace>, ProviderError> {
+        self.provider.trace_block(BlockNumber::Number(block_number)).await
     }
 
     pub async fn get_logs(

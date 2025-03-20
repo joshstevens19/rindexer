@@ -117,6 +117,20 @@ pub async fn setup_no_code(
                     .join(", ")
             );
 
+            if manifest.has_enabled_native_transfers() {
+                info!(
+                    "Native token transfers to index: {}",
+                    manifest
+                        .native_transfers
+                        .networks
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|network| network.network.clone())
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                );
+            }
+
             Ok(StartDetails {
                 manifest_path: details.manifest_path,
                 indexing_details: Some(IndexingDetails { registry }),
