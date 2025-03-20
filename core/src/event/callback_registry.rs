@@ -294,7 +294,51 @@ impl TraceCallbackRegistry {
     }
 
     pub async fn trigger_event(&self, id: &String, data: CallbackResult) {
-        todo!()
+        let mut attempts = 0;
+        let mut delay = Duration::from_millis(100);
+
+        if let Some(event_information) = self.find_event(id) {
+            let len = match &data {
+                CallbackResult::Trace(v) => v.len(),
+                CallbackResult::Event(v) => v.len(),
+            };
+
+            debug!("{} - Pushed {} events", len, event_information.info_log_name());
+
+            loop {
+                if !is_running() {
+                    info!("Detected shutdown, stopping event trigger");
+                    break;
+                }
+
+                match (event_information.callback)(data.clone()).await {
+                    Ok(_) => {
+                        debug!(
+                            "Event processing succeeded for id: {} - topic_id: {}",
+                            id, event_information.event_name
+                        );
+                        break;
+                    }
+                    Err(e) => {
+                        if !is_running() {
+                            info!("Detected shutdown, stopping event trigger");
+                            break;
+                        }
+                        attempts += 1;
+                        error!(
+                            "{} Event processing failed - id: {} - topic_id: {}. Retrying... (attempt {}). Error: {}",
+                            event_information.info_log_name(), id, event_information.event_name, attempts, e
+                        );
+
+                        delay = (delay * 2).min(Duration::from_secs(15));
+
+                        sleep(delay).await;
+                    }
+                }
+            }
+        } else {
+            error!("EventCallbackRegistry: No event found for id: {}", id);
+        }
     }
 
     pub fn complete(&self) -> Arc<Self> {

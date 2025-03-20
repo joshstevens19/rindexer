@@ -707,7 +707,7 @@ pub async fn process_trace_events(
     //
     // It is unclear whether simply calling it `Transfer` would be desired.
     let abi_str = r#"
-    {
+    [{
         "anonymous": false,
         "inputs": [
           {
@@ -728,9 +728,11 @@ pub async fn process_trace_events(
         ],
         "name": "NativeTokenTransfer",
         "type": "event"
-    }
+    }]
     "#;
+
     let abi: Abi = serde_json::from_str(abi_str)?;
+
     #[allow(clippy::useless_conversion)]
     let abi_gen = EthersContract::from(abi);
     let abi_items: Vec<ABIItem> = serde_json::from_str(&abi_str)?;

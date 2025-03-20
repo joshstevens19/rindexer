@@ -215,6 +215,8 @@ pub async fn start_indexing(
                 loop {
                     let recv = block_rx.recv_many(&mut buffer, MAX_CONCURRENT_REQUESTS).await;
 
+                    info!("rec blocks: {}", recv);
+
                     // FIXME: Right now we have no clear shutdown mechanism for this loop
                     //
                     // It will simply "recv" 0, infinitely!
