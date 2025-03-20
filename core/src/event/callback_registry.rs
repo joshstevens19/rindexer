@@ -346,6 +346,11 @@ impl TraceCallbackRegistry {
     }
 }
 
+/// TODO
+///
+/// Testing this enum approach out to see if backwards compatibility is OK?
+///
+/// The `rust` project setting may make this untenable.
 #[derive(Clone)]
 pub enum CallbackResult {
     Event(Vec<EventResult>),

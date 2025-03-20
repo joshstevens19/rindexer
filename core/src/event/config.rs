@@ -5,7 +5,9 @@ use tokio::sync::{Mutex, Semaphore};
 
 use crate::{
     event::{
-        callback_registry::{EventCallbackRegistry, EventResult},
+        callback_registry::{
+            CallbackResult, EventCallbackRegistry, EventResult, TraceCallbackRegistry, TraceResult,
+        },
         contract_setup::NetworkContract,
         BuildRindexerFilterError, RindexerEventFilter,
     },
@@ -13,7 +15,6 @@ use crate::{
     manifest::storage::CsvDetails,
     PostgresClient,
 };
-use crate::event::callback_registry::{CallbackResult, TraceCallbackRegistry, TraceResult};
 
 pub struct EventProcessingConfig {
     pub id: String,

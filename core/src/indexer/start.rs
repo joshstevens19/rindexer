@@ -92,28 +92,29 @@ pub async fn start_indexing(
     trace_registry: Arc<TraceCallbackRegistry>,
 ) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
     let start = Instant::now();
-
     let database = initialize_database(manifest).await?;
     let event_progress_state = IndexingEventsProgressState::monitor(&registry.events).await;
 
     // we can bring this into the yaml file later if required
     let semaphore = Arc::new(Semaphore::new(100));
+
     // need this to keep track of dependency_events cross contracts and events
     let mut event_processing_configs: Vec<Arc<EventProcessingConfig>> = vec![];
+
     // any events which are non-blocking and can be fired in parallel
     let mut non_blocking_process_events = Vec::new();
     let mut dependency_event_processing_configs: Vec<ContractEventsDependenciesConfig> = Vec::new();
+
     // if you are doing advanced dependency events where other contracts depend on the processing of
     // this contract you will need to apply the dependency after the processing of the other
     // contract to avoid ordering issues
     let mut apply_cross_contract_dependency_events_config_after_processing = Vec::new();
-
     let mut processed_network_contracts: Vec<ProcessedNetworkContract> = Vec::new();
 
     for event in trace_registry.events.iter() {
         // We could do this inside the `no_code` setup as well
         let providers = CreateNetworkProvider::create(manifest)
-            .expect("handle this createnetwork ERR")
+            .expect("handle this create network ERR")
             .into_iter()
             .map(|p| (p.network_name, p.client))
             .collect::<HashMap<_, _>>();
@@ -126,16 +127,13 @@ pub async fn start_indexing(
             registry: trace_registry.clone(),
         };
 
-
         let networks = manifest.clone().native_transfers.networks.unwrap_or_default();
 
         for network in networks.into_iter() {
             let provider = providers.get(&network.network).expect("must have provider");
             let (block_tx, mut block_rx) = tokio::sync::mpsc::channel(8192);
 
-            // TODO
-            //
-            // 1. Need validations
+            // TODO: Need validations
             //    - End block without start block
             //    - End block less than start block
 
@@ -143,8 +141,6 @@ pub async fn start_indexing(
             let latest_block = provider.get_block_number().await?;
             let start_block =
                 network.start_block.unwrap_or(network.end_block.unwrap_or(latest_block));
-
-            let publisher_provider = provider.clone();
 
             // Block publisher
             //
@@ -154,6 +150,7 @@ pub async fn start_indexing(
             //
             // For now implement a simpler naive variant.
             let n = network_name.clone();
+            let publisher_provider = provider.clone();
             let _handle = tokio::spawn(async move {
                 let mut last_seen_block = start_block;
 
@@ -218,7 +215,6 @@ pub async fn start_indexing(
                     info!("rec blocks: {}", recv);
 
                     // FIXME: Right now we have no clear shutdown mechanism for this loop
-                    //
                     // It will simply "recv" 0, infinitely!
                     if recv == 0 {
                         sleep(Duration::from_secs(1)).await;
@@ -229,7 +225,7 @@ pub async fn start_indexing(
                         provider.clone(),
                         &buffer[..recv],
                         &network_name,
-                        &config
+                        &config,
                     )
                     .await;
 

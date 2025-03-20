@@ -167,6 +167,9 @@ struct NoCodeCallbackParams {
 }
 
 fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
+    // TODO
+    // The enum variant is fine, a little verbose and it may make the Rust binding project a little
+    // hard to work with.
     Arc::new(move |results| {
         let params = Arc::clone(&params);
 
@@ -184,17 +187,9 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                     params.event_info.name,
                     "NO EVENTS".red()
                 );
+
                 return Ok(());
             }
-
-            // let (from_block, to_block) = match results.first() {
-            //     Some(first) => (first.found_in_request.from_block,
-            // first.found_in_request.to_block),     None => {
-            //         let error_message = "Unexpected error: no first event despite non-zero
-            // length.";         error!("{}", error_message);
-            //         return Err(error_message.to_string());
-            //     }
-            // };
 
             // TODO
             // Remove unwrap
@@ -271,70 +266,61 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                         ))
                     })
                     .collect::<Vec<_>>(),
-                CallbackResult::Trace(events) => {
-                    events
-                        .iter()
-                        .filter_map(|result| {
-                            // let log = parse_log(&params.event, &result.log)?;
+                CallbackResult::Trace(events) => events
+                    .iter()
+                    .filter_map(|result| {
+                        let log_params = vec![
+                            LogParam {
+                                name: "from".to_string(),
+                                value: Token::Address(result.from),
+                            },
+                            LogParam { name: "to".to_string(), value: Token::Address(result.to) },
+                            LogParam {
+                                name: "value".to_string(),
+                                value: Token::Uint(result.value),
+                            },
+                        ];
 
-                            let log_params = vec![
-                                LogParam {
-                                    name: "from".to_string(),
-                                    value: Token::Address(result.from),
-                                },
-                                LogParam {
-                                    name: "to".to_string(),
-                                    value: Token::Address(result.to),
-                                },
-                                LogParam {
-                                    name: "valie".to_string(),
-                                    value: Token::Uint(result.value),
-                                },
-                            ];
+                        let address = result.tx_information.address;
+                        let transaction_hash = result.tx_information.transaction_hash;
+                        let block_number = result.tx_information.block_number;
+                        let block_hash = result.tx_information.block_hash;
+                        let network = result.tx_information.network.to_string();
+                        let transaction_index = result.tx_information.transaction_index;
+                        let log_index = result.tx_information.log_index;
 
-                            let address = result.tx_information.address;
-                            let transaction_hash = result.tx_information.transaction_hash;
-                            let block_number = result.tx_information.block_number;
-                            let block_hash = result.tx_information.block_hash;
-                            let network = result.tx_information.network.to_string();
-                            let transaction_index = result.tx_information.transaction_index;
-                            let log_index = result.tx_information.log_index;
+                        let event_parameters: Vec<EthereumSqlTypeWrapper> =
+                            map_log_params_to_ethereum_wrapper(
+                                &params.event_info.inputs,
+                                &log_params,
+                            );
 
-                            let event_parameters: Vec<EthereumSqlTypeWrapper> =
-                                map_log_params_to_ethereum_wrapper(
-                                    &params.event_info.inputs,
-                                    &log_params,
-                                );
+                        let contract_address = EthereumSqlTypeWrapper::Address(address);
+                        let end_global_parameters = vec![
+                            EthereumSqlTypeWrapper::H256(transaction_hash),
+                            EthereumSqlTypeWrapper::U64(block_number),
+                            EthereumSqlTypeWrapper::H256(block_hash),
+                            EthereumSqlTypeWrapper::String(network.to_string()),
+                            EthereumSqlTypeWrapper::U64(transaction_index),
+                            EthereumSqlTypeWrapper::U256(log_index),
+                        ];
 
-                            let contract_address = EthereumSqlTypeWrapper::Address(address);
-                            let end_global_parameters = vec![
-                                EthereumSqlTypeWrapper::H256(transaction_hash),
-                                EthereumSqlTypeWrapper::U64(block_number),
-                                EthereumSqlTypeWrapper::H256(block_hash),
-                                EthereumSqlTypeWrapper::String(network.to_string()),
-                                EthereumSqlTypeWrapper::U64(transaction_index),
-                                EthereumSqlTypeWrapper::U256(log_index),
-                            ];
-
-                            Some((
-                                log_params,
-                                address,
-                                transaction_hash,
-                                log_index,
-                                transaction_index,
-                                block_number,
-                                block_hash,
-                                network,
-                                contract_address,
-                                event_parameters,
-                                end_global_parameters,
-                            ))
-                        })
-                        .collect::<Vec<_>>()
-                }
+                        Some((
+                            log_params,
+                            address,
+                            transaction_hash,
+                            log_index,
+                            transaction_index,
+                            block_number,
+                            block_hash,
+                            network,
+                            contract_address,
+                            event_parameters,
+                            end_global_parameters,
+                        ))
+                    })
+                    .collect::<Vec<_>>(),
             };
-
-            // Collect owned results to avoid lifetime issues
 
             for (
                 log_params,
@@ -707,28 +693,28 @@ pub async fn process_trace_events(
     //
     // It is unclear whether simply calling it `Transfer` would be desired.
     let abi_str = r#"
-    [{
-        "anonymous": false,
-        "inputs": [
-          {
-            "indexed": true,
-            "name": "from",
-            "type": "address"
-          },
-          {
-            "indexed": true,
-            "name": "to",
-            "type": "address"
-          },
-          {
-            "indexed": false,
-            "name": "value",
-            "type": "uint256"
-          }
-        ],
-        "name": "NativeTokenTransfer",
-        "type": "event"
-    }]
+        [{
+            "anonymous": false,
+            "inputs": [
+              {
+                "indexed": true,
+                "name": "from",
+                "type": "address"
+              },
+              {
+                "indexed": true,
+                "name": "to",
+                "type": "address"
+              },
+              {
+                "indexed": false,
+                "name": "value",
+                "type": "uint256"
+              }
+            ],
+            "name": "NativeTokenTransfer",
+            "type": "event"
+        }]
     "#;
 
     let abi: Abi = serde_json::from_str(abi_str)?;
