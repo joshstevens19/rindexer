@@ -10,6 +10,7 @@ mod dependency;
 pub use dependency::ContractEventDependenciesMapFromRelationshipsError;
 mod fetch_logs;
 mod last_synced;
+pub mod native_transfer;
 pub mod no_code;
 mod reorg;
 pub mod start;
