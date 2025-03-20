@@ -3,7 +3,7 @@ use std::{any::Any, sync::Arc, time::Duration};
 use ethers::{
     addressbook::Address,
     contract::LogMeta,
-    types::{Bytes, Log, H256, U256, U64},
+    types::{Action, Bytes, Call, Log, Trace, H256, U256, U64},
 };
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -80,7 +80,7 @@ impl EventResult {
 
 pub type EventCallbackResult<T> = Result<T, String>;
 pub type EventCallbackType =
-    Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync>;
+    Arc<dyn Fn(CallbackResult) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync>;
 
 pub struct EventCallbackRegistryInformation {
     pub id: String,
@@ -136,12 +136,17 @@ impl EventCallbackRegistry {
         self.events.push(event);
     }
 
-    pub async fn trigger_event(&self, id: &String, data: Vec<EventResult>) {
+    pub async fn trigger_event(&self, id: &String, data: CallbackResult) {
         let mut attempts = 0;
         let mut delay = Duration::from_millis(100);
 
         if let Some(event_information) = self.find_event(id) {
-            debug!("{} - Pushed {} events", data.len(), event_information.info_log_name());
+            let len = match &data {
+                CallbackResult::Trace(v) => v.len(),
+                CallbackResult::Event(v) => v.len(),
+            };
+
+            debug!("{} - Pushed {} events", len, event_information.info_log_name());
 
             loop {
                 if !is_running() {
@@ -209,4 +214,145 @@ impl EventCallbackRegistry {
 
         self.complete()
     }
+}
+
+// --------------------------------
+// "Native" Trace Callback Registry
+// --------------------------------
+
+#[derive(Debug, Clone)]
+pub struct TraceResult {
+    pub from: Address,
+    pub to: Address,
+    pub value: U256,
+    pub tx_information: TxInformation,
+    pub found_in_request: LogFoundInRequest,
+}
+
+impl TraceResult {
+    /// Create a "NativeTokenTransfer" TraceResult to be published to the sinks and stream
+    /// processors.
+    pub fn new_native_transfer(
+        action: &Call,
+        trace: &Trace,
+        network: &str,
+        start_block: U64,
+        end_block: U64,
+    ) -> Self {
+        Self {
+            from: action.from,
+            to: action.from,
+            value: action.value,
+            tx_information: TxInformation {
+                network: network.to_string(),
+                address: Address::zero(),
+                block_number: U64::from(trace.block_number),
+                block_timestamp: None,
+                transaction_hash: trace.transaction_hash.expect("checked prior"),
+                block_hash: trace.block_hash,
+                transaction_index: U64::from(trace.transaction_position.unwrap_or(0)),
+                log_index: U256::from(0),
+            },
+            found_in_request: LogFoundInRequest { from_block: start_block, to_block: end_block },
+        }
+    }
+}
+
+pub type TraceCallbackResult<T> = Result<T, String>;
+
+#[derive(Clone)]
+pub struct TraceCallbackRegistryInformation {
+    pub id: String,
+    pub indexer_name: String,
+    pub event_name: String,
+    pub contract_name: String,
+    pub callback: EventCallbackType,
+}
+
+impl TraceCallbackRegistryInformation {
+    pub fn info_log_name(&self) -> String {
+        format!("{}::{}", self.indexer_name, self.event_name)
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct TraceCallbackRegistry {
+    pub events: Vec<TraceCallbackRegistryInformation>,
+}
+
+impl TraceCallbackRegistry {
+    pub fn new() -> Self {
+        TraceCallbackRegistry { events: Vec::new() }
+    }
+
+    pub fn find_event(&self, id: &String) -> Option<&TraceCallbackRegistryInformation> {
+        self.events.iter().find(|e| e.id == *id)
+    }
+
+    pub fn register_event(&mut self, event: TraceCallbackRegistryInformation) {
+        self.events.push(event);
+    }
+
+    pub async fn trigger_event(&self, id: &String, data: CallbackResult) {
+        let mut attempts = 0;
+        let mut delay = Duration::from_millis(100);
+
+        if let Some(event_information) = self.find_event(id) {
+            let len = match &data {
+                CallbackResult::Trace(v) => v.len(),
+                CallbackResult::Event(v) => v.len(),
+            };
+
+            debug!("{} - Pushed {} events", len, event_information.info_log_name());
+
+            loop {
+                if !is_running() {
+                    info!("Detected shutdown, stopping event trigger");
+                    break;
+                }
+
+                match (event_information.callback)(data.clone()).await {
+                    Ok(_) => {
+                        debug!(
+                            "Event processing succeeded for id: {} - topic_id: {}",
+                            id, event_information.event_name
+                        );
+                        break;
+                    }
+                    Err(e) => {
+                        if !is_running() {
+                            info!("Detected shutdown, stopping event trigger");
+                            break;
+                        }
+                        attempts += 1;
+                        error!(
+                            "{} Event processing failed - id: {} - topic_id: {}. Retrying... (attempt {}). Error: {}",
+                            event_information.info_log_name(), id, event_information.event_name, attempts, e
+                        );
+
+                        delay = (delay * 2).min(Duration::from_secs(15));
+
+                        sleep(delay).await;
+                    }
+                }
+            }
+        } else {
+            error!("EventCallbackRegistry: No event found for id: {}", id);
+        }
+    }
+
+    pub fn complete(&self) -> Arc<Self> {
+        Arc::new(self.clone())
+    }
+}
+
+/// TODO
+///
+/// Testing this enum approach out to see if backwards compatibility is OK?
+///
+/// The `rust` project setting may make this untenable.
+#[derive(Clone)]
+pub enum CallbackResult {
+    Event(Vec<EventResult>),
+    Trace(Vec<TraceResult>),
 }

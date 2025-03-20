@@ -12,7 +12,8 @@ use tracing::{error, info};
 use crate::{
     database::postgres::client::PostgresConnectionError,
     event::{
-        callback_registry::EventCallbackRegistry, config::EventProcessingConfig,
+        callback_registry::{EventCallbackRegistry, TraceCallbackRegistry},
+        config::{EventProcessingConfig, TraceProcessingConfig},
         contract_setup::NetworkContract,
     },
     indexer::{
@@ -88,33 +89,43 @@ pub async fn start_indexing(
     dependencies: &[ContractEventDependencies],
     no_live_indexing_forced: bool,
     registry: Arc<EventCallbackRegistry>,
+    trace_registry: Arc<TraceCallbackRegistry>,
 ) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
     let start = Instant::now();
-
     let database = initialize_database(manifest).await?;
     let event_progress_state = IndexingEventsProgressState::monitor(&registry.events).await;
 
     // we can bring this into the yaml file later if required
     let semaphore = Arc::new(Semaphore::new(100));
+
     // need this to keep track of dependency_events cross contracts and events
     let mut event_processing_configs: Vec<Arc<EventProcessingConfig>> = vec![];
+
     // any events which are non-blocking and can be fired in parallel
     let mut non_blocking_process_events = Vec::new();
     let mut dependency_event_processing_configs: Vec<ContractEventsDependenciesConfig> = Vec::new();
+
     // if you are doing advanced dependency events where other contracts depend on the processing of
     // this contract you will need to apply the dependency after the processing of the other
     // contract to avoid ordering issues
     let mut apply_cross_contract_dependency_events_config_after_processing = Vec::new();
-
     let mut processed_network_contracts: Vec<ProcessedNetworkContract> = Vec::new();
 
-    if manifest.has_enabled_native_transfers() {
+    for event in trace_registry.events.iter() {
         // We could do this inside the `no_code` setup as well
         let providers = CreateNetworkProvider::create(manifest)
-            .expect("handle this createnetwork ERR")
+            .expect("handle this create network ERR")
             .into_iter()
             .map(|p| (p.network_name, p.client))
             .collect::<HashMap<_, _>>();
+
+        let config = TraceProcessingConfig {
+            id: event.id.to_string(),
+            project_path: Default::default(),
+            start_block: Default::default(),
+            end_block: Default::default(),
+            registry: trace_registry.clone(),
+        };
 
         let networks = manifest.clone().native_transfers.networks.unwrap_or_default();
 
@@ -122,9 +133,7 @@ pub async fn start_indexing(
             let provider = providers.get(&network.network).expect("must have provider");
             let (block_tx, mut block_rx) = tokio::sync::mpsc::channel(8192);
 
-            // TODO
-            //
-            // 1. Need validations
+            // TODO: Need validations
             //    - End block without start block
             //    - End block less than start block
 
@@ -133,8 +142,6 @@ pub async fn start_indexing(
             let start_block =
                 network.start_block.unwrap_or(network.end_block.unwrap_or(latest_block));
 
-            let publisher_provider = provider.clone();
-
             // Block publisher
             //
             // Can ultimately try and share logic with `live_indexing_stream` which is currently
@@ -142,6 +149,8 @@ pub async fn start_indexing(
             // "log" fetching.
             //
             // For now implement a simpler naive variant.
+            let n = network_name.clone();
+            let publisher_provider = provider.clone();
             let _handle = tokio::spawn(async move {
                 let mut last_seen_block = start_block;
 
@@ -166,6 +175,7 @@ pub async fn start_indexing(
                                         .unwrap_or(block);
 
                                     let from_block = block.min(last_seen_block + 1);
+
                                     info!("Pushing blocks {} - {}", from_block, to_block);
 
                                     push_range(from_block, to_block).await;
@@ -175,7 +185,7 @@ pub async fn start_indexing(
                                 if network.end_block.is_some() &&
                                     block > network.end_block.expect("must have block")
                                 {
-                                    info!("Finished HISTORICAL INDEXING NativeEvmTraces. No more blocks to push.");
+                                    info!("Finished {} HISTORICAL INDEXING NativeEvmTraces. No more blocks to push.", &n);
                                     break;
                                 }
                             }
@@ -189,20 +199,12 @@ pub async fn start_indexing(
                 }
             });
 
-            // Register streams client
-            //
-            // This is the only `dev` support publishing method for now for PoC.
-            let streams_client = if let Some(streams) = &manifest.native_transfers.streams {
-                Some(StreamsClients::new(streams.clone()).await)
-            } else {
-                None
-            };
-
             // Block consumer
             //
             // Fetches the incoming debug traces for a block and handles stream-callbacks for the
             // publishing of the "NativeTransfer" event.
             let provider = provider.clone();
+            let config = config.clone();
             let _handle_2 = tokio::spawn(async move {
                 const MAX_CONCURRENT_REQUESTS: usize = 20;
                 let mut buffer: Vec<U64> = Vec::with_capacity(MAX_CONCURRENT_REQUESTS);
@@ -210,8 +212,9 @@ pub async fn start_indexing(
                 loop {
                     let recv = block_rx.recv_many(&mut buffer, MAX_CONCURRENT_REQUESTS).await;
 
+                    info!("rec blocks: {}", recv);
+
                     // FIXME: Right now we have no clear shutdown mechanism for this loop
-                    //
                     // It will simply "recv" 0, infinitely!
                     if recv == 0 {
                         sleep(Duration::from_secs(1)).await;
@@ -222,7 +225,7 @@ pub async fn start_indexing(
                         provider.clone(),
                         &buffer[..recv],
                         &network_name,
-                        streams_client.as_ref(),
+                        &config,
                     )
                     .await;
 

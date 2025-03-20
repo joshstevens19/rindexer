@@ -5,7 +5,9 @@ use tokio::sync::{Mutex, Semaphore};
 
 use crate::{
     event::{
-        callback_registry::{EventCallbackRegistry, EventResult},
+        callback_registry::{
+            CallbackResult, EventCallbackRegistry, EventResult, TraceCallbackRegistry, TraceResult,
+        },
         contract_setup::NetworkContract,
         BuildRindexerFilterError, RindexerEventFilter,
     },
@@ -48,21 +50,22 @@ impl EventProcessingConfig {
     }
 
     pub async fn trigger_event(&self, fn_data: Vec<EventResult>) {
-        self.registry.trigger_event(&self.id, fn_data).await;
+        self.registry.trigger_event(&self.id, CallbackResult::Event(fn_data)).await;
     }
 }
 
+#[derive(Clone)]
 pub struct TraceProcessingConfig {
     pub id: String,
     pub project_path: PathBuf,
-    pub network_contract: Arc<NetworkContract>,
+    // pub network_contract: Arc<NetworkContract>,
     pub start_block: U64,
     pub end_block: U64,
-    pub registry: Arc<EventCallbackRegistry>,
+    pub registry: Arc<TraceCallbackRegistry>,
 }
 
 impl TraceProcessingConfig {
-    pub async fn trigger_event(&self, fn_data: Vec<EventResult>) {
-        self.registry.trigger_event(&self.id, fn_data).await;
+    pub async fn trigger_event(&self, fn_data: Vec<TraceResult>) {
+        self.registry.trigger_event(&self.id, CallbackResult::Trace(fn_data)).await;
     }
 }

@@ -249,6 +249,7 @@ impl ABIItem {
         is_filter: bool,
     ) -> Result<Vec<ABIItem>, ReadAbiError> {
         let mut abi_items = ABIItem::read_abi_items(project_path, contract)?;
+
         if is_filter {
             let filter_event_names: HashSet<String> = contract
                 .details
@@ -341,11 +342,11 @@ impl EventInfo {
     pub fn create_csv_file_for_event(
         &self,
         project_path: &Path,
-        contract: &Contract,
+        contract_name: &str,
         csv_path: &str,
     ) -> Result<String, CreateCsvFileForEvent> {
-        let csv_file_name = format!("{}-{}.csv", contract.name, self.name).to_lowercase();
-        let csv_folder = project_path.join(csv_path).join(&contract.name);
+        let csv_file_name = format!("{}-{}.csv", contract_name, self.name).to_lowercase();
+        let csv_folder = project_path.join(csv_path).join(&contract_name);
 
         // Create directory if it does not exist.
         if let Err(e) = fs::create_dir_all(&csv_folder) {

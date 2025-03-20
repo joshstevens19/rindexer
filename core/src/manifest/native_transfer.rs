@@ -2,7 +2,7 @@ use ethers::prelude::U64;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::core::{deserialize_option_u64_from_string, serialize_option_u64_as_string};
-use crate::manifest::stream::StreamsConfig;
+use crate::manifest::{chat::ChatConfig, stream::StreamsConfig};
 
 #[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub struct NativeTransferDetails {
@@ -42,6 +42,13 @@ pub struct NativeTransfers {
     /// For now `NativeTokenTransfer` must be the defined "Event" name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub streams: Option<StreamsConfig>,
+
+    /// For now `NativeTokenTransfer` must be the defined "Event" name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat: Option<ChatConfig>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generate_csv: Option<bool>,
 }
 
 /// The config to enable native transfers. This can be either a "simple" opinionated enable-all, or
@@ -67,9 +74,13 @@ where
     let value = NativeTransferFullOrSimple::deserialize(deserializer)?;
 
     Ok(match value {
-        NativeTransferFullOrSimple::Simple(enabled) => {
-            NativeTransfers { enabled, networks: None, streams: None }
-        }
+        NativeTransferFullOrSimple::Simple(enabled) => NativeTransfers {
+            enabled,
+            networks: None,
+            streams: None,
+            chat: None,
+            generate_csv: None,
+        },
         NativeTransferFullOrSimple::Full(transfers) => transfers,
     })
 }
