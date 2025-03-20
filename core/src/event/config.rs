@@ -13,7 +13,7 @@ use crate::{
     manifest::storage::CsvDetails,
     PostgresClient,
 };
-use crate::event::callback_registry::{TraceCallbackRegistry, TraceResult};
+use crate::event::callback_registry::{CallbackResult, TraceCallbackRegistry, TraceResult};
 
 pub struct EventProcessingConfig {
     pub id: String,
@@ -49,7 +49,7 @@ impl EventProcessingConfig {
     }
 
     pub async fn trigger_event(&self, fn_data: Vec<EventResult>) {
-        self.registry.trigger_event(&self.id, fn_data).await;
+        self.registry.trigger_event(&self.id, CallbackResult::Event(fn_data)).await;
     }
 }
 
@@ -65,6 +65,6 @@ pub struct TraceProcessingConfig {
 
 impl TraceProcessingConfig {
     pub async fn trigger_event(&self, fn_data: Vec<TraceResult>) {
-        self.registry.trigger_event(&self.id, fn_data).await;
+        self.registry.trigger_event(&self.id, CallbackResult::Trace(fn_data)).await;
     }
 }

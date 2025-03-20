@@ -6,7 +6,7 @@ use std::{
 
 use colored::Colorize;
 use ethers::{
-    abi::{Abi, Contract as EthersContract, Event, EventParam, ParamType},
+    abi::{Abi, Contract as EthersContract, Event, EventParam, Log, LogParam, ParamType, Token},
     types::U256,
 };
 use serde_json::Value;
@@ -29,8 +29,9 @@ use crate::{
     },
     event::{
         callback_registry::{
-            noop_decoder, EventCallbackRegistry, EventCallbackRegistryInformation,
-            EventCallbackType, TraceCallbackRegistryInformation, TxInformation,
+            noop_decoder, CallbackResult, EventCallbackRegistry, EventCallbackRegistryInformation,
+            EventCallbackType, TraceCallbackRegistry, TraceCallbackRegistryInformation,
+            TxInformation,
         },
         contract_setup::{ContractInformation, CreateContractInformationError},
         EventMessage,
@@ -47,7 +48,6 @@ use crate::{
     streams::StreamsClients,
     AsyncCsvAppender, FutureExt, IndexingDetails, StartDetails, StartNoCodeDetails,
 };
-use crate::event::callback_registry::TraceCallbackRegistry;
 
 #[derive(thiserror::Error, Debug)]
 pub enum SetupNoCodeError {
@@ -108,7 +108,8 @@ pub async fn setup_no_code(
             );
 
             let events =
-                process_events(project_path, &mut manifest, postgres.clone(), &network_providers).await?;
+                process_events(project_path, &mut manifest, postgres.clone(), &network_providers)
+                    .await?;
 
             let registry = EventCallbackRegistry { events };
             info!(
@@ -122,8 +123,9 @@ pub async fn setup_no_code(
             );
 
             let trace_events =
-                process_trace_events(project_path, &mut manifest, postgres, &network_providers).await?;
-            let trace_registry = TraceCallbackRegistry { events:trace_events };
+                process_trace_events(project_path, &mut manifest, postgres, &network_providers)
+                    .await?;
+            let trace_registry = TraceCallbackRegistry { events: trace_events };
 
             if manifest.has_enabled_native_transfers() {
                 info!(
@@ -141,7 +143,7 @@ pub async fn setup_no_code(
 
             Ok(StartDetails {
                 manifest_path: details.manifest_path,
-                indexing_details: Some(IndexingDetails { registry,trace_registry }),
+                indexing_details: Some(IndexingDetails { registry, trace_registry }),
                 graphql_details: details.graphql_details,
             })
         }
@@ -169,7 +171,11 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
         let params = Arc::clone(&params);
 
         async move {
-            let event_length = results.len();
+            let event_length = match &results {
+                CallbackResult::Event(event) => event.len(),
+                CallbackResult::Trace(event) => event.len(),
+            };
+
             if event_length == 0 {
                 debug!(
                     "{} {}: {} - {}",
@@ -181,16 +187,36 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                 return Ok(());
             }
 
-            let (from_block, to_block) = match results.first() {
-                Some(first) => (first.found_in_request.from_block, first.found_in_request.to_block),
-                None => {
-                    let error_message = "Unexpected error: no first event despite non-zero length.";
-                    error!("{}", error_message);
-                    return Err(error_message.to_string());
-                }
+            // let (from_block, to_block) = match results.first() {
+            //     Some(first) => (first.found_in_request.from_block,
+            // first.found_in_request.to_block),     None => {
+            //         let error_message = "Unexpected error: no first event despite non-zero
+            // length.";         error!("{}", error_message);
+            //         return Err(error_message.to_string());
+            //     }
+            // };
+
+            // TODO
+            // Remove unwrap
+            let (from_block, to_block) = match &results {
+                CallbackResult::Event(event) => (
+                    event.first().unwrap().found_in_request.from_block,
+                    event.first().unwrap().found_in_request.to_block,
+                ),
+                CallbackResult::Trace(event) => (
+                    event.first().unwrap().found_in_request.from_block,
+                    event.first().unwrap().found_in_request.to_block,
+                ),
             };
 
-            let network = results.first().unwrap().tx_information.network.clone();
+            let network = match &results {
+                CallbackResult::Event(event) => {
+                    event.first().unwrap().tx_information.network.clone()
+                }
+                CallbackResult::Trace(event) => {
+                    event.first().unwrap().tx_information.network.clone()
+                }
+            };
 
             let mut indexed_count = 0;
             let mut postgres_bulk_data: Vec<Vec<EthereumSqlTypeWrapper>> = Vec::new();
@@ -200,48 +226,115 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
             // stream and chat info
             let mut event_message_data: Vec<Value> = Vec::new();
 
+            let owned_results = match &results {
+                CallbackResult::Event(events) => events
+                    .iter()
+                    .filter_map(|result| {
+                        let log = parse_log(&params.event, &result.log)?;
+
+                        let address = result.tx_information.address;
+                        let transaction_hash = result.tx_information.transaction_hash;
+                        let block_number = result.tx_information.block_number;
+                        let block_hash = result.tx_information.block_hash;
+                        let network = result.tx_information.network.to_string();
+                        let transaction_index = result.tx_information.transaction_index;
+                        let log_index = result.tx_information.log_index;
+
+                        let event_parameters: Vec<EthereumSqlTypeWrapper> =
+                            map_log_params_to_ethereum_wrapper(
+                                &params.event_info.inputs,
+                                &log.params,
+                            );
+
+                        let contract_address = EthereumSqlTypeWrapper::Address(address);
+                        let end_global_parameters = vec![
+                            EthereumSqlTypeWrapper::H256(transaction_hash),
+                            EthereumSqlTypeWrapper::U64(block_number),
+                            EthereumSqlTypeWrapper::H256(block_hash),
+                            EthereumSqlTypeWrapper::String(network.to_string()),
+                            EthereumSqlTypeWrapper::U64(transaction_index),
+                            EthereumSqlTypeWrapper::U256(log_index),
+                        ];
+
+                        Some((
+                            log.params,
+                            address,
+                            transaction_hash,
+                            log_index,
+                            transaction_index,
+                            block_number,
+                            block_hash,
+                            network,
+                            contract_address,
+                            event_parameters,
+                            end_global_parameters,
+                        ))
+                    })
+                    .collect::<Vec<_>>(),
+                CallbackResult::Trace(events) => {
+                    events
+                        .iter()
+                        .filter_map(|result| {
+                            // let log = parse_log(&params.event, &result.log)?;
+
+                            let log_params = vec![
+                                LogParam {
+                                    name: "from".to_string(),
+                                    value: Token::Address(result.from),
+                                },
+                                LogParam {
+                                    name: "to".to_string(),
+                                    value: Token::Address(result.to),
+                                },
+                                LogParam {
+                                    name: "valie".to_string(),
+                                    value: Token::Uint(result.value),
+                                },
+                            ];
+
+                            let address = result.tx_information.address;
+                            let transaction_hash = result.tx_information.transaction_hash;
+                            let block_number = result.tx_information.block_number;
+                            let block_hash = result.tx_information.block_hash;
+                            let network = result.tx_information.network.to_string();
+                            let transaction_index = result.tx_information.transaction_index;
+                            let log_index = result.tx_information.log_index;
+
+                            let event_parameters: Vec<EthereumSqlTypeWrapper> =
+                                map_log_params_to_ethereum_wrapper(
+                                    &params.event_info.inputs,
+                                    &log_params,
+                                );
+
+                            let contract_address = EthereumSqlTypeWrapper::Address(address);
+                            let end_global_parameters = vec![
+                                EthereumSqlTypeWrapper::H256(transaction_hash),
+                                EthereumSqlTypeWrapper::U64(block_number),
+                                EthereumSqlTypeWrapper::H256(block_hash),
+                                EthereumSqlTypeWrapper::String(network.to_string()),
+                                EthereumSqlTypeWrapper::U64(transaction_index),
+                                EthereumSqlTypeWrapper::U256(log_index),
+                            ];
+
+                            Some((
+                                log_params,
+                                address,
+                                transaction_hash,
+                                log_index,
+                                transaction_index,
+                                block_number,
+                                block_hash,
+                                network,
+                                contract_address,
+                                event_parameters,
+                                end_global_parameters,
+                            ))
+                        })
+                        .collect::<Vec<_>>()
+                }
+            };
+
             // Collect owned results to avoid lifetime issues
-            let owned_results: Vec<_> = results
-                .iter()
-                .filter_map(|result| {
-                    let log = parse_log(&params.event, &result.log)?;
-
-                    let address = result.tx_information.address;
-                    let transaction_hash = result.tx_information.transaction_hash;
-                    let block_number = result.tx_information.block_number;
-                    let block_hash = result.tx_information.block_hash;
-                    let network = result.tx_information.network.to_string();
-                    let transaction_index = result.tx_information.transaction_index;
-                    let log_index = result.tx_information.log_index;
-
-                    let event_parameters: Vec<EthereumSqlTypeWrapper> =
-                        map_log_params_to_ethereum_wrapper(&params.event_info.inputs, &log.params);
-
-                    let contract_address = EthereumSqlTypeWrapper::Address(address);
-                    let end_global_parameters = vec![
-                        EthereumSqlTypeWrapper::H256(transaction_hash),
-                        EthereumSqlTypeWrapper::U64(block_number),
-                        EthereumSqlTypeWrapper::H256(block_hash),
-                        EthereumSqlTypeWrapper::String(network.to_string()),
-                        EthereumSqlTypeWrapper::U64(transaction_index),
-                        EthereumSqlTypeWrapper::U256(log_index),
-                    ];
-
-                    Some((
-                        log.params,
-                        address,
-                        transaction_hash,
-                        log_index,
-                        transaction_index,
-                        block_number,
-                        block_hash,
-                        network,
-                        contract_address,
-                        event_parameters,
-                        end_global_parameters,
-                    ))
-                })
-                .collect();
 
             for (
                 log_params,
@@ -533,8 +626,11 @@ pub async fn process_events(
 
                 let headers: Vec<String> = event_info.csv_headers_for_event();
                 let csv_path_str = csv_path.to_str().expect("Failed to convert csv path to string");
-                let csv_path =
-                    event_info.create_csv_file_for_event(project_path, &contract.name, csv_path_str)?;
+                let csv_path = event_info.create_csv_file_for_event(
+                    project_path,
+                    &contract.name,
+                    csv_path_str,
+                )?;
                 let csv_appender = AsyncCsvAppender::new(&csv_path);
                 if !Path::new(&csv_path).exists() {
                     csv_appender.append_header(headers).await?;
@@ -640,7 +736,7 @@ pub async fn process_trace_events(
     let abi_items: Vec<ABIItem> = serde_json::from_str(&abi_str)?;
     let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
 
-    let contract = &manifest.native_transfers;;
+    let contract = &manifest.native_transfers;
     let contract_name = "EvmTraces".to_string();
 
     for event_info in event_names {

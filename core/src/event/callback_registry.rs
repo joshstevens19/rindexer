@@ -3,7 +3,7 @@ use std::{any::Any, sync::Arc, time::Duration};
 use ethers::{
     addressbook::Address,
     contract::LogMeta,
-    types::{Action, Bytes, Log, H256, U256, U64},
+    types::{Action, Bytes, Call, Log, Trace, H256, U256, U64},
 };
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -80,7 +80,7 @@ impl EventResult {
 
 pub type EventCallbackResult<T> = Result<T, String>;
 pub type EventCallbackType =
-    Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync>;
+    Arc<dyn Fn(CallbackResult) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync>;
 
 pub struct EventCallbackRegistryInformation {
     pub id: String,
@@ -136,12 +136,17 @@ impl EventCallbackRegistry {
         self.events.push(event);
     }
 
-    pub async fn trigger_event(&self, id: &String, data: Vec<EventResult>) {
+    pub async fn trigger_event(&self, id: &String, data: CallbackResult) {
         let mut attempts = 0;
         let mut delay = Duration::from_millis(100);
 
         if let Some(event_information) = self.find_event(id) {
-            debug!("{} - Pushed {} events", data.len(), event_information.info_log_name());
+            let len = match &data {
+                CallbackResult::Trace(v) => v.len(),
+                CallbackResult::Event(v) => v.len(),
+            };
+
+            debug!("{} - Pushed {} events", len, event_information.info_log_name());
 
             loop {
                 if !is_running() {
@@ -217,34 +222,39 @@ impl EventCallbackRegistry {
 
 #[derive(Debug, Clone)]
 pub struct TraceResult {
-    pub decoded_data: Arc<dyn Any + Send + Sync>,
+    pub from: Address,
+    pub to: Address,
+    pub value: U256,
     pub tx_information: TxInformation,
     pub found_in_request: LogFoundInRequest,
 }
 
 impl TraceResult {
-    /// Create a "NativeTokenTransfer" TraceResult to be published to the sinks and stream processors.
+    /// Create a "NativeTokenTransfer" TraceResult to be published to the sinks and stream
+    /// processors.
     pub fn new_native_transfer(
-        // network_contract: Arc<NetworkContract>,
-        // action: Action,
-        // start_block: U64,
-        // end_block: U64,
+        action: &Call,
+        trace: &Trace,
+        network: &str,
+        start_block: U64,
+        end_block: U64,
     ) -> Self {
-        // Self {
-        //     decoded_data: network_contract.decode_log(log.inner),
-        //     tx_information: TxInformation {
-        //         network: network_name.to_owned(),
-        //         address: Address::zero(),
-        //         block_number: U64::from(trace.block_number),
-        //         block_timestamp: None,
-        //         transaction_hash: trace.transaction_hash.expect("checked prior"),
-        //         block_hash: trace.block_hash,
-        //         transaction_index: U64::from(trace.transaction_position.unwrap_or(0)),
-        //         log_index: U256::from(0),
-        //     },
-        //     found_in_request: LogFoundInRequest { from_block: start_block, to_block: end_block },
-        // }
-        todo!()
+        Self {
+            from: action.from,
+            to: action.from,
+            value: action.value,
+            tx_information: TxInformation {
+                network: network.to_string(),
+                address: Address::zero(),
+                block_number: U64::from(trace.block_number),
+                block_timestamp: None,
+                transaction_hash: trace.transaction_hash.expect("checked prior"),
+                block_hash: trace.block_hash,
+                transaction_index: U64::from(trace.transaction_position.unwrap_or(0)),
+                log_index: U256::from(0),
+            },
+            found_in_request: LogFoundInRequest { from_block: start_block, to_block: end_block },
+        }
     }
 }
 
@@ -283,11 +293,17 @@ impl TraceCallbackRegistry {
         self.events.push(event);
     }
 
-    pub async fn trigger_event(&self, id: &String, data: Vec<TraceResult>) {
+    pub async fn trigger_event(&self, id: &String, data: CallbackResult) {
         todo!()
     }
 
     pub fn complete(&self) -> Arc<Self> {
         Arc::new(self.clone())
     }
+}
+
+#[derive(Clone)]
+pub enum CallbackResult {
+    Event(Vec<EventResult>),
+    Trace(Vec<TraceResult>),
 }
