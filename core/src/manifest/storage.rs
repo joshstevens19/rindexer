@@ -144,7 +144,7 @@ impl Storage {
 
         self.postgres
             .as_ref()
-            .map_or(false, |details| details.disable_create_tables.unwrap_or_default())
+            .is_some_and(|details| details.disable_create_tables.unwrap_or_default())
     }
 
     pub fn postgres_drop_each_run(&self) -> bool {
@@ -153,7 +153,7 @@ impl Storage {
             return false;
         }
 
-        self.postgres.as_ref().map_or(false, |details| details.drop_each_run.unwrap_or_default())
+        self.postgres.as_ref().is_some_and(|details| details.drop_each_run.unwrap_or_default())
     }
 
     pub fn csv_enabled(&self) -> bool {
@@ -169,9 +169,7 @@ impl Storage {
             return true;
         }
 
-        self.csv
-            .as_ref()
-            .map_or(false, |details| details.disable_create_headers.unwrap_or_default())
+        self.csv.as_ref().is_some_and(|details| details.disable_create_headers.unwrap_or_default())
     }
 
     pub async fn create_relationships_and_indexes(

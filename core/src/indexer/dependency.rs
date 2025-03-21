@@ -252,7 +252,7 @@ impl ContractEventDependencies {
         dependencies: &[ContractEventDependencies],
     ) -> DependencyStatus {
         let has_dependency_in_own_contract =
-            dependencies.iter().find(|d| d.contract_name == contract_name).map_or(false, |deps| {
+            dependencies.iter().find(|d| d.contract_name == contract_name).is_some_and(|deps| {
                 deps.event_dependencies.has_dependency(&ContractEventMapping {
                     contract_name: deps.contract_name.clone(),
                     event_name: event_name.to_string(),
