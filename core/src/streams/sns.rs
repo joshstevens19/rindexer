@@ -1,4 +1,4 @@
-use aws_config::{meta::region::RegionProviderChain, BehaviorVersion, Region};
+use aws_config::{BehaviorVersion, Region};
 use aws_sdk_sns::{
     config::{http::HttpResponse, Credentials},
     error::SdkError,
@@ -10,26 +10,47 @@ use tracing::{error, info};
 use crate::types::aws_config::AwsConfig;
 
 #[derive(Debug, Clone)]
-#[allow(clippy::upper_case_acronyms)]
 pub struct SNS {
     client: Client,
 }
 
 impl SNS {
     pub async fn new(config: &AwsConfig) -> Self {
-        let region_provider = RegionProviderChain::first_try(Region::new(config.region.clone()));
+        // Start with the default AWS config builder
+        let mut aws_config_builder = aws_config::defaults(BehaviorVersion::latest());
 
-        let credentials_provider = Credentials::new(
-            &config.access_key,
-            &config.secret_key,
-            config.session_token.clone(),
-            None,
-            "manual",
-        );
+        // Set region if provided
+        if let Some(region) = &config.region {
+            if !region.trim().is_empty() {
+                aws_config_builder = aws_config_builder.region(Region::new(region.clone()));
+            }
+        }
 
-        let mut sdk_config = aws_config::defaults(BehaviorVersion::latest())
+        // Define region_provider and credentials_provider
+        let region_provider = Region::new(config.region.clone().unwrap_or_default());
+        let credentials_provider = if let (Some(access_key), Some(secret_key)) = (&config.access_key, &config.secret_key) {
+            if !access_key.trim().is_empty() && !secret_key.trim().is_empty() {
+                Some(Credentials::new(
+                    access_key,
+                    secret_key,
+                    config.session_token.clone(),
+                    None,
+                    "manual",
+                ))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Use the credentials_provider if available, otherwise use a default or handle the None case
+        if let Some(credentials) = credentials_provider {
+            aws_config_builder = aws_config_builder.credentials_provider(credentials);
+        }
+
+        let mut sdk_config = aws_config_builder
             .region(region_provider)
-            .credentials_provider(credentials_provider)
             .load()
             .await;
 
