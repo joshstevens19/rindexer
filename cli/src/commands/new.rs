@@ -165,7 +165,7 @@ pub fn handle_new_command(
             streams: None,
             chat: None,
         }],
-        // This will create a default NativeTranfers struct which 
+        // This will create a default NativeTranfers struct which
         native_transfers: NativeTransfers::default(),
         phantom: None,
         global: None,
