@@ -1,6 +1,6 @@
 use std::{str::FromStr, sync::Arc, time::Duration};
 
-use ethers::types::{Action, Address, Bytes, Res, U256, U64};
+use ethers::types::{Action, Address, Bytes, U256, U64};
 use futures::future::try_join_all;
 use serde::Serialize;
 use tokio::time::sleep;
