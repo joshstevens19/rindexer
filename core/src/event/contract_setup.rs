@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     event::callback_registry::Decoder,
     generate_random_id,
+    indexer::native_transfer::EVENT_NAME,
     manifest::{
         contract::{Contract, EventInputIndexedFilters},
         native_transfer::NativeTransfers,
@@ -146,7 +147,7 @@ impl TraceInformation {
         }
 
         Ok(TraceInformation {
-            name: "NativeTokenTransfers".to_string(),
+            name: EVENT_NAME.to_string(),
             details,
             reorg_safe_distance: native_transfers.reorg_safe_distance.unwrap_or_default(),
         })

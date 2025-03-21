@@ -91,14 +91,8 @@ impl JsonRpcCachedProvider {
         self.provider.get_block_number().await
     }
 
-    /// TODO: Replaced with `trace_block` as provides info we need as is as-fast or faster, and is
-    ///       less overall boilerplate with custom query.
-    ///
-    /// Request a `debug_traceBlockByNumber` RPC response with a config designed to return only a
-    /// lightweight response of required top-level data.
-    ///
-    /// _NOTE:_ We have to implement a custom RPC call because the deprecated `ethers-rs` does not
-    /// support retuning the transaction_hash in the response.
+    /// Custom implementation of a `debug_traceBlockByNumber` call
+    #[deprecated(note = "Use 'trace_block' for better information and better ethers-rs support")]
     pub async fn debug_trace_block_by_number(
         &self,
         block_number: U64,

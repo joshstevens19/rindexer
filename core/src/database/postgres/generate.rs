@@ -5,7 +5,10 @@ use tracing::{error, info};
 use crate::{
     abi::{ABIInput, ABIItem, EventInfo, GenerateAbiPropertiesType, ParamTypeError, ReadAbiError},
     helpers::camel_to_snake,
-    indexer::Indexer,
+    indexer::{
+        native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME},
+        Indexer,
+    },
     manifest::contract::Contract,
     types::code::Code,
 };
@@ -193,32 +196,8 @@ pub fn generate_tables_for_indexer_sql(
     }
 
     if indexer.native_transfers.enabled {
-        let contract_name = "EvmTraces".to_string();
-        let abi_str = r#"
-            [{
-                "anonymous": false,
-                "inputs": [
-                  {
-                    "indexed": true,
-                    "name": "from",
-                    "type": "address"
-                  },
-                  {
-                    "indexed": true,
-                    "name": "to",
-                    "type": "address"
-                  },
-                  {
-                    "indexed": false,
-                    "name": "value",
-                    "type": "uint256"
-                  }
-                ],
-                "name": "NativeTokenTransfer",
-                "type": "event"
-            }]
-        "#;
-
+        let contract_name = NATIVE_TRANSFER_CONTRACT_NAME.to_string();
+        let abi_str = NATIVE_TRANSFER_ABI;
         let abi_items: Vec<ABIItem> =
             serde_json::from_str(abi_str).expect("JSON was not well-formatted");
         let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;

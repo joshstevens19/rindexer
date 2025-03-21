@@ -10,6 +10,7 @@ use serde_json::Value;
 use tokio_postgres::types::Type as PgType;
 use tracing::{debug, error, info, warn};
 
+use super::native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME};
 use crate::{
     abi::{ABIItem, CreateCsvFileForEvent, EventInfo, ParamTypeError, ReadAbiError},
     chat::ChatClients,
@@ -698,35 +699,7 @@ pub async fn process_trace_events(
         return Ok(events);
     }
 
-    // Invent our own Abi which would match a standard ERC0 Transfer event.
-    // However, discriminate on the name replacing `Transfer` with `NativeTokenTransfer`.
-    //
-    // It is unclear whether simply calling it `Transfer` would be desired.
-    let abi_str = r#"
-        [{
-            "anonymous": false,
-            "inputs": [
-              {
-                "indexed": true,
-                "name": "from",
-                "type": "address"
-              },
-              {
-                "indexed": true,
-                "name": "to",
-                "type": "address"
-              },
-              {
-                "indexed": false,
-                "name": "value",
-                "type": "uint256"
-              }
-            ],
-            "name": "NativeTokenTransfer",
-            "type": "event"
-        }]
-    "#;
-
+    let abi_str = NATIVE_TRANSFER_ABI;
     let abi: Abi = serde_json::from_str(abi_str)?;
 
     #[allow(clippy::useless_conversion)]
@@ -735,7 +708,7 @@ pub async fn process_trace_events(
     let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
 
     let contract = &manifest.native_transfers;
-    let contract_name = "EvmTraces".to_string();
+    let contract_name = NATIVE_TRANSFER_CONTRACT_NAME.to_string();
 
     for event_info in event_names {
         let event_name = event_info.name.clone();
