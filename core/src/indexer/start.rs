@@ -18,7 +18,7 @@ use crate::{
     indexer::{
         dependency::ContractEventsDependenciesConfig,
         last_synced::{get_last_synced_block_number, SyncConfig},
-        native_transfer::native_transfer_block_consumer,
+        native_transfer::{native_transfer_block_consumer, native_transfer_block_fetch},
         process::{
             process_contracts_events_with_dependencies, process_event,
             ProcessContractsEventsWithDependenciesError, ProcessEventError,
@@ -227,73 +227,14 @@ pub async fn start_indexing(
 
             let end_block = network.end_block;
 
-            // Block publisher
-            //
-            // Can ultimately try and share logic with `live_indexing_stream` which is currently
-            // handling extra protections and optimisations, but is tightly coupled to
-            // "log" fetching.
-            //
-            // For now implement a simpler naive variant.
-            let n = network_name.clone();
-            let publisher_provider = network.cached_provider.clone();
-            let _handle = tokio::spawn(async move {
-                let mut last_seen_block = start_block;
-
-                let push_range = async |last: U64, latest: U64| {
-                    let range = last.as_u64()..=latest.as_u64();
-                    for block in range {
-                        block_tx.send(U64::from(block)).await.expect("should send");
-                    }
-                };
-
-                loop {
-                    sleep(Duration::from_millis(200)).await;
-
-                    let latest_block = publisher_provider.get_latest_block().await;
-
-                    match latest_block {
-                        Ok(Some(latest_block)) => {
-                            if let Some(block) = latest_block.number {
-                                let safe_block_number = block - indexing_distance_from_head;
-
-                                if block > safe_block_number {
-                                    info!(
-                                        "{} - not in safe reorg block range yet block: {} > range: {}",
-                                        "NativeEvmTraces",
-                                        block,
-                                        safe_block_number
-                                    );
-                                    continue;
-                                }
-
-                                if block > last_seen_block {
-                                    let to_block =
-                                        end_block.map(|end| block.min(end)).unwrap_or(block);
-
-                                    let from_block = block.min(last_seen_block + 1);
-
-                                    info!("Pushing blocks {} - {}", from_block, to_block);
-
-                                    push_range(from_block, to_block).await;
-                                    last_seen_block = to_block;
-                                }
-
-                                if end_block.is_some() &&
-                                    block > end_block.expect("must have block")
-                                {
-                                    info!("Finished {} HISTORICAL INDEXING NativeEvmTraces. No more blocks to push.", &n);
-                                    break;
-                                }
-                            }
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            error!("Error fetching trace_block: {}", e.to_string());
-                            sleep(Duration::from_secs(1)).await;
-                        }
-                    }
-                }
-            });
+            let _handle = tokio::spawn(native_transfer_block_fetch(
+                network.cached_provider.clone(),
+                block_tx,
+                start_block,
+                end_block,
+                indexing_distance_from_head,
+                network_name.clone(),
+            ));
 
             // Block consumer
             //

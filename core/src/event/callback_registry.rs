@@ -25,6 +25,18 @@ pub fn noop_decoder() -> Decoder {
     }) as Decoder
 }
 
+/// The [`CallbackResult`] enum has two core variants, a Trace and an Event. We implement shared
+/// callback logic to sink or stream these "results".
+///
+/// Since each event is different, and we want `rust` project consumers to not worry about manually
+/// mapping their [`EventResult`] into a [`CallbackResult`], we handle this for them internally and
+/// this struct allows us to do this behind the scenes.
+#[derive(Clone)]
+pub enum CallbackResult {
+    Event(Vec<EventResult>),
+    Trace(Vec<TraceResult>),
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TxInformation {
     pub network: String,
@@ -340,15 +352,4 @@ impl TraceCallbackRegistry {
     pub fn complete(&self) -> Arc<Self> {
         Arc::new(self.clone())
     }
-}
-
-/// TODO
-///
-/// Testing this enum approach out to see if backwards compatibility is OK?
-///
-/// The `rust` project setting may make this untenable.
-#[derive(Clone)]
-pub enum CallbackResult {
-    Event(Vec<EventResult>),
-    Trace(Vec<TraceResult>),
 }
