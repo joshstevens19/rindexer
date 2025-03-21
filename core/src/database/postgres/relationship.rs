@@ -115,7 +115,7 @@ impl Relationship {
         format!(
             "fk_{linked_db_table_name}_{linked_db_table_column}",
             linked_db_table_name =
-                self.linked_to.db_table_name.split('.').last().unwrap_or_else(|| panic!(
+                self.linked_to.db_table_name.split('.').next_back().unwrap_or_else(|| panic!(
                     "Failed to split and then get schema for table: {}",
                     self.linked_to.db_table_column
                 )),
@@ -163,7 +163,7 @@ impl Relationship {
         format!(
             "unique_{linked_db_table_name}_{linked_db_table_column}",
             linked_db_table_name =
-                self.linked_to.db_table_name.split('.').last().unwrap_or_else(|| panic!(
+                self.linked_to.db_table_name.split('.').next_back().unwrap_or_else(|| panic!(
                     "Failed to split and then get schema for table: {}",
                     self.linked_to.db_table_column
                 )),
@@ -238,7 +238,7 @@ impl Relationship {
     pub fn index_name(&self) -> String {
         format!(
             "idx_{db_table_name}_{db_table_column}",
-            db_table_name = self.db_table_name.split('.').last().unwrap_or_else(|| panic!(
+            db_table_name = self.db_table_name.split('.').next_back().unwrap_or_else(|| panic!(
                 "Failed to split and then get schema for table: {}",
                 self.db_table_column
             )),

@@ -174,7 +174,7 @@ impl StreamsClients {
     }
 
     /// Gets event name, which may be an optional alias, or the contract's event name.
-    fn get_event_name(&self, events: &Vec<StreamEvent>, event_message: &EventMessage) -> String {
+    fn get_event_name(&self, events: &[StreamEvent], event_message: &EventMessage) -> String {
         let alias_name = events
             .iter()
             .find(|n| n.event_name == event_message.event_name)
@@ -185,14 +185,14 @@ impl StreamsClients {
 
     fn create_chunk_message_raw(
         &self,
-        events: &Vec<StreamEvent>,
+        events: &[StreamEvent],
         event_message: &EventMessage,
         chunk: &[Value],
     ) -> String {
         let chunk_message = EventMessage {
             event_name: self.get_event_name(events, event_message),
             event_data: Value::Array(chunk.to_vec()),
-            event_signature_hash: event_message.event_signature_hash.clone(),
+            event_signature_hash: event_message.event_signature_hash,
             network: event_message.network.clone(),
         };
 
@@ -201,14 +201,14 @@ impl StreamsClients {
 
     fn create_chunk_message_json(
         &self,
-        events: &Vec<StreamEvent>,
+        events: &[StreamEvent],
         event_message: &EventMessage,
         chunk: &[Value],
     ) -> Value {
         let chunk_message = EventMessage {
             event_name: self.get_event_name(events, event_message),
             event_data: Value::Array(chunk.to_vec()),
-            event_signature_hash: event_message.event_signature_hash.clone(),
+            event_signature_hash: event_message.event_signature_hash,
             network: event_message.network.clone(),
         };
 
@@ -278,7 +278,7 @@ impl StreamsClients {
                 let client = Arc::clone(&client);
                 let topic_arn = config.topic_arn.clone();
                 let publish_message =
-                    self.create_chunk_message_raw(&config.events, &event_message, &filtered_chunk);
+                    self.create_chunk_message_raw(&config.events, event_message, &filtered_chunk);
                 task::spawn(async move {
                     let _ =
                         client.publish(&publish_message_id, &topic_arn, &publish_message).await?;

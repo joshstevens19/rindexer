@@ -334,7 +334,7 @@ where
         let index_event_in_order = contract_details
             .index_event_in_order
             .as_ref()
-            .map_or(false, |vec| vec.contains(&event_name.to_string()));
+            .is_some_and(|vec| vec.contains(&event_name.to_string()));
 
         let contract = ContractInformation {
             name: contract_details.before_modify_name_if_filter_readonly().into_owned(),
@@ -353,7 +353,7 @@ where
                         .networks
                         .iter()
                         .find(|n| n.name == c.network)
-                        .map_or(false, |n| n.disable_logs_bloom_checks.unwrap_or_default()),
+                        .is_some_and(|n| n.disable_logs_bloom_checks.unwrap_or_default()),
                 })
                 .collect(),
             abi: contract_details.abi,
