@@ -18,7 +18,7 @@ pub struct CloneMeta {
 
 impl CloneMeta {
     fn get_out_contract_sol_from_path(&self) -> String {
-        self.path.split('/').last().unwrap_or_default().to_string()
+        self.path.split('/').next_back().unwrap_or_default().to_string()
     }
 }
 

@@ -93,7 +93,7 @@ impl Manifest {
             .contracts
             .iter()
             .find(|c| c.name == contract_name)
-            .map_or(false, |c| c.generate_csv.unwrap_or(true));
+            .is_some_and(|c| c.generate_csv.unwrap_or(true));
 
         self.storage.csv_enabled() && contract_csv_enabled
     }

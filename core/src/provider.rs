@@ -100,7 +100,7 @@ impl JsonRpcCachedProvider {
         let mut cache_guard = self.cache.lock().await;
 
         if let Some((timestamp, block)) = &*cache_guard {
-            if timestamp.elapsed() < Duration::from_millis(300) {
+            if timestamp.elapsed() < Duration::from_millis(50) {
                 return Ok(Some(Arc::clone(block)));
             }
         }
