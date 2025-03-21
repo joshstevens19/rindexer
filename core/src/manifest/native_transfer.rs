@@ -35,7 +35,8 @@ pub struct NativeTransfers {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 
-    /// None has a special meaning of "All" networks.
+    /// None has a special meaning of "All" networks for this case. This is because we want the
+    /// functionality to be as simple to opt in to as possible.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub networks: Option<Vec<NativeTransferDetails>>,
 
@@ -47,6 +48,7 @@ pub struct NativeTransfers {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat: Option<ChatConfig>,
 
+    /// Generate a CSV
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generate_csv: Option<bool>,
 }
