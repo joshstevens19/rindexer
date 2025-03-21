@@ -36,6 +36,9 @@ pub enum ProcessEventError {
 
     #[error("Could not build filter: {0}")]
     BuildFilterError(#[from] BuildRindexerFilterError),
+
+    #[error("Could not get block number from provider: {0}")]
+    ProviderCallError(#[from] ProviderError),
 }
 
 pub async fn process_event(

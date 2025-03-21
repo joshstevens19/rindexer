@@ -55,7 +55,7 @@ pub enum PostgresError {
     ConnectionPoolError(#[from] RunError<tokio_postgres::Error>),
 }
 
-#[allow(dead_code)]
+#[allow(unused)]
 pub struct PostgresTransaction<'a> {
     pub transaction: PgTransaction<'a>,
 }

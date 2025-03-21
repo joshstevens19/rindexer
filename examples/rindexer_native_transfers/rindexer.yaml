@@ -1,0 +1,40 @@
+name: rindexer-native-transfers
+description: rindexer native transfers demo
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    # Not all providers support `trace_block` functionality across all chains.
+    # Please ensure that this method is available.
+    rpc: https://docs-demo.quiknode.pro
+native_transfers:
+  networks:
+    - network: ethereum
+  streams:
+    sns:
+      aws_config:
+        region: us-east-1
+        access_key: test
+        secret_key: test
+        endpoint_url: ${ENDPOINT_URL}
+      topics:
+        - topic_arn: arn:aws:sns:us-east-1:000000000000:eth-transfers
+          networks:
+            - ethereum
+
+          # IMPORTANT:
+          #
+          # For now we must enforce the event name is `NativeTokenTransfer`. This is
+          # because areas of the code check that the event is defined in the config on publish, but we are
+          # enforcing that the name must be: "NativeTokenTransfer".
+          events:
+            - event_name: NativeTokenTransfer
+contracts:
+  - name: ERC20Transfer
+    abi: ./abis/ERC20.abi.json
+    details:
+      - network: ethereum
+        filter:
+          - event_name: Transfer
+    include_events:
+      - Transfer
