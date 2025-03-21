@@ -28,9 +28,9 @@ use crate::{
         callback_registry::{
             noop_decoder, CallbackResult, EventCallbackRegistry, EventCallbackRegistryInformation,
             EventCallbackType, TraceCallbackRegistry, TraceCallbackRegistryInformation,
-            TxInformation,
+            TraceCallbackType, TxInformation,
         },
-        contract_setup::{ContractInformation, CreateContractInformationError},
+        contract_setup::{ContractInformation, CreateContractInformationError, TraceInformation},
         EventMessage,
     },
     generate_random_id,
@@ -163,11 +163,13 @@ struct NoCodeCallbackParams {
     chat_clients: Arc<Option<ChatClients>>,
 }
 
-fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
-    // TODO
-    // The enum variant is fine, a little verbose and it may make the Rust binding project a little
-    // hard to work with.
-    Arc::new(move |results| {
+struct EventCallbacks {
+    event_callback: EventCallbackType,
+    trace_callback: TraceCallbackType,
+}
+
+fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
+    let shared_callback = Arc::new(move |results| {
         let params = Arc::clone(&params);
 
         async move {
@@ -522,7 +524,17 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
             Ok(())
         }
         .boxed()
-    })
+    });
+
+    let callback = Arc::clone(&shared_callback);
+    let event_callback: EventCallbackType =
+        Arc::new(move |events| callback(CallbackResult::Event(events)));
+
+    let callback = Arc::clone(&shared_callback);
+    let trace_callback: TraceCallbackType =
+        Arc::new(move |traces| callback(CallbackResult::Trace(traces)));
+
+    EventCallbacks { trace_callback, event_callback }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -663,7 +675,8 @@ pub async fn process_events(
                     postgres_column_names,
                     streams_clients: Arc::new(streams_client),
                     chat_clients: Arc::new(chat_clients),
-                })),
+                }))
+                .event_callback,
             };
 
             events.push(event);
@@ -746,6 +759,9 @@ pub async fn process_trace_events(
             })?
             .clone();
 
+        let trace_information =
+            TraceInformation::create(manifest.native_transfers.clone(), network_providers)?;
+
         let mut csv: Option<Arc<AsyncCsvAppender>> = None;
         if contract.generate_csv.unwrap_or(true) && manifest.storage.csv_enabled() {
             let csv_path =
@@ -806,7 +822,8 @@ pub async fn process_trace_events(
             indexer_name: manifest.name.clone(),
             event_name: event_info.name.clone(),
             contract_name: contract_name.clone(),
-            callback: no_code_callback(callback_params),
+            trace_information: trace_information.clone(),
+            callback: no_code_callback(callback_params).trace_callback,
         };
 
         events.push(event);

@@ -111,25 +111,15 @@ pub async fn start_indexing(
     let mut processed_network_contracts: Vec<ProcessedNetworkContract> = Vec::new();
 
     for event in trace_registry.events.iter() {
-        // We could do this inside the `no_code` setup as well
-        let providers = CreateNetworkProvider::create(manifest)
-            .expect("handle this create network ERR")
-            .into_iter()
-            .map(|p| (p.network_name, p.client))
-            .collect::<HashMap<_, _>>();
+        for network in event.trace_information.details.iter() {
+            let config = TraceProcessingConfig {
+                id: event.id.to_string(),
+                project_path: Default::default(),
+                start_block: Default::default(),
+                end_block: Default::default(),
+                registry: trace_registry.clone(),
+            };
 
-        let config = TraceProcessingConfig {
-            id: event.id.to_string(),
-            project_path: Default::default(),
-            start_block: Default::default(),
-            end_block: Default::default(),
-            registry: trace_registry.clone(),
-        };
-
-        let networks = manifest.clone().native_transfers.networks.unwrap_or_default();
-
-        for network in networks.into_iter() {
-            let provider = providers.get(&network.network).expect("must have provider");
             let (block_tx, mut block_rx) = tokio::sync::mpsc::channel(8192);
 
             // TODO: Need validations
@@ -137,7 +127,7 @@ pub async fn start_indexing(
             //    - End block less than start block
 
             let network_name = network.network.clone();
-            let latest_block = provider.get_block_number().await?;
+            let latest_block = network.cached_provider.get_block_number().await?;
             let start_block =
                 network.start_block.unwrap_or(network.end_block.unwrap_or(latest_block));
 
@@ -149,7 +139,8 @@ pub async fn start_indexing(
             //
             // For now implement a simpler naive variant.
             let n = network_name.clone();
-            let publisher_provider = provider.clone();
+            let publisher_provider = network.cached_provider.clone();
+            let end_block = network.end_block.clone();
             let _handle = tokio::spawn(async move {
                 let mut last_seen_block = start_block;
 
@@ -168,10 +159,8 @@ pub async fn start_indexing(
                         Ok(Some(latest_block)) => {
                             if let Some(block) = latest_block.number {
                                 if block > last_seen_block {
-                                    let to_block = network
-                                        .end_block
-                                        .map(|end| block.min(end))
-                                        .unwrap_or(block);
+                                    let to_block =
+                                        end_block.map(|end| block.min(end)).unwrap_or(block);
 
                                     let from_block = block.min(last_seen_block + 1);
 
@@ -181,8 +170,8 @@ pub async fn start_indexing(
                                     last_seen_block = to_block;
                                 }
 
-                                if network.end_block.is_some() &&
-                                    block > network.end_block.expect("must have block")
+                                if end_block.is_some() &&
+                                    block > end_block.expect("must have block")
                                 {
                                     info!("Finished {} HISTORICAL INDEXING NativeEvmTraces. No more blocks to push.", &n);
                                     break;
@@ -202,7 +191,7 @@ pub async fn start_indexing(
             //
             // Fetches the incoming debug traces for a block and handles stream-callbacks for the
             // publishing of the "NativeTransfer" event.
-            let provider = provider.clone();
+            let provider = network.cached_provider.clone();
             let config = config.clone();
             let _handle_2 = tokio::spawn(async move {
                 const MAX_CONCURRENT_REQUESTS: usize = 20;
@@ -210,8 +199,6 @@ pub async fn start_indexing(
 
                 loop {
                     let recv = block_rx.recv_many(&mut buffer, MAX_CONCURRENT_REQUESTS).await;
-
-                    info!("rec blocks: {}", recv);
 
                     // FIXME: Right now we have no clear shutdown mechanism for this loop
                     // It will simply "recv" 0, infinitely!

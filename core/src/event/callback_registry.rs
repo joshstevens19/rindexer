@@ -11,7 +11,7 @@ use tokio::time::sleep;
 use tracing::{debug, error, info};
 
 use crate::{
-    event::contract_setup::{ContractInformation, NetworkContract},
+    event::contract_setup::{ContractInformation, NetworkContract, TraceInformation},
     indexer::start::ProcessedNetworkContract,
     is_running,
     provider::WrappedLog,
@@ -80,7 +80,9 @@ impl EventResult {
 
 pub type EventCallbackResult<T> = Result<T, String>;
 pub type EventCallbackType =
-    Arc<dyn Fn(CallbackResult) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync>;
+    Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync>;
+pub type TraceCallbackType =
+    Arc<dyn Fn(Vec<TraceResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync>;
 
 pub struct EventCallbackRegistryInformation {
     pub id: String,
@@ -136,15 +138,12 @@ impl EventCallbackRegistry {
         self.events.push(event);
     }
 
-    pub async fn trigger_event(&self, id: &String, data: CallbackResult) {
+    pub async fn trigger_event(&self, id: &String, data: Vec<EventResult>) {
         let mut attempts = 0;
         let mut delay = Duration::from_millis(100);
 
         if let Some(event_information) = self.find_event(id) {
-            let len = match &data {
-                CallbackResult::Trace(v) => v.len(),
-                CallbackResult::Event(v) => v.len(),
-            };
+            let len = data.len();
 
             debug!("{} - Pushed {} events", len, event_information.info_log_name());
 
@@ -230,8 +229,7 @@ pub struct TraceResult {
 }
 
 impl TraceResult {
-    /// Create a "NativeTokenTransfer" TraceResult to be published to the sinks and stream
-    /// processors.
+    /// Create a "NativeTokenTransfer" TraceResult for sinking and streaming.
     pub fn new_native_transfer(
         action: &Call,
         trace: &Trace,
@@ -241,7 +239,7 @@ impl TraceResult {
     ) -> Self {
         Self {
             from: action.from,
-            to: action.from,
+            to: action.to,
             value: action.value,
             tx_information: TxInformation {
                 network: network.to_string(),
@@ -266,7 +264,8 @@ pub struct TraceCallbackRegistryInformation {
     pub indexer_name: String,
     pub event_name: String,
     pub contract_name: String,
-    pub callback: EventCallbackType,
+    pub trace_information: TraceInformation,
+    pub callback: TraceCallbackType,
 }
 
 impl TraceCallbackRegistryInformation {
@@ -293,15 +292,12 @@ impl TraceCallbackRegistry {
         self.events.push(event);
     }
 
-    pub async fn trigger_event(&self, id: &String, data: CallbackResult) {
+    pub async fn trigger_event(&self, id: &String, data: Vec<TraceResult>) {
         let mut attempts = 0;
         let mut delay = Duration::from_millis(100);
 
         if let Some(event_information) = self.find_event(id) {
-            let len = match &data {
-                CallbackResult::Trace(v) => v.len(),
-                CallbackResult::Event(v) => v.len(),
-            };
+            let len = data.len();
 
             debug!("{} - Pushed {} events", len, event_information.info_log_name());
 
