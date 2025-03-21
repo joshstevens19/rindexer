@@ -190,7 +190,7 @@ export default defineConfig({
       items: [
         { text: "From A Foundry Project - coming soon" },
         { text: "From A Hardhat Project - coming soon" },
-        { text: "Using Reth ExExes - coming soon" },
+        { text: "Using Reth ExExes", link: "/docs/advanced/using-reth-exex" },
       ],
     },
     {

@@ -251,18 +251,16 @@ pub fn update_progress_and_last_synced_task(
                 error!("Error updating last synced block: {:?}", e);
             }
         } else if let Some(csv_details) = &config.csv_details {
-            if let Err(e) = update_last_synced_block_number_for_file(
-                &config,
-                &get_full_path(&config.project_path, &csv_details.path).unwrap_or_else(|_| {
+            let full_path =
+                get_full_path(&config.project_path, &csv_details.path).unwrap_or_else(|_| {
                     panic!("failed to get full path {}", config.project_path.display())
-                }),
-                to_block,
-            )
-            .await
+                });
+            if let Err(e) =
+                update_last_synced_block_number_for_file(&config, &full_path, to_block).await
             {
                 error!(
-                    "Error updating last synced block to CSV - path - {} error - {:?}",
-                    csv_details.path, e
+                    "Error updating last synced block to CSV - path - {} error - {:?} full path - {}",
+                    csv_details.path, e, full_path.display()
                 );
             }
         } else if let Some(stream_last_synced_block_file_path) =

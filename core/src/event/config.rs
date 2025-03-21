@@ -34,6 +34,7 @@ pub struct EventProcessingConfig {
     pub index_event_in_order: bool,
     pub live_indexing: bool,
     pub indexing_distance_from_head: U64,
+    pub is_reth_exex: bool,
 }
 
 impl EventProcessingConfig {
