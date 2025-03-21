@@ -29,6 +29,7 @@ use crate::{
         ContractEventDependencies,
     },
     manifest::core::Manifest,
+    provider::JsonRpcCachedProvider,
     PostgresClient,
 };
 
@@ -81,6 +82,81 @@ pub struct ProcessedNetworkContract {
     pub processed_up_to: U64,
 }
 
+async fn get_start_end_block(
+    provider: Arc<JsonRpcCachedProvider>,
+    manifest_start_block: Option<U64>,
+    manifest_end_block: Option<U64>,
+    config: SyncConfig<'_>,
+    event_name: &str,
+    network: &str,
+    reorg_safe_distance: bool,
+) -> Result<(U64, U64, U64), StartIndexingError> {
+    let latest_block = provider.get_block_number().await?;
+
+    if let Some(start_block) = manifest_start_block {
+        if start_block > latest_block {
+            error!(
+                "{} - start_block supplied in yaml - {} {} is higher then latest block number - {}",
+                event_name, network, start_block, latest_block
+            );
+            return Err(StartIndexingError::StartBlockIsHigherThanLatestBlockError(
+                event_name.to_string(),
+                start_block,
+                latest_block,
+            ));
+        }
+    }
+
+    if let Some(end_block) = manifest_end_block {
+        if end_block > latest_block {
+            error!(
+                "{} - end_block supplied in yaml - {} {} is higher then latest block number - {}",
+                event_name, network, end_block, latest_block
+            );
+            return Err(StartIndexingError::EndBlockIsHigherThanLatestBlockError(
+                event_name.to_string(),
+                end_block,
+                latest_block,
+            ));
+        }
+    }
+
+    let last_known_start_block = if manifest_start_block.is_some() {
+        let last_synced_block = get_last_synced_block_number(config).await;
+
+        if let Some(value) = last_synced_block {
+            let start_from = value + 1;
+            info!(
+                "{} Found last synced block number - {:?} rindexer will start up from {:?}",
+                event_name, value, start_from
+            );
+            Some(start_from)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let start_block =
+        last_known_start_block.unwrap_or(manifest_start_block.unwrap_or(latest_block));
+    let end_block = std::cmp::min(manifest_end_block.unwrap_or(latest_block), latest_block);
+
+    info!("{} start_block is {}", event_name, start_block);
+
+    if let Some(end_block) = manifest_end_block {
+        if end_block > latest_block {
+            error!("{} - end_block supplied in yaml - {} is higher then latest - {} - end_block now will be {}", event_name, end_block, latest_block, latest_block);
+        }
+    }
+
+    let (end_block, indexing_distance_from_head) =
+        calculate_safe_block_number(reorg_safe_distance, &provider, latest_block, end_block)
+            .await?;
+
+    Ok((start_block, end_block, indexing_distance_from_head))
+}
+
 pub async fn start_indexing(
     manifest: &Manifest,
     project_path: &Path,
@@ -110,6 +186,12 @@ pub async fn start_indexing(
     let mut processed_network_contracts: Vec<ProcessedNetworkContract> = Vec::new();
 
     for event in trace_registry.events.iter() {
+        let stream_details = manifest
+            .contracts
+            .iter()
+            .find(|c| c.name == event.contract_name)
+            .and_then(|c| c.streams.as_ref());
+
         for network in event.trace_information.details.iter() {
             let config = TraceProcessingConfig {
                 id: event.id.to_string(),
@@ -119,16 +201,32 @@ pub async fn start_indexing(
                 registry: trace_registry.clone(),
             };
 
+            let sync_config = SyncConfig {
+                project_path,
+                database: &database,
+                csv_details: &manifest.storage.csv,
+                contract_csv_enabled: manifest.contract_csv_enabled(&event.contract_name),
+                stream_details: &stream_details,
+                indexer_name: &event.indexer_name,
+                contract_name: &event.contract_name,
+                event_name: &event.event_name,
+                network: &network.network,
+            };
+
             let (block_tx, mut block_rx) = tokio::sync::mpsc::channel(8192);
-
-            // TODO: Need validations
-            //    - End block without start block
-            //    - End block less than start block
-
             let network_name = network.network.clone();
-            let latest_block = network.cached_provider.get_block_number().await?;
-            let start_block =
-                network.start_block.unwrap_or(network.end_block.unwrap_or(latest_block));
+            let (start_block, _end_block, indexing_distance_from_head) = get_start_end_block(
+                network.cached_provider.clone(),
+                network.start_block,
+                network.end_block,
+                sync_config,
+                &event.info_log_name(),
+                &network.network,
+                event.trace_information.reorg_safe_distance,
+            )
+            .await?;
+
+            let end_block = network.end_block;
 
             // Block publisher
             //
@@ -139,7 +237,6 @@ pub async fn start_indexing(
             // For now implement a simpler naive variant.
             let n = network_name.clone();
             let publisher_provider = network.cached_provider.clone();
-            let end_block = network.end_block;
             let _handle = tokio::spawn(async move {
                 let mut last_seen_block = start_block;
 
@@ -152,11 +249,24 @@ pub async fn start_indexing(
 
                 loop {
                     sleep(Duration::from_millis(200)).await;
+
                     let latest_block = publisher_provider.get_latest_block().await;
 
                     match latest_block {
                         Ok(Some(latest_block)) => {
                             if let Some(block) = latest_block.number {
+                                let safe_block_number = block - indexing_distance_from_head;
+
+                                if block > safe_block_number {
+                                    info!(
+                                        "{} - not in safe reorg block range yet block: {} > range: {}",
+                                        "NativeEvmTraces",
+                                        block,
+                                        safe_block_number
+                                    );
+                                    continue;
+                                }
+
                                 if block > last_seen_block {
                                     let to_block =
                                         end_block.map(|end| block.min(end)).unwrap_or(block);
@@ -245,65 +355,14 @@ pub async fn start_indexing(
                 network: &network_contract.network,
             };
 
-            let latest_block = network_contract.cached_provider.get_block_number().await?;
-
-            if let Some(start_block) = network_contract.start_block {
-                if start_block > latest_block {
-                    error!("{} - start_block supplied in yaml - {} {} is higher then latest block number - {}", event.info_log_name(), network_contract.network, start_block, latest_block);
-                    return Err(StartIndexingError::StartBlockIsHigherThanLatestBlockError(
-                        event.info_log_name().to_string(),
-                        start_block,
-                        latest_block,
-                    ));
-                }
-            }
-
-            if let Some(end_block) = network_contract.end_block {
-                if end_block > latest_block {
-                    error!("{} - end_block supplied in yaml - {} {} is higher then latest block number - {}", event.info_log_name(), network_contract.network, end_block, latest_block);
-                    return Err(StartIndexingError::EndBlockIsHigherThanLatestBlockError(
-                        event.info_log_name().to_string(),
-                        end_block,
-                        latest_block,
-                    ));
-                }
-            }
-
-            let last_known_start_block = if network_contract.start_block.is_some() {
-                let last_synced_block = get_last_synced_block_number(config).await;
-
-                if let Some(value) = last_synced_block {
-                    let start_from = value + 1;
-                    info!(
-                        "{} Found last synced block number - {:?} rindexer will start up from {:?}",
-                        event.info_log_name(),
-                        value,
-                        start_from
-                    );
-                    Some(start_from)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            let start_block = last_known_start_block
-                .unwrap_or(network_contract.start_block.unwrap_or(latest_block));
-            info!("{} start_block is {}", event.info_log_name(), start_block);
-            let end_block =
-                std::cmp::min(network_contract.end_block.unwrap_or(latest_block), latest_block);
-            if let Some(end_block) = network_contract.end_block {
-                if end_block > latest_block {
-                    error!("{} - end_block supplied in yaml - {} is higher then latest - {} - end_block now will be {}", event.info_log_name(), end_block, latest_block, latest_block);
-                }
-            }
-
-            let (end_block, indexing_distance_from_head) = calculate_safe_block_number(
+            let (start_block, end_block, indexing_distance_from_head) = get_start_end_block(
+                network_contract.cached_provider.clone(),
+                network_contract.start_block,
+                network_contract.end_block,
+                config,
+                &event.info_log_name(),
+                &network_contract.network,
                 event.contract.reorg_safe_distance,
-                network_contract,
-                latest_block,
-                end_block,
             )
             .await?;
 
@@ -443,17 +502,14 @@ pub async fn initialize_database(
 
 pub async fn calculate_safe_block_number(
     reorg_safe_distance: bool,
-    network_contract: &NetworkContract,
+    provider: &Arc<JsonRpcCachedProvider>,
     latest_block: U64,
     mut end_block: U64,
 ) -> Result<(U64, U64), StartIndexingError> {
     let mut indexing_distance_from_head = U64::zero();
     if reorg_safe_distance {
-        let chain_id = network_contract
-            .cached_provider
-            .get_chain_id()
-            .await
-            .map_err(StartIndexingError::GetChainIdError)?;
+        let chain_id =
+            provider.get_chain_id().await.map_err(StartIndexingError::GetChainIdError)?;
         let reorg_safe_distance = reorg_safe_distance_for_chain(&chain_id);
         let safe_block_number = latest_block - reorg_safe_distance;
         if end_block > safe_block_number {

@@ -148,8 +148,7 @@ impl TraceInformation {
         Ok(TraceInformation {
             name: "NativeTokenTransfers".to_string(),
             details,
-            // TODO: Implement trailing reorg safety
-            reorg_safe_distance: false,
+            reorg_safe_distance: native_transfers.reorg_safe_distance.unwrap_or_default(),
         })
     }
 }

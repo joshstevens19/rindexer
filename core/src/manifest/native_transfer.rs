@@ -75,6 +75,9 @@ pub struct NativeTransfers {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generate_csv: Option<bool>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reorg_safe_distance: Option<bool>,
 }
 
 /// The config to enable native transfers. This can be either a "simple" opinionated enable-all, or
@@ -107,6 +110,7 @@ where
             streams: None,
             chat: None,
             generate_csv: None,
+            reorg_safe_distance: None,
         },
         NativeTransferFullOrSimple::Full(transfers) => transfers,
     })
