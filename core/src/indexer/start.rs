@@ -30,7 +30,6 @@ use crate::{
     },
     manifest::core::Manifest,
     provider::CreateNetworkProvider,
-    streams::StreamsClients,
     PostgresClient,
 };
 

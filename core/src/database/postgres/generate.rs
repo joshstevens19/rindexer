@@ -220,7 +220,7 @@ pub fn generate_tables_for_indexer_sql(
         "#;
 
         let abi_items: Vec<ABIItem> =
-            serde_json::from_str(&abi_str).expect("JSON was not well-formatted");
+            serde_json::from_str(abi_str).expect("JSON was not well-formatted");
         let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
         let schema_name = generate_indexer_contract_schema_name(&indexer.name, &contract_name);
         let networks = indexer.clone().native_transfers.networks.unwrap();

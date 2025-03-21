@@ -5,10 +5,7 @@ use std::{
 };
 
 use colored::Colorize;
-use ethers::{
-    abi::{Abi, Contract as EthersContract, Event, EventParam, Log, LogParam, ParamType, Token},
-    types::U256,
-};
+use ethers::abi::{Abi, Contract as EthersContract, Event, LogParam, Token};
 use serde_json::Value;
 use tokio_postgres::types::Type as PgType;
 use tracing::{debug, error, info, warn};
@@ -721,7 +718,7 @@ pub async fn process_trace_events(
 
     #[allow(clippy::useless_conversion)]
     let abi_gen = EthersContract::from(abi);
-    let abi_items: Vec<ABIItem> = serde_json::from_str(&abi_str)?;
+    let abi_items: Vec<ABIItem> = serde_json::from_str(abi_str)?;
     let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
 
     let contract = &manifest.native_transfers;

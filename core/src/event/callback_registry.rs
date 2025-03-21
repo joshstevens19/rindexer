@@ -3,7 +3,7 @@ use std::{any::Any, sync::Arc, time::Duration};
 use ethers::{
     addressbook::Address,
     contract::LogMeta,
-    types::{Action, Bytes, Call, Log, Trace, H256, U256, U64},
+    types::{Bytes, Call, Log, Trace, H256, U256, U64},
 };
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};

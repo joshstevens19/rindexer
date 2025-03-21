@@ -16,7 +16,6 @@ use crate::{
     helpers::{load_env_from_full_path, replace_env_variable_to_raw_name},
     manifest::{
         core::{Manifest, ProjectType},
-        native_transfer::NativeTransferDetails,
         network::Network,
     },
     StringOrArray,

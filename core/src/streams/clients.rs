@@ -282,7 +282,7 @@ impl StreamsClients {
                 let client = Arc::clone(&client);
                 let topic_arn = config.topic_arn.clone();
                 let publish_message =
-                    self.create_chunk_message_raw(&config.events, &event_message, &filtered_chunk);
+                    self.create_chunk_message_raw(&config.events, event_message, &filtered_chunk);
                 task::spawn(async move {
                     let _ =
                         client.publish(&publish_message_id, &topic_arn, &publish_message).await?;

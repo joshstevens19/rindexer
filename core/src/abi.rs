@@ -346,7 +346,7 @@ impl EventInfo {
         csv_path: &str,
     ) -> Result<String, CreateCsvFileForEvent> {
         let csv_file_name = format!("{}-{}.csv", contract_name, self.name).to_lowercase();
-        let csv_folder = project_path.join(csv_path).join(&contract_name);
+        let csv_folder = project_path.join(csv_path).join(contract_name);
 
         // Create directory if it does not exist.
         if let Err(e) = fs::create_dir_all(&csv_folder) {

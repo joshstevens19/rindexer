@@ -227,7 +227,7 @@ mod tests {
 
         let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
 
-        assert_eq!(manifest.native_transfers.enabled, true);
+        assert!(manifest.native_transfers.enabled);
         assert_eq!(
             manifest.native_transfers.streams.unwrap().sns.unwrap().topics[0].events[0].event_name,
             "NativeTokenTransfer"
@@ -255,7 +255,7 @@ mod tests {
         "#;
 
         let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(manifest.native_transfers.enabled, true);
+        assert!(manifest.native_transfers.enabled);
 
         let yaml = r#"
         name: test
@@ -266,7 +266,7 @@ mod tests {
         "#;
 
         let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(manifest.native_transfers.enabled, false);
+        assert!(!manifest.native_transfers.enabled);
 
         let yaml = r#"
         name: test
@@ -276,6 +276,6 @@ mod tests {
         "#;
 
         let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(manifest.native_transfers.enabled, false);
+        assert!(!manifest.native_transfers.enabled);
     }
 }

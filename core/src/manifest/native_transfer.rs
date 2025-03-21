@@ -1,7 +1,7 @@
 use ethers::prelude::U64;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::core::{deserialize_option_u64_from_string, serialize_option_u64_as_string};
+use super::core::serialize_option_u64_as_string;
 use crate::manifest::{chat::ChatConfig, stream::StreamsConfig};
 
 #[derive(Serialize, Deserialize)]
