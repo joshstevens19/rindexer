@@ -14,7 +14,6 @@ use crate::{
     event::{
         callback_registry::{EventCallbackRegistry, TraceCallbackRegistry},
         config::{EventProcessingConfig, TraceProcessingConfig},
-        contract_setup::NetworkContract,
     },
     indexer::{
         dependency::ContractEventsDependenciesConfig,
