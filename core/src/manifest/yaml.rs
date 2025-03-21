@@ -305,19 +305,7 @@ pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError>
 
     // Assign networks to the Native Transfer if opted into without defining networks.
     // We treat None as "All available".
-    manifest_after_transform.native_transfers.networks =
-        Some(manifest_after_transform.native_transfers.networks.unwrap_or_else(|| {
-            manifest_after_transform
-                .networks
-                .iter()
-                .cloned()
-                .map(|n| NativeTransferDetails {
-                    network: n.name,
-                    start_block: None,
-                    end_block: None,
-                })
-                .collect::<Vec<_>>()
-        }));
+    manifest_after_transform.set_native_transfer_networks();
 
     // as we don't want to inject the RPC URL in rust projects in clear text we should change
     // the networks.rpc back to what it was before and the generated code will handle it

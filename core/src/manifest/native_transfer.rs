@@ -4,6 +4,32 @@ use serde::{Deserialize, Deserializer, Serialize};
 use super::core::{deserialize_option_u64_from_string, serialize_option_u64_as_string};
 use crate::manifest::{chat::ChatConfig, stream::StreamsConfig};
 
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum StringOrNum {
+    String(String),
+    Num(u64),
+}
+
+/// Deserialize a number or string into a U64. This is required for the untagged deserialize of
+/// native transfers to succeed.
+fn deserialize_option_u64_from_string_or_num<'de, D>(
+    deserializer: D,
+) -> Result<Option<U64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s: Option<StringOrNum> = Option::deserialize(deserializer)?;
+
+    match s {
+        Some(StringOrNum::String(string)) => {
+            U64::from_dec_str(&string).map(Some).map_err(serde::de::Error::custom)
+        }
+        Some(StringOrNum::Num(num)) => Ok(Some(U64::from(num))),
+        None => Ok(None),
+    }
+}
+
 #[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub struct NativeTransferDetails {
     pub network: String,
@@ -11,7 +37,7 @@ pub struct NativeTransferDetails {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_option_u64_from_string",
+        deserialize_with = "deserialize_option_u64_from_string_or_num",
         serialize_with = "serialize_option_u64_as_string"
     )]
     pub start_block: Option<U64>,
@@ -19,7 +45,7 @@ pub struct NativeTransferDetails {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_option_u64_from_string",
+        deserialize_with = "deserialize_option_u64_from_string_or_num",
         serialize_with = "serialize_option_u64_as_string"
     )]
     pub end_block: Option<U64>,
@@ -44,11 +70,9 @@ pub struct NativeTransfers {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub streams: Option<StreamsConfig>,
 
-    /// For now `NativeTokenTransfer` must be the defined "Event" name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat: Option<ChatConfig>,
 
-    /// Generate a CSV
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generate_csv: Option<bool>,
 }
@@ -94,8 +118,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_native_transfer_full() {
-        // TODO: Right now, "100" will pass but 100 as a numeric will not...
+    fn test_native_transfer_full_string() {
         let yaml = r#"
           networks:
             - network: ethereum
@@ -110,5 +133,22 @@ mod tests {
         assert_eq!(networks[0].network, "ethereum");
         assert_eq!(networks[0].start_block.unwrap().as_u64(), 100);
         assert_eq!(networks[0].end_block.unwrap().as_u64(), 200);
+    }
+
+    #[test]
+    fn test_native_transfer_full_u64() {
+        let yaml = r#"
+          networks:
+            - network: base
+              start_block: 100
+        "#;
+
+        let transfer: NativeTransfers = serde_yaml::from_str(yaml).unwrap();
+        let networks: Vec<NativeTransferDetails> = transfer.networks.unwrap().into_iter().collect();
+
+        assert!(transfer.enabled);
+        assert_eq!(networks[0].network, "base");
+        assert_eq!(networks[0].start_block.unwrap().as_u64(), 100);
+        assert_eq!(networks[0].end_block, None);
     }
 }

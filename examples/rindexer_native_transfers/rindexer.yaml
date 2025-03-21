@@ -21,6 +21,12 @@ native_transfers:
         - topic_arn: arn:aws:sns:us-east-1:000000000000:eth-transfers
           networks:
             - ethereum
+
+          # IMPORTANT:
+          #
+          # For now we must enforce the event name is `NativeTokenTransfer`. This is
+          # because areas of the code check that the event is defined in the config on publish, but we are
+          # enforcing that the name must be: "NativeTokenTransfer".
           events:
             - event_name: NativeTokenTransfer
 contracts:

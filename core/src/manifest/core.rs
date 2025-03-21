@@ -8,7 +8,7 @@ use crate::{
         contract::Contract,
         global::Global,
         graphql::GraphQLSettings,
-        native_transfer::{deserialize_native_transfers, NativeTransfers},
+        native_transfer::{deserialize_native_transfers, NativeTransferDetails, NativeTransfers},
         network::Network,
         phantom::Phantom,
         storage::Storage,
@@ -101,10 +101,44 @@ impl Manifest {
             0
     }
 
-    /// Check if the manifest has opted-in to indexing native transfers.
-    /// It is off by default.
+    /// Check if the manifest has opted-in to indexing native transfers. It is off by default.
     pub fn has_enabled_native_transfers(&self) -> bool {
         self.native_transfers.enabled
+    }
+
+    /// We allow `networks` to be None for native transfers. Which has a special semantic of meaning
+    /// opt in to "all supported networks" for live indexing only.
+    ///
+    /// This means we can map the root `networks` object into the `native_transfers.networks` for
+    /// simplicity when constructing the manifest.
+    ///
+    /// If the user defines a `networks` list this will take priority.
+    ///
+    /// # Example
+    ///
+    /// ```yaml
+    /// project_type: no-code
+    ///   networks:
+    ///     - name: ethereum
+    //        chain_id: 1
+    //        rpc: https://example.rpc.org
+    ///   native_transfers: true
+    /// ```
+    pub fn set_native_transfer_networks(&mut self) {
+        if self.native_transfers.networks.is_none() {
+            let root_networks = self
+                .networks
+                .iter()
+                .cloned()
+                .map(|n| NativeTransferDetails {
+                    network: n.name,
+                    start_block: None,
+                    end_block: None,
+                })
+                .collect::<Vec<_>>();
+
+            self.native_transfers.networks = Some(root_networks);
+        }
     }
 
     pub fn contract_csv_enabled(&self, contract_name: &str) -> bool {
@@ -159,28 +193,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_native_transfers() {
+    fn test_native_transfers_complex() {
         let yaml = r#"
         name: test
         project_type: no-code
         networks: []
         contracts: []
+        storage:
+          csv:
+            enabled: true
+          postgres:
+            enabled: true
         native_transfers:
           networks:
             - network: ethereum
-              start_block: "100"
-              end_block: "200"
+              start_block: 100
+              end_block: 200
+            - network: base
+          streams:
+            sns:
+              aws_config:
+                region: us-east-1
+                access_key: test
+                secret_key: test
+                endpoint_url: http://localhost:8000
+              topics:
+                - topic_arn: arn:aws:sns:us-east-1:000000000000:native-transfers-test
+                  networks:
+                    - ethereum
+                  events:
+                    - event_name: NativeTokenTransfer
         "#;
 
         let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
 
         assert_eq!(manifest.native_transfers.enabled, true);
+        assert_eq!(
+            manifest.native_transfers.streams.unwrap().sns.unwrap().topics[0].events[0].event_name,
+            "NativeTokenTransfer"
+        );
 
         let networks = manifest.native_transfers.networks.unwrap();
 
         assert_eq!(networks[0].network, "ethereum");
         assert_eq!(networks[0].start_block.unwrap().as_u64(), 100);
         assert_eq!(networks[0].end_block.unwrap().as_u64(), 200);
+
+        assert_eq!(networks[1].network, "base");
+        assert_eq!(networks[1].start_block, None);
+        assert_eq!(networks[1].end_block, None);
     }
 
     #[test]

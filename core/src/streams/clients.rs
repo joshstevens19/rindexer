@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use aws_sdk_sns::{config::http::HttpResponse, error::SdkError, operation::publish::PublishError};
 use futures::future::join_all;
-use log::info;
 use serde_json::Value;
 use thiserror::Error;
 use tokio::{
@@ -451,8 +450,6 @@ impl StreamsClients {
         index_event_in_order: bool,
         is_trace_event: bool,
     ) -> Result<usize, StreamError> {
-        info!("self.has_any_streams {}", self.has_any_streams());
-
         if !self.has_any_streams() {
             return Ok(0);
         }
