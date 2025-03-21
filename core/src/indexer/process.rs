@@ -24,6 +24,7 @@ use crate::{
         last_synced::update_progress_and_last_synced_task,
         log_helpers::is_relevant_block,
         progress::IndexingEventProgressStatus,
+        start::StartIndexingError,
         task_tracker::{indexing_event_processed, indexing_event_processing},
     },
     is_running,
@@ -36,6 +37,9 @@ pub enum ProcessEventError {
 
     #[error("Could not build filter: {0}")]
     BuildFilterError(#[from] BuildRindexerFilterError),
+
+    #[error("Could not get block number from provider: {0}")]
+    ProviderCallError(#[from] ProviderError),
 }
 
 pub async fn process_event(

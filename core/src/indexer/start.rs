@@ -227,7 +227,7 @@ pub async fn start_indexing(
 
             let end_block = network.end_block;
 
-            let _handle = tokio::spawn(native_transfer_block_fetch(
+            let native_transfer_handle = tokio::spawn(native_transfer_block_fetch(
                 network.cached_provider.clone(),
                 block_tx,
                 start_block,
@@ -236,13 +236,16 @@ pub async fn start_indexing(
                 network_name.clone(),
             ));
 
+            non_blocking_process_events.push(native_transfer_handle);
+
             // Block consumer
             //
             // Fetches the incoming debug traces for a block and handles stream-callbacks for the
             // publishing of the "NativeTransfer" event.
             let provider = network.cached_provider.clone();
             let config = config.clone();
-            let _handle_2 = tokio::spawn(async move {
+
+            let native_transfer_consumer_handle = tokio::spawn(async move {
                 const MAX_CONCURRENT_REQUESTS: usize = 20;
                 let mut buffer: Vec<U64> = Vec::with_capacity(MAX_CONCURRENT_REQUESTS);
 
@@ -272,6 +275,8 @@ pub async fn start_indexing(
                     buffer.clear();
                 }
             });
+
+            non_blocking_process_events.push(native_transfer_consumer_handle);
         }
     }
 

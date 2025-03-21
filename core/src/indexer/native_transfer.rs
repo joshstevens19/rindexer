@@ -1,6 +1,9 @@
 use std::{str::FromStr, sync::Arc, time::Duration};
 
-use ethers::types::{Action, Address, Bytes, U256, U64};
+use ethers::{
+    prelude::ProviderError,
+    types::{Action, Address, Bytes, U256, U64},
+};
 use futures::future::try_join_all;
 use serde::Serialize;
 use tokio::time::sleep;
@@ -11,7 +14,9 @@ use crate::{
     event::{
         callback_registry::{TraceResult, TxInformation},
         config::TraceProcessingConfig,
+        BuildRindexerFilterError,
     },
+    indexer::process::ProcessEventError,
     provider::JsonRpcCachedProvider,
 };
 
@@ -37,7 +42,7 @@ pub async fn native_transfer_block_fetch(
     end_block: Option<U64>,
     indexing_distance_from_head: U64,
     network: String,
-) -> Result<(), StartIndexingError> {
+) -> Result<(), ProcessEventError> {
     let mut last_seen_block = start_block;
 
     // Push a range of blocks to the back-pressured channel and block producer when full.
@@ -97,7 +102,7 @@ pub async fn native_transfer_block_consumer(
     block_numbers: &[U64],
     network_name: &str,
     config: &TraceProcessingConfig,
-) -> Result<(), StartIndexingError> {
+) -> Result<(), ProcessEventError> {
     let trace_futures: Vec<_> = block_numbers.iter().map(|n| provider.trace_block(*n)).collect();
     let trace_calls = try_join_all(trace_futures).await?;
     let (from_block, to_block) =
