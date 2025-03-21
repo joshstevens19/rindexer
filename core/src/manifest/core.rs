@@ -101,24 +101,10 @@ impl Manifest {
             0
     }
 
-    /// Check if the manifest has opted-in to indexing native transfers. It is off by default.
+    /// Check if the manifest has opted-in to indexing native transfers.
+    /// It is off by default.
     pub fn has_enabled_native_transfers(&self) -> bool {
         self.native_transfers.enabled
-    }
-
-    /// Determine if native transfers are opted in to live indexing as well. This would happen any
-    /// time an end-block is not specified for any network.
-    pub fn has_native_transfers_live_indexing(&self) -> bool {
-        let enabled = self.native_transfers.enabled;
-        let any_network_is_live = self
-            .native_transfers
-            .networks
-            .iter()
-            .filter(|s| s.iter().any(|n| n.end_block.is_none()))
-            .count() >
-            0;
-
-        enabled && any_network_is_live
     }
 
     pub fn contract_csv_enabled(&self, contract_name: &str) -> bool {
@@ -187,22 +173,16 @@ mod tests {
         "#;
 
         let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
-        assert!(manifest.native_transfers.enabled);
+
+        assert_eq!(manifest.native_transfers.enabled, true);
+
         let networks = manifest.native_transfers.networks.unwrap();
+
         assert_eq!(networks[0].network, "ethereum");
         assert_eq!(networks[0].start_block.unwrap().as_u64(), 100);
         assert_eq!(networks[0].end_block.unwrap().as_u64(), 200);
     }
 
-    /// FIXME
-    ///
-    /// What would be the expected behaviour in the stream-processing for `native_transfers: true`?
-    ///
-    /// 1. Don't publish anything, just index no-op
-    /// 2. Persist to PG is storage available?
-    /// 3. Write to CSV?
-    ///
-    /// What is the current behavior if we don't define any storage/csv/stream option for the code?
     #[test]
     fn test_native_transfers_simple() {
         let yaml = r#"
@@ -214,7 +194,7 @@ mod tests {
         "#;
 
         let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
-        assert!(manifest.native_transfers.enabled);
+        assert_eq!(manifest.native_transfers.enabled, true);
 
         let yaml = r#"
         name: test
@@ -225,7 +205,7 @@ mod tests {
         "#;
 
         let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
-        assert!(!manifest.native_transfers.enabled);
+        assert_eq!(manifest.native_transfers.enabled, false);
 
         let yaml = r#"
         name: test
@@ -235,6 +215,6 @@ mod tests {
         "#;
 
         let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
-        assert!(!manifest.native_transfers.enabled);
+        assert_eq!(manifest.native_transfers.enabled, false);
     }
 }
