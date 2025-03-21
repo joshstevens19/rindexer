@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use bb8_redis::{
-    bb8::{Pool, PooledConnection},
+    bb8::{self, Pool, PooledConnection},
     redis::{cmd, AsyncCommands},
     RedisConnectionManager,
 };
@@ -14,10 +14,10 @@ use crate::manifest::stream::RedisStreamConfig;
 #[derive(Error, Debug)]
 pub enum RedisError {
     #[error("Redis error: {0}")]
-    RedisError(#[from] bb8_redis::redis::RedisError),
+    RedisCmdError(#[from] redis::RedisError),
 
     #[error("Redis pool error: {0}")]
-    PoolError(#[from] bb8_redis::bb8::RunError<bb8_redis::redis::RedisError>),
+    PoolError(#[from] bb8::RunError<redis::RedisError>),
 
     #[error("Could not serialize message: {0}")]
     CouldNotSerialize(#[from] serde_json::Error),
