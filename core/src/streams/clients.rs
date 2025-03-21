@@ -35,6 +35,7 @@ struct SNSStream {
     client: Arc<SNS>,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Error, Debug)]
 pub enum StreamError {
     #[error("SNS could not publish - {0}")]
