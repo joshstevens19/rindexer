@@ -315,11 +315,11 @@ impl PostgresClient {
         Ok(())
     }
 
-    pub async fn bulk_insert<'a>(
+    pub async fn bulk_insert(
         &self,
         table_name: &str,
         column_names: &[String],
-        bulk_data: &'a [Vec<EthereumSqlTypeWrapper>],
+        bulk_data: &[Vec<EthereumSqlTypeWrapper>],
     ) -> Result<u64, PostgresError> {
         let total_columns = column_names.len();
 
@@ -344,7 +344,7 @@ impl PostgresClient {
             table_name,
             generate_event_table_columns_names_sql(column_names),
         );
-        let mut params: Vec<&'a (dyn ToSql + Sync + 'a)> = Vec::new();
+        let mut params: Vec<&(dyn ToSql + Sync)> = Vec::new();
 
         for (i, row) in bulk_data.iter().enumerate() {
             if i > 0 {
@@ -357,7 +357,7 @@ impl PostgresClient {
             query.push_str(&format!("({})", placeholders.join(",")));
 
             for param in row {
-                params.push(param as &'a (dyn ToSql + Sync + 'a));
+                params.push(param as &(dyn ToSql + Sync));
             }
         }
 

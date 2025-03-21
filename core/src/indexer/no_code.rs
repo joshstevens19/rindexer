@@ -267,7 +267,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                     .collect::<Vec<_>>(),
                 CallbackResult::Trace(events) => events
                     .iter()
-                    .filter_map(|result| {
+                    .map(|result| {
                         let log_params = vec![
                             LogParam {
                                 name: "from".to_string(),
@@ -304,7 +304,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                             EthereumSqlTypeWrapper::U256(log_index),
                         ];
 
-                        Some((
+                        (
                             log_params,
                             address,
                             transaction_hash,
@@ -316,7 +316,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                             contract_address,
                             event_parameters,
                             end_global_parameters,
-                        ))
+                        )
                     })
                     .collect::<Vec<_>>(),
             };

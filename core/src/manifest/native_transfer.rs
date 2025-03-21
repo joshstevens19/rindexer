@@ -86,6 +86,7 @@ pub struct NativeTransfers {
 /// # Simple opt-in to all native transfer live indexing
 /// native_transfers: true
 /// ```
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(untagged)]
 pub enum NativeTransferFullOrSimple {

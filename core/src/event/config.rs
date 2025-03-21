@@ -6,7 +6,7 @@ use tokio::sync::{Mutex, Semaphore};
 use crate::{
     event::{
         callback_registry::{
-            CallbackResult, EventCallbackRegistry, EventResult, TraceCallbackRegistry, TraceResult,
+            EventCallbackRegistry, EventResult, TraceCallbackRegistry, TraceResult,
         },
         contract_setup::NetworkContract,
         BuildRindexerFilterError, RindexerEventFilter,

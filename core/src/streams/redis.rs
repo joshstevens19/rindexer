@@ -14,7 +14,7 @@ use crate::manifest::stream::RedisStreamConfig;
 #[derive(Error, Debug)]
 pub enum RedisError {
     #[error("Redis error: {0}")]
-    RedisError(#[from] bb8_redis::redis::RedisError),
+    RedisCmdError(#[from] bb8_redis::redis::RedisError),
 
     #[error("Redis pool error: {0}")]
     PoolError(#[from] bb8_redis::bb8::RunError<bb8_redis::redis::RedisError>),

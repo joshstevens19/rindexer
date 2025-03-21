@@ -178,7 +178,7 @@ impl StreamsClients {
     }
 
     /// Gets event name, which may be an optional alias, or the contract's event name.
-    fn get_event_name(&self, events: &Vec<StreamEvent>, event_message: &EventMessage) -> String {
+    fn get_event_name(&self, events: &[StreamEvent], event_message: &EventMessage) -> String {
         let alias_name = events
             .iter()
             .find(|n| n.event_name == event_message.event_name)
@@ -189,7 +189,7 @@ impl StreamsClients {
 
     fn create_chunk_message_raw(
         &self,
-        events: &Vec<StreamEvent>,
+        events: &[StreamEvent],
         event_message: &EventMessage,
         chunk: &[Value],
     ) -> String {
@@ -205,7 +205,7 @@ impl StreamsClients {
 
     fn create_chunk_message_json(
         &self,
-        events: &Vec<StreamEvent>,
+        events: &[StreamEvent],
         event_message: &EventMessage,
         chunk: &[Value],
     ) -> Value {

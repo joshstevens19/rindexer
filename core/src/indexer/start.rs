@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
+use std::{path::Path, sync::Arc, time::Duration};
 
 use ethers::{providers::ProviderError, types::U64};
 use futures::future::try_join_all;
@@ -29,7 +29,6 @@ use crate::{
         ContractEventDependencies,
     },
     manifest::core::Manifest,
-    provider::CreateNetworkProvider,
     PostgresClient,
 };
 
@@ -140,7 +139,7 @@ pub async fn start_indexing(
             // For now implement a simpler naive variant.
             let n = network_name.clone();
             let publisher_provider = network.cached_provider.clone();
-            let end_block = network.end_block.clone();
+            let end_block = network.end_block;
             let _handle = tokio::spawn(async move {
                 let mut last_seen_block = start_block;
 
