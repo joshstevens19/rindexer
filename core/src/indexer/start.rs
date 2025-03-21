@@ -7,7 +7,7 @@ use tokio::{
     task::{JoinError, JoinHandle},
     time::{sleep, Instant},
 };
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::{
     database::postgres::client::PostgresConnectionError,
@@ -238,22 +238,17 @@ pub async fn start_indexing(
 
             non_blocking_process_events.push(native_transfer_handle);
 
-            // Block consumer
-            //
-            // Fetches the incoming debug traces for a block and handles stream-callbacks for the
-            // publishing of the "NativeTransfer" event.
             let provider = network.cached_provider.clone();
             let config = config.clone();
-
             let native_transfer_consumer_handle = tokio::spawn(async move {
+                // TODO: It would be nice to make the concurrent requests dynamic based on provider
+                // speeds and limits
                 const MAX_CONCURRENT_REQUESTS: usize = 20;
                 let mut buffer: Vec<U64> = Vec::with_capacity(MAX_CONCURRENT_REQUESTS);
 
                 loop {
                     let recv = block_rx.recv_many(&mut buffer, MAX_CONCURRENT_REQUESTS).await;
 
-                    // FIXME: Right now we have no clear shutdown mechanism for this loop
-                    // It will simply "recv" 0, infinitely!
                     if recv == 0 {
                         sleep(Duration::from_secs(1)).await;
                         continue;
@@ -267,12 +262,15 @@ pub async fn start_indexing(
                     )
                     .await;
 
-                    // TODO If this errors we need to retry and reconsume the blocks
+                    // If this has an error we need to not and reconsume the blocks. We don't have
+                    // to worry about double-publish because the failure point
+                    // is on the provider call itself, which is before publish.
                     if let Err(e) = processed_block {
-                        error!("Error consuming trace_block: {}", e);
+                        warn!("Error consuming trace_block. Retrying: {}", e);
+                        continue;
+                    } else {
+                        buffer.clear();
                     };
-
-                    buffer.clear();
                 }
             });
 

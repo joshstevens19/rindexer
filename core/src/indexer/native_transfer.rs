@@ -1,20 +1,15 @@
-use std::{str::FromStr, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
-use ethers::{
-    prelude::ProviderError,
-    types::{Action, Address, Bytes, U256, U64},
-};
+use ethers::types::{Action, Address, Bytes, U256, U64};
 use futures::future::try_join_all;
 use serde::Serialize;
 use tokio::time::sleep;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
-use super::start::StartIndexingError;
 use crate::{
     event::{
         callback_registry::{TraceResult, TxInformation},
         config::TraceProcessingConfig,
-        BuildRindexerFilterError,
     },
     indexer::process::ProcessEventError,
     provider::JsonRpcCachedProvider,
@@ -83,7 +78,9 @@ pub async fn native_transfer_block_fetch(
                     }
 
                     if end_block.is_some() && block > end_block.expect("must have block") {
-                        info!("Finished {} HISTORICAL INDEXING NativeEvmTraces. No more blocks to push.", network);
+                        info!("Finished HISTORICAL INDEXING for {} NativeEvmTraces. No more blocks to push.", network);
+                        debug!("Dropping {} 'NativeEvmTraces' block Sender handle", network);
+                        drop(block_tx);
                         return Ok(());
                     }
                 }
@@ -119,8 +116,7 @@ pub async fn native_transfer_block_consumer(
                 _ => None,
             }?;
 
-            // TODO: Replace with `Bytes::new()`
-            let no_input = action.input == Bytes::from_str("0x").unwrap();
+            let no_input = action.input == Bytes::new();
             let has_value = !action.value.is_zero();
             let is_native_transfer = has_value && no_input;
 

@@ -24,7 +24,6 @@ use crate::{
         last_synced::update_progress_and_last_synced_task,
         log_helpers::is_relevant_block,
         progress::IndexingEventProgressStatus,
-        start::StartIndexingError,
         task_tracker::{indexing_event_processed, indexing_event_processing},
     },
     is_running,
