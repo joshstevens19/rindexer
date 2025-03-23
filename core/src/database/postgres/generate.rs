@@ -29,6 +29,7 @@ pub fn generate_column_names_only_with_base_properties(inputs: &[ABIInput]) -> V
     let mut column_names: Vec<String> = vec!["contract_address".to_string()];
     column_names.extend(generate_columns_names_only(inputs));
     column_names.extend(vec![
+        "timestamp".to_string(),
         "tx_hash".to_string(),
         "block_number".to_string(),
         "block_hash".to_string(),
@@ -61,6 +62,7 @@ fn generate_event_table_sql_with_comments(
                 rindexer_id SERIAL PRIMARY KEY NOT NULL, \
                 contract_address CHAR(66) NOT NULL, \
                 {} \
+                timestamp TIMESTAMPTZ NOT NULL, \
                 tx_hash CHAR(66) NOT NULL, \
                 block_number NUMERIC NOT NULL, \
                 block_hash CHAR(66) NOT NULL, \

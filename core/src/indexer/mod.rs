@@ -11,6 +11,8 @@ pub use dependency::ContractEventDependenciesMapFromRelationshipsError;
 mod fetch_logs;
 mod last_synced;
 pub mod no_code;
+mod predictable_timestamp;
+pub use predictable_timestamp::{get_block_timestamp, get_timestamp_for_block};
 mod reorg;
 pub mod start;
 pub mod task_tracker;

@@ -32,7 +32,7 @@ use crate::{
         contract_setup::{ContractInformation, CreateContractInformationError},
         EventMessage,
     },
-    generate_random_id,
+    generate_random_id, get_timestamp_for_block,
     indexer::log_helpers::{map_log_params_to_raw_values, parse_log},
     manifest::{
         contract::ParseAbiError,
@@ -185,6 +185,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                     let log = parse_log(&params.event, &result.log)?;
 
                     let address = result.tx_information.address;
+                    let block_timestamp = result.tx_information.block_timestamp;
                     let transaction_hash = result.tx_information.transaction_hash;
                     let block_number = result.tx_information.block_number;
                     let block_hash = result.tx_information.block_hash;
@@ -208,6 +209,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                     Some((
                         log.params,
                         address,
+                        block_timestamp,
                         transaction_hash,
                         log_index,
                         transaction_index,
@@ -224,6 +226,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
             for (
                 log_params,
                 address,
+                block_timestamp,
                 transaction_hash,
                 log_index,
                 transaction_index,
@@ -235,8 +238,9 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                 end_global_parameters,
             ) in owned_results
             {
+                let predicted_timestamp = get_timestamp_for_block(&network, &block_number).await;
                 if params.streams_clients.is_some() || params.chat_clients.is_some() {
-                    let event_result = map_ethereum_wrapper_to_json(
+                    let mut event_result = map_ethereum_wrapper_to_json(
                         &params.event_info.inputs,
                         &event_parameters,
                         &TxInformation {
@@ -245,17 +249,27 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                             block_hash,
                             block_number,
                             transaction_hash,
-                            block_timestamp: None,
+                            block_timestamp,
                             log_index,
                             transaction_index,
                         },
                         false,
                     );
+                    if let Value::Object(ref mut map) = event_result {
+                        map.insert(
+                            "predicted_timestamp".to_string(),
+                            Value::Number(serde_json::Number::from(
+                                predicted_timestamp.timestamp(),
+                            )),
+                        );
+                    }
+
                     event_message_data.push(event_result);
                 }
 
                 let mut all_params: Vec<EthereumSqlTypeWrapper> = vec![contract_address];
                 all_params.extend(event_parameters);
+                all_params.push(EthereumSqlTypeWrapper::DateTime(predicted_timestamp));
                 all_params.extend(end_global_parameters);
 
                 // Set column types dynamically based on first result
@@ -275,6 +289,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                         csv_data.push(param);
                     }
 
+                    csv_data.push(format!("{:?}", predicted_timestamp));
                     csv_data.push(format!("{:?}", transaction_hash));
                     csv_data.push(format!("{:?}", block_number));
                     csv_data.push(format!("{:?}", block_hash));

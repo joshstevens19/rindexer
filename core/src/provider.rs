@@ -5,7 +5,7 @@ use std::{
 
 use ethers::{
     middleware::Middleware,
-    prelude::Log,
+    prelude::{Log, TxHash},
     providers::{Http, Provider, ProviderError, RetryClient, RetryClientBuilder},
     types::{Block, BlockNumber, H256, U256, U64},
 };
@@ -67,6 +67,13 @@ impl JsonRpcCachedProvider {
 
     pub async fn get_block_number(&self) -> Result<U64, ProviderError> {
         self.provider.get_block_number().await
+    }
+
+    pub async fn get_block(
+        &self,
+        block_number: BlockNumber,
+    ) -> Result<Option<Block<TxHash>>, ProviderError> {
+        self.provider.get_block(block_number).await
     }
 
     pub async fn get_logs(

@@ -18,6 +18,7 @@ use crate::{
     indexer::{
         dependency::ContractEventsDependenciesConfig,
         last_synced::{get_last_synced_block_number, SyncConfig},
+        predictable_timestamp::start_predictable_timestamps,
         process::{
             process_contracts_events_with_dependencies, process_event,
             ProcessContractsEventsWithDependenciesError, ProcessEventError,
@@ -83,6 +84,10 @@ pub async fn start_indexing(
     registry: Arc<EventCallbackRegistry>,
 ) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
     let start = Instant::now();
+
+    start_predictable_timestamps(
+        registry.events.iter().flat_map(|event| event.contract.details.iter().cloned()).collect(),
+    );
 
     let database = initialize_database(manifest).await?;
     let event_progress_state = IndexingEventsProgressState::monitor(&registry.events).await;

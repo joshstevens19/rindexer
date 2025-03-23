@@ -1,6 +1,7 @@
 // public
 pub mod generator;
 pub mod indexer;
+pub use indexer::{get_block_timestamp, get_timestamp_for_block};
 pub mod manifest;
 
 mod system_state;
