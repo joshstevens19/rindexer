@@ -3,9 +3,11 @@ use std::{path::Path, sync::Arc, time::Duration};
 use ethers::{providers::ProviderError, types::U64};
 use futures::future::try_join_all;
 use tokio::{
+    join,
     sync::Semaphore,
     task::{JoinError, JoinHandle},
     time::{sleep, Instant},
+    try_join,
 };
 use tracing::{error, info, warn};
 
@@ -156,33 +158,13 @@ async fn get_start_end_block(
     Ok((start_block, end_block, indexing_distance_from_head))
 }
 
-pub async fn start_indexing(
+pub async fn start_indexing_traces(
     manifest: &Manifest,
     project_path: &Path,
-    dependencies: &[ContractEventDependencies],
-    no_live_indexing_forced: bool,
-    registry: Arc<EventCallbackRegistry>,
+    database: Option<Arc<PostgresClient>>,
     trace_registry: Arc<TraceCallbackRegistry>,
-) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
-    let start = Instant::now();
-    let database = initialize_database(manifest).await?;
-    let event_progress_state = IndexingEventsProgressState::monitor(&registry.events).await;
-
-    // we can bring this into the yaml file later if required
-    let semaphore = Arc::new(Semaphore::new(100));
-
-    // need this to keep track of dependency_events cross contracts and events
-    let mut event_processing_configs: Vec<Arc<EventProcessingConfig>> = vec![];
-
-    // any events which are non-blocking and can be fired in parallel
+) -> Result<Vec<JoinHandle<Result<(), ProcessEventError>>>, StartIndexingError> {
     let mut non_blocking_process_events = Vec::new();
-    let mut dependency_event_processing_configs: Vec<ContractEventsDependenciesConfig> = Vec::new();
-
-    // if you are doing advanced dependency events where other contracts depend on the processing of
-    // this contract you will need to apply the dependency after the processing of the other
-    // contract to avoid ordering issues
-    let mut apply_cross_contract_dependency_events_config_after_processing = Vec::new();
-    let mut processed_network_contracts: Vec<ProcessedNetworkContract> = Vec::new();
 
     for event in trace_registry.events.iter() {
         let stream_details = manifest
@@ -277,6 +259,38 @@ pub async fn start_indexing(
             non_blocking_process_events.push(native_transfer_consumer_handle);
         }
     }
+
+    Ok(non_blocking_process_events)
+}
+
+pub async fn start_indexing_contract_events(
+    manifest: &Manifest,
+    project_path: &Path,
+    database: Option<Arc<PostgresClient>>,
+    registry: Arc<EventCallbackRegistry>,
+    dependencies: &[ContractEventDependencies],
+    no_live_indexing_forced: bool,
+) -> Result<
+    (
+        Vec<JoinHandle<Result<(), ProcessEventError>>>,
+        Vec<ProcessedNetworkContract>,
+        Vec<(String, Arc<EventProcessingConfig>)>,
+        Vec<ContractEventsDependenciesConfig>,
+    ),
+    StartIndexingError,
+> {
+    let event_progress_state = IndexingEventsProgressState::monitor(&registry.events).await;
+    let semaphore = Arc::new(Semaphore::new(100));
+
+    // need this to keep track of dependency_events cross contracts and events
+    // if you are doing advanced dependency events where other contracts depend on the processing of
+    // this contract you will need to apply the dependency after the processing of the other
+    // contract to avoid ordering issues
+    let mut apply_cross_contract_dependency_events_config_after_processing = Vec::new();
+    let mut event_processing_configs: Vec<Arc<EventProcessingConfig>> = vec![];
+    let mut non_blocking_process_events = Vec::new();
+    let mut processed_network_contracts: Vec<ProcessedNetworkContract> = Vec::new();
+    let mut dependency_event_processing_configs: Vec<ContractEventsDependenciesConfig> = Vec::new();
 
     for event in registry.events.iter() {
         let stream_details = manifest
@@ -377,6 +391,51 @@ pub async fn start_indexing(
             }
         }
     }
+
+    Ok((
+        non_blocking_process_events,
+        processed_network_contracts,
+        apply_cross_contract_dependency_events_config_after_processing,
+        dependency_event_processing_configs,
+    ))
+}
+
+pub async fn start_indexing(
+    manifest: &Manifest,
+    project_path: &Path,
+    dependencies: &[ContractEventDependencies],
+    no_live_indexing_forced: bool,
+    registry: Arc<EventCallbackRegistry>,
+    trace_registry: Arc<TraceCallbackRegistry>,
+) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
+    let start = Instant::now();
+    let database = initialize_database(manifest).await?;
+
+    // any events which are non-blocking and can be fired in parallel
+    let mut non_blocking_process_events = Vec::new();
+
+    // Start the sub-indexers concurrently to ensure fast startup times
+    let (trace_indexer_handles, contract_events_indexer) = join!(
+        start_indexing_traces(&manifest, &project_path, database.clone(), trace_registry.clone()),
+        start_indexing_contract_events(
+            &manifest,
+            &project_path,
+            database.clone(),
+            registry.clone(),
+            dependencies,
+            no_live_indexing_forced,
+        )
+    );
+
+    let (
+        non_blocking_contract_handles,
+        processed_network_contracts,
+        apply_cross_contract_dependency_events_config_after_processing,
+        mut dependency_event_processing_configs,
+    ) = contract_events_indexer?;
+
+    non_blocking_process_events.extend(trace_indexer_handles?);
+    non_blocking_process_events.extend(non_blocking_contract_handles);
 
     // apply dependency events config after processing to avoid ordering issues
     for apply in apply_cross_contract_dependency_events_config_after_processing {

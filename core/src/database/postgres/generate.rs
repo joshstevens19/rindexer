@@ -138,6 +138,7 @@ fn find_clashing_event_names(
 ) -> Result<Vec<String>, GenerateTablesForIndexerSqlError> {
     let mut clashing_events = Vec::new();
 
+
     for other_contract in other_contracts {
         if other_contract.name == current_contract_name {
             continue;
@@ -223,7 +224,6 @@ pub fn generate_tables_for_indexer_sql(
                 event_matching_name_on_other,
             ));
         }
-        // we still need to create the internal tables for the contract
         sql.push_str(&generate_internal_event_table_sql(&event_names, &schema_name, networks));
     }
 

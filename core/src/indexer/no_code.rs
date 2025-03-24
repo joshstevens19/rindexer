@@ -564,6 +564,9 @@ pub enum ProcessIndexersError {
     #[error("Event name not found in ABI for contract: {0} - event: {1}")]
     EventNameNotFoundInAbi(String, String),
 
+    #[error("Contract name is reserved: {0}. Please use another contract name.")]
+    ContractNameConflict(String),
+
     #[error("{0}")]
     ParseAbiError(#[from] ParseAbiError),
 }
@@ -577,6 +580,10 @@ pub async fn process_events(
     let mut events: Vec<EventCallbackRegistryInformation> = vec![];
 
     for contract in &mut manifest.contracts {
+        if contract.name.to_lowercase() == NATIVE_TRANSFER_CONTRACT_NAME.to_lowercase() {
+            return Err(ProcessIndexersError::ContractNameConflict(contract.name.to_string()));
+        }
+
         // TODO - this could be shared with `get_abi_items`
         let abi_str = contract.parse_abi(project_path)?;
         let abi: Abi = serde_json::from_str(&abi_str)?;
