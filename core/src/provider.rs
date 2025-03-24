@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
 use tokio::sync::Mutex;
-use tracing::{error, info};
+use tracing::error;
 use url::Url;
 
 use crate::{event::RindexerEventFilter, manifest::core::Manifest};
@@ -97,7 +97,6 @@ impl JsonRpcCachedProvider {
         &self,
         block_number: U64,
     ) -> Result<Vec<TraceCallFrame>, ProviderError> {
-        let now = Instant::now();
         let block = json!(serde_json::to_string_pretty(&block_number)?.replace("\"", ""));
         let options = json!({
             "tracer": "callTracer",
@@ -108,10 +107,6 @@ impl JsonRpcCachedProvider {
 
         let valid_traces: Vec<TraceCallFrame> =
             self.provider.request("debug_traceBlockByNumber", [block, options]).await?;
-
-        let fin = Instant::now().duration_since(now);
-
-        info!("called debug_trace in {}ms", fin.as_millis());
 
         Ok(valid_traces)
     }
