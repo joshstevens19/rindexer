@@ -7,7 +7,6 @@ use tokio::{
     sync::Semaphore,
     task::{JoinError, JoinHandle},
     time::{sleep, Instant},
-    try_join,
 };
 use tracing::{error, info, warn};
 
@@ -416,10 +415,10 @@ pub async fn start_indexing(
 
     // Start the sub-indexers concurrently to ensure fast startup times
     let (trace_indexer_handles, contract_events_indexer) = join!(
-        start_indexing_traces(&manifest, &project_path, database.clone(), trace_registry.clone()),
+        start_indexing_traces(manifest, project_path, database.clone(), trace_registry.clone()),
         start_indexing_contract_events(
-            &manifest,
-            &project_path,
+            manifest,
+            project_path,
             database.clone(),
             registry.clone(),
             dependencies,

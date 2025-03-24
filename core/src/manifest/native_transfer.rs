@@ -1,15 +1,8 @@
 use ethers::prelude::U64;
-use redis::ExpireOption::NONE;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::core::serialize_option_u64_as_string;
-use crate::{
-    indexer::native_transfer::EVENT_NAME,
-    manifest::{
-        chat::ChatConfig,
-        stream::{StreamEvent, StreamsConfig},
-    },
-};
+use crate::manifest::{chat::ChatConfig, stream::StreamsConfig};
 
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]

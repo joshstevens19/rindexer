@@ -24,8 +24,10 @@ native_transfers:
           # The underlying event name is `NativeTransfer`. This events section can be omitted, but if you want
           # to alias the stream event name, you can do so by referencing the event `NativeTransfer`.
           #
-          # This can be useful in cases where you dont want to make a distinction between, say an Erc20 "Transfer" and
+          # This can be useful in cases where you don't want to make a distinction between, say an Erc20 "Transfer" and
           # a native token transfer, they can be mapped to the same event name.
+          #
+          # Otherwise, this whole `events` section can be omitted.
           events:
             - event_name: NativeTransfer
               alias: Transfer
