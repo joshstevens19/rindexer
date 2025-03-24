@@ -1,8 +1,15 @@
 use ethers::prelude::U64;
+use redis::ExpireOption::NONE;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::core::serialize_option_u64_as_string;
-use crate::manifest::{chat::ChatConfig, stream::StreamsConfig};
+use crate::{
+    indexer::native_transfer::EVENT_NAME,
+    manifest::{
+        chat::ChatConfig,
+        stream::{StreamEvent, StreamsConfig},
+    },
+};
 
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
@@ -66,7 +73,9 @@ pub struct NativeTransfers {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub networks: Option<Vec<NativeTransferDetails>>,
 
-    /// For now `NativeTokenTransfer` must be the defined "Event" name.
+    /// Define any stream provider, you can manually override the event name by using the Stream
+    /// `alias` option, or by default we ensure the event is included in the list of `events`
+    /// on the stream if none are provided to the native_transfers stream config..
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub streams: Option<StreamsConfig>,
 
@@ -102,8 +111,7 @@ where
     D: Deserializer<'de>,
 {
     let value = NativeTransferFullOrSimple::deserialize(deserializer)?;
-
-    Ok(match value {
+    let native = match value {
         NativeTransferFullOrSimple::Simple(enabled) => NativeTransfers {
             enabled,
             networks: None,
@@ -113,7 +121,9 @@ where
             reorg_safe_distance: None,
         },
         NativeTransferFullOrSimple::Full(transfers) => transfers,
-    })
+    };
+
+    Ok(native)
 }
 
 #[cfg(test)]

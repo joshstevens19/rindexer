@@ -213,6 +213,14 @@ impl CreateNetworkProvider {
     }
 }
 
+/// Get a provider for a specific network
+pub fn get_network_provider<'a>(
+    network: &str,
+    providers: &'a [CreateNetworkProvider],
+) -> Option<&'a CreateNetworkProvider> {
+    providers.iter().find(|item| item.network_name == network)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

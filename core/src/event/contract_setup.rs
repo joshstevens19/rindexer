@@ -14,7 +14,7 @@ use crate::{
         contract::{Contract, EventInputIndexedFilters},
         native_transfer::NativeTransfers,
     },
-    provider::{CreateNetworkProvider, JsonRpcCachedProvider},
+    provider::{get_network_provider, CreateNetworkProvider, JsonRpcCachedProvider},
     types::single_or_array::StringOrArray,
 };
 
@@ -62,7 +62,7 @@ impl ContractInformation {
     ) -> Result<ContractInformation, CreateContractInformationError> {
         let mut details = vec![];
         for c in &contract.details {
-            let provider = network_providers.iter().find(|item| item.network_name == *c.network);
+            let provider = get_network_provider(&c.network, network_providers);
 
             match provider {
                 None => {
@@ -126,7 +126,7 @@ impl TraceInformation {
 
         for n in &trace_networks {
             let name = n.network.clone();
-            let provider = network_providers.iter().find(|item| item.network_name == name);
+            let provider = get_network_provider(&name, network_providers);
 
             match provider {
                 None => {

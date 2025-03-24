@@ -118,11 +118,11 @@ impl Manifest {
     ///
     /// ```yaml
     /// project_type: no-code
-    ///   networks:
-    ///     - name: ethereum
-    //        chain_id: 1
-    //        rpc: https://example.rpc.org
-    ///   native_transfers: true
+    /// native_transfers: true
+    /// networks:
+    ///   - name: ethereum
+    //      chain_id: 1
+    //      rpc: https://example.rpc.org
     /// ```
     pub fn set_native_transfer_networks(&mut self) {
         if self.native_transfers.networks.is_none() {
@@ -222,7 +222,7 @@ mod tests {
                   networks:
                     - ethereum
                   events:
-                    - event_name: NativeTokenTransfer
+                    - event_name: NativeTransfer
         "#;
 
         let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
@@ -230,7 +230,7 @@ mod tests {
         assert!(manifest.native_transfers.enabled);
         assert_eq!(
             manifest.native_transfers.streams.unwrap().sns.unwrap().topics[0].events[0].event_name,
-            "NativeTokenTransfer"
+            "NativeTransfer"
         );
 
         let networks = manifest.native_transfers.networks.unwrap();

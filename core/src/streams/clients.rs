@@ -12,6 +12,7 @@ use tracing::error;
 
 use crate::{
     event::{filter_event_data_by_conditions, EventMessage},
+    indexer::native_transfer::EVENT_NAME,
     manifest::stream::{
         KafkaStreamConfig, KafkaStreamQueueConfig, RabbitMQStreamConfig, RabbitMQStreamQueueConfig,
         RedisStreamConfig, RedisStreamStreamConfig, SNSStreamTopicConfig, StreamEvent,
@@ -240,9 +241,14 @@ impl StreamsClients {
         event_message: &EventMessage,
         chunk: &[Value],
     ) -> Vec<Value> {
-        let stream_event = events
-            .iter()
-            .find(|e| e.event_name == event_message.event_name)
+        let stream_event = events.iter().find(|e| e.event_name == event_message.event_name);
+
+        // Allow no trace events to be defined, otherwise use the defined event config.
+        if event_message.event_name == EVENT_NAME && stream_event.is_none() {
+            return chunk.to_vec();
+        }
+
+        let stream_event = stream_event
             .expect("Failed to find stream event - should never happen please raise an issue");
 
         let filtered_chunk: Vec<Value> = chunk

@@ -445,8 +445,13 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                     params.contract_name, params.event_info.name, network, from_block, to_block
                 );
 
+                let is_trace_event = match results {
+                    CallbackResult::Event(_) => false,
+                    CallbackResult::Trace(_) => true,
+                };
+
                 match streams_clients
-                    .stream(stream_id, &event_message, params.index_event_in_order, false)
+                    .stream(stream_id, &event_message, params.index_event_in_order, is_trace_event)
                     .await
                 {
                     Ok(streamed) => {
@@ -777,11 +782,6 @@ pub async fn process_trace_events(
         } else {
             None
         };
-
-        // let index_event_in_order = contract
-        //     .index_event_in_order
-        //     .as_ref()
-        //     .is_some_and(|vec| vec.contains(&event_info.name));
 
         let callback_params = Arc::new(NoCodeCallbackParams {
             event_info: event_info.clone(),

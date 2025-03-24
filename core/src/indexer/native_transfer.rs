@@ -21,14 +21,14 @@ pub const NATIVE_TRANSFER_CONTRACT_NAME: &str = "EvmTraces";
 
 /// An imaginary contract name to ensure native transfer "debug trace" indexing is compatible
 /// with the streams and sinks to which rindexer writes.
-pub const EVENT_NAME: &str = "NativeTokenTransfer";
+pub const EVENT_NAME: &str = "NativeTransfer";
 
 /// Invent an ABI to mimic an ERC0 Transfer.
 ///
 /// This will allow indexer consumers, which will typically be configured to consume contract events
 /// to simply ingest an ERC20 compatible event for the native tokens.
 ///
-/// In order to reduce name conflicts we will call the Transfer event `NativeTokenTransfer`.
+/// In order to reduce name conflicts we will call the Transfer event `NativeTransfer`.
 pub const NATIVE_TRANSFER_ABI: &str = r#"[{
     "anonymous": false,
     "inputs": [
@@ -48,7 +48,7 @@ pub const NATIVE_TRANSFER_ABI: &str = r#"[{
             "type": "uint256"
         }
     ],
-    "name": "NativeTokenTransfer",
+    "name": "NativeTransfer",
     "type": "event"
 }]"#;
 

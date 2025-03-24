@@ -138,7 +138,6 @@ fn find_clashing_event_names(
 ) -> Result<Vec<String>, GenerateTablesForIndexerSqlError> {
     let mut clashing_events = Vec::new();
 
-
     for other_contract in other_contracts {
         if other_contract.name == current_contract_name {
             continue;

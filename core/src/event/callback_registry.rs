@@ -91,6 +91,7 @@ impl EventResult {
 }
 
 pub type EventCallbackResult<T> = Result<T, String>;
+
 pub type EventCallbackType =
     Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync>;
 pub type TraceCallbackType =
@@ -151,45 +152,15 @@ impl EventCallbackRegistry {
     }
 
     pub async fn trigger_event(&self, id: &String, data: Vec<EventResult>) {
-        let mut attempts = 0;
-        let mut delay = Duration::from_millis(100);
-
         if let Some(event_information) = self.find_event(id) {
-            let len = data.len();
-
-            debug!("{} - Pushed {} events", len, event_information.info_log_name());
-
-            loop {
-                if !is_running() {
-                    info!("Detected shutdown, stopping event trigger");
-                    break;
-                }
-
-                match (event_information.callback)(data.clone()).await {
-                    Ok(_) => {
-                        debug!(
-                            "Event processing succeeded for id: {} - topic_id: {}",
-                            id, event_information.topic_id
-                        );
-                        break;
-                    }
-                    Err(e) => {
-                        if !is_running() {
-                            info!("Detected shutdown, stopping event trigger");
-                            break;
-                        }
-                        attempts += 1;
-                        error!(
-                            "{} Event processing failed - id: {} - topic_id: {}. Retrying... (attempt {}). Error: {}",
-                            event_information.info_log_name(), id, event_information.topic_id, attempts, e
-                        );
-
-                        delay = (delay * 2).min(Duration::from_secs(15));
-
-                        sleep(delay).await;
-                    }
-                }
-            }
+            trigger_event(
+                id,
+                data,
+                |d| (event_information.callback)(d),
+                || event_information.info_log_name(),
+                &event_information.topic_id.to_string(),
+            )
+            .await;
         } else {
             error!("EventCallbackRegistry: No event found for id: {}", id);
         }
@@ -241,7 +212,7 @@ pub struct TraceResult {
 }
 
 impl TraceResult {
-    /// Create a "NativeTokenTransfer" TraceResult for sinking and streaming.
+    /// Create a "NativeTransfer" TraceResult for sinking and streaming.
     pub fn new_native_transfer(
         action: &Call,
         trace: &Trace,
@@ -305,45 +276,15 @@ impl TraceCallbackRegistry {
     }
 
     pub async fn trigger_event(&self, id: &String, data: Vec<TraceResult>) {
-        let mut attempts = 0;
-        let mut delay = Duration::from_millis(100);
-
         if let Some(event_information) = self.find_event(id) {
-            let len = data.len();
-
-            debug!("{} - Pushed {} events", len, event_information.info_log_name());
-
-            loop {
-                if !is_running() {
-                    info!("Detected shutdown, stopping event trigger");
-                    break;
-                }
-
-                match (event_information.callback)(data.clone()).await {
-                    Ok(_) => {
-                        debug!(
-                            "Event processing succeeded for id: {} - topic_id: {}",
-                            id, event_information.event_name
-                        );
-                        break;
-                    }
-                    Err(e) => {
-                        if !is_running() {
-                            info!("Detected shutdown, stopping event trigger");
-                            break;
-                        }
-                        attempts += 1;
-                        error!(
-                            "{} Event processing failed - id: {} - topic_id: {}. Retrying... (attempt {}). Error: {}",
-                            event_information.info_log_name(), id, event_information.event_name, attempts, e
-                        );
-
-                        delay = (delay * 2).min(Duration::from_secs(15));
-
-                        sleep(delay).await;
-                    }
-                }
-            }
+            trigger_event(
+                id,
+                data,
+                |d| (event_information.callback)(d),
+                || event_information.info_log_name(),
+                &event_information.event_name,
+            )
+            .await;
         } else {
             error!("EventCallbackRegistry: No event found for id: {}", id);
         }
@@ -351,5 +292,53 @@ impl TraceCallbackRegistry {
 
     pub fn complete(&self) -> Arc<Self> {
         Arc::new(self.clone())
+    }
+}
+
+async fn trigger_event<T>(
+    id: &String,
+    data: Vec<T>,
+    callback: impl Fn(Vec<T>) -> BoxFuture<'static, EventCallbackResult<()>>,
+    info_log_name: impl Fn() -> String,
+    event_identifier: &str,
+) where
+    T: Clone,
+{
+    let mut attempts = 0;
+    let mut delay = Duration::from_millis(100);
+
+    let len = data.len();
+    debug!("{} - Pushed {} events", len, info_log_name());
+
+    loop {
+        if !is_running() {
+            info!("Detected shutdown, stopping event trigger");
+            break;
+        }
+
+        match callback(data.clone()).await {
+            Ok(_) => {
+                debug!(
+                    "Event processing succeeded for id: {} - topic_id: {}",
+                    id, event_identifier
+                );
+                break;
+            }
+            Err(e) => {
+                if !is_running() {
+                    info!("Detected shutdown, stopping event trigger");
+                    break;
+                }
+                attempts += 1;
+                error!(
+                    "{} Event processing failed - id: {} - topic_id: {}. Retrying... (attempt {}). Error: {}",
+                    info_log_name(), id, event_identifier, attempts, e
+                );
+
+                delay = (delay * 2).min(Duration::from_secs(15));
+
+                sleep(delay).await;
+            }
+        }
     }
 }
