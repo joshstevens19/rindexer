@@ -5,7 +5,8 @@ rindexer streams can be used without any other storage providers. It can also be
 :::
 
 rindexer allows you to configure [RabbitMQ](https://www.rabbitmq.com/) to stream any data to. This goes under
-the [contracts](/docs/start-building/yaml-config/contracts) section of the YAML configuration file.
+the [contracts](/docs/start-building/yaml-config/contracts) or [native_transfers](/docs/start-building/yaml-config/native-transfers)
+section of the YAML configuration file.
 
 Find out more about [RabbitMQ](https://www.rabbitmq.com/).
 
@@ -120,6 +121,32 @@ contracts:
             - ethereum // [!code focus]
           events: // [!code focus]
             - event_name: Transfer // [!code focus]
+```
+
+```yaml [native transfers (fanout)]
+name: ETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+native_transfers:
+  networks:
+    - network: ethereum
+  streams: // [!code focus]
+    rabbitmq: // [!code focus]
+      # we advise to put this in a environment variables // [!code focus]
+      url: ${RABBITMQ_URL} // [!code focus]
+      exchanges: // [!code focus]
+        - exchange: transfer // [!code focus]
+          #  expected one of `direct`, `topic` or `fanout` // [!code focus]
+          exchange_type: fanout // [!code focus]
+          networks: // [!code focus]
+            - ethereum // [!code focus]
+          events: // [!code focus]
+            - event_name: NativeTransfer // [!code focus]
 ```
 
 :::

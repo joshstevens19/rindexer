@@ -5,7 +5,8 @@ rindexer streams can be used without any other storage providers. It can also be
 :::
 
 rindexer allows you to configure [Redis Streams](https://redis.io/docs/latest/develop/data-types/streams/) to stream any data to. This goes under
-the [contracts](docs/start-building/yaml-config/contracts) section.
+the [contracts](docs/start-building/yaml-config/contracts) or [native_transfers](/docs/start-building/yaml-config/native-transfers)
+section of the YAML configuration file.
 
 Found out more about [Redis Streams](https://redis.io/docs/latest/develop/data-types/streams/).
 
@@ -13,7 +14,10 @@ Found out more about [Redis Streams](https://redis.io/docs/latest/develop/data-t
 `redis` `streams` property accepts an array allowing you to split up the streams any way you wish.
 
 ## Example
-```yaml [rindexer.yaml]
+
+:::code-group
+
+```yaml [contract events]
 name: RocketPoolETHIndexer
 description: My first rindexer project
 repository: https://github.com/joshstevens19/rindexer
@@ -43,6 +47,32 @@ contracts:
             - event_name: Transfer // [!code focus]
               alias: RocketPoolTransfer
 ```
+
+```yaml [native transfers]
+name: ETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+native_transfers:
+  networks:
+    - network: ethereum
+  streams: // [!code focus]
+    redis: // [!code focus]
+      connection_uri: ${REDIS_CONNECTION_URI} // [!code focus]
+      streams: // [!code focus]
+        - stream_name: "ethereum_transfer_stream" // [!code focus]
+          networks: // [!code focus]
+            - ethereum // [!code focus]
+          events: // [!code focus]
+            - event_name: NativeTransfer // [!code focus]
+              alias: Transfer
+```
+
+:::
 
 ## Response
 
