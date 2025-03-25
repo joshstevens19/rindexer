@@ -10,7 +10,8 @@ rindexer streams can be used without any other storage providers. It can also be
 :::
 
 rindexer allows you to configure [Kafka](https://kafka.apache.org/) to stream any data to. This goes under
-the [contracts](/docs/start-building/yaml-config/contracts) section of the YAML configuration file.
+the [contracts](/docs/start-building/yaml-config/contracts) or [native_transfers](/docs/start-building/yaml-config/native-transfers)
+section of the YAML configuration file.
 
 Find out more about [Kafka](https://kafka.apache.org/).
 
@@ -100,6 +101,38 @@ contracts:
             - ethereum
           events:
             - event_name: Transfer
+```
+
+```yaml [native transfers (ssl)]
+name: RocketPoolETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+native_transfers:
+  networks:
+    - network: ethereum
+  streams: // [!code focus]
+    kafka: // [!code focus]
+      brokers: // [!code focus]
+        - ${KAFKA_BROKER_URL_1} // [!code focus]
+        - ${KAFKA_BROKER_URL_2} // [!code focus]
+      acks: all // [!code focus]
+      security_protocol: SASL_SSL // [!code focus]
+      sasl_mechanisms: PLAIN // [!code focus]
+      sasl_username: $<CLUSTER_API_KEY> // [!code focus]
+      sasl_password: $<CLUSTER_API_SECRET> // [!code focus]
+      topics:
+        - topic: test-topic
+          # key is optional // [!code focus]
+          key: my-routing-key
+          networks:
+            - ethereum
+          events:
+            - event_name: NativeTransfer  // [!code focus]
 ```
 
 :::

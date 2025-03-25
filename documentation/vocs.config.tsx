@@ -90,6 +90,10 @@ export default defineConfig({
               link: "/docs/start-building/yaml-config/storage",
             },
             {
+              text: "Native Transfers",
+              link: "/docs/start-building/yaml-config/native-transfers",
+            },
+            {
               text: "Contracts",
               link: "/docs/start-building/yaml-config/contracts",
             },

@@ -24,7 +24,9 @@ You have to use telegram itself to setup a bot:
 
 ## Example
 
-```yaml
+:::code-group
+
+```yaml [contract events]
 name: RocketPoolETHIndexer
 description: My first rindexer project
 repository: https://github.com/joshstevens19/rindexer
@@ -68,6 +70,42 @@ contracts:
                               [etherscan](https://etherscan.io/tx/{{transaction_information.transaction_hash}}) // [!code focus]
                               " // [!code focus]
 ```
+
+```yaml [native transfers]
+name: ETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+native_transfers:
+  networks:
+    - network: ethereum
+  chat: // [!code focus]
+    telegram: // [!code focus]
+      - bot_token: ${TELEGRAM_BOT_TOKEN} // [!code focus]
+        chat_id: -4223616270 // [!code focus]
+        networks: // [!code focus]
+          - ethereum // [!code focus]
+        messages:
+          - event_name: NativeTransfer // [!code focus]
+            template_inline: "*New ETH Transfer Event* // [!code focus]
+
+                              from: {{from}} // [!code focus]
+
+                              to: {{to}} // [!code focus]
+
+                              amount: {{format_value(value, 18)}} // [!code focus]
+
+                              Token address: {{transaction_information.address}} // [!code focus]
+
+                              [etherscan](https://etherscan.io/tx/{{transaction_information.transaction_hash}}) // [!code focus]
+                              " // [!code focus]
+```
+
+:::
 
 ## bot_token
 

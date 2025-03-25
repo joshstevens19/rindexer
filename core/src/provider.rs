@@ -5,14 +5,16 @@ use std::{
 
 use ethers::{
     middleware::Middleware,
-    prelude::Log,
+    prelude::{Bytes, Log},
     providers::{Http, Provider, ProviderError, RetryClient, RetryClientBuilder},
-    types::{Block, BlockNumber, H256, U256, U64},
+    types::{Address, Block, BlockNumber, Trace, H256, U256, U64},
 };
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use thiserror::Error;
 use tokio::sync::Mutex;
+use tracing::error;
 use url::Url;
 
 use crate::{event::RindexerEventFilter, manifest::core::Manifest};
@@ -32,6 +34,26 @@ pub struct WrappedLog {
     #[serde(rename = "blockTimestamp")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub block_timestamp: Option<U256>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TraceCall {
+    pub from: Address,
+    pub gas: String,
+    #[serde(rename = "gasUsed")]
+    pub gas_used: U256,
+    pub to: Address,
+    pub input: Bytes,
+    pub value: U256,
+    #[serde(rename = "type")]
+    pub typ: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TraceCallFrame {
+    #[serde(rename = "txHash")]
+    pub tx_hash: H256,
+    pub result: TraceCall,
 }
 
 impl JsonRpcCachedProvider {
@@ -67,6 +89,31 @@ impl JsonRpcCachedProvider {
 
     pub async fn get_block_number(&self) -> Result<U64, ProviderError> {
         self.provider.get_block_number().await
+    }
+
+    /// Custom implementation of a `debug_traceBlockByNumber` call
+    #[deprecated(note = "Use 'trace_block' for better information and better ethers-rs support")]
+    pub async fn debug_trace_block_by_number(
+        &self,
+        block_number: U64,
+    ) -> Result<Vec<TraceCallFrame>, ProviderError> {
+        let block = json!(serde_json::to_string_pretty(&block_number)?.replace("\"", ""));
+        let options = json!({
+            "tracer": "callTracer",
+            "tracerConfig": {
+                "onlyTopCall": true
+            }
+        });
+
+        let valid_traces: Vec<TraceCallFrame> =
+            self.provider.request("debug_traceBlockByNumber", [block, options]).await?;
+
+        Ok(valid_traces)
+    }
+
+    /// Request `trace_block` information. This currently does not support batched multi-calls.
+    pub async fn trace_block(&self, block_number: U64) -> Result<Vec<Trace>, ProviderError> {
+        self.provider.trace_block(BlockNumber::Number(block_number)).await
     }
 
     pub async fn get_logs(
@@ -159,6 +206,14 @@ impl CreateNetworkProvider {
 
         Ok(result)
     }
+}
+
+/// Get a provider for a specific network
+pub fn get_network_provider<'a>(
+    network: &str,
+    providers: &'a [CreateNetworkProvider],
+) -> Option<&'a CreateNetworkProvider> {
+    providers.iter().find(|item| item.network_name == network)
 }
 
 #[cfg(test)]
