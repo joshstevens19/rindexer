@@ -5,7 +5,8 @@ rindexer streams can be used without any other storage providers. It can also be
 :::
 
 rindexer allows you to configure AWS SNS and AWS SQS to stream any data to. This goes under
-the [contracts](/docs/start-building/yaml-config/contracts) section of the YAML configuration file.
+the [contracts](/docs/start-building/yaml-config/contracts) or [native_transfers](/docs/start-building/yaml-config/native-transfers)
+section of the YAML configuration file.
 
 Find out more about [Simple Notification Service](https://aws.amazon.com/sns/) and [Simple Queue Service](https://aws.amazon.com/sqs/)
 
@@ -15,7 +16,9 @@ Find out more about [Simple Notification Service](https://aws.amazon.com/sns/) a
 
 ## Example
 
-```yaml [rindexer.yaml]
+:::code-group
+
+```yaml [contract events]
 name: RocketPoolETHIndexer
 description: My first rindexer project
 repository: https://github.com/joshstevens19/rindexer
@@ -52,6 +55,37 @@ contracts:
             - event_name: Transfer // [!code focus]
               alias: RocketPoolTransfer
 ```
+
+
+```yaml [native transfers]
+name: ETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+native_transfers:
+  networks:
+    - network: ethereum
+  streams: // [!code focus]
+    sns: // [!code focus]
+      aws_config: // [!code focus]
+        region: us-east-1 // [!code focus]
+        access_key: ${AWS_ACCESS_KEY_ID} // [!code focus]
+        secret_key: ${AWS_SECRET_ACCESS_KEY} // [!code focus]
+        # session_token is optional // [!code focus]
+        session_token: ${AWS_SESSION_TOKEN} // [!code focus]
+        # endpoint_url is optional // [!code focus]
+        endpoint_url: ${ENDPOINT_URL} // ![code focus]
+      topics: // [!code focus]
+        - topic_arn: "arn:aws:sns:us-east-1:664643779377:ethereum-transfers" // [!code focus]
+          networks: // [!code focus]
+            - ethereum // [!code focus]
+```
+
+:::
 
 ## Response
 

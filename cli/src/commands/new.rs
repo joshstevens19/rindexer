@@ -12,6 +12,7 @@ use rindexer::{
     manifest::{
         contract::{Contract, ContractDetails},
         core::{Manifest, ProjectType},
+        native_transfer::NativeTransfers,
         network::Network,
         storage::{CsvDetails, PostgresDetails, Storage},
         yaml::{write_manifest, YAML_CONFIG_NAME},
@@ -164,6 +165,7 @@ pub fn handle_new_command(
             streams: None,
             chat: None,
         }],
+        native_transfers: NativeTransfers::default(),
         phantom: None,
         global: None,
         storage: Storage {

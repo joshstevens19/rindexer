@@ -9,8 +9,12 @@ use serde::{Deserialize, Serialize};
 use crate::{
     event::callback_registry::Decoder,
     generate_random_id,
-    manifest::contract::{Contract, EventInputIndexedFilters},
-    provider::{CreateNetworkProvider, JsonRpcCachedProvider},
+    indexer::native_transfer::EVENT_NAME,
+    manifest::{
+        contract::{Contract, EventInputIndexedFilters},
+        native_transfer::NativeTransfers,
+    },
+    provider::{get_network_provider, CreateNetworkProvider, JsonRpcCachedProvider},
     types::single_or_array::StringOrArray,
 };
 
@@ -58,7 +62,7 @@ impl ContractInformation {
     ) -> Result<ContractInformation, CreateContractInformationError> {
         let mut details = vec![];
         for c in &contract.details {
-            let provider = network_providers.iter().find(|item| item.network_name == *c.network);
+            let provider = get_network_provider(&c.network, network_providers);
 
             match provider {
                 None => {
@@ -86,6 +90,66 @@ impl ContractInformation {
             details,
             abi: contract.abi.clone(),
             reorg_safe_distance: contract.reorg_safe_distance.unwrap_or_default(),
+        })
+    }
+}
+
+#[derive(Clone)]
+pub struct NetworkTrace {
+    pub id: String,
+    pub network: String,
+    pub cached_provider: Arc<JsonRpcCachedProvider>,
+    pub start_block: Option<U64>,
+    pub end_block: Option<U64>,
+}
+
+impl NetworkTrace {
+    pub fn is_live_indexing(&self) -> bool {
+        self.end_block.is_none()
+    }
+}
+
+#[derive(Clone)]
+pub struct TraceInformation {
+    pub name: String,
+    pub details: Vec<NetworkTrace>,
+    pub reorg_safe_distance: bool,
+}
+
+impl TraceInformation {
+    pub fn create(
+        native_transfers: NativeTransfers,
+        network_providers: &[CreateNetworkProvider],
+    ) -> Result<TraceInformation, CreateContractInformationError> {
+        let mut details = vec![];
+        let trace_networks = native_transfers.networks.unwrap_or_default();
+
+        for n in &trace_networks {
+            let name = n.network.clone();
+            let provider = get_network_provider(&name, network_providers);
+
+            match provider {
+                None => {
+                    return Err(CreateContractInformationError::CanNotFindNetworkFromProviders(
+                        name,
+                    ));
+                }
+                Some(provider) => {
+                    details.push(NetworkTrace {
+                        id: generate_random_id(10),
+                        network: name,
+                        cached_provider: Arc::clone(&provider.client),
+                        start_block: n.start_block,
+                        end_block: n.end_block,
+                    });
+                }
+            }
+        }
+
+        Ok(TraceInformation {
+            name: EVENT_NAME.to_string(),
+            details,
+            reorg_safe_distance: native_transfers.reorg_safe_distance.unwrap_or_default(),
         })
     }
 }

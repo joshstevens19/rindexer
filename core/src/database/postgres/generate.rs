@@ -5,7 +5,10 @@ use tracing::{error, info};
 use crate::{
     abi::{ABIInput, ABIItem, EventInfo, GenerateAbiPropertiesType, ParamTypeError, ReadAbiError},
     helpers::camel_to_snake,
-    indexer::Indexer,
+    indexer::{
+        native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME},
+        Indexer,
+    },
     manifest::contract::Contract,
     types::code::Code,
 };
@@ -129,14 +132,14 @@ pub enum GenerateTablesForIndexerSqlError {
 /// to avoid clashing of graphql namings
 fn find_clashing_event_names(
     project_path: &Path,
-    current_contract: &Contract,
+    current_contract_name: &str,
     other_contracts: &[Contract],
     current_event_names: &[EventInfo],
 ) -> Result<Vec<String>, GenerateTablesForIndexerSqlError> {
     let mut clashing_events = Vec::new();
 
     for other_contract in other_contracts {
-        if other_contract.name == current_contract.name {
+        if other_contract.name == current_contract_name {
             continue;
         }
 
@@ -176,7 +179,7 @@ pub fn generate_tables_for_indexer_sql(
 
             let event_matching_name_on_other = find_clashing_event_names(
                 project_path,
-                contract,
+                &contract_name,
                 &indexer.contracts,
                 &event_names,
             )?;
@@ -189,6 +192,37 @@ pub fn generate_tables_for_indexer_sql(
             ));
         }
         // we still need to create the internal tables for the contract
+        sql.push_str(&generate_internal_event_table_sql(&event_names, &schema_name, networks));
+    }
+
+    if indexer.native_transfers.enabled {
+        let contract_name = NATIVE_TRANSFER_CONTRACT_NAME.to_string();
+        let abi_str = NATIVE_TRANSFER_ABI;
+        let abi_items: Vec<ABIItem> =
+            serde_json::from_str(abi_str).expect("JSON was not well-formatted");
+        let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
+        let schema_name = generate_indexer_contract_schema_name(&indexer.name, &contract_name);
+        let networks = indexer.clone().native_transfers.networks.unwrap();
+        let networks: Vec<&str> = networks.iter().map(|d| d.network.as_str()).collect();
+
+        if !disable_event_tables {
+            sql.push_str(format!("CREATE SCHEMA IF NOT EXISTS {};", schema_name).as_str());
+            info!("Creating schema if not exists: {}", schema_name);
+
+            let event_matching_name_on_other = find_clashing_event_names(
+                project_path,
+                &contract_name,
+                &indexer.contracts,
+                &event_names,
+            )?;
+
+            sql.push_str(&generate_event_table_sql_with_comments(
+                &event_names,
+                &contract_name,
+                &schema_name,
+                event_matching_name_on_other,
+            ));
+        }
         sql.push_str(&generate_internal_event_table_sql(&event_names, &schema_name, networks));
     }
 
