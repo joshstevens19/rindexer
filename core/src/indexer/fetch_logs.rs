@@ -114,6 +114,7 @@ pub fn fetch_logs_stream(
             live_indexing_stream(
                 &config.network_contract.cached_provider,
                 &tx,
+                snapshot_to_block,
                 &contract_address,
                 &config.topic_id,
                 &config.indexing_distance_from_head,
@@ -322,6 +323,7 @@ async fn fetch_historic_logs_stream(
 async fn live_indexing_stream(
     cached_provider: &Arc<JsonRpcCachedProvider>,
     tx: &mpsc::UnboundedSender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
+    last_seen_block_number: U64,
     contract_address: &Option<ValueOrArray<Address>>,
     topic_id: &H256,
     reorg_safe_distance: &U64,
@@ -330,7 +332,7 @@ async fn live_indexing_stream(
     semaphore: &Arc<Semaphore>,
     disable_logs_bloom_checks: bool,
 ) {
-    let mut last_seen_block_number = U64::from(0);
+    let mut last_seen_block_number = last_seen_block_number;
     let mut last_no_new_block_log_time = Instant::now();
     let log_no_new_block_interval = Duration::from_secs(300);
     let target_iteration_duration = Duration::from_millis(200);
