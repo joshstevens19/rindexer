@@ -12,7 +12,7 @@ use crate::{
     indexer::native_transfer::EVENT_NAME,
     manifest::{
         contract::{Contract, EventInputIndexedFilters},
-        native_transfer::NativeTransfers,
+        native_transfer::{NativeTransfers, TraceProcessingMethod},
     },
     provider::{get_network_provider, CreateNetworkProvider, JsonRpcCachedProvider},
     types::single_or_array::StringOrArray,
@@ -101,6 +101,7 @@ pub struct NetworkTrace {
     pub cached_provider: Arc<JsonRpcCachedProvider>,
     pub start_block: Option<U64>,
     pub end_block: Option<U64>,
+    pub method: TraceProcessingMethod,
 }
 
 impl NetworkTrace {
@@ -141,6 +142,7 @@ impl TraceInformation {
                         cached_provider: Arc::clone(&provider.client),
                         start_block: n.start_block,
                         end_block: n.end_block,
+                        method: n.method,
                     });
                 }
             }

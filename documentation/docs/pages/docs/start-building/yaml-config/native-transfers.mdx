@@ -9,7 +9,7 @@ This is **experimental** functionality which has not yet been extensively tested
 :::
 
 :::info
-**IMPORTANT**: The `rpc` provider passed into the `networks` configuration must support the `trace_block` RPC method. Not
+**IMPORTANT**: The `rpc` provider passed into the `networks` configuration must support the `trace_block` RPC method or `debug_traceBlockByNumber` RPC method. Not
 all providers currently support this.
 :::
 
@@ -38,7 +38,7 @@ project_type: no-code
 networks:
   - name: ethereum
     chain_id: 1
-    # The rpc provider must support the `trace_block` rpc method // [!code focus]
+    # The rpc provider must support the `trace_block` rpc method in simple mode
     rpc: https://mainnet.gateway.tenderly.co  // [!code focus]
 storage:
   postgres:
@@ -127,6 +127,75 @@ native_transfers:
 contracts: []
 ```
 
+### method
+
+:::info
+This is optional, if you do not provide a method it will default to using `trace_block` as
+it provides a `block_hash` in the response.
+:::
+
+The method field is an advanced option, and typically does not need to be defined. By default it 
+will use `trace_block` and it is only recommended to manually override this in the event that your 
+RPC provider does not have adequate support for `trace_block` (i.e. in the case of Alchemy L2 Support).
+
+Valid options are: `debug_traceBlockByNumber` or `trace_block`.
+
+:::code-group
+
+```yaml [debug_traceBlockByNumber]
+name: rIndexer
+description: My native transfers rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+native_transfers:
+  networks: // [!code focus]
+    - network: ethereum
+      start_block: 18600000
+      end_block: 18718056 
+      method: debug_traceBlockByNumber
+contracts: []
+```
+
+```yaml [trace_block]
+name: rIndexer
+description: My native transfers rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+native_transfers:
+  networks: // [!code focus]
+    - network: ethereum
+      start_block: 18600000
+      end_block: 18718056 
+      method: trace_block // [!code focus]
+contracts: []
+```
+
+```yaml [default]
+name: rIndexer
+description: My native transfers rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+native_transfers:
+  networks: // [!code focus]
+    - network: ethereum
+      start_block: 18600000
+      end_block: 18718056 
+contracts: []
+```
+
+:::
 
 ### Multiple Networks
 

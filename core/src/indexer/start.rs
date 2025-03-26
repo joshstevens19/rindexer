@@ -179,6 +179,7 @@ pub async fn start_indexing_traces(
                 start_block: Default::default(),
                 end_block: Default::default(),
                 registry: trace_registry.clone(),
+                method: network.method,
             };
 
             let sync_config = SyncConfig {
