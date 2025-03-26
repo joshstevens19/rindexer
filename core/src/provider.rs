@@ -6,8 +6,11 @@ use std::{
 use ethers::{
     middleware::Middleware,
     prelude::{Bytes, Log},
-    providers::{Http, Provider, ProviderError, RetryClient, RetryClientBuilder},
-    types::{Address, Block, BlockNumber, Trace, H256, U256, U64},
+    providers::{Http, JsonRpcClient, Provider, ProviderError, RetryClient, RetryClientBuilder},
+    types::{
+        Action, ActionType, Address, Block, BlockNumber, Call, CallResult, CallType, Res, Trace,
+        H256, U256, U64,
+    },
 };
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
@@ -46,7 +49,7 @@ pub struct TraceCall {
     pub input: Bytes,
     pub value: U256,
     #[serde(rename = "type")]
-    pub typ: String,
+    pub typ: CallType,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -91,12 +94,13 @@ impl JsonRpcCachedProvider {
         self.provider.get_block_number().await
     }
 
-    /// Custom implementation of a `debug_traceBlockByNumber` call
-    #[deprecated(note = "Use 'trace_block' for better information and better ethers-rs support")]
+    /// Prefer using `trace_block` where possible as it returns more information.
+    ///
+    /// The current ethers version does not allow batching, we should upgrade to alloy.
     pub async fn debug_trace_block_by_number(
         &self,
         block_number: U64,
-    ) -> Result<Vec<TraceCallFrame>, ProviderError> {
+    ) -> Result<Vec<Trace>, ProviderError> {
         let block = json!(serde_json::to_string_pretty(&block_number)?.replace("\"", ""));
         let options = json!({
             "tracer": "callTracer",
@@ -108,7 +112,31 @@ impl JsonRpcCachedProvider {
         let valid_traces: Vec<TraceCallFrame> =
             self.provider.request("debug_traceBlockByNumber", [block, options]).await?;
 
-        Ok(valid_traces)
+        let traces = valid_traces
+            .into_iter()
+            .map(|frame| Trace {
+                action: Action::Call(Call {
+                    from: frame.result.from,
+                    to: frame.result.to,
+                    value: frame.result.value,
+                    gas: U256::from_str_radix(frame.result.gas.trim_start_matches("0x"), 16)
+                        .unwrap_or_default(),
+                    input: frame.result.input,
+                    call_type: frame.result.typ,
+                }),
+                result: None,
+                trace_address: vec![],
+                subtraces: 0,
+                transaction_hash: Some(frame.tx_hash),
+                transaction_position: None, // not provided by debug_trace
+                block_number: block_number.as_u64(),
+                block_hash: H256::zero(), // not provided by debug_trace
+                error: None,
+                action_type: ActionType::Call,
+            })
+            .collect();
+
+        Ok(traces)
     }
 
     /// Request `trace_block` information. This currently does not support batched multi-calls.
@@ -161,15 +189,16 @@ pub fn create_client(
     let client = reqwest::Client::builder().default_headers(custom_headers).build()?;
 
     let provider = Http::new_with_client(url, client);
-    let instance = Provider::new(
-        RetryClientBuilder::default()
-            // assume minimum compute units per second if not provided as growth plan standard
-            .compute_units_per_second(compute_units_per_second.unwrap_or(660))
-            .rate_limit_retries(5000)
-            .timeout_retries(1000)
-            .initial_backoff(Duration::from_millis(500))
-            .build(provider, Box::<ethers::providers::HttpRateLimitRetryPolicy>::default()),
-    );
+
+    let retry_client = RetryClientBuilder::default()
+        // assume minimum compute units per second if not provided as growth plan standard
+        .compute_units_per_second(compute_units_per_second.unwrap_or(660))
+        .rate_limit_retries(5000)
+        .timeout_retries(1000)
+        .initial_backoff(Duration::from_millis(500))
+        .build(provider, Box::<ethers::providers::HttpRateLimitRetryPolicy>::default());
+    let instance = Provider::new(retry_client);
+
     Ok(Arc::new(JsonRpcCachedProvider::new(instance, max_block_range)))
 }
 

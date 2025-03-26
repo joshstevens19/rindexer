@@ -134,6 +134,7 @@ impl Manifest {
                     network: n.name,
                     start_block: None,
                     end_block: None,
+                    method: Default::default(),
                 })
                 .collect::<Vec<_>>();
 

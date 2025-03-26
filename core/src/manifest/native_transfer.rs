@@ -11,6 +11,15 @@ enum StringOrNum {
     Num(u64),
 }
 
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Default, Deserialize, Serialize)]
+pub enum TraceProcessingMethod {
+    #[default]
+    #[serde(rename = "trace_block")]
+    TraceBlock,
+    #[serde(rename = "debug_traceBlockByNumber")]
+    DebugTraceBlockByNumber,
+}
+
 /// Deserialize a number or string into a U64. This is required for the untagged deserialize of
 /// native transfers to succeed.
 fn deserialize_option_u64_from_string_or_num<'de, D>(
@@ -33,6 +42,9 @@ where
 #[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub struct NativeTransferDetails {
     pub network: String,
+
+    #[serde(default)]
+    pub method: TraceProcessingMethod,
 
     #[serde(
         default,
@@ -141,6 +153,7 @@ mod tests {
         assert_eq!(networks[0].network, "ethereum");
         assert_eq!(networks[0].start_block.unwrap().as_u64(), 100);
         assert_eq!(networks[0].end_block.unwrap().as_u64(), 200);
+        assert_eq!(networks[0].method, TraceProcessingMethod::TraceBlock);
     }
 
     #[test]
@@ -158,5 +171,29 @@ mod tests {
         assert_eq!(networks[0].network, "base");
         assert_eq!(networks[0].start_block.unwrap().as_u64(), 100);
         assert_eq!(networks[0].end_block, None);
+        assert_eq!(networks[0].method, TraceProcessingMethod::TraceBlock);
+    }
+
+    #[test]
+    fn test_native_transfer_full_method() {
+        let yaml = r#"
+          networks:
+            - network: base
+              start_block: 100
+              method: "trace_block"
+            - network: ethereum
+              method: "debug_traceBlockByNumber"
+        "#;
+
+        let transfer: NativeTransfers = serde_yaml::from_str(yaml).unwrap();
+        let networks: Vec<NativeTransferDetails> = transfer.networks.unwrap().into_iter().collect();
+
+        assert!(transfer.enabled);
+        assert_eq!(networks[0].network, "base");
+        assert_eq!(networks[0].method, TraceProcessingMethod::TraceBlock);
+
+        assert!(transfer.enabled);
+        assert_eq!(networks[1].network, "ethereum");
+        assert_eq!(networks[1].method, TraceProcessingMethod::DebugTraceBlockByNumber);
     }
 }
