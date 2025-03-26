@@ -12,7 +12,7 @@ use crate::{
         BuildRindexerFilterError, RindexerEventFilter,
     },
     indexer::IndexingEventsProgressState,
-    manifest::storage::CsvDetails,
+    manifest::{native_transfer::TraceProcessingMethod, storage::CsvDetails},
     PostgresClient,
 };
 
@@ -61,6 +61,7 @@ pub struct TraceProcessingConfig {
     pub start_block: U64,
     pub end_block: U64,
     pub registry: Arc<TraceCallbackRegistry>,
+    pub method: TraceProcessingMethod,
 }
 
 impl TraceProcessingConfig {
