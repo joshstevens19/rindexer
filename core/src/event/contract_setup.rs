@@ -142,7 +142,7 @@ impl TraceInformation {
                         cached_provider: Arc::clone(&provider.client),
                         start_block: n.start_block,
                         end_block: n.end_block,
-                        method: n.method.clone(),
+                        method: n.method,
                     });
                 }
             }

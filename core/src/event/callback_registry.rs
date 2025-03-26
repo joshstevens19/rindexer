@@ -14,7 +14,6 @@ use crate::{
     event::contract_setup::{ContractInformation, NetworkContract, TraceInformation},
     indexer::start::ProcessedNetworkContract,
     is_running,
-    manifest::native_transfer::TraceProcessingMethod,
     provider::WrappedLog,
 };
 

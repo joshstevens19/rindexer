@@ -6,10 +6,9 @@ use std::{
 use ethers::{
     middleware::Middleware,
     prelude::{Bytes, Log},
-    providers::{Http, JsonRpcClient, Provider, ProviderError, RetryClient, RetryClientBuilder},
+    providers::{Http, Provider, ProviderError, RetryClient, RetryClientBuilder},
     types::{
-        Action, ActionType, Address, Block, BlockNumber, Call, CallResult, CallType, Res, Trace,
-        H256, U256, U64,
+        Action, ActionType, Address, Block, BlockNumber, Call, CallType, Trace, H256, U256, U64,
     },
 };
 use reqwest::header::HeaderMap;
