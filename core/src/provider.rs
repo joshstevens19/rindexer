@@ -45,10 +45,12 @@ pub struct TraceCall {
     #[serde(rename = "gasUsed")]
     pub gas_used: U256,
     pub to: Address,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
     pub input: Bytes,
     pub value: U256,
     #[serde(rename = "type")]
-    pub typ: CallType,
+    pub typ: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -121,7 +123,7 @@ impl JsonRpcCachedProvider {
                     gas: U256::from_str_radix(frame.result.gas.trim_start_matches("0x"), 16)
                         .unwrap_or_default(),
                     input: frame.result.input,
-                    call_type: frame.result.typ,
+                    call_type: CallType::Call,
                 }),
                 result: None,
                 trace_address: vec![],
@@ -130,7 +132,7 @@ impl JsonRpcCachedProvider {
                 transaction_position: None, // not provided by debug_trace
                 block_number: block_number.as_u64(),
                 block_hash: H256::zero(), // not provided by debug_trace
-                error: None,
+                error: frame.result.error,
                 action_type: ActionType::Call,
             })
             .collect();

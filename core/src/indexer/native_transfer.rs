@@ -12,6 +12,7 @@ use crate::{
         config::TraceProcessingConfig,
     },
     indexer::process::ProcessEventError,
+    manifest::native_transfer::TraceProcessingMethod,
     provider::JsonRpcCachedProvider,
 };
 
@@ -140,7 +141,7 @@ pub async fn native_transfer_block_consumer(
     config: &TraceProcessingConfig,
 ) -> Result<(), ProcessEventError> {
     let provider_call = async |block: U64| {
-        if 0.1 == 0.2 {
+        if config.method == TraceProcessingMethod::DebugTraceBlockByNumber {
             provider.debug_trace_block_by_number(block).await
         } else {
             provider.trace_block(block).await
