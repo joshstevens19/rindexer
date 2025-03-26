@@ -183,6 +183,9 @@ mod tests {
               method: "trace_block"
             - network: ethereum
               method: "debug_traceBlockByNumber"
+            - network: blast
+              method: debug_traceBlockByNumber
+            - network: optimism
         "#;
 
         let transfer: NativeTransfers = serde_yaml::from_str(yaml).unwrap();
@@ -195,5 +198,13 @@ mod tests {
         assert!(transfer.enabled);
         assert_eq!(networks[1].network, "ethereum");
         assert_eq!(networks[1].method, TraceProcessingMethod::DebugTraceBlockByNumber);
+
+        assert!(transfer.enabled);
+        assert_eq!(networks[2].network, "blast");
+        assert_eq!(networks[2].method, TraceProcessingMethod::DebugTraceBlockByNumber);
+
+        assert!(transfer.enabled);
+        assert_eq!(networks[3].network, "optimism");
+        assert_eq!(networks[3].method, TraceProcessingMethod::TraceBlock);
     }
 }
