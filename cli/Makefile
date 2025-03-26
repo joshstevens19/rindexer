@@ -44,8 +44,8 @@ start_uniswap:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/uniswap_v3_factory all
 start_sophon:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/sophon_testnet_contract_deploy all
-start_indexer_xenea:
-	RUSTFLAGS='-C target-cpu=native' RUST_BACKTRACE='full' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/xenea-bug indexer
+start_indexer_issue:
+	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- start --path $(CURDIR)/../../rindexer-issue/smallIndexer indexer
 codegen_typings_lens:
 	cargo run -- codegen --path $(CURDIR)/../../lens-backend/crates/lens-indexer typings
 codegen_indexer_lens:
