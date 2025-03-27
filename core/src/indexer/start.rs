@@ -248,7 +248,7 @@ pub async fn start_indexing_traces(
                     // to worry about double-publish because the failure point
                     // is on the provider call itself, which is before publish.
                     if let Err(e) = processed_block {
-                        warn!("Error consuming trace_block. Retrying: {}", e);
+                        warn!("Error consuming '{}' block traces. Retrying: {}", network_name, e);
                         continue;
                     } else {
                         buffer.clear();
