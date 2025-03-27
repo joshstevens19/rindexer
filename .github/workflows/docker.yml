@@ -1,6 +1,7 @@
 name: Build & publish docker image
 
 on:
+  workflow_dispatch:
   pull_request:
     types:
       - closed
@@ -21,9 +22,9 @@ jobs:
       matrix:
         include:
           - dockerfile: Dockerfile
-            image: ghcr.io/joshstevens19/rindexer
+            image: ghcr.io/family/rindexer
           - dockerfile: bundled.Dockerfile
-            image: ghcr.io/joshstevens19/rindexer-bundled
+            image: ghcr.io/family/rindexer-bundled
 
     steps:
       - name: Checkout repository
