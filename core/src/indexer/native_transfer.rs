@@ -108,10 +108,9 @@ pub async fn native_transfer_block_fetch(
 
                     if block > last_seen_block {
                         let to_block = end_block.map(|end| block.min(end)).unwrap_or(block);
-
                         let from_block = block.min(last_seen_block + 1);
 
-                        info!("Pushing blocks {} - {}", from_block, to_block);
+                        debug!("Pushing trace blocks {} - {}", from_block, to_block);
 
                         push_range(from_block, to_block).await;
                         last_seen_block = to_block;
@@ -127,7 +126,7 @@ pub async fn native_transfer_block_fetch(
             }
             Ok(None) => {}
             Err(e) => {
-                error!("Error fetching trace_block: {}", e.to_string());
+                error!("Error fetching '{}' block traces: {}", network, e.to_string());
                 sleep(Duration::from_secs(1)).await;
             }
         }
