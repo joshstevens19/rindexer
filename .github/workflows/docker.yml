@@ -22,9 +22,9 @@ jobs:
       matrix:
         include:
           - dockerfile: Dockerfile
-            image: ghcr.io/family/rindexer
+            image: ghcr.io/jaggad/rindexer
           - dockerfile: bundled.Dockerfile
-            image: ghcr.io/family/rindexer-bundled
+            image: ghcr.io/jaggad/rindexer-bundled
 
     steps:
       - name: Checkout repository
