@@ -78,6 +78,7 @@ pub fn create_mod_file(
                 create_mod_file(&path, code_generated_comment)?;
             }
         } else if let Some(ext) = path.extension() {
+            #[allow(clippy::unnecessary_map_or)]
             if ext == "rs" && path.file_stem().map_or(true, |s| s != "mod") {
                 if let Some(file_stem) = path.file_stem().and_then(|s| s.to_str()) {
                     mods.push(file_stem.to_owned());
