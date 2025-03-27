@@ -25,6 +25,7 @@ use crate::{event::RindexerEventFilter, manifest::core::Manifest};
 pub struct JsonRpcCachedProvider {
     provider: Arc<Provider<RetryClient<Http>>>,
     cache: Mutex<Option<(Instant, Arc<Block<H256>>)>>,
+    chain_id: u64,
     pub max_block_range: Option<U64>,
 }
 
@@ -38,7 +39,7 @@ pub struct WrappedLog {
     pub block_timestamp: Option<U256>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraceCall {
     pub from: Address,
     pub gas: String,
@@ -48,24 +49,34 @@ pub struct TraceCall {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     pub input: Bytes,
+    #[serde(default)]
     pub value: U256,
     #[serde(rename = "type")]
     pub typ: String,
+    #[serde(default)]
+    pub calls: Vec<TraceCall>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraceCallFrame {
+    /// Zksync chains do not return `tx_hash` in their call trace response.
     #[serde(rename = "txHash")]
-    pub tx_hash: H256,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_hash: Option<H256>,
     pub result: TraceCall,
 }
 
 impl JsonRpcCachedProvider {
-    pub fn new(provider: Provider<RetryClient<Http>>, max_block_range: Option<U64>) -> Self {
+    pub fn new(
+        provider: Provider<RetryClient<Http>>,
+        chain_id: u64,
+        max_block_range: Option<U64>,
+    ) -> Self {
         JsonRpcCachedProvider {
             provider: Arc::new(provider),
             cache: Mutex::new(None),
             max_block_range,
+            chain_id,
         }
     }
 
@@ -102,18 +113,51 @@ impl JsonRpcCachedProvider {
         &self,
         block_number: U64,
     ) -> Result<Vec<Trace>, ProviderError> {
+        // TODO: Consider the need to use `arbtrace_block` for early arbitrum blocks?
+        //
+        // Alchemy does not support the top-level call only setting for 'Arbitrum'.
+        // We consider this a bug but must work around it. Arb-nova is supported.
+        //
+        // Additionally, zksync chains operate differently where we must get the "native transfers"
+        // from deep nested in the callstack rather than the top-level call.
+        let disable_only_top_call = match self.chain_id {
+            42161 => true,       // Arbitrum (Alchemy RPC Bug)
+            300 | 324 => true,   // Zksync
+            37111 | 232 => true, // Lens
+            _ => false,
+        };
+
         let block = json!(serde_json::to_string_pretty(&block_number)?.replace("\"", ""));
-        let options = json!({
-            "tracer": "callTracer",
-            "tracerConfig": {
-                "onlyTopCall": true
-            }
-        });
+        let options = if disable_only_top_call {
+            json!({ "tracer": "callTracer" })
+        } else {
+            json!({ "tracer": "callTracer", "tracerConfig": { "onlyTopCall": true } })
+        };
 
         let valid_traces: Vec<TraceCallFrame> =
             self.provider.request("debug_traceBlockByNumber", [block, options]).await?;
 
-        let traces = valid_traces
+        let mut flattened_calls = Vec::new();
+
+        for trace in valid_traces {
+            flattened_calls.push(TraceCallFrame {
+                tx_hash: trace.tx_hash,
+                result: TraceCall { calls: vec![], ..trace.result },
+            });
+
+            let mut stack = vec![];
+            stack.extend(trace.result.calls.into_iter());
+
+            while let Some(call) = stack.pop() {
+                flattened_calls.push(TraceCallFrame {
+                    tx_hash: None,
+                    result: TraceCall { calls: vec![], ..call },
+                });
+                stack.extend(call.calls.into_iter());
+            }
+        }
+
+        let traces = flattened_calls
             .into_iter()
             .map(|frame| Trace {
                 action: Action::Call(Call {
@@ -128,7 +172,7 @@ impl JsonRpcCachedProvider {
                 result: None,
                 trace_address: vec![],
                 subtraces: 0,
-                transaction_hash: Some(frame.tx_hash),
+                transaction_hash: frame.tx_hash,
                 transaction_position: None, // not provided by debug_trace
                 block_number: block_number.as_u64(),
                 block_hash: H256::zero(), // not provided by debug_trace
@@ -176,10 +220,14 @@ pub enum RetryClientError {
 
     #[error("Could not build client: {0}")]
     CouldNotBuildClient(#[from] reqwest::Error),
+
+    #[error("Could not connect to client for chain_id: {0}")]
+    CouldNotConnectClient(#[from] ProviderError),
 }
 
 pub fn create_client(
     rpc_url: &str,
+    chain_id: u64,
     compute_units_per_second: Option<u64>,
     max_block_range: Option<U64>,
     custom_headers: HeaderMap,
@@ -200,7 +248,7 @@ pub fn create_client(
         .build(provider, Box::<ethers::providers::HttpRateLimitRetryPolicy>::default());
     let instance = Provider::new(retry_client);
 
-    Ok(Arc::new(JsonRpcCachedProvider::new(instance, max_block_range)))
+    Ok(Arc::new(JsonRpcCachedProvider::new(instance, chain_id, max_block_range)))
 }
 
 pub async fn get_chain_id(rpc_url: &str) -> Result<U256, ProviderError> {
@@ -223,6 +271,7 @@ impl CreateNetworkProvider {
         for network in &manifest.networks {
             let provider = create_client(
                 &network.rpc,
+                network.chain_id,
                 network.compute_units_per_second,
                 network.max_block_range,
                 manifest.get_custom_headers(),
@@ -253,14 +302,14 @@ mod tests {
     #[test]
     fn test_create_retry_client() {
         let rpc_url = "http://localhost:8545";
-        let result = create_client(rpc_url, Some(660), None, HeaderMap::new());
+        let result = create_client(rpc_url, 1, Some(660), None, HeaderMap::new());
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_create_retry_client_invalid_url() {
+    #[tokio::test]
+    async fn test_create_retry_client_invalid_url() {
         let rpc_url = "invalid_url";
-        let result = create_client(rpc_url, Some(660), None, HeaderMap::new());
+        let result = create_client(rpc_url, 1, Some(660), None, HeaderMap::new());
         assert!(result.is_err());
         if let Err(RetryClientError::HttpProviderCantBeCreated(url, _)) = result {
             assert_eq!(url, rpc_url);
