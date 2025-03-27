@@ -142,7 +142,7 @@ async fn get_start_end_block(
         last_known_start_block.unwrap_or(manifest_start_block.unwrap_or(latest_block));
     let end_block = std::cmp::min(manifest_end_block.unwrap_or(latest_block), latest_block);
 
-    info!("{} start_block is {}", event_name, start_block);
+    info!("[{}] Native transfer - {} Starting block number - {}", network, event_name, start_block);
 
     if let Some(end_block) = manifest_end_block {
         if end_block > latest_block {
@@ -248,7 +248,7 @@ pub async fn start_indexing_traces(
                     // to worry about double-publish because the failure point
                     // is on the provider call itself, which is before publish.
                     if let Err(e) = processed_block {
-                        warn!("Error consuming '{}' block traces. Retrying: {}", network_name, e);
+                        warn!("Could not process '{}' block traces. Likely too early, Retrying: {}", network_name, e);
                         continue;
                     } else {
                         buffer.clear();

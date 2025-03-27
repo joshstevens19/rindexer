@@ -15,6 +15,7 @@ use rindexer::{
 #[allow(dead_code)]
 fn create_shadow_client(
     rpc_url: &str,
+    chain_id: u64,
     compute_units_per_second: Option<u64>,
     max_block_range: Option<U64>,
 ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
@@ -23,13 +24,14 @@ fn create_shadow_client(
         "X-SHADOW-API-KEY",
         public_read_env_value("RINDEXER_PHANTOM_API_KEY").unwrap().parse().unwrap(),
     );
-    create_client(rpc_url, compute_units_per_second, max_block_range, header)
+    create_client(rpc_url, chain_id, compute_units_per_second, max_block_range, header)
 }
 
 lazy_static! {
     static ref ETHEREUM_PROVIDER: Arc<JsonRpcCachedProvider> = create_client(
         &public_read_env_value("https://mainnet.gateway.tenderly.co")
             .unwrap_or("https://mainnet.gateway.tenderly.co".to_string()),
+        1,
         None,
         None,
         HeaderMap::new()
@@ -38,6 +40,7 @@ lazy_static! {
     static ref BASE_PROVIDER: Arc<JsonRpcCachedProvider> = create_client(
         &public_read_env_value("https://mainnet.base.org")
             .unwrap_or("https://mainnet.base.org".to_string()),
+        8453,
         None,
         None,
         HeaderMap::new()

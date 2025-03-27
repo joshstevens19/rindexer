@@ -162,7 +162,7 @@ impl EventCallbackRegistry {
             )
             .await;
         } else {
-            error!("EventCallbackRegistry: No event found for id: {}", id);
+            error!("EventCallbackRegistry: No event found for id: {}. Data: {:?}", id, data.first());
         }
     }
 
@@ -229,7 +229,7 @@ impl TraceResult {
                 address: Address::zero(),
                 block_number: U64::from(trace.block_number),
                 block_timestamp: None,
-                transaction_hash: trace.transaction_hash.expect("checked prior"),
+                transaction_hash: trace.transaction_hash.unwrap_or_else(H256::zero),
                 block_hash: trace.block_hash,
                 transaction_index: U64::from(trace.transaction_position.unwrap_or(0)),
                 log_index: U256::from(0),
