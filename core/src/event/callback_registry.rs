@@ -162,7 +162,11 @@ impl EventCallbackRegistry {
             )
             .await;
         } else {
-            error!("EventCallbackRegistry: No event found for id: {}. Data: {:?}", id, data.first());
+            error!(
+                "EventCallbackRegistry: No event found for id: {}. Data: {:?}",
+                id,
+                data.first()
+            );
         }
     }
 

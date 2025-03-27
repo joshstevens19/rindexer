@@ -266,9 +266,7 @@ pub struct CreateNetworkProvider {
 }
 
 impl CreateNetworkProvider {
-    pub fn create(
-        manifest: &Manifest,
-    ) -> Result<Vec<CreateNetworkProvider>, RetryClientError> {
+    pub fn create(manifest: &Manifest) -> Result<Vec<CreateNetworkProvider>, RetryClientError> {
         let mut result: Vec<CreateNetworkProvider> = vec![];
         for network in &manifest.networks {
             let provider = create_client(
@@ -301,10 +299,17 @@ pub fn get_network_provider<'a>(
 mod tests {
     use super::*;
 
+    #[test]
+    fn test_create_retry_client() {
+        let rpc_url = "http://localhost:8545";
+        let result = create_client(rpc_url, 1, Some(660), None, HeaderMap::new());
+        assert!(result.is_ok());
+    }
+
     #[tokio::test]
     async fn test_create_retry_client_invalid_url() {
         let rpc_url = "invalid_url";
-        let result = create_client(rpc_url, 660, None, None, HeaderMap::new());
+        let result = create_client(rpc_url, 1, Some(660), None, HeaderMap::new());
         assert!(result.is_err());
         if let Err(RetryClientError::HttpProviderCantBeCreated(url, _)) = result {
             assert_eq!(url, rpc_url);

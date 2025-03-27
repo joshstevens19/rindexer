@@ -1,4 +1,8 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+    time::Duration,
+};
 
 use ethers::types::{Action, Address, Bytes, U256, U64};
 use futures::future::try_join_all;
@@ -81,12 +85,15 @@ pub async fn native_transfer_block_fetch(
     let mut last_seen_block = start_block;
 
     // Push a range of blocks to the back-pressured channel and block producer when full.
+    //
+    // It should only error on critial issues like the receiver being dropped, but we will handle
+    // gracefully anyway.
     let push_range = async |last: U64, latest: U64| {
-        let range = last.as_u64()..=latest.as_u64();
-        for block in range {
+        let mut range = (last.as_u64()..=latest.as_u64()).collect::<VecDeque<_>>();
+        while let Some(block) = range.pop_front() {
             if let Err(e) = block_tx.send(U64::from(block)).await {
-                // Need to re-queue it
-                error!("Failed to send block via channel: {:?}", e);
+                error!("Failed to send block via channel. Requeuing: {:?}", e);
+                range.push_front(block);
             }
         }
     };
@@ -157,28 +164,26 @@ pub async fn native_transfer_block_consumer(
             (std::cmp::min(min, num), std::cmp::max(max, num))
         });
 
-
     // We're not ready to support complete "trace" indexing for zksync chains. So we can
-    // effectively only get what we need for native transfers by removing calls to "system contracts".
+    // effectively only get what we need for native transfers by removing calls to "system
+    // contracts".
     //
     // As an example, a Zksync ETH transfer have a complex set of interactions with contracts like:
     // - `0x0000000000000000000000000000000000008009`
     // - `0x0000000000000000000000000000000000008001`
     // - `0x000000000000000000000000000000000000800a`
     //
-    // There will be one deeply-nested "transfer" call for the actual two EOAs, so filtering everything
-    // else will allow us to grab that.
+    // There will be one deeply-nested "transfer" call for the actual two EOAs, so filtering
+    // everything else will allow us to grab that.
     //
     // Read more: https://docs.zksync.io/zksync-protocol/contracts/system-contracts#l2basetoken-msgvaluesimulator
-    let zksync_system_contracts: [Address; 5] =
-        [
-            "0x0000000000000000000000000000000000008009".parse().unwrap(),
-            "0x0000000000000000000000000000000000008001".parse().unwrap(),
-            "0x000000000000000000000000000000000000800a".parse().unwrap(),
-            "0x0000000000000000000000000000000000008010".parse().unwrap(),
-            "0x000000000000000000000000000000000000800d".parse().unwrap(),
-        ];
-
+    let zksync_system_contracts: [Address; 5] = [
+        "0x0000000000000000000000000000000000008009".parse().unwrap(),
+        "0x0000000000000000000000000000000000008001".parse().unwrap(),
+        "0x000000000000000000000000000000000000800a".parse().unwrap(),
+        "0x0000000000000000000000000000000000008010".parse().unwrap(),
+        "0x000000000000000000000000000000000000800d".parse().unwrap(),
+    ];
 
     let native_transfers = trace_calls
         .into_iter()
