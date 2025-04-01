@@ -4,6 +4,7 @@ use ethers::{
     addressbook::Address,
     middleware::MiddlewareError,
     prelude::{BlockNumber, JsonRpcError, ValueOrArray, H256, U64},
+    providers::ProviderError,
 };
 use regex::Regex;
 use tokio::{
@@ -70,6 +71,7 @@ pub fn fetch_logs_stream(
                         max_block_range_limitation,
                         snapshot_to_block,
                         &config.info_log_name,
+                        &config.network_contract.network,
                     )
                     .await;
 
@@ -122,6 +124,7 @@ pub fn fetch_logs_stream(
                 &config.info_log_name,
                 &config.semaphore,
                 config.network_contract.disable_logs_bloom_checks,
+                &config.network_contract.network,
             )
             .await;
         }
@@ -135,6 +138,7 @@ struct ProcessHistoricLogsStreamResult {
     pub max_block_range_limitation: Option<U64>,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn fetch_historic_logs_stream(
     cached_provider: &Arc<JsonRpcCachedProvider>,
     tx: &mpsc::UnboundedSender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
@@ -143,6 +147,7 @@ async fn fetch_historic_logs_stream(
     max_block_range_limitation: Option<U64>,
     snapshot_to_block: U64,
     info_log_name: &str,
+    network: &str,
 ) -> Option<ProcessHistoricLogsStreamResult> {
     let from_block = current_filter.get_from_block();
     let to_block = current_filter.get_to_block();
@@ -212,8 +217,8 @@ async fn fetch_historic_logs_stream(
 
             if logs_empty {
                 info!(
-                    "{} - No events found between blocks {} - {}",
-                    info_log_name, from_block, to_block
+                    "{} - No events found between blocks {} - {} - network: {}",
+                    info_log_name, from_block, to_block, network
                 );
                 let next_from_block = to_block + 1;
                 return if next_from_block > snapshot_to_block {
@@ -285,12 +290,12 @@ async fn fetch_historic_logs_stream(
                 if let Some(retry_result) =
                     retry_with_block_range(json_rpc_error, from_block, to_block)
                 {
-                    warn!(
+                    debug!(
                         "{} - {} - Fetching from {} to {} didnt work - retrying with block range: {:?}",
                         info_log_name,
                         IndexingEventProgressStatus::Syncing.log(),
-                        from_block,
-                        to_block,
+                        from_block.as_u64(),
+                        to_block.as_u64(),
                         retry_result
                     );
                     return Some(ProcessHistoricLogsStreamResult {
@@ -302,15 +307,69 @@ async fn fetch_historic_logs_stream(
                 }
             }
 
-            error!(
-                "{} - {} - Error fetching logs: {}",
-                info_log_name,
-                IndexingEventProgressStatus::Syncing.log(),
-                err
-            );
+            let halved_range = (from_block + to_block) / 2;
+            let halved_to_block = (from_block + halved_range).max(1.into());
 
-            let _ = tx.send(Err(Box::new(err)));
-            return None;
+            match err {
+                // Retryable temporary errors. Typically networking issues.
+                ProviderError::HTTPError(e) => {
+                    warn!(
+                        "[{}] - {} - {} - Network error fetching logs. Retrying... {}",
+                        network,
+                        info_log_name,
+                        IndexingEventProgressStatus::Syncing.log(),
+                        e
+                    );
+
+                    return Some(ProcessHistoricLogsStreamResult {
+                        next: current_filter
+                            .set_from_block(from_block)
+                            .set_to_block(halved_to_block),
+                        max_block_range_limitation,
+                    });
+                }
+                ProviderError::SerdeJson(e) => {
+                    warn!(
+                        "[{}] - {} - {} - Deserialization error fetching logs. Retrying... {}",
+                        network,
+                        info_log_name,
+                        IndexingEventProgressStatus::Syncing.log(),
+                        e
+                    );
+
+                    return Some(ProcessHistoricLogsStreamResult {
+                        next: current_filter
+                            .set_from_block(from_block)
+                            .set_to_block(halved_to_block),
+                        max_block_range_limitation,
+                    });
+                }
+                // Potentially unrecoverable errors, bail out.
+                //
+                // FIXME
+                //  - This currently just ends up switching to "live" indexing which is unexpected
+                //    behaviour.
+                _ => {
+                    error!(
+                        "[{}] - {} - {} - Unexpected error fetching logs in range {} - {}. Fetching 1 block: {:?}",
+                        network,
+                        info_log_name,
+                        IndexingEventProgressStatus::Syncing.log(),
+                        from_block.as_u64(),
+                        to_block.as_u64(),
+                        err
+                    );
+
+                    let _ = tx.send(Err(Box::new(err)));
+                    // return None;
+                    return Some(ProcessHistoricLogsStreamResult {
+                        next: current_filter
+                            .set_from_block(from_block)
+                            .set_to_block(halved_to_block),
+                        max_block_range_limitation,
+                    });
+                }
+            }
         }
     }
 
@@ -331,6 +390,7 @@ async fn live_indexing_stream(
     info_log_name: &str,
     semaphore: &Arc<Semaphore>,
     disable_logs_bloom_checks: bool,
+    network: &str,
 ) {
     let mut last_seen_block_number = last_seen_block_number;
     let mut last_no_new_block_log_time = Instant::now();
@@ -460,11 +520,12 @@ async fn live_indexing_stream(
                                                     current_filter =
                                                         current_filter.set_from_block(to_block + 1);
                                                     info!(
-                                                        "{} - {} - No events found between blocks {} - {}",
+                                                        "{} - {} - No events found between blocks {} - {} - network: {}",
                                                         info_log_name,
                                                         IndexingEventProgressStatus::Live.log(),
                                                         from_block,
-                                                        to_block
+                                                        to_block,
+                                                        network
                                                     );
                                                 } else if let Some(last_log) = last_log {
                                                     if let Some(last_log_block_number) =
@@ -483,10 +544,12 @@ async fn live_indexing_stream(
                                                 drop(permit);
                                             }
                                             Err(err) => {
-                                                error!(
-                                                    "{} - {} - Error fetching logs: {}",
+                                                warn!(
+                                                    "{} - {} - Error fetching logs in range {} - {}. Retrying: {}",
                                                     info_log_name,
                                                     IndexingEventProgressStatus::Live.log(),
+                                                    from_block.as_u64(),
+                                                    to_block.as_u64(),
                                                     err
                                                 );
                                                 drop(permit);

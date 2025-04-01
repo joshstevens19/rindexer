@@ -563,7 +563,13 @@ async fn handle_logs_result(
             Ok(tokio::spawn(async {})) // Return a completed task
         }
         Err(e) => {
-            error!("Error fetching logs: {:?}", e);
+            error!(
+                "[{}] - {} - {} - Error fetching logs: {}",
+                config.network_contract.network,
+                config.event_name,
+                IndexingEventProgressStatus::Live.log(),
+                e
+            );
             Err(e)
         }
     }
