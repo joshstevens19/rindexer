@@ -179,6 +179,7 @@ pub async fn handle_add_contract_command(
             abi: StringOrArray::Single(abi_path_relative),
             include_events: None,
             index_event_in_order: None,
+            custom_indexing: None,
             dependency_events: None,
             reorg_safe_distance: None,
             generate_csv: None,

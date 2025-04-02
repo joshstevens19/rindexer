@@ -5,7 +5,7 @@ use ethers::{
     prelude::{Filter, ValueOrArray, U64},
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use super::core::{deserialize_option_u64_from_string, serialize_option_u64_as_string};
 use crate::{
@@ -211,6 +211,9 @@ pub struct Contract {
     pub dependency_events: Option<DependencyEventTreeYaml>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_indexing: Option<Vec<CustomIndex>>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reorg_safe_distance: Option<bool>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -223,8 +226,81 @@ pub struct Contract {
     pub chat: Option<ChatConfig>,
 }
 
-#[derive(thiserror::Error, Debug)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CustomIndex {
+    pub name: String,
 
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    pub fields: Vec<IndexField>,
+
+    pub events: Vec<EventMapping>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct IndexField {
+    pub name: String,
+
+    #[serde(rename = "type")]
+    pub type_: String,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary: Option<bool>,
+
+    // #[serde(default, skip_serializing_if = "Option::is_none")]
+    // pub default: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<bool>,
+    // #[serde(default, skip_serializing_if = "Option::is_none")]
+    // pub auto_update: Option<bool>,
+
+    // #[serde(default, skip_serializing_if = "Option::is_none")]
+    // pub update_on_insert: Option<bool>,
+
+    // #[serde(default, skip_serializing_if = "Option::is_none")]
+    // pub derived: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EventMapping {
+    pub event: String,
+
+    pub mappings: Vec<FieldMapping>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FieldMapping {
+    #[serde(rename = "match")]
+    pub match_: String,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conditions: Option<Vec<Map<String, Value>>>,
+
+    pub updates: Vec<FieldUpdate>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FieldUpdate {
+    pub field: String,
+
+    pub action: UpdateAction,
+
+    pub value: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateAction {
+    Add,
+    Subtract,
+    Replace,
+}
+
+#[derive(thiserror::Error, Debug)]
 pub enum ParseAbiError {
     #[error("Could not read ABI string: {0}")]
     CouldNotReadAbiString(String),

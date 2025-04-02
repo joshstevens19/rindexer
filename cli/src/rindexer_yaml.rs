@@ -14,7 +14,7 @@ pub fn rindexer_yaml_does_not_exist(project_path: &Path) -> bool {
 
 pub fn validate_rindexer_yaml_exist(project_path: &Path) {
     if rindexer_yaml_does_not_exist(project_path) {
-        print_error_message("rindexer.yaml does not exist in the current directory. Please use rindexer new to create a new project.");
+        print_error_message(&format!("rindexer.yaml does not exist in the {} directory. Please use rindexer new to create a new project.", project_path.display()));
         std::process::exit(1);
     }
 }

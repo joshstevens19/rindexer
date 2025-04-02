@@ -159,6 +159,7 @@ pub fn handle_new_command(
             abi: StringOrArray::Single(abi_example_path.display().to_string()),
             include_events: Some(vec!["Transfer".to_string(), "Approval".to_string()]),
             index_event_in_order: None,
+            custom_indexing: None,
             dependency_events: None,
             reorg_safe_distance: None,
             generate_csv: None,

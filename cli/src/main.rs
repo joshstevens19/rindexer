@@ -73,7 +73,7 @@ fn resolve_path(override_path: &Option<String>) -> Result<PathBuf, String> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env::set_var("RUST_BACKTRACE", "full");
-    set_panic_hook();
+    // set_panic_hook();
     let cli = CLI::parse();
 
     match &cli.command {

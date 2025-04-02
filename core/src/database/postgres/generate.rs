@@ -190,7 +190,82 @@ pub fn generate_tables_for_indexer_sql(
                 &schema_name,
                 event_matching_name_on_other,
             ));
+
+            if let Some(custom_indexing) = &contract.custom_indexing {
+                for custom in custom_indexing {
+                    let table_name = format!("{}.{}", schema_name, camel_to_snake(&custom.name));
+                    info!("Creating custom index table if not exists: {}", table_name);
+
+                    // Generate column definitions
+                    let columns: Vec<String> = custom
+                        .fields
+                        .iter()
+                        .map(|field| {
+                            let mut column_def = format!(
+                                "{} {}",
+                                camel_to_snake(&field.name),
+                                solidity_type_to_db_type(&field.type_)
+                            );
+
+                            if field.primary.unwrap_or(false) {
+                                column_def.push_str(" PRIMARY KEY");
+                            }
+
+                            // if let Some(default) = &field.default {
+                            //     column_def.push_str(&format!(" DEFAULT {}", default));
+                            // }
+
+                            // if field.index.unwrap_or(false) {
+                            //     column_def.push_str(" INDEX");
+                            // }
+
+                            // if field.auto_update.unwrap_or(false) ||
+                            //     field.update_on_insert.unwrap_or(false)
+                            // {
+                            //     column_def.push_str(" NOT NULL"); // Assuming these need to be
+                            //                                       // non-nullable
+                            // }
+
+                            column_def
+                        })
+                        .collect();
+
+                    // Create table SQL
+                    sql.push_str(&format!(
+                        "CREATE TABLE IF NOT EXISTS {} (\n    {}\n);\n",
+                        table_name,
+                        columns.join(",\n    ")
+                    ));
+
+                    // Add description as comment if present
+                    // if let Some(description) = &custom.description {
+                    //     sql.push_str(&format!(
+                    //         "COMMENT ON TABLE {} IS '{}';\n",
+                    //         table_name,
+                    //         description
+                    //     ));
+                    // }
+
+                    // Add indexes for fields marked with index: true
+                    for field in &custom.fields {
+                        if field.index.unwrap_or(false) {
+                            let index_name = format!(
+                                "{}_{}_idx",
+                                camel_to_snake(&custom.name),
+                                camel_to_snake(&field.name)
+                            );
+                            sql.push_str(&format!(
+                                "CREATE INDEX IF NOT EXISTS {} ON {} ({});\n",
+                                index_name,
+                                table_name,
+                                camel_to_snake(&field.name)
+                            ));
+                        }
+                    }
+                }
+            }
         }
+
         // we still need to create the internal tables for the contract
         sql.push_str(&generate_internal_event_table_sql(&event_names, &schema_name, networks));
     }

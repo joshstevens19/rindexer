@@ -46,6 +46,7 @@ use crate::{
     streams::StreamsClients,
     AsyncCsvAppender, FutureExt, IndexingDetails, StartDetails, StartNoCodeDetails,
 };
+use crate::manifest::contract::CustomIndex;
 
 #[derive(thiserror::Error, Debug)]
 pub enum SetupNoCodeError {
@@ -156,6 +157,7 @@ struct NoCodeCallbackParams {
     contract_name: String,
     event: Event,
     index_event_in_order: bool,
+    custom_indexing: Option<Vec<CustomIndex>>,
     csv: Option<Arc<AsyncCsvAppender>>,
     postgres: Option<Arc<PostgresClient>>,
     postgres_event_table_name: String,
@@ -191,8 +193,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                 return Ok(());
             }
 
-            // TODO
-            // Remove unwrap
+            // TODO: remove unwrap
             let (from_block, to_block) = match &results {
                 CallbackResult::Event(event) => (
                     event.first().unwrap().found_in_request.from_block,
@@ -682,6 +683,7 @@ pub async fn process_events(
                     contract_name: contract.name.clone(),
                     event: event.clone(),
                     index_event_in_order,
+                    custom_indexing: contract.custom_indexing.clone(),
                     csv,
                     postgres: postgres.clone(),
                     postgres_event_table_name,
