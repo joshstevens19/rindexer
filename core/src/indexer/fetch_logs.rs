@@ -153,8 +153,9 @@ async fn fetch_historic_logs_stream(
     let to_block = current_filter.get_to_block();
 
     debug!(
-        "{} - {} - Process historic events - blocks: {} - {}",
+        "{}::{} - {} - Process historic events - blocks: {} - {}",
         info_log_name,
+        network,
         IndexingEventProgressStatus::Syncing.log(),
         from_block,
         to_block
@@ -170,7 +171,7 @@ async fn fetch_historic_logs_stream(
         );
 
         return Some(ProcessHistoricLogsStreamResult {
-            next: current_filter.set_from_block(to_block),
+            next: current_filter.set_from_block(to_block).set_to_block(to_block + 1),
             max_block_range_limitation,
         });
     }
@@ -292,14 +293,15 @@ async fn fetch_historic_logs_stream(
                 if let Some(retry_result) =
                     retry_with_block_range(json_rpc_error, from_block, to_block)
                 {
-                    debug!(
-                        "{} - {} - Fetching from {} to {} didnt work - retrying with block range: {:?}",
+                    warn!(
+                        "{} - {} - Overfetched from {} to {} - shrinking to block range: {:?}",
                         info_log_name,
                         IndexingEventProgressStatus::Syncing.log(),
                         from_block.as_u64(),
                         to_block.as_u64(),
                         retry_result
                     );
+
                     return Some(ProcessHistoricLogsStreamResult {
                         next: current_filter
                             .set_from_block(retry_result.from)
@@ -312,6 +314,7 @@ async fn fetch_historic_logs_stream(
             let halved_range = (to_block - from_block) / 2;
             let halved_to_block = (from_block + halved_range).max(from_block + 100);
 
+            // Handle deserialization, networking, and other non-rpc related errors.
             error!(
                 "[{}] - {} - {} - Unexpected error fetching logs in range {} - {}. Retry fetching {} - {}: {:?}",
                 network,
@@ -584,9 +587,22 @@ fn retry_with_block_range(
             if let (Some(start_block), Some(end_block)) = (captures.get(1), captures.get(2)) {
                 let start_block_str = start_block.as_str();
                 let end_block_str = end_block.as_str();
+
                 if let (Ok(from), Ok(to)) =
                     (BlockNumber::from_str(start_block_str), BlockNumber::from_str(end_block_str))
                 {
+                    if from.as_number() > to.as_number() {
+                        error!(
+                            "Alchemy returned a negative block range. Overriding to single fetch"
+                        );
+
+                        return Some(RetryWithBlockRangeResult {
+                            from: BlockNumber::Number(from_block),
+                            to: BlockNumber::Number(from_block + 1),
+                            max_block_range: None,
+                        });
+                    }
+
                     return Some(RetryWithBlockRangeResult { from, to, max_block_range: None });
                 }
             }
@@ -657,6 +673,16 @@ fn retry_with_block_range(
         if next_to_block == to_block {
             block_range = block_range.lower();
             next_to_block = from_block + block_range.value();
+        }
+
+        if next_to_block < from_block {
+            error!("Computed a negative fallback block range. Overriding to single block fetch:");
+
+            return Some(RetryWithBlockRangeResult {
+                from: BlockNumber::Number(from_block),
+                to: BlockNumber::Number(from_block + 1),
+                max_block_range: None,
+            });
         }
 
         return Some(RetryWithBlockRangeResult {
