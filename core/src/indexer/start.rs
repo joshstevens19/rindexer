@@ -142,7 +142,7 @@ async fn get_start_end_block(
         last_known_start_block.unwrap_or(manifest_start_block.unwrap_or(latest_block));
     let end_block = std::cmp::min(manifest_end_block.unwrap_or(latest_block), latest_block);
 
-    info!("[{}] Native transfer - {} Starting block number - {}", network, event_name, start_block);
+    info!("[{}] {} Starting block number - {}", network, event_name, start_block);
 
     if let Some(end_block) = manifest_end_block {
         if end_block > latest_block {

@@ -151,6 +151,7 @@ async fn fetch_historic_logs_stream(
 ) -> Option<ProcessHistoricLogsStreamResult> {
     let from_block = current_filter.get_from_block();
     let to_block = current_filter.get_to_block();
+
     debug!(
         "{} - {} - Process historic events - blocks: {} - {}",
         info_log_name,
@@ -208,8 +209,9 @@ async fn fetch_historic_logs_stream(
 
             if tx.send(Ok(FetchLogsResult { logs, from_block, to_block })).is_err() {
                 error!(
-                    "{} - {} - Failed to send logs to stream consumer!",
+                    "{} - {} - {} - Failed to send logs to stream consumer!",
                     IndexingEventProgressStatus::Syncing.log(),
+                    network,
                     info_log_name
                 );
                 return None;
@@ -307,69 +309,28 @@ async fn fetch_historic_logs_stream(
                 }
             }
 
-            let halved_range = (from_block + to_block) / 2;
-            let halved_to_block = (from_block + halved_range).max(1.into());
+            let halved_range = (to_block - from_block) / 2;
+            let halved_to_block = (from_block + halved_range).max(from_block + 100);
 
-            match err {
-                // Retryable temporary errors. Typically networking issues.
-                ProviderError::HTTPError(e) => {
-                    warn!(
-                        "[{}] - {} - {} - Network error fetching logs. Retrying... {}",
-                        network,
-                        info_log_name,
-                        IndexingEventProgressStatus::Syncing.log(),
-                        e
-                    );
+            error!(
+                "[{}] - {} - {} - Unexpected error fetching logs in range {} - {}. Retry fetching {} - {}: {:?}",
+                network,
+                info_log_name,
+                IndexingEventProgressStatus::Syncing.log(),
+                from_block.as_u64(),
+                to_block.as_u64(),
+                from_block.as_u64(),
+                halved_to_block.as_u64(),
+                err
+            );
 
-                    return Some(ProcessHistoricLogsStreamResult {
-                        next: current_filter
-                            .set_from_block(from_block)
-                            .set_to_block(halved_to_block),
-                        max_block_range_limitation,
-                    });
-                }
-                ProviderError::SerdeJson(e) => {
-                    warn!(
-                        "[{}] - {} - {} - Deserialization error fetching logs. Retrying... {}",
-                        network,
-                        info_log_name,
-                        IndexingEventProgressStatus::Syncing.log(),
-                        e
-                    );
+            // ???????
+            let _ = tx.send(Err(Box::new(err)));
 
-                    return Some(ProcessHistoricLogsStreamResult {
-                        next: current_filter
-                            .set_from_block(from_block)
-                            .set_to_block(halved_to_block),
-                        max_block_range_limitation,
-                    });
-                }
-                // Potentially unrecoverable errors, bail out.
-                //
-                // FIXME
-                //  - This currently just ends up switching to "live" indexing which is unexpected
-                //    behaviour.
-                _ => {
-                    error!(
-                        "[{}] - {} - {} - Unexpected error fetching logs in range {} - {}. Fetching 1 block: {:?}",
-                        network,
-                        info_log_name,
-                        IndexingEventProgressStatus::Syncing.log(),
-                        from_block.as_u64(),
-                        to_block.as_u64(),
-                        err
-                    );
-
-                    let _ = tx.send(Err(Box::new(err)));
-                    // return None;
-                    return Some(ProcessHistoricLogsStreamResult {
-                        next: current_filter
-                            .set_from_block(from_block)
-                            .set_to_block(halved_to_block),
-                        max_block_range_limitation,
-                    });
-                }
-            }
+            return Some(ProcessHistoricLogsStreamResult {
+                next: current_filter.set_from_block(from_block).set_to_block(halved_to_block),
+                max_block_range_limitation,
+            });
         }
     }
 
