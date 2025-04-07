@@ -10,8 +10,11 @@ use tokio::{
 use tracing::error;
 
 use crate::{
+    database::postgres::generate::{
+        generate_indexer_contract_schema_name, generate_internal_event_table_name,
+    },
     event::config::EventProcessingConfig,
-    helpers::{camel_to_snake, get_full_path},
+    helpers::get_full_path,
     manifest::{storage::CsvDetails, stream::StreamsConfig},
     EthereumSqlTypeWrapper, PostgresClient,
 };
@@ -142,11 +145,12 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
 
     // Query database for last synced block
     if let Some(database) = config.database {
+        let schema =
+            generate_indexer_contract_schema_name(&config.indexer_name, &config.contract_name);
+        let table_name = generate_internal_event_table_name(&schema, &config.event_name);
         let query = format!(
-            "SELECT last_synced_block FROM rindexer_internal.{}_{}_{} WHERE network = $1",
-            camel_to_snake(config.indexer_name),
-            camel_to_snake(config.contract_name),
-            camel_to_snake(config.event_name)
+            "SELECT last_synced_block FROM rindexer_internal.{} WHERE network = $1",
+            table_name
         );
 
         match database.query_one(&query, &[&config.network]).await {
@@ -232,18 +236,17 @@ pub fn update_progress_and_last_synced_task(
         }
 
         if let Some(database) = &config.database {
+            let schema =
+                generate_indexer_contract_schema_name(&config.indexer_name, &config.contract_name);
+            let table_name = generate_internal_event_table_name(&schema, &config.event_name);
+            let query = format!(
+                "UPDATE rindexer_internal.{} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block",
+                table_name
+            );
             let result = database
                 .execute(
-                    &format!(
-                        "UPDATE rindexer_internal.{}_{}_{} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block",
-                        camel_to_snake(&config.indexer_name),
-                        camel_to_snake(&config.contract_name),
-                        camel_to_snake(&config.event_name)
-                    ),
-                    &[
-                        &EthereumSqlTypeWrapper::U64(to_block),
-                        &config.network_contract.network,
-                    ],
+                    &query,
+                    &[&EthereumSqlTypeWrapper::U64(to_block), &config.network_contract.network],
                 )
                 .await;
 
