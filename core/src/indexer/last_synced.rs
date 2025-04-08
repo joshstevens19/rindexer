@@ -146,8 +146,8 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
     // Query database for last synced block
     if let Some(database) = config.database {
         let schema =
-            generate_indexer_contract_schema_name(&config.indexer_name, &config.contract_name);
-        let table_name = generate_internal_event_table_name(&schema, &config.event_name);
+            generate_indexer_contract_schema_name(config.indexer_name, config.contract_name);
+        let table_name = generate_internal_event_table_name(&schema, config.event_name);
         let query = format!(
             "SELECT last_synced_block FROM rindexer_internal.{} WHERE network = $1",
             table_name
