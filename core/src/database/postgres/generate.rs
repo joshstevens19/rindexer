@@ -97,7 +97,7 @@ fn generate_internal_event_table_sql(
     networks: Vec<&str>,
 ) -> String {
     abi_inputs.iter().map(|event_info| {
-        let table_name = generate_internal_event_table_name(&schema_name, &event_info.name);
+        let table_name = generate_internal_event_table_name(schema_name, &event_info.name);
 
         let create_table_query = format!(
             r#"CREATE TABLE IF NOT EXISTS rindexer_internal.{} ("network" TEXT PRIMARY KEY, "last_synced_block" NUMERIC);"#,
