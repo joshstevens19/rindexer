@@ -79,6 +79,9 @@ pub enum StartRindexerError {
 
     #[error("Could not start Reth node: {0}")]
     CouldNotStartRethNode(#[from] eyre::Error),
+
+    #[error("Reth CLI error: {0}")]
+    RethCliError(#[from] Box<dyn std::error::Error>),
 }
 
 async fn handle_shutdown(signal: &str) {
@@ -130,7 +133,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
 
             // Start Reth nodes for enabled networks
             for network in manifest.reth_enabled_networks() {
-                let reth_cli = network.reth.as_ref().unwrap().cli_config.to_reth_cli();
+                let reth_cli = network.reth.as_ref().unwrap().to_cli()?;
                 info!("Starting Reth node for network: {}", network.name);
                 let reth_tx = start_reth_node_with_exex(reth_cli)?;
                 info!("Started Reth node for network: {}", network.name);

@@ -15,7 +15,10 @@ mod rindexer_yaml;
 use std::{path::PathBuf, str::FromStr, sync::Once};
 
 use clap::Parser;
-use rindexer::{load_env_from_project_path, manifest::core::ProjectType};
+use rindexer::{
+    load_env_from_project_path,
+    manifest::{core::ProjectType, network::RethConfig},
+};
 
 use crate::{
     cli_interface::{AddSubcommands, Commands, NewSubcommands, CLI},
@@ -77,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = CLI::parse();
 
     match &cli.command {
-        Commands::New { subcommand, path } => {
+        Commands::New { subcommand, path, reth, reth_args } => {
             let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;
             load_env_from_project_path(&resolved_path);
 
@@ -86,7 +89,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 NewSubcommands::Rust => ProjectType::Rust,
             };
 
-            handle_new_command(resolved_path, project_type)
+            // get the reth config if it is enabled
+            let reth_config =
+                reth.then_some(RethConfig { enabled: true, cli_args: Some(reth_args.clone()) });
+
+            handle_new_command(resolved_path, project_type, reth_config)
         }
         Commands::Add { subcommand, path } => {
             let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;
