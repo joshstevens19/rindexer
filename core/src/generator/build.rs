@@ -14,12 +14,21 @@ use super::{
     networks_bindings::generate_networks_code,
 };
 use crate::{
-    generator::database_bindings::generate_database_code,
+    generator::{
+        database_bindings::generate_database_code,
+        trace_bindings::{
+            generate_trace_bindings, generate_trace_handlers, trace_abigen_contract_file_name,
+            trace_abigen_contract_name, GenerateTraceHandlersError,
+        },
+    },
     helpers::{
         camel_to_snake, create_mod_file, format_all_files_for_project, write_file,
         CreateModFileError, WriteFileError,
     },
-    indexer::Indexer,
+    indexer::{
+        native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME},
+        Indexer,
+    },
     manifest::{
         contract::ParseAbiError,
         core::Manifest,
@@ -140,6 +149,44 @@ fn write_indexer_events(
         )
         .map_err(WriteIndexerEvents::CouldNotWriteAbigenCodeCode)?;
     }
+
+    if indexer.native_transfers.enabled {
+        let events_code = generate_trace_bindings(
+            project_path,
+            &indexer.name,
+            NATIVE_TRANSFER_CONTRACT_NAME,
+            false,
+            storage,
+        )?;
+
+        let event_path = format!(
+            "{}/events/{}",
+            camel_to_snake(&indexer.name),
+            camel_to_snake(NATIVE_TRANSFER_CONTRACT_NAME)
+        );
+        write_file(&generate_file_location(output, &event_path), events_code.as_str())?;
+
+        let abi_string = NATIVE_TRANSFER_ABI;
+        let abi_gen =
+            Abigen::new(trace_abigen_contract_name(&NATIVE_TRANSFER_CONTRACT_NAME), abi_string)
+                .map_err(|_| WriteIndexerEvents::CouldNotCreateAbigenInstance)?
+                .generate()
+                .map_err(|_| WriteIndexerEvents::CouldNotGenerateAbi)?;
+
+        write_file(
+            &generate_file_location(
+                output,
+                &format!(
+                    "{}/events/{}",
+                    camel_to_snake(&indexer.name),
+                    trace_abigen_contract_file_name(&NATIVE_TRANSFER_CONTRACT_NAME)
+                ),
+            ),
+            &abi_gen.to_string(),
+        )
+        .map_err(WriteIndexerEvents::CouldNotWriteAbigenCodeCode)?;
+    }
+
     Ok(())
 }
 
@@ -221,6 +268,9 @@ pub enum GenerateRindexerHandlersError {
     #[error("{0}")]
     GenerateEventBindingCodeError(#[from] GenerateEventHandlersError),
 
+    #[error("{0}")]
+    GenerateTraceBindingCodeError(#[from] GenerateTraceHandlersError),
+
     #[error("Could not write event handler code: {0}")]
     CouldNotWriteEventHandlerCode(#[from] WriteFileError),
 
@@ -245,12 +295,24 @@ pub fn generate_rindexer_handlers(
             let mut handlers = String::new();
             handlers.push_str(
                 r#"
-        use std::path::PathBuf;
-        use rindexer::event::callback_registry::EventCallbackRegistry;
-        
-        pub async fn register_all_handlers(manifest_path: &PathBuf) -> EventCallbackRegistry {
-             let mut registry = EventCallbackRegistry::new();
-        "#,
+            use std::path::PathBuf;
+            use rindexer::event::callback_registry::EventCallbackRegistry;
+            "#,
+            );
+
+            if manifest.native_transfers.enabled {
+                handlers.push_str(
+                    r#"
+                use rindexer::event::callback_registry::TraceCallbackRegistry;
+                "#,
+                )
+            }
+
+            handlers.push_str(
+                r#"
+            pub async fn register_all_handlers(manifest_path: &PathBuf) -> EventCallbackRegistry {
+                 let mut registry = EventCallbackRegistry::new();
+            "#,
             );
 
             for mut contract in manifest.contracts {
@@ -281,6 +343,31 @@ pub fn generate_rindexer_handlers(
                         &manifest.storage,
                     )?
                     .as_str(),
+                )?;
+            }
+
+            if manifest.native_transfers.enabled {
+                handlers.push_str("let mut trace_registry = TraceCallbackRegistry::new();");
+
+                let indexer_name = camel_to_snake(&manifest.name);
+                let contract_name = camel_to_snake(NATIVE_TRANSFER_CONTRACT_NAME);
+                let handler_fn_name = format!("{}_handlers", contract_name);
+
+                handlers.insert_str(
+                    0,
+                    &format!(r#"use super::{indexer_name}::{contract_name}::{handler_fn_name};"#,),
+                );
+
+                handlers.push_str(&format!(
+                    r#"{handler_fn_name}(manifest_path, &mut registry).await;"#
+                ));
+
+                let handler_path = format!("indexers/{}/{}", indexer_name, contract_name);
+
+                write_file(
+                    &generate_file_location(&output, &handler_path),
+                    generate_trace_handlers(&indexer_name, &contract_name, &manifest.storage)?
+                        .as_str(),
                 )?;
             }
 
