@@ -60,8 +60,16 @@ pub struct TraceProcessingConfig {
     pub project_path: PathBuf,
     pub start_block: U64,
     pub end_block: U64,
+    pub indexer_name: String,
+    pub contract_name: String,
+    pub event_name: String,
+    pub network: String,
+    pub progress: Option<Arc<Mutex<IndexingEventsProgressState>>>,
+    pub database: Option<Arc<PostgresClient>>,
+    pub csv_details: Option<CsvDetails>,
     pub registry: Arc<TraceCallbackRegistry>,
     pub method: TraceProcessingMethod,
+    pub stream_last_synced_block_file_path: Option<String>,
 }
 
 impl TraceProcessingConfig {

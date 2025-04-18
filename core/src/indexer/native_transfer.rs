@@ -11,7 +11,13 @@ use crate::{
         callback_registry::{TraceResult, TxInformation},
         config::TraceProcessingConfig,
     },
-    indexer::process::ProcessEventError,
+    indexer::{
+        last_synced::{
+            evm_trace_update_progress_and_last_synced_task, update_progress_and_last_synced_task,
+        },
+        process::ProcessEventError,
+        task_tracker::indexing_event_processed,
+    },
     manifest::native_transfer::TraceProcessingMethod,
     provider::JsonRpcCachedProvider,
 };
@@ -143,7 +149,7 @@ pub async fn native_transfer_block_consumer(
     provider: Arc<JsonRpcCachedProvider>,
     block_numbers: &[U64],
     network_name: &str,
-    config: &TraceProcessingConfig,
+    config: Arc<TraceProcessingConfig>,
 ) -> Result<(), ProcessEventError> {
     let provider_call = async |block: U64| {
         if config.method == TraceProcessingMethod::DebugTraceBlockByNumber {
@@ -216,6 +222,7 @@ pub async fn native_transfer_block_consumer(
     }
 
     config.trigger_event(native_transfers).await;
+    evm_trace_update_progress_and_last_synced_task(config, to_block, indexing_event_processed);
 
     Ok(())
 }

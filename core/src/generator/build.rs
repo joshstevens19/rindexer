@@ -14,11 +14,12 @@ use super::{
     networks_bindings::generate_networks_code,
 };
 use crate::{
+    event::callback_registry::TraceCallbackRegistryInformation,
     generator::{
         database_bindings::generate_database_code,
         trace_bindings::{
             generate_trace_bindings, generate_trace_handlers, trace_abigen_contract_file_name,
-            trace_abigen_contract_name, GenerateTraceHandlersError,
+            trace_abigen_contract_name, GenerateTraceBindingsError, GenerateTraceHandlersError,
         },
     },
     helpers::{
@@ -110,6 +111,9 @@ pub enum WriteIndexerEvents {
     #[error("{0}")]
     GenerateEventBindingCodeError(#[from] GenerateEventBindingsError),
 
+    #[error("{0}")]
+    GenerateTraceBindingCodeError(#[from] GenerateTraceBindingsError),
+
     #[error("Could not parse ABI: {0}")]
     CouldNotParseAbi(#[from] ParseAbiError),
 }
@@ -155,6 +159,7 @@ fn write_indexer_events(
             project_path,
             &indexer.name,
             NATIVE_TRANSFER_CONTRACT_NAME,
+            &indexer.native_transfers,
             false,
             storage,
         )?;
