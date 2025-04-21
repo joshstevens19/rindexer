@@ -485,6 +485,7 @@ serde = {{ version = "1.0.194", features = ["derive"] }}
 
             use self::rindexer_lib::indexers::all_handlers::register_all_handlers;
             use rindexer::{
+                event::callback_registry::TraceCallbackRegistry,
                 start_rindexer, GraphqlOverrideSettings, IndexingDetails, StartDetails,
             };
 
@@ -534,6 +535,7 @@ serde = {{ version = "1.0.194", features = ["derive"] }}
                             indexing_details: if enable_indexer {
                                 Some(IndexingDetails {
                                     registry: register_all_handlers(&manifest_path).await,
+                                    trace_registry: TraceCallbackRegistry { events: vec![] },
                                 })
                             } else {
                                 None

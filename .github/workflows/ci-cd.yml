@@ -155,7 +155,7 @@ jobs:
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: pwsh
         run: |
-          choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System'
+          choco install cmake --version=3.20.0 --installargs 'ADD_CMAKE_TO_PATH=System'
           refreshenv
           cmake --version
           echo "CMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append

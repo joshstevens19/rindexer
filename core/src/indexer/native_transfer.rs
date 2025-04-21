@@ -1,9 +1,12 @@
 use std::{collections::VecDeque, sync::Arc, time::Duration};
 
-use ethers::types::{Action, Address, Bytes, U256, U64};
+use ethers::{
+    providers::ProviderError,
+    types::{Action, Address, Bytes, Trace, U256, U64},
+};
 use futures::future::try_join_all;
 use serde::Serialize;
-use tokio::time::sleep;
+use tokio::{sync::mpsc, time::sleep};
 use tracing::{debug, error, info};
 
 use crate::{
@@ -67,6 +70,17 @@ pub struct NativeTransfer {
     pub transaction_information: TxInformation,
 }
 
+/// Push a range of blocks to the back-pressured channel and block producer when full.
+async fn push_range(block_tx: &mpsc::Sender<U64>, last: U64, latest: U64) {
+    let mut range = (last.as_u64()..=latest.as_u64()).collect::<VecDeque<_>>();
+    while let Some(block) = range.pop_front() {
+        if let Err(e) = block_tx.send(U64::from(block)).await {
+            error!("Failed to send block via channel. Re-queuing: {:?}", e);
+            range.push_front(block);
+        }
+    }
+}
+
 /// Block publisher.
 ///
 /// This is a long-running process designed to accept a [`Sender`] handle and publish blocks
@@ -76,27 +90,13 @@ pub struct NativeTransfer {
 /// reached.
 pub async fn native_transfer_block_fetch(
     publisher: Arc<JsonRpcCachedProvider>,
-    block_tx: tokio::sync::mpsc::Sender<U64>,
+    block_tx: mpsc::Sender<U64>,
     start_block: U64,
     end_block: Option<U64>,
     indexing_distance_from_head: U64,
     network: String,
 ) -> Result<(), ProcessEventError> {
     let mut last_seen_block = start_block;
-
-    // Push a range of blocks to the back-pressured channel and block producer when full.
-    //
-    // It should only error on critial issues like the receiver being dropped, but we will handle
-    // gracefully anyway.
-    let push_range = async |last: U64, latest: U64| {
-        let mut range = (last.as_u64()..=latest.as_u64()).collect::<VecDeque<_>>();
-        while let Some(block) = range.pop_front() {
-            if let Err(e) = block_tx.send(U64::from(block)).await {
-                error!("Failed to send block via channel. Requeuing: {:?}", e);
-                range.push_front(block);
-            }
-        }
-    };
 
     loop {
         sleep(Duration::from_millis(200)).await;
@@ -118,11 +118,12 @@ pub async fn native_transfer_block_fetch(
 
                     if block > last_seen_block {
                         let to_block = end_block.map(|end| block.min(end)).unwrap_or(block);
+
                         let from_block = block.min(last_seen_block + 1);
 
                         debug!("Pushing trace blocks {} - {}", from_block, to_block);
 
-                        push_range(from_block, to_block).await;
+                        push_range(&block_tx, from_block, to_block).await;
                         last_seen_block = to_block;
                     }
 
@@ -143,22 +144,26 @@ pub async fn native_transfer_block_fetch(
     }
 }
 
+async fn provider_call(
+    provider: Arc<JsonRpcCachedProvider>,
+    config: &TraceProcessingConfig,
+    block: U64,
+) -> Result<Vec<Trace>, ProviderError> {
+    if config.method == TraceProcessingMethod::DebugTraceBlockByNumber {
+        provider.debug_trace_block_by_number(block).await
+    } else {
+        provider.trace_block(block).await
+    }
+}
+
 pub async fn native_transfer_block_consumer(
     provider: Arc<JsonRpcCachedProvider>,
     block_numbers: &[U64],
     network_name: &str,
     config: Arc<TraceProcessingConfig>,
 ) -> Result<(), ProcessEventError> {
-    // TODO: Need to batch call this in 1000 calls at once for ideal performance
-    let provider_call = async |block: U64| {
-        if config.method == TraceProcessingMethod::DebugTraceBlockByNumber {
-            provider.debug_trace_block_by_number(block).await
-        } else {
-            provider.trace_block(block).await
-        }
-    };
-
-    let trace_futures: Vec<_> = block_numbers.iter().map(|n| provider_call(*n)).collect();
+    let trace_futures: Vec<_> =
+        block_numbers.iter().map(|n| provider_call(provider.clone(), &config, *n)).collect();
     let trace_calls = try_join_all(trace_futures).await?;
     let (from_block, to_block) =
         block_numbers.iter().fold((U64::MAX, U64::zero()), |(min, max), &num| {
