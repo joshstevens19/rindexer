@@ -15,10 +15,11 @@ pub fn network_provider_fn_name(network: &Network) -> String {
 fn generate_network_lazy_provider_code(network: &Network) -> Code {
     Code::new(format!(
         r#"
-            static ref {network_name}: Arc<JsonRpcCachedProvider> = {client_fn}(&public_read_env_value("{network_url}").unwrap_or("{network_url}".to_string()), {compute_units_per_second}, {max_block_range} {placeholder_headers}).expect("Error creating provider");
+            static ref {network_name}: Arc<JsonRpcCachedProvider> = {client_fn}(&public_read_env_value("{network_url}").unwrap_or("{network_url}".to_string()), {chain_id}, {compute_units_per_second}, {max_block_range} {placeholder_headers}).expect("Error creating provider");
         "#,
         network_name = network_provider_name(network),
         network_url = network.rpc,
+        chain_id = network.chain_id,
         compute_units_per_second =
             if let Some(compute_units_per_second) = network.compute_units_per_second {
                 format!("Some({})", compute_units_per_second)
@@ -100,6 +101,7 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
             #[allow(dead_code)]
             fn create_shadow_client(
                 rpc_url: &str,
+                chain_id: u64,
                 compute_units_per_second: Option<u64>,
                 max_block_range: Option<U64>,
             ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
@@ -108,7 +110,7 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
                     "X-SHADOW-API-KEY",
                     public_read_env_value("RINDEXER_PHANTOM_API_KEY").unwrap().parse().unwrap(),
                 );
-                create_client(rpc_url, compute_units_per_second, max_block_range, header)
+                create_client(rpc_url, chain_id, compute_units_per_second, max_block_range, header)
             }
 
             lazy_static! {

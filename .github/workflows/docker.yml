@@ -13,7 +13,6 @@ env:
 
 jobs:
   build:
-    if: github.event.pull_request.merged == true && startsWith(github.head_ref, 'release/')
     runs-on: ubuntu-latest
     permissions:
       contents: read
