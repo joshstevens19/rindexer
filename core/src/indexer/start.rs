@@ -237,11 +237,11 @@ pub async fn start_indexing_traces(
             let native_transfer_consumer_handle = tokio::spawn(async move {
                 // TODO: It would be nice to make the concurrent requests dynamic based on provider
                 // speeds and limits
-                const MAX_CONCURRENT_REQUESTS: usize = 20;
-                let mut buffer: Vec<U64> = Vec::with_capacity(MAX_CONCURRENT_REQUESTS);
+                let mut max_concurrent_requests: usize = 100;
+                let mut buffer: Vec<U64> = Vec::with_capacity(max_concurrent_requests);
 
                 loop {
-                    let recv = block_rx.recv_many(&mut buffer, MAX_CONCURRENT_REQUESTS).await;
+                    let recv = block_rx.recv_many(&mut buffer, max_concurrent_requests).await;
 
                     if recv == 0 {
                         sleep(Duration::from_secs(1)).await;
@@ -260,6 +260,9 @@ pub async fn start_indexing_traces(
                     // to worry about double-publish because the failure point
                     // is on the provider call itself, which is before publish.
                     if let Err(e) = processed_block {
+                        // On error, reset to original or half the search.
+                        max_concurrent_requests = std::cmp::max(20, max_concurrent_requests / 2);
+
                         warn!(
                             "Could not process '{}' block traces. Likely too early, Retrying: {}",
                             network_name,
@@ -268,6 +271,7 @@ pub async fn start_indexing_traces(
                         continue;
                     } else {
                         buffer.clear();
+                        max_concurrent_requests = (max_concurrent_requests as f64 * 1.25) as usize;
                     };
                 }
             });

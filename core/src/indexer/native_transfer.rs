@@ -16,7 +16,7 @@ use crate::{
             evm_trace_update_progress_and_last_synced_task, update_progress_and_last_synced_task,
         },
         process::ProcessEventError,
-        task_tracker::indexing_event_processed,
+        task_tracker::{indexing_event_processed, indexing_event_processing},
     },
     manifest::native_transfer::TraceProcessingMethod,
     provider::JsonRpcCachedProvider,
@@ -151,6 +151,7 @@ pub async fn native_transfer_block_consumer(
     network_name: &str,
     config: Arc<TraceProcessingConfig>,
 ) -> Result<(), ProcessEventError> {
+    // TODO: Need to batch call this in 1000 calls at once for ideal performance
     let provider_call = async |block: U64| {
         if config.method == TraceProcessingMethod::DebugTraceBlockByNumber {
             provider.debug_trace_block_by_number(block).await
@@ -221,6 +222,7 @@ pub async fn native_transfer_block_consumer(
         return Ok(());
     }
 
+    indexing_event_processing();
     config.trigger_event(native_transfers).await;
     evm_trace_update_progress_and_last_synced_task(config, to_block, indexing_event_processed);
 
