@@ -233,6 +233,7 @@ impl TraceResult {
                 address: Address::zero(),
                 block_number: U64::from(trace.block_number),
                 block_timestamp: None,
+                // TODO: Unclear in what situation this would be `None`.
                 transaction_hash: trace.transaction_hash.unwrap_or_else(H256::zero),
                 block_hash: trace.block_hash,
                 transaction_index: U64::from(trace.transaction_position.unwrap_or(0)),
@@ -290,7 +291,7 @@ impl TraceCallbackRegistry {
             )
             .await;
         } else {
-            error!("EventCallbackRegistry: No event found for id: {}", id);
+            error!("TraceCallbackRegistry: No event found for id: {}", id);
         }
     }
 

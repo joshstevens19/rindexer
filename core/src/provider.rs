@@ -45,7 +45,7 @@ pub struct TraceCall {
     pub gas: String,
     #[serde(rename = "gasUsed")]
     pub gas_used: U256,
-    pub to: Address,
+    pub to: Option<Address>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     pub input: Bytes,
@@ -159,25 +159,38 @@ impl JsonRpcCachedProvider {
 
         let traces = flattened_calls
             .into_iter()
-            .map(|frame| Trace {
-                action: Action::Call(Call {
-                    from: frame.result.from,
-                    to: frame.result.to,
-                    value: frame.result.value,
-                    gas: U256::from_str_radix(frame.result.gas.trim_start_matches("0x"), 16)
-                        .unwrap_or_default(),
-                    input: frame.result.input,
-                    call_type: CallType::Call,
-                }),
-                result: None,
-                trace_address: vec![],
-                subtraces: 0,
-                transaction_hash: frame.tx_hash,
-                transaction_position: None, // not provided by debug_trace
-                block_number: block_number.as_u64(),
-                block_hash: H256::zero(), // not provided by debug_trace
-                error: frame.result.error,
-                action_type: ActionType::Call,
+            .filter_map(|frame| {
+                // It's not clear in what situation this is None, but it does happen so it's
+                // better to avoid deserialization errors for now and remove them from the list.
+                //
+                // We know they cannot be a valid native token transfer.
+                if let Some(to) = frame.result.to {
+                    Some(Trace {
+                        action: Action::Call(Call {
+                            from: frame.result.from,
+                            to,
+                            value: frame.result.value,
+                            gas: U256::from_str_radix(
+                                frame.result.gas.trim_start_matches("0x"),
+                                16,
+                            )
+                            .unwrap_or_default(),
+                            input: frame.result.input,
+                            call_type: CallType::Call,
+                        }),
+                        result: None,
+                        trace_address: vec![],
+                        subtraces: 0,
+                        transaction_hash: frame.tx_hash,
+                        transaction_position: None, // not provided by debug_trace
+                        block_number: block_number.as_u64(),
+                        block_hash: H256::zero(), // not provided by debug_trace
+                        error: frame.result.error,
+                        action_type: ActionType::Call,
+                    })
+                } else {
+                    None
+                }
             })
             .collect();
 
@@ -306,8 +319,8 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[tokio::test]
-    async fn test_create_retry_client_invalid_url() {
+    #[test]
+    fn test_create_retry_client_invalid_url() {
         let rpc_url = "invalid_url";
         let result = create_client(rpc_url, 1, Some(660), None, HeaderMap::new());
         assert!(result.is_err());

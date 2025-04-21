@@ -358,13 +358,9 @@ impl EthereumSqlTypeWrapper {
     fn convert_u256_to_base_10000_numeric_digits(value: &U256) -> Vec<i16> {
         let mut groups = Vec::new();
         let mut num = *value;
-
-        // Handle zero case
         if num.is_zero() {
             return vec![0];
         }
-
-        // Convert U256 to base 10000 digits
         while !num.is_zero() {
             let remainder = num % U256::from(10000);
             groups.push(remainder.as_u128() as i16);
@@ -406,12 +402,15 @@ impl EthereumSqlTypeWrapper {
         Ok(IsNull::No)
     }
 
-    fn write_u256_numeric_to_postgres(
-        value: &U256,
+    fn write_u256_numeric_to_postgres<T>(
+        value: T,
         is_negative: bool,
         out: &mut BytesMut,
-    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
-        let groups = Self::convert_u256_to_base_10000_numeric_digits(value);
+    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>>
+    where
+        T: Into<U256>,
+    {
+        let groups = Self::convert_u256_to_base_10000_numeric_digits(&value.into());
 
         if groups.is_empty() {
             // Handle zero case

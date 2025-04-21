@@ -167,6 +167,8 @@ pub async fn start_indexing_traces(
     trace_registry: Arc<TraceCallbackRegistry>,
 ) -> Result<Vec<JoinHandle<Result<(), ProcessEventError>>>, StartIndexingError> {
     let mut non_blocking_process_events = Vec::new();
+    let trace_progress_state =
+        IndexingEventsProgressState::monitor_traces(&trace_registry.events).await;
 
     for event in trace_registry.events.iter() {
         let stream_details = manifest
@@ -213,7 +215,7 @@ pub async fn start_indexing_traces(
                 contract_name: NATIVE_TRANSFER_CONTRACT_NAME.to_string(),
                 event_name: EVENT_NAME.to_string(),
                 network: network_name.to_string(),
-                progress: None,
+                progress: trace_progress_state.clone(),
                 database: database.clone(),
                 csv_details: None,
                 registry: trace_registry.clone(),
@@ -260,13 +262,15 @@ pub async fn start_indexing_traces(
                     // to worry about double-publish because the failure point
                     // is on the provider call itself, which is before publish.
                     if let Err(e) = processed_block {
-                        // On error, reset to original or half the search.
-                        max_concurrent_requests = std::cmp::max(20, max_concurrent_requests / 2);
+                        // On error, reset to original or half the search space.
+                        max_concurrent_requests = std::cmp::max(100, max_concurrent_requests / 2);
 
                         warn!(
-                            "Could not process '{}' block traces. Likely too early, Retrying: {}",
+                            "Could not process '{}' block traces. Likely too early for {}..{}, Retrying: {}",
                             network_name,
-                            e.to_string().chars().take(1000).collect::<String>(),
+                            &buffer.first().map(|n| n.as_u64()).unwrap_or_else(|| 0),
+                            &buffer.last().map(|n| n.as_u64()).unwrap_or_else(|| 0),
+                            e.to_string().chars().take(2000).collect::<String>(),
                         );
                         continue;
                     } else {

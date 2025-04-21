@@ -14,7 +14,7 @@ use crate::{
         generate_indexer_contract_schema_name, generate_internal_event_table_name,
     },
     event::config::{EventProcessingConfig, TraceProcessingConfig},
-    helpers::{get_full_path},
+    helpers::get_full_path,
     manifest::{storage::CsvDetails, stream::StreamsConfig},
     EthereumSqlTypeWrapper, PostgresClient,
 };
@@ -296,17 +296,12 @@ pub fn evm_trace_update_progress_and_last_synced_task(
     on_complete: impl FnOnce() + Send + 'static,
 ) {
     tokio::spawn(async move {
-        // TODO: Progress
-        //
-        // let update_last_synced_block_result = config
-        //     .progress
-        //     .lock()
-        //     .await
-        //     .update_last_synced_block(&config.id, to_block);
-        //
-        // if let Err(e) = update_last_synced_block_result {
-        //     error!("Error updating last synced block: {:?}", e);
-        // }
+        let update_last_synced_block_result =
+            config.progress.lock().await.update_last_synced_block(&config.id, to_block);
+
+        if let Err(e) = update_last_synced_block_result {
+            error!("Error updating last synced block: {:?}", e);
+        }
 
         if let Some(database) = &config.database {
             let schema =

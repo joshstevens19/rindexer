@@ -327,7 +327,6 @@ async fn fetch_historic_logs_stream(
                 err
             );
 
-            // ???????
             let _ = tx.send(Err(Box::new(err)));
 
             return Some(ProcessHistoricLogsStreamResult {
@@ -593,7 +592,7 @@ fn retry_with_block_range(
                 {
                     if from.as_number() > to.as_number() {
                         error!(
-                            "Alchemy returned a negative block range. Overriding to single fetch"
+                            "Alchemy returned a negative block range. Overriding to single block fetch."
                         );
 
                         return Some(RetryWithBlockRangeResult {
@@ -676,7 +675,7 @@ fn retry_with_block_range(
         }
 
         if next_to_block < from_block {
-            error!("Computed a negative fallback block range. Overriding to single block fetch:");
+            error!("Computed a negative fallback block range. Overriding to single block fetch.");
 
             return Some(RetryWithBlockRangeResult {
                 from: BlockNumber::Number(from_block),
