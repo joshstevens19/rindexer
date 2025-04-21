@@ -14,7 +14,6 @@ use super::{
     networks_bindings::generate_networks_code,
 };
 use crate::{
-    event::callback_registry::TraceCallbackRegistryInformation,
     generator::{
         database_bindings::generate_database_code,
         trace_bindings::{
@@ -173,7 +172,7 @@ fn write_indexer_events(
 
         let abi_string = NATIVE_TRANSFER_ABI;
         let abi_gen =
-            Abigen::new(trace_abigen_contract_name(&NATIVE_TRANSFER_CONTRACT_NAME), abi_string)
+            Abigen::new(trace_abigen_contract_name(NATIVE_TRANSFER_CONTRACT_NAME), abi_string)
                 .map_err(|_| WriteIndexerEvents::CouldNotCreateAbigenInstance)?
                 .generate()
                 .map_err(|_| WriteIndexerEvents::CouldNotGenerateAbi)?;
@@ -184,7 +183,7 @@ fn write_indexer_events(
                 &format!(
                     "{}/events/{}",
                     camel_to_snake(&indexer.name),
-                    trace_abigen_contract_file_name(&NATIVE_TRANSFER_CONTRACT_NAME)
+                    trace_abigen_contract_file_name(NATIVE_TRANSFER_CONTRACT_NAME)
                 ),
             ),
             &abi_gen.to_string(),

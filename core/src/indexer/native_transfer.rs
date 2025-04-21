@@ -12,9 +12,7 @@ use crate::{
         config::TraceProcessingConfig,
     },
     indexer::{
-        last_synced::{
-            evm_trace_update_progress_and_last_synced_task, update_progress_and_last_synced_task,
-        },
+        last_synced::evm_trace_update_progress_and_last_synced_task,
         process::ProcessEventError,
         task_tracker::{indexing_event_processed, indexing_event_processing},
     },

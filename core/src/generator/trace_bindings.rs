@@ -29,7 +29,7 @@ fn trace_abigen_contract_mod_name(contract_name: &str) -> String {
 }
 
 pub fn trace_abigen_contract_file_name(contract_name: &str) -> String {
-    format!("{}_abi_gen", camel_to_snake(&contract_name))
+    format!("{}_abi_gen", camel_to_snake(contract_name))
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -49,7 +49,7 @@ pub enum GenerateStructsError {
 
 fn trace_generate_structs(contract_name: &str) -> Result<Code, GenerateStructsError> {
     let abi_str = NATIVE_TRANSFER_ABI;
-    let abi_json: Value = serde_json::from_str(&abi_str)?;
+    let abi_json: Value = serde_json::from_str(abi_str)?;
 
     let mut structs = Code::blank();
 
@@ -92,23 +92,6 @@ fn generate_event_enums_code(event_info: &[EventInfo]) -> Code {
 
 fn generate_event_type_name(name: &str) -> String {
     format!("{}EventType", name)
-}
-
-fn generate_topic_ids_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> Code {
-    Code::new(
-        event_info
-            .iter()
-            .map(|info| {
-                format!(
-                    "{}::{}(_) => \"0x{}\",",
-                    event_type_name,
-                    info.name,
-                    info.topic_id_as_hex_string()
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-    )
 }
 
 fn generate_event_names_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> Code {
@@ -443,7 +426,7 @@ fn generate_trace_bindings_code(
     storage: &Storage,
     event_info: Vec<EventInfo>,
 ) -> Result<Code, GenerateTraceBindingCodeError> {
-    let event_type_name = generate_event_type_name(&contract_name);
+    let event_type_name = generate_event_type_name(contract_name);
 
     let code = Code::new(format!(
         r#"#![allow(non_camel_case_types, clippy::enum_variant_names, clippy::too_many_arguments, clippy::upper_case_acronyms, clippy::type_complexity, dead_code)]
@@ -594,7 +577,7 @@ fn generate_trace_bindings_code(
         event_context_csv =
             if storage.csv_enabled() { "pub csv: Arc<AsyncCsvAppender>," } else { "" },
         event_callback_structs =
-            generate_trace_callback_structs_code(project_path, &event_info, &contract, storage)?,
+            generate_trace_callback_structs_code(project_path, &event_info, contract, storage)?,
         event_enums = generate_event_enums_code(&event_info),
         event_names_match_arms =
             generate_event_names_match_arms_code(&event_type_name, &event_info),
@@ -604,7 +587,7 @@ fn generate_trace_bindings_code(
             &trace_abigen_contract_name(contract_name)
         ),
         build_pub_contract_fn = build_pub_contract_fn(
-            &contract_name,
+            contract_name,
             contract.networks.clone().unwrap_or_default(),
             &trace_abigen_contract_name(contract_name)
         ),
@@ -708,8 +691,8 @@ pub fn generate_trace_handlers(
         r#"use std::path::PathBuf;
         use super::super::super::typings::{indexer_name_formatted}::events::{handler_registry_name}::{{no_extensions, {event_type_name}"#,
         indexer_name_formatted = camel_to_snake(indexer_name),
-        handler_registry_name = camel_to_snake(&contract_name),
-        event_type_name = generate_event_type_name(&contract_name)
+        handler_registry_name = camel_to_snake(contract_name),
+        event_type_name = generate_event_type_name(contract_name)
     ));
 
     let mut handlers = String::new();
@@ -717,11 +700,11 @@ pub fn generate_trace_handlers(
     let mut registry_fn = String::new();
     registry_fn.push_str(&format!(
         r#"pub async fn {handler_registry_fn_name}_handlers(manifest_path: &PathBuf, registry: &mut TraceCallbackRegistry) {{"#,
-        handler_registry_fn_name = camel_to_snake(&contract_name),
+        handler_registry_fn_name = camel_to_snake(contract_name),
     ));
 
     for event in event_names {
-        let event_type_name = generate_event_type_name(&contract_name);
+        let event_type_name = generate_event_type_name(contract_name);
 
         imports.push_str(&format!(r#",{handler_name}Event"#, handler_name = event.name,));
 
@@ -881,7 +864,7 @@ pub fn generate_trace_handlers(
                     }}
                 "#,
                 table_name =
-                    generate_event_table_full_name(indexer_name, &contract_name, &event.name),
+                    generate_event_table_full_name(indexer_name, contract_name, &event.name),
                 handler_name = event.name,
                 event_type_name = event_type_name,
                 columns_names = generate_column_names_only_with_base_properties(&event.inputs)

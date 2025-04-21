@@ -187,10 +187,10 @@ async fn update_last_synced_block_number_for_file(
     to_block: U64,
 ) -> Result<(), UpdateLastSyncedBlockNumberFile> {
     let file_path =
-        build_last_synced_block_number_file(full_path, &contract_name, &network, &event_name);
+        build_last_synced_block_number_file(full_path, contract_name, network, event_name);
 
     let last_block =
-        get_last_synced_block_number_file(full_path, &contract_name, &network, &event_name).await?;
+        get_last_synced_block_number_file(full_path, contract_name, network, event_name).await?;
 
     let to_block_higher_then_last_block =
         if let Some(last_block_value) = last_block { to_block > last_block_value } else { true };

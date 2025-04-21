@@ -249,18 +249,19 @@ impl EthereumSqlTypeWrapper {
             }
             // 256-bit unsigned integers opt in numeric representation (numeric(78))
             EthereumSqlTypeWrapper::U256Numeric(_) => PgType::NUMERIC,
-            EthereumSqlTypeWrapper::U256Bytes(value) |
-            EthereumSqlTypeWrapper::U256BytesNullable(value) => PgType::BYTEA,
+            EthereumSqlTypeWrapper::U256Bytes(_) | EthereumSqlTypeWrapper::U256BytesNullable(_) => {
+                PgType::BYTEA
+            }
             EthereumSqlTypeWrapper::I256(_) | EthereumSqlTypeWrapper::I256Nullable(_) => {
                 PgType::VARCHAR
             }
             EthereumSqlTypeWrapper::I256Bytes(_) | EthereumSqlTypeWrapper::I256BytesNullable(_) => {
                 PgType::BYTEA
             }
-            EthereumSqlTypeWrapper::VecU256(values) => PgType::VARCHAR_ARRAY,
-            EthereumSqlTypeWrapper::VecU256Bytes(values) => PgType::BYTEA_ARRAY,
-            EthereumSqlTypeWrapper::VecI256(values) => PgType::VARCHAR_ARRAY,
-            EthereumSqlTypeWrapper::VecI256Bytes(values) => PgType::BYTEA_ARRAY,
+            EthereumSqlTypeWrapper::VecU256(_) => PgType::VARCHAR_ARRAY,
+            EthereumSqlTypeWrapper::VecU256Bytes(_) => PgType::BYTEA_ARRAY,
+            EthereumSqlTypeWrapper::VecI256(_) => PgType::VARCHAR_ARRAY,
+            EthereumSqlTypeWrapper::VecI256Bytes(_) => PgType::BYTEA_ARRAY,
 
             // 512-bit integers
             EthereumSqlTypeWrapper::U512(_) => PgType::TEXT,

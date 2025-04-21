@@ -4,7 +4,6 @@ use ethers::{
     addressbook::Address,
     middleware::MiddlewareError,
     prelude::{BlockNumber, JsonRpcError, ValueOrArray, H256, U64},
-    providers::ProviderError,
 };
 use regex::Regex;
 use tokio::{
