@@ -19,7 +19,10 @@ use crate::{
     indexer::{
         dependency::ContractEventsDependenciesConfig,
         last_synced::{get_last_synced_block_number, SyncConfig},
-        native_transfer::{native_transfer_block_consumer, native_transfer_block_fetch},
+        native_transfer::{
+            native_transfer_block_consumer, native_transfer_block_fetch, EVENT_NAME,
+            NATIVE_TRANSFER_CONTRACT_NAME,
+        },
         process::{
             process_contracts_events_with_dependencies, process_event,
             ProcessContractsEventsWithDependenciesError, ProcessEventError,
@@ -173,15 +176,6 @@ pub async fn start_indexing_traces(
             .and_then(|c| c.streams.as_ref());
 
         for network in event.trace_information.details.iter() {
-            let config = TraceProcessingConfig {
-                id: event.id.to_string(),
-                project_path: Default::default(),
-                start_block: Default::default(),
-                end_block: Default::default(),
-                registry: trace_registry.clone(),
-                method: network.method,
-            };
-
             let sync_config = SyncConfig {
                 project_path,
                 database: &database,
@@ -196,7 +190,7 @@ pub async fn start_indexing_traces(
 
             let (block_tx, mut block_rx) = tokio::sync::mpsc::channel(8192);
             let network_name = network.network.clone();
-            let (start_block, _end_block, indexing_distance_from_head) = get_start_end_block(
+            let (start_block, end_block, indexing_distance_from_head) = get_start_end_block(
                 network.cached_provider.clone(),
                 network.start_block,
                 network.end_block,
@@ -207,13 +201,31 @@ pub async fn start_indexing_traces(
             )
             .await?;
 
-            let end_block = network.end_block;
+            // let end_block = network.end_block;
+
+            let config = Arc::new(TraceProcessingConfig {
+                id: event.id.to_string(),
+                project_path: project_path.to_path_buf(),
+                start_block,
+                end_block, /* TODO: Not in sync with below `native_transfer_block_fetch`
+                            * network.end_block */
+                indexer_name: event.indexer_name.clone(),
+                contract_name: NATIVE_TRANSFER_CONTRACT_NAME.to_string(),
+                event_name: EVENT_NAME.to_string(),
+                network: network_name.to_string(),
+                progress: None,
+                database: database.clone(),
+                csv_details: None,
+                registry: trace_registry.clone(),
+                method: network.method,
+                stream_last_synced_block_file_path: None,
+            });
 
             let native_transfer_handle = tokio::spawn(native_transfer_block_fetch(
                 network.cached_provider.clone(),
                 block_tx,
                 start_block,
-                end_block,
+                network.end_block, // TODO: Not in sync with config.end_block
                 indexing_distance_from_head,
                 network_name.clone(),
             ));
@@ -225,11 +237,11 @@ pub async fn start_indexing_traces(
             let native_transfer_consumer_handle = tokio::spawn(async move {
                 // TODO: It would be nice to make the concurrent requests dynamic based on provider
                 // speeds and limits
-                const MAX_CONCURRENT_REQUESTS: usize = 20;
-                let mut buffer: Vec<U64> = Vec::with_capacity(MAX_CONCURRENT_REQUESTS);
+                let mut max_concurrent_requests: usize = 100;
+                let mut buffer: Vec<U64> = Vec::with_capacity(max_concurrent_requests);
 
                 loop {
-                    let recv = block_rx.recv_many(&mut buffer, MAX_CONCURRENT_REQUESTS).await;
+                    let recv = block_rx.recv_many(&mut buffer, max_concurrent_requests).await;
 
                     if recv == 0 {
                         sleep(Duration::from_secs(1)).await;
@@ -240,7 +252,7 @@ pub async fn start_indexing_traces(
                         provider.clone(),
                         &buffer[..recv],
                         &network_name,
-                        &config,
+                        config.clone(),
                     )
                     .await;
 
@@ -248,13 +260,18 @@ pub async fn start_indexing_traces(
                     // to worry about double-publish because the failure point
                     // is on the provider call itself, which is before publish.
                     if let Err(e) = processed_block {
+                        // On error, reset to original or half the search.
+                        max_concurrent_requests = std::cmp::max(20, max_concurrent_requests / 2);
+
                         warn!(
                             "Could not process '{}' block traces. Likely too early, Retrying: {}",
-                            network_name, e
+                            network_name,
+                            e.to_string().chars().take(1000).collect::<String>(),
                         );
                         continue;
                     } else {
                         buffer.clear();
+                        max_concurrent_requests = (max_concurrent_requests as f64 * 1.25) as usize;
                     };
                 }
             });

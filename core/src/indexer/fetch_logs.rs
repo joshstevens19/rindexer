@@ -4,7 +4,6 @@ use ethers::{
     addressbook::Address,
     middleware::MiddlewareError,
     prelude::{BlockNumber, JsonRpcError, ValueOrArray, H256, U64},
-    providers::ProviderError,
 };
 use regex::Regex;
 use tokio::{
@@ -294,8 +293,9 @@ async fn fetch_historic_logs_stream(
                     retry_with_block_range(json_rpc_error, from_block, to_block)
                 {
                     warn!(
-                        "{} - {} - Overfetched from {} to {} - shrinking to block range: {:?}",
+                        "{}::{} - {} - Overfetched from {} to {} - shrinking to block range: {:?}",
                         info_log_name,
+                        network,
                         IndexingEventProgressStatus::Syncing.log(),
                         from_block.as_u64(),
                         to_block.as_u64(),
