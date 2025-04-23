@@ -1,6 +1,6 @@
 use std::{
     sync::atomic::{AtomicBool, Ordering},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use once_cell::sync::Lazy;
@@ -13,17 +13,10 @@ static IS_RUNNING: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(true));
 pub async fn initiate_shutdown() {
     IS_RUNNING.store(false, Ordering::SeqCst);
     let mut active = active_indexing_count();
-    let shutdown_timeout = Duration::from_secs(15);
-    let start_shutdown = Instant::now();
 
     info!("Starting shutdown with {} active tasks", active);
 
     loop {
-        if start_shutdown.elapsed() >= shutdown_timeout && active <= 1 {
-            info!("Aborting graceful shutdown with {} tasks remaining ...", active);
-            break
-        }
-
         if active == 0 {
             info!("All active indexing tasks finished shutting down system...");
             break

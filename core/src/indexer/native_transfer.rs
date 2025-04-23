@@ -118,7 +118,6 @@ pub async fn native_transfer_block_fetch(
 
                     if block > last_seen_block {
                         let to_block = end_block.map(|end| block.min(end)).unwrap_or(block);
-
                         let from_block = block.min(last_seen_block + 1);
 
                         debug!("Pushing trace blocks {} - {}", from_block, to_block);
@@ -174,21 +173,26 @@ pub async fn native_transfer_block_consumer(
     // effectively only get what we need for native transfers by removing calls to "system
     // contracts".
     //
-    // As an example, a Zksync ETH transfer have a complex set of interactions with contracts like:
-    // - `0x0000000000000000000000000000000000008009`
-    // - `0x0000000000000000000000000000000000008001`
-    // - `0x000000000000000000000000000000000000800a`
+    // As an example, a Zksync ETH transfer will have a complex set of interactions with system
+    // contracts. But, there will be only one deeply-nested "transfer" call for the actual two EOAs,
+    // so filtering everything else will allow us to grab that without noise.
     //
-    // There will be one deeply-nested "transfer" call for the actual two EOAs, so filtering
-    // everything else will allow us to grab that.
-    //
-    // Read more: https://docs.zksync.io/zksync-protocol/contracts/system-contracts#l2basetoken-msgvaluesimulator
-    let zksync_system_contracts: [Address; 5] = [
-        "0x0000000000000000000000000000000000008009".parse().unwrap(),
-        "0x0000000000000000000000000000000000008001".parse().unwrap(),
-        "0x000000000000000000000000000000000000800a".parse().unwrap(),
-        "0x0000000000000000000000000000000000008010".parse().unwrap(),
-        "0x000000000000000000000000000000000000800d".parse().unwrap(),
+    // Read more:
+    // - https://docs.zksync.io/zksync-protocol/contracts/system-contracts#l2basetoken-msgvaluesimulator
+    // - https://github.com/matter-labs/zksync-era/blob/7f36ed98fc6066c1224ff07c95282b647a8114fc/infrastructure/zk/src/verify-upgrade.ts#L24
+    let zksync_system_contracts: [Address; 12] = [
+        "0x0000000000000000000000000000000000008002".parse().unwrap(), // AccountCodeStorage
+        "0x0000000000000000000000000000000000008003".parse().unwrap(), // NonceHolder
+        "0x0000000000000000000000000000000000008004".parse().unwrap(), // KnownCodesStorage
+        "0x0000000000000000000000000000000000008005".parse().unwrap(), // ImmutableSimulator
+        "0x0000000000000000000000000000000000008006".parse().unwrap(), // ContractDeployer
+        "0x0000000000000000000000000000000000008008".parse().unwrap(), // L1Messenger
+        "0x0000000000000000000000000000000000008009".parse().unwrap(), // MsgValueSimulator
+        "0x000000000000000000000000000000000000800a".parse().unwrap(), // L2BaseToken
+        "0x000000000000000000000000000000000000800b".parse().unwrap(), // SystemContext
+        "0x000000000000000000000000000000000000800c".parse().unwrap(), // BootloaderUtilities
+        "0x000000000000000000000000000000000000800e".parse().unwrap(), // BytecodeCompressor
+        "0x000000000000000000000000000000000000800f".parse().unwrap(), // ComplexUpgrader
     ];
 
     let native_transfers = trace_calls

@@ -203,14 +203,11 @@ pub async fn start_indexing_traces(
             )
             .await?;
 
-            // let end_block = network.end_block;
-
             let config = Arc::new(TraceProcessingConfig {
                 id: event.id.to_string(),
                 project_path: project_path.to_path_buf(),
                 start_block,
-                end_block, /* TODO: Not in sync with below `native_transfer_block_fetch`
-                            * network.end_block */
+                end_block,
                 indexer_name: event.indexer_name.clone(),
                 contract_name: NATIVE_TRANSFER_CONTRACT_NAME.to_string(),
                 event_name: EVENT_NAME.to_string(),
@@ -227,7 +224,7 @@ pub async fn start_indexing_traces(
                 network.cached_provider.clone(),
                 block_tx,
                 start_block,
-                network.end_block, // TODO: Not in sync with config.end_block
+                network.end_block,
                 indexing_distance_from_head,
                 network_name.clone(),
             ));
@@ -238,7 +235,8 @@ pub async fn start_indexing_traces(
             let config = config.clone();
             let native_transfer_consumer_handle = tokio::spawn(async move {
                 // TODO: It would be nice to make the concurrent requests dynamic based on provider
-                // speeds and limits
+                // speeds and limits. For now we can just increase slowly on success, and reduce
+                // concurrency on failure.
                 let mut max_concurrent_requests: usize = 100;
                 let mut buffer: Vec<U64> = Vec::with_capacity(max_concurrent_requests);
 

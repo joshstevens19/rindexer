@@ -182,8 +182,6 @@ impl IndexingEventsProgressState {
             }
         }
 
-        println!("------- {:?}", events);
-
         Arc::new(Mutex::new(Self { events }))
     }
 

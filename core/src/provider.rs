@@ -120,6 +120,11 @@ impl JsonRpcCachedProvider {
         //
         // Additionally, zksync chains operate differently where we must get the "native transfers"
         // from deep nested in the callstack rather than the top-level call.
+        //
+        // TODO: an automated way could be to issue a few request upfront to a random sampling of
+        //       blocks and see if they all fail, then fallback to disabling the "onlyTopCall" if
+        // they       do all fail. This still doesn't solve ZKsync chains where we always
+        // **NEED** the       full trace.
         let disable_only_top_call = match self.chain_id {
             42161 => true,       // Arbitrum (Alchemy RPC Bug)
             300 | 324 => true,   // Zksync
