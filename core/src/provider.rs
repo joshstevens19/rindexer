@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
 use tokio::sync::Mutex;
-use tracing::error;
+use tracing::{error, info};
 use url::Url;
 
 use crate::{event::RindexerEventFilter, manifest::core::Manifest};
@@ -25,6 +25,8 @@ use crate::{event::RindexerEventFilter, manifest::core::Manifest};
 pub struct JsonRpcCachedProvider {
     provider: Arc<Provider<RetryClient<Http>>>,
     cache: Mutex<Option<(Instant, Arc<Block<H256>>)>>,
+    is_zk_chain: bool,
+    #[allow(unused)]
     chain_id: u64,
     pub max_block_range: Option<U64>,
 }
@@ -67,16 +69,24 @@ pub struct TraceCallFrame {
 }
 
 impl JsonRpcCachedProvider {
-    pub fn new(
+    pub async fn new(
         provider: Provider<RetryClient<Http>>,
         chain_id: u64,
         max_block_range: Option<U64>,
     ) -> Self {
+        let response: Result<String, _> = provider.request("zks_L1ChainId", [&()]).await;
+        let is_zk_chain = response.is_ok();
+
+        if is_zk_chain {
+            info!("Chain {} is zk chain. Trace indexing adjusted.", chain_id);
+        }
+
         JsonRpcCachedProvider {
             provider: Arc::new(provider),
             cache: Mutex::new(None),
             max_block_range,
             chain_id,
+            is_zk_chain,
         }
     }
 
@@ -114,26 +124,8 @@ impl JsonRpcCachedProvider {
         block_number: U64,
     ) -> Result<Vec<Trace>, ProviderError> {
         // TODO: Consider the need to use `arbtrace_block` for early arbitrum blocks?
-        //
-        // Alchemy does not support the top-level call only setting for 'Arbitrum'.
-        // We consider this a bug but must work around it. Arb-nova is supported.
-        //
-        // Additionally, zksync chains operate differently where we must get the "native transfers"
-        // from deep nested in the callstack rather than the top-level call.
-        //
-        // TODO: an automated way could be to issue a few request upfront to a random sampling of
-        //       blocks and see if they all fail, then fallback to disabling the "onlyTopCall" if
-        // they       do all fail. This still doesn't solve ZKsync chains where we always
-        // **NEED** the       full trace.
-        let disable_only_top_call = match self.chain_id {
-            42161 => true,       // Arbitrum (Alchemy RPC Bug)
-            300 | 324 => true,   // Zksync
-            37111 | 232 => true, // Lens
-            _ => false,
-        };
-
         let block = json!(serde_json::to_string_pretty(&block_number)?.replace("\"", ""));
-        let options = if disable_only_top_call {
+        let options = if self.is_zk_chain {
             json!({ "tracer": "callTracer" })
         } else {
             json!({ "tracer": "callTracer", "tracerConfig": { "onlyTopCall": true } })
@@ -243,7 +235,7 @@ pub enum RetryClientError {
     CouldNotConnectClient(#[from] ProviderError),
 }
 
-pub fn create_client(
+pub async fn create_client(
     rpc_url: &str,
     chain_id: u64,
     compute_units_per_second: Option<u64>,
@@ -266,7 +258,7 @@ pub fn create_client(
         .build(provider, Box::<ethers::providers::HttpRateLimitRetryPolicy>::default());
     let instance = Provider::new(retry_client);
 
-    Ok(Arc::new(JsonRpcCachedProvider::new(instance, chain_id, max_block_range)))
+    Ok(Arc::new(JsonRpcCachedProvider::new(instance, chain_id, max_block_range).await))
 }
 
 pub async fn get_chain_id(rpc_url: &str) -> Result<U256, ProviderError> {
@@ -284,7 +276,9 @@ pub struct CreateNetworkProvider {
 }
 
 impl CreateNetworkProvider {
-    pub fn create(manifest: &Manifest) -> Result<Vec<CreateNetworkProvider>, RetryClientError> {
+    pub async fn create(
+        manifest: &Manifest,
+    ) -> Result<Vec<CreateNetworkProvider>, RetryClientError> {
         let mut result: Vec<CreateNetworkProvider> = vec![];
         for network in &manifest.networks {
             let provider = create_client(
@@ -293,7 +287,8 @@ impl CreateNetworkProvider {
                 network.compute_units_per_second,
                 network.max_block_range,
                 manifest.get_custom_headers(),
-            )?;
+            )
+            .await?;
             result.push(CreateNetworkProvider {
                 network_name: network.name.clone(),
                 disable_logs_bloom_checks: network.disable_logs_bloom_checks.unwrap_or_default(),
@@ -317,17 +312,17 @@ pub fn get_network_provider<'a>(
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_create_retry_client() {
+    #[tokio::test]
+    async fn test_create_retry_client() {
         let rpc_url = "http://localhost:8545";
-        let result = create_client(rpc_url, 1, Some(660), None, HeaderMap::new());
+        let result = create_client(rpc_url, 1, Some(660), None, HeaderMap::new()).await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_create_retry_client_invalid_url() {
+    #[tokio::test]
+    async fn test_create_retry_client_invalid_url() {
         let rpc_url = "invalid_url";
-        let result = create_client(rpc_url, 1, Some(660), None, HeaderMap::new());
+        let result = create_client(rpc_url, 1, Some(660), None, HeaderMap::new()).await;
         assert!(result.is_err());
         if let Err(RetryClientError::HttpProviderCantBeCreated(url, _)) = result {
             assert_eq!(url, rpc_url);

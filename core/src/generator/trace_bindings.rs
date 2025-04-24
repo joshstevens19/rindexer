@@ -347,7 +347,7 @@ fn generate_trace_callback_structs_code(
 fn decoder_contract_fn(contracts_details: Vec<NativeTransferDetails>, abi_gen_name: &str) -> Code {
     let mut function = String::new();
     function.push_str(&format!(
-        r#"pub fn decoder_contract(network: &str) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> {{"#,
+        r#"pub async fn decoder_contract(network: &str) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> {{"#,
         abi_gen_name = abi_gen_name
     ));
 
@@ -364,7 +364,7 @@ fn decoder_contract_fn(contracts_details: Vec<NativeTransferDetails>, abi_gen_na
                 {abi_gen_name}::new(
                     // do not care about address here its decoding makes it easier to handle ValueOrArray
                     Address::zero(),
-                    Arc::new(get_provider_cache_for_network(network).get_inner_provider()),
+                    Arc::new(get_provider_cache_for_network(network).await.get_inner_provider()),
                  )
             }}"#,
             network = network,
@@ -392,10 +392,10 @@ fn build_pub_contract_fn(
     let contract_name = camel_to_snake(contract_name);
 
     Code::new(format!(
-        r#"pub fn {contract_name}_contract(network: &str, address: Address) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> {{
+        r#"pub async fn {contract_name}_contract(network: &str, address: Address) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> {{
                 {abi_gen_name}::new(
                     address,
-                    Arc::new(get_provider_cache_for_network(network).get_inner_provider()),
+                    Arc::new(get_provider_cache_for_network(network).await.get_inner_provider()),
                  )
                }}
             "#,
@@ -439,6 +439,7 @@ fn generate_trace_bindings_code(
         use std::{{any::Any, sync::Arc}};
         use std::error::Error;
         use std::future::Future;
+        use std::collections::HashMap;
         use std::pin::Pin;
         use std::path::{{Path, PathBuf}};
         use ethers::{{providers::{{Http, Provider, RetryClient}}, abi::Address, contract::EthLogDecode, types::{{Bytes, H256}}}};
@@ -507,8 +508,8 @@ fn generate_trace_bindings_code(
                 "{raw_contract_name}".to_string()
             }}
 
-            fn get_provider(&self, network: &str) -> Arc<JsonRpcCachedProvider> {{
-                get_provider_cache_for_network(network)
+            async fn get_provider(&self, network: &str) -> Arc<JsonRpcCachedProvider> {{
+                get_provider_cache_for_network(network).await
             }}
 
             fn decoder(&self, network: &str) -> Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync> {{
@@ -519,13 +520,21 @@ fn generate_trace_bindings_code(
                 }}
             }}
 
-            pub fn register(self, manifest_path: &PathBuf, registry: &mut TraceCallbackRegistry) {{
+            pub async fn register(self, manifest_path: &PathBuf, registry: &mut TraceCallbackRegistry) {{
                  let rindexer_yaml = read_manifest(manifest_path).expect("Failed to read rindexer.yaml");
                  let contract_name = self.contract_name();
                  let event_name = self.event_name();
 
                  let contract_details = rindexer_yaml
                     .native_transfers.networks.unwrap_or_default();
+
+                // Expect providers to have been initialized, but it's an async init so this should
+                // be fast but for correctness we must await each future.
+                let mut providers = HashMap::new();
+                for n in contract_details.iter() {{
+                    let provider = self.get_provider(&n.network).await;
+                    providers.insert(n.network.clone(), provider);
+                }}
 
                 let trace_information = TraceInformation {{
                     name: "{EVENT_NAME}".to_string(),
@@ -534,7 +543,10 @@ fn generate_trace_bindings_code(
                         .map(|c| NetworkTrace {{
                             id: generate_random_id(10),
                             network: c.network.clone(),
-                            cached_provider: self.get_provider(&c.network),
+                            cached_provider: providers
+                                .get(&c.network)
+                                .expect("must have a provider")
+                                .clone(),
                             start_block: c.start_block,
                             end_block: c.end_block,
                             method: c.method,

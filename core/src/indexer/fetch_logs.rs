@@ -376,8 +376,9 @@ async fn live_indexing_stream(
                             );
                             if last_no_new_block_log_time.elapsed() >= log_no_new_block_interval {
                                 info!(
-                                    "{} - {} - No new blocks published in the last 5 minutes - latest block number {}",
+                                    "{}::{} - {} - No new blocks published in the last 5 minutes - latest block number {}",
                                     info_log_name,
+                                    network,
                                     IndexingEventProgressStatus::Live.log(),
                                     last_seen_block_number,
                                 );

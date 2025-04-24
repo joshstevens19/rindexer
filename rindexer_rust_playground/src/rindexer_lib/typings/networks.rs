@@ -11,9 +11,10 @@ use rindexer::{
     provider::{create_client, JsonRpcCachedProvider, RetryClientError},
     public_read_env_value, HeaderMap,
 };
+use tokio::sync::OnceCell;
 
 #[allow(dead_code)]
-fn create_shadow_client(
+async fn create_shadow_client(
     rpc_url: &str,
     chain_id: u64,
     compute_units_per_second: Option<u64>,
@@ -24,52 +25,64 @@ fn create_shadow_client(
         "X-SHADOW-API-KEY",
         public_read_env_value("RINDEXER_PHANTOM_API_KEY").unwrap().parse().unwrap(),
     );
-    create_client(rpc_url, chain_id, compute_units_per_second, max_block_range, header)
+    create_client(rpc_url, chain_id, compute_units_per_second, max_block_range, header).await
 }
 
-lazy_static! {
-    static ref ETHEREUM_PROVIDER: Arc<JsonRpcCachedProvider> = create_client(
-        &public_read_env_value("https://mainnet.gateway.tenderly.co")
-            .unwrap_or("https://mainnet.gateway.tenderly.co".to_string()),
-        1,
-        None,
-        None,
-        HeaderMap::new()
-    )
-    .expect("Error creating provider");
-    static ref BASE_PROVIDER: Arc<JsonRpcCachedProvider> = create_client(
-        &public_read_env_value("https://mainnet.base.org")
-            .unwrap_or("https://mainnet.base.org".to_string()),
-        8453,
-        None,
-        None,
-        HeaderMap::new()
-    )
-    .expect("Error creating provider");
-}
-pub fn get_ethereum_provider_cache() -> Arc<JsonRpcCachedProvider> {
-    Arc::clone(&ETHEREUM_PROVIDER)
+static ETHEREUM_PROVIDER: OnceCell<Arc<JsonRpcCachedProvider>> = OnceCell::const_new();
+
+static BASE_PROVIDER: OnceCell<Arc<JsonRpcCachedProvider>> = OnceCell::const_new();
+
+pub async fn get_ethereum_provider_cache() -> Arc<JsonRpcCachedProvider> {
+    ETHEREUM_PROVIDER
+        .get_or_init(|| async {
+            create_client(
+                &public_read_env_value("https://mainnet.gateway.tenderly.co")
+                    .unwrap_or("https://mainnet.gateway.tenderly.co".to_string()),
+                1,
+                None,
+                None,
+                HeaderMap::new(),
+            )
+            .await
+            .expect("Error creating provider")
+        })
+        .await
+        .clone()
 }
 
-pub fn get_ethereum_provider() -> Arc<Provider<RetryClient<Http>>> {
-    ETHEREUM_PROVIDER.get_inner_provider()
+pub async fn get_ethereum_provider() -> Arc<Provider<RetryClient<Http>>> {
+    get_ethereum_provider_cache().await.get_inner_provider()
 }
 
-pub fn get_base_provider_cache() -> Arc<JsonRpcCachedProvider> {
-    Arc::clone(&BASE_PROVIDER)
+pub async fn get_base_provider_cache() -> Arc<JsonRpcCachedProvider> {
+    BASE_PROVIDER
+        .get_or_init(|| async {
+            create_client(
+                &public_read_env_value("https://mainnet.base.org")
+                    .unwrap_or("https://mainnet.base.org".to_string()),
+                8453,
+                None,
+                None,
+                HeaderMap::new(),
+            )
+            .await
+            .expect("Error creating provider")
+        })
+        .await
+        .clone()
 }
 
-pub fn get_base_provider() -> Arc<Provider<RetryClient<Http>>> {
-    BASE_PROVIDER.get_inner_provider()
+pub async fn get_base_provider() -> Arc<Provider<RetryClient<Http>>> {
+    get_base_provider_cache().await.get_inner_provider()
 }
 
-pub fn get_provider_cache_for_network(network: &str) -> Arc<JsonRpcCachedProvider> {
+pub async fn get_provider_cache_for_network(network: &str) -> Arc<JsonRpcCachedProvider> {
     if network == "ethereum" {
-        return get_ethereum_provider_cache();
+        return get_ethereum_provider_cache().await;
     }
 
     if network == "base" {
-        return get_base_provider_cache();
+        return get_base_provider_cache().await;
     }
     panic!("Network not supported")
 }

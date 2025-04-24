@@ -8,6 +8,7 @@
 )]
 use std::{
     any::Any,
+    collections::HashMap,
     error::Error,
     future::Future,
     path::{Path, PathBuf},
@@ -17,6 +18,7 @@ use std::{
 
 use ethers::{
     abi::Address,
+    contract::EthLogDecode,
     providers::{Http, Provider, RetryClient},
     types::{Bytes, H256},
 };
@@ -138,9 +140,11 @@ where
             + Clone,
         Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
     {
-        let csv = AsyncCsvAppender::new("/Users/joshstevens/code/rindexer/rindexer_rust_playground/./generated_csv/ERC20Filter/erc20filter-approval.csv");
-        if !Path::new("/Users/joshstevens/code/rindexer/rindexer_rust_playground/./generated_csv/ERC20Filter/erc20filter-approval.csv").exists() {
-            csv.append_header(vec!["contract_address".into(), "owner".into(), "spender".into(), "value".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()])
+        let csv = AsyncCsvAppender::new(
+            r"/Users/jackedgson/Development/avara/rindexer/rindexer_rust_playground/generated_csv/ERC20Filter/erc20filter-approval.csv",
+        );
+        if !Path::new(r"/Users/jackedgson/Development/avara/rindexer/rindexer_rust_playground/generated_csv/ERC20Filter/erc20filter-approval.csv").exists() {
+            csv.append_header(vec!["contract_address".into(), "owner".into(), "spender".into(), "value".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()].into())
                 .await
                 .expect("Failed to write CSV header");
         }
@@ -233,9 +237,11 @@ where
             + Clone,
         Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
     {
-        let csv = AsyncCsvAppender::new("/Users/joshstevens/code/rindexer/rindexer_rust_playground/./generated_csv/ERC20Filter/erc20filter-transfer.csv");
-        if !Path::new("/Users/joshstevens/code/rindexer/rindexer_rust_playground/./generated_csv/ERC20Filter/erc20filter-transfer.csv").exists() {
-            csv.append_header(vec!["contract_address".into(), "from".into(), "to".into(), "value".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()])
+        let csv = AsyncCsvAppender::new(
+            r"/Users/jackedgson/Development/avara/rindexer/rindexer_rust_playground/generated_csv/ERC20Filter/erc20filter-transfer.csv",
+        );
+        if !Path::new(r"/Users/jackedgson/Development/avara/rindexer/rindexer_rust_playground/generated_csv/ERC20Filter/erc20filter-transfer.csv").exists() {
+            csv.append_header(vec!["contract_address".into(), "from".into(), "to".into(), "value".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()].into())
                 .await
                 .expect("Failed to write CSV header");
         }
@@ -284,22 +290,24 @@ where
     Transfer(TransferEvent<TExtensions>),
 }
 
-pub fn erc_20_filter_contract(
+pub async fn erc_20_filter_contract(
     network: &str,
     address: Address,
 ) -> RindexerERC20FilterGen<Arc<Provider<RetryClient<Http>>>> {
     RindexerERC20FilterGen::new(
         address,
-        Arc::new(get_provider_cache_for_network(network).get_inner_provider()),
+        Arc::new(get_provider_cache_for_network(network).await.get_inner_provider()),
     )
 }
 
-pub fn decoder_contract(network: &str) -> RindexerERC20FilterGen<Arc<Provider<RetryClient<Http>>>> {
+pub async fn decoder_contract(
+    network: &str,
+) -> RindexerERC20FilterGen<Arc<Provider<RetryClient<Http>>>> {
     if network == "ethereum" {
         RindexerERC20FilterGen::new(
             // do not care about address here its decoding makes it easier to handle ValueOrArray
             Address::zero(),
-            Arc::new(get_provider_cache_for_network(network).get_inner_provider()),
+            Arc::new(get_provider_cache_for_network(network).await.get_inner_provider()),
         )
     } else {
         panic!("Network not supported");
@@ -332,8 +340,8 @@ where
         "ERC20".to_string()
     }
 
-    fn get_provider(&self, network: &str) -> Arc<JsonRpcCachedProvider> {
-        get_provider_cache_for_network(network)
+    async fn get_provider(&self, network: &str) -> Arc<JsonRpcCachedProvider> {
+        get_provider_cache_for_network(network).await
     }
 
     fn decoder(
@@ -344,22 +352,34 @@ where
 
         match self {
             ERC20FilterEventType::Approval(_) => Arc::new(move |topics: Vec<H256>, data: Bytes| {
-                match decoder_contract.decode_event::<ApprovalData>("Approval", topics, data) {
-                    Ok(filter) => Arc::new(filter) as Arc<dyn Any + Send + Sync>,
+                match ApprovalData::decode_log(&ethers::core::abi::RawLog {
+                    topics,
+                    data: data.to_vec(),
+                }) {
+                    Ok(event) => {
+                        let result: ApprovalData = event;
+                        Arc::new(result) as Arc<dyn Any + Send + Sync>
+                    }
                     Err(error) => Arc::new(error) as Arc<dyn Any + Send + Sync>,
                 }
             }),
 
             ERC20FilterEventType::Transfer(_) => Arc::new(move |topics: Vec<H256>, data: Bytes| {
-                match decoder_contract.decode_event::<TransferData>("Transfer", topics, data) {
-                    Ok(filter) => Arc::new(filter) as Arc<dyn Any + Send + Sync>,
+                match TransferData::decode_log(&ethers::core::abi::RawLog {
+                    topics,
+                    data: data.to_vec(),
+                }) {
+                    Ok(event) => {
+                        let result: TransferData = event;
+                        Arc::new(result) as Arc<dyn Any + Send + Sync>
+                    }
                     Err(error) => Arc::new(error) as Arc<dyn Any + Send + Sync>,
                 }
             }),
         }
     }
 
-    pub fn register(self, manifest_path: &PathBuf, registry: &mut EventCallbackRegistry) {
+    pub async fn register(self, manifest_path: &PathBuf, registry: &mut EventCallbackRegistry) {
         let rindexer_yaml = read_manifest(manifest_path).expect("Failed to read rindexer.yaml");
         let topic_id = self.topic_id();
         let contract_name = self.contract_name();
@@ -380,7 +400,15 @@ where
         let index_event_in_order = contract_details
             .index_event_in_order
             .as_ref()
-            .is_some_and(|vec| vec.contains(&event_name.to_string()));
+            .map_or(false, |vec| vec.contains(&event_name.to_string()));
+
+        // Expect providers to have been initialized, but it's an async init so this should
+        // be fast but for correctness we must await each future.
+        let mut providers = HashMap::new();
+        for n in contract_details.details.iter() {
+            let provider = self.get_provider(&n.network).await;
+            providers.insert(n.network.clone(), provider);
+        }
 
         let contract = ContractInformation {
             name: contract_details.before_modify_name_if_filter_readonly().into_owned(),
@@ -390,7 +418,10 @@ where
                 .map(|c| NetworkContract {
                     id: generate_random_id(10),
                     network: c.network.clone(),
-                    cached_provider: self.get_provider(&c.network),
+                    cached_provider: providers
+                        .get(&c.network)
+                        .expect("must have a provider")
+                        .clone(),
                     decoder: self.decoder(&c.network),
                     indexing_contract_setup: c.indexing_contract_setup(),
                     start_block: c.start_block,
@@ -399,7 +430,7 @@ where
                         .networks
                         .iter()
                         .find(|n| n.name == c.network)
-                        .is_some_and(|n| n.disable_logs_bloom_checks.unwrap_or_default()),
+                        .map_or(false, |n| n.disable_logs_bloom_checks.unwrap_or_default()),
                 })
                 .collect(),
             abi: contract_details.abi,

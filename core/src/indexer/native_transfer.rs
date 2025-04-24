@@ -180,7 +180,8 @@ pub async fn native_transfer_block_consumer(
     // Read more:
     // - https://docs.zksync.io/zksync-protocol/contracts/system-contracts#l2basetoken-msgvaluesimulator
     // - https://github.com/matter-labs/zksync-era/blob/7f36ed98fc6066c1224ff07c95282b647a8114fc/infrastructure/zk/src/verify-upgrade.ts#L24
-    let zksync_system_contracts: [Address; 12] = [
+    let zksync_system_contracts: [Address; 13] = [
+        "0x0000000000000000000000000000000000008001".parse().unwrap(), // Native Token
         "0x0000000000000000000000000000000000008002".parse().unwrap(), // AccountCodeStorage
         "0x0000000000000000000000000000000000008003".parse().unwrap(), // NonceHolder
         "0x0000000000000000000000000000000000008004".parse().unwrap(), // KnownCodesStorage
