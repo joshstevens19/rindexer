@@ -95,7 +95,7 @@ pub async fn setup_no_code(
                 });
             }
 
-            let network_providers = CreateNetworkProvider::create(&manifest)?;
+            let network_providers = CreateNetworkProvider::create(&manifest).await?;
             info!(
                 "Networks enabled: {}",
                 network_providers

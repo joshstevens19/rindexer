@@ -290,8 +290,9 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                                     log_no_new_block_interval
                                 {
                                     info!(
-                                        "{} - {} - No new blocks published in the last 5 minutes - latest block number {}",
+                                        "{}::{} - {} - No new blocks published in the last 5 minutes - latest block number {}",
                                         &config.info_log_name,
+                                        &config.network_contract.network,
                                         IndexingEventProgressStatus::Live.log(),
                                         latest_block_number
                                     );
@@ -563,7 +564,13 @@ async fn handle_logs_result(
             Ok(tokio::spawn(async {})) // Return a completed task
         }
         Err(e) => {
-            error!("Error fetching logs: {:?}", e);
+            error!(
+                "[{}] - {} - {} - Error fetching logs: {}",
+                config.network_contract.network,
+                config.event_name,
+                IndexingEventProgressStatus::Live.log(),
+                e
+            );
             Err(e)
         }
     }

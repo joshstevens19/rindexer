@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
 use tokio::sync::Mutex;
-use tracing::error;
+use tracing::{error, info};
 use url::Url;
 
 use crate::{event::RindexerEventFilter, manifest::core::Manifest};
@@ -25,6 +25,9 @@ use crate::{event::RindexerEventFilter, manifest::core::Manifest};
 pub struct JsonRpcCachedProvider {
     provider: Arc<Provider<RetryClient<Http>>>,
     cache: Mutex<Option<(Instant, Arc<Block<H256>>)>>,
+    is_zk_chain: bool,
+    #[allow(unused)]
+    chain_id: u64,
     pub max_block_range: Option<U64>,
 }
 
@@ -38,34 +41,52 @@ pub struct WrappedLog {
     pub block_timestamp: Option<U256>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraceCall {
     pub from: Address,
     pub gas: String,
     #[serde(rename = "gasUsed")]
     pub gas_used: U256,
-    pub to: Address,
+    pub to: Option<Address>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     pub input: Bytes,
+    #[serde(default)]
     pub value: U256,
     #[serde(rename = "type")]
     pub typ: String,
+    #[serde(default)]
+    pub calls: Vec<TraceCall>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraceCallFrame {
+    /// Zksync chains do not return `tx_hash` in their call trace response.
     #[serde(rename = "txHash")]
-    pub tx_hash: H256,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_hash: Option<H256>,
     pub result: TraceCall,
 }
 
 impl JsonRpcCachedProvider {
-    pub fn new(provider: Provider<RetryClient<Http>>, max_block_range: Option<U64>) -> Self {
+    pub async fn new(
+        provider: Provider<RetryClient<Http>>,
+        chain_id: u64,
+        max_block_range: Option<U64>,
+    ) -> Self {
+        let response: Result<String, _> = provider.request("zks_L1ChainId", [&()]).await;
+        let is_zk_chain = response.is_ok();
+
+        if is_zk_chain {
+            info!("Chain {} is zk chain. Trace indexing adjusted.", chain_id);
+        }
+
         JsonRpcCachedProvider {
             provider: Arc::new(provider),
             cache: Mutex::new(None),
             max_block_range,
+            chain_id,
+            is_zk_chain,
         }
     }
 
@@ -102,38 +123,71 @@ impl JsonRpcCachedProvider {
         &self,
         block_number: U64,
     ) -> Result<Vec<Trace>, ProviderError> {
+        // TODO: Consider the need to use `arbtrace_block` for early arbitrum blocks?
         let block = json!(serde_json::to_string_pretty(&block_number)?.replace("\"", ""));
-        let options = json!({
-            "tracer": "callTracer",
-            "tracerConfig": {
-                "onlyTopCall": true
-            }
-        });
+        let options = if self.is_zk_chain {
+            json!({ "tracer": "callTracer" })
+        } else {
+            json!({ "tracer": "callTracer", "tracerConfig": { "onlyTopCall": true } })
+        };
 
         let valid_traces: Vec<TraceCallFrame> =
             self.provider.request("debug_traceBlockByNumber", [block, options]).await?;
 
-        let traces = valid_traces
+        let mut flattened_calls = Vec::new();
+
+        for trace in valid_traces {
+            flattened_calls.push(TraceCallFrame {
+                tx_hash: trace.tx_hash,
+                result: TraceCall { calls: vec![], ..trace.result },
+            });
+
+            let mut stack = vec![];
+            stack.extend(trace.result.calls.into_iter());
+
+            while let Some(call) = stack.pop() {
+                flattened_calls.push(TraceCallFrame {
+                    tx_hash: None,
+                    result: TraceCall { calls: vec![], ..call },
+                });
+                stack.extend(call.calls.into_iter());
+            }
+        }
+
+        let traces = flattened_calls
             .into_iter()
-            .map(|frame| Trace {
-                action: Action::Call(Call {
-                    from: frame.result.from,
-                    to: frame.result.to,
-                    value: frame.result.value,
-                    gas: U256::from_str_radix(frame.result.gas.trim_start_matches("0x"), 16)
-                        .unwrap_or_default(),
-                    input: frame.result.input,
-                    call_type: CallType::Call,
-                }),
-                result: None,
-                trace_address: vec![],
-                subtraces: 0,
-                transaction_hash: Some(frame.tx_hash),
-                transaction_position: None, // not provided by debug_trace
-                block_number: block_number.as_u64(),
-                block_hash: H256::zero(), // not provided by debug_trace
-                error: frame.result.error,
-                action_type: ActionType::Call,
+            .filter_map(|frame| {
+                // It's not clear in what situation this is None, but it does happen so it's
+                // better to avoid deserialization errors for now and remove them from the list.
+                //
+                // We know they cannot be a valid native token transfer.
+                if let Some(to) = frame.result.to {
+                    Some(Trace {
+                        action: Action::Call(Call {
+                            from: frame.result.from,
+                            to,
+                            value: frame.result.value,
+                            gas: U256::from_str_radix(
+                                frame.result.gas.trim_start_matches("0x"),
+                                16,
+                            )
+                            .unwrap_or_default(),
+                            input: frame.result.input,
+                            call_type: CallType::Call,
+                        }),
+                        result: None,
+                        trace_address: vec![],
+                        subtraces: 0,
+                        transaction_hash: frame.tx_hash,
+                        transaction_position: None, // not provided by debug_trace
+                        block_number: block_number.as_u64(),
+                        block_hash: H256::zero(), // not provided by debug_trace
+                        error: frame.result.error,
+                        action_type: ActionType::Call,
+                    })
+                } else {
+                    None
+                }
             })
             .collect();
 
@@ -176,10 +230,14 @@ pub enum RetryClientError {
 
     #[error("Could not build client: {0}")]
     CouldNotBuildClient(#[from] reqwest::Error),
+
+    #[error("Could not connect to client for chain_id: {0}")]
+    CouldNotConnectClient(#[from] ProviderError),
 }
 
-pub fn create_client(
+pub async fn create_client(
     rpc_url: &str,
+    chain_id: u64,
     compute_units_per_second: Option<u64>,
     max_block_range: Option<U64>,
     custom_headers: HeaderMap,
@@ -200,7 +258,7 @@ pub fn create_client(
         .build(provider, Box::<ethers::providers::HttpRateLimitRetryPolicy>::default());
     let instance = Provider::new(retry_client);
 
-    Ok(Arc::new(JsonRpcCachedProvider::new(instance, max_block_range)))
+    Ok(Arc::new(JsonRpcCachedProvider::new(instance, chain_id, max_block_range).await))
 }
 
 pub async fn get_chain_id(rpc_url: &str) -> Result<U256, ProviderError> {
@@ -218,15 +276,19 @@ pub struct CreateNetworkProvider {
 }
 
 impl CreateNetworkProvider {
-    pub fn create(manifest: &Manifest) -> Result<Vec<CreateNetworkProvider>, RetryClientError> {
+    pub async fn create(
+        manifest: &Manifest,
+    ) -> Result<Vec<CreateNetworkProvider>, RetryClientError> {
         let mut result: Vec<CreateNetworkProvider> = vec![];
         for network in &manifest.networks {
             let provider = create_client(
                 &network.rpc,
+                network.chain_id,
                 network.compute_units_per_second,
                 network.max_block_range,
                 manifest.get_custom_headers(),
-            )?;
+            )
+            .await?;
             result.push(CreateNetworkProvider {
                 network_name: network.name.clone(),
                 disable_logs_bloom_checks: network.disable_logs_bloom_checks.unwrap_or_default(),
@@ -250,17 +312,17 @@ pub fn get_network_provider<'a>(
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_create_retry_client() {
+    #[tokio::test]
+    async fn test_create_retry_client() {
         let rpc_url = "http://localhost:8545";
-        let result = create_client(rpc_url, Some(660), None, HeaderMap::new());
+        let result = create_client(rpc_url, 1, Some(660), None, HeaderMap::new()).await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_create_retry_client_invalid_url() {
+    #[tokio::test]
+    async fn test_create_retry_client_invalid_url() {
         let rpc_url = "invalid_url";
-        let result = create_client(rpc_url, Some(660), None, HeaderMap::new());
+        let result = create_client(rpc_url, 1, Some(660), None, HeaderMap::new()).await;
         assert!(result.is_err());
         if let Err(RetryClientError::HttpProviderCantBeCreated(url, _)) = result {
             assert_eq!(url, rpc_url);

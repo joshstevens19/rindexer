@@ -1,6 +1,7 @@
 name: CI/CD
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - 'release/**'
@@ -30,7 +31,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: rustup component add clippy
       - name: Run clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy -- -D warnings -A clippy::uninlined_format_args
 
   build:
     if: |

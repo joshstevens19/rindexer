@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::VecDeque, sync::Arc, time::Duration};
 
 use ethers::{
     providers::ProviderError,
@@ -14,7 +14,11 @@ use crate::{
         callback_registry::{TraceResult, TxInformation},
         config::TraceProcessingConfig,
     },
-    indexer::process::ProcessEventError,
+    indexer::{
+        last_synced::evm_trace_update_progress_and_last_synced_task,
+        process::ProcessEventError,
+        task_tracker::{indexing_event_processed, indexing_event_processing},
+    },
     manifest::native_transfer::TraceProcessingMethod,
     provider::JsonRpcCachedProvider,
 };
@@ -68,10 +72,12 @@ pub struct NativeTransfer {
 
 /// Push a range of blocks to the back-pressured channel and block producer when full.
 async fn push_range(block_tx: &mpsc::Sender<U64>, last: U64, latest: U64) {
-    let range = last.as_u64()..=latest.as_u64();
-
-    for block in range {
-        block_tx.send(U64::from(block)).await.expect("should send");
+    let mut range = (last.as_u64()..=latest.as_u64()).collect::<VecDeque<_>>();
+    while let Some(block) = range.pop_front() {
+        if let Err(e) = block_tx.send(U64::from(block)).await {
+            error!("Failed to send block via channel. Re-queuing: {:?}", e);
+            range.push_front(block);
+        }
     }
 }
 
@@ -112,10 +118,9 @@ pub async fn native_transfer_block_fetch(
 
                     if block > last_seen_block {
                         let to_block = end_block.map(|end| block.min(end)).unwrap_or(block);
-
                         let from_block = block.min(last_seen_block + 1);
 
-                        info!("Pushing blocks {} - {}", from_block, to_block);
+                        debug!("Pushing trace blocks {} - {}", from_block, to_block);
 
                         push_range(&block_tx, from_block, to_block).await;
                         last_seen_block = to_block;
@@ -131,7 +136,7 @@ pub async fn native_transfer_block_fetch(
             }
             Ok(None) => {}
             Err(e) => {
-                error!("Error fetching trace_block: {}", e.to_string());
+                error!("Error fetching '{}' block traces: {}", network, e.to_string());
                 sleep(Duration::from_secs(1)).await;
             }
         }
@@ -154,15 +159,42 @@ pub async fn native_transfer_block_consumer(
     provider: Arc<JsonRpcCachedProvider>,
     block_numbers: &[U64],
     network_name: &str,
-    config: &TraceProcessingConfig,
+    config: Arc<TraceProcessingConfig>,
 ) -> Result<(), ProcessEventError> {
     let trace_futures: Vec<_> =
-        block_numbers.iter().map(|n| provider_call(provider.clone(), config, *n)).collect();
+        block_numbers.iter().map(|n| provider_call(provider.clone(), &config, *n)).collect();
     let trace_calls = try_join_all(trace_futures).await?;
     let (from_block, to_block) =
         block_numbers.iter().fold((U64::MAX, U64::zero()), |(min, max), &num| {
             (std::cmp::min(min, num), std::cmp::max(max, num))
         });
+
+    // We're not ready to support complete "trace" indexing for zksync chains. So we can
+    // effectively only get what we need for native transfers by removing calls to "system
+    // contracts".
+    //
+    // As an example, a Zksync ETH transfer will have a complex set of interactions with system
+    // contracts. But, there will be only one deeply-nested "transfer" call for the actual two EOAs,
+    // so filtering everything else will allow us to grab that without noise.
+    //
+    // Read more:
+    // - https://docs.zksync.io/zksync-protocol/contracts/system-contracts#l2basetoken-msgvaluesimulator
+    // - https://github.com/matter-labs/zksync-era/blob/7f36ed98fc6066c1224ff07c95282b647a8114fc/infrastructure/zk/src/verify-upgrade.ts#L24
+    let zksync_system_contracts: [Address; 13] = [
+        "0x0000000000000000000000000000000000008001".parse().unwrap(), // Native Token
+        "0x0000000000000000000000000000000000008002".parse().unwrap(), // AccountCodeStorage
+        "0x0000000000000000000000000000000000008003".parse().unwrap(), // NonceHolder
+        "0x0000000000000000000000000000000000008004".parse().unwrap(), // KnownCodesStorage
+        "0x0000000000000000000000000000000000008005".parse().unwrap(), // ImmutableSimulator
+        "0x0000000000000000000000000000000000008006".parse().unwrap(), // ContractDeployer
+        "0x0000000000000000000000000000000000008008".parse().unwrap(), // L1Messenger
+        "0x0000000000000000000000000000000000008009".parse().unwrap(), // MsgValueSimulator
+        "0x000000000000000000000000000000000000800a".parse().unwrap(), // L2BaseToken
+        "0x000000000000000000000000000000000000800b".parse().unwrap(), // SystemContext
+        "0x000000000000000000000000000000000000800c".parse().unwrap(), // BootloaderUtilities
+        "0x000000000000000000000000000000000000800e".parse().unwrap(), // BytecodeCompressor
+        "0x000000000000000000000000000000000000800f".parse().unwrap(), // ComplexUpgrader
+    ];
 
     let native_transfers = trace_calls
         .into_iter()
@@ -175,7 +207,10 @@ pub async fn native_transfer_block_consumer(
 
             let no_input = action.input == Bytes::new();
             let has_value = !action.value.is_zero();
-            let is_native_transfer = has_value && no_input;
+            let is_zksync_system_transfer = zksync_system_contracts.contains(&action.from) ||
+                zksync_system_contracts.contains(&action.to);
+
+            let is_native_transfer = has_value && no_input && !is_zksync_system_transfer;
 
             if is_native_transfer {
                 Some(TraceResult::new_native_transfer(
@@ -195,7 +230,9 @@ pub async fn native_transfer_block_consumer(
         return Ok(());
     }
 
+    indexing_event_processing();
     config.trigger_event(native_transfers).await;
+    evm_trace_update_progress_and_last_synced_task(config, to_block, indexing_event_processed);
 
     Ok(())
 }

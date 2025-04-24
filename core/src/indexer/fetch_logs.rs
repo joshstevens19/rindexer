@@ -70,6 +70,7 @@ pub fn fetch_logs_stream(
                         max_block_range_limitation,
                         snapshot_to_block,
                         &config.info_log_name,
+                        &config.network_contract.network,
                     )
                     .await;
 
@@ -122,6 +123,7 @@ pub fn fetch_logs_stream(
                 &config.info_log_name,
                 &config.semaphore,
                 config.network_contract.disable_logs_bloom_checks,
+                &config.network_contract.network,
             )
             .await;
         }
@@ -135,6 +137,7 @@ struct ProcessHistoricLogsStreamResult {
     pub max_block_range_limitation: Option<U64>,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn fetch_historic_logs_stream(
     cached_provider: &Arc<JsonRpcCachedProvider>,
     tx: &mpsc::UnboundedSender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
@@ -143,12 +146,15 @@ async fn fetch_historic_logs_stream(
     max_block_range_limitation: Option<U64>,
     snapshot_to_block: U64,
     info_log_name: &str,
+    network: &str,
 ) -> Option<ProcessHistoricLogsStreamResult> {
     let from_block = current_filter.get_from_block();
     let to_block = current_filter.get_to_block();
+
     debug!(
-        "{} - {} - Process historic events - blocks: {} - {}",
+        "{}::{} - {} - Process historic events - blocks: {} - {}",
         info_log_name,
+        network,
         IndexingEventProgressStatus::Syncing.log(),
         from_block,
         to_block
@@ -164,7 +170,7 @@ async fn fetch_historic_logs_stream(
         );
 
         return Some(ProcessHistoricLogsStreamResult {
-            next: current_filter.set_from_block(to_block),
+            next: current_filter.set_from_block(to_block).set_to_block(to_block + 1),
             max_block_range_limitation,
         });
     }
@@ -203,8 +209,9 @@ async fn fetch_historic_logs_stream(
 
             if tx.send(Ok(FetchLogsResult { logs, from_block, to_block })).is_err() {
                 error!(
-                    "{} - {} - Failed to send logs to stream consumer!",
+                    "{} - {} - {} - Failed to send logs to stream consumer!",
                     IndexingEventProgressStatus::Syncing.log(),
+                    network,
                     info_log_name
                 );
                 return None;
@@ -212,8 +219,8 @@ async fn fetch_historic_logs_stream(
 
             if logs_empty {
                 info!(
-                    "{} - No events found between blocks {} - {}",
-                    info_log_name, from_block, to_block
+                    "{} - No events found between blocks {} - {} - network: {}",
+                    info_log_name, from_block, to_block, network
                 );
                 let next_from_block = to_block + 1;
                 return if next_from_block > snapshot_to_block {
@@ -286,13 +293,15 @@ async fn fetch_historic_logs_stream(
                     retry_with_block_range(json_rpc_error, from_block, to_block)
                 {
                     warn!(
-                        "{} - {} - Fetching from {} to {} didnt work - retrying with block range: {:?}",
+                        "{}::{} - {} - Overfetched from {} to {} - shrinking to block range: {:?}",
                         info_log_name,
+                        network,
                         IndexingEventProgressStatus::Syncing.log(),
-                        from_block,
-                        to_block,
+                        from_block.as_u64(),
+                        to_block.as_u64(),
                         retry_result
                     );
+
                     return Some(ProcessHistoricLogsStreamResult {
                         next: current_filter
                             .set_from_block(retry_result.from)
@@ -302,15 +311,28 @@ async fn fetch_historic_logs_stream(
                 }
             }
 
+            let halved_range = (to_block - from_block) / 2;
+            let halved_to_block = (from_block + halved_range).max(from_block + 100);
+
+            // Handle deserialization, networking, and other non-rpc related errors.
             error!(
-                "{} - {} - Error fetching logs: {}",
+                "[{}] - {} - {} - Unexpected error fetching logs in range {} - {}. Retry fetching {} - {}: {:?}",
+                network,
                 info_log_name,
                 IndexingEventProgressStatus::Syncing.log(),
+                from_block.as_u64(),
+                to_block.as_u64(),
+                from_block.as_u64(),
+                halved_to_block.as_u64(),
                 err
             );
 
             let _ = tx.send(Err(Box::new(err)));
-            return None;
+
+            return Some(ProcessHistoricLogsStreamResult {
+                next: current_filter.set_from_block(from_block).set_to_block(halved_to_block),
+                max_block_range_limitation,
+            });
         }
     }
 
@@ -331,6 +353,7 @@ async fn live_indexing_stream(
     info_log_name: &str,
     semaphore: &Arc<Semaphore>,
     disable_logs_bloom_checks: bool,
+    network: &str,
 ) {
     let mut last_seen_block_number = last_seen_block_number;
     let mut last_no_new_block_log_time = Instant::now();
@@ -353,8 +376,9 @@ async fn live_indexing_stream(
                             );
                             if last_no_new_block_log_time.elapsed() >= log_no_new_block_interval {
                                 info!(
-                                    "{} - {} - No new blocks published in the last 5 minutes - latest block number {}",
+                                    "{}::{} - {} - No new blocks published in the last 5 minutes - latest block number {}",
                                     info_log_name,
+                                    network,
                                     IndexingEventProgressStatus::Live.log(),
                                     last_seen_block_number,
                                 );
@@ -460,11 +484,12 @@ async fn live_indexing_stream(
                                                     current_filter =
                                                         current_filter.set_from_block(to_block + 1);
                                                     info!(
-                                                        "{} - {} - No events found between blocks {} - {}",
+                                                        "{} - {} - No events found between blocks {} - {} - network: {}",
                                                         info_log_name,
                                                         IndexingEventProgressStatus::Live.log(),
                                                         from_block,
-                                                        to_block
+                                                        to_block,
+                                                        network
                                                     );
                                                 } else if let Some(last_log) = last_log {
                                                     if let Some(last_log_block_number) =
@@ -483,10 +508,12 @@ async fn live_indexing_stream(
                                                 drop(permit);
                                             }
                                             Err(err) => {
-                                                error!(
-                                                    "{} - {} - Error fetching logs: {}",
+                                                warn!(
+                                                    "{} - {} - Error fetching logs in range {} - {}. Retrying: {}",
                                                     info_log_name,
                                                     IndexingEventProgressStatus::Live.log(),
+                                                    from_block.as_u64(),
+                                                    to_block.as_u64(),
                                                     err
                                                 );
                                                 drop(permit);
@@ -560,9 +587,22 @@ fn retry_with_block_range(
             if let (Some(start_block), Some(end_block)) = (captures.get(1), captures.get(2)) {
                 let start_block_str = start_block.as_str();
                 let end_block_str = end_block.as_str();
+
                 if let (Ok(from), Ok(to)) =
                     (BlockNumber::from_str(start_block_str), BlockNumber::from_str(end_block_str))
                 {
+                    if from.as_number() > to.as_number() {
+                        error!(
+                            "Alchemy returned a negative block range. Overriding to single block fetch."
+                        );
+
+                        return Some(RetryWithBlockRangeResult {
+                            from: BlockNumber::Number(from_block),
+                            to: BlockNumber::Number(from_block + 1),
+                            max_block_range: None,
+                        });
+                    }
+
                     return Some(RetryWithBlockRangeResult { from, to, max_block_range: None });
                 }
             }
@@ -633,6 +673,16 @@ fn retry_with_block_range(
         if next_to_block == to_block {
             block_range = block_range.lower();
             next_to_block = from_block + block_range.value();
+        }
+
+        if next_to_block < from_block {
+            error!("Computed a negative fallback block range. Overriding to single block fetch.");
+
+            return Some(RetryWithBlockRangeResult {
+                from: BlockNumber::Number(from_block),
+                to: BlockNumber::Number(from_block + 1),
+                max_block_range: None,
+            });
         }
 
         return Some(RetryWithBlockRangeResult {
