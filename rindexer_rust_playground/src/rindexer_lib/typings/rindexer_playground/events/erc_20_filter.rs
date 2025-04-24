@@ -144,7 +144,7 @@ where
             r"/Users/joshstevens/code/rindexer/rindexer_rust_playground/generated_csv/ERC20Filter/erc20filter-approval.csv",
         );
         if !Path::new(r"/Users/joshstevens/code/rindexer/rindexer_rust_playground/generated_csv/ERC20Filter/erc20filter-approval.csv").exists() {
-            csv.append_header(vec!["contract_address".into(), "owner".into(), "spender".into(), "value".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()].into())
+            csv.append_header(vec!["contract_address".into(), "owner".into(), "spender".into(), "value".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()])
                 .await
                 .expect("Failed to write CSV header");
         }
@@ -241,7 +241,7 @@ where
             r"/Users/joshstevens/code/rindexer/rindexer_rust_playground/generated_csv/ERC20Filter/erc20filter-transfer.csv",
         );
         if !Path::new(r"/Users/joshstevens/code/rindexer/rindexer_rust_playground/generated_csv/ERC20Filter/erc20filter-transfer.csv").exists() {
-            csv.append_header(vec!["contract_address".into(), "from".into(), "to".into(), "value".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()].into())
+            csv.append_header(vec!["contract_address".into(), "from".into(), "to".into(), "value".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()])
                 .await
                 .expect("Failed to write CSV header");
         }
@@ -400,7 +400,7 @@ where
         let index_event_in_order = contract_details
             .index_event_in_order
             .as_ref()
-            .map_or(false, |vec| vec.contains(&event_name.to_string()));
+            .is_some_and(|vec| vec.contains(&event_name.to_string()));
 
         // Expect providers to have been initialized, but it's an async init so this should
         // be fast but for correctness we must await each future.
@@ -430,7 +430,7 @@ where
                         .networks
                         .iter()
                         .find(|n| n.name == c.network)
-                        .map_or(false, |n| n.disable_logs_bloom_checks.unwrap_or_default()),
+                        .is_some_and(|n| n.disable_logs_bloom_checks.unwrap_or_default()),
                 })
                 .collect(),
             abi: contract_details.abi,
