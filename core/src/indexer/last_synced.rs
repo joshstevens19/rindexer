@@ -13,7 +13,7 @@ use crate::{
     database::postgres::generate::{
         generate_indexer_contract_schema_name, generate_internal_event_table_name,
     },
-    event::config::EventProcessingConfig,
+    event::config::{EventProcessingConfig, TraceProcessingConfig},
     helpers::get_full_path,
     manifest::{storage::CsvDetails, stream::StreamsConfig},
     EthereumSqlTypeWrapper, PostgresClient,
@@ -184,24 +184,17 @@ pub enum UpdateLastSyncedBlockNumberFile {
 }
 
 async fn update_last_synced_block_number_for_file(
-    config: &Arc<EventProcessingConfig>,
+    contract_name: &str,
+    network: &str,
+    event_name: &str,
     full_path: &Path,
     to_block: U64,
 ) -> Result<(), UpdateLastSyncedBlockNumberFile> {
-    let file_path = build_last_synced_block_number_file(
-        full_path,
-        &config.contract_name,
-        &config.network_contract.network,
-        &config.event_name,
-    );
+    let file_path =
+        build_last_synced_block_number_file(full_path, contract_name, network, event_name);
 
-    let last_block = get_last_synced_block_number_file(
-        full_path,
-        &config.contract_name,
-        &config.network_contract.network,
-        &config.event_name,
-    )
-    .await?;
+    let last_block =
+        get_last_synced_block_number_file(full_path, contract_name, network, event_name).await?;
 
     let to_block_higher_then_last_block =
         if let Some(last_block_value) = last_block { to_block > last_block_value } else { true };
@@ -255,7 +248,9 @@ pub fn update_progress_and_last_synced_task(
             }
         } else if let Some(csv_details) = &config.csv_details {
             if let Err(e) = update_last_synced_block_number_for_file(
-                &config,
+                &config.contract_name,
+                &config.network_contract.network,
+                &config.event_name,
                 &get_full_path(&config.project_path, &csv_details.path).unwrap_or_else(|_| {
                     panic!("failed to get full path {}", config.project_path.display())
                 }),
@@ -272,7 +267,81 @@ pub fn update_progress_and_last_synced_task(
             &config.stream_last_synced_block_file_path
         {
             if let Err(e) = update_last_synced_block_number_for_file(
-                &config,
+                &config.contract_name,
+                &config.network_contract.network,
+                &config.event_name,
+                &config
+                    .project_path
+                    .join(stream_last_synced_block_file_path)
+                    .canonicalize()
+                    .expect("Failed to canonicalize path"),
+                to_block,
+            )
+            .await
+            {
+                error!(
+                    "Error updating last synced block to stream - path - {} error - {:?}",
+                    stream_last_synced_block_file_path, e
+                );
+            }
+        }
+
+        on_complete();
+    });
+}
+
+pub fn evm_trace_update_progress_and_last_synced_task(
+    config: Arc<TraceProcessingConfig>,
+    to_block: U64,
+    on_complete: impl FnOnce() + Send + 'static,
+) {
+    tokio::spawn(async move {
+        let update_last_synced_block_result =
+            config.progress.lock().await.update_last_synced_block(&config.id, to_block);
+
+        if let Err(e) = update_last_synced_block_result {
+            error!("Error updating last synced block: {:?}", e);
+        }
+
+        if let Some(database) = &config.database {
+            let schema =
+                generate_indexer_contract_schema_name(&config.indexer_name, &config.contract_name);
+            let table_name = generate_internal_event_table_name(&schema, &config.event_name);
+            let query = format!(
+                "UPDATE rindexer_internal.{} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block",
+                table_name
+            );
+            let result = database
+                .execute(&query, &[&EthereumSqlTypeWrapper::U64(to_block), &config.network])
+                .await;
+
+            if let Err(e) = result {
+                error!("Error updating last synced block: {:?}", e);
+            }
+        } else if let Some(csv_details) = &config.csv_details {
+            if let Err(e) = update_last_synced_block_number_for_file(
+                &config.contract_name,
+                &config.network,
+                &config.event_name,
+                &get_full_path(&config.project_path, &csv_details.path).unwrap_or_else(|_| {
+                    panic!("failed to get full path {}", config.project_path.display())
+                }),
+                to_block,
+            )
+            .await
+            {
+                error!(
+                    "Error updating last synced block to CSV - path - {} error - {:?}",
+                    csv_details.path, e
+                );
+            }
+        } else if let Some(stream_last_synced_block_file_path) =
+            &config.stream_last_synced_block_file_path
+        {
+            if let Err(e) = update_last_synced_block_number_for_file(
+                &config.contract_name,
+                &config.network,
+                &config.event_name,
                 &config
                     .project_path
                     .join(stream_last_synced_block_file_path)

@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use ethers::types::ValueOrArray;
 use serde_json::Value;
 
 use crate::{
@@ -12,23 +11,25 @@ use crate::{
         generate_column_names_only_with_base_properties, generate_event_table_full_name,
     },
     helpers::{camel_to_snake, camel_to_snake_advanced, to_pascal_case},
+    indexer::native_transfer::{EVENT_NAME, NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME},
     manifest::{
-        contract::{Contract, ContractDetails, ParseAbiError},
+        contract::ParseAbiError,
+        native_transfer::{NativeTransferDetails, NativeTransfers},
         storage::{CsvDetails, Storage},
     },
     types::code::Code,
 };
 
-pub fn abigen_contract_name(contract: &Contract) -> String {
-    format!("Rindexer{}Gen", contract.name)
+pub fn trace_abigen_contract_name(contract_name: &str) -> String {
+    format!("Rindexer{}Gen", contract_name)
 }
 
-fn abigen_contract_mod_name(contract: &Contract) -> String {
-    camel_to_snake_advanced(&abigen_contract_name(contract), true)
+fn trace_abigen_contract_mod_name(contract_name: &str) -> String {
+    camel_to_snake_advanced(&trace_abigen_contract_name(contract_name), true)
 }
 
-pub fn abigen_contract_file_name(contract: &Contract) -> String {
-    format!("{}_abi_gen", camel_to_snake(&contract.name))
+pub fn trace_abigen_contract_file_name(contract_name: &str) -> String {
+    format!("{}_abi_gen", camel_to_snake(contract_name))
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -46,14 +47,9 @@ pub enum GenerateStructsError {
     ParseAbiError(#[from] ParseAbiError),
 }
 
-fn generate_structs(
-    project_path: &Path,
-    contract: &Contract,
-) -> Result<Code, GenerateStructsError> {
-    // TODO - this could be shared with `get_abi_items`
-    let abi_str = contract.parse_abi(project_path)?;
-
-    let abi_json: Value = serde_json::from_str(&abi_str)?;
+fn trace_generate_structs(contract_name: &str) -> Result<Code, GenerateStructsError> {
+    let abi_str = NATIVE_TRANSFER_ABI;
+    let abi_json: Value = serde_json::from_str(abi_str)?;
 
     let mut structs = Code::blank();
 
@@ -75,7 +71,7 @@ fn generate_structs(
                 "#,
                 struct_result = struct_result,
                 struct_data = struct_data,
-                abigen_mod_name = abigen_contract_mod_name(contract),
+                abigen_mod_name = trace_abigen_contract_mod_name(contract_name),
                 pascal_event_name = to_pascal_case(event_name)
             )));
         }
@@ -96,23 +92,6 @@ fn generate_event_enums_code(event_info: &[EventInfo]) -> Code {
 
 fn generate_event_type_name(name: &str) -> String {
     format!("{}EventType", name)
-}
-
-fn generate_topic_ids_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> Code {
-    Code::new(
-        event_info
-            .iter()
-            .map(|info| {
-                format!(
-                    "{}::{}(_) => \"0x{}\",",
-                    event_type_name,
-                    info.name,
-                    info.topic_id_as_hex_string()
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-    )
 }
 
 fn generate_event_names_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> Code {
@@ -176,7 +155,7 @@ fn generate_decoder_match_arms_code(event_type_name: &str, event_info: &[EventIn
 
 fn generate_csv_instance(
     project_path: &Path,
-    contract: &Contract,
+    contract: &NativeTransfers,
     event_info: &EventInfo,
     csv: &Option<CsvDetails>,
 ) -> Result<Code, CreateCsvFileForEvent> {
@@ -194,8 +173,11 @@ fn generate_csv_instance(
     }
 
     let csv_path_str = csv_path.to_str().expect("Failed to convert csv path to string");
-    let csv_path =
-        event_info.create_csv_file_for_event(project_path, &contract.name, csv_path_str)?;
+    let csv_path = event_info.create_csv_file_for_event(
+        project_path,
+        NATIVE_TRANSFER_CONTRACT_NAME,
+        csv_path_str,
+    )?;
     let headers: Vec<String> =
         event_info.csv_headers_for_event().iter().map(|h| format!("\"{}\"", h)).collect();
 
@@ -217,20 +199,20 @@ fn generate_csv_instance(
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum GenerateEventCallbackStructsError {
+pub enum GenerateTraceCallbackStructsError {
     #[error("{0}")]
     CreateCsvFileForEvent(#[from] CreateCsvFileForEvent),
 }
 
-fn generate_event_callback_structs_code(
+fn generate_trace_callback_structs_code(
     project_path: &Path,
     event_info: &[EventInfo],
-    contract: &Contract,
+    contract: &NativeTransfers,
     storage: &Storage,
-) -> Result<Code, GenerateEventCallbackStructsError> {
+) -> Result<Code, GenerateTraceCallbackStructsError> {
     let databases_enabled = storage.postgres_enabled();
     let csv_enabled = storage.csv_enabled();
-    let is_filter = contract.is_filter();
+    let is_filter = false; // TODO: Hardcoded for now
 
     let mut parts = Vec::new();
 
@@ -245,15 +227,15 @@ fn generate_event_callback_structs_code(
             r#"
             pub fn {lower_name}_handler<TExtensions, F, Fut>(
                 custom_logic: F,
-            ) -> {name}EventCallbackType<TExtensions>
+            ) -> {name}TraceCallbackType<TExtensions>
             where
                 {struct_result}: Clone + 'static,
-                F: for<'a> Fn(Vec<{struct_result}>, Arc<EventContext<TExtensions>>) -> Fut
+                F: for<'a> Fn(Vec<{struct_result}>, Arc<TraceContext<TExtensions>>) -> Fut
                     + Send
                     + Sync
                     + 'static
                     + Clone,
-                Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
+                Fut: Future<Output = TraceCallbackResult<()>> + Send + 'static,
                 TExtensions: Send + Sync + 'static,
             {{
                 Arc::new(move |results, context| {{
@@ -264,33 +246,33 @@ fn generate_event_callback_structs_code(
                 }})
             }}
             
-            type {name}EventCallbackType<TExtensions> = Arc<
-                dyn for<'a> Fn(&'a Vec<{struct_result}>, Arc<EventContext<TExtensions>>) -> BoxFuture<'a, EventCallbackResult<()>>
+            type {name}TraceCallbackType<TExtensions> = Arc<
+                dyn for<'a> Fn(&'a Vec<{struct_result}>, Arc<TraceContext<TExtensions>>) -> BoxFuture<'a, TraceCallbackResult<()>>
                     + Send
                     + Sync,
                 >;
 
             pub struct {name}Event<TExtensions> where TExtensions: Send + Sync + 'static {{
-                callback: {name}EventCallbackType<TExtensions>,
-                context: Arc<EventContext<TExtensions>>,
+                callback: {name}TraceCallbackType<TExtensions>,
+                context: Arc<TraceContext<TExtensions>>,
             }}
 
             impl<TExtensions> {name}Event<TExtensions> where TExtensions: Send + Sync + 'static {{
                 pub async fn handler<F, Fut>(closure: F, extensions: TExtensions) -> Self
                 where
                     {struct_result}: Clone + 'static,
-                    F: for<'a> Fn(Vec<{struct_result}>, Arc<EventContext<TExtensions>>) -> Fut
+                    F: for<'a> Fn(Vec<{struct_result}>, Arc<TraceContext<TExtensions>>) -> Fut
                         + Send
                         + Sync
                         + 'static
                         + Clone,
-                    Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
+                    Fut: Future<Output = TraceCallbackResult<()>> + Send + 'static,
                 {{
                     {csv_generator}
 
                     Self {{
                         callback: {lower_name}_handler(closure),
-                        context: Arc::new(EventContext {{
+                        context: Arc::new(TraceContext {{
                             {database}
                             {csv}
                             extensions: Arc::new(extensions),
@@ -300,8 +282,8 @@ fn generate_event_callback_structs_code(
             }}
 
             #[async_trait]
-            impl<TExtensions> EventCallback for {name}Event<TExtensions> where TExtensions: Send + Sync {{
-                async fn call(&self, events: Vec<EventResult>) -> EventCallbackResult<()> {{
+            impl<TExtensions> TraceCallback for {name}Event<TExtensions> where TExtensions: Send + Sync {{
+                async fn call(&self, events: Vec<TraceResult>) -> TraceCallbackResult<()> {{
                     {event_callback_events_len}
 
                     // note some can not downcast because it cant decode
@@ -309,14 +291,17 @@ fn generate_event_callback_structs_code(
                     // not having the right abi for example
                     // transfer events with 2 indexed topics cant decode
                     // transfer events with 3 indexed topics
-                    let result: Vec<{struct_result}> = events.into_iter()
-                        .filter_map(|item| {{
-                            item.decoded_data.downcast::<{struct_data}>()
-                                .ok()
-                                .map(|arc| {struct_result} {{
-                                    event_data: (*arc).clone(),
-                                    tx_information: item.tx_information
-                                }})
+                    let result: Vec<{name}Result> = events
+                        .into_iter()
+                        .map(|item| {{
+                            {name}Result {{
+                                event_data: {name}Data {{
+                                    from: item.from,
+                                    to: item.to,
+                                    value: item.value,
+                                }},
+                                tx_information: item.tx_information,
+                            }}
                         }})
                         .collect();
 
@@ -327,7 +312,6 @@ fn generate_event_callback_structs_code(
             name = info.name,
             lower_name = info.name.to_lowercase(),
             struct_result = info.struct_result(),
-            struct_data = info.struct_data(),
             database = if databases_enabled {
                 "database: get_or_init_postgres_client().await,"
             } else {
@@ -360,7 +344,7 @@ fn generate_event_callback_structs_code(
     Ok(Code::new(parts.join("\n")))
 }
 
-fn decoder_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &str) -> Code {
+fn decoder_contract_fn(contracts_details: Vec<NativeTransferDetails>, abi_gen_name: &str) -> Code {
     let mut function = String::new();
     function.push_str(&format!(
         r#"pub async fn decoder_contract(network: &str) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> {{"#,
@@ -402,63 +386,25 @@ fn decoder_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &
 
 fn build_pub_contract_fn(
     contract_name: &str,
-    contracts_details: Vec<&ContractDetails>,
+    _contracts_details: Vec<NativeTransferDetails>,
     abi_gen_name: &str,
 ) -> Code {
     let contract_name = camel_to_snake(contract_name);
 
-    let has_array_addresses =
-        contracts_details.iter().any(|c| matches!(c.address(), Some(ValueOrArray::Array(_))));
-
-    let no_address = contracts_details.iter().any(|c| c.address().is_none());
-
-    if contracts_details.len() > 1 || has_array_addresses || no_address {
-        Code::new(format!(
-            r#"pub async fn {contract_name}_contract(network: &str, address: Address) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> {{
+    Code::new(format!(
+        r#"pub async fn {contract_name}_contract(network: &str, address: Address) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> {{
                 {abi_gen_name}::new(
                     address,
                     Arc::new(get_provider_cache_for_network(network).await.get_inner_provider()),
                  )
                }}
             "#,
-            abi_gen_name = abi_gen_name
-        ))
-    } else {
-        let contract = contracts_details
-            .first()
-            .expect("Contract details should have at least one contract detail");
-
-        match contract.address() {
-            None => {
-                panic!("Contract details should have an address");
-            }
-            Some(value) => match value {
-                ValueOrArray::Value(address) => {
-                    let address = format!("{:?}", address);
-                    Code::new(format!(
-                        r#"pub async fn {contract_name}_contract(network: &str) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> {{
-                                let address: Address = "{address}".parse().expect("Invalid address");
-                                {abi_gen_name}::new(
-                                    address,
-                                    Arc::new(get_provider_cache_for_network(network).await.get_inner_provider()),
-                                 )
-                               }}
-                            "#,
-                        abi_gen_name = abi_gen_name,
-                        contract_name = contract_name,
-                        address = address,
-                    ))
-                }
-                ValueOrArray::Array(_) => {
-                    unreachable!("Contract details should always be an single address");
-                }
-            },
-        }
-    }
+        abi_gen_name = abi_gen_name
+    ))
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum GenerateEventBindingCodeError {
+pub enum GenerateTraceBindingCodeError {
     #[error("Could not read ABI string: {0}")]
     CouldNotReadAbiString(#[from] std::io::Error),
 
@@ -469,17 +415,19 @@ pub enum GenerateEventBindingCodeError {
     GenerateStructsError(#[from] GenerateStructsError),
 
     #[error("{0}")]
-    GenerateEventCallbackStructsError(#[from] GenerateEventCallbackStructsError),
+    GenerateTraceCallbackStructsError(#[from] GenerateTraceCallbackStructsError),
 }
 
-fn generate_event_bindings_code(
+fn generate_trace_bindings_code(
     project_path: &Path,
     indexer_name: &str,
-    contract: &Contract,
+    contract_name: &str,
+    contract: &NativeTransfers,
     storage: &Storage,
     event_info: Vec<EventInfo>,
-) -> Result<Code, GenerateEventBindingCodeError> {
-    let event_type_name = generate_event_type_name(&contract.name);
+) -> Result<Code, GenerateTraceBindingCodeError> {
+    let event_type_name = generate_event_type_name(contract_name);
+
     let code = Code::new(format!(
         r#"#![allow(non_camel_case_types, clippy::enum_variant_names, clippy::too_many_arguments, clippy::upper_case_acronyms, clippy::type_complexity, dead_code)]
         /// THIS IS A GENERATED FILE. DO NOT MODIFY MANUALLY.
@@ -502,10 +450,10 @@ fn generate_event_bindings_code(
             FutureExt,
             event::{{
                 callback_registry::{{
-                    EventCallbackRegistry, EventCallbackRegistryInformation, EventCallbackResult,
-                    EventResult, TxInformation,
+                    TraceCallbackRegistry, TraceCallbackRegistryInformation, TraceCallbackResult,
+                    TraceResult, TxInformation,
                 }},
-                contract_setup::{{ContractInformation, NetworkContract}},
+                contract_setup::{{TraceInformation, NetworkTrace}},
             }},
             manifest::{{
                 contract::{{Contract, ContractDetails}},
@@ -522,11 +470,11 @@ fn generate_event_bindings_code(
         type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
         #[async_trait]
-        trait EventCallback {{
-            async fn call(&self, events: Vec<EventResult>) -> EventCallbackResult<()>;
+        trait TraceCallback {{
+            async fn call(&self, events: Vec<TraceResult>) -> TraceCallbackResult<()>;
         }}
 
-        pub struct EventContext<TExtensions> where TExtensions: Send + Sync {{
+        pub struct TraceContext<TExtensions> where TExtensions: Send + Sync {{
             {event_context_database}
             {event_context_csv}
             pub extensions: Arc<TExtensions>,
@@ -550,12 +498,6 @@ fn generate_event_bindings_code(
         {decoder_contract_fn}
 
         impl<TExtensions> {event_type_name}<TExtensions> where TExtensions: 'static + Send + Sync {{
-            pub fn topic_id(&self) -> &'static str {{
-                match self {{
-                    {topic_ids_match_arms}
-                }}
-            }}
-
             pub fn event_name(&self) -> &'static str {{
                 match self {{
                     {event_names_match_arms}
@@ -578,71 +520,53 @@ fn generate_event_bindings_code(
                 }}
             }}
 
-            pub async fn register(self, manifest_path: &PathBuf, registry: &mut EventCallbackRegistry) {{
-                let rindexer_yaml = read_manifest(manifest_path).expect("Failed to read rindexer.yaml");
-                let topic_id = self.topic_id();
-                let contract_name = self.contract_name();
-                let event_name = self.event_name();
+            pub async fn register(self, manifest_path: &PathBuf, registry: &mut TraceCallbackRegistry) {{
+                 let rindexer_yaml = read_manifest(manifest_path).expect("Failed to read rindexer.yaml");
+                 let contract_name = self.contract_name();
+                 let event_name = self.event_name();
 
-                let contract_details = rindexer_yaml
-                    .contracts
-                    .iter()
-                    .find(|c| c.name == contract_name)
-                    .unwrap_or_else(|| panic!("Contract {{}} not found please make sure its defined in the rindexer.yaml",
-                        contract_name))
-                    .clone();
-
-                  let index_event_in_order = contract_details
-                    .index_event_in_order
-                    .as_ref()
-                    .map_or(false, |vec| vec.contains(&event_name.to_string()));
+                 let contract_details = rindexer_yaml
+                    .native_transfers.networks.unwrap_or_default();
 
                 // Expect providers to have been initialized, but it's an async init so this should
                 // be fast but for correctness we must await each future.
                 let mut providers = HashMap::new();
-                for n in contract_details.details.iter() {{
+                for n in contract_details.iter() {{
                     let provider = self.get_provider(&n.network).await;
                     providers.insert(n.network.clone(), provider);
                 }}
 
-                let contract = ContractInformation {{
-                    name: contract_details.before_modify_name_if_filter_readonly().into_owned(),
+                let trace_information = TraceInformation {{
+                    name: "{EVENT_NAME}".to_string(),
                     details: contract_details
-                        .details
                         .iter()
-                        .map(|c| NetworkContract {{
+                        .map(|c| NetworkTrace {{
                             id: generate_random_id(10),
                             network: c.network.clone(),
                             cached_provider: providers
                                 .get(&c.network)
                                 .expect("must have a provider")
                                 .clone(),
-                            decoder: self.decoder(&c.network),
-                            indexing_contract_setup: c.indexing_contract_setup(),
                             start_block: c.start_block,
                             end_block: c.end_block,
-                            disable_logs_bloom_checks: rindexer_yaml
-                                                        .networks
-                                                        .iter()
-                                                        .find(|n| n.name == c.network)
-                                                        .map_or(false, |n| n.disable_logs_bloom_checks.unwrap_or_default()),
+                            method: c.method,
                         }})
                         .collect(),
-                    abi: contract_details.abi,
-                    reorg_safe_distance: contract_details.reorg_safe_distance.unwrap_or_default(),
+                    reorg_safe_distance: rindexer_yaml
+                        .native_transfers.reorg_safe_distance.unwrap_or_default(),
                 }};
 
-                let callback: Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync> = match self {{
+                let callback: Arc<dyn Fn(Vec<TraceResult>) -> BoxFuture<'static, TraceCallbackResult<()>> + Send + Sync> = match self {{
                     {register_match_arms}
                 }};
 
-               registry.register_event(EventCallbackRegistryInformation {{
+
+               registry.register_event(TraceCallbackRegistryInformation {{
                     id: generate_random_id(10),
                     indexer_name: "{indexer_name}".to_string(),
                     event_name: event_name.to_string(),
-                    index_event_in_order,
-                    topic_id: topic_id.parse::<H256>().unwrap(),
-                    contract,
+                    contract_name: contract_name.to_string(),
+                    trace_information: trace_information,
                     callback,
                 }});
             }}
@@ -655,28 +579,29 @@ fn generate_event_bindings_code(
         },
         postgres_client_import = if storage.postgres_enabled() { "PostgresClient," } else { "" },
         csv_import = if storage.csv_enabled() { "AsyncCsvAppender," } else { "" },
-        abigen_mod_name = abigen_contract_mod_name(contract),
-        abigen_file_name = abigen_contract_file_name(contract),
-        abigen_name = abigen_contract_name(contract),
-        structs = generate_structs(project_path, contract)?,
+        abigen_mod_name = trace_abigen_contract_mod_name(contract_name),
+        abigen_file_name = trace_abigen_contract_file_name(contract_name),
+        abigen_name = trace_abigen_contract_name(contract_name),
+        structs = trace_generate_structs(contract_name)?,
         event_type_name = &event_type_name,
         event_context_database =
             if storage.postgres_enabled() { "pub database: Arc<PostgresClient>," } else { "" },
         event_context_csv =
             if storage.csv_enabled() { "pub csv: Arc<AsyncCsvAppender>," } else { "" },
         event_callback_structs =
-            generate_event_callback_structs_code(project_path, &event_info, contract, storage)?,
+            generate_trace_callback_structs_code(project_path, &event_info, contract, storage)?,
         event_enums = generate_event_enums_code(&event_info),
-        topic_ids_match_arms = generate_topic_ids_match_arms_code(&event_type_name, &event_info),
         event_names_match_arms =
             generate_event_names_match_arms_code(&event_type_name, &event_info),
-        raw_contract_name = contract.raw_name(),
-        decoder_contract_fn =
-            decoder_contract_fn(contract.details.iter().collect(), &abigen_contract_name(contract)),
+        raw_contract_name = contract_name,
+        decoder_contract_fn = decoder_contract_fn(
+            contract.networks.clone().unwrap_or_default(),
+            &trace_abigen_contract_name(contract_name)
+        ),
         build_pub_contract_fn = build_pub_contract_fn(
-            &contract.name,
-            contract.details.iter().collect(),
-            &abigen_contract_name(contract)
+            contract_name,
+            contract.networks.clone().unwrap_or_default(),
+            &trace_abigen_contract_name(contract_name)
         ),
         decoder_match_arms = generate_decoder_match_arms_code(&event_type_name, &event_info),
         register_match_arms = generate_register_match_arms_code(&event_type_name, &event_info)
@@ -686,33 +611,69 @@ fn generate_event_bindings_code(
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum GenerateEventBindingsError {
+pub enum GenerateTraceBindingsError {
     #[error("{0}")]
     ReadAbi(#[from] ReadAbiError),
 
     #[error("{0}")]
-    GenerateEventBindingCode(#[from] GenerateEventBindingCodeError),
+    GenerateEventBindingCode(#[from] GenerateTraceBindingCodeError),
 
     #[error("{0}")]
     ParamType(#[from] ParamTypeError),
 }
 
-pub fn generate_event_bindings(
+/// Minimal changes by hardcoding the "mocked" native transfer Event abi as per erc20 standard.
+fn get_native_transfer_abi_items() -> Vec<ABIItem> {
+    vec![ABIItem {
+        inputs: vec![
+            ABIInput {
+                indexed: Some(true),
+                name: "from".to_string(),
+                type_: "address".to_string(),
+                components: None,
+            },
+            ABIInput {
+                indexed: Some(true),
+                name: "to".to_string(),
+                type_: "address".to_string(),
+                components: None,
+            },
+            ABIInput {
+                indexed: Some(false),
+                name: "value".to_string(),
+                type_: "uint256".to_string(),
+                components: None,
+            },
+        ],
+        name: "NativeTransfer".to_string(),
+        type_: "event".to_string(),
+    }]
+}
+
+pub fn generate_trace_bindings(
     project_path: &Path,
     indexer_name: &str,
-    contract: &Contract,
-    is_filter: bool,
+    contract_name: &str,
+    contract: &NativeTransfers,
+    _is_filter: bool,
     storage: &Storage,
-) -> Result<Code, GenerateEventBindingsError> {
-    let abi_items = ABIItem::get_abi_items(project_path, contract, is_filter)?;
+) -> Result<Code, GenerateTraceBindingsError> {
+    let abi_items = get_native_transfer_abi_items();
     let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
 
-    generate_event_bindings_code(project_path, indexer_name, contract, storage, event_names)
-        .map_err(GenerateEventBindingsError::GenerateEventBindingCode)
+    generate_trace_bindings_code(
+        project_path,
+        indexer_name,
+        contract_name,
+        contract,
+        storage,
+        event_names,
+    )
+    .map_err(GenerateTraceBindingsError::GenerateEventBindingCode)
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum GenerateEventHandlersError {
+pub enum GenerateTraceHandlersError {
     #[error("{0}")]
     ReadAbiError(#[from] ReadAbiError),
 
@@ -720,21 +681,19 @@ pub enum GenerateEventHandlersError {
     ParamTypeError(#[from] ParamTypeError),
 }
 
-pub fn generate_event_handlers(
-    project_path: &Path,
+pub fn generate_trace_handlers(
     indexer_name: &str,
-    is_filter: bool,
-    contract: &Contract,
+    contract_name: &str,
     storage: &Storage,
-) -> Result<Code, GenerateEventHandlersError> {
-    let abi_items = ABIItem::get_abi_items(project_path, contract, is_filter)?;
+) -> Result<Code, GenerateTraceHandlersError> {
+    let abi_items = get_native_transfer_abi_items();
     let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
 
     let mut imports = String::new();
     imports.push_str(
         r#"#![allow(non_snake_case)]
             use rindexer::{
-                event::callback_registry::EventCallbackRegistry,
+                event::callback_registry::TraceCallbackRegistry,
                 EthereumSqlTypeWrapper, PgType, RindexerColorize, rindexer_error, rindexer_info
             };
         "#,
@@ -744,20 +703,20 @@ pub fn generate_event_handlers(
         r#"use std::path::PathBuf;
         use super::super::super::typings::{indexer_name_formatted}::events::{handler_registry_name}::{{no_extensions, {event_type_name}"#,
         indexer_name_formatted = camel_to_snake(indexer_name),
-        handler_registry_name = camel_to_snake(&contract.name),
-        event_type_name = generate_event_type_name(&contract.name)
+        handler_registry_name = camel_to_snake(contract_name),
+        event_type_name = generate_event_type_name(contract_name)
     ));
 
     let mut handlers = String::new();
 
     let mut registry_fn = String::new();
     registry_fn.push_str(&format!(
-        r#"pub async fn {handler_registry_fn_name}_handlers(manifest_path: &PathBuf, registry: &mut EventCallbackRegistry) {{"#,
-        handler_registry_fn_name = camel_to_snake(&contract.name),
+        r#"pub async fn {handler_registry_fn_name}_handlers(manifest_path: &PathBuf, registry: &mut TraceCallbackRegistry) {{"#,
+        handler_registry_fn_name = camel_to_snake(contract_name),
     ));
 
     for event in event_names {
-        let event_type_name = generate_event_type_name(&contract.name);
+        let event_type_name = generate_event_type_name(contract_name);
 
         imports.push_str(&format!(r#",{handler_name}Event"#, handler_name = event.name,));
 
@@ -917,7 +876,7 @@ pub fn generate_event_handlers(
                     }}
                 "#,
                 table_name =
-                    generate_event_table_full_name(indexer_name, &contract.name, &event.name),
+                    generate_event_table_full_name(indexer_name, contract_name, &event.name),
                 handler_name = event.name,
                 event_type_name = event_type_name,
                 columns_names = generate_column_names_only_with_base_properties(&event.inputs)
@@ -952,7 +911,7 @@ pub fn generate_event_handlers(
 
         let handler = format!(
             r#"
-            async fn {handler_fn_name}_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegistry) {{
+            async fn {handler_fn_name}_handler(manifest_path: &PathBuf, registry: &mut TraceCallbackRegistry) {{
                 {event_type_name}::{handler_name}(
                     {handler_name}Event::handler(|results, context| async move {{
                             if results.is_empty() {{
@@ -980,7 +939,7 @@ pub fn generate_event_handlers(
             handler_fn_name = camel_to_snake(&event.name),
             handler_name = event.name,
             event_type_name = event_type_name,
-            contract_name = contract.name,
+            contract_name = contract_name,
             csv_write = if !postgres_write.is_empty() { String::new() } else { csv_write },
             postgres_write = postgres_write,
         );

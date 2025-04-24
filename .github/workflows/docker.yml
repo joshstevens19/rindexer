@@ -1,6 +1,7 @@
 name: Build & publish docker image
 
 on:
+  workflow_dispatch:
   pull_request:
     types:
       - closed
@@ -12,7 +13,6 @@ env:
 
 jobs:
   build:
-    if: github.event.pull_request.merged == true && startsWith(github.head_ref, 'release/')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -21,9 +21,9 @@ jobs:
       matrix:
         include:
           - dockerfile: Dockerfile
-            image: ghcr.io/joshstevens19/rindexer
+            image: ghcr.io/${{ github.repository }}
           - dockerfile: bundled.Dockerfile
-            image: ghcr.io/joshstevens19/rindexer-bundled
+            image: ghcr.io/${{ github.repository }}-bundled
 
     steps:
       - name: Checkout repository

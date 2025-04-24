@@ -14,9 +14,9 @@ use super::networks::{get_base_provider, get_ethereum_provider};
 
 abigen!(USDT, "./abis/erc20-abi.json");
 
-pub fn usdt_contract() -> USDT<Arc<Provider<RetryClient<Http>>>> {
+pub async fn usdt_contract() -> USDT<Arc<Provider<RetryClient<Http>>>> {
     let address: Address =
         "0xdac17f958d2ee523a2206206994597c13d831ec7".parse().expect("Invalid address");
 
-    USDT::new(address, Arc::new(get_ethereum_provider().clone()))
+    USDT::new(address, Arc::new(get_ethereum_provider().await.clone()))
 }

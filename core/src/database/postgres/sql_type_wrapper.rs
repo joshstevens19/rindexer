@@ -54,6 +54,7 @@ pub enum EthereumSqlTypeWrapper {
 
     // 256-bit integers
     U256(U256),
+    U256Numeric(U256),
     U256Nullable(U256),
     U256Bytes(U256),
     U256BytesNullable(U256),
@@ -150,6 +151,7 @@ impl EthereumSqlTypeWrapper {
             // 256-bit integers
             EthereumSqlTypeWrapper::U256(_) => "U256",
             EthereumSqlTypeWrapper::U256Nullable(_) => "U256Nullable",
+            EthereumSqlTypeWrapper::U256Numeric(_) => "U256Numeric",
             EthereumSqlTypeWrapper::U256Bytes(_) => "U256Bytes",
             EthereumSqlTypeWrapper::U256BytesNullable(_) => "U256BytesNullable",
             EthereumSqlTypeWrapper::I256(_) => "I256",
@@ -245,6 +247,8 @@ impl EthereumSqlTypeWrapper {
             EthereumSqlTypeWrapper::U256(_) | EthereumSqlTypeWrapper::U256Nullable(_) => {
                 PgType::VARCHAR
             }
+            // 256-bit unsigned integers opt in numeric representation (numeric(78))
+            EthereumSqlTypeWrapper::U256Numeric(_) => PgType::NUMERIC,
             EthereumSqlTypeWrapper::U256Bytes(_) | EthereumSqlTypeWrapper::U256BytesNullable(_) => {
                 PgType::BYTEA
             }
@@ -351,6 +355,22 @@ impl EthereumSqlTypeWrapper {
         groups
     }
 
+    fn convert_u256_to_base_10000_numeric_digits(value: &U256) -> Vec<i16> {
+        let mut groups = Vec::new();
+        let mut num = *value;
+        if num.is_zero() {
+            return vec![0];
+        }
+        while !num.is_zero() {
+            let remainder = num % U256::from(10000);
+            groups.push(remainder.as_u128() as i16);
+            num /= U256::from(10000);
+        }
+
+        groups.reverse();
+        groups
+    }
+
     fn write_numeric_to_postgres<T>(
         value: T,
         is_negative: bool,
@@ -360,6 +380,37 @@ impl EthereumSqlTypeWrapper {
         T: Into<u128> + Copy,
     {
         let groups = Self::convert_to_base_10000_numeric_digits(value);
+
+        if groups.is_empty() {
+            // Handle zero case
+            out.put_i16(0); // ndigits
+            out.put_i16(0); // weight
+            out.put_i16(0x0000); // sign
+            out.put_i16(0); // dscale
+            return Ok(IsNull::No);
+        }
+
+        out.put_i16(groups.len() as i16); // ndigits
+        out.put_i16((groups.len() - 1) as i16); // weight - safe now as we checked for empty
+        out.put_i16(if is_negative { 0x4000 } else { 0x0000 }); // sign
+        out.put_i16(0); // dscale
+
+        for group in groups {
+            out.put_i16(group);
+        }
+
+        Ok(IsNull::No)
+    }
+
+    fn write_u256_numeric_to_postgres<T>(
+        value: T,
+        is_negative: bool,
+        out: &mut BytesMut,
+    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>>
+    where
+        T: Into<U256>,
+    {
+        let groups = Self::convert_u256_to_base_10000_numeric_digits(&value.into());
 
         if groups.is_empty() {
             // Handle zero case
@@ -455,6 +506,9 @@ impl ToSql for EthereumSqlTypeWrapper {
                     return Ok(IsNull::Yes);
                 }
                 String::to_sql(&value.to_string(), ty, out)
+            }
+            EthereumSqlTypeWrapper::U256Numeric(value) => {
+                Self::write_u256_numeric_to_postgres(value, false, out)
             }
             EthereumSqlTypeWrapper::U256Bytes(value) => {
                 let mut bytes = [0u8; 32];
@@ -1391,6 +1445,7 @@ pub fn map_ethereum_wrapper_to_json(
                         json!(i128s.iter().map(|i| i.to_string()).collect::<Vec<_>>())
                     }
                     EthereumSqlTypeWrapper::U256(u) |
+                    EthereumSqlTypeWrapper::U256Numeric(u) |
                     EthereumSqlTypeWrapper::U256Bytes(u) |
                     EthereumSqlTypeWrapper::U256Nullable(u) |
                     EthereumSqlTypeWrapper::U256BytesNullable(u) => {
