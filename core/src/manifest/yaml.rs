@@ -66,7 +66,7 @@ fn validate_manifest(
     manifest: &Manifest,
 ) -> Result<(), ValidateManifestError> {
     for contract in &manifest.contracts {
-        let events = ABIItem::read_abi_items(project_path, contract)
+        let events = ABIItem::read_abi_items(project_path, &contract.to_abi_context())
             .map_err(|e| ValidateManifestError::InvalidABI(contract.name.clone(), e.to_string()))?;
 
         for detail in &contract.details {

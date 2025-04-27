@@ -8,8 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use super::core::{deserialize_option_u64_from_string, serialize_option_u64_as_string};
 use crate::{
+    abi::ABIContext,
     event::contract_setup::{
-        AddressDetails, ContractEventMapping, FilterDetails, IndexingContractSetup,
+        AddressDetails, ContractEventMapping, FactoryDetails, FilterDetails, IndexingContractSetup,
     },
     indexer::parse_topic,
     manifest::{chat::ChatConfig, stream::StreamsConfig},
@@ -62,8 +63,9 @@ pub struct ContractDetails {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub indexed_filters: Option<Vec<EventInputIndexedFilters>>,
 
-    // #[serde(default, skip_serializing_if = "Option::is_none")]
-    // factory: Option<FactoryDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub factories: Option<Vec<FactoryDetails>>,
+
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -122,7 +124,7 @@ impl ContractDetails {
             address: Some(address),
             filter: None,
             indexed_filters,
-            //factory: None,
+            factories: None,
             start_block,
             end_block,
         }
@@ -140,7 +142,7 @@ impl ContractDetails {
             address: None,
             filter: Some(filter),
             indexed_filters,
-            //factory: None,
+            factories: None,
             start_block,
             end_block,
         }
@@ -298,5 +300,13 @@ impl Contract {
         } else {
             false
         }
+    }
+
+    pub fn to_abi_context(&self) -> ABIContext {
+        ABIContext { abi: self.abi.clone(), include_events: self.include_events.clone() }
+    }
+
+    pub fn get_factories_details(&self) -> Vec<&FactoryDetails> {
+        self.details.iter().filter_map(|d| d.factories.as_ref()).flatten().collect()
     }
 }

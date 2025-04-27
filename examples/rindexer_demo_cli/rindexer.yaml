@@ -20,3 +20,18 @@ contracts:
   abi: ./abis/RocketTokenRETH.abi.json
   include_events:
   - Transfer
+- name: UniswapFactory
+  details:
+    - network: ethereum
+      address: 0x1f9840a85d5af5bf1d1762f925bdaddc4201f984
+      factory:
+        - name: pool
+          contract_address_deployed: PoolCreated.address
+          abi: ./abis/UniswapV3Pool.abi.json
+          include_events:
+            - Swap
+            - Mint
+      start_block: 12369621
+  abi: ./abis/UniswapV3Factory.abi.json
+  include_events:
+    - PoolCreated

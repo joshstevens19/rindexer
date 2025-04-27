@@ -166,6 +166,11 @@ pub enum ReadAbiError {
     CouldNotReadAbiJson(#[from] serde_json::Error),
 }
 
+pub struct ABIContext {
+    pub abi: String,
+    pub include_events: Option<Vec<String>>,
+}
+
 impl ABIItem {
     pub fn format_event_signature(&self) -> Result<String, ParamTypeError> {
         let formatted_inputs = self
@@ -191,14 +196,14 @@ impl ABIItem {
 
     pub fn read_abi_items(
         project_path: &Path,
-        contract: &Contract,
+        context: &ABIContext,
     ) -> Result<Vec<ABIItem>, ReadAbiError> {
-        let full_path = get_full_path(project_path, &contract.abi)
-            .map_err(|_| ReadAbiError::AbiPathDoesNotExist(contract.abi.clone()))?;
+        let full_path = get_full_path(project_path, &context.abi)
+            .map_err(|_| ReadAbiError::AbiPathDoesNotExist(context.abi.clone()))?;
         let abi_str = fs::read_to_string(full_path)?;
         let abi_items: Vec<ABIItem> = serde_json::from_str(&abi_str)?;
 
-        let filtered_abi_items = match &contract.include_events {
+        let filtered_abi_items = match &context.include_events {
             Some(events) => abi_items
                 .into_iter()
                 .filter(|item| item.type_ != "event" || events.contains(&item.name))
@@ -214,7 +219,7 @@ impl ABIItem {
         contract: &Contract,
         is_filter: bool,
     ) -> Result<Vec<ABIItem>, ReadAbiError> {
-        let mut abi_items = ABIItem::read_abi_items(project_path, contract)?;
+        let mut abi_items = ABIItem::read_abi_items(project_path, &contract.to_abi_context())?;
         if is_filter {
             let filter_event_names: Vec<String> = contract
                 .details

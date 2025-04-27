@@ -372,7 +372,7 @@ pub async fn create_relationships(
                 )));
             }
             Some(contract) => {
-                let abi_items = ABIItem::read_abi_items(project_path, contract)?;
+                let abi_items = ABIItem::read_abi_items(project_path, &contract.to_abi_context())?;
 
                 for linked_key in &foreign_key.foreign_keys {
                     let parameter_mapping =
@@ -393,8 +393,10 @@ pub async fn create_relationships(
                             ))
                         })?;
 
-                    let linked_abi_items =
-                        ABIItem::read_abi_items(project_path, linked_key_contract)?;
+                    let linked_abi_items = ABIItem::read_abi_items(
+                        project_path,
+                        &linked_key_contract.to_abi_context(),
+                    )?;
                     let linked_parameter_mapping =
                         linked_key.event_input_name.split('.').collect::<Vec<&str>>();
                     let linked_abi_parameter = get_abi_item_with_db_map(

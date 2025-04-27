@@ -84,15 +84,10 @@ impl RindexerEventFilter {
                     Filter::new().topic0(*topic_id).from_block(current_block).to_block(next_block),
                 )),
             },
-            IndexingContractSetup::Factory(factory) => {
-                let address = factory
-                    .address
-                    .parse::<Address>()
-                    .map_err(|_| BuildRindexerFilterError::AddressInvalidFormat)?;
-
+            IndexingContractSetup::Factory(address, factory) => {
                 Ok(RindexerEventFilter::from_filter(
                     Filter::new()
-                        .address(address)
+                        .address(ValueOrArray::Value(*address))
                         .topic0(*topic_id)
                         .from_block(current_block)
                         .to_block(next_block),

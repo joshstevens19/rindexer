@@ -1,12 +1,13 @@
 use std::{any::Any, sync::Arc};
 
 use ethers::{
-    addressbook::Address,
     prelude::{Log, ValueOrArray, U64},
+    types::Address,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    abi::ABIContext,
     event::callback_registry::Decoder,
     generate_random_id,
     manifest::contract::{Contract, EventInputIndexedFilters},
@@ -103,16 +104,28 @@ pub struct AddressDetails {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct FactoryDetails {
-    pub address: String,
+pub struct FactoryCreatedEvent {
+    pub event: String,
 
-    #[serde(rename = "eventName")]
-    pub event_name: String,
-
-    #[serde(rename = "parameterName")]
     pub parameter_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FactoryDetails {
+    pub name: String,
+
+    pub created_event: FactoryCreatedEvent,
 
     pub abi: String,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_events: Option<Vec<String>>,
+}
+
+impl FactoryDetails {
+    pub fn to_abi_context(&self) -> ABIContext {
+        ABIContext { abi: self.abi.clone(), include_events: self.include_events.clone() }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -126,7 +139,7 @@ pub struct FilterDetails {
 pub enum IndexingContractSetup {
     Address(AddressDetails),
     Filter(FilterDetails),
-    Factory(FactoryDetails),
+    Factory(Address, FactoryDetails),
 }
 
 impl IndexingContractSetup {

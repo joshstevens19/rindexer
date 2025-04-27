@@ -43,7 +43,7 @@ fn generate_event_table_sql_with_comments(
     abi_inputs: &[EventInfo],
     contract_name: &str,
     schema_name: &str,
-    apply_full_name_comment_for_events: Vec<String>,
+    apply_full_name_comment_for_events: &[String],
 ) -> String {
     abi_inputs
         .iter()
@@ -90,12 +90,14 @@ fn generate_event_table_sql_with_comments(
 fn generate_internal_event_table_sql(
     abi_inputs: &[EventInfo],
     schema_name: &str,
-    networks: Vec<&str>,
+    table_prefix: Option<String>,
+    networks: &Vec<&str>,
 ) -> String {
     abi_inputs.iter().map(|event_info| {
         let table_name = format!(
-            "rindexer_internal.{}_{}",
+            "rindexer_internal.{}_{}{}",
             schema_name,
+            table_prefix.as_deref().unwrap_or(""),
             camel_to_snake(&event_info.name)
         );
 
@@ -140,7 +142,8 @@ fn find_clashing_event_names(
             continue;
         }
 
-        let other_abi_items = ABIItem::read_abi_items(project_path, other_contract)?;
+        let other_abi_items =
+            ABIItem::read_abi_items(project_path, &other_contract.to_abi_context())?;
         let other_event_names =
             ABIItem::extract_event_names_and_signatures_from_abi(other_abi_items)?;
 
@@ -164,7 +167,7 @@ pub fn generate_tables_for_indexer_sql(
 
     for contract in &indexer.contracts {
         let contract_name = contract.before_modify_name_if_filter_readonly();
-        let abi_items = ABIItem::read_abi_items(project_path, contract)?;
+        let abi_items = ABIItem::read_abi_items(project_path, &contract.to_abi_context())?;
         let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
         let schema_name = generate_indexer_contract_schema_name(&indexer.name, &contract_name);
         sql.push_str(format!("CREATE SCHEMA IF NOT EXISTS {};", schema_name).as_str());
@@ -179,9 +182,41 @@ pub fn generate_tables_for_indexer_sql(
             &event_names,
             &contract.name,
             &schema_name,
-            event_matching_name_on_other,
+            &event_matching_name_on_other,
         ));
-        sql.push_str(&generate_internal_event_table_sql(&event_names, &schema_name, networks));
+        sql.push_str(&generate_internal_event_table_sql(
+            &event_names,
+            &schema_name,
+            None,
+            &networks,
+        ));
+
+        let all_factories = contract.get_factories_details();
+        for factory in all_factories {
+            let factory_schema_name = generate_indexer_contract_factory_schema_name(
+                &indexer.name,
+                &contract_name,
+                &factory.name,
+            );
+            sql.push_str(format!("CREATE SCHEMA IF NOT EXISTS {};", factory_schema_name).as_str());
+            info!("Creating schema if not exists: {}", factory_schema_name);
+
+            let abi_items = ABIItem::read_abi_items(project_path, &factory.to_abi_context())?;
+            let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
+            sql.push_str(&generate_event_table_sql_with_comments(
+                &event_names,
+                &contract.name,
+                &factory_schema_name,
+                // TODO - need to map this from the factory to the contract
+                &event_matching_name_on_other,
+            ));
+            sql.push_str(&generate_internal_event_table_sql(
+                &event_names,
+                &schema_name,
+                Some(format!("{}_", camel_to_snake(&factory.name))),
+                &networks,
+            ));
+        }
     }
 
     sql.push_str(&format!(
@@ -224,6 +259,19 @@ pub fn generate_indexer_contract_schema_name(indexer_name: &str, contract_name: 
     format!("{}_{}", camel_to_snake(indexer_name), camel_to_snake(contract_name))
 }
 
+pub fn generate_indexer_contract_factory_schema_name(
+    indexer_name: &str,
+    contract_name: &str,
+    factory_name: &str,
+) -> String {
+    format!(
+        "{}_{}_{}",
+        camel_to_snake(indexer_name),
+        camel_to_snake(contract_name),
+        camel_to_snake(factory_name)
+    )
+}
+
 pub fn drop_tables_for_indexer_sql(project_path: &Path, indexer: &Indexer) -> Code {
     let mut sql = format!(
         "DROP TABLE IF EXISTS rindexer_internal.{}_last_known_indexes_dropping_sql CASCADE;",
@@ -237,7 +285,7 @@ pub fn drop_tables_for_indexer_sql(project_path: &Path, indexer: &Indexer) -> Co
         sql.push_str(format!("DROP SCHEMA IF EXISTS {} CASCADE;", schema_name).as_str());
 
         // drop last synced blocks for contracts
-        let abi_items = ABIItem::read_abi_items(project_path, contract);
+        let abi_items = ABIItem::read_abi_items(project_path, &contract.to_abi_context());
         if let Ok(abi_items) = abi_items {
             for abi_item in abi_items.iter() {
                 let table_name = format!("{}_{}", schema_name, camel_to_snake(&abi_item.name));
@@ -251,6 +299,33 @@ pub fn drop_tables_for_indexer_sql(project_path: &Path, indexer: &Indexer) -> Co
                 "Could not read ABI items for contract moving on clearing the other data up: {}",
                 contract.name
             );
+        }
+
+        let all_factories = contract.get_factories_details();
+        for factory in all_factories {
+            let abi_items = ABIItem::read_abi_items(project_path, &factory.to_abi_context());
+            if let Ok(abi_items) = abi_items {
+                for abi_item in abi_items.iter() {
+                    let table_name = format!(
+                        "{}_{}_{}",
+                        schema_name,
+                        camel_to_snake(&factory.name),
+                        camel_to_snake(&abi_item.name)
+                    );
+
+                    sql.push_str(&format!(
+                        r#"
+                        DROP TABLE IF EXISTS rindexer_internal.{} CASCADE;
+                        "#,
+                        table_name
+                    ));
+                }
+            } else {
+                error!(
+                    "Could not read ABI items for contract moving on clearing the other data up: {}",
+                    contract.name
+                );
+            }
         }
     }
 

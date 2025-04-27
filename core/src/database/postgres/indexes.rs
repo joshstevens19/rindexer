@@ -205,7 +205,7 @@ pub async fn prepare_indexes(
     // global first
     if let Some(global_injected_parameters) = &postgres_indexes.global_injected_parameters {
         for contract in contracts {
-            let abi_items = ABIItem::read_abi_items(project_path, contract)?;
+            let abi_items = ABIItem::read_abi_items(project_path, &contract.to_abi_context())?;
 
             for abi_item in abi_items {
                 let db_table_name = format!(
@@ -239,7 +239,8 @@ pub async fn prepare_indexes(
                     ));
                 }
                 Some(contract) => {
-                    let abi_items = ABIItem::read_abi_items(project_path, contract)?;
+                    let abi_items =
+                        ABIItem::read_abi_items(project_path, &contract.to_abi_context())?;
 
                     if let Some(injected_parameters) = &contract_event_indexes.injected_parameters {
                         for abi_item in &abi_items {

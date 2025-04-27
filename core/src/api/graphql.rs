@@ -16,7 +16,10 @@ use tracing::{error, info};
 
 use crate::{
     database::postgres::{
-        client::connection_string, generate::generate_indexer_contract_schema_name,
+        client::connection_string,
+        generate::{
+            generate_indexer_contract_factory_schema_name, generate_indexer_contract_schema_name,
+        },
     },
     helpers::{kill_process_on_port, set_thread_no_logging},
     indexer::Indexer,
@@ -106,11 +109,25 @@ pub async fn start_graphql_server(
     let schemas: Vec<String> = indexer
         .contracts
         .iter()
-        .map(move |contract| {
-            generate_indexer_contract_schema_name(
+        .flat_map(|contract| {
+            let mut schemas = vec![generate_indexer_contract_schema_name(
                 &indexer.name,
                 &contract.before_modify_name_if_filter_readonly(),
-            )
+            )];
+
+            for detail in &contract.details {
+                if let Some(factories) = &detail.factories {
+                    schemas.extend(factories.iter().map(|factory| {
+                        generate_indexer_contract_factory_schema_name(
+                            &indexer.name,
+                            &contract.name,
+                            &factory.name,
+                        )
+                    }));
+                }
+            }
+
+            schemas
         })
         .collect();
 
