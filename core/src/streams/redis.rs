@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use bb8_redis::{
     bb8::{self, Pool, PooledConnection},
-    redis::{cmd, AsyncCommands},
+    redis::cmd,
     RedisConnectionManager,
 };
-use log::error;
+use redis::AsyncCommands;
 use serde_json::Value;
 use thiserror::Error;
 
@@ -65,7 +65,7 @@ impl Redis {
 
         let json_value = serde_json::to_string(&message_with_id)?;
         let mut con = get_pooled_connection(&self.client).await?;
-        let _: String = con.xadd(stream_name, "*", &[("payload", &json_value)]).await?;
+        let _: () = con.xadd(stream_name, "*", &[("payload", &json_value)]).await?;
 
         Ok(())
     }

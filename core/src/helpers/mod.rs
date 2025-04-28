@@ -18,7 +18,7 @@ pub use file::{
     create_mod_file, format_all_files_for_project, load_env_from_full_path,
     load_env_from_project_path, write_file, CreateModFileError, WriteFileError,
 };
-use rand::{distributions::Alphanumeric, Rng};
+use rand::{distr::Alphanumeric, Rng};
 
 pub fn camel_to_snake(s: &str) -> String {
     camel_to_snake_advanced(s, false)
@@ -128,7 +128,7 @@ fn capitalize_word(word: &str, is_single_word: bool) -> String {
 }
 
 pub fn generate_random_id(len: usize) -> String {
-    rand::thread_rng().sample_iter(&Alphanumeric).take(len).map(char::from).collect()
+    rand::rng().sample_iter(&Alphanumeric).take(len).map(char::from).collect()
 }
 
 pub fn get_full_path(project_path: &Path, file_path: &str) -> Result<PathBuf, std::io::Error> {

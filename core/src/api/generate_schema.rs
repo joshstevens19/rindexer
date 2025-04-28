@@ -103,14 +103,16 @@ pub async fn generate_graphql_queries(
 
 #[cfg(test)]
 mod tests {
-    use mockito::mock;
     use tempfile::tempdir;
 
     use super::*;
 
     #[tokio::test]
     async fn test_generate_graphql_queries_no_data() {
-        let _mock = mock("POST", "/")
+        let mut server = mockito::Server::new();
+
+        server
+            .mock("POST", "/")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"{"data": {}}"#)
@@ -119,7 +121,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let generate_path = dir.path();
 
-        let result = generate_graphql_queries(&mockito::server_url(), generate_path).await;
+        let result = generate_graphql_queries(&server.url(), generate_path).await;
         assert!(matches!(result, Err(GenerateGraphqlQueriesError::NoData)));
     }
 }
