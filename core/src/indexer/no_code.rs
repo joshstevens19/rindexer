@@ -7,11 +7,10 @@ use std::{
 
 use alloy::{
     dyn_abi::{abi::Token, DynSolValue},
-    json_abi::JsonAbi,
+    json_abi::{Event, JsonAbi},
     primitives::TxHash,
 };
 use colored::Colorize;
-use ethers::abi::Event;
 use serde_json::Value;
 use tokio_postgres::types::Type as PgType;
 use tracing::{debug, error, info, warn};
@@ -50,6 +49,7 @@ use crate::{
     provider::{CreateNetworkProvider, RetryClientError},
     setup_info_logger,
     streams::StreamsClients,
+    types::ethers::LogParam,
     AsyncCsvAppender, FutureExt, IndexingDetails, StartDetails, StartNoCodeDetails,
 };
 
@@ -242,10 +242,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                         let log_index = result.tx_information.log_index;
 
                         let event_parameters: Vec<EthereumSqlTypeWrapper> =
-                            map_log_params_to_ethereum_wrapper(
-                                &params.event_info.inputs,
-                                &log.params,
-                            );
+                            map_log_params_to_ethereum_wrapper(&params.event_info.inputs, &log);
 
                         let contract_address = EthereumSqlTypeWrapper::Address(address);
                         let end_global_parameters = vec![

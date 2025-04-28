@@ -6,13 +6,8 @@ use alloy::{
     primitives::{keccak256, Address, Bloom, B256, U256},
     rpc::types::{Block, FilterSet, FilteredParams, Log, ValueOrArray},
 };
-#[derive(Debug, PartialEq, Clone)]
-pub struct LogParam {
-    /// Decoded log name.
-    pub name: String,
-    /// Decoded log value.
-    pub value: DynSolValue,
-}
+
+use crate::types::ethers::LogParam;
 
 pub fn parse_log(event: &Event, log: &Log) -> Option<Vec<EventParam>> {
     // as topic[0] is the event signature

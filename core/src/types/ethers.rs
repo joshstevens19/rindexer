@@ -1,4 +1,7 @@
-use alloy::primitives::{Address, BlockHash, TxHash, U256, U64};
+use alloy::{
+    dyn_abi::DynSolValue,
+    primitives::{Address, BlockHash, TxHash, U256, U64},
+};
 use serde::{Deserialize, Serialize};
 
 /// Metadata inside a log
@@ -21,4 +24,12 @@ pub struct LogMeta {
 
     /// Log index position in the block
     pub log_index: U256,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct LogParam {
+    /// Decoded log name.
+    pub name: String,
+    /// Decoded log value.
+    pub value: DynSolValue,
 }
