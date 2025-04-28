@@ -2,10 +2,9 @@ use std::sync::Arc;
 
 use bb8_redis::{
     bb8::{self, Pool, PooledConnection},
-    redis::cmd,
+    redis::{cmd, AsyncCommands},
     RedisConnectionManager,
 };
-use redis::AsyncCommands;
 use serde_json::Value;
 use thiserror::Error;
 
