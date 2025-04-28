@@ -1,4 +1,6 @@
-use ethers::prelude::U64;
+use std::str::FromStr;
+
+use alloy::{primitives::U64, transports::http::reqwest::header::HeaderMap};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_yaml::Value;
 
@@ -152,8 +154,8 @@ impl Manifest {
         self.storage.csv_enabled() && contract_csv_enabled
     }
 
-    pub fn get_custom_headers(&self) -> reqwest::header::HeaderMap {
-        let mut headers = reqwest::header::HeaderMap::new();
+    pub fn get_custom_headers(&self) -> HeaderMap {
+        let mut headers = HeaderMap::new();
         if let Some(phantom) = &self.phantom {
             if let Some(shadow) = &phantom.shadow {
                 headers.insert("X-SHADOW-API-KEY", shadow.api_key.parse().unwrap());
@@ -169,7 +171,7 @@ where
 {
     let s: Option<String> = Option::deserialize(deserializer)?;
     match s {
-        Some(string) => U64::from_dec_str(&string).map(Some).map_err(serde::de::Error::custom),
+        Some(string) => U64::from_str(&string).map(Some).map_err(serde::de::Error::custom),
         None => Ok(None),
     }
 }
@@ -182,7 +184,7 @@ where
     S: Serializer,
 {
     match *value {
-        Some(ref u64_value) => serializer.serialize_some(&u64_value.as_u64().to_string()),
+        Some(ref u64_value) => serializer.serialize_some(&u64_value.as_limbs()[0].to_string()),
         None => serializer.serialize_none(),
     }
 }
@@ -237,8 +239,8 @@ mod tests {
         let networks = manifest.native_transfers.networks.unwrap();
 
         assert_eq!(networks[0].network, "ethereum");
-        assert_eq!(networks[0].start_block.unwrap().as_u64(), 100);
-        assert_eq!(networks[0].end_block.unwrap().as_u64(), 200);
+        assert_eq!(networks[0].start_block.unwrap().as_limbs()[0], 100);
+        assert_eq!(networks[0].end_block.unwrap().as_limbs()[0], 200);
 
         assert_eq!(networks[1].network, "base");
         assert_eq!(networks[1].start_block, None);

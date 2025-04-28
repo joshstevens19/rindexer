@@ -1,4 +1,4 @@
-use ethers::abi::Hash;
+use alloy::primitives::TxHash;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -6,6 +6,6 @@ use serde_json::Value;
 pub struct EventMessage {
     pub event_name: String,
     pub event_data: Value,
-    pub event_signature_hash: Hash,
+    pub event_signature_hash: TxHash,
     pub network: String,
 }

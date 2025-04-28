@@ -1,13 +1,11 @@
 use std::str::FromStr;
 
+use alloy::{
+    // abi::{Int, LogParam, Token},
+    primitives::{aliases::B160, Address, Bytes, B128, B256, B512, I256, U256, U512, U64},
+};
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, Utc};
-use ethers::{
-    abi::{Int, LogParam, Token},
-    addressbook::Address,
-    prelude::{Bytes, H128, H160, H256, H512, U256, U512, U64},
-    types::I256,
-};
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type as PgType};

@@ -1,9 +1,11 @@
 use std::{any::Any, sync::Arc, time::Duration};
 
-use ethers::{
-    addressbook::Address,
-    contract::LogMeta,
-    types::{Bytes, Call, Log, Trace, H256, U256, U64},
+use alloy::{
+    primitives::{Address, BlockHash, Bytes, TxHash, B256, U256, U64},
+    rpc::types::{
+        trace::parity::{CallAction, LocalizedTransactionTrace},
+        Log,
+    },
 };
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -14,13 +16,13 @@ use crate::{
     event::contract_setup::{ContractInformation, NetworkContract, TraceInformation},
     indexer::start::ProcessedNetworkContract,
     is_running,
-    provider::WrappedLog,
+    types::ethers::LogMeta,
 };
 
-pub type Decoder = Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync>;
+pub type Decoder = Arc<dyn Fn(Vec<TxHash>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync>;
 
 pub fn noop_decoder() -> Decoder {
-    Arc::new(move |_topics: Vec<H256>, _data: Bytes| {
+    Arc::new(move |_topics: Vec<TxHash>, _data: Bytes| {
         Arc::new(String::new()) as Arc<dyn Any + Send + Sync>
     }) as Decoder
 }
@@ -41,10 +43,10 @@ pub enum CallbackResult {
 pub struct TxInformation {
     pub network: String,
     pub address: Address,
-    pub block_hash: H256,
+    pub block_hash: BlockHash,
     pub block_number: U64,
     pub block_timestamp: Option<U256>,
-    pub transaction_hash: H256,
+    pub transaction_hash: TxHash,
     pub log_index: U256,
     pub transaction_index: U64,
 }
@@ -66,24 +68,27 @@ pub struct EventResult {
 impl EventResult {
     pub fn new(
         network_contract: Arc<NetworkContract>,
-        log: WrappedLog,
+        log: Log,
         start_block: U64,
         end_block: U64,
     ) -> Self {
-        let log_meta = LogMeta::from(&log.inner);
         let log_address = log.inner.address;
         Self {
-            log: log.inner.clone(),
+            log: log.clone(),
             decoded_data: network_contract.decode_log(log.inner),
             tx_information: TxInformation {
                 network: network_contract.network.to_string(),
                 address: log_address,
-                block_hash: log_meta.block_hash,
-                block_number: log_meta.block_number,
-                block_timestamp: log.block_timestamp,
-                transaction_hash: log_meta.transaction_hash,
-                transaction_index: log_meta.transaction_index,
-                log_index: log_meta.log_index,
+                block_hash: log.block_hash.expect("log should contain block_hash"),
+                block_number: U64::from(log.block_number.expect("log should contain block_number")),
+                block_timestamp: log.block_timestamp.map(U256::from),
+                transaction_hash: log
+                    .transaction_hash
+                    .expect("log should contain transaction_hash"),
+                transaction_index: U64::from(
+                    log.transaction_index.expect("log should contain transaction_index"),
+                ),
+                log_index: U256::from(log.log_index.expect("log should contain log_index")),
             },
             found_in_request: LogFoundInRequest { from_block: start_block, to_block: end_block },
         }
@@ -100,7 +105,7 @@ pub type TraceCallbackType =
 pub struct EventCallbackRegistryInformation {
     pub id: String,
     pub indexer_name: String,
-    pub topic_id: H256,
+    pub topic_id: B256,
     pub event_name: String,
     pub index_event_in_order: bool,
     pub contract: ContractInformation,
@@ -218,24 +223,31 @@ pub struct TraceResult {
 impl TraceResult {
     /// Create a "NativeTransfer" TraceResult for sinking and streaming.
     pub fn new_native_transfer(
-        action: &Call,
-        trace: &Trace,
+        action: &CallAction,
+        trace: &LocalizedTransactionTrace,
         network: &str,
         start_block: U64,
         end_block: U64,
     ) -> Self {
+        if trace.block_number.is_none() {
+            error!(
+                "Unexpected block trace None for `block_number` in {} - {}",
+                start_block, end_block
+            );
+        }
+
         Self {
             from: action.from,
             to: action.to,
             value: action.value,
             tx_information: TxInformation {
                 network: network.to_string(),
-                address: Address::zero(),
-                block_number: U64::from(trace.block_number),
-                block_timestamp: None,
+                address: Address::ZERO,
                 // TODO: Unclear in what situation this would be `None`.
-                transaction_hash: trace.transaction_hash.unwrap_or_else(H256::zero),
-                block_hash: trace.block_hash,
+                block_number: trace.block_number.map(U64::from).unwrap_or_else(|| U64::ZERO),
+                block_timestamp: None,
+                transaction_hash: trace.transaction_hash.unwrap_or_else(|| TxHash::ZERO),
+                block_hash: trace.block_hash.unwrap_or_else(|| BlockHash::ZERO),
                 transaction_index: U64::from(trace.transaction_position.unwrap_or(0)),
                 log_index: U256::from(0),
             },

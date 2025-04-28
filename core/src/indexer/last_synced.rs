@@ -1,6 +1,6 @@
-use std::{path::Path, sync::Arc};
+use std::{path::Path, str::FromStr, sync::Arc};
 
-use ethers::prelude::U64;
+use alloy::primitives::U64;
 use rust_decimal::Decimal;
 use tokio::{
     fs,
@@ -40,7 +40,7 @@ async fn get_last_synced_block_number_file(
 
     if reader.read_line(&mut line).await? > 0 {
         let value = line.trim();
-        let parse = U64::from_dec_str(value);
+        let parse = U64::from_str(value);
         return match parse {
             Ok(value) => Ok(Some(value)),
             Err(e) => {
@@ -156,8 +156,8 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
         match database.query_one(&query, &[&config.network]).await {
             Ok(row) => {
                 let result: Decimal = row.get("last_synced_block");
-                let parsed = U64::from_dec_str(&result.to_string())
-                    .expect("Failed to parse last_synced_block");
+                let parsed =
+                    U64::from_str(&result.to_string()).expect("Failed to parse last_synced_block");
                 if parsed.is_zero() {
                     None
                 } else {

@@ -12,8 +12,8 @@ use std::{
     str,
 };
 
+use alloy::primitives::{I256, U256};
 use dotenv::dotenv;
-use ethers::prelude::{I256, U256};
 pub use file::{
     create_mod_file, format_all_files_for_project, load_env_from_full_path,
     load_env_from_project_path, write_file, CreateModFileError, WriteFileError,
@@ -185,7 +185,7 @@ pub fn u256_to_i256(value: U256) -> I256 {
         I256::from_raw(value)
     } else {
         // If it's larger, it represents a negative number in two's complement
-        let twos_complement = (!value).overflowing_add(U256::one()).0;
+        let twos_complement = (!value).overflowing_add(U256::ONE).0;
         I256::from_raw(twos_complement).wrapping_neg()
     }
 }

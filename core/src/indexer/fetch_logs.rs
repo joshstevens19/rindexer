@@ -1,9 +1,9 @@
 use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
 
-use ethers::{
-    addressbook::Address,
-    middleware::MiddlewareError,
-    prelude::{BlockNumber, JsonRpcError, ValueOrArray, H256, U64},
+use alloy::{
+    primitives::{Address, BlockNumber, B256, U64},
+    rpc::types::{Log, ValueOrArray},
+    transports::RpcError,
 };
 use regex::Regex;
 use tokio::{
@@ -16,11 +16,11 @@ use tracing::{debug, error, info, warn};
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
     indexer::{log_helpers::is_relevant_block, IndexingEventProgressStatus},
-    provider::{JsonRpcCachedProvider, WrappedLog},
+    provider::{JsonRpcCachedProvider, ProviderError, WrappedLog},
 };
 
 pub struct FetchLogsResult {
-    pub logs: Vec<WrappedLog>,
+    pub logs: Vec<Log>,
     pub from_block: U64,
     pub to_block: U64,
 }
@@ -141,7 +141,7 @@ struct ProcessHistoricLogsStreamResult {
 async fn fetch_historic_logs_stream(
     cached_provider: &Arc<JsonRpcCachedProvider>,
     tx: &mpsc::UnboundedSender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
-    topic_id: &H256,
+    topic_id: &B256,
     current_filter: RindexerEventFilter,
     max_block_range_limitation: Option<U64>,
     snapshot_to_block: U64,
@@ -170,7 +170,7 @@ async fn fetch_historic_logs_stream(
         );
 
         return Some(ProcessHistoricLogsStreamResult {
-            next: current_filter.set_from_block(to_block).set_to_block(to_block + 1),
+            next: current_filter.set_from_block(to_block).set_to_block(to_block + U64::from(1)),
             max_block_range_limitation,
         });
     }
@@ -222,7 +222,7 @@ async fn fetch_historic_logs_stream(
                     "{} - No events found between blocks {} - {} - network: {}",
                     info_log_name, from_block, to_block, network
                 );
-                let next_from_block = to_block + 1;
+                let next_from_block = to_block + U64::from(1);
                 return if next_from_block > snapshot_to_block {
                     None
                 } else {
@@ -250,11 +250,10 @@ async fn fetch_historic_logs_stream(
             }
 
             if let Some(last_log) = last_log {
-                let next_from_block = last_log
-                    .inner
-                    .block_number
-                    .expect("block number should always be present in a log") +
-                    U64::from(1);
+                let next_from_block = U64::from(
+                    last_log.block_number.expect("block number should always be present in a log") +
+                        1,
+                );
                 debug!(
                     "{} - {} - next_block {:?}",
                     info_log_name,
@@ -288,31 +287,27 @@ async fn fetch_historic_logs_stream(
             }
         }
         Err(err) => {
-            if let Some(json_rpc_error) = err.as_error_response() {
-                if let Some(retry_result) =
-                    retry_with_block_range(json_rpc_error, from_block, to_block)
-                {
-                    warn!(
-                        "{}::{} - {} - Overfetched from {} to {} - shrinking to block range: {:?}",
-                        info_log_name,
-                        network,
-                        IndexingEventProgressStatus::Syncing.log(),
-                        from_block.as_u64(),
-                        to_block.as_u64(),
-                        retry_result
-                    );
+            if let Some(retry_result) = retry_with_block_range(&err, from_block, to_block) {
+                warn!(
+                    "{}::{} - {} - Overfetched from {} to {} - shrinking to block range: {:?}",
+                    info_log_name,
+                    network,
+                    IndexingEventProgressStatus::Syncing.log(),
+                    from_block,
+                    to_block,
+                    retry_result
+                );
 
-                    return Some(ProcessHistoricLogsStreamResult {
-                        next: current_filter
-                            .set_from_block(retry_result.from)
-                            .set_to_block(retry_result.to),
-                        max_block_range_limitation: retry_result.max_block_range,
-                    });
-                }
+                return Some(ProcessHistoricLogsStreamResult {
+                    next: current_filter
+                        .set_from_block(U64::from(retry_result.from))
+                        .set_to_block(U64::from(retry_result.to)),
+                    max_block_range_limitation: retry_result.max_block_range,
+                });
             }
 
-            let halved_range = (to_block - from_block) / 2;
-            let halved_to_block = (from_block + halved_range).max(from_block + 100);
+            let halved_range = (to_block - from_block) / U64::from(2);
+            let halved_to_block = (from_block + halved_range).max(from_block + U64::from(100));
 
             // Handle deserialization, networking, and other non-rpc related errors.
             error!(
@@ -320,10 +315,10 @@ async fn fetch_historic_logs_stream(
                 network,
                 info_log_name,
                 IndexingEventProgressStatus::Syncing.log(),
-                from_block.as_u64(),
-                to_block.as_u64(),
-                from_block.as_u64(),
-                halved_to_block.as_u64(),
+                from_block,
+                to_block,
+                from_block,
+                halved_to_block,
                 err
             );
 
@@ -347,7 +342,7 @@ async fn live_indexing_stream(
     tx: &mpsc::UnboundedSender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
     last_seen_block_number: U64,
     contract_address: &Option<ValueOrArray<Address>>,
-    topic_id: &H256,
+    topic_id: &B256,
     reorg_safe_distance: &U64,
     mut current_filter: RindexerEventFilter,
     info_log_name: &str,
@@ -367,79 +362,81 @@ async fn live_indexing_stream(
         match latest_block {
             Ok(latest_block) => {
                 if let Some(latest_block) = latest_block {
-                    if let Some(latest_block_number) = latest_block.number {
-                        if last_seen_block_number == latest_block_number {
-                            debug!(
-                                "{} - {} - No new blocks to process...",
-                                info_log_name,
-                                IndexingEventProgressStatus::Live.log()
-                            );
-                            if last_no_new_block_log_time.elapsed() >= log_no_new_block_interval {
-                                info!(
+                    let latest_block_number = U64::from(latest_block.header.number);
+
+                    if last_seen_block_number == latest_block_number {
+                        debug!(
+                            "{} - {} - No new blocks to process...",
+                            info_log_name,
+                            IndexingEventProgressStatus::Live.log()
+                        );
+                        if last_no_new_block_log_time.elapsed() >= log_no_new_block_interval {
+                            info!(
                                     "{}::{} - {} - No new blocks published in the last 5 minutes - latest block number {}",
                                     info_log_name,
                                     network,
                                     IndexingEventProgressStatus::Live.log(),
                                     last_seen_block_number,
                                 );
-                                last_no_new_block_log_time = Instant::now();
-                            }
-                        } else {
-                            debug!(
-                                "{} - {} - New block seen {} - Last seen block {}",
+                            last_no_new_block_log_time = Instant::now();
+                        }
+                    } else {
+                        debug!(
+                            "{} - {} - New block seen {} - Last seen block {}",
+                            info_log_name,
+                            IndexingEventProgressStatus::Live.log(),
+                            latest_block_number,
+                            last_seen_block_number
+                        );
+
+                        let safe_block_number = latest_block_number - reorg_safe_distance;
+                        let from_block = current_filter.get_from_block();
+                        if from_block > safe_block_number {
+                            info!(
+                                "{} - {} - not in safe reorg block range yet block: {} > range: {}",
                                 info_log_name,
                                 IndexingEventProgressStatus::Live.log(),
-                                latest_block_number,
-                                last_seen_block_number
+                                from_block,
+                                safe_block_number
                             );
-
-                            let safe_block_number = latest_block_number - reorg_safe_distance;
-                            let from_block = current_filter.get_from_block();
-                            if from_block > safe_block_number {
-                                info!(
-                                    "{} - {} - not in safe reorg block range yet block: {} > range: {}",
+                        } else {
+                            let to_block = safe_block_number;
+                            if from_block == to_block &&
+                                !disable_logs_bloom_checks &&
+                                !is_relevant_block(contract_address, topic_id, &latest_block)
+                            {
+                                debug!(
+                                    "{} - {} - Skipping block {} as it's not relevant",
                                     info_log_name,
                                     IndexingEventProgressStatus::Live.log(),
-                                    from_block,
-                                    safe_block_number
+                                    from_block
                                 );
-                            } else {
-                                let to_block = safe_block_number;
-                                if from_block == to_block &&
-                                    !disable_logs_bloom_checks &&
-                                    !is_relevant_block(contract_address, topic_id, &latest_block)
-                                {
-                                    debug!(
-                                        "{} - {} - Skipping block {} as it's not relevant",
-                                        info_log_name,
-                                        IndexingEventProgressStatus::Live.log(),
-                                        from_block
-                                    );
-                                    debug!(
+                                debug!(
                                         "{} - {} - Did not need to hit RPC as no events in {} block - LogsBloom for block checked",
                                         info_log_name,
                                         IndexingEventProgressStatus::Live.log(),
                                         from_block
                                     );
-                                    current_filter = current_filter.set_from_block(to_block + 1);
-                                    last_seen_block_number = to_block;
-                                } else {
-                                    current_filter = current_filter.set_to_block(to_block);
+                                current_filter =
+                                    current_filter.set_from_block(to_block + U64::from(1));
+                                last_seen_block_number = to_block;
+                            } else {
+                                current_filter = current_filter.set_to_block(to_block);
 
-                                    debug!(
-                                        "{} - {} - Processing live filter: {:?}",
-                                        info_log_name,
-                                        IndexingEventProgressStatus::Live.log(),
-                                        current_filter
-                                    );
+                                debug!(
+                                    "{} - {} - Processing live filter: {:?}",
+                                    info_log_name,
+                                    IndexingEventProgressStatus::Live.log(),
+                                    current_filter
+                                );
 
-                                    let semaphore_client = Arc::clone(semaphore);
-                                    let permit = semaphore_client.acquire_owned().await;
+                                let semaphore_client = Arc::clone(semaphore);
+                                let permit = semaphore_client.acquire_owned().await;
 
-                                    if let Ok(permit) = permit {
-                                        match cached_provider.get_logs(&current_filter).await {
-                                            Ok(logs) => {
-                                                debug!(
+                                if let Ok(permit) = permit {
+                                    match cached_provider.get_logs(&current_filter).await {
+                                        Ok(logs) => {
+                                            debug!(
                                                     "{} - {} - Live topic_id {}, Logs: {} from {} to {}",
                                                     info_log_name,
                                                     IndexingEventProgressStatus::Live.log(),
@@ -449,41 +446,41 @@ async fn live_indexing_stream(
                                                     to_block
                                                 );
 
-                                                debug!(
-                                                    "{} - {} - Fetched {} event logs - blocks: {} - {}",
-                                                    info_log_name,
-                                                    IndexingEventProgressStatus::Live.log(),
-                                                    logs.len(),
+                                            debug!(
+                                                "{} - {} - Fetched {} event logs - blocks: {} - {}",
+                                                info_log_name,
+                                                IndexingEventProgressStatus::Live.log(),
+                                                logs.len(),
+                                                from_block,
+                                                to_block
+                                            );
+
+                                            last_seen_block_number = to_block;
+
+                                            let logs_empty = logs.is_empty();
+                                            let last_log = logs.last().cloned();
+
+                                            if tx
+                                                .send(Ok(FetchLogsResult {
+                                                    logs,
                                                     from_block,
-                                                    to_block
-                                                );
-
-                                                last_seen_block_number = to_block;
-
-                                                let logs_empty = logs.is_empty();
-                                                let last_log = logs.last().cloned();
-
-                                                if tx
-                                                    .send(Ok(FetchLogsResult {
-                                                        logs,
-                                                        from_block,
-                                                        to_block,
-                                                    }))
-                                                    .is_err()
-                                                {
-                                                    error!(
+                                                    to_block,
+                                                }))
+                                                .is_err()
+                                            {
+                                                error!(
                                                         "{} - {} - Failed to send logs to stream consumer!",
                                                         info_log_name,
                                                         IndexingEventProgressStatus::Live.log()
                                                     );
-                                                    drop(permit);
-                                                    break;
-                                                }
+                                                drop(permit);
+                                                break;
+                                            }
 
-                                                if logs_empty {
-                                                    current_filter =
-                                                        current_filter.set_from_block(to_block + 1);
-                                                    info!(
+                                            if logs_empty {
+                                                current_filter = current_filter
+                                                    .set_from_block(to_block + U64::from(1));
+                                                info!(
                                                         "{} - {} - No events found between blocks {} - {} - network: {}",
                                                         info_log_name,
                                                         IndexingEventProgressStatus::Live.log(),
@@ -491,40 +488,35 @@ async fn live_indexing_stream(
                                                         to_block,
                                                         network
                                                     );
-                                                } else if let Some(last_log) = last_log {
-                                                    if let Some(last_log_block_number) =
-                                                        last_log.inner.block_number
-                                                    {
-                                                        current_filter = current_filter
-                                                            .set_from_block(
-                                                                last_log_block_number +
-                                                                    U64::from(1),
-                                                            );
-                                                    } else {
-                                                        error!("Failed to get last log block number the provider returned null (should never happen) - try again in 200ms");
-                                                    }
+                                            } else if let Some(last_log) = last_log {
+                                                if let Some(last_log_block_number) =
+                                                    last_log.block_number
+                                                {
+                                                    current_filter = current_filter.set_from_block(
+                                                        U64::from(last_log_block_number + 1),
+                                                    );
+                                                } else {
+                                                    error!("Failed to get last log block number the provider returned null (should never happen) - try again in 200ms");
                                                 }
-
-                                                drop(permit);
                                             }
-                                            Err(err) => {
-                                                warn!(
+
+                                            drop(permit);
+                                        }
+                                        Err(err) => {
+                                            warn!(
                                                     "{} - {} - Error fetching logs in range {} - {}. Retrying: {}",
                                                     info_log_name,
                                                     IndexingEventProgressStatus::Live.log(),
-                                                    from_block.as_u64(),
-                                                    to_block.as_u64(),
+                                                    from_block,
+                                                    to_block,
                                                     err
                                                 );
-                                                drop(permit);
-                                            }
+                                            drop(permit);
                                         }
                                     }
                                 }
                             }
                         }
-                    } else {
-                        info!("WARNING - empty latest block returned from provider, will try again in 200ms");
                     }
                 } else {
                     info!("WARNING - empty latest block returned from provider, will try again in 200ms");
@@ -549,8 +541,8 @@ async fn live_indexing_stream(
 
 #[derive(Debug)]
 struct RetryWithBlockRangeResult {
-    from: BlockNumber,
-    to: BlockNumber,
+    from: U64,
+    to: U64,
     // This is only populated if you are using an RPC provider
     // who doesn't give block ranges, this tends to be providers
     // which are a lot slower than others, expect these providers
@@ -560,10 +552,16 @@ struct RetryWithBlockRangeResult {
 
 /// Attempts to retry with a new block range based on the error message.
 fn retry_with_block_range(
-    error: &JsonRpcError,
+    error: &ProviderError,
     from_block: U64,
     to_block: U64,
 ) -> Option<RetryWithBlockRangeResult> {
+    let error = match error {
+        ProviderError::RequestFailed(RpcError::ErrorResp(json_rpc_err)) => json_rpc_err,
+        // Break early if not a Server JSON-RPC Error.
+        _ => return None,
+    };
+
     let error_message = &error.message;
     // some providers put the data in the data field
     let error_data_binding = error.data.as_ref().map(|data| data.to_string());
@@ -591,19 +589,23 @@ fn retry_with_block_range(
                 if let (Ok(from), Ok(to)) =
                     (BlockNumber::from_str(start_block_str), BlockNumber::from_str(end_block_str))
                 {
-                    if from.as_number() > to.as_number() {
+                    if from > to {
                         error!(
                             "Alchemy returned a negative block range. Overriding to single block fetch."
                         );
 
                         return Some(RetryWithBlockRangeResult {
-                            from: BlockNumber::Number(from_block),
-                            to: BlockNumber::Number(from_block + 1),
+                            from: from_block,
+                            to: from_block + U64::from(1),
                             max_block_range: None,
                         });
                     }
 
-                    return Some(RetryWithBlockRangeResult { from, to, max_block_range: None });
+                    return Some(RetryWithBlockRangeResult {
+                        from: U64::from(from),
+                        to: U64::from(to),
+                        max_block_range: None,
+                    });
                 }
             }
         }
@@ -623,7 +625,11 @@ fn retry_with_block_range(
                 if let (Ok(from), Ok(to)) =
                     (BlockNumber::from_str(&start_block_str), BlockNumber::from_str(&end_block_str))
                 {
-                    return Some(RetryWithBlockRangeResult { from, to, max_block_range: None });
+                    return Some(RetryWithBlockRangeResult {
+                        from: U64::from(from),
+                        to: U64::from(to),
+                        max_block_range: None,
+                    });
                 }
             }
         }
@@ -632,9 +638,9 @@ fn retry_with_block_range(
     // Ankr
     if error_message.contains("block range is too wide") && error.code == -32600 {
         return Some(RetryWithBlockRangeResult {
-            from: BlockNumber::from(from_block),
-            to: BlockNumber::from(from_block + 3000),
-            max_block_range: Some(3000.into()),
+            from: from_block,
+            to: from_block + U64::from(3000),
+            max_block_range: Some(U64::from(3000)),
         });
     }
 
@@ -643,10 +649,10 @@ fn retry_with_block_range(
         if let Some(captures) = re.captures(error_message).or_else(|| re.captures(error_data)) {
             if let Some(range_str_match) = captures.get(1) {
                 let range_str = range_str_match.as_str().replace(&['.', ','][..], "");
-                if let Ok(range) = U64::from_dec_str(&range_str) {
+                if let Ok(range) = U64::from_str(&range_str) {
                     return Some(RetryWithBlockRangeResult {
-                        from: BlockNumber::from(from_block),
-                        to: BlockNumber::from(from_block + range),
+                        from: from_block,
+                        to: from_block + range,
                         max_block_range: Some(range),
                     });
                 }
@@ -657,15 +663,15 @@ fn retry_with_block_range(
     // Base
     if error_message.contains("block range too large") {
         return Some(RetryWithBlockRangeResult {
-            from: BlockNumber::from(from_block),
-            to: BlockNumber::from(from_block + 2000),
-            max_block_range: Some(2000.into()),
+            from: from_block,
+            to: from_block + U64::from(2000),
+            max_block_range: Some(U64::from(2000)),
         });
     }
 
     // Fallback range
     if to_block > from_block {
-        let diff = to_block.as_u64() - from_block.as_u64();
+        let diff = to_block - from_block;
 
         let mut block_range = FallbackBlockRange::from_diff(diff);
         let mut next_to_block = from_block + block_range.value();
@@ -679,15 +685,15 @@ fn retry_with_block_range(
             error!("Computed a negative fallback block range. Overriding to single block fetch.");
 
             return Some(RetryWithBlockRangeResult {
-                from: BlockNumber::Number(from_block),
-                to: BlockNumber::Number(from_block + 1),
+                from: from_block,
+                to: from_block + U64::from(1),
                 max_block_range: None,
             });
         }
 
         return Some(RetryWithBlockRangeResult {
-            from: BlockNumber::from(from_block),
-            to: BlockNumber::from(next_to_block),
+            from: from_block,
+            to: next_to_block,
             max_block_range: Some(U64::from(block_range.value())),
         });
     }
@@ -714,22 +720,22 @@ enum FallbackBlockRange {
 }
 
 impl FallbackBlockRange {
-    fn value(&self) -> u64 {
+    fn value(&self) -> U64 {
         match self {
-            FallbackBlockRange::Range5000 => 5000,
-            FallbackBlockRange::Range500 => 500,
-            FallbackBlockRange::Range75 => 75,
-            FallbackBlockRange::Range50 => 50,
-            FallbackBlockRange::Range45 => 45,
-            FallbackBlockRange::Range40 => 40,
-            FallbackBlockRange::Range35 => 35,
-            FallbackBlockRange::Range30 => 30,
-            FallbackBlockRange::Range25 => 25,
-            FallbackBlockRange::Range20 => 20,
-            FallbackBlockRange::Range15 => 15,
-            FallbackBlockRange::Range10 => 10,
-            FallbackBlockRange::Range5 => 5,
-            FallbackBlockRange::Range1 => 1,
+            FallbackBlockRange::Range5000 => U64::from(5000),
+            FallbackBlockRange::Range500 => U64::from(500),
+            FallbackBlockRange::Range75 => U64::from(75),
+            FallbackBlockRange::Range50 => U64::from(50),
+            FallbackBlockRange::Range45 => U64::from(45),
+            FallbackBlockRange::Range40 => U64::from(40),
+            FallbackBlockRange::Range35 => U64::from(35),
+            FallbackBlockRange::Range30 => U64::from(30),
+            FallbackBlockRange::Range25 => U64::from(25),
+            FallbackBlockRange::Range20 => U64::from(20),
+            FallbackBlockRange::Range15 => U64::from(15),
+            FallbackBlockRange::Range10 => U64::from(10),
+            FallbackBlockRange::Range5 => U64::from(5),
+            FallbackBlockRange::Range1 => U64::from(1),
         }
     }
 
@@ -752,7 +758,8 @@ impl FallbackBlockRange {
         }
     }
 
-    fn from_diff(diff: u64) -> FallbackBlockRange {
+    fn from_diff(diff: U64) -> FallbackBlockRange {
+        let diff = diff.as_limbs()[0];
         if diff >= 5000 {
             FallbackBlockRange::Range5000
         } else if diff >= 500 {

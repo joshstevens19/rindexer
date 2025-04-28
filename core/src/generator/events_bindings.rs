@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use ethers::types::ValueOrArray;
+use alloy::rpc::types::ValueOrArray;
 use serde_json::Value;
 
 use crate::{
