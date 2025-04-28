@@ -1,6 +1,7 @@
 use std::{borrow::Cow, fs, path::PathBuf, time::Duration};
 
 use alloy::{primitives::Address, rpc::types::ValueOrArray};
+use ethers::abi::ethabi;
 #[deprecated(note = "move to alloy")]
 use ethers::prelude::Chain;
 #[deprecated(note = "move to alloy")]
@@ -89,7 +90,8 @@ pub async fn handle_add_contract_command(
         .parse::<Address>()
         .inspect_err(|e| print_error_message(&format!("Invalid contract address: {}", e)))?;
 
-    let mut abi_lookup_address = address;
+    let mut abi_lookup_address: ethabi::Address =
+        address.to_string().parse().expect("contract already checked");
     let mut timeout = 1000;
     let mut retry_attempts = 0;
     let max_retries = 3;

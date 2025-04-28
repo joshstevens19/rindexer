@@ -347,7 +347,7 @@ fn generate_trace_callback_structs_code(
 fn decoder_contract_fn(contracts_details: Vec<NativeTransferDetails>, abi_gen_name: &str) -> Code {
     let mut function = String::new();
     function.push_str(&format!(
-        r#"pub async fn decoder_contract(network: &str) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> {{"#,
+        r#"pub async fn decoder_contract(network: &str) -> {abi_gen_name}<Arc<RindexerProvider>> {{"#,
         abi_gen_name = abi_gen_name
     ));
 
@@ -392,7 +392,7 @@ fn build_pub_contract_fn(
     let contract_name = camel_to_snake(contract_name);
 
     Code::new(format!(
-        r#"pub async fn {contract_name}_contract(network: &str, address: Address) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> {{
+        r#"pub async fn {contract_name}_contract(network: &str, address: Address) -> {abi_gen_name}<Arc<RindexerProvider>> {{
                 {abi_gen_name}::new(
                     address,
                     Arc::new(get_provider_cache_for_network(network).await.get_inner_provider()),
@@ -442,7 +442,8 @@ fn generate_trace_bindings_code(
         use std::collections::HashMap;
         use std::pin::Pin;
         use std::path::{{Path, PathBuf}};
-        use ethers::{{providers::{{Http, Provider, RetryClient}}, abi::Address, contract::EthLogDecode, types::{{Bytes, H256}}}};
+        use alloy::primitives::Address;
+        use ethers::{{contract::EthLogDecode, types::{{Bytes, H256}}}};
         use rindexer::{{
             async_trait,
             {csv_import}
@@ -459,7 +460,7 @@ fn generate_trace_bindings_code(
                 contract::{{Contract, ContractDetails}},
                 yaml::read_manifest,
             }},
-            provider::JsonRpcCachedProvider,
+            provider::{{JsonRpcCachedProvider, RindexerProvider}},
             {postgres_client_import}
         }};
         use super::super::super::super::typings::networks::get_provider_cache_for_network;
