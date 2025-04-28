@@ -26,10 +26,18 @@ pub struct LogMeta {
     pub log_index: U256,
 }
 
+/// Decoded log param.
 #[derive(Debug, PartialEq, Clone)]
 pub struct LogParam {
     /// Decoded log name.
     pub name: String,
     /// Decoded log value.
     pub value: DynSolValue,
+}
+
+/// Decoded log.
+#[derive(Debug, PartialEq, Clone)]
+pub struct ParsedLog {
+    /// Log params.
+    pub params: Vec<LogParam>,
 }

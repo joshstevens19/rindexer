@@ -1,23 +1,39 @@
 use std::str::FromStr;
 
 use alloy::{
-    dyn_abi::DynSolValue,
-    json_abi::{Event, EventParam},
+    dyn_abi::{DynSolValue, EventExt},
+    json_abi::Event,
     primitives::{keccak256, Address, Bloom, B256, U256},
     rpc::types::{Block, FilterSet, FilteredParams, Log, ValueOrArray},
 };
 
-use crate::types::ethers::LogParam;
-
-pub fn parse_log(event: &Event, log: &Log) -> Option<Vec<EventParam>> {
+use crate::types::ethers::{LogParam, ParsedLog};
+pub fn parse_log(event: &Event, log: &Log) -> Option<ParsedLog> {
     // as topic[0] is the event signature
     let topics_length = log.topics().len() - 1;
     let indexed_inputs_abi_length = event.inputs.iter().filter(|param| param.indexed).count();
 
     // check if topics and data match the event
     if topics_length == indexed_inputs_abi_length {
-        let log = event.clone().inputs;
-        return Some(log);
+        if let Ok(decoded) = event.decode_log(&log.inner) {
+            let mut indexed_iter = decoded.indexed.into_iter();
+            let mut body_iter = decoded.body.into_iter();
+
+            let params = event
+                .inputs
+                .iter()
+                .map(|input| {
+                    let value = if input.indexed {
+                        indexed_iter.next().expect("Not enough indexed values")
+                    } else {
+                        body_iter.next().expect("Not enough body values")
+                    };
+                    LogParam { name: input.name.clone(), value }
+                })
+                .collect();
+
+            return Some(ParsedLog { params });
+        }
     }
 
     None

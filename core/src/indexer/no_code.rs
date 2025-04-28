@@ -6,7 +6,7 @@ use std::{
 };
 
 use alloy::{
-    dyn_abi::{abi::Token, DynSolValue},
+    dyn_abi::{abi::Token, DynSolValue, EventExt},
     json_abi::{Event, JsonAbi},
     primitives::TxHash,
 };
@@ -242,7 +242,10 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                         let log_index = result.tx_information.log_index;
 
                         let event_parameters: Vec<EthereumSqlTypeWrapper> =
-                            map_log_params_to_ethereum_wrapper(&params.event_info.inputs, &log);
+                            map_log_params_to_ethereum_wrapper(
+                                &params.event_info.inputs,
+                                &log.params,
+                            );
 
                         let contract_address = EthereumSqlTypeWrapper::Address(address);
                         let end_global_parameters = vec![

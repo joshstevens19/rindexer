@@ -12,7 +12,7 @@ use ethers::{
 /// Any manual changes to this file will be overwritten.
 use super::networks::{get_base_provider, get_ethereum_provider};
 
-abigen!(USDT, "./abis/erc20-abi.json");
+sol!(USDT, "./abis/erc20-abi.json");
 
 pub async fn usdt_contract() -> USDT<Arc<Provider<RetryClient<Http>>>> {
     let address: Address =

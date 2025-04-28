@@ -7,7 +7,6 @@ use alloy::{
 };
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, Utc};
-use ethers::abi::Int;
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type as PgType};

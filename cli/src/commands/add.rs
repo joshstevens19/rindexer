@@ -1,9 +1,9 @@
 use std::{borrow::Cow, fs, path::PathBuf, time::Duration};
 
-use ethers::{
-    addressbook::{Address, Chain},
-    prelude::ValueOrArray,
-};
+use alloy::{primitives::Address, rpc::types::ValueOrArray};
+#[deprecated(note = "move to alloy")]
+use ethers::prelude::Chain;
+#[deprecated(note = "move to alloy")]
 use ethers_etherscan::Client;
 use rindexer::{
     manifest::{
@@ -86,7 +86,7 @@ pub async fn handle_add_contract_command(
         })?;
 
     let address = contract_address
-        .parse()
+        .parse::<Address>()
         .inspect_err(|e| print_error_message(&format!("Invalid contract address: {}", e)))?;
 
     let mut abi_lookup_address = address;
@@ -95,7 +95,12 @@ pub async fn handle_add_contract_command(
     let max_retries = 3;
 
     loop {
-        let metadata = match client.contract_source_code(abi_lookup_address).await {
+        let metadata = match client
+            .contract_source_code(
+                abi_lookup_address.to_string().parse().expect("contract already checked"),
+            )
+            .await
+        {
             Ok(data) => data,
             Err(e) => {
                 if retry_attempts >= max_retries {

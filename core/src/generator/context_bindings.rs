@@ -23,9 +23,9 @@ fn generate_contract_code(
                 let contract_address = format!("{:?}", address);
                 let code = format!(
                     r#"
-                        abigen!({contract_name}, "{contract_path}");
+                        sol!({contract_name}, "{contract_path}");
 
-                        pub async fn {contract_fn_name}_contract() -> {contract_name}<Arc<Provider<RetryClient<Http>>>> {{
+                        pub async fn {contract_fn_name}_contract() -> {contract_name}<Arc<RindexerProvider> {{
                             let address: Address = "{contract_address}"
                                 .parse()
                                 .expect("Invalid address");
@@ -45,9 +45,9 @@ fn generate_contract_code(
             ValueOrArray::Array(_) => {
                 let code = format!(
                     r#"
-                        abigen!({contract_name}, "{contract_path}");
+                        sol!({contract_name}, "{contract_path}");
 
-                        pub fn {contract_fn_name}_contract(address: Address) -> {contract_name}<Arc<Provider<RetryClient<Http>>>> {{
+                        pub fn {contract_fn_name}_contract(address: Address) -> {contract_name}<Arc<RindexerProvider> {{
                             {contract_name}::new(address, Arc::new({network_fn_name}().clone()))
                         }}
                     "#,
@@ -75,7 +75,9 @@ fn generate_contracts_code(contracts: &[Contract], networks: &[Network]) -> Code
         
         use super::networks::{{{}}};
         use std::sync::Arc;
-        use ethers::{{contract::abigen, abi::Address, providers::{{Provider, Http, RetryClient}}}};
+        use rindexer::provider::RindexerProvider;
+        use alloy::primitives::Address;
+        use alloy::sol;
         "#,
         network_imports.join(", ")
     ));
