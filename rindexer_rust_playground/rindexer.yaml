@@ -19,7 +19,7 @@ contracts:
       - network: ethereum
         address: "0xae78736cd615f374d3085123a210448e74fc6393"
         start_block: '18900000'
-        end_block: '19000000'
+        end_block: '19100000'
     abi: ./abis/erc20-abi.json
     include_events:
       - Transfer
@@ -38,7 +38,7 @@ contracts:
         filter:
           event_name: Swap
         start_block: 19953475
-        end_block: 19953475
+        end_block: 19963475
     abi: ./abis/uniswap-v3-pool-abi.json
     include_events:
       - Swap
@@ -48,7 +48,7 @@ contracts:
         filter:
           event_name: Swap
         start_block: 19953475
-        end_block: 19953475
+        end_block: 19956475
     abi: ./abis/playground-types-abi.json
     include_events:
       - Swap
