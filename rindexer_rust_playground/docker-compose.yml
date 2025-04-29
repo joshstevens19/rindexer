@@ -18,4 +18,4 @@ services:
         ['CMD-SHELL', 'pg_isready -U $${DATABASE_USER} -d $${DATABASE_NAME} -q']
       interval: 5s
       timeout: 10s
-      retries: 10
+      retries: 10c

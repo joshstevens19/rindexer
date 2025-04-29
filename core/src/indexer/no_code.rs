@@ -1,14 +1,12 @@
 use std::{
     io,
     path::{Path, PathBuf},
-    str::FromStr,
     sync::Arc,
 };
 
 use alloy::{
     dyn_abi::DynSolValue,
     json_abi::{Event, JsonAbi},
-    primitives::TxHash,
 };
 use colored::Colorize;
 use serde_json::Value;
@@ -49,7 +47,7 @@ use crate::{
     provider::{CreateNetworkProvider, RetryClientError},
     setup_info_logger,
     streams::StreamsClients,
-    types::ethers::LogParam,
+    types::core::LogParam,
     AsyncCsvAppender, FutureExt, IndexingDetails, StartDetails, StartNoCodeDetails,
 };
 
@@ -444,8 +442,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             let event_message = EventMessage {
                 event_name: params.event_info.name.clone(),
                 event_data: Value::Array(event_message_data),
-                event_signature_hash: TxHash::from_str(&params.event.signature())
-                    .expect("converts between signature and hash"),
+                event_signature_hash: params.event.selector(),
                 network: network.clone(),
             };
 

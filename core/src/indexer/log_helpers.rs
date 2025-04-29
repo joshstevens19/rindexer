@@ -6,8 +6,9 @@ use alloy::{
     primitives::{keccak256, Address, Bloom, B256, U256},
     rpc::types::{Block, FilterSet, FilteredParams, Log, ValueOrArray},
 };
+use tracing::error;
 
-use crate::types::ethers::{LogParam, ParsedLog};
+use crate::types::core::{LogParam, ParsedLog};
 pub fn parse_log(event: &Event, log: &Log) -> Option<ParsedLog> {
     // as topic[0] is the event signature
     let topics_length = log.topics().len() - 1;
@@ -64,6 +65,7 @@ fn map_token_to_raw_values(token: &DynSolValue) -> Vec<String> {
             values
         }
         _ => {
+            error!("Error parsing unsupported token {:?}", token);
             unimplemented!(
                 "Functions and CustomStruct are not supported yet for `map_token_to_raw_values`"
             );

@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type as PgType};
 use tracing::error;
 
-use crate::{abi::ABIInput, event::callback_registry::TxInformation, types::ethers::LogParam};
+use crate::{abi::ABIInput, event::callback_registry::TxInformation, types::core::LogParam};
 
 #[derive(Debug, Clone)]
 pub enum EthereumSqlTypeWrapper {
