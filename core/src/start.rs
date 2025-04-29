@@ -91,6 +91,7 @@ async fn handle_shutdown(signal: &str) {
 
 pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindexerError> {
     let project_path = details.manifest_path.parent();
+
     match project_path {
         Some(project_path) => {
             #[cfg(unix)]

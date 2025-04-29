@@ -1,6 +1,9 @@
 use std::str::FromStr;
 
-use alloy::{primitives::U64, transports::http::reqwest::header::HeaderMap};
+use alloy::{
+    primitives::{Bytes, U64},
+    transports::http::reqwest::header::HeaderMap,
+};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_yaml::Value;
 

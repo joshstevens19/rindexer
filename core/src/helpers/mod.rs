@@ -77,6 +77,12 @@ pub fn to_pascal_case(input: &str) -> String {
         return String::new();
     }
 
+    // Events like Erc1155 "URI" Event are capitalized and need to remain that way. Return it as it
+    // is.
+    if !input.contains("_") && input.chars().filter(|c| c.is_ascii_lowercase()).count() == 0 {
+        return input.to_string();
+    }
+
     let words: Vec<&str> = input.split('_').filter(|s| !s.is_empty()).collect();
     let mut result = String::with_capacity(input.len());
 
@@ -244,8 +250,8 @@ mod tests {
     #[test]
     fn test_single_word() {
         assert_eq!(to_pascal_case("user"), "User");
-        assert_eq!(to_pascal_case("CONSTANT"), "Constant");
-        assert_eq!(to_pascal_case("URI"), "Uri");
+        assert_eq!(to_pascal_case("CONSTANT"), "CONSTANT");
+        assert_eq!(to_pascal_case("URI"), "UR");
     }
 
     #[test]

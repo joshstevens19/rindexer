@@ -1,4 +1,9 @@
-use std::{collections::VecDeque, sync::Arc, time::Duration};
+use std::{
+    collections::VecDeque,
+    ops::{Range, RangeInclusive},
+    sync::Arc,
+    time::Duration,
+};
 
 use alloy::{
     primitives::{Address, Bytes, U256, U64},
@@ -72,10 +77,13 @@ pub struct NativeTransfer {
 
 /// Push a range of blocks to the back-pressured channel and block producer when full.
 async fn push_range(block_tx: &mpsc::Sender<U64>, last: U64, latest: U64) {
-    let mut range = (last.as_limbs()[0]..=latest.as_limbs()[0]).collect::<VecDeque<_>>();
+    let range: RangeInclusive<u64> =
+        last.try_into().expect("U64 fits u64")..=latest.try_into().expect("U64 fits u64");
+    let mut range = range.collect::<VecDeque<_>>();
+
     while let Some(block) = range.pop_front() {
         if let Err(e) = block_tx.send(U64::from(block)).await {
-            error!("Failed to send block via channel. Re-queuing: {:?}", e);
+            error!("Failed to send block via channel. Re-queuing: {}", e.to_string());
             range.push_front(block);
         }
     }

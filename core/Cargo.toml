@@ -32,8 +32,8 @@ csv = "1.3.1"
 deadpool = { version = "0.12", features = ["rt_tokio_1"] }
 deadpool-lapin = "0.12"
 dotenv = "0.15.0"
- ethers = { version = "2.0", features = ["rustls", "openssl"] }
- ethers-solc = "2.0.14"
+# ethers = { version = "2.0", features = ["rustls", "openssl"] }
+# ethers-solc = "2.0.14"
 futures = "0.3.30"
 hex = "0.4.3"
 lapin = "2.5.0"
@@ -58,10 +58,18 @@ tempfile = "3.9.0"
 thiserror = "2.0.12"
 thread_local = "1.1"
 tokio = { version = "1", features = ["full"] }
-tokio-postgres = { version="0.7", features=["with-uuid-1", "with-chrono-0_4", "with-serde_json-1"] }
+tokio-postgres = { version = "0.7", features = [
+  "with-uuid-1",
+  "with-chrono-0_4",
+  "with-serde_json-1",
+] }
 tokio-stream = "0.1.15"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "time"] }
+tracing-subscriber = { version = "0.3", features = [
+  "env-filter",
+  "fmt",
+  "time",
+] }
 url = "2.5.0"
 
 # build

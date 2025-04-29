@@ -3,8 +3,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use ethers::contract::Abigen;
-
 use super::{
     context_bindings::generate_context_code,
     events_bindings::{
@@ -18,7 +16,7 @@ use crate::{
         database_bindings::generate_database_code,
         trace_bindings::{
             generate_trace_bindings, generate_trace_handlers, trace_abigen_contract_file_name,
-            trace_abigen_contract_name, GenerateTraceBindingsError, GenerateTraceHandlersError,
+            GenerateTraceBindingsError, GenerateTraceHandlersError,
         },
     },
     helpers::{
@@ -37,6 +35,7 @@ use crate::{
         storage::Storage,
         yaml::{read_manifest, ReadManifestError, YAML_CONFIG_NAME},
     },
+    types::code::Code,
 };
 
 fn generate_file_location(output: &Path, location: &str) -> PathBuf {
@@ -134,10 +133,21 @@ fn write_indexer_events(
 
         let abi_string = contract.parse_abi(project_path)?;
 
-        let abi_gen = Abigen::new(abigen_contract_name(&contract), abi_string)
-            .map_err(|_| WriteIndexerEvents::CouldNotCreateAbigenInstance)?
-            .generate()
-            .map_err(|_| WriteIndexerEvents::CouldNotGenerateAbi)?;
+        let code = format!(
+            r##"
+            use alloy::sol;
+
+            sol!(
+                #[derive(Debug)]
+                #[sol(rpc, all_derives)]
+                {contract_name},
+                r#"{contract_path}"#
+            );
+            "##,
+            contract_name = abigen_contract_name(&contract),
+            contract_path = abi_string,
+        );
+        let code = Code::new(code);
 
         write_file(
             &generate_file_location(
@@ -148,7 +158,7 @@ fn write_indexer_events(
                     abigen_contract_file_name(&contract)
                 ),
             ),
-            &abi_gen.to_string(),
+            &code.to_string(),
         )
         .map_err(WriteIndexerEvents::CouldNotWriteAbigenCodeCode)?;
     }
@@ -171,11 +181,23 @@ fn write_indexer_events(
         write_file(&generate_file_location(output, &event_path), events_code.as_str())?;
 
         let abi_string = NATIVE_TRANSFER_ABI;
-        let abi_gen =
-            Abigen::new(trace_abigen_contract_name(NATIVE_TRANSFER_CONTRACT_NAME), abi_string)
-                .map_err(|_| WriteIndexerEvents::CouldNotCreateAbigenInstance)?
-                .generate()
-                .map_err(|_| WriteIndexerEvents::CouldNotGenerateAbi)?;
+        let abigen_contract_name = format!("Rindexer{}Gen", NATIVE_TRANSFER_CONTRACT_NAME);
+
+        let code = format!(
+            r##"
+            use alloy::sol;
+
+            sol!(
+                #[derive(Debug)]
+                #[sol(rpc, all_derives)]
+                {contract_name},
+                r#"{contract_path}"#
+            );
+            "##,
+            contract_name = abigen_contract_name,
+            contract_path = abi_string,
+        );
+        let code = Code::new(code);
 
         write_file(
             &generate_file_location(
@@ -186,7 +208,7 @@ fn write_indexer_events(
                     trace_abigen_contract_file_name(NATIVE_TRANSFER_CONTRACT_NAME)
                 ),
             ),
-            &abi_gen.to_string(),
+            &code.to_string(),
         )
         .map_err(WriteIndexerEvents::CouldNotWriteAbigenCodeCode)?;
     }
