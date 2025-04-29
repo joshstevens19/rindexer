@@ -240,26 +240,55 @@ pub struct TransferResult {
 }
 ```
 
-The `event_data` will be pointing to the ABI type generated using `ethers`
+The `event_data` will be pointing to the ABI type generated using `alloy` `sol!` macro.
 
 ```rs
-#[derive(
-    Clone,
-    ::ethers::contract::EthEvent,
-    ::ethers::contract::EthDisplay,
-    Default,
-    Debug,
-    PartialEq,
-    Eq,
-    Hash,
+sol!(
+    #[derive(Debug)]
+    #[sol(rpc, all_derives)]
+    TransferFilter,
+    r#"
+    [{
+        "anonymous": false,
+        "inputs": [
+          {
+            "indexed": true,
+            "name": "from",
+            "type": "address"
+          },
+          {
+            "indexed": true,
+            "name": "to",
+            "type": "address"
+          },
+          {
+            "indexed": false,
+            "name": "value",
+            "type": "uint256"
+          }
+        ],
+        "name": "Transfer",
+        "type": "event"
+      }]
+    "#
+}
+```
+
+Which will expand to a struct like:
+```rs
+#[allow(
+    non_camel_case_types,
+    non_snake_case,
+    clippy::pub_underscore_fields,
+    clippy::style
 )]
-#[ethevent(name = "Transfer", abi = "Transfer(address,address,uint256)")]
-pub struct TransferFilter {
-    #[ethevent(indexed)]
-    pub from: ::ethers::core::types::Address,
-    #[ethevent(indexed)]
-    pub to: ::ethers::core::types::Address,
-    pub value: ::ethers::core::types::U256,
+pub struct Transfer {
+    #[allow(missing_docs)]
+    pub from: ::alloy::sol_types::private::Address,
+    #[allow(missing_docs)]
+    pub to: ::alloy::sol_types::private::Address,
+    #[allow(missing_docs)]
+    pub value: ::alloy::sol_types::private::primitives::aliases::U256,
 }
 ```
 

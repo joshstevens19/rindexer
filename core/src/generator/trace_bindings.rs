@@ -10,7 +10,7 @@ use crate::{
     database::postgres::generate::{
         generate_column_names_only_with_base_properties, generate_event_table_full_name,
     },
-    helpers::{camel_to_snake, camel_to_snake_advanced, to_pascal_case},
+    helpers::{camel_to_snake, to_pascal_case},
     indexer::native_transfer::{EVENT_NAME, NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME},
     manifest::{
         contract::ParseAbiError,
@@ -22,10 +22,6 @@ use crate::{
 
 pub fn trace_abigen_contract_name(contract_name: &str) -> String {
     format!("Rindexer{}Gen", contract_name)
-}
-
-fn trace_abigen_contract_mod_name(contract_name: &str) -> String {
-    camel_to_snake_advanced(&trace_abigen_contract_name(contract_name), true)
 }
 
 pub fn trace_abigen_contract_file_name(contract_name: &str) -> String {

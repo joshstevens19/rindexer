@@ -32,8 +32,6 @@ csv = "1.3.1"
 deadpool = { version = "0.12", features = ["rt_tokio_1"] }
 deadpool-lapin = "0.12"
 dotenv = "0.15.0"
-# ethers = { version = "2.0", features = ["rustls", "openssl"] }
-# ethers-solc = "2.0.14"
 futures = "0.3.30"
 hex = "0.4.3"
 lapin = "2.5.0"
@@ -46,8 +44,7 @@ rand = "0.9.1"
 # bb8-redis once https://github.com/djc/bb8/pull/183 is merged.
 redis = { version = "0.29.5", features = ["streams"] }
 regex = "1.10.4"
-# Do not change version as have to match ethers at the moment
-reqwest = { version = "0.11.27", features = ["json"] }
+reqwest = { version = "0.12.15", features = ["json"] }
 rust_decimal = { version = "1.35.0", features = ["db-tokio-postgres"] }
 serde = "1.0"
 serde_json = "1.0"
@@ -75,6 +72,7 @@ url = "2.5.0"
 # build
 jemallocator = { version = "0.6.0", package = "tikv-jemallocator", optional = true }
 jemalloc-ctl = { version = "0.6.0", package = "tikv-jemalloc-ctl", optional = true }
+foundry-compilers = "0.14.1"
 
 [target.'cfg(not(windows))'.dependencies]
 rdkafka = { version = "0.37.0", features = ["tokio"] }

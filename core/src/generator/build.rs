@@ -491,7 +491,7 @@ edition = "2021"
 [dependencies]
 rindexer = {{ git = "https://github.com/joshstevens19/rindexer", branch = "master" }}
 tokio = {{ version = "1", features = ["full"] }}
-ethers = {{ version = "2.0", features = ["rustls", "openssl"] }}
+alloy = {{ version = "0.15.6", features = ["full"] }}
 serde = {{ version = "1.0.194", features = ["derive"] }}
 "#,
         project_name = manifest.name,

@@ -1,11 +1,8 @@
 use std::{borrow::Cow, fs, path::PathBuf, time::Duration};
 
 use alloy::{primitives::Address, rpc::types::ValueOrArray};
-use ethers::abi::ethabi;
-#[deprecated(note = "move to alloy")]
-use ethers::prelude::Chain;
-#[deprecated(note = "move to alloy")]
-use ethers_etherscan::Client;
+use alloy_chains::Chain;
+use foundry_block_explorers::Client;
 use rindexer::{
     manifest::{
         contract::{Contract, ContractDetails},
@@ -62,8 +59,7 @@ pub async fn handle_add_contract_command(
         .expect("Unreachable: Network not found in networks")
         .1;
 
-    let chain_network = Chain::try_from(chain_id)
-        .inspect_err(|_| print_error_message("Network is not supported by etherscan API, please add the contract manually in the rindexer.yaml file"))?;
+    let chain_network = Chain::from(chain_id);
     let contract_address =
         prompt_for_input(&format!("Enter {} Contract Address", network), None, None, None);
 
@@ -90,8 +86,7 @@ pub async fn handle_add_contract_command(
         .parse::<Address>()
         .inspect_err(|e| print_error_message(&format!("Invalid contract address: {}", e)))?;
 
-    let mut abi_lookup_address: ethabi::Address =
-        address.to_string().parse().expect("contract already checked");
+    let mut abi_lookup_address: Address = address;
     let mut timeout = 1000;
     let mut retry_attempts = 0;
     let max_retries = 3;
@@ -133,7 +128,7 @@ pub async fn handle_add_contract_command(
 
         let item = &metadata.items[0];
         if item.proxy == 1 && item.implementation.is_some() {
-            abi_lookup_address = item.implementation.unwrap();
+            abi_lookup_address = item.implementation.unwrap().to_string().parse().unwrap();
             println!(
                 "This contract is a proxy contract. Loading the implementation contract {}",
                 abi_lookup_address

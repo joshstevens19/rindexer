@@ -371,7 +371,7 @@ impl EthereumSqlTypeWrapper {
         while !num.is_zero() {
             let remainder = num % U256::from(10000);
             let bytes: [u8; 32] = remainder.to_be_bytes();
-            let bytes: [u8; 2] = bytes[..2].try_into().unwrap();
+            let bytes: [u8; 2] = bytes[30..].try_into().unwrap();
             let remainder_i16 = i16::from_be_bytes(bytes);
             groups.push(remainder_i16);
             num /= U256::from(10000);

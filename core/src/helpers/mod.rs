@@ -12,7 +12,6 @@ use std::{
     str,
 };
 
-use alloy::primitives::{I256, U256};
 use dotenv::dotenv;
 pub use file::{
     create_mod_file, format_all_files_for_project, load_env_from_full_path,
@@ -179,22 +178,24 @@ pub fn replace_env_variable_to_raw_name(rpc: &str) -> String {
     }
 }
 
-pub fn u256_to_i256(value: U256) -> I256 {
-    let max_i256_as_u256 = U256::from_str_radix(
-        "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-        16,
-    )
-    .unwrap();
-
-    if value <= max_i256_as_u256 {
-        // If the value is less than or equal to I256::MAX, it's a positive number
-        I256::from_raw(value)
-    } else {
-        // If it's larger, it represents a negative number in two's complement
-        let twos_complement = (!value).overflowing_add(U256::ONE).0;
-        I256::from_raw(twos_complement).wrapping_neg()
-    }
-}
+// Remove this if we're sure we no longer need it after the Alloy migration
+//
+// pub fn u256_to_i256(value: U256) -> I256 {
+//     let max_i256_as_u256 = U256::from_str_radix(
+//         "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+//         16,
+//     )
+//     .unwrap();
+//
+//     if value <= max_i256_as_u256 {
+//         // If the value is less than or equal to I256::MAX, it's a positive number
+//         I256::from_raw(value)
+//     } else {
+//         // If it's larger, it represents a negative number in two's complement
+//         let twos_complement = (!value).overflowing_add(U256::ONE).0;
+//         I256::from_raw(twos_complement).wrapping_neg()
+//     }
+// }
 
 #[cfg(test)]
 mod tests {
@@ -251,7 +252,7 @@ mod tests {
     fn test_single_word() {
         assert_eq!(to_pascal_case("user"), "User");
         assert_eq!(to_pascal_case("CONSTANT"), "CONSTANT");
-        assert_eq!(to_pascal_case("URI"), "UR");
+        assert_eq!(to_pascal_case("URI"), "URI");
     }
 
     #[test]

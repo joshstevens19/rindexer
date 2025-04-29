@@ -11,7 +11,7 @@ use crate::{
     database::postgres::generate::{
         generate_column_names_only_with_base_properties, generate_event_table_full_name,
     },
-    helpers::{camel_to_snake, camel_to_snake_advanced, to_pascal_case},
+    helpers::{camel_to_snake, to_pascal_case},
     manifest::{
         contract::{Contract, ContractDetails, ParseAbiError},
         storage::{CsvDetails, Storage},
@@ -21,10 +21,6 @@ use crate::{
 
 pub fn abigen_contract_name(contract: &Contract) -> String {
     format!("Rindexer{}Gen", contract.name)
-}
-
-fn abigen_contract_mod_name(contract: &Contract) -> String {
-    camel_to_snake_advanced(&abigen_contract_name(contract), true)
 }
 
 pub fn abigen_contract_file_name(contract: &Contract) -> String {
