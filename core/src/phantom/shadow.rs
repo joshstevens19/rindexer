@@ -1,14 +1,8 @@
-use std::{collections::BTreeMap, path::Path, process::Command};
+use std::{path::Path, process::Command};
 
-use alloy::{json_abi::JsonAbi, primitives::Address, providers::Provider};
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-use crate::{
-    manifest::{contract::Contract, phantom::PhantomShadow},
-    phantom::common::CloneMeta,
-};
+use crate::{manifest::phantom::PhantomShadow, phantom::common::CloneMeta};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct ShadowSourceFile {

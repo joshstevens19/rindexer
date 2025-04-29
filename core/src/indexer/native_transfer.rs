@@ -1,9 +1,4 @@
-use std::{
-    collections::VecDeque,
-    ops::{Range, RangeInclusive},
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::VecDeque, ops::RangeInclusive, sync::Arc, time::Duration};
 
 use alloy::{
     primitives::{Address, Bytes, U256, U64},

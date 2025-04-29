@@ -3,5 +3,5 @@ resolver = "2"
 members = [
     "core",
     "cli",
-#    "rindexer_rust_playground"
+    "rindexer_rust_playground"
 ]

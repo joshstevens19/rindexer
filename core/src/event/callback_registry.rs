@@ -16,7 +16,6 @@ use crate::{
     event::contract_setup::{ContractInformation, NetworkContract, TraceInformation},
     indexer::start::ProcessedNetworkContract,
     is_running,
-    types::ethers::LogMeta,
 };
 
 pub type Decoder = Arc<dyn Fn(Vec<TxHash>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync>;
@@ -246,8 +245,8 @@ impl TraceResult {
                 // TODO: Unclear in what situation this would be `None`.
                 block_number: trace.block_number.map(U64::from).unwrap_or_else(|| U64::ZERO),
                 block_timestamp: None,
-                transaction_hash: trace.transaction_hash.unwrap_or_else(|| TxHash::ZERO),
-                block_hash: trace.block_hash.unwrap_or_else(|| BlockHash::ZERO),
+                transaction_hash: trace.transaction_hash.unwrap_or(TxHash::ZERO),
+                block_hash: trace.block_hash.unwrap_or(BlockHash::ZERO),
                 transaction_index: U64::from(trace.transaction_position.unwrap_or(0)),
                 log_index: U256::from(0),
             },

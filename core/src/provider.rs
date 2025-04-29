@@ -5,7 +5,7 @@ use std::{
 
 use alloy::{
     eips::{BlockId, BlockNumberOrTag},
-    primitives::{Address, BlockHash, Bytes, TxHash, U256, U64},
+    primitives::{Address, Bytes, TxHash, U256, U64},
     providers::{
         ext::TraceApi,
         fillers::{BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller},
@@ -22,13 +22,10 @@ use alloy::{
     },
     transports::{
         http::{
-            reqwest::{
-                header::{HeaderMap, HeaderValue, AUTHORIZATION},
-                Client, Error as ReqwestError,
-            },
+            reqwest::{header::HeaderMap, Client, Error as ReqwestError},
             Http,
         },
-        RpcError, TransportErrorKind, TransportResult,
+        RpcError, TransportErrorKind,
     },
 };
 use serde::{Deserialize, Serialize};

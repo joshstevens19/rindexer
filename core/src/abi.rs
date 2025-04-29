@@ -303,8 +303,8 @@ impl EventInfo {
 
     pub fn topic_id(&self) -> B256 {
         let event_signature = self.signature.clone();
-        let hash = keccak256(event_signature);
-        hash
+
+        keccak256(event_signature)
     }
 
     pub fn topic_id_as_hex_string(&self) -> String {

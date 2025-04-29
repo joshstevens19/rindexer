@@ -1078,15 +1078,15 @@ fn process_tuple(abi_inputs: &[ABIInput], tokens: &[DynSolValue]) -> Vec<Ethereu
 fn low_u128(value: &U256) -> u128 {
     // Referenced from: https://github.com/paritytech/parity-common/blob/a2b580d9fd5a340cea817bc9ed829320d2c9cd73/uint/src/uint.rs#L499
     let arr = value.as_limbs();
-    let value = ((arr[1] as u128) << 64) + arr[0] as u128;
-    value
+
+    ((arr[1] as u128) << 64) + arr[0] as u128
 }
 
 fn low_u128_from_int(value: &I256) -> u128 {
     // Referenced from: https://github.com/paritytech/parity-common/blob/a2b580d9fd5a340cea817bc9ed829320d2c9cd73/uint/src/uint.rs#L499
     let arr = value.as_limbs();
-    let value = ((arr[1] as u128) << 64) + arr[0] as u128;
-    value
+
+    ((arr[1] as u128) << 64) + arr[0] as u128
 }
 
 fn low_u32(value: &U256) -> u32 {
@@ -1232,9 +1232,7 @@ fn map_log_token_to_ethereum_wrapper(
         }
         DynSolValue::Bool(b) => EthereumSqlTypeWrapper::Bool(*b),
         DynSolValue::String(s) => EthereumSqlTypeWrapper::String(s.clone()),
-        DynSolValue::FixedBytes(bytes, _) => {
-            EthereumSqlTypeWrapper::Bytes(Bytes::from(bytes.clone()))
-        }
+        DynSolValue::FixedBytes(bytes, _) => EthereumSqlTypeWrapper::Bytes(Bytes::from(*bytes)),
         DynSolValue::Bytes(bytes) => EthereumSqlTypeWrapper::Bytes(Bytes::from(bytes.clone())),
         DynSolValue::FixedArray(tokens) | DynSolValue::Array(tokens) => {
             match tokens.first() {
@@ -1257,7 +1255,7 @@ fn map_log_token_to_ethereum_wrapper(
                             let mut vec: Vec<Bytes> = vec![];
                             for token in tokens {
                                 if let DynSolValue::FixedBytes(bytes, _) = token {
-                                    vec.push(Bytes::from(bytes.clone()));
+                                    vec.push(Bytes::from(*bytes));
                                 }
                             }
 

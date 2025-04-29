@@ -6,7 +6,7 @@ use std::{
 };
 
 use alloy::{
-    dyn_abi::{abi::Token, DynSolValue, EventExt},
+    dyn_abi::DynSolValue,
     json_abi::{Event, JsonAbi},
     primitives::TxHash,
 };

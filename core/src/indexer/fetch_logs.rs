@@ -16,7 +16,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
     indexer::{log_helpers::is_relevant_block, IndexingEventProgressStatus},
-    provider::{JsonRpcCachedProvider, ProviderError, WrappedLog},
+    provider::{JsonRpcCachedProvider, ProviderError},
 };
 
 pub struct FetchLogsResult {
