@@ -247,9 +247,9 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
 
                         let contract_address = EthereumSqlTypeWrapper::Address(address);
                         let end_global_parameters = vec![
-                            EthereumSqlTypeWrapper::H256(transaction_hash),
+                            EthereumSqlTypeWrapper::B256(transaction_hash),
                             EthereumSqlTypeWrapper::U64(block_number),
-                            EthereumSqlTypeWrapper::H256(block_hash),
+                            EthereumSqlTypeWrapper::B256(block_hash),
                             EthereumSqlTypeWrapper::String(network.to_string()),
                             EthereumSqlTypeWrapper::U64(transaction_index),
                             EthereumSqlTypeWrapper::U256(log_index),
@@ -304,9 +304,9 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
 
                         let contract_address = EthereumSqlTypeWrapper::Address(address);
                         let end_global_parameters = vec![
-                            EthereumSqlTypeWrapper::H256(transaction_hash),
+                            EthereumSqlTypeWrapper::B256(transaction_hash),
                             EthereumSqlTypeWrapper::U64(block_number),
-                            EthereumSqlTypeWrapper::H256(block_hash),
+                            EthereumSqlTypeWrapper::B256(block_hash),
                             EthereumSqlTypeWrapper::String(network.to_string()),
                             EthereumSqlTypeWrapper::U64(transaction_index),
                             EthereumSqlTypeWrapper::U256(log_index),

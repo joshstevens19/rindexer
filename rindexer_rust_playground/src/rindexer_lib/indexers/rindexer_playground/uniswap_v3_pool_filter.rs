@@ -46,9 +46,9 @@ async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegis
                     EthereumSqlTypeWrapper::U256(U256::from(result.event_data.sqrtPriceX96)),
                     EthereumSqlTypeWrapper::U128(result.event_data.liquidity),
                     EthereumSqlTypeWrapper::I32(result.event_data.tick.as_i32()),
-                    EthereumSqlTypeWrapper::H256(result.tx_information.transaction_hash),
+                    EthereumSqlTypeWrapper::B256(result.tx_information.transaction_hash),
                     EthereumSqlTypeWrapper::U64(result.tx_information.block_number),
-                    EthereumSqlTypeWrapper::H256(result.tx_information.block_hash),
+                    EthereumSqlTypeWrapper::B256(result.tx_information.block_hash),
                     EthereumSqlTypeWrapper::String(result.tx_information.network.to_string()),
                     EthereumSqlTypeWrapper::U64(result.tx_information.transaction_index),
                     EthereumSqlTypeWrapper::U256(result.tx_information.log_index)

@@ -86,9 +86,9 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
                         EthereumSqlTypeWrapper::Address(result.event_data.from),
                         EthereumSqlTypeWrapper::Address(result.event_data.to),
                         EthereumSqlTypeWrapper::U256(result.event_data.value),
-                        EthereumSqlTypeWrapper::H256(result.tx_information.transaction_hash),
+                        EthereumSqlTypeWrapper::B256(result.tx_information.transaction_hash),
                         EthereumSqlTypeWrapper::U64(result.tx_information.block_number),
-                        EthereumSqlTypeWrapper::H256(result.tx_information.block_hash),
+                        EthereumSqlTypeWrapper::B256(result.tx_information.block_hash),
                         EthereumSqlTypeWrapper::String(result.tx_information.network.to_string()),
                     ];
                     bulk_data.push(data);
