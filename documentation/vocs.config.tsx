@@ -206,6 +206,7 @@ export default defineConfig({
         },
       ],
     },
+    { text: "Ethers to Alloy Migration", link: "/docs/ethers-alloy-migration" },
     { text: "Changelog", link: "/docs/changelog" },
     { text: "Shoutout", link: "/docs/shoutout" },
   ],

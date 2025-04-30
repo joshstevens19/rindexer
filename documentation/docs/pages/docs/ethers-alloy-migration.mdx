@@ -1,0 +1,69 @@
+# Ethers to Alloy Migration Guide
+
+Rindexer released a breaking change for all Rust projects, which internally migrates from ethers to alloy.
+
+This means that exposed types and primitives are now from Alloy rather than Ethers-rs; some methods have also been
+deprecated and this will require breaking changes to be implemented within any rindexer rust project.
+
+The simple steps to take are as follows:
+1. Add `alloy` to your `Cargo.toml`
+2. Run `rindexer codegen typings` to get the latest codegen state
+3. Go through and change all parameter names and types as required to use `alloy` rather than `ethers` types
+
+## Cargo.toml
+
+You can now remove any references to the `ethers` crate and replace this will the newer `alloy` crate. It should be pegged
+to the same version used by `rindexer` internally to ensure type compatibility.
+
+```diff
+- ethers = "2.0.14"
++ alloy = { version = "0.15.6", features = ["full"] }
+```
+
+## Codegen
+
+Once you have added the `alloy` crate to your project you can now run the codegen with `rindexer codegen typings`.
+
+:::warn
+If for some reason there are errors in your codegen file, please try deleting it before re-running. Otherwise raise an
+issue on github: https://github.com/joshstevens19/rindexer/issues.
+:::
+
+This should lead to working error-free code in the codegen directory, and lead to errors in most of the actual custom
+indexing files if you have specified them. This is mainly due to the reasons below (parameter name changes & type changes).
+
+## Types and Parameters
+
+**Solidity contract parameters**
+
+The casing of solidity contract parameters is now transparent, meaning the prior `snake_case` conversion will no longer
+be retained and instead you will be required to access an event parameter by it's source name.
+
+This will typically be `camelCase` or occasionally `UPPERCASE`, the rust compiler will help with this and the conversion
+should be relatively simple, albeit it a manual process.
+
+```diff
+- EthereumSqlTypeWrapper::AddressBytes(t.event_data.on_behalf_of),
+- EthereumSqlTypeWrapper::AddressBytes(t.event_data.onBehalfOf),
+```
+
+**Solidity types**
+
+The core `EthereumSqlTypeWrapper` have been ported to use the new alloy primitives internally, so if you are manually
+passing any `ethers` types such as the `Address` derived manually (i.e. not as an automatically exposed type from rindexer)
+then you will need ensure this is migrated to the new types.
+
+Most simple types can be found in the alloy migration guide: https://alloy.rs/migrating-from-ethers/reference/
+
+## Methods
+
+Certain methods are no longer exposed directly on all solidity primitive `uint` types. For example the `as_u32()` method
+which existed on a `U256` is no longer directly accessible.
+
+Instead if you wish to downcast, you can use the `TryInto` trait on most `uint` types to achieve the same outcome and
+handle errors gracefully in the event of an overflow (where before a panic would occur implicitly).
+
+```diff
+- EthereumSqlTypeWrapper::I32(t.tx_information.log_index.as_u32() as i32),
++ EthereumSqlTypeWrapper::I32(t.tx_information.log_index.try_into().unwrap()),
+```
