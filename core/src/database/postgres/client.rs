@@ -13,8 +13,7 @@ use tokio_postgres::{
     binary_copy::BinaryCopyInWriter, config::SslMode, Config, CopyInSink, Error as PgError, Row,
     Statement, ToStatement, Transaction as PgTransaction,
 };
-use tracing::{debug, error};
-
+use tracing::error;
 use crate::database::postgres::{
     generate::generate_event_table_columns_names_sql, sql_type_wrapper::EthereumSqlTypeWrapper,
 };
@@ -301,14 +300,14 @@ impl PostgresClient {
             generate_event_table_columns_names_sql(column_names),
         );
 
-        debug!("Bulk insert statement: {}", stmt);
+        // info!("Bulk insert statement: {}", stmt);
 
         let prepared_data: Vec<Vec<&(dyn ToSql + Sync)>> = data
             .iter()
             .map(|row| row.iter().map(|param| param as &(dyn ToSql + Sync)).collect())
             .collect();
 
-        //debug!("Prepared data: {:?}", prepared_data);
+        // info!("Prepared data: {:?}", prepared_data);
 
         let sink = self.copy_in(&stmt).await?;
 

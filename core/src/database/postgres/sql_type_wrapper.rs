@@ -542,8 +542,7 @@ impl ToSql for EthereumSqlTypeWrapper {
                 } else {
                     let values_strings: Vec<String> =
                         values.iter().map(|v| v.to_string()).collect();
-                    let formatted_str = values_strings.join(",");
-                    String::to_sql(&formatted_str, ty, out)
+                    EthereumSqlTypeWrapper::VecStringVarchar(values_strings).to_sql(ty, out)
                 }
             }
             EthereumSqlTypeWrapper::VecU256Bytes(values) => {
@@ -1236,7 +1235,10 @@ fn map_log_token_to_ethereum_wrapper(
         DynSolValue::Bytes(bytes) => EthereumSqlTypeWrapper::Bytes(Bytes::from(bytes.clone())),
         DynSolValue::FixedArray(tokens) | DynSolValue::Array(tokens) => {
             match tokens.first() {
-                None => EthereumSqlTypeWrapper::VecString(vec![]),
+                None => {
+                    #[allow(clippy::expect_fun_call)]
+                    solidity_type_to_ethereum_sql_type_wrapper(&abi_input.type_).expect(format!("map_log_token_to_ethereum_wrapper:: Unknown type: {}", abi_input.type_).as_str())
+                },
                 Some(first_token) => {
                     // events arrays can only be one type so get it from the first one
                     let token_type = first_token;

@@ -15,7 +15,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
-    indexer::{log_helpers::is_relevant_block, IndexingEventProgressStatus},
+    indexer::{log_helpers::{is_relevant_block, halved_block_number}, IndexingEventProgressStatus},
     provider::{JsonRpcCachedProvider, ProviderError},
 };
 
@@ -306,8 +306,7 @@ async fn fetch_historic_logs_stream(
                 });
             }
 
-            let halved_range = (to_block - from_block) / U64::from(2);
-            let halved_to_block = (from_block + halved_range).max(from_block + U64::from(100));
+            let halved_to_block = halved_block_number(to_block, from_block);
 
             // Handle deserialization, networking, and other non-rpc related errors.
             error!(
@@ -351,6 +350,7 @@ async fn live_indexing_stream(
     network: &str,
 ) {
     let mut last_seen_block_number = last_seen_block_number;
+    let mut log_response_to_large_to_block: Option<U64> = None;
     let mut last_no_new_block_log_time = Instant::now();
     let log_no_new_block_interval = Duration::from_secs(300);
     let target_iteration_duration = Duration::from_millis(200);
@@ -362,9 +362,9 @@ async fn live_indexing_stream(
         match latest_block {
             Ok(latest_block) => {
                 if let Some(latest_block) = latest_block {
-                    let latest_block_number = U64::from(latest_block.header.number);
+                    let to_block_number = log_response_to_large_to_block.unwrap_or(U64::from(latest_block.header.number));
 
-                    if last_seen_block_number == latest_block_number {
+                    if last_seen_block_number == to_block_number {
                         debug!(
                             "{} - {} - No new blocks to process...",
                             info_log_name,
@@ -385,11 +385,11 @@ async fn live_indexing_stream(
                             "{} - {} - New block seen {} - Last seen block {}",
                             info_log_name,
                             IndexingEventProgressStatus::Live.log(),
-                            latest_block_number,
+                            to_block_number,
                             last_seen_block_number
                         );
 
-                        let safe_block_number = latest_block_number - reorg_safe_distance;
+                        let safe_block_number = to_block_number - reorg_safe_distance;
                         let from_block = current_filter.get_from_block();
                         if from_block > safe_block_number {
                             info!(
@@ -481,13 +481,13 @@ async fn live_indexing_stream(
                                                 current_filter = current_filter
                                                     .set_from_block(to_block + U64::from(1));
                                                 info!(
-                                                        "{} - {} - No events found between blocks {} - {} - network: {}",
-                                                        info_log_name,
-                                                        IndexingEventProgressStatus::Live.log(),
-                                                        from_block,
-                                                        to_block,
-                                                        network
-                                                    );
+                                                    "{} - {} - No events found between blocks {} - {} - network: {}",
+                                                    info_log_name,
+                                                    IndexingEventProgressStatus::Live.log(),
+                                                    from_block,
+                                                    to_block,
+                                                    network
+                                                );
                                             } else if let Some(last_log) = last_log {
                                                 if let Some(last_log_block_number) =
                                                     last_log.block_number
@@ -500,17 +500,39 @@ async fn live_indexing_stream(
                                                 }
                                             }
 
+                                            log_response_to_large_to_block = None;
+
                                             drop(permit);
                                         }
                                         Err(err) => {
-                                            warn!(
-                                                    "{} - {} - Error fetching logs in range {} - {}. Retrying: {}",
+                                            if let Some(retry_result) = retry_with_block_range(&err, from_block, to_block) {
+                                                warn!(
+                                                    "{}::{} - {} - Overfetched from {} to {} - shrinking to block range: from {} to {}",
                                                     info_log_name,
+                                                    network,
                                                     IndexingEventProgressStatus::Live.log(),
                                                     from_block,
                                                     to_block,
-                                                    err
-                                                );
+                                                    from_block,
+                                                    retry_result.to
+                                                    );
+
+                                                log_response_to_large_to_block = Some(retry_result.to);
+                                            }
+
+                                            let halved_to_block = halved_block_number(to_block, from_block);
+
+                                            error!(
+                                                "[{}] - {} - {} - Unexpected error fetching logs in range {} - {}. Retry fetching {} - {}: {:?}",
+                                                network,
+                                                info_log_name,
+                                                IndexingEventProgressStatus::Live.log(),
+                                                from_block,
+                                                to_block,
+                                                from_block,
+                                                halved_to_block,
+                                                err
+                                            );
                                             drop(permit);
                                         }
                                     }

@@ -3,7 +3,7 @@ use std::str::FromStr;
 use alloy::{
     dyn_abi::{DynSolValue, EventExt},
     json_abi::Event,
-    primitives::{keccak256, Address, Bloom, B256, U256},
+    primitives::{keccak256, Address, Bloom, B256, U256, U64},
     rpc::types::{Block, FilterSet, FilteredParams, Log, ValueOrArray},
 };
 use tracing::error;
@@ -136,4 +136,11 @@ pub fn is_relevant_block(
     }
 
     true
+}
+
+pub fn halved_block_number(to_block: U64, from_block: U64) -> U64 {
+    let halved_range = (to_block - from_block) / U64::from(2);
+    let halved_to_block = (from_block + halved_range).max(from_block + U64::from(100));
+
+    halved_to_block
 }
