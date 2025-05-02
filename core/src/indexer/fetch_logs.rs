@@ -525,22 +525,26 @@ async fn live_indexing_stream(
 
                                                 log_response_to_large_to_block =
                                                     Some(retry_result.to);
+                                            } else {
+                                                let halved_to_block =
+                                                    halved_block_number(to_block, from_block);
+
+                                                error!(
+                                                    "[{}] - {} - {} - Unexpected error fetching logs in range {} - {}. Retry fetching {} - {}: {:?}",
+                                                    network,
+                                                    info_log_name,
+                                                    IndexingEventProgressStatus::Live.log(),
+                                                    from_block,
+                                                    to_block,
+                                                    from_block,
+                                                    halved_to_block,
+                                                    err
+                                                );
+
+                                                log_response_to_large_to_block =
+                                                    Some(halved_to_block);
                                             }
 
-                                            let halved_to_block =
-                                                halved_block_number(to_block, from_block);
-
-                                            error!(
-                                                "[{}] - {} - {} - Unexpected error fetching logs in range {} - {}. Retry fetching {} - {}: {:?}",
-                                                network,
-                                                info_log_name,
-                                                IndexingEventProgressStatus::Live.log(),
-                                                from_block,
-                                                to_block,
-                                                from_block,
-                                                halved_to_block,
-                                                err
-                                            );
                                             drop(permit);
                                         }
                                     }
