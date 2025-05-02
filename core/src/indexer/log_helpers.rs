@@ -140,7 +140,5 @@ pub fn is_relevant_block(
 
 pub fn halved_block_number(to_block: U64, from_block: U64) -> U64 {
     let halved_range = (to_block - from_block) / U64::from(2);
-    let halved_to_block = (from_block + halved_range).max(from_block + U64::from(100));
-
-    halved_to_block
+    (from_block + halved_range).max(from_block + U64::from(100))
 }
