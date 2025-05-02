@@ -14,6 +14,7 @@ use tokio_postgres::{
     Statement, ToStatement, Transaction as PgTransaction,
 };
 use tracing::error;
+
 use crate::database::postgres::{
     generate::generate_event_table_columns_names_sql, sql_type_wrapper::EthereumSqlTypeWrapper,
 };

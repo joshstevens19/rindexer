@@ -1235,10 +1235,17 @@ fn map_log_token_to_ethereum_wrapper(
         DynSolValue::Bytes(bytes) => EthereumSqlTypeWrapper::Bytes(Bytes::from(bytes.clone())),
         DynSolValue::FixedArray(tokens) | DynSolValue::Array(tokens) => {
             match tokens.first() {
-                None => {
+                None =>
+                {
                     #[allow(clippy::expect_fun_call)]
-                    solidity_type_to_ethereum_sql_type_wrapper(&abi_input.type_).expect(format!("map_log_token_to_ethereum_wrapper:: Unknown type: {}", abi_input.type_).as_str())
-                },
+                    solidity_type_to_ethereum_sql_type_wrapper(&abi_input.type_).expect(
+                        format!(
+                            "map_log_token_to_ethereum_wrapper:: Unknown type: {}",
+                            abi_input.type_
+                        )
+                        .as_str(),
+                    )
+                }
                 Some(first_token) => {
                     // events arrays can only be one type so get it from the first one
                     let token_type = first_token;

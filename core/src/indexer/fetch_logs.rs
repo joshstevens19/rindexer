@@ -15,7 +15,10 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
-    indexer::{log_helpers::{is_relevant_block, halved_block_number}, IndexingEventProgressStatus},
+    indexer::{
+        log_helpers::{halved_block_number, is_relevant_block},
+        IndexingEventProgressStatus,
+    },
     provider::{JsonRpcCachedProvider, ProviderError},
 };
 
@@ -362,7 +365,8 @@ async fn live_indexing_stream(
         match latest_block {
             Ok(latest_block) => {
                 if let Some(latest_block) = latest_block {
-                    let to_block_number = log_response_to_large_to_block.unwrap_or(U64::from(latest_block.header.number));
+                    let to_block_number = log_response_to_large_to_block
+                        .unwrap_or(U64::from(latest_block.header.number));
 
                     if last_seen_block_number == to_block_number {
                         debug!(
@@ -505,7 +509,9 @@ async fn live_indexing_stream(
                                             drop(permit);
                                         }
                                         Err(err) => {
-                                            if let Some(retry_result) = retry_with_block_range(&err, from_block, to_block) {
+                                            if let Some(retry_result) =
+                                                retry_with_block_range(&err, from_block, to_block)
+                                            {
                                                 warn!(
                                                     "{}::{} - {} - Overfetched from {} to {} - shrinking to block range: from {} to {}",
                                                     info_log_name,
@@ -517,10 +523,12 @@ async fn live_indexing_stream(
                                                     retry_result.to
                                                     );
 
-                                                log_response_to_large_to_block = Some(retry_result.to);
+                                                log_response_to_large_to_block =
+                                                    Some(retry_result.to);
                                             }
 
-                                            let halved_to_block = halved_block_number(to_block, from_block);
+                                            let halved_to_block =
+                                                halved_block_number(to_block, from_block);
 
                                             error!(
                                                 "[{}] - {} - {} - Unexpected error fetching logs in range {} - {}. Retry fetching {} - {}: {:?}",
