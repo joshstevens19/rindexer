@@ -302,11 +302,16 @@ pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError>
 
     let mut manifest_after_transform: Manifest = serde_yaml::from_str(&contents)?;
 
+    // Assign networks to the Native Transfer if opted into without defining networks.
+    // We treat None as "All available".
+    manifest_after_transform.set_native_transfer_networks();
+
     // as we don't want to inject the RPC URL in rust projects in clear text we should change
     // the networks.rpc back to what it was before and the generated code will handle it
     if manifest_after_transform.project_type == ProjectType::Rust {
         let manifest_networks_only: ManifestNetworksOnly =
             serde_yaml::from_str(&contents_before_transform)?;
+
         for network in &mut manifest_after_transform.networks {
             network.rpc = manifest_networks_only
                 .networks

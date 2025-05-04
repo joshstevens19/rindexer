@@ -12,6 +12,7 @@ use tracing::error;
 
 use crate::{
     event::{filter_event_data_by_conditions, EventMessage},
+    indexer::native_transfer::EVENT_NAME,
     manifest::stream::{
         KafkaStreamConfig, KafkaStreamQueueConfig, RabbitMQStreamConfig, RabbitMQStreamQueueConfig,
         RedisStreamConfig, RedisStreamStreamConfig, SNSStreamTopicConfig, StreamEvent,
@@ -63,21 +64,25 @@ struct WebhookStream {
     client: Arc<Webhook>,
 }
 
+#[derive(Debug)]
 pub struct RabbitMQStream {
     config: RabbitMQStreamConfig,
     client: Arc<RabbitMQ>,
 }
 
+#[derive(Debug)]
 pub struct KafkaStream {
     config: KafkaStreamConfig,
     client: Arc<Kafka>,
 }
 
+#[derive(Debug)]
 pub struct RedisStream {
     config: RedisStreamConfig,
     client: Arc<Redis>,
 }
 
+#[derive(Debug)]
 pub struct StreamsClients {
     sns: Option<SNSStream>,
     webhook: Option<WebhookStream>,
@@ -236,9 +241,14 @@ impl StreamsClients {
         event_message: &EventMessage,
         chunk: &[Value],
     ) -> Vec<Value> {
-        let stream_event = events
-            .iter()
-            .find(|e| e.event_name == event_message.event_name)
+        let stream_event = events.iter().find(|e| e.event_name == event_message.event_name);
+
+        // Allow no trace events to be defined, otherwise use the defined event config.
+        if event_message.event_name == EVENT_NAME && stream_event.is_none() {
+            return chunk.to_vec();
+        }
+
+        let stream_event = stream_event
             .expect("Failed to find stream event - should never happen please raise an issue");
 
         let filtered_chunk: Vec<Value> = chunk
@@ -445,6 +455,7 @@ impl StreamsClients {
         id: String,
         event_message: &EventMessage,
         index_event_in_order: bool,
+        is_trace_event: bool,
     ) -> Result<usize, StreamError> {
         if !self.has_any_streams() {
             return Ok(0);
@@ -457,7 +468,10 @@ impl StreamsClients {
 
             if let Some(sns) = &self.sns {
                 for config in &sns.config {
-                    if config.events.iter().any(|e| e.event_name == event_message.event_name) &&
+                    let is_user_event =
+                        config.events.iter().any(|e| e.event_name == event_message.event_name);
+
+                    if (is_user_event || is_trace_event) &&
                         config.networks.contains(&event_message.network)
                     {
                         streams.push(self.sns_stream_tasks(

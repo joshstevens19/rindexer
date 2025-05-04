@@ -1,11 +1,15 @@
 use std::path::Path;
 
+use ethers::utils::keccak256;
 use tracing::{error, info};
 
 use crate::{
     abi::{ABIInput, ABIItem, EventInfo, GenerateAbiPropertiesType, ParamTypeError, ReadAbiError},
     helpers::camel_to_snake,
-    indexer::Indexer,
+    indexer::{
+        native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME},
+        Indexer,
+    },
     manifest::contract::Contract,
     types::code::Code,
 };
@@ -93,20 +97,16 @@ fn generate_internal_event_table_sql(
     networks: Vec<&str>,
 ) -> String {
     abi_inputs.iter().map(|event_info| {
-        let table_name = format!(
-            "rindexer_internal.{}_{}",
-            schema_name,
-            camel_to_snake(&event_info.name)
-        );
+        let table_name = generate_internal_event_table_name(schema_name, &event_info.name);
 
         let create_table_query = format!(
-            r#"CREATE TABLE IF NOT EXISTS {} ("network" TEXT PRIMARY KEY, "last_synced_block" NUMERIC);"#,
+            r#"CREATE TABLE IF NOT EXISTS rindexer_internal.{} ("network" TEXT PRIMARY KEY, "last_synced_block" NUMERIC);"#,
             table_name
         );
 
         let insert_queries = networks.iter().map(|network| {
             format!(
-                r#"INSERT INTO {} ("network", "last_synced_block") VALUES ('{}', 0) ON CONFLICT ("network") DO NOTHING;"#,
+                r#"INSERT INTO rindexer_internal.{} ("network", "last_synced_block") VALUES ('{}', 0) ON CONFLICT ("network") DO NOTHING;"#,
                 table_name,
                 network
             )
@@ -129,14 +129,14 @@ pub enum GenerateTablesForIndexerSqlError {
 /// to avoid clashing of graphql namings
 fn find_clashing_event_names(
     project_path: &Path,
-    current_contract: &Contract,
+    current_contract_name: &str,
     other_contracts: &[Contract],
     current_event_names: &[EventInfo],
 ) -> Result<Vec<String>, GenerateTablesForIndexerSqlError> {
     let mut clashing_events = Vec::new();
 
     for other_contract in other_contracts {
-        if other_contract.name == current_contract.name {
+        if other_contract.name == current_contract_name {
             continue;
         }
 
@@ -176,7 +176,7 @@ pub fn generate_tables_for_indexer_sql(
 
             let event_matching_name_on_other = find_clashing_event_names(
                 project_path,
-                contract,
+                &contract_name,
                 &indexer.contracts,
                 &event_names,
             )?;
@@ -189,6 +189,37 @@ pub fn generate_tables_for_indexer_sql(
             ));
         }
         // we still need to create the internal tables for the contract
+        sql.push_str(&generate_internal_event_table_sql(&event_names, &schema_name, networks));
+    }
+
+    if indexer.native_transfers.enabled {
+        let contract_name = NATIVE_TRANSFER_CONTRACT_NAME.to_string();
+        let abi_str = NATIVE_TRANSFER_ABI;
+        let abi_items: Vec<ABIItem> =
+            serde_json::from_str(abi_str).expect("JSON was not well-formatted");
+        let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
+        let schema_name = generate_indexer_contract_schema_name(&indexer.name, &contract_name);
+        let networks = indexer.clone().native_transfers.networks.unwrap();
+        let networks: Vec<&str> = networks.iter().map(|d| d.network.as_str()).collect();
+
+        if !disable_event_tables {
+            sql.push_str(format!("CREATE SCHEMA IF NOT EXISTS {};", schema_name).as_str());
+            info!("Creating schema if not exists: {}", schema_name);
+
+            let event_matching_name_on_other = find_clashing_event_names(
+                project_path,
+                &contract_name,
+                &indexer.contracts,
+                &event_names,
+            )?;
+
+            sql.push_str(&generate_event_table_sql_with_comments(
+                &event_names,
+                &contract_name,
+                &schema_name,
+                event_matching_name_on_other,
+            ));
+        }
         sql.push_str(&generate_internal_event_table_sql(&event_names, &schema_name, networks));
     }
 
@@ -232,6 +263,26 @@ pub fn generate_indexer_contract_schema_name(indexer_name: &str, contract_name: 
     format!("{}_{}", camel_to_snake(indexer_name), camel_to_snake(contract_name))
 }
 
+pub fn generate_internal_event_table_name(schema_name: &str, event_name: &str) -> String {
+    let table_name = format!("{}_{}", schema_name, camel_to_snake(event_name));
+    // sql table names cant be as long as 63
+    if table_name.len() > 63 {
+        let hash_bytes = keccak256(table_name.as_bytes());
+        let hash = hash_bytes.iter().map(|byte| format!("{:02x}", byte)).collect::<String>();
+        let hash_prefix = &hash[0..10];
+
+        // Preserve the beginning of the original name, but leave room for the hash
+        let preserved_length = 63 - 11; // 10 for hash plus 1 for underscore
+        let prefix = &table_name[0..preserved_length];
+
+        let shortened_name = format!("{}_{}", prefix, hash_prefix);
+
+        return shortened_name;
+    }
+
+    table_name
+}
+
 pub fn drop_tables_for_indexer_sql(project_path: &Path, indexer: &Indexer) -> Code {
     let mut sql = format!(
         "DROP TABLE IF EXISTS rindexer_internal.{}_last_known_indexes_dropping_sql CASCADE;",
@@ -248,7 +299,7 @@ pub fn drop_tables_for_indexer_sql(project_path: &Path, indexer: &Indexer) -> Co
         let abi_items = ABIItem::read_abi_items(project_path, contract);
         if let Ok(abi_items) = abi_items {
             for abi_item in abi_items.iter() {
-                let table_name = format!("{}_{}", schema_name, camel_to_snake(&abi_item.name));
+                let table_name = generate_internal_event_table_name(&schema_name, &abi_item.name);
                 sql.push_str(
                     format!("DROP TABLE IF EXISTS rindexer_internal.{} CASCADE;", table_name)
                         .as_str(),

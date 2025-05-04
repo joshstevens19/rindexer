@@ -8,7 +8,9 @@ use ethers::types::U64;
 use tokio::sync::Mutex;
 use tracing::{error, info};
 
-use crate::event::callback_registry::EventCallbackRegistryInformation;
+use crate::event::callback_registry::{
+    EventCallbackRegistryInformation, TraceCallbackRegistryInformation,
+};
 
 #[derive(Clone, Debug, Hash)]
 pub enum IndexingEventProgressStatus {
@@ -136,6 +138,44 @@ impl IndexingEventsProgressState {
                         error!(
                             "Failed to get latest block for network {}: {}",
                             network_contract.network, e
+                        );
+                    }
+                }
+            }
+        }
+
+        Arc::new(Mutex::new(Self { events }))
+    }
+
+    pub async fn monitor_traces(
+        event_information: &Vec<TraceCallbackRegistryInformation>,
+    ) -> Arc<Mutex<IndexingEventsProgressState>> {
+        let mut events = Vec::new();
+
+        for event_info in event_information {
+            for network_traces in &event_info.trace_information.details {
+                let latest_block = network_traces.cached_provider.get_block_number().await;
+                match latest_block {
+                    Ok(latest_block) => {
+                        let start_block = network_traces.start_block.unwrap_or(latest_block);
+                        let end_block = network_traces.end_block.unwrap_or(latest_block);
+
+                        events.push(IndexingEventProgress::running(
+                            event_info.id.to_string(),
+                            event_info.contract_name.clone(),
+                            event_info.event_name.to_string(),
+                            start_block,
+                            start_block,
+                            if latest_block > end_block { end_block } else { latest_block },
+                            network_traces.network.clone(),
+                            network_traces.end_block.is_none(),
+                            event_info.info_log_name(),
+                        ));
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to get latest block for tracing network {}: {}",
+                            network_traces.network, e
                         );
                     }
                 }

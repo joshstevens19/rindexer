@@ -3,7 +3,7 @@ use std::{any::Any, sync::Arc, time::Duration};
 use ethers::{
     addressbook::Address,
     contract::LogMeta,
-    types::{Bytes, Log, H256, U256, U64},
+    types::{Bytes, Call, Log, Trace, H256, U256, U64},
 };
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,7 @@ use tokio::time::sleep;
 use tracing::{debug, error, info};
 
 use crate::{
-    event::contract_setup::{ContractInformation, NetworkContract},
+    event::contract_setup::{ContractInformation, NetworkContract, TraceInformation},
     indexer::start::ProcessedNetworkContract,
     is_running,
     provider::WrappedLog,
@@ -23,6 +23,18 @@ pub fn noop_decoder() -> Decoder {
     Arc::new(move |_topics: Vec<H256>, _data: Bytes| {
         Arc::new(String::new()) as Arc<dyn Any + Send + Sync>
     }) as Decoder
+}
+
+/// The [`CallbackResult`] enum has two core variants, a Trace and an Event. We implement shared
+/// callback logic to sink or stream these "results".
+///
+/// Since each event is different, and we want `rust` project consumers to not worry about manually
+/// mapping their [`EventResult`] into a [`CallbackResult`], we handle this for them internally and
+/// this struct allows us to do this behind the scenes.
+#[derive(Clone)]
+pub enum CallbackResult {
+    Event(Vec<EventResult>),
+    Trace(Vec<TraceResult>),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -79,8 +91,11 @@ impl EventResult {
 }
 
 pub type EventCallbackResult<T> = Result<T, String>;
+
 pub type EventCallbackType =
     Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync>;
+pub type TraceCallbackType =
+    Arc<dyn Fn(Vec<TraceResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync>;
 
 pub struct EventCallbackRegistryInformation {
     pub id: String,
@@ -137,45 +152,21 @@ impl EventCallbackRegistry {
     }
 
     pub async fn trigger_event(&self, id: &String, data: Vec<EventResult>) {
-        let mut attempts = 0;
-        let mut delay = Duration::from_millis(100);
-
         if let Some(event_information) = self.find_event(id) {
-            debug!("{} - Pushed {} events", data.len(), event_information.info_log_name());
-
-            loop {
-                if !is_running() {
-                    info!("Detected shutdown, stopping event trigger");
-                    break;
-                }
-
-                match (event_information.callback)(data.clone()).await {
-                    Ok(_) => {
-                        debug!(
-                            "Event processing succeeded for id: {} - topic_id: {}",
-                            id, event_information.topic_id
-                        );
-                        break;
-                    }
-                    Err(e) => {
-                        if !is_running() {
-                            info!("Detected shutdown, stopping event trigger");
-                            break;
-                        }
-                        attempts += 1;
-                        error!(
-                            "{} Event processing failed - id: {} - topic_id: {}. Retrying... (attempt {}). Error: {}",
-                            event_information.info_log_name(), id, event_information.topic_id, attempts, e
-                        );
-
-                        delay = (delay * 2).min(Duration::from_secs(15));
-
-                        sleep(delay).await;
-                    }
-                }
-            }
+            trigger_event(
+                id,
+                data,
+                |d| (event_information.callback)(d),
+                || event_information.info_log_name(),
+                &event_information.topic_id.to_string(),
+            )
+            .await;
         } else {
-            error!("EventCallbackRegistry: No event found for id: {}", id);
+            error!(
+                "EventCallbackRegistry: No event found for id: {}. Data: {:?}",
+                id,
+                data.first()
+            );
         }
     }
 
@@ -208,5 +199,151 @@ impl EventCallbackRegistry {
         self.events.retain(|e| !e.contract.details.is_empty());
 
         self.complete()
+    }
+}
+
+// --------------------------------
+// "Native" Trace Callback Registry
+// --------------------------------
+
+#[derive(Debug, Clone)]
+pub struct TraceResult {
+    pub from: Address,
+    pub to: Address,
+    pub value: U256,
+    pub tx_information: TxInformation,
+    pub found_in_request: LogFoundInRequest,
+}
+
+impl TraceResult {
+    /// Create a "NativeTransfer" TraceResult for sinking and streaming.
+    pub fn new_native_transfer(
+        action: &Call,
+        trace: &Trace,
+        network: &str,
+        start_block: U64,
+        end_block: U64,
+    ) -> Self {
+        Self {
+            from: action.from,
+            to: action.to,
+            value: action.value,
+            tx_information: TxInformation {
+                network: network.to_string(),
+                address: Address::zero(),
+                block_number: U64::from(trace.block_number),
+                block_timestamp: None,
+                // TODO: Unclear in what situation this would be `None`.
+                transaction_hash: trace.transaction_hash.unwrap_or_else(H256::zero),
+                block_hash: trace.block_hash,
+                transaction_index: U64::from(trace.transaction_position.unwrap_or(0)),
+                log_index: U256::from(0),
+            },
+            found_in_request: LogFoundInRequest { from_block: start_block, to_block: end_block },
+        }
+    }
+}
+
+pub type TraceCallbackResult<T> = Result<T, String>;
+
+#[derive(Clone)]
+pub struct TraceCallbackRegistryInformation {
+    pub id: String,
+    pub indexer_name: String,
+    pub event_name: String,
+    pub contract_name: String,
+    pub trace_information: TraceInformation,
+    pub callback: TraceCallbackType,
+}
+
+impl TraceCallbackRegistryInformation {
+    pub fn info_log_name(&self) -> String {
+        format!("{}::{}", self.indexer_name, self.event_name)
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct TraceCallbackRegistry {
+    pub events: Vec<TraceCallbackRegistryInformation>,
+}
+
+impl TraceCallbackRegistry {
+    pub fn new() -> Self {
+        TraceCallbackRegistry { events: Vec::new() }
+    }
+
+    pub fn find_event(&self, id: &String) -> Option<&TraceCallbackRegistryInformation> {
+        self.events.iter().find(|e| e.id == *id)
+    }
+
+    pub fn register_event(&mut self, event: TraceCallbackRegistryInformation) {
+        self.events.push(event);
+    }
+
+    pub async fn trigger_event(&self, id: &String, data: Vec<TraceResult>) {
+        if let Some(event_information) = self.find_event(id) {
+            trigger_event(
+                id,
+                data,
+                |d| (event_information.callback)(d),
+                || event_information.info_log_name(),
+                &event_information.event_name,
+            )
+            .await;
+        } else {
+            error!("TraceCallbackRegistry: No event found for id: {}", id);
+        }
+    }
+
+    pub fn complete(&self) -> Arc<Self> {
+        Arc::new(self.clone())
+    }
+}
+
+async fn trigger_event<T>(
+    id: &String,
+    data: Vec<T>,
+    callback: impl Fn(Vec<T>) -> BoxFuture<'static, EventCallbackResult<()>>,
+    info_log_name: impl Fn() -> String,
+    event_identifier: &str,
+) where
+    T: Clone,
+{
+    let mut attempts = 0;
+    let mut delay = Duration::from_millis(100);
+
+    let len = data.len();
+    debug!("{} - Pushed {} events", len, info_log_name());
+
+    loop {
+        if !is_running() {
+            info!("Detected shutdown, stopping event trigger");
+            break;
+        }
+
+        match callback(data.clone()).await {
+            Ok(_) => {
+                debug!(
+                    "Event processing succeeded for id: {} - topic_id: {}",
+                    id, event_identifier
+                );
+                break;
+            }
+            Err(e) => {
+                if !is_running() {
+                    info!("Detected shutdown, stopping event trigger");
+                    break;
+                }
+                attempts += 1;
+                error!(
+                    "{} Event processing failed - id: {} - topic_id: {}. Retrying... (attempt {}). Error: {}",
+                    info_log_name(), id, event_identifier, attempts, e
+                );
+
+                delay = (delay * 2).min(Duration::from_secs(15));
+
+                sleep(delay).await;
+            }
+        }
     }
 }

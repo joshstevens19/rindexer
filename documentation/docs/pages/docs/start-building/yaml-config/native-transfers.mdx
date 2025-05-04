@@ -1,0 +1,371 @@
+# Native Transfers
+
+A special opt-in configuration for indexing native token transfers such as "ETH", in the form of "ERC20"-like transfer events.
+
+You can expect the event to be defined as if you were indexing an ERC20 Transfer event.
+
+:::warning
+This is **experimental** functionality which has not yet been extensively tested in production.
+:::
+
+:::info
+**IMPORTANT**: The `rpc` provider passed into the `networks` configuration must support the `trace_block` RPC method or `debug_traceBlockByNumber` RPC method. Not
+all providers currently support this.
+:::
+
+Supported stream providers:
+
+- [Simple](/docs/start-building/yaml-config/native-transfers#simple) - Simple opt-in (for csv, and postgres)
+- [Complex](/docs/start-building/yaml-config/native-transfers#complex) - Complex indexing configuration with stream providers
+
+# Simple
+
+The "simple" opt-in is done via including the top level yaml `native_transfers: true`. This has a few special properties
+and is designed to kickstart simple persistence based indexing of native transfers.
+
+By default, this means:
+- All networks defined in `networks` will be enabled for native transfer indexing
+- All enabled `storage` options will be used
+- Native transfers will be indexed in `live` mode, from the latest block onwards.
+
+The event will be persisted to storage under the event name `NativeTransfer`.
+
+```yaml [rindexer.yaml]
+name: rIndexer
+description: My native transfers rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    # The rpc provider must support the `trace_block` rpc method in simple mode
+    rpc: https://mainnet.gateway.tenderly.co  // [!code focus]
+storage:
+  postgres:
+    enabled: true
+native_transfers: true // [!code focus]
+contracts: []
+```
+
+# Complex
+
+The complex configuration is designed for more powerful configuration. Specifically if your use case is one of the following:
+1. You want historical `native transfer` indexing
+2. You want to use one of the `stream` or `chat` providers
+3. You want to conditionally filter or alias the event name
+4. You want to only opt-in to specific networks for `native transfer` events
+
+If you provide any `networks` in the `native_transfers` config it is equivalent to setting `native_tranfers: true` and
+you will be opted in to native transfer indexing for that network.
+
+## networks
+
+The network name to listen for events on, this should match the network name in the networks section of the YAML.
+
+```yaml [rindexer.yaml]
+name: rIndexer
+description: My native transfers rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+native_transfers:
+  networks: // [!code focus]
+    - network: ethereum // [!code focus]
+contracts: []
+```
+
+### start_block
+
+The block to start indexing from, you can use the deployed block if you wish to get everything.
+
+:::info
+This is optional but most people will want to use this, if you do not provide an start block it will index the data from now and then live index as new blocks
+come in. Important to know this will NOT track last synced block and when you start and stop the indexer it will start from the latest block.
+You can read more about this [here](/docs/start-building/live-indexing-and-historic).
+:::
+
+```yaml [rindexer.yaml]
+name: rIndexer
+description: My native transfers rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+native_transfers:
+  networks: // [!code focus]
+    - network: ethereum
+      start_block: 0 // [!code focus]
+contracts: []
+```
+
+### end_block
+
+:::info
+This is optional, if you do not provide an end block it will index all the data and then live index as new blocks
+come in. You can read more about this [here](/docs/start-building/live-indexing-and-historic).
+:::
+
+```yaml [rindexer.yaml]
+name: rIndexer
+description: My native transfers rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+native_transfers:
+  networks: // [!code focus]
+    - network: ethereum
+      start_block: 18600000
+      end_block: 18718056 // [!code focus]
+contracts: []
+```
+
+### method
+
+:::info
+This is optional, if you do not provide a method it will default to using `trace_block` as
+it provides a `block_hash` in the response.
+:::
+
+The method field is an advanced option, and typically does not need to be defined. By default it 
+will use `trace_block` and it is only recommended to manually override this in the event that your 
+RPC provider does not have adequate support for `trace_block` (i.e. in the case of Alchemy L2 Support).
+
+Valid options are: `debug_traceBlockByNumber` or `trace_block`.
+
+:::code-group
+
+```yaml [debug_traceBlockByNumber]
+name: rIndexer
+description: My native transfers rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+native_transfers:
+  networks: // [!code focus]
+    - network: ethereum
+      start_block: 18600000
+      end_block: 18718056 
+      method: debug_traceBlockByNumber
+contracts: []
+```
+
+```yaml [trace_block]
+name: rIndexer
+description: My native transfers rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+native_transfers:
+  networks: // [!code focus]
+    - network: ethereum
+      start_block: 18600000
+      end_block: 18718056 
+      method: trace_block // [!code focus]
+contracts: []
+```
+
+```yaml [default]
+name: rIndexer
+description: My native transfers rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+native_transfers:
+  networks: // [!code focus]
+    - network: ethereum
+      start_block: 18600000
+      end_block: 18718056 
+contracts: []
+```
+
+:::
+
+### Multiple Networks
+
+You can have multiple networks, this is useful if you must track native balances across a variety of networks.
+
+```yaml [rindexer.yaml]
+name: rIndexer
+description: My native transfers rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks: // [!code focus]
+  - name: ethereum // [!code focus]
+    chain_id: 1 // [!code focus]
+    rpc: https://mainnet.gateway.tenderly.co // [!code focus]
+  - name: base // [!code focus]
+    chain_id: 8453 // [!code focus]
+    rpc: https://base.gateway.tenderly.co // [!code focus]
+storage:
+  postgres:
+    enabled: true
+native_transfers: // [!code focus]
+  networks: // [!code focus]
+    - network: ethereum // [!code focus]
+      start_block: 18600000
+      end_block: 18718056
+    - network: base // [!code focus]
+      start_block: 18118056
+      end_block: 18918056
+```
+
+## reorg_safe_distance
+
+Reorgs can happen on the chain, this is when a block is removed from the chain and replaced with another block.
+This can cause issues with the indexer indexed state if you turn `reorg_safe_distance` on it will keep a safe distance from the live
+latest block to avoid any reorg issues.
+
+Note if you are doing live indexing you will need to handle more advanced reorgs, support for advanced reorgs
+is in the backlog for rindexer.
+
+:::info
+This is optional if you do not provide this it will index the latest blocks as soon as it is available for `debug`
+indexing by the provider.
+:::
+
+```yaml [rindexer.yaml]
+name: rIndexer
+description: My native transfers rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+  - name: base
+    chain_id: 8453
+    rpc: https://base.gateway.tenderly.co
+native_transfers: // [!code focus]
+  networks:
+    - network: ethereum
+    - network: base
+  reorg_safe_distance: true // [!code focus]
+contracts: []
+```
+
+## generate_csv
+
+If you wish to generate a CSV file of the indexed data you can turn this on. This will be ignored if you do not have
+the CSV storage enabled. By default if this is not supplied and the CSV storage is enabled it will generate a CSV file.
+
+:::info
+This is optional if you do not provide this it will generate a CSV file if the CSV storage is enabled.
+:::
+
+```yaml [rindexer.yaml]
+name: rIndexer
+description: My native transfers rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+native_transfers: // [!code focus]
+  networks:
+    - network: ethereum
+  generate_csv: true // [!code focus]
+contracts: []
+```
+
+## streams
+
+The stream options for `native_transfers` is equivalent to contract event indexing with one exception.
+
+All streams provided will have the `NativeTransfer` event enabled by default, so it does not need to be explicitly defined
+unless special logic (e.g. aliasing event names) is desired.
+
+:::info
+You can configure streams to stream the data to other services, this is useful if you want to use other services
+to index the data. You can read more about it [here](/docs/start-building/streams).
+:::
+
+## Simple stream definition
+
+:::info
+Notice we ___don't___ define `events` under the `topics` in this SNS stream example.
+:::
+
+That is because rindexer knows the single `NativeTransfer` event should be included by default.
+
+```yaml [rindexer.yaml]
+name: indexer
+description: rindexer native transfers demo
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+native_transfers:
+  networks:
+    - network: ethereum
+      reorg_safe_distance: true
+  streams:
+    sns:
+      aws_config:
+        region: us-east-1
+        access_key: ${AWS_ACCESS_KEY_ID}
+        secret_key: ${AWS_SECRET_ACCESS_KEY}
+      topics: // [!code focus]
+        - topic_arn: arn:aws:sns:us-east-1:000000000000:ethereum-transfers // [!code focus]
+          networks: // [!code focus]
+            - ethereum // [!code focus]
+contracts: []
+```
+
+## Explicit `events` definition
+
+In this case, we want to explicitly configure the stream processing for the event.
+
+:::info
+In order to add additional stream-event config, we **MUST** define the event with the name `NativeTransfer`.
+:::
+
+```yaml [rindexer.yaml]
+name: indexer
+description: rindexer native transfers demo
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+native_transfers:
+  networks:
+    - network: ethereum
+      reorg_safe_distance: true
+  streams:
+    sns:
+      aws_config:
+        region: us-east-1
+        access_key: ${AWS_ACCESS_KEY_ID}
+        secret_key: ${AWS_SECRET_ACCESS_KEY}
+      topics:
+        - topic_arn: arn:aws:sns:us-east-1:000000000000:ethereum-transfers
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: NativeTransfer // [!code focus]
+              alias: ETHTransfer // [!code focus]
+contracts: []
+```
+
+## chat
+
+You can configure chat to send messages You can read more about it [here](/docs/start-building/chatbots).

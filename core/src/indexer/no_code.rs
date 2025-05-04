@@ -5,11 +5,12 @@ use std::{
 };
 
 use colored::Colorize;
-use ethers::abi::{Abi, Contract as EthersContract, Event};
+use ethers::abi::{Abi, Contract as EthersContract, Event, LogParam, Token};
 use serde_json::Value;
 use tokio_postgres::types::Type as PgType;
 use tracing::{debug, error, info, warn};
 
+use super::native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME};
 use crate::{
     abi::{ABIItem, CreateCsvFileForEvent, EventInfo, ParamTypeError, ReadAbiError},
     chat::ChatClients,
@@ -26,10 +27,11 @@ use crate::{
     },
     event::{
         callback_registry::{
-            noop_decoder, EventCallbackRegistry, EventCallbackRegistryInformation,
-            EventCallbackType, TxInformation,
+            noop_decoder, CallbackResult, EventCallbackRegistry, EventCallbackRegistryInformation,
+            EventCallbackType, TraceCallbackRegistry, TraceCallbackRegistryInformation,
+            TraceCallbackType, TxInformation,
         },
-        contract_setup::{ContractInformation, CreateContractInformationError},
+        contract_setup::{ContractInformation, CreateContractInformationError, TraceInformation},
         EventMessage,
     },
     generate_random_id,
@@ -93,7 +95,7 @@ pub async fn setup_no_code(
                 });
             }
 
-            let network_providers = CreateNetworkProvider::create(&manifest)?;
+            let network_providers = CreateNetworkProvider::create(&manifest).await?;
             info!(
                 "Networks enabled: {}",
                 network_providers
@@ -104,7 +106,8 @@ pub async fn setup_no_code(
             );
 
             let events =
-                process_events(project_path, &mut manifest, postgres, &network_providers).await?;
+                process_events(project_path, &mut manifest, postgres.clone(), &network_providers)
+                    .await?;
 
             let registry = EventCallbackRegistry { events };
             info!(
@@ -117,9 +120,28 @@ pub async fn setup_no_code(
                     .join(", ")
             );
 
+            let trace_events =
+                process_trace_events(project_path, &mut manifest, postgres, &network_providers)
+                    .await?;
+            let trace_registry = TraceCallbackRegistry { events: trace_events };
+
+            if manifest.has_enabled_native_transfers() {
+                info!(
+                    "Native token transfers to index: {}",
+                    manifest
+                        .native_transfers
+                        .networks
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|network| network.network.clone())
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                );
+            }
+
             Ok(StartDetails {
                 manifest_path: details.manifest_path,
-                indexing_details: Some(IndexingDetails { registry }),
+                indexing_details: Some(IndexingDetails { registry, trace_registry }),
                 graphql_details: details.graphql_details,
             })
         }
@@ -142,12 +164,21 @@ struct NoCodeCallbackParams {
     chat_clients: Arc<Option<ChatClients>>,
 }
 
-fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
-    Arc::new(move |results| {
+struct EventCallbacks {
+    event_callback: EventCallbackType,
+    trace_callback: TraceCallbackType,
+}
+
+fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
+    let shared_callback = Arc::new(move |results| {
         let params = Arc::clone(&params);
 
         async move {
-            let event_length = results.len();
+            let event_length = match &results {
+                CallbackResult::Event(event) => event.len(),
+                CallbackResult::Trace(event) => event.len(),
+            };
+
             if event_length == 0 {
                 debug!(
                     "{} {}: {} - {}",
@@ -156,19 +187,31 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                     params.event_info.name,
                     "NO EVENTS".red()
                 );
+
                 return Ok(());
             }
 
-            let (from_block, to_block) = match results.first() {
-                Some(first) => (first.found_in_request.from_block, first.found_in_request.to_block),
-                None => {
-                    let error_message = "Unexpected error: no first event despite non-zero length.";
-                    error!("{}", error_message);
-                    return Err(error_message.to_string());
-                }
+            // TODO
+            // Remove unwrap
+            let (from_block, to_block) = match &results {
+                CallbackResult::Event(event) => (
+                    event.first().unwrap().found_in_request.from_block,
+                    event.first().unwrap().found_in_request.to_block,
+                ),
+                CallbackResult::Trace(event) => (
+                    event.first().unwrap().found_in_request.from_block,
+                    event.first().unwrap().found_in_request.to_block,
+                ),
             };
 
-            let network = results.first().unwrap().tx_information.network.clone();
+            let network = match &results {
+                CallbackResult::Event(event) => {
+                    event.first().unwrap().tx_information.network.clone()
+                }
+                CallbackResult::Trace(event) => {
+                    event.first().unwrap().tx_information.network.clone()
+                }
+            };
 
             let mut indexed_count = 0;
             let mut postgres_bulk_data: Vec<Vec<EthereumSqlTypeWrapper>> = Vec::new();
@@ -178,48 +221,106 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
             // stream and chat info
             let mut event_message_data: Vec<Value> = Vec::new();
 
-            // Collect owned results to avoid lifetime issues
-            let owned_results: Vec<_> = results
-                .iter()
-                .filter_map(|result| {
-                    let log = parse_log(&params.event, &result.log)?;
+            let owned_results = match &results {
+                CallbackResult::Event(events) => events
+                    .iter()
+                    .filter_map(|result| {
+                        let log = parse_log(&params.event, &result.log)?;
 
-                    let address = result.tx_information.address;
-                    let transaction_hash = result.tx_information.transaction_hash;
-                    let block_number = result.tx_information.block_number;
-                    let block_hash = result.tx_information.block_hash;
-                    let network = result.tx_information.network.to_string();
-                    let transaction_index = result.tx_information.transaction_index;
-                    let log_index = result.tx_information.log_index;
+                        let address = result.tx_information.address;
+                        let transaction_hash = result.tx_information.transaction_hash;
+                        let block_number = result.tx_information.block_number;
+                        let block_hash = result.tx_information.block_hash;
+                        let network = result.tx_information.network.to_string();
+                        let transaction_index = result.tx_information.transaction_index;
+                        let log_index = result.tx_information.log_index;
 
-                    let event_parameters: Vec<EthereumSqlTypeWrapper> =
-                        map_log_params_to_ethereum_wrapper(&params.event_info.inputs, &log.params);
+                        let event_parameters: Vec<EthereumSqlTypeWrapper> =
+                            map_log_params_to_ethereum_wrapper(
+                                &params.event_info.inputs,
+                                &log.params,
+                            );
 
-                    let contract_address = EthereumSqlTypeWrapper::Address(address);
-                    let end_global_parameters = vec![
-                        EthereumSqlTypeWrapper::H256(transaction_hash),
-                        EthereumSqlTypeWrapper::U64(block_number),
-                        EthereumSqlTypeWrapper::H256(block_hash),
-                        EthereumSqlTypeWrapper::String(network.to_string()),
-                        EthereumSqlTypeWrapper::U64(transaction_index),
-                        EthereumSqlTypeWrapper::U256(log_index),
-                    ];
+                        let contract_address = EthereumSqlTypeWrapper::Address(address);
+                        let end_global_parameters = vec![
+                            EthereumSqlTypeWrapper::H256(transaction_hash),
+                            EthereumSqlTypeWrapper::U64(block_number),
+                            EthereumSqlTypeWrapper::H256(block_hash),
+                            EthereumSqlTypeWrapper::String(network.to_string()),
+                            EthereumSqlTypeWrapper::U64(transaction_index),
+                            EthereumSqlTypeWrapper::U256(log_index),
+                        ];
 
-                    Some((
-                        log.params,
-                        address,
-                        transaction_hash,
-                        log_index,
-                        transaction_index,
-                        block_number,
-                        block_hash,
-                        network,
-                        contract_address,
-                        event_parameters,
-                        end_global_parameters,
-                    ))
-                })
-                .collect();
+                        Some((
+                            log.params,
+                            address,
+                            transaction_hash,
+                            log_index,
+                            transaction_index,
+                            block_number,
+                            block_hash,
+                            network,
+                            contract_address,
+                            event_parameters,
+                            end_global_parameters,
+                        ))
+                    })
+                    .collect::<Vec<_>>(),
+                CallbackResult::Trace(events) => events
+                    .iter()
+                    .map(|result| {
+                        let log_params = vec![
+                            LogParam {
+                                name: "from".to_string(),
+                                value: Token::Address(result.from),
+                            },
+                            LogParam { name: "to".to_string(), value: Token::Address(result.to) },
+                            LogParam {
+                                name: "value".to_string(),
+                                value: Token::Uint(result.value),
+                            },
+                        ];
+
+                        let address = result.tx_information.address;
+                        let transaction_hash = result.tx_information.transaction_hash;
+                        let block_number = result.tx_information.block_number;
+                        let block_hash = result.tx_information.block_hash;
+                        let network = result.tx_information.network.to_string();
+                        let transaction_index = result.tx_information.transaction_index;
+                        let log_index = result.tx_information.log_index;
+
+                        let event_parameters: Vec<EthereumSqlTypeWrapper> =
+                            map_log_params_to_ethereum_wrapper(
+                                &params.event_info.inputs,
+                                &log_params,
+                            );
+
+                        let contract_address = EthereumSqlTypeWrapper::Address(address);
+                        let end_global_parameters = vec![
+                            EthereumSqlTypeWrapper::H256(transaction_hash),
+                            EthereumSqlTypeWrapper::U64(block_number),
+                            EthereumSqlTypeWrapper::H256(block_hash),
+                            EthereumSqlTypeWrapper::String(network.to_string()),
+                            EthereumSqlTypeWrapper::U64(transaction_index),
+                            EthereumSqlTypeWrapper::U256(log_index),
+                        ];
+
+                        (
+                            log_params,
+                            address,
+                            transaction_hash,
+                            log_index,
+                            transaction_index,
+                            block_number,
+                            block_hash,
+                            network,
+                            contract_address,
+                            event_parameters,
+                            end_global_parameters,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            };
 
             for (
                 log_params,
@@ -344,8 +445,13 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
                     params.contract_name, params.event_info.name, network, from_block, to_block
                 );
 
+                let is_trace_event = match results {
+                    CallbackResult::Event(_) => false,
+                    CallbackResult::Trace(_) => true,
+                };
+
                 match streams_clients
-                    .stream(stream_id, &event_message, params.index_event_in_order)
+                    .stream(stream_id, &event_message, params.index_event_in_order, is_trace_event)
                     .await
                 {
                     Ok(streamed) => {
@@ -424,7 +530,17 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbackType {
             Ok(())
         }
         .boxed()
-    })
+    });
+
+    let callback = Arc::clone(&shared_callback);
+    let event_callback: EventCallbackType =
+        Arc::new(move |events| callback(CallbackResult::Event(events)));
+
+    let callback = Arc::clone(&shared_callback);
+    let trace_callback: TraceCallbackType =
+        Arc::new(move |traces| callback(CallbackResult::Trace(traces)));
+
+    EventCallbacks { trace_callback, event_callback }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -453,6 +569,9 @@ pub enum ProcessIndexersError {
     #[error("Event name not found in ABI for contract: {0} - event: {1}")]
     EventNameNotFoundInAbi(String, String),
 
+    #[error("Contract name is reserved: {0}. Please use another contract name.")]
+    ContractNameConflict(String),
+
     #[error("{0}")]
     ParseAbiError(#[from] ParseAbiError),
 }
@@ -466,6 +585,10 @@ pub async fn process_events(
     let mut events: Vec<EventCallbackRegistryInformation> = vec![];
 
     for contract in &mut manifest.contracts {
+        if contract.name.to_lowercase() == NATIVE_TRANSFER_CONTRACT_NAME.to_lowercase() {
+            return Err(ProcessIndexersError::ContractNameConflict(contract.name.to_string()));
+        }
+
         // TODO - this could be shared with `get_abi_items`
         let abi_str = contract.parse_abi(project_path)?;
         let abi: Abi = serde_json::from_str(&abi_str)?;
@@ -511,8 +634,11 @@ pub async fn process_events(
 
                 let headers: Vec<String> = event_info.csv_headers_for_event();
                 let csv_path_str = csv_path.to_str().expect("Failed to convert csv path to string");
-                let csv_path =
-                    event_info.create_csv_file_for_event(project_path, contract, csv_path_str)?;
+                let csv_path = event_info.create_csv_file_for_event(
+                    project_path,
+                    &contract.name,
+                    csv_path_str,
+                )?;
                 let csv_appender = AsyncCsvAppender::new(&csv_path);
                 if !Path::new(&csv_path).exists() {
                     csv_appender.append_header(headers).await?;
@@ -562,11 +688,125 @@ pub async fn process_events(
                     postgres_column_names,
                     streams_clients: Arc::new(streams_client),
                     chat_clients: Arc::new(chat_clients),
-                })),
+                }))
+                .event_callback,
             };
 
             events.push(event);
         }
+    }
+
+    Ok(events)
+}
+
+pub async fn process_trace_events(
+    project_path: &Path,
+    manifest: &mut Manifest,
+    postgres: Option<Arc<PostgresClient>>,
+    network_providers: &[CreateNetworkProvider],
+) -> Result<Vec<TraceCallbackRegistryInformation>, ProcessIndexersError> {
+    let mut events: Vec<TraceCallbackRegistryInformation> = vec![];
+
+    if !manifest.has_enabled_native_transfers() {
+        return Ok(events);
+    }
+
+    let abi_str = NATIVE_TRANSFER_ABI;
+    let abi: Abi = serde_json::from_str(abi_str)?;
+
+    #[allow(clippy::useless_conversion)]
+    let abi_gen = EthersContract::from(abi);
+    let abi_items: Vec<ABIItem> = serde_json::from_str(abi_str)?;
+    let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
+
+    let contract = &manifest.native_transfers;
+    let contract_name = NATIVE_TRANSFER_CONTRACT_NAME.to_string();
+
+    for event_info in event_names {
+        let event_name = event_info.name.clone();
+        let event = &abi_gen
+            .events
+            .iter()
+            .find(|(name, _)| *name == &event_name)
+            .map(|(_, event)| event)
+            .ok_or_else(|| {
+                ProcessIndexersError::EventNameNotFoundInAbi(
+                    contract_name.clone(),
+                    event_name.clone(),
+                )
+            })?
+            .first()
+            .ok_or_else(|| {
+                ProcessIndexersError::EventNameNotFoundInAbi(
+                    contract_name.clone(),
+                    event_name.clone(),
+                )
+            })?
+            .clone();
+
+        let trace_information =
+            TraceInformation::create(manifest.native_transfers.clone(), network_providers)?;
+
+        let mut csv: Option<Arc<AsyncCsvAppender>> = None;
+        if contract.generate_csv.unwrap_or(true) && manifest.storage.csv_enabled() {
+            let csv_path =
+                manifest.storage.csv.as_ref().map_or(PathBuf::from("generated_csv"), |c| {
+                    PathBuf::from(c.path.strip_prefix("./").unwrap())
+                });
+
+            let headers: Vec<String> = event_info.csv_headers_for_event();
+            let csv_path_str = csv_path.to_str().expect("Failed to convert csv path to string");
+            let csv_path =
+                event_info.create_csv_file_for_event(project_path, &contract_name, csv_path_str)?;
+            let csv_appender = AsyncCsvAppender::new(&csv_path);
+            if !Path::new(&csv_path).exists() {
+                csv_appender.append_header(headers).await?;
+            }
+
+            csv = Some(Arc::new(csv_appender));
+        }
+
+        let postgres_column_names =
+            generate_column_names_only_with_base_properties(&event_info.inputs);
+        let postgres_event_table_name =
+            generate_event_table_full_name(&manifest.name, &contract_name, &event_info.name);
+
+        let streams_client = if let Some(streams) = &contract.streams {
+            Some(StreamsClients::new(streams.clone()).await)
+        } else {
+            None
+        };
+
+        let chat_clients = if let Some(chats) = &contract.chat {
+            Some(ChatClients::new(chats.clone()).await)
+        } else {
+            None
+        };
+
+        let callback_params = Arc::new(NoCodeCallbackParams {
+            event_info: event_info.clone(),
+            indexer_name: manifest.name.clone(),
+            contract_name: contract_name.clone(),
+            event: event.clone(),
+            index_event_in_order: false,
+            csv,
+            postgres: postgres.clone(),
+            postgres_event_table_name,
+            postgres_column_names,
+            streams_clients: Arc::new(streams_client),
+            chat_clients: Arc::new(chat_clients),
+        });
+
+        let event = TraceCallbackRegistryInformation {
+            id: generate_random_id(10),
+            indexer_name: manifest.name.clone(),
+            event_name: event_info.name.clone(),
+            contract_name: contract_name.clone(),
+            trace_information: trace_information.clone(),
+            callback: no_code_callback(callback_params).trace_callback,
+        };
+
+        events.push(event);
     }
 
     Ok(events)

@@ -5,12 +5,14 @@ use tokio::sync::{Mutex, Semaphore};
 
 use crate::{
     event::{
-        callback_registry::{EventCallbackRegistry, EventResult},
+        callback_registry::{
+            EventCallbackRegistry, EventResult, TraceCallbackRegistry, TraceResult,
+        },
         contract_setup::NetworkContract,
         BuildRindexerFilterError, RindexerEventFilter,
     },
     indexer::IndexingEventsProgressState,
-    manifest::storage::CsvDetails,
+    manifest::{native_transfer::TraceProcessingMethod, storage::CsvDetails},
     PostgresClient,
 };
 
@@ -49,6 +51,30 @@ impl EventProcessingConfig {
     }
 
     pub async fn trigger_event(&self, fn_data: Vec<EventResult>) {
+        self.registry.trigger_event(&self.id, fn_data).await;
+    }
+}
+
+#[derive(Clone)]
+pub struct TraceProcessingConfig {
+    pub id: String,
+    pub project_path: PathBuf,
+    pub start_block: U64,
+    pub end_block: U64,
+    pub indexer_name: String,
+    pub contract_name: String,
+    pub event_name: String,
+    pub network: String,
+    pub progress: Arc<Mutex<IndexingEventsProgressState>>,
+    pub database: Option<Arc<PostgresClient>>,
+    pub csv_details: Option<CsvDetails>,
+    pub registry: Arc<TraceCallbackRegistry>,
+    pub method: TraceProcessingMethod,
+    pub stream_last_synced_block_file_path: Option<String>,
+}
+
+impl TraceProcessingConfig {
+    pub async fn trigger_event(&self, fn_data: Vec<TraceResult>) {
         self.registry.trigger_event(&self.id, fn_data).await;
     }
 }

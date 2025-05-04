@@ -55,7 +55,7 @@ pub enum PostgresError {
     ConnectionPoolError(#[from] RunError<tokio_postgres::Error>),
 }
 
-#[allow(dead_code)]
+#[allow(unused)]
 pub struct PostgresTransaction<'a> {
     pub transaction: PgTransaction<'a>,
 }
@@ -153,12 +153,20 @@ impl PostgresClient {
 
             let manager = PostgresConnectionManager::new(config, tls_connector);
 
+            // TODO: It's important for users to be able to define the pool size they want.
+            // Rust binding projects can use this client, but it's critical to have config access.
             let pool = Pool::builder().build(manager).await?;
 
             Ok(PostgresClient { pool })
         }
 
         _new(false).await
+    }
+
+    pub async fn from_connection(
+        pool: Pool<PostgresConnectionManager<MakeTlsConnector>>,
+    ) -> Result<Self, PostgresConnectionError> {
+        Ok(Self { pool })
     }
 
     pub async fn batch_execute(&self, sql: &str) -> Result<(), PostgresError> {

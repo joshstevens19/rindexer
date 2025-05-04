@@ -1,6 +1,9 @@
 {
   "name": "rindexer_docs",
   "version": "0.0.0",
+  "engines": {
+    "node": ">=20"
+  },
   "type": "module",
   "scripts": {
     "dev": "vocs dev",

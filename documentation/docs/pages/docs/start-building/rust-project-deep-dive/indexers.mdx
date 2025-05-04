@@ -960,7 +960,7 @@ use std::env;
 
 use self::rindexer_lib::indexers::all_handlers::register_all_handlers;
 use rindexer::{
-    start_rindexer, GraphQLServerDetails, GraphQLServerSettings, IndexingDetails, StartDetails,
+    event::callback_registry::TraceCallbackRegistry, start_rindexer, GraphQLServerDetails, GraphQLServerSettings, IndexingDetails, StartDetails,
 };
 
 mod rindexer_lib;
@@ -1003,6 +1003,7 @@ async fn main() {
                 indexing_details: if enable_indexer {
                     Some(IndexingDetails {
                         registry: register_all_handlers(&manifest_path).await,
+                        trace_registry: TraceCallbackRegistry { events: vec![] },
                     })
                 } else {
                     None

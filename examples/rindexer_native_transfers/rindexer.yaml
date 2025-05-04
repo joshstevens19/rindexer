@@ -1,0 +1,42 @@
+name: rindexer-native-transfers
+description: index all erc20 transfer events and all ethereum native token transfer events
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    # Not all providers support `trace_block` functionality across all chains.
+    # Please ensure that this method is available.
+    rpc: https://mainnet.gateway.tenderly.co
+native_transfers:
+  networks:
+    - network: ethereum
+  streams:
+    sns:
+      aws_config:
+        region: us-east-1
+        access_key: test
+        secret_key: test
+        endpoint_url: ${ENDPOINT_URL}
+      topics:
+        - topic_arn: arn:aws:sns:us-east-1:000000000000:eth-transfers
+          networks:
+            - ethereum
+          # The underlying event name is `NativeTransfer`. This events section can be omitted, but if you want
+          # to alias the stream event name, you can do so by referencing the event `NativeTransfer`.
+          #
+          # This can be useful in cases where you don't want to make a distinction between, say an Erc20 "Transfer" and
+          # a native token transfer, they can be mapped to the same event name.
+          #
+          # Otherwise, this whole `events` section can be omitted.
+          events:
+            - event_name: NativeTransfer
+              alias: Transfer
+contracts:
+  - name: ERC20Transfer
+    abi: ./abis/ERC20.abi.json
+    details:
+      - network: ethereum
+        filter:
+          - event_name: Transfer
+    include_events:
+      - Transfer

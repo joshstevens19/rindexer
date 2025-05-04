@@ -23,6 +23,7 @@ pub struct SNSStreamTopicConfig {
     pub prefix_id: Option<String>,
     pub topic_arn: String,
     pub networks: Vec<String>,
+    #[serde(default)]
     pub events: Vec<StreamEvent>,
 }
 
@@ -37,6 +38,7 @@ pub struct WebhookStreamConfig {
     pub endpoint: String,
     pub shared_secret: String,
     pub networks: Vec<String>,
+    #[serde(default)]
     pub events: Vec<StreamEvent>,
 }
 
@@ -56,6 +58,7 @@ fn default_pool_size() -> u32 {
 pub struct RedisStreamStreamConfig {
     pub stream_name: String,
     pub networks: Vec<String>,
+    #[serde(default)]
     pub events: Vec<StreamEvent>,
 }
 
@@ -87,6 +90,7 @@ pub struct RabbitMQStreamQueueConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing_key: Option<String>,
     pub networks: Vec<String>,
+    #[serde(default)]
     pub events: Vec<StreamEvent>,
 }
 
@@ -134,6 +138,7 @@ pub struct KafkaStreamQueueConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
     pub networks: Vec<String>,
+    #[serde(default)]
     pub events: Vec<StreamEvent>,
 }
 
