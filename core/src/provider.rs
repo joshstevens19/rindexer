@@ -25,6 +25,7 @@ use alloy::{
             reqwest::{header::HeaderMap, Client, Error as ReqwestError},
             Http,
         },
+        layers::RetryBackoffLayer,
         RpcError, TransportErrorKind,
     },
 };
@@ -303,7 +304,7 @@ pub enum RetryClientError {
 pub async fn create_client(
     rpc_url: &str,
     chain_id: u64,
-    _compute_units_per_second: Option<u64>,
+    compute_units_per_second: Option<u64>,
     max_block_range: Option<U64>,
     custom_headers: HeaderMap,
 ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
@@ -313,16 +314,8 @@ pub async fn create_client(
 
     let client_with_auth = Client::builder().default_headers(custom_headers).build()?;
     let http = Http::with_client(client_with_auth, rpc_url);
-    let rpc_client = RpcClient::new(http, false);
-
-    // TODO: We lost the backoff and CU ratelimit options on `alloy` upgrade. Determine if needed.
-    //
-    // ```
-    // .compute_units_per_second(compute_units_per_second.unwrap_or(660))
-    // .rate_limit_retries(5000)
-    // .timeout_retries(1000)
-    // .initial_backoff(Duration::from_millis(500))
-    // ```
+    let retry_layer = RetryBackoffLayer::new(5000, 500, compute_units_per_second.unwrap_or(660));
+    let rpc_client = RpcClient::builder().layer(retry_layer).transport(http, false);
     let provider = ProviderBuilder::new().connect_client(rpc_client);
 
     Ok(Arc::new(JsonRpcCachedProvider::new(provider, chain_id, max_block_range).await))
