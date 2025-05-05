@@ -6,33 +6,53 @@ This means that exposed types and primitives are now from Alloy rather than Ethe
 deprecated and this will require breaking changes to be implemented within any rindexer rust project.
 
 The simple steps to take are as follows:
+
 1. Add `alloy` to your `Cargo.toml`
 2. Run `rindexer codegen typings` to get the latest codegen state
-3. Go through and change all parameter names and types as required to use `alloy` rather than `ethers` types
+3. Change all parameter names and types
+4. Change advanced methods
 
-## Cargo.toml
+You can see more details on each section below.
 
-You can now remove any references to the `ethers` crate and replace this will the newer `alloy` crate. It should be pegged
-to the same version used by `rindexer` internally to ensure type compatibility.
+## 1. Add `alloy` to your `Cargo.toml`
 
+First you should add `alloy` to your `Cargo.toml` and delete `ethers`.  You can now remove any references to the `ethers` crate and replace
+this will the newer `alloy` crate. It should be pegged to the same version used by `rindexer` internally to ensure type compatibility.
+
+Replace in `Cargo.toml`
 ```diff
 - ethers = "2.0.14"
 + alloy = { version = "0.15.6", features = ["full"] }
 ```
 
-## Codegen
+Then any references to ethers types in your own code can be replaced with the alloy types. You can read more
+in the [migration docs](https://alloy.rs/migrating-from-ethers/reference/).
 
-Once you have added the `alloy` crate to your project you can now run the codegen with `rindexer codegen typings`.
+```diff
+- use ethers::prelude::U256;
++ use alloy::primitives::U256;
+```
+
+## 2. Run `rindexer codegen typings` to get the latest codegen state
+
+Once you have added the `alloy` crate and changed any of your project-specific code uses you can now run the rindexer
+codegen with `rindexer codegen typings`. This will regenerate the bindings with alloy code and types.
 
 :::warn
 If for some reason there are errors in your codegen file, please try deleting it before re-running. Otherwise raise an
 issue on github: https://github.com/joshstevens19/rindexer/issues.
 :::
 
-This should lead to working error-free code in the codegen directory, and lead to errors in most of the actual custom
-indexing files if you have specified them. This is mainly due to the reasons below (parameter name changes & type changes).
+This should lead to working error-free code in the codegen directory. At this point you should expect to errors in most
+of the actual custom indexing files if you have specified them. This is mainly due to the reasons below (parameter name
+changes & type changes).
 
-## Types and Parameters
+## 3. Change all parameter names and types
+
+You must now go through and deal with the errors in your specific handler functions. These will almost exclusively be
+related to casing changes i.e. `token_id` -> `tokenId`. Or it will be a type's name change, i.e `H256` -> `B256`.
+
+This should be relatively self explanatory, you can read more details below but it's just a simple manual process.
 
 **Solidity contract parameters**
 
@@ -70,15 +90,29 @@ The following types have been retained but should be consisted deprecated and ma
 A simple find and replace should handle most of these cases
 :::
 
-## Methods
+## 4. Change advanced methods
 
-Certain methods are no longer exposed directly on all solidity primitive `uint` types. For example the `as_u32()` method
+:::warn
+Most projects will by default use the underlying type, this is for when manual type manipulation is needed.
+:::
+
+The final step may be to replace any methods that are erroring out, that previously were not. The most common of this
+will be the existence of `as_u[BITS]`.
+
+These methods are no longer exposed directly on all solidity primitive `uint` types. For example the `as_u32()` method
 which existed on a `U256` is no longer directly accessible.
 
-Instead if you wish to downcast, you can use the `TryInto` trait on most `uint` types to achieve the same outcome and
+Instead now, if you wish to downcast, you can use the `TryInto` trait on most `uint` types to achieve the same outcome and
 handle errors gracefully in the event of an overflow (where before a panic would occur implicitly).
 
 ```diff
-- EthereumSqlTypeWrapper::I32(t.tx_information.log_index.as_u32() as i32),
-+ EthereumSqlTypeWrapper::I32(t.tx_information.log_index.try_into().unwrap()),
+- EthereumSqlTypeWrapper::U32(t.tx_information.log_index.as_u32()),
++ EthereumSqlTypeWrapper::U32(t.tx_information.log_index.try_into().expect("log_index should fit in u32")),
+```
+
+You may also opt to match the underlying type
+
+```diff
+- EthereumSqlTypeWrapper::U32(t.tx_information.log_index.as_u32()),
++ EthereumSqlTypeWrapper::U256(t.tx_information.log_index),
 ```
