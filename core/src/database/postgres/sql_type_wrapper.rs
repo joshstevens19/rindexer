@@ -71,20 +71,20 @@ pub enum EthereumSqlTypeWrapper {
     VecU512(Vec<U512>),
 
     // Hashes
-    H128(B128),
+    B128(B128),
     #[deprecated(note = "Use Address instead")]
     #[allow(deprecated)]
     H160(B160),
     B256(B256),
     B256Bytes(B256),
-    H512(B512),
-    VecH128(Vec<B128>),
+    B512(B512),
+    VecB128(Vec<B128>),
     #[deprecated(note = "Use Address instead")]
     #[allow(deprecated)]
     VecH160(Vec<B160>),
     VecB256(Vec<B256>),
     VecB256Bytes(Vec<B256>),
-    VecH512(Vec<B512>),
+    VecB512(Vec<B512>),
 
     // Address
     Address(Address),
@@ -171,18 +171,18 @@ impl EthereumSqlTypeWrapper {
             EthereumSqlTypeWrapper::VecU512(_) => "VecU512",
 
             // Hashes
-            EthereumSqlTypeWrapper::H128(_) => "H128",
+            EthereumSqlTypeWrapper::B128(_) => "B128",
             #[allow(deprecated)]
             EthereumSqlTypeWrapper::H160(_) => "H160",
             EthereumSqlTypeWrapper::B256(_) => "B256",
             EthereumSqlTypeWrapper::B256Bytes(_) => "B256Bytes",
-            EthereumSqlTypeWrapper::H512(_) => "H512",
-            EthereumSqlTypeWrapper::VecH128(_) => "VecH128",
+            EthereumSqlTypeWrapper::B512(_) => "B512",
+            EthereumSqlTypeWrapper::VecB128(_) => "VecB128",
             #[allow(deprecated)]
             EthereumSqlTypeWrapper::VecH160(_) => "VecH160",
             EthereumSqlTypeWrapper::VecB256(_) => "VecB256",
             EthereumSqlTypeWrapper::VecB256Bytes(_) => "VecB256Bytes",
-            EthereumSqlTypeWrapper::VecH512(_) => "VecH512",
+            EthereumSqlTypeWrapper::VecB512(_) => "VecB512",
 
             // Address
             EthereumSqlTypeWrapper::Address(_) => "Address",
@@ -273,20 +273,20 @@ impl EthereumSqlTypeWrapper {
             EthereumSqlTypeWrapper::VecU512(_) => PgType::TEXT_ARRAY,
 
             // Hashes
-            EthereumSqlTypeWrapper::H128(_) => PgType::BYTEA,
+            EthereumSqlTypeWrapper::B128(_) => PgType::BYTEA,
             #[allow(deprecated)]
             EthereumSqlTypeWrapper::H160(_) => PgType::BYTEA,
             // TODO! LOOK AT THIS TYPE AS IT IS SAVED AS CHAR IN NO CODE
             EthereumSqlTypeWrapper::B256(_) => PgType::BYTEA,
             EthereumSqlTypeWrapper::B256Bytes(_) => PgType::BYTEA,
-            EthereumSqlTypeWrapper::H512(_) => PgType::BYTEA,
-            EthereumSqlTypeWrapper::VecH128(_) => PgType::BYTEA_ARRAY,
+            EthereumSqlTypeWrapper::B512(_) => PgType::BYTEA,
+            EthereumSqlTypeWrapper::VecB128(_) => PgType::BYTEA_ARRAY,
             #[allow(deprecated)]
             EthereumSqlTypeWrapper::VecH160(_) => PgType::BYTEA_ARRAY,
             // TODO! LOOK AT THIS TYPE AS IT IS SAVED AS CHAR IN NO CODE
             EthereumSqlTypeWrapper::VecB256(_) => PgType::BYTEA_ARRAY,
             EthereumSqlTypeWrapper::VecB256Bytes(_) => PgType::BYTEA_ARRAY,
-            EthereumSqlTypeWrapper::VecH512(_) => PgType::BYTEA_ARRAY,
+            EthereumSqlTypeWrapper::VecB512(_) => PgType::BYTEA_ARRAY,
 
             // Address
             EthereumSqlTypeWrapper::Address(_) | EthereumSqlTypeWrapper::AddressNullable(_) => {
@@ -621,12 +621,12 @@ impl ToSql for EthereumSqlTypeWrapper {
                     String::to_sql(&formatted_str, ty, out)
                 }
             }
-            EthereumSqlTypeWrapper::H128(value) => {
+            EthereumSqlTypeWrapper::B128(value) => {
                 let hex = format!("{:?}", value);
                 out.extend_from_slice(hex.as_bytes());
                 Ok(IsNull::No)
             }
-            EthereumSqlTypeWrapper::VecH128(values) => {
+            EthereumSqlTypeWrapper::VecB128(values) => {
                 let hexes: Vec<String> = values.iter().map(|s| format!("{:?}", s)).collect();
                 if hexes.is_empty() {
                     Ok(IsNull::Yes)
@@ -678,12 +678,12 @@ impl ToSql for EthereumSqlTypeWrapper {
                     Ok(IsNull::No)
                 }
             }
-            EthereumSqlTypeWrapper::H512(value) => {
+            EthereumSqlTypeWrapper::B512(value) => {
                 let hex = format!("{:?}", value);
                 out.extend_from_slice(hex.as_bytes());
                 Ok(IsNull::No)
             }
-            EthereumSqlTypeWrapper::VecH512(values) => {
+            EthereumSqlTypeWrapper::VecB512(values) => {
                 let hexes: Vec<String> = values.iter().map(|s| format!("{:?}", s)).collect();
                 if hexes.is_empty() {
                     Ok(IsNull::Yes)
@@ -1575,8 +1575,8 @@ pub fn map_ethereum_wrapper_to_json(
                     EthereumSqlTypeWrapper::VecU512(u512s) => {
                         json!(u512s.iter().map(|u| u.to_string()).collect::<Vec<_>>())
                     }
-                    EthereumSqlTypeWrapper::H128(h) => json!(h),
-                    EthereumSqlTypeWrapper::VecH128(h128s) => json!(h128s),
+                    EthereumSqlTypeWrapper::B128(h) => json!(h),
+                    EthereumSqlTypeWrapper::VecB128(h128s) => json!(h128s),
                     #[allow(deprecated)]
                     EthereumSqlTypeWrapper::H160(h) => json!(h),
                     #[allow(deprecated)]
@@ -1586,8 +1586,8 @@ pub fn map_ethereum_wrapper_to_json(
                     }
                     EthereumSqlTypeWrapper::VecB256(h256s) |
                     EthereumSqlTypeWrapper::VecB256Bytes(h256s) => json!(h256s),
-                    EthereumSqlTypeWrapper::H512(h) => json!(h),
-                    EthereumSqlTypeWrapper::VecH512(h512s) => json!(h512s),
+                    EthereumSqlTypeWrapper::B512(h) => json!(h),
+                    EthereumSqlTypeWrapper::VecB512(h512s) => json!(h512s),
                     EthereumSqlTypeWrapper::Address(address) |
                     EthereumSqlTypeWrapper::AddressBytes(address) |
                     EthereumSqlTypeWrapper::AddressBytesNullable(address) |

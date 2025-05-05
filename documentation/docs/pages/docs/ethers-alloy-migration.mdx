@@ -55,6 +55,21 @@ then you will need ensure this is migrated to the new types.
 
 Most simple types can be found in the alloy migration guide: https://alloy.rs/migrating-from-ethers/reference/
 
+The most common types which experiences the rename are the `Hash` types, renamed to `Byte` types:
+- `H256` -> `B256`
+- `H128` -> `B128`
+- `H256` -> `B256`
+- `H512` -> `B512`
+
+The above includes all Vec, and Byte representation variants e.g. `VecB512`, etc.
+
+The following types have been retained but should be consisted deprecated and may be removed:
+- `H160` -> Use `Address` types instead (Including all Vec, and Byte representation variants)
+
+:::warn
+A simple find and replace should handle most of these cases
+:::
+
 ## Methods
 
 Certain methods are no longer exposed directly on all solidity primitive `uint` types. For example the `as_u32()` method

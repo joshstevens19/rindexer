@@ -299,10 +299,10 @@ The `tx_information` will be the transaction related information for the event
 pub struct TxInformation {
     pub network: String,
     pub address: Address,
-    pub block_hash: H256,
+    pub block_hash: BlockHash,
     pub block_number: U64,
     pub block_timestamp: Option<U256>,
-    pub transaction_hash: H256,
+    pub transaction_hash: TxHash,
     pub log_index: U256,
     pub transaction_index: U64,
 }
@@ -843,16 +843,18 @@ pub enum EthereumSqlTypeWrapper {
     VecU512(Vec<U512>),
 
     // Hashes
-    H128(H128),
+    B128(B128),
     H160(H160),
-    H256(H256),
-    H256Bytes(H256),
-    H512(H512),
-    VecH128(Vec<H128>),
+    B256(B256),
+    B256Bytes(B256),
+    B512(B512),
+    VecB128(Vec<B128>),
+    VecB256(Vec<B256>),
+    VecB256Bytes(Vec<B256>),
+    VecB512(Vec<B512>),
+
+    // Deprecated Hash. Move to use Address
     VecH160(Vec<H160>),
-    VecH256(Vec<H256>),
-    VecH256Bytes(Vec<H256>),
-    VecH512(Vec<H512>),
 
     // Address
     Address(Address),
