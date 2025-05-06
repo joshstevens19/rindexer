@@ -1,4 +1,6 @@
-use ethers::types::U64;
+use std::str::FromStr;
+
+use alloy::primitives::U64;
 use regex::Regex;
 use serde_json::Value;
 
@@ -74,9 +76,9 @@ impl Template {
     }
 
     fn format_value(&self, value: &str, decimals: u32) -> String {
-        match U64::from_dec_str(value) {
+        match U64::from_str(value) {
             Ok(v) => {
-                let divisor = U64::from(10).pow(decimals.into());
+                let divisor = U64::from(10).pow(U64::from(decimals));
                 let integer_part = v / divisor;
                 let fractional_part = v % divisor;
                 if fractional_part.is_zero() {

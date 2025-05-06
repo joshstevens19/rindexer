@@ -1,4 +1,4 @@
-use ethers::prelude::U64;
+use alloy::primitives::U64;
 use serde_json::{Map, Value};
 
 fn get_nested_value(data: &Value, path: &str) -> Option<Value> {

@@ -1,4 +1,6 @@
-use ethers::prelude::U64;
+use std::str::FromStr;
+
+use alloy::primitives::U64;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::core::serialize_option_u64_as_string;
@@ -32,7 +34,7 @@ where
 
     match s {
         Some(StringOrNum::String(string)) => {
-            U64::from_dec_str(&string).map(Some).map_err(serde::de::Error::custom)
+            U64::from_str(&string).map(Some).map_err(serde::de::Error::custom)
         }
         Some(StringOrNum::Num(num)) => Ok(Some(U64::from(num))),
         None => Ok(None),
@@ -151,8 +153,8 @@ mod tests {
 
         assert!(transfer.enabled);
         assert_eq!(networks[0].network, "ethereum");
-        assert_eq!(networks[0].start_block.unwrap().as_u64(), 100);
-        assert_eq!(networks[0].end_block.unwrap().as_u64(), 200);
+        assert_eq!(networks[0].start_block.unwrap().as_limbs()[0], 100);
+        assert_eq!(networks[0].end_block.unwrap().as_limbs()[0], 200);
         assert_eq!(networks[0].method, TraceProcessingMethod::TraceBlock);
     }
 
@@ -169,7 +171,7 @@ mod tests {
 
         assert!(transfer.enabled);
         assert_eq!(networks[0].network, "base");
-        assert_eq!(networks[0].start_block.unwrap().as_u64(), 100);
+        assert_eq!(networks[0].start_block.unwrap().as_limbs()[0], 100);
         assert_eq!(networks[0].end_block, None);
         assert_eq!(networks[0].method, TraceProcessingMethod::TraceBlock);
     }

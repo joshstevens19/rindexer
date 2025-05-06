@@ -1,8 +1,8 @@
 use std::{any::Any, sync::Arc};
 
-use ethers::{
-    addressbook::Address,
-    prelude::{Log, ValueOrArray, U64},
+use alloy::{
+    primitives::{Address, Log, U64},
+    rpc::types::ValueOrArray,
 };
 use serde::{Deserialize, Serialize};
 
@@ -32,7 +32,7 @@ pub struct NetworkContract {
 
 impl NetworkContract {
     pub fn decode_log(&self, log: Log) -> Arc<dyn Any + Send + Sync> {
-        (self.decoder)(log.topics, log.data)
+        (self.decoder)(log.topics().to_vec(), log.data.data)
     }
 
     pub fn is_live_indexing(&self) -> bool {

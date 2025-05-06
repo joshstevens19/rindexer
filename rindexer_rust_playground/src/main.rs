@@ -86,7 +86,7 @@ async fn main() {
 #[allow(dead_code)]
 fn generate() {
     let path = PathBuf::from_str(
-        "/Users/joshstevens/code/rindexer/rindexer_rust_playground/rindexer.yaml",
+        "/Users/jackedgson/Development/avara/rindexer/rindexer_rust_playground/rindexer.yaml",
     )
     .expect("Invalid path");
     let manifest = read_manifest(&path).expect("Failed to read manifest");
@@ -97,7 +97,7 @@ fn generate() {
 #[allow(dead_code)]
 fn generate_code_test() {
     let path = PathBuf::from_str(
-        "/Users/joshstevens/code/rindexer/rindexer_rust_playground/rindexer.yaml",
+        "/Users/jackedgson/Development/avara/rindexer/rindexer_rust_playground/rindexer.yaml",
     )
     .expect("Invalid path");
     let manifest = read_manifest(&path).expect("Failed to read manifest");
@@ -109,7 +109,7 @@ fn generate_code_test() {
 #[allow(dead_code)]
 fn generate_all() {
     let path = PathBuf::from_str(
-        "/Users/joshstevens/code/rindexer/rindexer_rust_playground/rindexer.yaml",
+        "/Users/jackedgson/Development/avara/rindexer/rindexer_rust_playground/rindexer.yaml",
     )
     .expect("Invalid path");
     rindexer::generator::build::generate_rindexer_typings_and_handlers(&path)

@@ -1,8 +1,8 @@
-use ethers::prelude::ValueOrArray;
+use alloy::rpc::types::ValueOrArray;
 
 use super::networks_bindings::network_provider_fn_name;
 use crate::{
-    helpers::camel_to_snake,
+    helpers::{camel_to_snake, to_pascal_case},
     manifest::{
         contract::{Contract, ContractDetails},
         network::Network,
@@ -23,17 +23,23 @@ fn generate_contract_code(
                 let contract_address = format!("{:?}", address);
                 let code = format!(
                     r#"
-                        abigen!({contract_name}, "{contract_path}");
+                        sol!(
+                            #[derive(Debug)]
+                            #[sol(rpc, all_derives)]
+                            {contract_name}{network_suffix},
+                            "{contract_path}"
+                        );
 
-                        pub async fn {contract_fn_name}_contract() -> {contract_name}<Arc<Provider<RetryClient<Http>>>> {{
+                        pub async fn {contract_fn_name}_{network_fn_name}_contract() -> {contract_name}{network_suffix}::{contract_name}{network_suffix}Instance<Arc<RindexerProvider>> {{
                             let address: Address = "{contract_address}"
                                 .parse()
                                 .expect("Invalid address");
 
-                            {contract_name}::new(address, Arc::new({network_fn_name}().await.clone()))
+                            {contract_name}{network_suffix}::new(address, {network_fn_name}().await.clone())
                         }}
                     "#,
                     contract_name = contract_name,
+                    network_suffix = to_pascal_case(&network.name),
                     contract_fn_name = camel_to_snake(contract_name),
                     contract_address = contract_address,
                     network_fn_name = network_provider_fn_name(network),
@@ -45,13 +51,19 @@ fn generate_contract_code(
             ValueOrArray::Array(_) => {
                 let code = format!(
                     r#"
-                        abigen!({contract_name}, "{contract_path}");
+                         sol!(
+                            #[derive(Debug)]
+                            #[sol(rpc, all_derives)]
+                            {contract_name}{network_suffix},
+                            "{contract_path}"
+                        );
 
-                        pub fn {contract_fn_name}_contract(address: Address) -> {contract_name}<Arc<Provider<RetryClient<Http>>>> {{
-                            {contract_name}::new(address, Arc::new({network_fn_name}().clone()))
+                        pub fn {contract_fn_name}_contract(address: Address) -> {contract_name}{network_suffix}::{contract_name}{network_suffix}Instance<Arc<RindexerProvider> {{
+                            {contract_name}{network_suffix}::new(address, {network_fn_name}().clone())
                         }}
                     "#,
                     contract_name = contract_name,
+                    network_suffix = to_pascal_case(&network.name),
                     contract_fn_name = camel_to_snake(contract_name),
                     network_fn_name = network_provider_fn_name(network),
                     contract_path = abi_location
@@ -75,7 +87,9 @@ fn generate_contracts_code(contracts: &[Contract], networks: &[Network]) -> Code
         
         use super::networks::{{{}}};
         use std::sync::Arc;
-        use ethers::{{contract::abigen, abi::Address, providers::{{Provider, Http, RetryClient}}}};
+        use rindexer::provider::RindexerProvider;
+        use alloy::primitives::Address;
+        use alloy::sol;
         "#,
         network_imports.join(", ")
     ));

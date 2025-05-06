@@ -1,6 +1,6 @@
 use std::{path::Path, sync::Arc, time::Duration};
 
-use ethers::{providers::ProviderError, types::U64};
+use alloy::primitives::U64;
 use futures::future::try_join_all;
 use tokio::{
     join,
@@ -32,7 +32,7 @@ use crate::{
         ContractEventDependencies,
     },
     manifest::core::Manifest,
-    provider::JsonRpcCachedProvider,
+    provider::{JsonRpcCachedProvider, ProviderError},
     PostgresClient,
 };
 
@@ -128,7 +128,7 @@ async fn get_start_end_block(
         let last_synced_block = get_last_synced_block_number(config).await;
 
         if let Some(value) = last_synced_block {
-            let start_from = value + 1;
+            let start_from = value + U64::from(1);
             info!(
                 "{} Found last synced block number - {:?} rindexer will start up from {:?}",
                 event_name, value, start_from
@@ -266,8 +266,8 @@ pub async fn start_indexing_traces(
                         warn!(
                             "Could not process '{}' block traces. Likely too early for {}..{}, Retrying: {}",
                             network_name,
-                            &buffer.first().map(|n| n.as_u64()).unwrap_or_else(|| 0),
-                            &buffer.last().map(|n| n.as_u64()).unwrap_or_else(|| 0),
+                            &buffer.first().map(|n| n.as_limbs()[0]).unwrap_or_else(|| 0),
+                            &buffer.last().map(|n| n.as_limbs()[0]).unwrap_or_else(|| 0),
                             e.to_string().chars().take(2000).collect::<String>(),
                         );
                         continue;
@@ -530,7 +530,7 @@ pub async fn calculate_safe_block_number(
     latest_block: U64,
     mut end_block: U64,
 ) -> Result<(U64, U64), StartIndexingError> {
-    let mut indexing_distance_from_head = U64::zero();
+    let mut indexing_distance_from_head = U64::ZERO;
     if reorg_safe_distance {
         let chain_id =
             provider.get_chain_id().await.map_err(StartIndexingError::GetChainIdError)?;

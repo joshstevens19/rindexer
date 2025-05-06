@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 use std::{path::PathBuf, sync::Arc};
 
+use alloy::primitives::U256;
 use rindexer::{
     event::callback_registry::EventCallbackRegistry, rindexer_error, rindexer_info,
     EthereumSqlTypeWrapper, PgType, RindexerColorize,
@@ -24,9 +25,9 @@ async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegis
                     format!("{:?}", result.tx_information.address),
                     format!("{:?}", result.event_data.sender,),
                     format!("{:?}", result.event_data.recipient,),
-                    result.event_data.amount_0.to_string(),
-                    result.event_data.amount_1.to_string(),
-                    result.event_data.sqrt_price_x96.to_string(),
+                    result.event_data.amount0.to_string(),
+                    result.event_data.amount1.to_string(),
+                    result.event_data.sqrtPriceX96.to_string(),
                     result.event_data.liquidity.to_string(),
                     result.event_data.tick.to_string(),
                     format!("{:?}", result.tx_information.transaction_hash),
@@ -40,14 +41,14 @@ async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegis
                     EthereumSqlTypeWrapper::Address(result.tx_information.address),
                     EthereumSqlTypeWrapper::Address(result.event_data.sender),
                     EthereumSqlTypeWrapper::Address(result.event_data.recipient),
-                    EthereumSqlTypeWrapper::I256(result.event_data.amount_0),
-                    EthereumSqlTypeWrapper::I256(result.event_data.amount_1),
-                    EthereumSqlTypeWrapper::U256(result.event_data.sqrt_price_x96),
+                    EthereumSqlTypeWrapper::I256(result.event_data.amount0),
+                    EthereumSqlTypeWrapper::I256(result.event_data.amount1),
+                    EthereumSqlTypeWrapper::U256(U256::from(result.event_data.sqrtPriceX96)),
                     EthereumSqlTypeWrapper::U128(result.event_data.liquidity),
-                    EthereumSqlTypeWrapper::I32(result.event_data.tick),
-                    EthereumSqlTypeWrapper::H256(result.tx_information.transaction_hash),
+                    EthereumSqlTypeWrapper::I32(result.event_data.tick.as_i32()),
+                    EthereumSqlTypeWrapper::B256(result.tx_information.transaction_hash),
                     EthereumSqlTypeWrapper::U64(result.tx_information.block_number),
-                    EthereumSqlTypeWrapper::H256(result.tx_information.block_hash),
+                    EthereumSqlTypeWrapper::B256(result.tx_information.block_hash),
                     EthereumSqlTypeWrapper::String(result.tx_information.network.to_string()),
                     EthereumSqlTypeWrapper::U64(result.tx_information.transaction_index),
                     EthereumSqlTypeWrapper::U256(result.tx_information.log_index)

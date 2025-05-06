@@ -1,4 +1,4 @@
-use ethers::prelude::U64;
+use alloy::primitives::U64;
 use serde::{Deserialize, Serialize};
 
 use super::core::{deserialize_option_u64_from_string, serialize_option_u64_as_string};

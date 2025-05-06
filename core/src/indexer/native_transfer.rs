@@ -1,8 +1,8 @@
-use std::{collections::VecDeque, sync::Arc, time::Duration};
+use std::{collections::VecDeque, ops::RangeInclusive, sync::Arc, time::Duration};
 
-use ethers::{
-    providers::ProviderError,
-    types::{Action, Address, Bytes, Trace, U256, U64},
+use alloy::{
+    primitives::{Address, Bytes, U256, U64},
+    rpc::types::trace::parity::{Action, LocalizedTransactionTrace},
 };
 use futures::future::try_join_all;
 use serde::Serialize;
@@ -20,7 +20,7 @@ use crate::{
         task_tracker::{indexing_event_processed, indexing_event_processing},
     },
     manifest::native_transfer::TraceProcessingMethod,
-    provider::JsonRpcCachedProvider,
+    provider::{JsonRpcCachedProvider, ProviderError},
 };
 
 /// An imaginary contract name to ensure native transfer "debug trace" indexing is compatible
@@ -72,10 +72,13 @@ pub struct NativeTransfer {
 
 /// Push a range of blocks to the back-pressured channel and block producer when full.
 async fn push_range(block_tx: &mpsc::Sender<U64>, last: U64, latest: U64) {
-    let mut range = (last.as_u64()..=latest.as_u64()).collect::<VecDeque<_>>();
+    let range: RangeInclusive<u64> =
+        last.try_into().expect("U64 fits u64")..=latest.try_into().expect("U64 fits u64");
+    let mut range = range.collect::<VecDeque<_>>();
+
     while let Some(block) = range.pop_front() {
         if let Err(e) = block_tx.send(U64::from(block)).await {
-            error!("Failed to send block via channel. Re-queuing: {:?}", e);
+            error!("Failed to send block via channel. Re-queuing: {}", e.to_string());
             range.push_front(block);
         }
     }
@@ -105,33 +108,32 @@ pub async fn native_transfer_block_fetch(
 
         match latest_block {
             Ok(Some(latest_block)) => {
-                if let Some(block) = latest_block.number {
-                    let safe_block_number = block - indexing_distance_from_head;
+                let block = U64::from(latest_block.header.number);
+                let safe_block_number = block - indexing_distance_from_head;
 
-                    if block > safe_block_number {
-                        info!(
-                            "{} - not in safe reorg block range yet block: {} > range: {}",
-                            "NativeEvmTraces", block, safe_block_number
-                        );
-                        continue;
-                    }
+                if block > safe_block_number {
+                    info!(
+                        "{} - not in safe reorg block range yet block: {} > range: {}",
+                        "NativeEvmTraces", block, safe_block_number
+                    );
+                    continue;
+                }
 
-                    if block > last_seen_block {
-                        let to_block = end_block.map(|end| block.min(end)).unwrap_or(block);
-                        let from_block = block.min(last_seen_block + 1);
+                if block > last_seen_block {
+                    let to_block = end_block.map(|end| block.min(end)).unwrap_or(block);
+                    let from_block = block.min(last_seen_block + U64::from(1));
 
-                        debug!("Pushing trace blocks {} - {}", from_block, to_block);
+                    debug!("Pushing trace blocks {} - {}", from_block, to_block);
 
-                        push_range(&block_tx, from_block, to_block).await;
-                        last_seen_block = to_block;
-                    }
+                    push_range(&block_tx, from_block, to_block).await;
+                    last_seen_block = to_block;
+                }
 
-                    if end_block.is_some() && block > end_block.expect("must have block") {
-                        info!("Finished HISTORICAL INDEXING for {} NativeEvmTraces. No more blocks to push.", network);
-                        debug!("Dropping {} 'NativeEvmTraces' block Sender handle", network);
-                        drop(block_tx);
-                        return Ok(());
-                    }
+                if end_block.is_some() && block > end_block.expect("must have block") {
+                    info!("Finished HISTORICAL INDEXING for {} NativeEvmTraces. No more blocks to push.", network);
+                    debug!("Dropping {} 'NativeEvmTraces' block Sender handle", network);
+                    drop(block_tx);
+                    return Ok(());
                 }
             }
             Ok(None) => {}
@@ -147,7 +149,7 @@ async fn provider_call(
     provider: Arc<JsonRpcCachedProvider>,
     config: &TraceProcessingConfig,
     block: U64,
-) -> Result<Vec<Trace>, ProviderError> {
+) -> Result<Vec<LocalizedTransactionTrace>, ProviderError> {
     if config.method == TraceProcessingMethod::DebugTraceBlockByNumber {
         provider.debug_trace_block_by_number(block).await
     } else {
@@ -165,7 +167,7 @@ pub async fn native_transfer_block_consumer(
         block_numbers.iter().map(|n| provider_call(provider.clone(), &config, *n)).collect();
     let trace_calls = try_join_all(trace_futures).await?;
     let (from_block, to_block) =
-        block_numbers.iter().fold((U64::MAX, U64::zero()), |(min, max), &num| {
+        block_numbers.iter().fold((U64::MAX, U64::ZERO), |(min, max), &num| {
             (std::cmp::min(min, num), std::cmp::max(max, num))
         });
 
@@ -200,7 +202,7 @@ pub async fn native_transfer_block_consumer(
         .into_iter()
         .flatten()
         .filter_map(|trace| {
-            let action = match &trace.action {
+            let action = match &trace.trace.action {
                 Action::Call(call) => Some(call),
                 _ => None,
             }?;
