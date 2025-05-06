@@ -306,6 +306,8 @@ pub async fn start_indexing_contract_events(
     let permits = usize::from_str(&permits).unwrap_or(100);
     let semaphore = Arc::new(Semaphore::new(permits));
 
+    info!("Configured {} permits for contract events.", permits);
+
     // need this to keep track of dependency_events cross contracts and events
     // if you are doing advanced dependency events where other contracts depend on the processing of
     // this contract you will need to apply the dependency after the processing of the other
