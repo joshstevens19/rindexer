@@ -3,9 +3,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use ethers::{
-    addressbook::Address,
-    prelude::{ValueOrArray, U64},
+use alloy::{
+    primitives::{Address, U64},
+    rpc::types::ValueOrArray,
 };
 use rindexer::{
     generator::{build::generate_rust_project, generate_docker_file},

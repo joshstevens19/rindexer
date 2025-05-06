@@ -5,7 +5,6 @@ use bb8_redis::{
     redis::{cmd, AsyncCommands},
     RedisConnectionManager,
 };
-use log::error;
 use serde_json::Value;
 use thiserror::Error;
 
@@ -65,7 +64,7 @@ impl Redis {
 
         let json_value = serde_json::to_string(&message_with_id)?;
         let mut con = get_pooled_connection(&self.client).await?;
-        let _: String = con.xadd(stream_name, "*", &[("payload", &json_value)]).await?;
+        let _: () = con.xadd(stream_name, "*", &[("payload", &json_value)]).await?;
 
         Ok(())
     }

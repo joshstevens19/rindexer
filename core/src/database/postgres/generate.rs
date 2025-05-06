@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use ethers::utils::keccak256;
+use alloy::primitives::keccak256;
 use tracing::{error, info};
 
 use crate::{

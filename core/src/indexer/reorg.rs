@@ -1,15 +1,16 @@
-use ethers::types::{U256, U64};
+use alloy::primitives::{U256, U64};
 
 pub fn reorg_safe_distance_for_chain(chain_id: &U256) -> U64 {
-    match chain_id.as_u64() {
-        1 => U64::from(12),
-        _ => U64::from(64),
+    if chain_id == &U256::from(1) {
+        U64::from(12)
+    } else {
+        U64::from(64)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use ethers::types::U256;
+    use alloy::primitives::U256;
 
     use super::*;
 

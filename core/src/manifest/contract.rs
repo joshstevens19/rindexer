@@ -1,8 +1,8 @@
 use std::{borrow::Cow, collections::HashSet, fs, path::Path};
 
-use ethers::{
-    addressbook::Address,
-    prelude::{Filter, ValueOrArray, U64},
+use alloy::{
+    primitives::{Address, U64},
+    rpc::types::{Filter, ValueOrArray},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

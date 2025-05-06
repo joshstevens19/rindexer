@@ -1,10 +1,8 @@
 use std::{borrow::Cow, fs, path::PathBuf, time::Duration};
 
-use ethers::{
-    addressbook::{Address, Chain},
-    prelude::ValueOrArray,
-};
-use ethers_etherscan::Client;
+use alloy::{primitives::Address, rpc::types::ValueOrArray};
+use alloy_chains::Chain;
+use foundry_block_explorers::Client;
 use rindexer::{
     manifest::{
         contract::{Contract, ContractDetails},
@@ -61,8 +59,7 @@ pub async fn handle_add_contract_command(
         .expect("Unreachable: Network not found in networks")
         .1;
 
-    let chain_network = Chain::try_from(chain_id)
-        .inspect_err(|_| print_error_message("Network is not supported by etherscan API, please add the contract manually in the rindexer.yaml file"))?;
+    let chain_network = Chain::from(chain_id);
     let contract_address =
         prompt_for_input(&format!("Enter {} Contract Address", network), None, None, None);
 
@@ -86,16 +83,21 @@ pub async fn handle_add_contract_command(
         })?;
 
     let address = contract_address
-        .parse()
+        .parse::<Address>()
         .inspect_err(|e| print_error_message(&format!("Invalid contract address: {}", e)))?;
 
-    let mut abi_lookup_address = address;
+    let mut abi_lookup_address: Address = address;
     let mut timeout = 1000;
     let mut retry_attempts = 0;
     let max_retries = 3;
 
     loop {
-        let metadata = match client.contract_source_code(abi_lookup_address).await {
+        let metadata = match client
+            .contract_source_code(
+                abi_lookup_address.to_string().parse().expect("contract already checked"),
+            )
+            .await
+        {
             Ok(data) => data,
             Err(e) => {
                 if retry_attempts >= max_retries {
@@ -126,7 +128,7 @@ pub async fn handle_add_contract_command(
 
         let item = &metadata.items[0];
         if item.proxy == 1 && item.implementation.is_some() {
-            abi_lookup_address = item.implementation.unwrap();
+            abi_lookup_address = item.implementation.unwrap().to_string().parse().unwrap();
             println!(
                 "This contract is a proxy contract. Loading the implementation contract {}",
                 abi_lookup_address

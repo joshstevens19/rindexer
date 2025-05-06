@@ -1,7 +1,11 @@
-use std::{collections::BTreeMap, path::Path, process::Command};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
-use ethers_solc::{
-    artifacts::{Contract, Contracts, Error, SourceFile},
+use foundry_compilers::{
+    artifacts::{Contract, Contracts, Error, FileToContractsMap, SourceFile},
     CompilerOutput,
 };
 use reqwest::Client;
@@ -18,22 +22,31 @@ pub struct ShadowSourceFile {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct ShadowCompilerOutput {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub errors: Vec<ethers_solc::artifacts::Error>,
+    pub errors: Vec<String>,
 
     #[serde(default)]
-    pub sources: BTreeMap<String, ShadowSourceFile>,
+    pub sources: BTreeMap<PathBuf, ShadowSourceFile>,
 
     #[serde(default)]
     pub contracts: Contracts,
 }
 
+type CompilerOut = CompilerOutput<Error, Contract>;
+
 impl ShadowCompilerOutput {
-    pub fn from_compile_output(output: CompilerOutput) -> Self {
+    pub fn from_compile_output(output: CompilerOut) -> Self {
         let sources = output
             .sources
             .into_iter()
             .map(|(key, value)| {
-                let new_key = key.split("lib/").last().unwrap_or_default().to_string();
+                let new_key = PathBuf::from(
+                    key.to_str()
+                        .expect("path is valid utf8")
+                        .split("lib/")
+                        .last()
+                        .unwrap_or_default()
+                        .to_string(),
+                );
                 let new_value = ShadowSourceFile { id: value.id };
                 (new_key, new_value)
             })
@@ -43,13 +56,24 @@ impl ShadowCompilerOutput {
             .contracts
             .into_iter()
             .map(|(file, contracts)| {
-                let new_file = file.split("lib/").last().unwrap_or_default().to_string();
+                let new_file = PathBuf::from(
+                    file.to_str()
+                        .expect("path is valid utf8")
+                        .split("lib/")
+                        .last()
+                        .unwrap_or_default()
+                        .to_string(),
+                );
                 let new_contracts = contracts.into_iter().collect();
                 (new_file, new_contracts)
             })
             .collect();
 
-        ShadowCompilerOutput { errors: output.errors, sources, contracts }
+        ShadowCompilerOutput {
+            errors: output.errors.into_iter().map(|e| e.message).collect(),
+            sources,
+            contracts,
+        }
     }
 }
 
@@ -92,7 +116,7 @@ pub async fn deploy_shadow_contract(
         let stdout_str = std::str::from_utf8(&output.stdout)
             .map_err(|_| DeployShadowError::CouldNotReadFormatJson)?;
 
-        let compiler_output: CompilerOutput = forge_to_solc(stdout_str)
+        let compiler_output: CompilerOut = forge_to_solc(stdout_str)
             .map_err(|_| DeployShadowError::InvalidCompilerOutputFromFormatJson)?;
 
         let shadow_compiler_output = ShadowCompilerOutput::from_compile_output(compiler_output);
@@ -103,50 +127,47 @@ pub async fn deploy_shadow_contract(
     }
 }
 
-fn forge_to_solc(stdout_str: &str) -> Result<CompilerOutput, serde_json::Error> {
+fn forge_to_solc(stdout_str: &str) -> Result<CompilerOut, serde_json::Error> {
     let val: Value = serde_json::from_str(stdout_str)?;
     let errors_arr = val["errors"].as_array().unwrap();
     let contract_objs_val = val["contracts"].as_object().unwrap();
     let sources_obj_val = val["sources"].as_object().unwrap();
 
-    let mut contracts = Contracts::new();
-    let mut sources: BTreeMap<String, SourceFile> = BTreeMap::new();
+    let mut contracts: FileToContractsMap<Contract> = BTreeMap::new();
+    let mut sources: BTreeMap<PathBuf, SourceFile> = BTreeMap::new();
 
     let errors = errors_arr
         .iter()
         .map(|e| serde_json::from_value::<Error>(e.clone()).unwrap())
-        .collect::<Vec<Error>>();
+        .collect::<Vec<_>>();
 
     for (file, value) in contract_objs_val.into_iter() {
         let obj = value.as_object().unwrap();
         let modules = obj.into_iter().collect::<Vec<_>>();
         let mut contracts_map: BTreeMap<String, Contract> = BTreeMap::new();
         for (module_name, contract_objs_wrapper) in modules {
-            // Note: Forge output has an array at this level, but solc output
-            // seems to be an object. Is there a guarantee to only be one object?
             let contract = &contract_objs_wrapper[0]["contract"];
             let parsed_contract: Contract = serde_json::from_value(contract.clone())?;
 
             contracts_map.insert(module_name.clone(), parsed_contract);
         }
-        contracts.insert(file.clone(), contracts_map);
+        let path_file = PathBuf::from(&file);
+        contracts.insert(path_file.clone(), contracts_map);
     }
 
     for (file, value) in sources_obj_val.into_iter() {
         let arr = value.as_array().unwrap();
-        // Note: Forge output has an array at this level, but solc output
-        // seems to be an object. Is there a guarantee to only be one object?
         let source_file: SourceFile = serde_json::from_value(arr[0]["source_file"].clone())?;
-        sources.insert(file.clone(), source_file);
+        let path_file = PathBuf::from(&file);
+        sources.insert(path_file.clone(), source_file);
     }
 
-    Ok(CompilerOutput { errors, sources, contracts })
+    Ok(CompilerOut { errors, sources, contracts, metadata: BTreeMap::new() })
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 struct ShadowBodyContract {
     address: String,
-
     #[serde(rename = "compilerOutput")]
     compiler_output: ShadowCompilerOutput,
 }
@@ -174,8 +195,6 @@ async fn deploy_shadow(
     let client = Client::new();
 
     let response = client
-        // https://api.staging.shadow.xyz
-        // https://api.shadow.xyz
         .post(format!("https://api.shadow.xyz/v1/{}/deploy", shadow_details.fork_id))
         .header("X-SHADOW-API-KEY", api_key)
         .json(&DeployShadowBody {

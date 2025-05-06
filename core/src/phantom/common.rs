@@ -1,6 +1,6 @@
 use std::{error::Error, fs::File, io::Read, path::Path};
 
-use ethers::abi::Abi;
+use alloy::json_abi::JsonAbi;
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug)]
@@ -41,7 +41,7 @@ pub struct Bytecode {
 
 #[derive(Deserialize, Debug)]
 pub struct CompiledContract {
-    pub abi: Abi,
+    pub abi: JsonAbi,
 
     pub bytecode: Bytecode,
 }
