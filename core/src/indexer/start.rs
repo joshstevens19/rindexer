@@ -1,5 +1,5 @@
 use std::{path::Path, sync::Arc, time::Duration};
-
+use std::str::FromStr;
 use alloy::primitives::U64;
 use futures::future::try_join_all;
 use tokio::{
@@ -33,7 +33,7 @@ use crate::{
     },
     manifest::core::Manifest,
     provider::{JsonRpcCachedProvider, ProviderError},
-    PostgresClient,
+    public_read_env_value, PostgresClient,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -302,7 +302,9 @@ pub async fn start_indexing_contract_events(
     StartIndexingError,
 > {
     let event_progress_state = IndexingEventsProgressState::monitor(&registry.events).await;
-    let semaphore = Arc::new(Semaphore::new(25));
+    let permits = public_read_env_value("CONTRACT_PERMITS").unwrap_or("100".to_string());
+    let permits = usize::from_str(&permits).unwrap_or(100);
+    let semaphore = Arc::new(Semaphore::new(permits));
 
     // need this to keep track of dependency_events cross contracts and events
     // if you are doing advanced dependency events where other contracts depend on the processing of
