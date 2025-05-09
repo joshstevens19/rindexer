@@ -160,6 +160,7 @@ export default defineConfig({
               link: "/docs/start-building/rust-project-deep-dive/indexers",
             },
             { text: "Building Own DB Schema - coming soon" },
+            { text: "Ethers to Alloy Migration", link: "/docs/start-building/rust-project-deep-dive/ethers-alloy-migration" },
           ],
         },
       ],

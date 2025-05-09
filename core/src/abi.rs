@@ -1,8 +1,8 @@
 use std::{collections::HashSet, fs, path::Path};
 
-use ethers::{
-    types::{ValueOrArray, H256},
-    utils::keccak256,
+use alloy::{
+    primitives::{keccak256, B256},
+    rpc::types::ValueOrArray,
 };
 use serde::{Deserialize, Serialize};
 
@@ -301,9 +301,10 @@ impl EventInfo {
         EventInfo { name: item.name, inputs: item.inputs, signature, struct_result, struct_data }
     }
 
-    pub fn topic_id(&self) -> H256 {
+    pub fn topic_id(&self) -> B256 {
         let event_signature = self.signature.clone();
-        H256::from_slice(&keccak256(event_signature))
+
+        keccak256(event_signature)
     }
 
     pub fn topic_id_as_hex_string(&self) -> String {

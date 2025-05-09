@@ -1,12 +1,7 @@
-use alloy_primitives::{Address as AlloyAddress, B256};
-use alloy_rpc_types::{
-    BlockNumberOrTag as AlloyBlockNumberOrTag, Filter as AlloyFilter,
-    FilterBlockOption as AlloyBlockOption, FilterSet, ValueOrArray as AlloyValueOrArray,
-};
-use ethers::{
-    addressbook::Address,
-    prelude::{BlockNumber, Filter, H256, U64},
-    types::ValueOrArray,
+use alloy::{
+    eips::BlockNumberOrTag,
+    primitives::{Address, B256, U64},
+    rpc::types::{Filter, ValueOrArray},
 };
 
 use crate::event::contract_setup::IndexingContractSetup;
@@ -35,7 +30,7 @@ impl RindexerEventFilter {
     }
 
     pub fn new(
-        topic_id: &H256,
+        topic_id: &B256,
         event_name: &str,
         indexing_contract_setup: &IndexingContractSetup,
         current_block: U64,
@@ -52,7 +47,7 @@ impl RindexerEventFilter {
                                 index_filters.extend_filter_indexed(
                                     Filter::new()
                                         .address(address_details.address.clone())
-                                        .topic0(*topic_id)
+                                        .event_signature(*topic_id)
                                         .from_block(current_block)
                                         .to_block(next_block),
                                 ),
@@ -62,7 +57,7 @@ impl RindexerEventFilter {
                         Ok(RindexerEventFilter::from_filter(
                             Filter::new()
                                 .address(address_details.address.clone())
-                                .topic0(*topic_id)
+                                .event_signature(*topic_id)
                                 .from_block(current_block)
                                 .to_block(next_block),
                         ))
@@ -70,7 +65,7 @@ impl RindexerEventFilter {
                     None => Ok(RindexerEventFilter::from_filter(
                         Filter::new()
                             .address(address_details.address.clone())
-                            .topic0(*topic_id)
+                            .event_signature(*topic_id)
                             .from_block(current_block)
                             .to_block(next_block),
                     )),
@@ -80,13 +75,16 @@ impl RindexerEventFilter {
                 Some(indexed_filters) => Ok(RindexerEventFilter::from_filter(
                     indexed_filters.extend_filter_indexed(
                         Filter::new()
-                            .topic0(*topic_id)
+                            .event_signature(*topic_id)
                             .from_block(current_block)
                             .to_block(next_block),
                     ),
                 )),
                 None => Ok(RindexerEventFilter::from_filter(
-                    Filter::new().topic0(*topic_id).from_block(current_block).to_block(next_block),
+                    Filter::new()
+                        .event_signature(*topic_id)
+                        .from_block(current_block)
+                        .to_block(next_block),
                 )),
             },
             IndexingContractSetup::Factory(factory) => {
@@ -98,7 +96,7 @@ impl RindexerEventFilter {
                 Ok(RindexerEventFilter::from_filter(
                     Filter::new()
                         .address(address)
-                        .topic0(*topic_id)
+                        .event_signature(*topic_id)
                         .from_block(current_block)
                         .to_block(next_block),
                 ))
@@ -107,86 +105,37 @@ impl RindexerEventFilter {
     }
 
     pub fn get_to_block(&self) -> U64 {
-        self.filter
-            .get_to_block()
-            .expect("impossible to not have a to block in RindexerEventFilter")
+        U64::from(
+            self.filter
+                .get_to_block()
+                .expect("impossible to not have a to block in RindexerEventFilter"),
+        )
     }
 
     pub fn get_from_block(&self) -> U64 {
-        self.filter
-            .get_from_block()
-            .expect("impossible to not have a from block in RindexerEventFilter")
+        U64::from(
+            self.filter
+                .get_from_block()
+                .expect("impossible to not have a from block in RindexerEventFilter"),
+        )
     }
 
-    pub fn set_from_block<T: Into<BlockNumber>>(mut self, block: T) -> Self {
-        self.filter = self.filter.from_block(block);
+    pub fn set_from_block<T: Into<U64>>(mut self, block: T) -> Self {
+        self.filter = self.filter.from_block(BlockNumberOrTag::Number(block.into().as_limbs()[0]));
         self
     }
 
-    pub fn set_to_block<T: Into<BlockNumber>>(mut self, block: T) -> Self {
-        self.filter = self.filter.to_block(block);
+    pub fn set_to_block<T: Into<U64>>(mut self, block: T) -> Self {
+        self.filter = self.filter.to_block(BlockNumberOrTag::Number(block.into().as_limbs()[0]));
         self
     }
 
     pub fn contract_address(&self) -> Option<ValueOrArray<Address>> {
-        self.filter.address.clone()
+        let address_filter = self.filter.address.clone();
+        address_filter.to_value_or_array()
     }
 
     pub fn raw_filter(&self) -> &Filter {
         &self.filter
-    }
-
-    pub fn to_alloy_filter(&self) -> AlloyFilter {
-        let ethers_filter = self.raw_filter();
-
-        // Convert block options
-        let block_option = {
-            let from_block = self.get_from_block();
-            let to_block = self.get_to_block();
-
-            AlloyBlockOption::Range {
-                from_block: Some(AlloyBlockNumberOrTag::Number(from_block.as_u64())),
-                to_block: Some(AlloyBlockNumberOrTag::Number(to_block.as_u64())),
-            }
-        };
-
-        // Convert ValueOrArray<EthersAddress> to AlloyValueOrArray<AlloyAddress>
-        let address = match &ethers_filter.address {
-            Some(ValueOrArray::Value(addr)) => {
-                let address_bytes: [u8; 20] = addr.0;
-                AlloyValueOrArray::Value(AlloyAddress::from(address_bytes))
-            }
-            Some(ValueOrArray::Array(addrs)) => AlloyValueOrArray::Array(
-                addrs
-                    .iter()
-                    .map(|addr| {
-                        let address_bytes: [u8; 20] = addr.0;
-                        AlloyAddress::from(address_bytes)
-                    })
-                    .collect(),
-            ),
-            None => AlloyValueOrArray::Value(AlloyAddress::default()),
-        };
-
-        let address = FilterSet::from(address);
-
-        // Convert topics: [Option<ValueOrArray<Option<EthersH256>>; 4] to [ValueOrArray<B256>; 4]
-        let topics_value_or_array: [AlloyValueOrArray<B256>; 4] =
-            ethers_filter.topics.clone().map(|topic| match topic {
-                Some(ValueOrArray::Value(Some(h256))) => {
-                    AlloyValueOrArray::Value(B256::from(h256.0))
-                }
-                Some(ValueOrArray::Value(None)) => AlloyValueOrArray::Array(vec![]),
-                Some(ValueOrArray::Array(arr)) => AlloyValueOrArray::Array(
-                    arr.iter()
-                        .filter_map(|opt_h256| opt_h256.as_ref().map(|h256| B256::from(h256.0)))
-                        .collect(),
-                ),
-                None => AlloyValueOrArray::Array(vec![]),
-            });
-
-        let topics = topics_value_or_array.map(|topic| FilterSet::from(topic));
-
-        AlloyFilter { block_option, address, topics }
     }
 }

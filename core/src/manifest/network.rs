@@ -1,6 +1,6 @@
 use std::error;
 
-use ethers::prelude::U64;
+use alloy::primitives::U64;
 use reth::cli::Cli;
 use serde::{Deserialize, Serialize};
 

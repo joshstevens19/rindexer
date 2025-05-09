@@ -13,12 +13,11 @@ use std::{
 };
 
 use dotenv::dotenv;
-use ethers::prelude::{I256, U256};
 pub use file::{
     create_mod_file, format_all_files_for_project, load_env_from_full_path,
     load_env_from_project_path, write_file, CreateModFileError, WriteFileError,
 };
-use rand::{distributions::Alphanumeric, Rng};
+use rand::{distr::Alphanumeric, Rng};
 
 pub fn camel_to_snake(s: &str) -> String {
     camel_to_snake_advanced(s, false)
@@ -77,6 +76,12 @@ pub fn to_pascal_case(input: &str) -> String {
         return String::new();
     }
 
+    // Events like Erc1155 "URI" Event are capitalized and need to remain that way. Return it as it
+    // is.
+    if !input.contains("_") && input.chars().filter(|c| c.is_ascii_lowercase()).count() == 0 {
+        return input.to_string();
+    }
+
     let words: Vec<&str> = input.split('_').filter(|s| !s.is_empty()).collect();
     let mut result = String::with_capacity(input.len());
 
@@ -128,7 +133,7 @@ fn capitalize_word(word: &str, is_single_word: bool) -> String {
 }
 
 pub fn generate_random_id(len: usize) -> String {
-    rand::thread_rng().sample_iter(&Alphanumeric).take(len).map(char::from).collect()
+    rand::rng().sample_iter(&Alphanumeric).take(len).map(char::from).collect()
 }
 
 pub fn get_full_path(project_path: &Path, file_path: &str) -> Result<PathBuf, std::io::Error> {
@@ -173,22 +178,24 @@ pub fn replace_env_variable_to_raw_name(rpc: &str) -> String {
     }
 }
 
-pub fn u256_to_i256(value: U256) -> I256 {
-    let max_i256_as_u256 = U256::from_str_radix(
-        "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-        16,
-    )
-    .unwrap();
-
-    if value <= max_i256_as_u256 {
-        // If the value is less than or equal to I256::MAX, it's a positive number
-        I256::from_raw(value)
-    } else {
-        // If it's larger, it represents a negative number in two's complement
-        let twos_complement = (!value).overflowing_add(U256::one()).0;
-        I256::from_raw(twos_complement).wrapping_neg()
-    }
-}
+// Remove this if we're sure we no longer need it after the Alloy migration
+//
+// pub fn u256_to_i256(value: U256) -> I256 {
+//     let max_i256_as_u256 = U256::from_str_radix(
+//         "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+//         16,
+//     )
+//     .unwrap();
+//
+//     if value <= max_i256_as_u256 {
+//         // If the value is less than or equal to I256::MAX, it's a positive number
+//         I256::from_raw(value)
+//     } else {
+//         // If it's larger, it represents a negative number in two's complement
+//         let twos_complement = (!value).overflowing_add(U256::ONE).0;
+//         I256::from_raw(twos_complement).wrapping_neg()
+//     }
+// }
 
 #[cfg(test)]
 mod tests {
@@ -244,8 +251,8 @@ mod tests {
     #[test]
     fn test_single_word() {
         assert_eq!(to_pascal_case("user"), "User");
-        assert_eq!(to_pascal_case("CONSTANT"), "Constant");
-        assert_eq!(to_pascal_case("URI"), "Uri");
+        assert_eq!(to_pascal_case("CONSTANT"), "CONSTANT");
+        assert_eq!(to_pascal_case("URI"), "URI");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use ethers::types::U64;
+use alloy::primitives::U64;
 use futures::future::join_all;
 use serde_json::Value;
 use serenity::all::ChannelId;
@@ -108,7 +108,7 @@ impl ChatClients {
 
         match from_block.overflowing_add(to_block - from_block) {
             (result, false) => result,
-            (_, true) => U64::max_value(),
+            (_, true) => U64::MAX,
         }
     }
 

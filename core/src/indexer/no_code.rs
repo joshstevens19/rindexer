@@ -4,8 +4,11 @@ use std::{
     sync::Arc,
 };
 
+use alloy::{
+    dyn_abi::DynSolValue,
+    json_abi::{Event, JsonAbi},
+};
 use colored::Colorize;
-use ethers::abi::{Abi, Contract as EthersContract, Event, LogParam, Token};
 use serde_json::Value;
 use tokio_postgres::types::Type as PgType;
 use tracing::{debug, error, info, warn};
@@ -44,6 +47,7 @@ use crate::{
     provider::{CreateNetworkProvider, RetryClientError},
     setup_info_logger,
     streams::StreamsClients,
+    types::core::LogParam,
     AsyncCsvAppender, FutureExt, IndexingDetails, StartDetails, StartNoCodeDetails,
 };
 
@@ -243,9 +247,9 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
 
                         let contract_address = EthereumSqlTypeWrapper::Address(address);
                         let end_global_parameters = vec![
-                            EthereumSqlTypeWrapper::H256(transaction_hash),
+                            EthereumSqlTypeWrapper::B256(transaction_hash),
                             EthereumSqlTypeWrapper::U64(block_number),
-                            EthereumSqlTypeWrapper::H256(block_hash),
+                            EthereumSqlTypeWrapper::B256(block_hash),
                             EthereumSqlTypeWrapper::String(network.to_string()),
                             EthereumSqlTypeWrapper::U64(transaction_index),
                             EthereumSqlTypeWrapper::U256(log_index),
@@ -272,12 +276,15 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                         let log_params = vec![
                             LogParam {
                                 name: "from".to_string(),
-                                value: Token::Address(result.from),
+                                value: DynSolValue::Address(result.from),
                             },
-                            LogParam { name: "to".to_string(), value: Token::Address(result.to) },
+                            LogParam {
+                                name: "to".to_string(),
+                                value: DynSolValue::Address(result.to),
+                            },
                             LogParam {
                                 name: "value".to_string(),
-                                value: Token::Uint(result.value),
+                                value: DynSolValue::Uint(result.value, 256),
                             },
                         ];
 
@@ -297,9 +304,9 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
 
                         let contract_address = EthereumSqlTypeWrapper::Address(address);
                         let end_global_parameters = vec![
-                            EthereumSqlTypeWrapper::H256(transaction_hash),
+                            EthereumSqlTypeWrapper::B256(transaction_hash),
                             EthereumSqlTypeWrapper::U64(block_number),
-                            EthereumSqlTypeWrapper::H256(block_hash),
+                            EthereumSqlTypeWrapper::B256(block_hash),
                             EthereumSqlTypeWrapper::String(network.to_string()),
                             EthereumSqlTypeWrapper::U64(transaction_index),
                             EthereumSqlTypeWrapper::U256(log_index),
@@ -435,7 +442,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             let event_message = EventMessage {
                 event_name: params.event_info.name.clone(),
                 event_data: Value::Array(event_message_data),
-                event_signature_hash: params.event.signature(),
+                event_signature_hash: params.event.selector(),
                 network: network.clone(),
             };
 
@@ -591,18 +598,14 @@ pub async fn process_events(
 
         // TODO - this could be shared with `get_abi_items`
         let abi_str = contract.parse_abi(project_path)?;
-        let abi: Abi = serde_json::from_str(&abi_str)?;
-
-        #[allow(clippy::useless_conversion)]
-        let abi_gen = EthersContract::from(abi);
-
+        let abi: JsonAbi = serde_json::from_str(&abi_str)?;
         let is_filter = contract.identify_and_modify_filter();
         let abi_items = ABIItem::get_abi_items(project_path, contract, is_filter)?;
         let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
 
         for event_info in event_names {
             let event_name = event_info.name.clone();
-            let event = &abi_gen
+            let event = &abi
                 .events
                 .iter()
                 .find(|(name, _)| *name == &event_name)
@@ -712,10 +715,9 @@ pub async fn process_trace_events(
     }
 
     let abi_str = NATIVE_TRANSFER_ABI;
-    let abi: Abi = serde_json::from_str(abi_str)?;
+    let abi: JsonAbi = serde_json::from_str(abi_str)?;
 
     #[allow(clippy::useless_conversion)]
-    let abi_gen = EthersContract::from(abi);
     let abi_items: Vec<ABIItem> = serde_json::from_str(abi_str)?;
     let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
 
@@ -724,7 +726,7 @@ pub async fn process_trace_events(
 
     for event_info in event_names {
         let event_name = event_info.name.clone();
-        let event = &abi_gen
+        let event = &abi
             .events
             .iter()
             .find(|(name, _)| *name == &event_name)

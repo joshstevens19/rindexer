@@ -86,9 +86,9 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
                         EthereumSqlTypeWrapper::Address(result.event_data.from),
                         EthereumSqlTypeWrapper::Address(result.event_data.to),
                         EthereumSqlTypeWrapper::U256(result.event_data.value),
-                        EthereumSqlTypeWrapper::H256(result.tx_information.transaction_hash),
+                        EthereumSqlTypeWrapper::B256(result.tx_information.transaction_hash),
                         EthereumSqlTypeWrapper::U64(result.tx_information.block_number),
-                        EthereumSqlTypeWrapper::H256(result.tx_information.block_hash),
+                        EthereumSqlTypeWrapper::B256(result.tx_information.block_hash),
                         EthereumSqlTypeWrapper::String(result.tx_information.network.to_string()),
                     ];
                     bulk_data.push(data);
@@ -240,26 +240,55 @@ pub struct TransferResult {
 }
 ```
 
-The `event_data` will be pointing to the ABI type generated using `ethers`
+The `event_data` will be pointing to the ABI type generated using `alloy` `sol!` macro.
 
 ```rs
-#[derive(
-    Clone,
-    ::ethers::contract::EthEvent,
-    ::ethers::contract::EthDisplay,
-    Default,
-    Debug,
-    PartialEq,
-    Eq,
-    Hash,
+sol!(
+    #[derive(Debug)]
+    #[sol(rpc, all_derives)]
+    TransferFilter,
+    r#"
+    [{
+        "anonymous": false,
+        "inputs": [
+          {
+            "indexed": true,
+            "name": "from",
+            "type": "address"
+          },
+          {
+            "indexed": true,
+            "name": "to",
+            "type": "address"
+          },
+          {
+            "indexed": false,
+            "name": "value",
+            "type": "uint256"
+          }
+        ],
+        "name": "Transfer",
+        "type": "event"
+      }]
+    "#
+}
+```
+
+Which will expand to a struct like:
+```rs
+#[allow(
+    non_camel_case_types,
+    non_snake_case,
+    clippy::pub_underscore_fields,
+    clippy::style
 )]
-#[ethevent(name = "Transfer", abi = "Transfer(address,address,uint256)")]
-pub struct TransferFilter {
-    #[ethevent(indexed)]
-    pub from: ::ethers::core::types::Address,
-    #[ethevent(indexed)]
-    pub to: ::ethers::core::types::Address,
-    pub value: ::ethers::core::types::U256,
+pub struct Transfer {
+    #[allow(missing_docs)]
+    pub from: ::alloy::sol_types::private::Address,
+    #[allow(missing_docs)]
+    pub to: ::alloy::sol_types::private::Address,
+    #[allow(missing_docs)]
+    pub value: ::alloy::sol_types::private::primitives::aliases::U256,
 }
 ```
 
@@ -270,10 +299,10 @@ The `tx_information` will be the transaction related information for the event
 pub struct TxInformation {
     pub network: String,
     pub address: Address,
-    pub block_hash: H256,
+    pub block_hash: BlockHash,
     pub block_number: U64,
     pub block_timestamp: Option<U256>,
-    pub transaction_hash: H256,
+    pub transaction_hash: TxHash,
     pub log_index: U256,
     pub transaction_index: U64,
 }
@@ -814,16 +843,18 @@ pub enum EthereumSqlTypeWrapper {
     VecU512(Vec<U512>),
 
     // Hashes
-    H128(H128),
+    B128(B128),
     H160(H160),
-    H256(H256),
-    H256Bytes(H256),
-    H512(H512),
-    VecH128(Vec<H128>),
+    B256(B256),
+    B256Bytes(B256),
+    B512(B512),
+    VecB128(Vec<B128>),
+    VecB256(Vec<B256>),
+    VecB256Bytes(Vec<B256>),
+    VecB512(Vec<B512>),
+
+    // Deprecated Hash. Move to use Address
     VecH160(Vec<H160>),
-    VecH256(Vec<H256>),
-    VecH256Bytes(Vec<H256>),
-    VecH512(Vec<H512>),
 
     // Address
     Address(Address),

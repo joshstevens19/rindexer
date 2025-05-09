@@ -8,7 +8,10 @@ use std::{
     process::Command,
 };
 
-use ethers::types::{Address, ValueOrArray, U64};
+use alloy::{
+    primitives::{Address, U64},
+    rpc::types::ValueOrArray,
+};
 use rindexer::{
     manifest::{
         network::Network,

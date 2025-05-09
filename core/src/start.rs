@@ -97,6 +97,7 @@ async fn handle_shutdown(signal: &str) {
 
 pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindexerError> {
     let project_path = details.manifest_path.parent();
+
     match project_path {
         Some(project_path) => {
             #[cfg(unix)]
@@ -207,6 +208,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     "Applying indexes if any back to the database as historic resync is complete"
                 );
                 PostgresIndexResult::apply_indexes(postgres_indexes).await?;
+                info!("Applied indexes back to database");
 
                 if !relationships.is_empty() {
                     // TODO if graphql isn't up yet, and we apply this on graphql wont refresh we
@@ -249,6 +251,8 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
             }
 
             // Await the GraphQL server task if it was started
+            info!("Waiting on GraphQL handle...");
+
             if let Some(handle) = graphql_server_handle {
                 handle.await.unwrap_or_else(|e| {
                     error!("GraphQL server task failed: {:?}", e);

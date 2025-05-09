@@ -62,6 +62,10 @@ impl AsyncCsvAppender {
 
         tokio::task::spawn_blocking(move || {
             let _guard = lock.lock();
+            // Create parent directories if they don't exist
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("Failed to create directory");
+            }
             let file = File::options().create(true).append(true).open(&path)?;
             let mut writer = Writer::from_writer(file);
 

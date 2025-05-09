@@ -6,6 +6,8 @@ networks:
     chain_id: 1
     # Not all providers support `trace_block` functionality across all chains.
     # Please ensure that this method is available.
+    #
+    # This endpoint will be HIGHLY rate-limited, so not recommended to test this example with it.
     rpc: https://mainnet.gateway.tenderly.co
 native_transfers:
   networks:
@@ -18,7 +20,7 @@ native_transfers:
         secret_key: test
         endpoint_url: ${ENDPOINT_URL}
       topics:
-        - topic_arn: arn:aws:sns:us-east-1:000000000000:eth-transfers
+        - topic_arn: arn:aws:sns:us-east-1:000000000000:erc20-transfers
           networks:
             - ethereum
           # The underlying event name is `NativeTransfer`. This events section can be omitted, but if you want
@@ -40,3 +42,16 @@ contracts:
           - event_name: Transfer
     include_events:
       - Transfer
+    streams:
+      sns:
+        aws_config:
+          region: us-east-1
+          access_key: test
+          secret_key: test
+          endpoint_url: ${ENDPOINT_URL}
+        topics:
+          - topic_arn: arn:aws:sns:us-east-1:000000000000:erc20-transfers
+            networks:
+              - ethereum
+            events:
+              - event_name: Transfer

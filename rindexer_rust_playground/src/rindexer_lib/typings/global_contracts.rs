@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
-use ethers::{
-    abi::Address,
-    contract::abigen,
-    providers::{Http, Provider, RetryClient},
-};
+use alloy::{primitives::Address, sol};
+use rindexer::provider::RindexerProvider;
 
 /// THIS IS A GENERATED FILE. DO NOT MODIFY MANUALLY.
 ///
@@ -12,11 +9,32 @@ use ethers::{
 /// Any manual changes to this file will be overwritten.
 use super::networks::{get_base_provider, get_ethereum_provider};
 
-abigen!(USDT, "./abis/erc20-abi.json");
+sol!(
+    #[derive(Debug)]
+    #[sol(rpc, all_derives)]
+    USDTEthereum,
+    "./abis/erc20-abi.json"
+);
 
-pub async fn usdt_contract() -> USDT<Arc<Provider<RetryClient<Http>>>> {
+pub async fn usdt_get_ethereum_provider_contract(
+) -> USDTEthereum::USDTEthereumInstance<Arc<RindexerProvider>> {
     let address: Address =
         "0xdac17f958d2ee523a2206206994597c13d831ec7".parse().expect("Invalid address");
 
-    USDT::new(address, Arc::new(get_ethereum_provider().await.clone()))
+    USDTEthereum::new(address, get_ethereum_provider().await.clone())
+}
+
+sol!(
+    #[derive(Debug)]
+    #[sol(rpc, all_derives)]
+    USDTBase,
+    "./abis/erc20-abi.json"
+);
+
+pub async fn usdt_get_base_provider_contract() -> USDTBase::USDTBaseInstance<Arc<RindexerProvider>>
+{
+    let address: Address =
+        "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2".parse().expect("Invalid address");
+
+    USDTBase::new(address, get_base_provider().await.clone())
 }

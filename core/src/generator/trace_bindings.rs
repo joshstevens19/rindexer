@@ -10,7 +10,7 @@ use crate::{
     database::postgres::generate::{
         generate_column_names_only_with_base_properties, generate_event_table_full_name,
     },
-    helpers::{camel_to_snake, camel_to_snake_advanced, to_pascal_case},
+    helpers::{camel_to_snake, to_pascal_case},
     indexer::native_transfer::{EVENT_NAME, NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME},
     manifest::{
         contract::ParseAbiError,
@@ -22,10 +22,6 @@ use crate::{
 
 pub fn trace_abigen_contract_name(contract_name: &str) -> String {
     format!("Rindexer{}Gen", contract_name)
-}
-
-fn trace_abigen_contract_mod_name(contract_name: &str) -> String {
-    camel_to_snake_advanced(&trace_abigen_contract_name(contract_name), true)
 }
 
 pub fn trace_abigen_contract_file_name(contract_name: &str) -> String {
@@ -61,7 +57,7 @@ fn trace_generate_structs(contract_name: &str) -> Result<Code, GenerateStructsEr
 
             structs.push_str(&Code::new(format!(
                 r#"
-                    pub type {struct_data} = {abigen_mod_name}::{pascal_event_name}Filter;
+                    pub type {struct_data} = {abigen_mod_name}::{pascal_event_name};
 
                     #[derive(Debug, Clone)]
                     pub struct {struct_result} {{
@@ -71,7 +67,7 @@ fn trace_generate_structs(contract_name: &str) -> Result<Code, GenerateStructsEr
                 "#,
                 struct_result = struct_result,
                 struct_data = struct_data,
-                abigen_mod_name = trace_abigen_contract_mod_name(contract_name),
+                abigen_mod_name = trace_abigen_contract_name(contract_name),
                 pascal_event_name = to_pascal_case(event_name)
             )));
         }
@@ -128,14 +124,15 @@ fn generate_register_match_arms_code(event_type_name: &str, event_info: &[EventI
 }
 
 fn generate_decoder_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> Code {
-    Code::new(event_info
-        .iter()
-        .map(|info| {
-            format!(
-                r#"
+    Code::new(
+        event_info
+            .iter()
+            .map(|info| {
+                format!(
+                    r#"
                     {event_type_name}::{event_info_name}(_) => {{
-                        Arc::new(move |topics: Vec<H256>, data: Bytes| {{
-                            match {event_info_name}Data::decode_log(&ethers::core::abi::RawLog {{ topics, data: data.to_vec() }}) {{
+                        Arc::new(move |topics: Vec<B256>, data: Bytes| {{
+                            match {event_info_name}Data::decode_raw_log(topics, &data[0..]) {{
                                 Ok(event) => {{
                                     let result: {event_info_name}Data = event;
                                     Arc::new(result) as Arc<dyn Any + Send + Sync>
@@ -145,12 +142,13 @@ fn generate_decoder_match_arms_code(event_type_name: &str, event_info: &[EventIn
                         }})
                     }}
                 "#,
-                event_type_name = event_type_name,
-                event_info_name = info.name
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n"))
+                    event_type_name = event_type_name,
+                    event_info_name = info.name
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 fn generate_csv_instance(
@@ -347,7 +345,7 @@ fn generate_trace_callback_structs_code(
 fn decoder_contract_fn(contracts_details: Vec<NativeTransferDetails>, abi_gen_name: &str) -> Code {
     let mut function = String::new();
     function.push_str(&format!(
-        r#"pub async fn decoder_contract(network: &str) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> {{"#,
+        r#"pub async fn decoder_contract(network: &str) -> {abi_gen_name}Instance<Arc<RindexerProvider>> {{"#,
         abi_gen_name = abi_gen_name
     ));
 
@@ -363,8 +361,8 @@ fn decoder_contract_fn(contracts_details: Vec<NativeTransferDetails>, abi_gen_na
             r#"network == "{network}" {{
                 {abi_gen_name}::new(
                     // do not care about address here its decoding makes it easier to handle ValueOrArray
-                    Address::zero(),
-                    Arc::new(get_provider_cache_for_network(network).await.get_inner_provider()),
+                    Address::ZERO,
+                    get_provider_cache_for_network(network).await.get_inner_provider(),
                  )
             }}"#,
             network = network,
@@ -392,10 +390,10 @@ fn build_pub_contract_fn(
     let contract_name = camel_to_snake(contract_name);
 
     Code::new(format!(
-        r#"pub async fn {contract_name}_contract(network: &str, address: Address) -> {abi_gen_name}<Arc<Provider<RetryClient<Http>>>> {{
+        r#"pub async fn {contract_name}_contract(network: &str, address: Address) -> {abi_gen_name}Instance<Arc<RindexerProvider>> {{
                 {abi_gen_name}::new(
                     address,
-                    Arc::new(get_provider_cache_for_network(network).await.get_inner_provider()),
+                    get_provider_cache_for_network(network).await.get_inner_provider(),
                  )
                }}
             "#,
@@ -435,14 +433,17 @@ fn generate_trace_bindings_code(
         /// This file was auto generated by rindexer - https://github.com/joshstevens19/rindexer.
         /// Any manual changes to this file will be overwritten.
         
-        use super::{abigen_file_name}::{abigen_mod_name}::{{self, {abigen_name}}};
+        use super::{abigen_file_name}::{{
+            {abigen_name}::{{self, {abigen_name}Instance, {abigen_name}Events}}
+        }};
         use std::{{any::Any, sync::Arc}};
         use std::error::Error;
         use std::future::Future;
         use std::collections::HashMap;
         use std::pin::Pin;
         use std::path::{{Path, PathBuf}};
-        use ethers::{{providers::{{Http, Provider, RetryClient}}, abi::Address, contract::EthLogDecode, types::{{Bytes, H256}}}};
+        use alloy::primitives::{{Address, Bytes, B256}};
+        use alloy::sol_types::{{SolEvent, SolEventInterface, SolType}};
         use rindexer::{{
             async_trait,
             {csv_import}
@@ -459,7 +460,7 @@ fn generate_trace_bindings_code(
                 contract::{{Contract, ContractDetails}},
                 yaml::read_manifest,
             }},
-            provider::JsonRpcCachedProvider,
+            provider::{{JsonRpcCachedProvider, RindexerProvider}},
             {postgres_client_import}
         }};
         use super::super::super::super::typings::networks::get_provider_cache_for_network;
@@ -512,7 +513,7 @@ fn generate_trace_bindings_code(
                 get_provider_cache_for_network(network).await
             }}
 
-            fn decoder(&self, network: &str) -> Arc<dyn Fn(Vec<H256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync> {{
+            fn decoder(&self, network: &str) -> Arc<dyn Fn(Vec<B256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync> {{
                 let decoder_contract = decoder_contract(network);
 
                 match self {{
@@ -579,7 +580,6 @@ fn generate_trace_bindings_code(
         },
         postgres_client_import = if storage.postgres_enabled() { "PostgresClient," } else { "" },
         csv_import = if storage.csv_enabled() { "AsyncCsvAppender," } else { "" },
-        abigen_mod_name = trace_abigen_contract_mod_name(contract_name),
         abigen_file_name = trace_abigen_contract_file_name(contract_name),
         abigen_name = trace_abigen_contract_name(contract_name),
         structs = trace_generate_structs(contract_name)?,
@@ -813,9 +813,9 @@ pub fn generate_trace_handlers(
                 }
             }
 
-            data.push_str("EthereumSqlTypeWrapper::H256(result.tx_information.transaction_hash),");
+            data.push_str("EthereumSqlTypeWrapper::B256(result.tx_information.transaction_hash),");
             data.push_str("EthereumSqlTypeWrapper::U64(result.tx_information.block_number),");
-            data.push_str("EthereumSqlTypeWrapper::H256(result.tx_information.block_hash),");
+            data.push_str("EthereumSqlTypeWrapper::B256(result.tx_information.block_hash),");
             data.push_str(
                 "EthereumSqlTypeWrapper::String(result.tx_information.network.to_string()),",
             );
