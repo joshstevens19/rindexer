@@ -13,7 +13,7 @@ use rindexer::{
         contract::{Contract, ContractDetails},
         core::{Manifest, ProjectType},
         native_transfer::NativeTransfers,
-        network::Network,
+        network::{Network, RethConfig},
         storage::{CsvDetails, PostgresDetails, Storage},
         yaml::{write_manifest, YAML_CONFIG_NAME},
     },
@@ -65,6 +65,7 @@ fn write_gitignore(path: &Path) -> Result<(), WriteFileError> {
 pub fn handle_new_command(
     project_path: PathBuf,
     project_type: ProjectType,
+    reth_config: Option<RethConfig>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     print_success_message("Initializing new rindexer project...");
 
@@ -142,6 +143,7 @@ pub fn handle_new_command(
             compute_units_per_second: None,
             max_block_range: None,
             disable_logs_bloom_checks: None,
+            reth: reth_config,
         }],
         contracts: vec![Contract {
             name: "RocketPoolETH".to_string(),
