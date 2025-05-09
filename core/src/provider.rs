@@ -45,11 +45,11 @@ pub struct WrappedLog {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraceCall {
-    pub from: Address,
+    pub from: EthersAddress,
     pub gas: String,
     #[serde(rename = "gasUsed")]
     pub gas_used: U256,
-    pub to: Option<Address>,
+    pub to: Option<EthersAddress>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     pub input: Bytes,

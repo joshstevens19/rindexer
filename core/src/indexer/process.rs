@@ -7,7 +7,7 @@ use ethers::{
 };
 use futures::future::join_all;
 use tokio::{
-    sync::{mpsc, Mutex, MutexGuard},
+    sync::{Mutex, MutexGuard},
     task::{JoinError, JoinHandle},
     time::Instant,
 };

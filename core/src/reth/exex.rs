@@ -106,7 +106,7 @@ where
                     continue;
                 }
                 if let Err(e) = buffer.append_chain((*committed_chain).clone()) {
-                    error!("Failed to append chain: {}", e);
+                    error!("Failed to append chain: {:?}", e);
                     continue; // Skip processing if append fails
                 }
                 if !job.backfill_running {

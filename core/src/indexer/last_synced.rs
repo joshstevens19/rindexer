@@ -325,13 +325,14 @@ pub fn evm_trace_update_progress_and_last_synced_task(
                 &config.event_name,
                 &get_full_path(&config.project_path, &csv_details.path).unwrap_or_else(|_| {
                     panic!("failed to get full path {}", config.project_path.display())
-                });
-            if let Err(e) =
-                update_last_synced_block_number_for_file(&config, &full_path, to_block).await
+                }),
+                to_block,
+            )
+            .await
             {
                 error!(
-                    "Error updating last synced block to CSV - path - {} error - {:?} full path - {}",
-                    csv_details.path, e, full_path.display()
+                    "Error updating last synced block to CSV - path - {} error - {:?}",
+                    csv_details.path, e
                 );
             }
         } else if let Some(stream_last_synced_block_file_path) =
