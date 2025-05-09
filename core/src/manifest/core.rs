@@ -165,7 +165,7 @@ impl Manifest {
     }
 
     pub fn reth_enabled_networks(&self) -> Vec<&Network> {
-        self.networks.iter().filter(|n| n.reth.is_some()).map(|network| network).collect()
+        self.networks.iter().filter(|n| n.reth.is_some()).collect()
     }
 }
 

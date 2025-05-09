@@ -15,13 +15,7 @@ use reth_node_api::FullNodeComponents;
 use reth_tracing::tracing::{error, info};
 use tokio::sync::{mpsc, Mutex, Semaphore};
 
-use crate::reth::types::{
-    BlockRangeInclusiveIter, ExExMode, ExExRequest, ExExReturnData, LogMetadata,
-};
-/// The default parallelism for the ExEx backfill jobs.
-const DEFAULT_PARALLELISM: usize = 32;
-/// The default batch size for the ExEx backfill jobs.
-const DEFAULT_BATCH_SIZE: usize = 8;
+use crate::reth::types::{BlockRangeInclusiveIter, ExExMode, ExExRequest, ExExReturnData};
 /// The maximum number of headers we read at once when handling a range filter.
 const MAX_HEADERS_RANGE: u64 = 1_000; // with ~530bytes per header this is ~500kb
 /// The number of concurrent backfills allowed.
@@ -33,6 +27,7 @@ struct JobState {
     tx: mpsc::UnboundedSender<ExExReturnData>,
     backfill_running: bool,
     buffer: Mutex<Chain>,
+    #[allow(dead_code)]
     handle: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -43,6 +38,7 @@ pub(crate) struct RindexerExEx<Node: FullNodeComponents> {
     /// The context of the ExEx.
     ctx: ExExContext<Node>,
     /// Sender for exex requests.
+    #[allow(dead_code)]
     request_tx: mpsc::UnboundedSender<ExExRequest>,
     /// Receiver for exex requests.
     request_rx: mpsc::UnboundedReceiver<ExExRequest>,
@@ -225,7 +221,7 @@ where
     }
 
     async fn backfill(
-        self: &mut Self,
+        &mut self,
         filter: Arc<Filter>,
         tx: &mpsc::UnboundedSender<ExExReturnData>,
     ) -> eyre::Result<tokio::task::JoinHandle<()>> {

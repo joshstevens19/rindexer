@@ -16,9 +16,6 @@ const STACK_SIZE: usize = 32 * 1024 * 1024; // 32 MB
 /// The name of the execution extension.
 const EXECUTION_EXTENSION_NAME: &str = "rindexer";
 
-/// The number of concurrent backfills.
-const CONCURRENT_BACKFILLS: usize = 10;
-
 /// Starts a Reth node with the execution extension that forwards blocks to the provided channel.
 pub fn start_reth_node_with_exex(cli: Cli) -> eyre::Result<RethTx> {
     // Create a channel for backfill requests. Sender will go to rindexer, receiver

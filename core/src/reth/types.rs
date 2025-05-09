@@ -11,6 +11,7 @@ pub type ExExResponse = eyre::Result<(u64, mpsc::UnboundedReceiver<ExExReturnDat
 pub type ExExTx = mpsc::UnboundedSender<ExExRequest>;
 
 /// ExExRequest is a request to the Execution Engine
+#[allow(clippy::large_enum_variant)]
 pub enum ExExRequest {
     /// Starts a new execution job with the given mode and filter
     Start { mode: ExExMode, filter: Filter, response_tx: oneshot::Sender<ExExResponse> },
@@ -70,6 +71,12 @@ impl RethChannels {
 
     pub fn get_mut(&mut self, network_name: &str) -> Option<&mut Arc<ExExTx>> {
         self.channels.get_mut(network_name)
+    }
+}
+
+impl Default for RethChannels {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
