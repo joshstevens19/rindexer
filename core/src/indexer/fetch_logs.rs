@@ -155,13 +155,12 @@ async fn process_exex_stream(
     config: &EventProcessingConfig,
 ) {
     let reth_tx = reth_tx.clone();
-    // TODO: Since most of the codebase uses ethers types, and we want reth types here,
-    // we are converting ethers types to reth types here.
-    // we should move towards using reth types throughout the codebase.
-    let filter = config.to_event_filter().unwrap().to_alloy_filter();
+
+    let event_filter = config.to_event_filter().unwrap();
+    let filter = event_filter.raw_filter();
 
     // Process backfill data
-    let to_block = config.to_event_filter().unwrap().get_to_block().as_u64();
+    let to_block = config.to_event_filter().unwrap().get_to_block();
 
     let (response_tx, response_rx) = oneshot::channel();
 
@@ -196,21 +195,10 @@ async fn process_exex_stream(
         let mut from_block: u64 = u64::MAX;
         let mut to_block: u64 = u64::MIN;
         let mut wrapped_logs = Vec::new();
-        for ExExReturnData { log, metadata } in logs {
-            from_block = from_block.min(metadata.block_number);
-            to_block = to_block.max(metadata.block_number);
-            let wrapped_log = WrappedLog::from_alloy_log(
-                &log,
-                metadata.block_timestamp,
-                metadata.block_hash,
-                metadata.block_number,
-                &metadata.tx_hash,
-                metadata.tx_index,
-                metadata.log_index,
-                None,
-                false,
-            );
-            wrapped_logs.push(wrapped_log);
+        for ExExReturnData { log } in logs {
+            from_block = from_block.min(log.block_number.unwrap());
+            to_block = to_block.max(log.block_number.unwrap());
+            wrapped_logs.push(log);
         }
         if let Err(e) = tx.send(Ok(FetchLogsResult {
             logs: wrapped_logs,
@@ -229,8 +217,8 @@ async fn process_exex_stream(
     info!("Pure backfill complete for job {}", job_id);
 
     if config.live_indexing {
-        let next_from_block = to_block + 1;
-        let filter = filter.from_block(next_from_block);
+        let next_from_block = to_block + U64::from(1);
+        let filter = filter.clone().from_block(next_from_block);
         let (response_tx, response_rx) = oneshot::channel();
         let res = reth_tx.send(ExExRequest::Start {
             mode: ExExMode::HistoricThenLive,
@@ -259,22 +247,11 @@ async fn process_exex_stream(
         };
         info!("Live backfill started for job {}", job_id);
 
-        while let Some(ExExReturnData { log, metadata }) = stream.recv().await {
-            let wrapped_log = WrappedLog::from_alloy_log(
-                &log,
-                metadata.block_timestamp,
-                metadata.block_hash,
-                metadata.block_number,
-                &metadata.tx_hash,
-                metadata.tx_index,
-                metadata.log_index,
-                None,
-                false,
-            );
+        while let Some(ExExReturnData { log }) = stream.recv().await {
             if let Err(e) = tx.send(Ok(FetchLogsResult {
-                logs: vec![wrapped_log],
-                from_block: U64::from(metadata.block_number),
-                to_block: U64::from(metadata.block_number),
+                logs: vec![log.clone()],
+                from_block: U64::from(log.block_number.unwrap()),
+                to_block: U64::from(log.block_number.unwrap()),
             })) {
                 error!(
                     "{} - {} - Failed to send logs to stream consumer: {}",

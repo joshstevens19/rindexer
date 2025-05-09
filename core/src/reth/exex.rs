@@ -1,8 +1,11 @@
 use std::{collections::HashMap, sync::Arc};
 
-use alloy_rpc_types::{BlockHashOrNumber, BlockNumberOrTag, Filter, FilteredParams};
+use alloy_rpc_types::{BlockNumberOrTag, Filter, FilteredParams, Log};
 use futures::StreamExt;
-use reth::providers::{HeaderProvider, ReceiptProvider, TransactionsProvider};
+use reth::{
+    providers::{HeaderProvider, ReceiptProvider, TransactionsProvider},
+    rpc::types::BlockHashOrNumber,
+};
 use reth_ethereum::{
     node::api::NodeTypes, primitives::AlloyBlockHeader, EthPrimitives, TransactionSigned,
 };
@@ -311,19 +314,18 @@ async fn process_blocks_with_filter<
                         if filter_params.filter_address(&log.address) &&
                             filter_params.filter_topics(log.topics())
                         {
-                            let log_metadata = LogMetadata {
-                                block_timestamp,
-                                block_hash,
-                                block_number,
-                                tx_hash: *tx_hash,
-                                tx_index: tx_index as u64,
-                                log_index,
-                                log_type: None,
+                            let log = Log {
+                                inner: log.clone(),
+                                block_timestamp: Some(block_timestamp),
+                                block_hash: Some(block_hash),
+                                block_number: Some(block_number),
+                                transaction_hash: Some(*tx_hash),
+                                transaction_index: Some(tx_index as u64),
+                                log_index: Some(log_index as u64),
                                 removed: false,
                             };
 
-                            let result = tx
-                                .send(ExExReturnData { log: log.clone(), metadata: log_metadata });
+                            let result = tx.send(ExExReturnData { log });
                             if let Err(e) = result {
                                 error!("Failed to send log to stream consumer: {}", e);
                             }

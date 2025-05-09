@@ -99,15 +99,14 @@ reth-tracing = { git = "https://github.com/paradigmxyz/reth", tag = "v1.3.10" }
 reth-stages-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.3.10" }
 
 # alloy
-alloy-eips = { version = "0.14", default-features = false }
-alloy-genesis = { version = "0.14", default-features = false }
-alloy-consensus = { version = "0.14", default-features = false }
+alloy-genesis = { version = "0.15.6", default-features = false }
+alloy-consensus = { version = "0.15.6", default-features = false }
 alloy-rlp = "0.3.4"
-alloy-rpc-types = { version = "0.14", features = [
+alloy-rpc-types = { version = "0.15.6", features = [
     "eth",
 ], default-features = false }
-alloy-signer = { version = "0.14", default-features = false }
-alloy-signer-local = { version = "0.14", default-features = false }
+alloy-signer = { version = "0.15.6", default-features = false }
+alloy-signer-local = { version = "0.15.6", default-features = false }
 
 alloy-primitives = { version = "1.0", default-features = false }
 alloy-sol-types  = { version = "1.0", features = ["json"] }

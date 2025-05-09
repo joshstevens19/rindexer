@@ -1,8 +1,8 @@
 // Module for integrating Reth with ExEx into rindexer
 use std::{collections::HashMap, iter::StepBy, ops::RangeInclusive, sync::Arc};
 
-use alloy_primitives::{FixedBytes, Log};
-use alloy_rpc_types::Filter;
+use alloy_primitives::FixedBytes;
+use alloy_rpc_types::{Filter, Log};
 use tokio::sync::{mpsc, oneshot};
 
 /// The response to an ExExRequest
@@ -47,7 +47,6 @@ pub struct LogMetadata {
 /// The data that is being returned
 pub struct ExExReturnData {
     pub log: Log,
-    pub metadata: LogMetadata,
 }
 
 #[derive(Clone)]
