@@ -171,12 +171,12 @@ pub struct AddressDetails {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FactoryDetails {
+    pub name: String,
+
     pub address: String,
 
-    #[serde(rename = "eventName")]
     pub event_name: String,
 
-    #[serde(rename = "parameterName")]
     pub parameter_name: String,
 
     pub abi: String,

@@ -35,13 +35,11 @@ pub fn fetch_logs_stream(
 {
     let (tx, rx) = mpsc::unbounded_channel();
 
-    let initial_filter = config.to_event_filter().unwrap();
-    let contract_address = initial_filter.contract_address();
-
     tokio::spawn(async move {
-        let snapshot_to_block = initial_filter.get_to_block();
-        let from_block = initial_filter.get_from_block();
-        let mut current_filter = initial_filter;
+        let mut current_filter = config.to_event_filter().unwrap();
+
+        let snapshot_to_block = current_filter.get_to_block();
+        let from_block = current_filter.get_from_block();
 
         // add any max block range limitation before we start processing
         let mut max_block_range_limitation =
@@ -119,7 +117,6 @@ pub fn fetch_logs_stream(
                 &config.network_contract.cached_provider,
                 &tx,
                 snapshot_to_block,
-                &contract_address,
                 &config.topic_id,
                 &config.indexing_distance_from_head,
                 current_filter,
@@ -343,7 +340,6 @@ async fn live_indexing_stream(
     cached_provider: &Arc<JsonRpcCachedProvider>,
     tx: &mpsc::UnboundedSender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
     last_seen_block_number: U64,
-    contract_address: &Option<ValueOrArray<Address>>,
     topic_id: &B256,
     reorg_safe_distance: &U64,
     mut current_filter: RindexerEventFilter,
@@ -404,10 +400,12 @@ async fn live_indexing_stream(
                                 safe_block_number
                             );
                         } else {
+                            let contract_address = current_filter.contract_address().await;
+
                             let to_block = safe_block_number;
                             if from_block == to_block &&
                                 !disable_logs_bloom_checks &&
-                                !is_relevant_block(contract_address, topic_id, &latest_block)
+                                !is_relevant_block(&contract_address, topic_id, &latest_block)
                             {
                                 debug!(
                                     "{} - {} - Skipping block {} as it's not relevant",

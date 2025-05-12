@@ -17,6 +17,7 @@ use crate::{
     manifest::{chat::ChatConfig, stream::StreamsConfig},
     types::single_or_array::StringOrArray,
 };
+use crate::event::contract_setup::FactoryDetails;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EventInputIndexedFilters {
@@ -53,11 +54,24 @@ pub struct FilterDetailsYaml {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FactoryDetailsYaml {
+    pub name: String,
+
+    pub address: String,
+
+    pub event_name: String,
+
+    pub parameter_name: String,
+
+    pub abi: String
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ContractDetails {
     pub network: String,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    address: Option<ValueOrArray<Address>>,
+    pub address: Option<ValueOrArray<Address>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filter: Option<ValueOrArray<FilterDetailsYaml>>,
@@ -65,8 +79,9 @@ pub struct ContractDetails {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub indexed_filters: Option<Vec<EventInputIndexedFilters>>,
 
-    // #[serde(default, skip_serializing_if = "Option::is_none")]
-    // factory: Option<FactoryDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub factory: Option<FactoryDetailsYaml>,
+
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -91,8 +106,14 @@ impl ContractDetails {
                 address: address.clone(),
                 indexed_filters: self.indexed_filters.clone(),
             })
-            // } else if let Some(factory) = &self.factory {
-            //     IndexingContractSetup::Factory(factory.clone())
+        } else if let Some(factory) = &self.factory {
+                IndexingContractSetup::Factory(FactoryDetails {
+                    name: factory.name.clone(),
+                    address: factory.address.clone(),
+                    event_name: factory.event_name.clone(),
+                    parameter_name: factory.parameter_name.clone(),
+                    abi: factory.abi.clone(),
+                })
         } else if let Some(filter) = &self.filter {
             return match filter {
                 ValueOrArray::Value(filter) => IndexingContractSetup::Filter(FilterDetails {
@@ -133,7 +154,7 @@ impl ContractDetails {
             address: Some(address),
             filter: None,
             indexed_filters,
-            //factory: None,
+            factory: None,
             start_block,
             end_block,
         }
@@ -222,6 +243,37 @@ pub struct Contract {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat: Option<ChatConfig>,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FactoryContract {
+    pub name: String,
+
+    pub details: Vec<ContractDetails>,
+
+    pub abi: StringOrArray,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_events: Option<Vec<String>>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index_event_in_order: Option<Vec<String>>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependency_events: Option<DependencyEventTreeYaml>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reorg_safe_distance: Option<bool>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generate_csv: Option<bool>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub streams: Option<StreamsConfig>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat: Option<ChatConfig>,
+}
+
 
 #[derive(thiserror::Error, Debug)]
 
@@ -315,6 +367,38 @@ impl Contract {
         }
 
         filter_count > 0
+    }
+
+    pub fn factory_contract(&self) -> Option<Contract> {
+        let factory = self
+            .details
+            .iter()
+            .filter_map(|details| details.factory.clone())
+            .collect::<Vec<_>>();
+
+        // TODO: Handle
+        // if filter_count > 0 && filter_count != self.details.len() {
+        //     // panic as this should never happen as validation has already happened
+        //     panic!("Cannot mix and match address and filter for the same contract definition.");
+        // }
+
+        let first = factory.first().cloned();
+
+        match first {
+            Some(factory) => Some(Contract {
+                name: factory.name,
+                details: vec![],
+                abi: StringOrArray::Single(factory.abi),
+                include_events: None,
+                index_event_in_order: None,
+                dependency_events: None,
+                reorg_safe_distance: None,
+                generate_csv: None,
+                streams: None,
+                chat: None,
+            }),
+            None => None
+        }
     }
 
     fn contract_name_to_filter_name(&self) -> String {

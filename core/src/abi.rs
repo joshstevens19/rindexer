@@ -218,7 +218,7 @@ impl ABIItem {
         for item in abi_json.into_iter() {
             if item.type_ == "event" {
                 let signature = item.format_event_signature()?;
-                // println!("signature {}", signature);
+
                 events.push(EventInfo::new(item, signature));
             }
         }

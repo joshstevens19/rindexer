@@ -40,13 +40,14 @@ pub struct EventProcessingConfig {
 
 impl EventProcessingConfig {
     pub fn to_event_filter(&self) -> Result<RindexerEventFilter, BuildRindexerFilterError> {
-        RindexerEventFilter::new(
-            &self.topic_id,
-            &self.event_name,
-            &self.network_contract.indexing_contract_setup,
-            self.start_block,
-            self.end_block,
-        )
+        unimplemented!()
+        // RindexerEventFilter::new(
+        //     &self.topic_id,
+        //     &self.event_name,
+        //     &self.network_contract.indexing_contract_setup,
+        //     self.start_block,
+        //     self.end_block,
+        // )
     }
 
     pub async fn trigger_event(&self, fn_data: Vec<EventResult>) {

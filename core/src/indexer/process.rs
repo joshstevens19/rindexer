@@ -334,9 +334,8 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                                 !is_relevant_block(
                                     &ordering_live_indexing_details
                                         .filter
-                                        .raw_filter()
-                                        .address
-                                        .to_value_or_array(),
+                                        .contract_address()
+                                        .await,
                                     &config.topic_id,
                                     latest_block,
                                 )

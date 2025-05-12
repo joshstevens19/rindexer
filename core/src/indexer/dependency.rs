@@ -241,6 +241,23 @@ impl ContractEventDependencies {
                     },
                 });
             }
+
+            contract.details.iter().filter_map(|d| d.factory.clone()).for_each(|factory| {
+                let dependency_event_tree = DependencyEventTree {
+                    contract_events: vec![ContractEventMapping { contract_name: factory.name, event_name: factory.event_name }],
+                    then: None,
+                };
+                let dependency_tree =
+                    EventsDependencyTree::from_dependency_event_tree(&dependency_event_tree);
+
+                dependencies.push(ContractEventDependencies {
+                    contract_name: contract.name.clone(),
+                    event_dependencies: EventDependencies {
+                        tree: Arc::new(dependency_tree),
+                        dependency_events: dependency_event_tree.collect_dependency_events(),
+                    },
+                });
+            })
         }
 
         dependencies
