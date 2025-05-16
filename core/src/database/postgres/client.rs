@@ -51,7 +51,7 @@ pub enum PostgresError {
     #[error("PgError {0}")]
     PgError(#[from] PgError),
 
-    #[error("Connection pool error: {0}")]
+    #[error("Pg Pool error: {0}")]
     ConnectionPoolError(#[from] RunError<tokio_postgres::Error>),
 }
 
