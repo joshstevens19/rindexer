@@ -53,8 +53,9 @@ pub fn fetch_logs_stream(
                 &max_block_range_limitation,
             ));
             warn!(
-                "{} - {} - max block range limitation of {} blocks applied - block range indexing will be slower then RPC providers supplying the optimal ranges - https://rindexer.xyz/docs/references/rpc-node-providers#rpc-node-providers",
+                "{}::{} - {} - max block range limitation of {} blocks applied - block range indexing will be slower then RPC providers supplying the optimal ranges - https://rindexer.xyz/docs/references/rpc-node-providers#rpc-node-providers",
                 config.info_log_name,
+                config.network_contract.network,
                 IndexingEventProgressStatus::Syncing.log(),
                 max_block_range_limitation.unwrap()
             );
@@ -81,9 +82,10 @@ pub fn fetch_logs_stream(
 
                     // slow indexing warn user
                     if let Some(range) = max_block_range_limitation {
-                        warn!(
-                            "{} - RPC PROVIDER IS SLOW - Slow indexing mode enabled, max block range limitation: {} blocks - we advise using a faster provider who can predict the next block ranges.",
+                        debug!(
+                            "{}::{} - RPC PROVIDER IS SLOW - Slow indexing mode enabled, max block range limitation: {} blocks - we advise using a faster provider who can predict the next block ranges.",
                             &config.info_log_name,
+                            &config.network_contract.network,
                             range
                         );
                     }
@@ -222,8 +224,8 @@ async fn fetch_historic_logs_stream(
 
             if logs_empty {
                 info!(
-                    "{} - No events found between blocks {} - {} - network: {}",
-                    info_log_name, from_block, to_block, network
+                    "{}::{} - No events found between blocks {} - {}",
+                    info_log_name, network, from_block, to_block
                 );
                 let next_from_block = to_block + U64::from(1);
                 return if next_from_block > snapshot_to_block {
@@ -484,13 +486,13 @@ async fn live_indexing_stream(
                                             if logs_empty {
                                                 current_filter = current_filter
                                                     .set_from_block(to_block + U64::from(1));
-                                                info!(
-                                                    "{} - {} - No events found between blocks {} - {} - network: {}",
+                                                debug!(
+                                                    "{}::{} - {} - No events found between blocks {} - {}",
                                                     info_log_name,
+                                                    network,
                                                     IndexingEventProgressStatus::Live.log(),
                                                     from_block,
-                                                    to_block,
-                                                    network
+                                                    to_block
                                                 );
                                             } else if let Some(last_log) = last_log {
                                                 if let Some(last_log_block_number) =

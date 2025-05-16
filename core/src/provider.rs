@@ -131,6 +131,10 @@ impl JsonRpcCachedProvider {
     pub async fn get_latest_block(&self) -> Result<Option<Arc<Block>>, ProviderError> {
         let mut cache_guard = self.cache.lock().await;
 
+        // TODO-TODO
+        //
+        // This is potentially called way too much. Consider dropping it back.
+        // Also ensure this isn't duplicated by each contract-event.
         if let Some((timestamp, block)) = &*cache_guard {
             if timestamp.elapsed() < Duration::from_millis(50) {
                 return Ok(Some(Arc::clone(block)));

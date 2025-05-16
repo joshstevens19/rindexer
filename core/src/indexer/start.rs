@@ -1,5 +1,5 @@
-use std::{path::Path, sync::Arc, time::Duration};
-use std::str::FromStr;
+use std::{path::Path, str::FromStr, sync::Arc, time::Duration};
+
 use alloy::primitives::U64;
 use futures::future::try_join_all;
 use tokio::{
