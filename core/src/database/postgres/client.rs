@@ -396,12 +396,17 @@ impl PostgresClient {
         }
 
         if postgres_bulk_data.len() > 100 {
-            let column_types: Vec<PgType> =
-                postgres_bulk_data[0].iter().map(|param| param.to_type()).collect();
+            // We want to avoid high WAL contention, overloading
+            for chunk in postgres_bulk_data.chunks(10_000) {
+                let column_types: Vec<PgType> =
+                    chunk[0].iter().map(|param| param.to_type()).collect();
 
-            self.bulk_insert_via_copy(table_name, columns, &column_types, postgres_bulk_data)
-                .await
-                .map_err(|e| e.to_string())
+                self.bulk_insert_via_copy(table_name, columns, &column_types, chunk)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+
+            Ok(())
         } else {
             self.bulk_insert(table_name, columns, postgres_bulk_data)
                 .await
