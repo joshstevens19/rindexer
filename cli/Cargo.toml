@@ -13,9 +13,9 @@ resolver = "2"
 rindexer = { path = "../core" }
 
 # external dependencies
-alloy = { version = "0.15.11", features = ["full"] }
-alloy-chains = "0.1.0"                                 # pegged to version in "foundry-block-explorers"
-foundry-block-explorers = "0.13.1"
+alloy = { version = "1.0.3", features = ["full"] }
+alloy-chains = "0.2.0"                                 # pegged to version in "foundry-block-explorers"
+foundry-block-explorers = "0.16.0"
 clap = { version = "4.4.11", features = ["derive"] }
 regex = "1.11.1"
 colored = "3.0.0"

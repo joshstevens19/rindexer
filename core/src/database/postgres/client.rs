@@ -301,22 +301,24 @@ impl PostgresClient {
             generate_event_table_columns_names_sql(column_names),
         );
 
-        // info!("Bulk insert statement: {}", stmt);
-
         let prepared_data: Vec<Vec<&(dyn ToSql + Sync)>> = data
             .iter()
             .map(|row| row.iter().map(|param| param as &(dyn ToSql + Sync)).collect())
             .collect();
-
-        // info!("Prepared data: {:?}", prepared_data);
 
         let sink = self.copy_in(&stmt).await?;
 
         let writer = BinaryCopyInWriter::new(sink, column_types);
         pin_mut!(writer);
 
+        // This can cause issues with Binary Copy command not completing and leaving hanging
+        // processes. See similar: https://github.com/sfackler/rust-postgres/issues/1109
         for row in prepared_data.iter() {
-            writer.as_mut().write(row).await?;
+            if let Err(e) = writer.as_mut().write(row).await {
+                error!("Error writing binary data {}", e);
+                writer.finish().await?;
+                return Err(e)?;
+            };
         }
 
         writer.finish().await?;
@@ -396,7 +398,6 @@ impl PostgresClient {
         }
 
         if postgres_bulk_data.len() > 100 {
-            // We want to avoid high WAL contention, overloading
             for chunk in postgres_bulk_data.chunks(10_000) {
                 let column_types: Vec<PgType> =
                     chunk[0].iter().map(|param| param.to_type()).collect();
