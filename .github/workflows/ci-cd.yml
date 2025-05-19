@@ -21,7 +21,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # Toolchain file bug workaround: https://github.com/dtolnay/rust-toolchain/issues/153
-      - run: rustup component add rustfmt && cargo fmt --all -- --check
+      - run: rustup component add clippy
+      - name: Run Fmt Check
+        run: cargo fmt --all -- --check
 
   clippy:
     name: Clippy
