@@ -504,7 +504,7 @@ async fn handle_phantom_deploy(
                 .details
                 .iter_mut()
                 .find(|c| c.network == args.network || c.network == name);
-            if contract_network.is_some() {
+            if let Some(contract_network) = contract_network {
                 let clone_meta = read_contract_clone_metadata(&deploy_in)?;
 
                 let phantom = manifest.phantom.as_ref().expect("Failed to get phantom");
@@ -562,7 +562,7 @@ async fn handle_phantom_deploy(
                 )?;
 
                 contract.abi = StringOrArray::Single(format!("./abis/{}.abi.json", name));
-                contract_network.unwrap().network = name;
+                contract_network.network = name;
 
                 write_manifest(&manifest, &rindexer_yaml_path)?;
 
