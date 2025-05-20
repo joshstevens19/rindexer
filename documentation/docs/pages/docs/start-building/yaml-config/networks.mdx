@@ -144,6 +144,53 @@ networks:
   disable_logs_bloom_checks: true // [!code focus]
 ```
 
+### reth
+
+:::warning
+This feature is intended for running rindexer alongside reth, which requires advanced knowledge of Reth and Ethereum Execution Layer Clients. Use this only if you have an archive reth node. For more information on how to run an archive reth node, visit [reth's official documentation on pruning and archive nodes](https://reth.rs/run/pruning.html#archive-node).
+:::
+
+Configure rindexer to use a local reth node for indexing. This allows you to directly connect to a reth node without going through RPC.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+  reth: // [!code focus]
+    enabled: true // [!code focus]
+    cli_config: // [!code focus]
+      data_dir: /path/to/reth/data // [!code focus]
+      authrpc_jwtsecret: /path/to/jwt.hex // [!code focus]
+      authrpc_addr: 127.0.0.1 // [!code focus]
+      authrpc_port: 8551 // [!code focus]
+      full: false // [!code focus]
+      metrics: null // [!code focus]
+      chain: mainnet // [!code focus]
+      http: true // [!code focus]
+```
+
+#### enabled
+
+Enable or disable the reth integration for this network.
+
+#### cli_config
+
+Configuration options for the reth node. This follows [Reth's cli config](https://reth.rs/cli/cli.html)
+
+- **data_dir**: Path to the reth data directory
+- **authrpc_jwtsecret**: Path to the JWT secret file for authenticated RPC
+- **authrpc_addr**: The address for the auth RPC server
+- **authrpc_port**: The port for the auth RPC server
+- **full**: Whether to run as a full node (false for archive node)
+- **metrics**: Metrics configuration (null to disable)
+- **chain**: The chain to connect to (mainnet, holesky, etc.)
+- **http**: Enable HTTP RPC server
+
 ## Multiple Networks
 
 You can have as many networks as you want in the YAML file.
