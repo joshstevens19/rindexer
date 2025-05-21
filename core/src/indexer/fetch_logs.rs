@@ -315,9 +315,9 @@ async fn fetch_historic_logs_stream(
 
             // Handle deserialization, networking, and other non-rpc related errors.
             error!(
-                "[{}] - {} - {} - Unexpected error fetching logs in range {} - {}. Retry fetching {} - {}: {:?}",
-                network,
+                "{}::{} - {} - Unexpected error fetching logs in historic range {} - {}. Retry fetching {} - {}: {:?}",
                 info_log_name,
+                network,
                 IndexingEventProgressStatus::Syncing.log(),
                 from_block,
                 to_block,
@@ -326,7 +326,11 @@ async fn fetch_historic_logs_stream(
                 err
             );
 
-            let _ = tx.send(Err(Box::new(err)));
+            // TODO: Identify why this was here. Right now this will simply cause the whole
+            //       historical indexing process to exit and kick into live, which isn't what we
+            //       want. We want to bypass and retry errors.
+            //
+            // let _ = tx.send(Err(Box::new(err)));
 
             return Some(ProcessHistoricLogsStreamResult {
                 next: current_filter.set_from_block(from_block).set_to_block(halved_to_block),
@@ -466,18 +470,17 @@ async fn live_indexing_stream(
                                             let logs_empty = logs.is_empty();
                                             let last_log = logs.last().cloned();
 
-                                            if tx
-                                                .send(Ok(FetchLogsResult {
-                                                    logs,
-                                                    from_block,
-                                                    to_block,
-                                                }))
-                                                .is_err()
-                                            {
+                                            if let Err(err) = tx.send(Ok(FetchLogsResult {
+                                                logs,
+                                                from_block,
+                                                to_block,
+                                            })) {
                                                 error!(
-                                                        "{} - {} - Failed to send logs to stream consumer!",
+                                                        "{}::{} - {} - Failed to send logs to stream consumer. Err: {}",
                                                         info_log_name,
-                                                        IndexingEventProgressStatus::Live.log()
+                                                        network,
+                                                        IndexingEventProgressStatus::Live.log(),
+                                                        err
                                                     );
                                                 drop(permit);
                                                 break;
@@ -532,9 +535,9 @@ async fn live_indexing_stream(
                                                     halved_block_number(to_block, from_block);
 
                                                 error!(
-                                                    "[{}] - {} - {} - Unexpected error fetching logs in range {} - {}. Retry fetching {} - {}: {:?}",
-                                                    network,
+                                                    "{}::{} - {} - Unexpected error fetching live logs in range {} - {}. Retry fetching {} - {}: {:?}",
                                                     info_log_name,
+                                                    network,
                                                     IndexingEventProgressStatus::Live.log(),
                                                     from_block,
                                                     to_block,
