@@ -53,9 +53,8 @@ pub fn fetch_logs_stream(
                 &max_block_range_limitation,
             ));
             warn!(
-                "{}::{} - {} - max block range limitation of {} blocks applied - block range indexing will be slower then RPC providers supplying the optimal ranges - https://rindexer.xyz/docs/references/rpc-node-providers#rpc-node-providers",
+                "{} - {} - max block range limitation of {} blocks applied - block range indexing will be slower then RPC providers supplying the optimal ranges - https://rindexer.xyz/docs/references/rpc-node-providers#rpc-node-providers",
                 config.info_log_name,
-                config.network_contract.network,
                 IndexingEventProgressStatus::Syncing.log(),
                 max_block_range_limitation.unwrap()
             );
@@ -82,10 +81,9 @@ pub fn fetch_logs_stream(
 
                     // slow indexing warn user
                     if let Some(range) = max_block_range_limitation {
-                        debug!(
-                            "{}::{} - RPC PROVIDER IS SLOW - Slow indexing mode enabled, max block range limitation: {} blocks - we advise using a faster provider who can predict the next block ranges.",
+                        warn!(
+                            "{} - RPC PROVIDER IS SLOW - Slow indexing mode enabled, max block range limitation: {} blocks - we advise using a faster provider who can predict the next block ranges.",
                             &config.info_log_name,
-                            &config.network_contract.network,
                             range
                         );
                     }
@@ -224,8 +222,8 @@ async fn fetch_historic_logs_stream(
 
             if logs_empty {
                 info!(
-                    "{}::{} - No events found between blocks {} - {}",
-                    info_log_name, network, from_block, to_block
+                    "{} - No events found between blocks {} - {} - network: {}",
+                    info_log_name, from_block, to_block, network
                 );
                 let next_from_block = to_block + U64::from(1);
                 return if next_from_block > snapshot_to_block {
@@ -315,9 +313,9 @@ async fn fetch_historic_logs_stream(
 
             // Handle deserialization, networking, and other non-rpc related errors.
             error!(
-                "{}::{} - {} - Unexpected error fetching logs in historic range {} - {}. Retry fetching {} - {}: {:?}",
-                info_log_name,
+                "[{}] - {} - {} - Unexpected error fetching logs in range {} - {}. Retry fetching {} - {}: {:?}",
                 network,
+                info_log_name,
                 IndexingEventProgressStatus::Syncing.log(),
                 from_block,
                 to_block,
@@ -326,11 +324,7 @@ async fn fetch_historic_logs_stream(
                 err
             );
 
-            // TODO: Identify why this was here. Right now this will simply cause the whole
-            //       historical indexing process to exit and kick into live, which isn't what we
-            //       want. We want to bypass and retry errors.
-            //
-            // let _ = tx.send(Err(Box::new(err)));
+            let _ = tx.send(Err(Box::new(err)));
 
             return Some(ProcessHistoricLogsStreamResult {
                 next: current_filter.set_from_block(from_block).set_to_block(halved_to_block),
@@ -470,17 +464,18 @@ async fn live_indexing_stream(
                                             let logs_empty = logs.is_empty();
                                             let last_log = logs.last().cloned();
 
-                                            if let Err(err) = tx.send(Ok(FetchLogsResult {
-                                                logs,
-                                                from_block,
-                                                to_block,
-                                            })) {
+                                            if tx
+                                                .send(Ok(FetchLogsResult {
+                                                    logs,
+                                                    from_block,
+                                                    to_block,
+                                                }))
+                                                .is_err()
+                                            {
                                                 error!(
-                                                        "{}::{} - {} - Failed to send logs to stream consumer. Err: {}",
+                                                        "{} - {} - Failed to send logs to stream consumer!",
                                                         info_log_name,
-                                                        network,
-                                                        IndexingEventProgressStatus::Live.log(),
-                                                        err
+                                                        IndexingEventProgressStatus::Live.log()
                                                     );
                                                 drop(permit);
                                                 break;
@@ -489,13 +484,13 @@ async fn live_indexing_stream(
                                             if logs_empty {
                                                 current_filter = current_filter
                                                     .set_from_block(to_block + U64::from(1));
-                                                debug!(
-                                                    "{}::{} - {} - No events found between blocks {} - {}",
+                                                info!(
+                                                    "{} - {} - No events found between blocks {} - {} - network: {}",
                                                     info_log_name,
-                                                    network,
                                                     IndexingEventProgressStatus::Live.log(),
                                                     from_block,
-                                                    to_block
+                                                    to_block,
+                                                    network
                                                 );
                                             } else if let Some(last_log) = last_log {
                                                 if let Some(last_log_block_number) =
@@ -535,9 +530,9 @@ async fn live_indexing_stream(
                                                     halved_block_number(to_block, from_block);
 
                                                 error!(
-                                                    "{}::{} - {} - Unexpected error fetching live logs in range {} - {}. Retry fetching {} - {}: {:?}",
-                                                    info_log_name,
+                                                    "[{}] - {} - {} - Unexpected error fetching logs in range {} - {}. Retry fetching {} - {}: {:?}",
                                                     network,
+                                                    info_log_name,
                                                     IndexingEventProgressStatus::Live.log(),
                                                     from_block,
                                                     to_block,

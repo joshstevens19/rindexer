@@ -51,7 +51,7 @@ pub enum PostgresError {
     #[error("PgError {0}")]
     PgError(#[from] PgError),
 
-    #[error("Pg Pool error: {0}")]
+    #[error("Connection pool error: {0}")]
     ConnectionPoolError(#[from] RunError<tokio_postgres::Error>),
 }
 
@@ -301,24 +301,22 @@ impl PostgresClient {
             generate_event_table_columns_names_sql(column_names),
         );
 
+        // info!("Bulk insert statement: {}", stmt);
+
         let prepared_data: Vec<Vec<&(dyn ToSql + Sync)>> = data
             .iter()
             .map(|row| row.iter().map(|param| param as &(dyn ToSql + Sync)).collect())
             .collect();
+
+        // info!("Prepared data: {:?}", prepared_data);
 
         let sink = self.copy_in(&stmt).await?;
 
         let writer = BinaryCopyInWriter::new(sink, column_types);
         pin_mut!(writer);
 
-        // This can cause issues with Binary Copy command not completing and leaving hanging
-        // processes. See similar: https://github.com/sfackler/rust-postgres/issues/1109
         for row in prepared_data.iter() {
-            if let Err(e) = writer.as_mut().write(row).await {
-                error!("Error writing binary data {}", e);
-                writer.finish().await?;
-                return Err(e)?;
-            };
+            writer.as_mut().write(row).await?;
         }
 
         writer.finish().await?;
@@ -398,16 +396,12 @@ impl PostgresClient {
         }
 
         if postgres_bulk_data.len() > 100 {
-            for chunk in postgres_bulk_data.chunks(10_000) {
-                let column_types: Vec<PgType> =
-                    chunk[0].iter().map(|param| param.to_type()).collect();
+            let column_types: Vec<PgType> =
+                postgres_bulk_data[0].iter().map(|param| param.to_type()).collect();
 
-                self.bulk_insert_via_copy(table_name, columns, &column_types, chunk)
-                    .await
-                    .map_err(|e| e.to_string())?;
-            }
-
-            Ok(())
+            self.bulk_insert_via_copy(table_name, columns, &column_types, postgres_bulk_data)
+                .await
+                .map_err(|e| e.to_string())
         } else {
             self.bulk_insert(table_name, columns, postgres_bulk_data)
                 .await

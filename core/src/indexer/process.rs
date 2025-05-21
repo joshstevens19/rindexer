@@ -441,10 +441,9 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                                                             .set_from_block(
                                                                 to_block + U64::from(1),
                                                             );
-                                                    debug!(
-                                                        "{}::{} - {} - No events found between blocks {} - {}",
+                                                    info!(
+                                                        "{} - {} - No events found between blocks {} - {}",
                                                         &config.info_log_name,
-                                                        &config.network_contract.network,
                                                         IndexingEventProgressStatus::Live.log(),
                                                         from_block,
                                                         to_block
