@@ -50,6 +50,13 @@ pub struct TxInformation {
     pub transaction_index: U64,
 }
 
+/// Define a trait over any entity that has attached transaction information. This is very useful
+/// when working with on-chain generics over many event types.
+pub trait HasTxInformation {
+    /// Return the transaction information associated with an event.
+    fn tx_information(&self) -> &TxInformation;
+}
+
 #[derive(Debug, Clone)]
 pub struct LogFoundInRequest {
     pub from_block: U64,
