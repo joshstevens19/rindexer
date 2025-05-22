@@ -26,7 +26,6 @@ pub fn noop_decoder() -> Decoder {
     }) as Decoder
 }
 
-
 /// The [`CallbackResult`] enum has two core variants, a Trace and an Event. We implement shared
 /// callback logic to sink or stream these "results".
 ///
