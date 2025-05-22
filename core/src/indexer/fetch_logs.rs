@@ -260,8 +260,8 @@ async fn fetch_historic_logs_stream(
 
             if let Some(last_log) = last_log {
                 let next_from_block = U64::from(
-                    last_log.block_number.expect("block number should always be present in a log") +
-                        1,
+                    last_log.block_number.expect("block number should always be present in a log")
+                        + 1,
                 );
                 debug!(
                     "{} - {} - next_block {:?}",
@@ -409,9 +409,9 @@ async fn live_indexing_stream(
                             );
                         } else {
                             let to_block = safe_block_number;
-                            if from_block == to_block &&
-                                !disable_logs_bloom_checks &&
-                                !is_relevant_block(contract_address, topic_id, &latest_block)
+                            if from_block == to_block
+                                && !disable_logs_bloom_checks
+                                && !is_relevant_block(contract_address, topic_id, &latest_block)
                             {
                                 debug!(
                                     "{} - {} - Skipping block {} as it's not relevant",

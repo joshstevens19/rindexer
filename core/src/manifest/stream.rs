@@ -107,9 +107,9 @@ impl RabbitMQStreamConfig {
         }
 
         for config in &self.exchanges {
-            if config.exchange_type.0 != ExchangeKind::Direct &&
-                config.exchange_type.0 != ExchangeKind::Fanout &&
-                config.exchange_type.0 != ExchangeKind::Topic
+            if config.exchange_type.0 != ExchangeKind::Direct
+                && config.exchange_type.0 != ExchangeKind::Fanout
+                && config.exchange_type.0 != ExchangeKind::Topic
             {
                 return Err("Only direct, topic and fanout exchanges are supported".to_string());
             }

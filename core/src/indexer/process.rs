@@ -163,9 +163,9 @@ async fn process_contract_events_with_dependencies(
                     .iter()
                     .find(|e| {
                         // TODO - this is a hacky way to check if it's a filter event
-                        (e.contract_name == dependency.contract_name ||
-                            e.contract_name.replace("Filter", "") == dependency.contract_name) &&
-                            e.event_name == dependency.event_name
+                        (e.contract_name == dependency.contract_name
+                            || e.contract_name.replace("Filter", "") == dependency.contract_name)
+                            && e.event_name == dependency.event_name
                     })
                     .ok_or(ProcessContractEventsWithDependenciesError::EventConfigNotFound(
                         dependency.contract_name,
@@ -276,8 +276,8 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                         if let Some(latest_block_number) =
                             Some(U64::from(latest_block.header.number))
                         {
-                            if ordering_live_indexing_details.last_seen_block_number ==
-                                latest_block_number
+                            if ordering_live_indexing_details.last_seen_block_number
+                                == latest_block_number
                             {
                                 debug!(
                                     "{} - {} - No new blocks to process...",
@@ -286,8 +286,8 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                                 );
                                 if ordering_live_indexing_details
                                     .last_no_new_block_log_time
-                                    .elapsed() >=
-                                    log_no_new_block_interval
+                                    .elapsed()
+                                    >= log_no_new_block_interval
                                 {
                                     info!(
                                         "{}::{} - {} - No new blocks published in the last 5 minutes - latest block number {}",
@@ -329,9 +329,9 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                             }
 
                             let to_block = safe_block_number;
-                            if from_block == to_block &&
-                                !config.network_contract.disable_logs_bloom_checks &&
-                                !is_relevant_block(
+                            if from_block == to_block
+                                && !config.network_contract.disable_logs_bloom_checks
+                                && !is_relevant_block(
                                     &ordering_live_indexing_details
                                         .filter
                                         .raw_filter()
@@ -564,7 +564,7 @@ async fn handle_logs_result(
                         trigger_event(config, fn_data, result.to_block).await;
                     });
                     Ok(task)
-                }
+                };
             }
 
             Ok(tokio::spawn(async {})) // Return a completed task

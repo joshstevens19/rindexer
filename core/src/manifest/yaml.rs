@@ -147,17 +147,19 @@ fn validate_manifest(
                         let indexed_allowed_length =
                             event.inputs.iter().filter(|i| i.indexed.unwrap_or(false)).count();
                         let indexed_filter_defined =
-                            indexed_filter.indexed_1.as_ref().map_or(0, |_| 1) +
-                                indexed_filter.indexed_2.as_ref().map_or(0, |_| 1) +
-                                indexed_filter.indexed_3.as_ref().map_or(0, |_| 1);
+                            indexed_filter.indexed_1.as_ref().map_or(0, |_| 1)
+                                + indexed_filter.indexed_2.as_ref().map_or(0, |_| 1)
+                                + indexed_filter.indexed_3.as_ref().map_or(0, |_| 1);
 
                         if indexed_filter_defined > indexed_allowed_length {
-                            return Err(ValidateManifestError::IndexedFilterDefinedMoreThanAllowed(
-                                indexed_filter.event_name.clone(),
-                                contract.name.clone(),
-                                indexed_allowed_length,
-                                indexed_filter_defined,
-                            ));
+                            return Err(
+                                ValidateManifestError::IndexedFilterDefinedMoreThanAllowed(
+                                    indexed_filter.event_name.clone(),
+                                    contract.name.clone(),
+                                    indexed_allowed_length,
+                                    indexed_filter_defined,
+                                ),
+                            );
                         }
                     } else {
                         return Err(ValidateManifestError::IndexedFilterEventNotFoundInABI(
