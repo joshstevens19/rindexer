@@ -26,6 +26,7 @@ pub fn noop_decoder() -> Decoder {
     }) as Decoder
 }
 
+
 /// The [`CallbackResult`] enum has two core variants, a Trace and an Event. We implement shared
 /// callback logic to sink or stream these "results".
 ///
@@ -48,6 +49,13 @@ pub struct TxInformation {
     pub transaction_hash: TxHash,
     pub log_index: U256,
     pub transaction_index: U64,
+}
+
+/// Define a trait over any entity that has attached transaction information. This is very useful
+/// when working with on-chain generics over many event types.
+pub trait HasTxInformation {
+    /// Return the transaction information associated with an event.
+    fn tx_information(&self) -> &TxInformation;
 }
 
 #[derive(Debug, Clone)]
