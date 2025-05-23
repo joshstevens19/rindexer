@@ -109,15 +109,9 @@ pub async fn native_transfer_block_fetch(
         match latest_block {
             Ok(Some(latest_block)) => {
                 let block = U64::from(latest_block.header.number);
-                let safe_block_number = block - indexing_distance_from_head;
 
-                if block > safe_block_number {
-                    info!(
-                        "{} - not in safe reorg block range yet block: {} > range: {}",
-                        "NativeEvmTraces", block, safe_block_number
-                    );
-                    continue;
-                }
+                // Always trim back to the safe indexing threshold (which is zero if disabled)
+                let block = block - indexing_distance_from_head;
 
                 if block > last_seen_block {
                     let to_block = end_block.map(|end| block.min(end)).unwrap_or(block);
