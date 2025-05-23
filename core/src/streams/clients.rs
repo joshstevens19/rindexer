@@ -146,11 +146,11 @@ impl StreamsClients {
     }
 
     fn has_any_streams(&self) -> bool {
-        self.sns.is_some() ||
-            self.webhook.is_some() ||
-            self.rabbitmq.is_some() ||
-            self.kafka.is_some() ||
-            self.redis.is_some()
+        self.sns.is_some()
+            || self.webhook.is_some()
+            || self.rabbitmq.is_some()
+            || self.kafka.is_some()
+            || self.redis.is_some()
     }
 
     fn chunk_data(&self, data_array: &Vec<Value>) -> Vec<Vec<Value>> {
@@ -471,8 +471,8 @@ impl StreamsClients {
                     let is_user_event =
                         config.events.iter().any(|e| e.event_name == event_message.event_name);
 
-                    if (is_user_event || is_trace_event) &&
-                        config.networks.contains(&event_message.network)
+                    if (is_user_event || is_trace_event)
+                        && config.networks.contains(&event_message.network)
                     {
                         streams.push(self.sns_stream_tasks(
                             config,
@@ -487,8 +487,8 @@ impl StreamsClients {
 
             if let Some(webhook) = &self.webhook {
                 for config in &webhook.config {
-                    if config.events.iter().any(|e| e.event_name == event_message.event_name) &&
-                        config.networks.contains(&event_message.network)
+                    if config.events.iter().any(|e| e.event_name == event_message.event_name)
+                        && config.networks.contains(&event_message.network)
                     {
                         streams.push(self.webhook_stream_tasks(
                             config,
@@ -503,8 +503,8 @@ impl StreamsClients {
 
             if let Some(rabbitmq) = &self.rabbitmq {
                 for config in &rabbitmq.config.exchanges {
-                    if config.events.iter().any(|e| e.event_name == event_message.event_name) &&
-                        config.networks.contains(&event_message.network)
+                    if config.events.iter().any(|e| e.event_name == event_message.event_name)
+                        && config.networks.contains(&event_message.network)
                     {
                         streams.push(self.rabbitmq_stream_tasks(
                             config,
@@ -519,8 +519,8 @@ impl StreamsClients {
 
             if let Some(kafka) = &self.kafka {
                 for config in &kafka.config.topics {
-                    if config.events.iter().any(|e| e.event_name == event_message.event_name) &&
-                        config.networks.contains(&event_message.network)
+                    if config.events.iter().any(|e| e.event_name == event_message.event_name)
+                        && config.networks.contains(&event_message.network)
                     {
                         streams.push(self.kafka_stream_tasks(
                             config,
@@ -535,8 +535,8 @@ impl StreamsClients {
 
             if let Some(redis) = &self.redis {
                 for config in &redis.config.streams {
-                    if config.events.iter().any(|e| e.event_name == event_message.event_name) &&
-                        config.networks.contains(&event_message.network)
+                    if config.events.iter().any(|e| e.event_name == event_message.event_name)
+                        && config.networks.contains(&event_message.network)
                     {
                         streams.push(self.redis_stream_tasks(
                             config,
