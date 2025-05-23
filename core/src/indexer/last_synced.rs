@@ -104,7 +104,7 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
             } else {
                 error!("Error fetching last synced block from CSV");
                 None
-            }
+            };
         }
     }
 
@@ -140,7 +140,7 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
         } else {
             error!("Error fetching last synced block from stream");
             None
-        }
+        };
     }
 
     // Query database for last synced block

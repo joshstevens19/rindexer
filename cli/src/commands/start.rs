@@ -68,7 +68,7 @@ fn check_docker_compose_status(project_path: &PathBuf, max_retries: u32) -> Resu
                     let error = "DATABASE_URL not set.".to_string();
                     rindexer_error!(error);
                     Err(error)
-                }
+                };
             }
         } else {
             let error = format!("docker compose ps exited with status: {}", ps_status.status);
@@ -131,7 +131,7 @@ pub async fn start(
             let docker_compose_path = project_path.join("docker-compose.yml");
             if !docker_compose_path.exists() {
                 return Err(
-                    "The DATABASE_URL mapped is not running please make sure it is correct".into()
+                    "The DATABASE_URL mapped is not running please make sure it is correct".into(),
                 );
             }
 

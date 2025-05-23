@@ -15,11 +15,11 @@ fn get_nested_value(data: &Value, path: &str) -> Option<Value> {
 
 #[allow(clippy::manual_strip)]
 fn evaluate_condition(value: &Value, condition: &str) -> bool {
-    if condition.contains("||") ||
-        condition.contains("&&") ||
-        condition.contains('>') ||
-        condition.contains('<') ||
-        condition.contains('=')
+    if condition.contains("||")
+        || condition.contains("&&")
+        || condition.contains('>')
+        || condition.contains('<')
+        || condition.contains('=')
     {
         let parts: Vec<&str> = condition.split("||").collect();
         for part in parts {
@@ -42,20 +42,20 @@ fn evaluate_condition(value: &Value, condition: &str) -> bool {
 
                 and_result &= match op {
                     ">=" => {
-                        U64::from_str_radix(value.as_str().unwrap_or("0"), 10).unwrap_or_default() >=
-                            U64::from_str_radix(comp, 10).unwrap_or_default()
+                        U64::from_str_radix(value.as_str().unwrap_or("0"), 10).unwrap_or_default()
+                            >= U64::from_str_radix(comp, 10).unwrap_or_default()
                     }
                     "<=" => {
-                        U64::from_str_radix(value.as_str().unwrap_or("0"), 10).unwrap_or_default() <=
-                            U64::from_str_radix(comp, 10).unwrap_or_default()
+                        U64::from_str_radix(value.as_str().unwrap_or("0"), 10).unwrap_or_default()
+                            <= U64::from_str_radix(comp, 10).unwrap_or_default()
                     }
                     ">" => {
-                        U64::from_str_radix(value.as_str().unwrap_or("0"), 10).unwrap_or_default() >
-                            U64::from_str_radix(comp, 10).unwrap_or_default()
+                        U64::from_str_radix(value.as_str().unwrap_or("0"), 10).unwrap_or_default()
+                            > U64::from_str_radix(comp, 10).unwrap_or_default()
                     }
                     "<" => {
-                        U64::from_str_radix(value.as_str().unwrap_or("0"), 10).unwrap_or_default() <
-                            U64::from_str_radix(comp, 10).unwrap_or_default()
+                        U64::from_str_radix(value.as_str().unwrap_or("0"), 10).unwrap_or_default()
+                            < U64::from_str_radix(comp, 10).unwrap_or_default()
                     }
                     "=" => value == &Value::String(comp.to_string()),
                     "" => value == &Value::String(subpart.to_string()),

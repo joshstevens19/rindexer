@@ -6,8 +6,16 @@
 ### Features
 -------------------------------------------------
 
+- Alter full toolchain to stable, drop some nightly rustfmt options and re-run fmt.
+- Improve logging experience by including more `errors` and `network` info where possible.
+- Add a currently undocumented `CONTRACT_PERMITS` env var to control manually the concurrency via an env var.
+- Add `HasTxInformation` trait to allow working with generics over Network Contract Events.
+
 ### Bug fixes
 -------------------------------------------------
+
+- Fix a bug with broken binary copy in the Postgres client. `finish` should be called manually on a bad write.
+- Fix bug with breaking out of historical indexing on log fetch error.
 
 ### Breaking changes
 -------------------------------------------------

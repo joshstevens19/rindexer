@@ -209,8 +209,8 @@ pub async fn native_transfer_block_consumer(
 
             let no_input = action.input == Bytes::new();
             let has_value = !action.value.is_zero();
-            let is_zksync_system_transfer = zksync_system_contracts.contains(&action.from) ||
-                zksync_system_contracts.contains(&action.to);
+            let is_zksync_system_transfer = zksync_system_contracts.contains(&action.from)
+                || zksync_system_contracts.contains(&action.to);
 
             let is_native_transfer = has_value && no_input && !is_zksync_system_transfer;
 
