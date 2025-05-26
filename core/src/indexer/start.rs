@@ -190,7 +190,7 @@ pub async fn start_indexing_traces(
                 network: &network.network,
             };
 
-            let (block_tx, mut block_rx) = tokio::sync::mpsc::channel(8192);
+            let (block_tx, mut block_rx) = tokio::sync::mpsc::channel(2048);
             let network_name = network.network.clone();
             let (start_block, end_block, indexing_distance_from_head) = get_start_end_block(
                 network.cached_provider.clone(),
@@ -442,8 +442,7 @@ pub async fn start_indexing(
     let mut non_blocking_process_events = Vec::new();
 
     // Start the sub-indexers concurrently to ensure fast startup times
-    let (trace_indexer_handles, contract_events_indexer) = join!(
-        start_indexing_traces(manifest, project_path, database.clone(), trace_registry.clone()),
+    let (contract_events_indexer,trace_indexer_handles) = join!(
         start_indexing_contract_events(
             manifest,
             project_path,
@@ -451,7 +450,8 @@ pub async fn start_indexing(
             registry.clone(),
             dependencies,
             no_live_indexing_forced,
-        )
+        ),
+        start_indexing_traces(manifest, project_path, database.clone(), trace_registry.clone()),
     );
 
     let (
