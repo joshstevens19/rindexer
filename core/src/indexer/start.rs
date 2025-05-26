@@ -271,6 +271,9 @@ pub async fn start_indexing_traces(
                             &buffer.last().map(|n| n.as_limbs()[0]).unwrap_or_else(|| 0),
                             e.to_string().chars().take(2000).collect::<String>(),
                         );
+
+                        sleep(Duration::from_secs(1)).await;
+
                         continue;
                     } else {
                         buffer.clear();
@@ -442,7 +445,8 @@ pub async fn start_indexing(
     let mut non_blocking_process_events = Vec::new();
 
     // Start the sub-indexers concurrently to ensure fast startup times
-    let (contract_events_indexer,trace_indexer_handles) = join!(
+    let (trace_indexer_handles, contract_events_indexer) = join!(
+        start_indexing_traces(manifest, project_path, database.clone(), trace_registry.clone()),
         start_indexing_contract_events(
             manifest,
             project_path,
@@ -451,7 +455,6 @@ pub async fn start_indexing(
             dependencies,
             no_live_indexing_forced,
         ),
-        start_indexing_traces(manifest, project_path, database.clone(), trace_registry.clone()),
     );
 
     let (
