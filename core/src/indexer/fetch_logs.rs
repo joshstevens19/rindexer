@@ -596,7 +596,10 @@ fn retry_with_block_range(
     let error = match error {
         ProviderError::RequestFailed(RpcError::ErrorResp(json_rpc_err)) => json_rpc_err,
         // Break early if not a Server JSON-RPC Error.
-        _ => return None,
+        _ => {
+            warn!("Unexpected error kind fetching block range.");
+            return None;
+        }
     };
 
     let error_message = &error.message;
