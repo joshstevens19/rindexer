@@ -78,6 +78,11 @@ async fn push_range(block_tx: &mpsc::Sender<U64>, last: U64, latest: U64) {
 
     while let Some(block) = range.pop_front() {
         if let Err(e) = block_tx.send(U64::from(block)).await {
+            if block_tx.is_closed() {
+                error!("Failed to send block via channel. Channel closed: {}", e.to_string());
+                break;
+            }
+
             error!("Failed to send block via channel. Re-queuing: {}", e.to_string());
             range.push_front(block);
         }
