@@ -600,7 +600,7 @@ fn retry_with_block_range(
         let error_message = error.message.to_string();
         let error_data_binding = error.data.as_ref().map(|data| data.to_string());
         let empty_string = String::from("");
-        let error_data = error_data_binding.unwrap_or_else(|| empty_string);
+        let error_data = error_data_binding.unwrap_or(empty_string);
 
         (error_message, error_data)
     } else {
