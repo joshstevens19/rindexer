@@ -29,6 +29,7 @@ use alloy::{
         RpcError, TransportErrorKind,
     },
 };
+use alloy_chains::Chain;
 use futures::future::try_join_all;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -55,6 +56,7 @@ pub struct JsonRpcCachedProvider {
     is_zk_chain: bool,
     #[allow(unused)]
     chain_id: u64,
+    chain: Chain,
     pub max_block_range: Option<U64>,
 }
 
@@ -113,6 +115,7 @@ impl JsonRpcCachedProvider {
         chain_id: u64,
         max_block_range: Option<U64>,
     ) -> Self {
+        let chain = Chain::from(chain_id);
         let response: Result<String, _> = provider.raw_request("zks_L1ChainId".into(), [&()]).await;
         let is_zk_chain = response.is_ok();
 
@@ -124,6 +127,7 @@ impl JsonRpcCachedProvider {
             provider: Arc::new(provider),
             cache: Mutex::new(None),
             max_block_range,
+            chain,
             chain_id,
             is_zk_chain,
         }
@@ -131,13 +135,17 @@ impl JsonRpcCachedProvider {
 
     pub async fn get_latest_block(&self) -> Result<Option<Arc<Block>>, ProviderError> {
         let mut cache_guard = self.cache.lock().await;
+        let block_time =
+            self.chain.average_blocktime_hint().unwrap_or_else(|| Duration::from_millis(1000));
+        let cache_time = block_time / 2;
 
-        // TODO-TODO
+        // Fetches the latest block only if it is likely that a new block has been produced for
+        // this specific network. Consider this to be equal to half the block-time.
         //
-        // This is potentially called way too much. Consider dropping it back.
-        // Also ensure this isn't duplicated by each contract-event.
+        // If we want to reduce RPC calls further at the cost of we could consider indexing delay we
+        // could set this to block-time directly.
         if let Some((timestamp, block)) = &*cache_guard {
-            if timestamp.elapsed() < Duration::from_millis(50) {
+            if timestamp.elapsed() < cache_time {
                 return Ok(Some(Arc::clone(block)));
             }
         }
