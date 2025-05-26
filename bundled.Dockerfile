@@ -4,7 +4,7 @@ RUN apt update && apt install -y libssl-dev pkg-config build-essential
 
 WORKDIR /app
 COPY . .
-RUN RUSTFLAGS='-C target-cpu=native' cargo build --release --features jemalloc
+RUN RUSTFLAGS='-C target-cpu=x86-64-v2' cargo build --release --features jemalloc
 
 FROM --platform=linux/amd64 node:lts-bookworm as node-builder
 RUN apt update && apt install -y ca-certificates

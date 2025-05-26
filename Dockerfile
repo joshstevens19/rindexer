@@ -4,7 +4,7 @@ RUN mkdir /app
 WORKDIR /app
 COPY . .
 RUN rustup target add x86_64-unknown-linux-musl
-RUN RUSTFLAGS='-C target-cpu=native' cargo build --release --target x86_64-unknown-linux-musl --features jemalloc
+RUN RUSTFLAGS='-C target-cpu=x86-64-v2' cargo build --release --target x86_64-unknown-linux-musl --features jemalloc
 
 FROM --platform=linux/amd64 scratch
 COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/rindexer_cli /app/rindexer
