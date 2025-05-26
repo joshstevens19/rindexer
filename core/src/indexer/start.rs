@@ -237,7 +237,8 @@ pub async fn start_indexing_traces(
                 // TODO: It would be nice to make the concurrent requests dynamic based on provider
                 // speeds and limits. For now we can just increase slowly on success, and reduce
                 // concurrency on failure.
-                let mut max_concurrent_requests: usize = 100;
+                let initial_concurrent_requests = 10;
+                let mut max_concurrent_requests: usize = initial_concurrent_requests;
                 let mut buffer: Vec<U64> = Vec::with_capacity(max_concurrent_requests);
 
                 loop {
@@ -260,8 +261,8 @@ pub async fn start_indexing_traces(
                     // to worry about double-publish because the failure point
                     // is on the provider call itself, which is before publish.
                     if let Err(e) = processed_block {
-                        // On error, reset to original or half the search space.
-                        max_concurrent_requests = std::cmp::max(100, max_concurrent_requests / 2);
+                        // On error, half the search space.
+                        max_concurrent_requests = std::cmp::max(1, max_concurrent_requests / 2);
 
                         warn!(
                             "Could not process '{}' block traces. Likely too early for {}..{}, Retrying: {}",
