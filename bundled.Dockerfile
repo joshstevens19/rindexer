@@ -1,10 +1,10 @@
-FROM --platform=linux/amd64 rust:1.79-slim-bookworm as builder
+FROM --platform=linux/amd64 clux/muslrust:1.87.0-stable-2025-05-18 as builder
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
-RUN apt update && apt install -y libssl-dev pkg-config build-essential
 
 WORKDIR /app
 COPY . .
-RUN RUSTFLAGS='-C target-cpu=x86-64-v2' cargo build --release --features jemalloc
+RUN rustup target add x86_64-unknown-linux-musl
+RUN RUSTFLAGS='-C target-cpu=x86-64-v2' cargo build --release --target x86_64-unknown-linux-musl --features jemalloc
 
 FROM --platform=linux/amd64 node:lts-bookworm as node-builder
 RUN apt update && apt install -y ca-certificates
@@ -23,6 +23,7 @@ RUN curl -L https://foundry.paradigm.xyz | bash
 RUN /root/.foundry/bin/foundryup
 
 COPY --from=node-builder /app/core/resources/rindexer-graphql-linux /app/resources/rindexer-graphql-linux
-COPY --from=builder /app/target/release/rindexer_cli /app/rindexer
+COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/rindexer_cli /app/rindexer
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 ENTRYPOINT ["/app/rindexer"]
