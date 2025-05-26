@@ -1,6 +1,6 @@
-FROM --platform=linux/amd64 clux/muslrust:stable as builder
+FROM --platform=linux/amd64 clux/muslrust:1.87.0-stable-2025-05-18 as builder
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
-RUN mkdir /app
+
 WORKDIR /app
 COPY . .
 RUN rustup target add x86_64-unknown-linux-musl
