@@ -6,6 +6,29 @@
 ### Features
 -------------------------------------------------
 
+### Bug fixes
+-------------------------------------------------
+
+### Breaking changes
+-------------------------------------------------
+
+## Releases
+-------------------------------------------------
+
+all release branches are deployed through `release/VERSION_NUMBER` branches
+
+## 0.17.0-beta - 26th May 2025
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.17.0
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.17.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.17.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.17.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.17.0/rindexer_win32-amd64.zip
+
+### Features
+-------------------------------------------------
+
 - Alter full toolchain to stable, drop some nightly rustfmt options and re-run fmt.
 - Improve logging experience by including more `errors` and `network` info where possible.
 - Add a currently undocumented `CONTRACT_PERMITS` env var to control manually the concurrency via an env var.
@@ -18,14 +41,6 @@
 - Fix bug with breaking out of historical indexing on log fetch error.
 - Fix native transfer indexing bug by adjusting the reorg safe condition to be correct
 - Fix `fetch_logs` block range parsing to include fallback string if no Err variant found (fixes Lens indexing)
-
-### Breaking changes
--------------------------------------------------
-
-## Releases
--------------------------------------------------
-
-all release branches are deployed through `release/VERSION_NUMBER` branches
 
 ## 0.16.1-beta - 20th May 2025
 
