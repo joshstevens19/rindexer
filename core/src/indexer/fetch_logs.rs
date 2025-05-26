@@ -1,9 +1,16 @@
 use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
 
+use crate::{
+    event::{config::EventProcessingConfig, RindexerEventFilter},
+    indexer::{
+        log_helpers::{halved_block_number, is_relevant_block},
+        IndexingEventProgressStatus,
+    },
+    provider::{JsonRpcCachedProvider, ProviderError},
+};
 use alloy::{
     primitives::{Address, BlockNumber, B256, U64},
     rpc::types::{Log, ValueOrArray},
-    transports::RpcError,
 };
 use rand::random_ratio;
 use regex::Regex;
@@ -13,15 +20,6 @@ use tokio::{
 };
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, error, info, warn};
-
-use crate::{
-    event::{config::EventProcessingConfig, RindexerEventFilter},
-    indexer::{
-        log_helpers::{halved_block_number, is_relevant_block},
-        IndexingEventProgressStatus,
-    },
-    provider::{JsonRpcCachedProvider, ProviderError},
-};
 
 pub struct FetchLogsResult {
     pub logs: Vec<Log>,
@@ -593,19 +591,22 @@ fn retry_with_block_range(
     from_block: U64,
     to_block: U64,
 ) -> Option<RetryWithBlockRangeResult> {
-    let error = match error {
-        ProviderError::RequestFailed(RpcError::ErrorResp(json_rpc_err)) => json_rpc_err,
-        // Break early if not a Server JSON-RPC Error.
-        _ => return None,
+    let error_struct = match error {
+        ProviderError::RequestFailed(json_rpc_err) => json_rpc_err.as_error_resp(),
+        _ => None,
     };
 
-    let error_message = &error.message;
-    // some providers put the data in the data field
-    let error_data_binding = error.data.as_ref().map(|data| data.to_string());
-    let empty_string = String::from("");
-    let error_data = match &error_data_binding {
-        Some(data) => data,
-        None => &empty_string,
+    let (error_message, error_data) = if let Some(error) = error_struct {
+        let error_message = error.message.to_string();
+        let error_data_binding = error.data.as_ref().map(|data| data.to_string());
+        let empty_string = String::from("");
+        let error_data = error_data_binding.unwrap_or(empty_string);
+
+        (error_message, error_data)
+    } else {
+        let str_err = error.to_string();
+        debug!("Failed to parse structured error, trying with raw string: {}", &str_err);
+        (str_err, "".to_string())
     };
 
     fn compile_regex(pattern: &str) -> Result<Regex, regex::Error> {
@@ -618,7 +619,7 @@ fn retry_with_block_range(
     if let Ok(re) =
         compile_regex(r"this block range should work: \[(0x[0-9a-fA-F]+),\s*(0x[0-9a-fA-F]+)]")
     {
-        if let Some(captures) = re.captures(error_message).or_else(|| re.captures(error_data)) {
+        if let Some(captures) = re.captures(&error_message).or_else(|| re.captures(&error_data)) {
             if let (Some(start_block), Some(end_block)) = (captures.get(1), captures.get(2)) {
                 let start_block_str = start_block.as_str();
                 let end_block_str = end_block.as_str();
@@ -652,10 +653,7 @@ fn retry_with_block_range(
     if let Ok(re) =
         compile_regex(r"Try with this block range \[0x([0-9a-fA-F]+),\s*0x([0-9a-fA-F]+)\]")
     {
-        if let Some(captures) = re.captures(error_message).or_else(|| {
-            let blah = re.captures(error_data);
-            blah
-        }) {
+        if let Some(captures) = re.captures(&error_message).or_else(|| re.captures(&error_data)) {
             if let (Some(start_block), Some(end_block)) = (captures.get(1), captures.get(2)) {
                 let start_block_str = format!("0x{}", start_block.as_str());
                 let end_block_str = format!("0x{}", end_block.as_str());
@@ -673,7 +671,7 @@ fn retry_with_block_range(
     }
 
     // Ankr
-    if error_message.contains("block range is too wide") && error.code == -32600 {
+    if error_message.contains("block range is too wide") {
         return Some(RetryWithBlockRangeResult {
             from: from_block,
             to: from_block + U64::from(3000),
@@ -683,7 +681,7 @@ fn retry_with_block_range(
 
     // QuickNode, 1RPC, zkEVM, Blast, BlockPI
     if let Ok(re) = compile_regex(r"limited to a ([\d,.]+)") {
-        if let Some(captures) = re.captures(error_message).or_else(|| re.captures(error_data)) {
+        if let Some(captures) = re.captures(&error_message).or_else(|| re.captures(&error_data)) {
             if let Some(range_str_match) = captures.get(1) {
                 let range_str = range_str_match.as_str().replace(&['.', ','][..], "");
                 if let Ok(range) = U64::from_str(&range_str) {
