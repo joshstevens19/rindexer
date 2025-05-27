@@ -1,6 +1,7 @@
 use std::{path::Path, str::FromStr, sync::Arc, time::Duration};
 
 use alloy::primitives::U64;
+use alloy::transports::{RpcError, TransportErrorKind};
 use futures::future::try_join_all;
 use tokio::{
     join,
@@ -177,6 +178,8 @@ pub async fn start_indexing_traces(
             .find(|c| c.name == event.contract_name)
             .and_then(|c| c.streams.as_ref());
 
+        let networks_count = event.trace_information.details.len();
+
         for network in event.trace_information.details.iter() {
             let sync_config = SyncConfig {
                 project_path,
@@ -234,10 +237,9 @@ pub async fn start_indexing_traces(
             let provider = network.cached_provider.clone();
             let config = config.clone();
             let native_transfer_consumer_handle = tokio::spawn(async move {
-                // TODO: It would be nice to make the concurrent requests dynamic based on provider
-                // speeds and limits. For now we can just increase slowly on success, and reduce
-                // concurrency on failure.
-                let initial_concurrent_requests = 10;
+                let initial_concurrent_requests = 1;
+                let limit_concurrent_requests = 200 / networks_count;
+
                 let mut max_concurrent_requests: usize = initial_concurrent_requests;
                 let mut buffer: Vec<U64> = Vec::with_capacity(max_concurrent_requests);
 
@@ -258,26 +260,50 @@ pub async fn start_indexing_traces(
                     .await;
 
                     // If this has an error we need to not and reconsume the blocks. We don't have
-                    // to worry about double-publish because the failure point
-                    // is on the provider call itself, which is before publish.
+                    // to worry about double-publish because the failure point is on the provider
+                    // call itself, which is before publish.
                     if let Err(e) = processed_block {
-                        // On error, half the search space.
+                        // On error, half the block query range. We want a slow increase in
+                        // concurrency and an aggressive backoff.
                         max_concurrent_requests = std::cmp::max(1, max_concurrent_requests / 2);
 
-                        warn!(
-                            "Could not process '{}' block traces. Likely too early for {}..{}, Retrying: {}",
-                            network_name,
-                            &buffer.first().map(|n| n.as_limbs()[0]).unwrap_or_else(|| 0),
-                            &buffer.last().map(|n| n.as_limbs()[0]).unwrap_or_else(|| 0),
-                            e.to_string().chars().take(2000).collect::<String>(),
+                        let is_rate_limit_error = matches!(&e, ProcessEventError::ProviderCallError(
+                            ProviderError::RequestFailed(
+                                RpcError::Transport(
+                                    TransportErrorKind::HttpError(http_err)
+                                )
+                            )) if http_err.status == 429
                         );
+
+                        if is_rate_limit_error {
+                            error!(
+                                "Rate-limited 429 '{}' block traces. Retrying: {}",
+                                network_name,
+                                e.to_string(),
+                            );
+                        } else {
+                            warn!(
+                                "Could not process '{}' block traces. Likely too early for {}..{}, Retrying: {}",
+                                network_name,
+                                &buffer.first().map(|n| n.as_limbs()[0]).unwrap_or_else(|| 0),
+                                &buffer.last().map(|n| n.as_limbs()[0]).unwrap_or_else(|| 0),
+                                e.to_string(),
+                            );
+                        }
 
                         sleep(Duration::from_secs(1)).await;
 
                         continue;
                     } else {
                         buffer.clear();
-                        max_concurrent_requests = (max_concurrent_requests as f64 * 1.25) as usize;
+
+                        // A random chance of increasing the request count helps us not overload
+                        // the ratelimit too rapidly across multi-network trace indexing and have a
+                        // slow ramp-up time.
+                        if rand::random_bool(0.05) {
+                            max_concurrent_requests =
+                                (max_concurrent_requests + 1).min(limit_concurrent_requests);
+                        }
                     };
                 }
             });
