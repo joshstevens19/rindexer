@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::{path::Path, str::FromStr, sync::Arc, time::Duration};
 
 use alloy::primitives::U64;
@@ -146,7 +147,7 @@ async fn get_start_end_block(
         last_known_start_block.unwrap_or(manifest_start_block.unwrap_or(latest_block));
     let end_block = std::cmp::min(manifest_end_block.unwrap_or(latest_block), latest_block);
 
-    info!("[{}] {} Starting block number - {}", network, event_name, start_block);
+    info!("{}::{} Starting block number - {}", event_name, network, start_block);
 
     if let Some(end_block) = manifest_end_block {
         if end_block > latest_block {
@@ -167,6 +168,11 @@ pub async fn start_indexing_traces(
     database: Option<Arc<PostgresClient>>,
     trace_registry: Arc<TraceCallbackRegistry>,
 ) -> Result<Vec<JoinHandle<Result<(), ProcessEventError>>>, StartIndexingError> {
+    if !manifest.native_transfers.enabled {
+        info!("Native transfer indexing disabled!");
+        return Ok(vec![]);
+    }
+
     let mut non_blocking_process_events = Vec::new();
     let trace_progress_state =
         IndexingEventsProgressState::monitor_traces(&trace_registry.events).await;
@@ -458,7 +464,7 @@ pub async fn start_indexing_contract_events(
 
 pub async fn start_indexing(
     manifest: &Manifest,
-    project_path: &Path,
+    project_path: PathBuf,
     dependencies: &[ContractEventDependencies],
     no_live_indexing_forced: bool,
     registry: Arc<EventCallbackRegistry>,
@@ -470,27 +476,43 @@ pub async fn start_indexing(
     // any events which are non-blocking and can be fired in parallel
     let mut non_blocking_process_events = Vec::new();
 
-    // Start the sub-indexers concurrently to ensure fast startup times
-    let (trace_indexer_handles, contract_events_indexer) = join!(
-        start_indexing_traces(manifest, project_path, database.clone(), trace_registry.clone()),
-        start_indexing_contract_events(
-            manifest,
-            project_path,
-            database.clone(),
-            registry.clone(),
-            dependencies,
-            no_live_indexing_forced,
-        ),
-    );
+    let man = manifest.clone();
+    let db = database.clone();
+    let pp = project_path.clone();
+    let dep = dependencies.to_vec();
 
+    let contract_events_handle = tokio::spawn(async move {
+        start_indexing_contract_events(
+            &man,
+            &pp.to_path_buf(),
+            db,
+            registry.clone(),
+            &dep,
+            no_live_indexing_forced,
+        )
+        .await
+    });
+
+    let m = manifest.clone();
+    let pp = project_path.clone();
+    let db = database.clone();
+
+    let trace_indexer_handle = tokio::spawn(async move {
+        start_indexing_traces(&m, &pp.to_path_buf(), db, trace_registry.clone()).await
+    });
+
+    let (trace_indexer_handles, contract_events_indexer) =
+        join!(trace_indexer_handle, contract_events_handle);
+
+    let trace_indexer_handles = trace_indexer_handles??;
     let (
         non_blocking_contract_handles,
         processed_network_contracts,
         apply_cross_contract_dependency_events_config_after_processing,
         mut dependency_event_processing_configs,
-    ) = contract_events_indexer?;
+    ) = contract_events_indexer??;
 
-    non_blocking_process_events.extend(trace_indexer_handles?);
+    non_blocking_process_events.extend(trace_indexer_handles);
     non_blocking_process_events.extend(non_blocking_contract_handles);
 
     // apply dependency events config after processing to avoid ordering issues
