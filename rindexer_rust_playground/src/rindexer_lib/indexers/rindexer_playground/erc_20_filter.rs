@@ -139,7 +139,7 @@ async fn approval_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
         )
         .await,
     )
-    .register(manifest_path, registry);
+    .register(manifest_path, registry).await;
 }
 
 async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegistry) {
@@ -271,7 +271,7 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
         )
         .await,
     )
-    .register(manifest_path, registry);
+    .register(manifest_path, registry).await;
 }
 pub async fn erc_20_filter_handlers(manifest_path: &PathBuf, registry: &mut EventCallbackRegistry) {
     approval_handler(manifest_path, registry).await;
