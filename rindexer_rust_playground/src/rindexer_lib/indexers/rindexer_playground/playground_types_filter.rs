@@ -170,7 +170,7 @@ async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegis
           )
           .await,
     )
-    .register(manifest_path, registry);
+    .register(manifest_path, registry).await;
 }
 pub async fn playground_types_filter_handlers(
     manifest_path: &PathBuf,

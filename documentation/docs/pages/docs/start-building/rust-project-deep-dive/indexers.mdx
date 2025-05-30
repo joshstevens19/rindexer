@@ -9,7 +9,7 @@ just focus on the logic you want.
 By default if you turn storage postgres on in the YAML configuration file it will also create you postgres tables,
 also write SQL for you to use and expose you a postgres client. This is a great starting point for you to build on.
 
-The tables creation can be skipped by using the [disable_create_tables](docs/start-building/yaml-config/storage#disable_create_tables) 
+The tables creation can be skipped by using the [disable_create_tables](docs/start-building/yaml-config/storage#disable_create_tables)
 in the YAML configuration file.
 
 If you also enable the CSV storage it will also generate code in the handler to write to that CSV files.
@@ -71,7 +71,10 @@ use rindexer::{
     EthereumSqlTypeWrapper, PgType, RindexerColorize,
 };
 
-async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+async fn transfer_handler(
+    manifest_path: &PathBuf,
+    registry: &mut EventCallbackRegistry,
+) {
     RocketPoolETHEventType::Transfer(
         TransferEvent::handler(
             |results, context| async move {
@@ -172,10 +175,13 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
         )
         .await,
     )
-    .register(registry);
+    .register(manifest_path, registry).await;
 }
 
-pub async fn rocket_pool_eth_handlers(registry: &mut EventCallbackRegistry) {
+pub async fn rocket_pool_eth_handlers(
+    manifest_path: &PathBuf,
+    registry: &mut EventCallbackRegistry,
+) {
     transfer_handler(registry).await;
 }
 ```
@@ -190,7 +196,10 @@ holds the database client and any extensions you pass to it.
 The naming convention for the handler is `{AbiEventName}Event::handler` so in this case `TransferEvent::handler` this is so you can.
 
 ```rs
-async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+async fn transfer_handler(
+    manifest_path: &PathBuf,
+    registry: &mut EventCallbackRegistry,
+) {
     RocketPoolETHEventType::Transfer(
         TransferEvent::handler( // [!code focus]
             |results, context| async move { // [!code focus]
@@ -201,7 +210,7 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
         )
         .await,
     )
-    .register(registry);
+    .register(manifest_path, registry).await;
 }
 ```
 
@@ -216,7 +225,10 @@ rust demands knowing all the memory location of every element and when to drop r
 This holds the event logs decoded information and the transaction information for the events.
 
 ```rs
-async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+async fn transfer_handler(
+    manifest_path: &PathBuf,
+    registry: &mut EventCallbackRegistry,
+) {
     RocketPoolETHEventType::Transfer(
         TransferEvent::handler(
             // results = Vec<TransferResult> // [!code focus]
@@ -228,7 +240,7 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
         )
         .await,
     )
-    .register(registry);
+    .register(manifest_path, registry).await;
 }
 ```
 
@@ -317,7 +329,10 @@ The `context` is a struct that is passed to the handler which has thread safe se
 within the handler.
 
 ```rs
-async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+async fn transfer_handler(
+    manifest_path: &PathBuf,
+    registry: &mut EventCallbackRegistry,
+) {
     RocketPoolETHEventType::Transfer(
         TransferEvent::handler(
             // context = Arc<EventContext<NoExtensions>> // [!code focus]
@@ -329,7 +344,7 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
         )
         .await,
     )
-    .register(registry);
+    .register(manifest_path, registry).await;
 }
 ```
 
@@ -355,7 +370,10 @@ retrying the event if it fails with exponential backoff.
 ### Success
 
 ```rs
-async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+async fn transfer_handler(
+    manifest_path: &PathBuf,
+    registry: &mut EventCallbackRegistry,
+) {
     RocketPoolETHEventType::Transfer(
         TransferEvent::handler(
             |results, context| async move {
@@ -366,7 +384,7 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
         )
         .await,
     )
-    .register(registry);
+    .register(manifest_path, registry).await;
 }
 ```
 
@@ -375,7 +393,10 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
 Error takes in a string which then is logged in the rindexer console to help debugging traces.
 
 ```rs
-async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+async fn transfer_handler(
+    manifest_path: &PathBuf,
+    registry: &mut EventCallbackRegistry,
+) {
     RocketPoolETHEventType::Transfer(
         TransferEvent::handler(
             |results, context| async move {
@@ -386,7 +407,7 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
         )
         .await,
     )
-    .register(registry);
+    .register(manifest_path, registry).await;
 }
 ```
 
@@ -420,7 +441,10 @@ impl HttpClient { // [!code focus]
     }
 }
 
-async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+async fn transfer_handler(
+    manifest_path: &PathBuf,
+    registry: &mut EventCallbackRegistry,
+) {
     RocketPoolETHEventType::Transfer(
         TransferEvent::handler(
             |results, context| async move {
@@ -440,7 +464,7 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
         )
         .await,
     )
-    .register(registry);
+    .register(manifest_path, registry).await;
 }
 ```
 
@@ -481,7 +505,10 @@ for example with network `ethereum` the provider function would be `get_ethereum
 ```rs
 use crate::rindexer_lib::typings::networks::get_ethereum_provider;// [!code focus]
 
-async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+async fn transfer_handler(
+    manifest_path: &PathBuf,
+    registry: &mut EventCallbackRegistry,
+) {
     RocketPoolETHEventType::Transfer(
         TransferEvent::handler(
             |results, context| async move {
@@ -502,7 +529,7 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
         )
         .await,
     )
-    .register(registry);
+    .register(manifest_path, registry).await;
 }
 ```
 
@@ -568,7 +595,10 @@ global: // [!code focus]
 ```rs
 use crate::rindexer_lib::typings::global_contracts::usdt_contract; // [!code focus]
 
-async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+async fn transfer_handler(
+    manifest_path: &PathBuf,
+    registry: &mut EventCallbackRegistry,
+) {
     RocketPoolETHEventType::Transfer(
         TransferEvent::handler(
             |results, context| async move {
@@ -589,7 +619,7 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
         )
         .await,
     )
-    .register(registry);
+    .register(manifest_path, registry).await;
 }
 ```
 
@@ -602,7 +632,10 @@ you have to pass in the address into the contract function.
 ```rs
 use crate::rindexer_lib::typings::global_contracts::usdt_contract; // [!code focus]
 
-async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+async fn transfer_handler(
+    manifest_path: &PathBuf,
+    registry: &mut EventCallbackRegistry,
+) {
     RocketPoolETHEventType::Transfer(
         TransferEvent::handler(
             |results, context| async move {
@@ -626,7 +659,7 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
         )
         .await,
     )
-    .register(registry);
+    .register(manifest_path, registry).await;
 }
 ```
 
@@ -653,7 +686,10 @@ contracts:
 ```rs
 use crate::rindexer_lib::typings::rust::events::rocket_pool_eth::rocket_pool_eth_contract; // [!code focus]
 
-async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+async fn transfer_handler(
+    manifest_path: &PathBuf,
+    registry: &mut EventCallbackRegistry,
+) {
     RocketPoolETHEventType::Transfer(
         TransferEvent::handler(
             |results, context| async move {
@@ -675,19 +711,22 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
         )
         .await,
     )
-    .register(registry);
+    .register(manifest_path, registry).await;
 }
 ```
 
 #### Multiple addresses
 
-If you have defined [multiple addresses](/docs/start-building/yaml-config/contracts#address) or you have a [filter](/docs/start-building/yaml-config/contracts#filter) 
+If you have defined [multiple addresses](/docs/start-building/yaml-config/contracts#address) or you have a [filter](/docs/start-building/yaml-config/contracts#filter)
 for a contract in the YAML configuration file you will have to pass in the address into the contract function.
 
 ```rs
 use crate::rindexer_lib::typings::rust::events::rocket_pool_eth::rocket_pool_eth_contract; // [!code focus]
 
-async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+async fn transfer_handler(
+    manifest_path: &PathBuf,
+    registry: &mut EventCallbackRegistry,
+) {
     RocketPoolETHEventType::Transfer(
         TransferEvent::handler(
             |results, context| async move {
@@ -712,7 +751,7 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
         )
         .await,
     )
-    .register(registry);
+    .register(manifest_path, registry).await;
 }
 ```
 
@@ -722,7 +761,10 @@ By default if you set the postgres storage on in the YAML configuration file it 
 uses the [tokio-postgres](https://docs.rs/tokio-postgres/latest/tokio_postgres/) library. This is a great starting point for you to build on. It uses connection pools by default.
 
 ```rs
-async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+async fn transfer_handler(
+    manifest_path: &PathBuf,
+    registry: &mut EventCallbackRegistry,
+) {
     RocketPoolETHEventType::Transfer(
         TransferEvent::handler(
             |results, context| async move {
@@ -735,7 +777,7 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
         )
         .await,
     )
-    .register(registry);
+    .register(manifest_path, registry).await;
 }
 ```
 
@@ -896,7 +938,10 @@ methods:
 - `context.csv.append` - This is for appending a row to the csv file.
 
 ```rs
-async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+async fn transfer_handler(
+    manifest_path: &PathBuf,
+    registry: &mut EventCallbackRegistry,
+) {
     RocketPoolETHEventType::Transfer(
         TransferEvent::handler(
             |results, context| async move {
@@ -909,15 +954,15 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
         )
         .await,
     )
-    .register(registry);
+    .register(manifest_path, registry).await;
 }
 
 ```
 
 ### Disable CSV Create Headers
 
-If you turn on csv storage then by default rindexer will create headers for you automatically inline with the ABI event data. 
-The CSV header creation can be skipped by using the [disable_create_headers](/docs/start-building/yaml-config/storage#disable_create_headers) 
+If you turn on csv storage then by default rindexer will create headers for you automatically inline with the ABI event data.
+The CSV header creation can be skipped by using the [disable_create_headers](/docs/start-building/yaml-config/storage#disable_create_headers)
 in the YAML configuration file.
 
 ```yaml
@@ -951,7 +996,10 @@ rindexer needs to know which handlers are required to be indexed so you need to 
 This passing of `&mut EventCallbackRegistry` is taken care of you by the rindexer framework, you just need to call the `register` function.
 
 ```rs
-async fn transfer_handler(registry: &mut EventCallbackRegistry) {
+async fn transfer_handler(
+    manifest_path: &PathBuf,
+    registry: &mut EventCallbackRegistry,
+) {
     RocketPoolETHEventType::Transfer(
         TransferEvent::handler(
             |results, context| async move {
@@ -962,7 +1010,7 @@ async fn transfer_handler(registry: &mut EventCallbackRegistry) {
         )
         .await,
     )
-    .register(registry); // [!code focus]
+    .register(manifest_path, registry).await; // [!code focus]
 }
 ```
 
@@ -971,12 +1019,13 @@ The `main.rs` calls the `register_all_handlers` function which lives in `all_han
 all generated for you and you do not need to worry about it.
 
 ```rs
+use std::path::PathBuf;
 use super::rust::rocket_pool_eth::rocket_pool_eth_handlers;
 use rindexer::event::callback_registry::EventCallbackRegistry;
 
-pub async fn register_all_handlers() -> EventCallbackRegistry {
+pub async fn register_all_handlers(manifest_path: &PathBuf) -> EventCallbackRegistry {
     let mut registry = EventCallbackRegistry::new();
-    rocket_pool_eth_handlers(&mut registry).await;
+    rocket_pool_eth_handlers(manifest_path, &mut registry).await;
     registry
 }
 ```
@@ -1061,7 +1110,7 @@ async fn main() {
 
 ```
 
-### Running 
+### Running
 
 If you want to run this with docker support for the postgres first run:
 
