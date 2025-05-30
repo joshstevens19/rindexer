@@ -1,18 +1,5 @@
 use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
 
-use alloy::{
-    primitives::{Address, BlockNumber, B256, U64},
-    rpc::types::{Log, ValueOrArray},
-    transports::RpcError,
-};
-use regex::Regex;
-use tokio::{
-    sync::{mpsc, Semaphore},
-    time::Instant,
-};
-use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::{debug, error, info, warn};
-
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
     indexer::{
@@ -21,6 +8,18 @@ use crate::{
     },
     provider::{JsonRpcCachedProvider, ProviderError},
 };
+use alloy::{
+    primitives::{Address, BlockNumber, B256, U64},
+    rpc::types::{Log, ValueOrArray},
+};
+use rand::random_ratio;
+use regex::Regex;
+use tokio::{
+    sync::{mpsc, Semaphore},
+    time::Instant,
+};
+use tokio_stream::wrappers::UnboundedReceiverStream;
+use tracing::{debug, error, info, warn};
 
 pub struct FetchLogsResult {
     pub logs: Vec<Log>,
@@ -53,8 +52,9 @@ pub fn fetch_logs_stream(
                 &max_block_range_limitation,
             ));
             warn!(
-                "{} - {} - max block range limitation of {} blocks applied - block range indexing will be slower then RPC providers supplying the optimal ranges - https://rindexer.xyz/docs/references/rpc-node-providers#rpc-node-providers",
+                "{}::{} - {} - max block range limitation of {} blocks applied - block range indexing will be slower then RPC providers supplying the optimal ranges - https://rindexer.xyz/docs/references/rpc-node-providers#rpc-node-providers",
                 config.info_log_name,
+                config.network_contract.network,
                 IndexingEventProgressStatus::Syncing.log(),
                 max_block_range_limitation.unwrap()
             );
@@ -79,13 +79,17 @@ pub fn fetch_logs_stream(
 
                     drop(permit);
 
-                    // slow indexing warn user
+                    // This check can be very noisy. We want to only sample this warning to notify
+                    // the user, rather than warn on every log fetch.
                     if let Some(range) = max_block_range_limitation {
-                        warn!(
-                            "{} - RPC PROVIDER IS SLOW - Slow indexing mode enabled, max block range limitation: {} blocks - we advise using a faster provider who can predict the next block ranges.",
-                            &config.info_log_name,
-                            range
-                        );
+                        if random_ratio(1, 50) {
+                            warn!(
+                                "{}::{} - RPC PROVIDER IS SLOW - Slow indexing mode enabled, max block range limitation: {} blocks - we advise using a faster provider who can predict the next block ranges.",
+                                &config.info_log_name,
+                                &config.network_contract.network,
+                                range
+                            );
+                        }
                     }
 
                     if let Some(result) = result {
@@ -222,8 +226,8 @@ async fn fetch_historic_logs_stream(
 
             if logs_empty {
                 info!(
-                    "{} - No events found between blocks {} - {} - network: {}",
-                    info_log_name, from_block, to_block, network
+                    "{}::{} - No events found between blocks {} - {}",
+                    info_log_name, network, from_block, to_block,
                 );
                 let next_from_block = to_block + U64::from(1);
                 return if next_from_block > snapshot_to_block {
@@ -254,8 +258,8 @@ async fn fetch_historic_logs_stream(
 
             if let Some(last_log) = last_log {
                 let next_from_block = U64::from(
-                    last_log.block_number.expect("block number should always be present in a log") +
-                        1,
+                    last_log.block_number.expect("block number should always be present in a log")
+                        + 1,
                 );
                 debug!(
                     "{} - {} - next_block {:?}",
@@ -323,8 +327,6 @@ async fn fetch_historic_logs_stream(
                 halved_to_block,
                 err
             );
-
-            let _ = tx.send(Err(Box::new(err)));
 
             return Some(ProcessHistoricLogsStreamResult {
                 next: current_filter.set_from_block(from_block).set_to_block(halved_to_block),
@@ -405,9 +407,9 @@ async fn live_indexing_stream(
                             );
                         } else {
                             let to_block = safe_block_number;
-                            if from_block == to_block &&
-                                !disable_logs_bloom_checks &&
-                                !is_relevant_block(contract_address, topic_id, &latest_block)
+                            if from_block == to_block
+                                && !disable_logs_bloom_checks
+                                && !is_relevant_block(contract_address, topic_id, &latest_block)
                             {
                                 debug!(
                                     "{} - {} - Skipping block {} as it's not relevant",
@@ -464,18 +466,17 @@ async fn live_indexing_stream(
                                             let logs_empty = logs.is_empty();
                                             let last_log = logs.last().cloned();
 
-                                            if tx
-                                                .send(Ok(FetchLogsResult {
-                                                    logs,
-                                                    from_block,
-                                                    to_block,
-                                                }))
-                                                .is_err()
-                                            {
+                                            if let Err(e) = tx.send(Ok(FetchLogsResult {
+                                                logs,
+                                                from_block,
+                                                to_block,
+                                            })) {
                                                 error!(
-                                                        "{} - {} - Failed to send logs to stream consumer!",
+                                                        "{}::{} - {} - Failed to send logs to stream consumer! Err: {}",
                                                         info_log_name,
-                                                        IndexingEventProgressStatus::Live.log()
+                                                        network,
+                                                        IndexingEventProgressStatus::Live.log(),
+                                                        e
                                                     );
                                                 drop(permit);
                                                 break;
@@ -485,12 +486,12 @@ async fn live_indexing_stream(
                                                 current_filter = current_filter
                                                     .set_from_block(to_block + U64::from(1));
                                                 info!(
-                                                    "{} - {} - No events found between blocks {} - {} - network: {}",
+                                                    "{}::{} - {} - No events found between blocks {} - {}",
                                                     info_log_name,
+                                                    network,
                                                     IndexingEventProgressStatus::Live.log(),
                                                     from_block,
                                                     to_block,
-                                                    network
                                                 );
                                             } else if let Some(last_log) = last_log {
                                                 if let Some(last_log_block_number) =
@@ -530,9 +531,9 @@ async fn live_indexing_stream(
                                                     halved_block_number(to_block, from_block);
 
                                                 error!(
-                                                    "[{}] - {} - {} - Unexpected error fetching logs in range {} - {}. Retry fetching {} - {}: {:?}",
-                                                    network,
+                                                    "{}::{} - {} - Unexpected error fetching logs in range {} - {}. Retry fetching {} - {}: {:?}",
                                                     info_log_name,
+                                                    network,
                                                     IndexingEventProgressStatus::Live.log(),
                                                     from_block,
                                                     to_block,
@@ -590,19 +591,22 @@ fn retry_with_block_range(
     from_block: U64,
     to_block: U64,
 ) -> Option<RetryWithBlockRangeResult> {
-    let error = match error {
-        ProviderError::RequestFailed(RpcError::ErrorResp(json_rpc_err)) => json_rpc_err,
-        // Break early if not a Server JSON-RPC Error.
-        _ => return None,
+    let error_struct = match error {
+        ProviderError::RequestFailed(json_rpc_err) => json_rpc_err.as_error_resp(),
+        _ => None,
     };
 
-    let error_message = &error.message;
-    // some providers put the data in the data field
-    let error_data_binding = error.data.as_ref().map(|data| data.to_string());
-    let empty_string = String::from("");
-    let error_data = match &error_data_binding {
-        Some(data) => data,
-        None => &empty_string,
+    let (error_message, error_data) = if let Some(error) = error_struct {
+        let error_message = error.message.to_string();
+        let error_data_binding = error.data.as_ref().map(|data| data.to_string());
+        let empty_string = String::from("");
+        let error_data = error_data_binding.unwrap_or(empty_string);
+
+        (error_message, error_data)
+    } else {
+        let str_err = error.to_string();
+        debug!("Failed to parse structured error, trying with raw string: {}", &str_err);
+        (str_err, "".to_string())
     };
 
     fn compile_regex(pattern: &str) -> Result<Regex, regex::Error> {
@@ -615,7 +619,7 @@ fn retry_with_block_range(
     if let Ok(re) =
         compile_regex(r"this block range should work: \[(0x[0-9a-fA-F]+),\s*(0x[0-9a-fA-F]+)]")
     {
-        if let Some(captures) = re.captures(error_message).or_else(|| re.captures(error_data)) {
+        if let Some(captures) = re.captures(&error_message).or_else(|| re.captures(&error_data)) {
             if let (Some(start_block), Some(end_block)) = (captures.get(1), captures.get(2)) {
                 let start_block_str = start_block.as_str();
                 let end_block_str = end_block.as_str();
@@ -649,10 +653,7 @@ fn retry_with_block_range(
     if let Ok(re) =
         compile_regex(r"Try with this block range \[0x([0-9a-fA-F]+),\s*0x([0-9a-fA-F]+)\]")
     {
-        if let Some(captures) = re.captures(error_message).or_else(|| {
-            let blah = re.captures(error_data);
-            blah
-        }) {
+        if let Some(captures) = re.captures(&error_message).or_else(|| re.captures(&error_data)) {
             if let (Some(start_block), Some(end_block)) = (captures.get(1), captures.get(2)) {
                 let start_block_str = format!("0x{}", start_block.as_str());
                 let end_block_str = format!("0x{}", end_block.as_str());
@@ -670,7 +671,7 @@ fn retry_with_block_range(
     }
 
     // Ankr
-    if error_message.contains("block range is too wide") && error.code == -32600 {
+    if error_message.contains("block range is too wide") {
         return Some(RetryWithBlockRangeResult {
             from: from_block,
             to: from_block + U64::from(3000),
@@ -680,7 +681,7 @@ fn retry_with_block_range(
 
     // QuickNode, 1RPC, zkEVM, Blast, BlockPI
     if let Ok(re) = compile_regex(r"limited to a ([\d,.]+)") {
-        if let Some(captures) = re.captures(error_message).or_else(|| re.captures(error_data)) {
+        if let Some(captures) = re.captures(&error_message).or_else(|| re.captures(&error_data)) {
             if let Some(range_str_match) = captures.get(1) {
                 let range_str = range_str_match.as_str().replace(&['.', ','][..], "");
                 if let Ok(range) = U64::from_str(&range_str) {

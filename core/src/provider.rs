@@ -29,6 +29,7 @@ use alloy::{
         RpcError, TransportErrorKind,
     },
 };
+use futures::future::try_join_all;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
@@ -131,6 +132,10 @@ impl JsonRpcCachedProvider {
     pub async fn get_latest_block(&self) -> Result<Option<Arc<Block>>, ProviderError> {
         let mut cache_guard = self.cache.lock().await;
 
+        // TODO-TODO
+        //
+        // This is potentially called way too much. Consider dropping it back.
+        // Also ensure this isn't duplicated by each contract-event.
         if let Some((timestamp, block)) = &*cache_guard {
             if timestamp.elapsed() < Duration::from_millis(50) {
                 return Ok(Some(Arc::clone(block)));
@@ -340,8 +345,7 @@ impl CreateNetworkProvider {
     pub async fn create(
         manifest: &Manifest,
     ) -> Result<Vec<CreateNetworkProvider>, RetryClientError> {
-        let mut result: Vec<CreateNetworkProvider> = vec![];
-        for network in &manifest.networks {
+        let provider_futures = manifest.networks.iter().map(|network| async move {
             let provider = create_client(
                 &network.rpc,
                 network.chain_id,
@@ -350,14 +354,14 @@ impl CreateNetworkProvider {
                 manifest.get_custom_headers(),
             )
             .await?;
-            result.push(CreateNetworkProvider {
+
+            Ok::<_, RetryClientError>(CreateNetworkProvider {
                 network_name: network.name.clone(),
                 disable_logs_bloom_checks: network.disable_logs_bloom_checks.unwrap_or_default(),
                 client: provider,
-            });
-        }
-
-        Ok(result)
+            })
+        });
+        try_join_all(provider_futures).await
     }
 }
 

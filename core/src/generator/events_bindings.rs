@@ -68,6 +68,12 @@ fn generate_structs(
                         pub event_data: {struct_data},
                         pub tx_information: TxInformation
                     }}
+
+                    impl HasTxInformation for {struct_result} {{
+                        fn tx_information(&self) -> &TxInformation {{
+                            &self.tx_information
+                        }}
+                    }}
                 "#,
                 struct_result = struct_result,
                 struct_data = struct_data,
@@ -504,7 +510,7 @@ fn generate_event_bindings_code(
             event::{{
                 callback_registry::{{
                     EventCallbackRegistry, EventCallbackRegistryInformation, EventCallbackResult,
-                    EventResult, TxInformation,
+                    EventResult, TxInformation, HasTxInformation
                 }},
                 contract_setup::{{ContractInformation, NetworkContract}},
             }},
