@@ -145,7 +145,7 @@ async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegis
           )
           .await,
     )
-    .register(manifest_path, registry);
+    .register(manifest_path, registry).await;
 }
 pub async fn uniswap_v3_pool_filter_handlers(
     manifest_path: &PathBuf,
