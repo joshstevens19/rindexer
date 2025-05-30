@@ -974,7 +974,7 @@ pub fn generate_event_handlers(
                       )
                       .await,
                 )
-                .register(manifest_path, registry);
+                .register(manifest_path, registry).await;
             }}
         "#,
             handler_fn_name = camel_to_snake(&event.name),
