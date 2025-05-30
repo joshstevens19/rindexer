@@ -115,7 +115,9 @@ pub struct TraceCallFrame {
 fn is_known_zk_evm_compatible_chain(chain: Chain) -> Option<bool> {
     if let Some(name) = chain.named() {
         match name {
-            NamedChain::Lens | NamedChain::ZkSync => Some(true),
+            NamedChain::Lens | NamedChain::ZkSync | NamedChain::Sophon | NamedChain::Abstract => {
+                Some(true)
+            }
             NamedChain::Mainnet
             | NamedChain::Arbitrum
             | NamedChain::Soneium
@@ -124,6 +126,7 @@ fn is_known_zk_evm_compatible_chain(chain: Chain) -> Option<bool> {
             | NamedChain::Scroll
             | NamedChain::Blast
             | NamedChain::World
+            | NamedChain::Unichain
             | NamedChain::Base => Some(false),
             _ => None,
         }
