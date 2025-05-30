@@ -6,6 +6,47 @@
 ### Features
 -------------------------------------------------
 
+### Bug fixes
+-------------------------------------------------
+
+- Improve RPC Efficiency
+- Make Native Transfer indexing a little more gently on startup, and a bit slower on failure, to prevent overloading apis with concurrency
+- Improve Startup speed significantly by reducing lots of redundant sequential rpc calls
+
+### Breaking changes
+-------------------------------------------------
+
+## Releases
+-------------------------------------------------
+
+all release branches are deployed through `release/VERSION_NUMBER` branches
+
+## 0.17.1-beta - 27th May 2025
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.17.1
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.17.1/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.17.1/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.17.1/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.17.1/rindexer_win32-amd64.zip
+
+### Bug fixes
+-------------------------------------------------
+
+- Resolve Docker image crashes with "Illegal instruction (core dumped)" on various x86-64 processors
+
+## 0.17.0-beta - 26th May 2025
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.17.0
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.17.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.17.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.17.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.17.0/rindexer_win32-amd64.zip
+
+### Features
+-------------------------------------------------
+
 - Alter full toolchain to stable, drop some nightly rustfmt options and re-run fmt.
 - Improve logging experience by including more `errors` and `network` info where possible.
 - Add a currently undocumented `CONTRACT_PERMITS` env var to control manually the concurrency via an env var.
@@ -16,8 +57,6 @@
 
 - Fix a bug with broken binary copy in the Postgres client. `finish` should be called manually on a bad write.
 - Fix bug with breaking out of historical indexing on log fetch error.
-- Fix native transfer indexing bug by adjusting the reorg safe condition to be correct
-- Fix `fetch_logs` block range parsing to include fallback string if no Err variant found (fixes Lens indexing)
 
 ### Breaking changes
 -------------------------------------------------
