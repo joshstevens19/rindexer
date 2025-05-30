@@ -145,8 +145,8 @@ fn find_clashing_event_names(
             ABIItem::extract_event_names_and_signatures_from_abi(other_abi_items)?;
 
         for event_name in current_event_names {
-            if other_event_names.iter().any(|e| e.name == event_name.name) &&
-                !clashing_events.contains(&event_name.name)
+            if other_event_names.iter().any(|e| e.name == event_name.name)
+                && !clashing_events.contains(&event_name.name)
             {
                 clashing_events.push(event_name.name.clone());
             }
@@ -338,8 +338,8 @@ pub fn solidity_type_to_db_type(abi_type: &str) -> String {
                 8 | 16 => "SMALLINT",
                 24 | 32 => "INTEGER",
                 40 | 48 | 56 | 64 | 72 | 80 | 88 | 96 | 104 | 112 | 120 | 128 => "NUMERIC",
-                136 | 144 | 152 | 160 | 168 | 176 | 184 | 192 | 200 | 208 | 216 | 224 | 232 |
-                240 | 248 | 256 => "VARCHAR(78)",
+                136 | 144 | 152 | 160 | 168 | 176 | 184 | 192 | 200 | 208 | 216 | 224 | 232
+                | 240 | 248 | 256 => "VARCHAR(78)",
                 _ => panic!("Unsupported {}N size: {}", prefix, size),
             }
         }
