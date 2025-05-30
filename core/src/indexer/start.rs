@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::{path::Path, str::FromStr, sync::Arc, time::Duration};
 
 use alloy::primitives::U64;
@@ -464,7 +463,7 @@ pub async fn start_indexing_contract_events(
 
 pub async fn start_indexing(
     manifest: &Manifest,
-    project_path: PathBuf,
+    project_path: &Path,
     dependencies: &[ContractEventDependencies],
     no_live_indexing_forced: bool,
     registry: Arc<EventCallbackRegistry>,
@@ -476,43 +475,27 @@ pub async fn start_indexing(
     // any events which are non-blocking and can be fired in parallel
     let mut non_blocking_process_events = Vec::new();
 
-    let man = manifest.clone();
-    let db = database.clone();
-    let pp = project_path.clone();
-    let dep = dependencies.to_vec();
-
-    let contract_events_handle = tokio::spawn(async move {
+    // Start the sub-indexers concurrently to ensure fast startup times
+    let (trace_indexer_handles, contract_events_indexer) = join!(
+        start_indexing_traces(manifest, project_path, database.clone(), trace_registry.clone()),
         start_indexing_contract_events(
-            &man,
-            &pp.to_path_buf(),
-            db,
+            manifest,
+            project_path,
+            database.clone(),
             registry.clone(),
-            &dep,
+            dependencies,
             no_live_indexing_forced,
         )
-        .await
-    });
+    );
 
-    let m = manifest.clone();
-    let pp = project_path.clone();
-    let db = database.clone();
-
-    let trace_indexer_handle = tokio::spawn(async move {
-        start_indexing_traces(&m, &pp.to_path_buf(), db, trace_registry.clone()).await
-    });
-
-    let (trace_indexer_handles, contract_events_indexer) =
-        join!(trace_indexer_handle, contract_events_handle);
-
-    let trace_indexer_handles = trace_indexer_handles??;
     let (
         non_blocking_contract_handles,
         processed_network_contracts,
         apply_cross_contract_dependency_events_config_after_processing,
         mut dependency_event_processing_configs,
-    ) = contract_events_indexer??;
+    ) = contract_events_indexer?;
 
-    non_blocking_process_events.extend(trace_indexer_handles);
+    non_blocking_process_events.extend(trace_indexer_handles?);
     non_blocking_process_events.extend(non_blocking_contract_handles);
 
     // apply dependency events config after processing to avoid ordering issues
