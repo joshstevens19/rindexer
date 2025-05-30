@@ -38,7 +38,6 @@ use crate::{
         EventMessage,
     },
     generate_random_id,
-    indexer::log_helpers::{map_log_params_to_raw_values, parse_log},
     manifest::{
         contract::ParseAbiError,
         core::Manifest,
@@ -50,6 +49,7 @@ use crate::{
     types::core::LogParam,
     AsyncCsvAppender, FutureExt, IndexingDetails, StartDetails, StartNoCodeDetails,
 };
+use crate::helpers::{map_log_params_to_raw_values, parse_log};
 use crate::manifest::contract::Contract;
 
 #[derive(thiserror::Error, Debug)]
@@ -617,18 +617,10 @@ async fn process_contract(project_path: &Path, manifest: &Manifest, postgres: Op
 
     for event_info in event_names {
         let event_name = event_info.name.clone();
-        let event = &abi
+        let event = abi
             .events
-            .iter()
-            .find(|(name, _)| *name == &event_name)
-            .map(|(_, event)| event)
-            .ok_or_else(|| {
-                ProcessIndexersError::EventNameNotFoundInAbi(
-                    contract.name.clone(),
-                    event_name.clone(),
-                )
-            })?
-            .first()
+            .get(&event_name)
+            .and_then(|events| events.first())
             .ok_or_else(|| {
                 ProcessIndexersError::EventNameNotFoundInAbi(
                     contract.name.clone(),

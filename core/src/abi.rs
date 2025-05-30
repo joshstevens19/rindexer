@@ -217,9 +217,7 @@ impl ABIItem {
         let mut events = Vec::new();
         for item in abi_json.into_iter() {
             if item.type_ == "event" {
-                let signature = item.format_event_signature()?;
-
-                events.push(EventInfo::new(item, signature));
+                events.push(EventInfo::new(item)?);
             }
         }
         Ok(events)
@@ -295,10 +293,11 @@ pub enum CreateCsvFileForEvent {
 }
 
 impl EventInfo {
-    pub fn new(item: ABIItem, signature: String) -> Self {
+    pub fn new(item: ABIItem) -> Result<Self, ParamTypeError> {
         let struct_result = format!("{}Result", item.name);
         let struct_data = format!("{}Data", item.name);
-        EventInfo { name: item.name, inputs: item.inputs, signature, struct_result, struct_data }
+        let signature = item.format_event_signature()?;
+        Ok(EventInfo { name: item.name, inputs: item.inputs, signature, struct_result, struct_data })
     }
 
     pub fn topic_id(&self) -> B256 {

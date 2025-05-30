@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use alloy::{
     eips::BlockNumberOrTag,
     primitives::{Address, B256, U64},
@@ -5,21 +7,15 @@ use alloy::{
 };
 
 use crate::event::contract_setup::{AddressDetails, FactoryDetails, FilterDetails};
-use crate::event::factory_event_filter_sync::{get_factory_deployed_addresses};
+use crate::event::factory_event_filter_sync::{get_known_factory_deployed_addresses, GetKnownFactoryDeployedAddressesParams};
+use crate::manifest::storage::CsvDetails;
+use crate::manifest::stream::StreamsConfig;
+use crate::PostgresClient;
 
 #[derive(thiserror::Error, Debug)]
 pub enum BuildRindexerFilterError {
     #[error("Address is valid format")]
     AddressInvalidFormat,
-}
-
-pub trait EventFilter {
-    fn get_to_block(&self) -> U64;
-    fn get_from_block(&self) -> U64;
-    fn set_from_block(self, block: U64) -> Self;
-    fn set_to_block(self, block: U64) -> Self;
-    async fn contract_address(&self) -> Option<ValueOrArray<Address>>;
-    async fn raw_filter(&self) -> Filter;
 }
 
 #[derive(Clone, Debug)]
@@ -38,9 +34,7 @@ impl SimpleEventFilter {
 
         Self { filter }
     }
-}
 
-impl EventFilter for SimpleEventFilter {
     fn get_to_block(&self) -> U64 {
         U64::from(
             self.filter
@@ -77,16 +71,25 @@ impl EventFilter for SimpleEventFilter {
     }
 }
 
-#[derive(Clone, Debug)]
-struct FactoryFilter {
-    // config: FactorySyncConfig<'a>,
-    topic_id: B256,
-    factory_details: FactoryDetails,
-    current_block: U64,
-    next_block: U64,
+
+#[derive(Clone)]
+pub struct FactoryFilter {
+    pub project_path: PathBuf,
+    pub factory_address: ValueOrArray<Address>,
+    pub factory_contract_name: String,
+    pub factory_event_name: String,
+    pub network: String,
+
+    pub topic_id: B256,
+
+    pub database: Option<Arc<PostgresClient>>,
+    pub csv_details: Option<CsvDetails>,
+
+    pub current_block: U64,
+    pub next_block: U64,
 }
 
-impl EventFilter for FactoryFilter {
+impl FactoryFilter {
     fn get_to_block(&self) -> U64 {
         self.next_block
     }
@@ -108,10 +111,17 @@ impl EventFilter for FactoryFilter {
     }
 
     async fn contract_address(&self) -> Option<ValueOrArray<Address>> {
-        unimplemented!()
-        // let result = get_factory_deployed_addresses(&self.config).await;
-        //
-        // Some(result.into())
+        let result = get_known_factory_deployed_addresses(&GetKnownFactoryDeployedAddressesParams {
+            project_path: self.project_path.clone(),
+            contract_name: self.factory_contract_name.clone(),
+            contract_address: self.factory_address.clone(),
+            event_name: self.factory_event_name.clone(),
+            network: self.network.clone(),
+            database: self.database.clone(),
+            csv_details: self.csv_details.clone(),
+        }).await.unwrap();
+
+        Some(result.into())
     }
 
     async fn raw_filter(&self) -> Filter {
@@ -125,7 +135,7 @@ impl EventFilter for FactoryFilter {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum RindexerEventFilter {
     Address(SimpleEventFilter),
     Filter(SimpleEventFilter),
@@ -189,16 +199,6 @@ impl RindexerEventFilter {
                     .from_block(current_block)
                     .to_block(next_block))))
         }
-    }
-
-    pub fn new_factory_filter(
-        topic_id: &B256,
-        _: &str,
-        filter_details: &FilterDetails,
-        current_block: U64,
-        next_block: U64,
-    ) -> Result<RindexerEventFilter, BuildRindexerFilterError> {
-       panic!("Not implemented")
     }
 
     pub fn get_to_block(&self) -> U64 {

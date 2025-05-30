@@ -9,6 +9,7 @@ use alloy::{
 use tracing::error;
 
 use crate::types::core::{LogParam, ParsedLog};
+
 pub fn parse_log(event: &Event, log: &Log) -> Option<ParsedLog> {
     // as topic[0] is the event signature
     let topics_length = log.topics().len() - 1;

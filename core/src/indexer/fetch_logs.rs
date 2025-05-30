@@ -16,11 +16,11 @@ use tracing::{debug, error, info, warn};
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
     indexer::{
-        log_helpers::{halved_block_number, is_relevant_block},
         IndexingEventProgressStatus,
     },
     provider::{JsonRpcCachedProvider, ProviderError},
 };
+use crate::helpers::{halved_block_number, is_relevant_block};
 
 pub struct FetchLogsResult {
     pub logs: Vec<Log>,
@@ -43,7 +43,7 @@ pub fn fetch_logs_stream(
 
         // add any max block range limitation before we start processing
         let mut max_block_range_limitation =
-            config.network_contract.cached_provider.max_block_range;
+            config.network_contract().cached_provider.max_block_range;
         if max_block_range_limitation.is_some() {
             current_filter = current_filter.set_to_block(calculate_process_historic_log_to_block(
                 &from_block,
@@ -52,26 +52,26 @@ pub fn fetch_logs_stream(
             ));
             warn!(
                 "{} - {} - max block range limitation of {} blocks applied - block range indexing will be slower then RPC providers supplying the optimal ranges - https://rindexer.xyz/docs/references/rpc-node-providers#rpc-node-providers",
-                config.info_log_name,
+                config.info_log_name(),
                 IndexingEventProgressStatus::Syncing.log(),
                 max_block_range_limitation.unwrap()
             );
         }
         while current_filter.get_from_block() <= snapshot_to_block {
-            let semaphore_client = Arc::clone(&config.semaphore);
+            let semaphore_client = Arc::clone(&config.semaphore());
             let permit = semaphore_client.acquire_owned().await;
 
             match permit {
                 Ok(permit) => {
                     let result = fetch_historic_logs_stream(
-                        &config.network_contract.cached_provider,
+                        &config.network_contract().cached_provider,
                         &tx,
-                        &config.topic_id,
+                        &config.topic_id(),
                         current_filter.clone(),
                         max_block_range_limitation,
                         snapshot_to_block,
-                        &config.info_log_name,
-                        &config.network_contract.network,
+                        &config.info_log_name(),
+                        &config.network_contract().network,
                     )
                     .await;
 
@@ -81,7 +81,7 @@ pub fn fetch_logs_stream(
                     if let Some(range) = max_block_range_limitation {
                         warn!(
                             "{} - RPC PROVIDER IS SLOW - Slow indexing mode enabled, max block range limitation: {} blocks - we advise using a faster provider who can predict the next block ranges.",
-                            &config.info_log_name,
+                            &config.info_log_name(),
                             range
                         );
                     }
@@ -96,7 +96,7 @@ pub fn fetch_logs_stream(
                 Err(e) => {
                     error!(
                         "{} - {} - Semaphore error: {}",
-                        &config.info_log_name,
+                        &config.info_log_name(),
                         IndexingEventProgressStatus::Syncing.log(),
                         e
                     );
@@ -107,23 +107,23 @@ pub fn fetch_logs_stream(
 
         info!(
             "{} - {} - Finished indexing historic events",
-            &config.info_log_name,
+            &config.info_log_name(),
             IndexingEventProgressStatus::Completed.log()
         );
 
         // Live indexing mode
-        if config.live_indexing && !force_no_live_indexing {
+        if config.live_indexing() && !force_no_live_indexing {
             live_indexing_stream(
-                &config.network_contract.cached_provider,
+                &config.network_contract().cached_provider,
                 &tx,
                 snapshot_to_block,
-                &config.topic_id,
-                &config.indexing_distance_from_head,
+                &config.topic_id(),
+                &config.indexing_distance_from_head(),
                 current_filter,
-                &config.info_log_name,
-                &config.semaphore,
-                config.network_contract.disable_logs_bloom_checks,
-                &config.network_contract.network,
+                &config.info_log_name(),
+                &config.semaphore(),
+                config.network_contract().disable_logs_bloom_checks,
+                &config.network_contract().network,
             )
             .await;
         }
@@ -175,12 +175,12 @@ async fn fetch_historic_logs_stream(
         });
     }
 
-    debug!(
-        "{} - {} - Processing filter: {:?}",
-        info_log_name,
-        IndexingEventProgressStatus::Syncing.log(),
-        current_filter
-    );
+    // debug!(
+    //     "{} - {} - Processing filter: {:?}",
+    //     info_log_name,
+    //     IndexingEventProgressStatus::Syncing.log(),
+    //     current_filter
+    // );
 
     match cached_provider.get_logs(&current_filter).await {
         Ok(logs) => {
@@ -425,12 +425,12 @@ async fn live_indexing_stream(
                             } else {
                                 current_filter = current_filter.set_to_block(to_block);
 
-                                debug!(
-                                    "{} - {} - Processing live filter: {:?}",
-                                    info_log_name,
-                                    IndexingEventProgressStatus::Live.log(),
-                                    current_filter
-                                );
+                                // debug!(
+                                //     "{} - {} - Processing live filter: {:?}",
+                                //     info_log_name,
+                                //     IndexingEventProgressStatus::Live.log(),
+                                //     current_filter
+                                // );
 
                                 let semaphore_client = Arc::clone(semaphore);
                                 let permit = semaphore_client.acquire_owned().await;

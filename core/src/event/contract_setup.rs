@@ -1,9 +1,11 @@
-use std::{any::Any, sync::Arc};
-
+use std::{any::Any, fs, sync::Arc};
+use std::path::Path;
 use alloy::{
     primitives::{Address, Log, U64},
     rpc::types::ValueOrArray,
 };
+use alloy::json_abi::{Event, JsonAbi};
+use alloy::primitives::B256;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -17,6 +19,7 @@ use crate::{
     provider::{get_network_provider, CreateNetworkProvider, JsonRpcCachedProvider},
     types::single_or_array::StringOrArray,
 };
+use crate::helpers::get_full_path;
 
 #[derive(Clone)]
 pub struct NetworkContract {
@@ -173,13 +176,25 @@ pub struct AddressDetails {
 pub struct FactoryDetails {
     pub name: String,
 
-    pub address: String,
+    pub address: ValueOrArray<Address>,
 
     pub event_name: String,
 
-    pub parameter_name: String,
+    pub input_name: String,
 
     pub abi: String,
+}
+
+
+impl FactoryDetails {
+    // TODO: Fix unwrap
+    pub fn event(&self, project_path: &Path) -> Event {
+        let full_path = get_full_path(project_path, &self.abi).unwrap();
+        let abi_str = fs::read_to_string(full_path).unwrap();
+        let abi: JsonAbi = serde_json::from_str(&abi_str).unwrap();
+
+        abi.event(&self.event_name).unwrap().first().unwrap().clone()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -199,5 +214,12 @@ pub enum IndexingContractSetup {
 impl IndexingContractSetup {
     pub fn is_filter(&self) -> bool {
         matches!(self, IndexingContractSetup::Filter(_))
+    }
+
+    pub fn factory_details(&self) -> Option<FactoryDetails> {
+        match self {
+            IndexingContractSetup::Factory(details) => Some(details.clone()),
+            _ => None,
+        }
     }
 }

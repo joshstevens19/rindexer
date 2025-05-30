@@ -1,65 +1,30 @@
-use std::{path::Path, str::FromStr, sync::Arc};
-
-use alloy::primitives::{Address, U64};
-use rust_decimal::Decimal;
-use tokio::{
-    fs,
-    fs::File,
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use alloy::primitives::{Address};
+use alloy::rpc::types::ValueOrArray;
+use tokio::io::AsyncWriteExt;
 use tracing::error;
+use crate::{AsyncCsvAppender, PostgresClient};
+use crate::event::callback_registry::EventResult;
+use crate::event::config::{FactoryEventProcessingConfig};
+use crate::helpers::{get_full_path, parse_log};
+use crate::manifest::storage::CsvDetails;
+use crate::simple_file_formatters::csv::AsyncCsvReader;
 
-use crate::{
-    database::postgres::generate::{
-        generate_indexer_contract_schema_name, generate_internal_event_table_name,
-    },
-    event::config::{EventProcessingConfig, TraceProcessingConfig},
-    helpers::get_full_path,
-    manifest::{storage::CsvDetails, stream::StreamsConfig},
-    EthereumSqlTypeWrapper, PostgresClient,
-};
-
-async fn get_last_synced_block_number_file(
-    full_path: &Path,
-    contract_name: &str,
-    network: &str,
-    event_name: &str,
-) -> Result<Option<U64>, UpdateLastSyncedBlockNumberFile> {
-    let file_path =
-        build_last_synced_block_number_file(full_path, contract_name, network, event_name);
-
-    let path = Path::new(&file_path);
-
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    let file = File::open(path).await?;
-    let mut reader = BufReader::new(file);
-    let mut line = String::new();
-
-    if reader.read_line(&mut line).await? > 0 {
-        let value = line.trim();
-        let parse = U64::from_str(value);
-        return match parse {
-            Ok(value) => Ok(Some(value)),
-            Err(e) => {
-                Err(UpdateLastSyncedBlockNumberFile::ParseError(value.to_string(), e.to_string()))
-            }
-        };
-    }
-
-    Ok(None)
+#[derive(thiserror::Error, Debug)]
+pub enum UpdateKnownFactoryDeployedAddressesError {
+    #[error("Could not write addresses to csv: {0}")]
+    CsvWriteError(#[from] csv::Error),
 }
 
-fn build_last_synced_block_number_file(
+fn build_known_factory_address_file(
     full_path: &Path,
     contract_name: &str,
     network: &str,
     event_name: &str,
 ) -> String {
-    let path = full_path.join(contract_name).join("last-synced-blocks").join(format!(
-        "{}-{}-{}.txt",
+    let path = full_path.join(contract_name).join("known-factory-addresses").join(format!(
+        "{}-{}-{}.csv",
         contract_name.to_lowercase(),
         network.to_lowercase(),
         event_name.to_lowercase()
@@ -68,197 +33,120 @@ fn build_last_synced_block_number_file(
     path.to_string_lossy().into_owned()
 }
 
-pub struct FactorySyncConfig<'a> {
-    pub project_path: &'a Path,
-    pub database: &'a Option<Arc<PostgresClient>>,
-    pub csv_details: &'a Option<CsvDetails>,
-    pub stream_details: &'a Option<&'a StreamsConfig>,
-    pub contract_csv_enabled: bool,
-    pub indexer_name: &'a str,
-    pub contract_name: &'a str,
-    pub event_name: &'a str,
-    pub network: &'a str,
-}
+pub async fn update_known_factory_deployed_addresses(
+    config: &FactoryEventProcessingConfig,
+    events: &Vec<EventResult>,
+) -> Result<(), UpdateKnownFactoryDeployedAddressesError> {
+    let addresses: Vec<Address> = events.iter().map(|event|
+        parse_log(&config.event, &event.log)
+            .and_then(|log| log.params.into_iter().find(|log| log.name == config.input_name))
+            .and_then(|param| param.value.as_address())
+    ).collect::<Option<Vec<_>>>().unwrap();
 
-pub async fn get_factory_deployed_addresses(config: &FactorySyncConfig<'_>) -> Vec<Address> {
-    vec![]
+    println!("ADDRESS {:?}", events.len());
+    println!("ADDRESS {:?}", addresses);
 
-    // Check CSV file for last seen block as no database enabled
-    // if config.database.is_none() && config.contract_csv_enabled {
-    //     if let Some(csv_details) = config.csv_details {
-    //         return if let Ok(result) = get_last_synced_block_number_file(
-    //             &get_full_path(config.project_path, &csv_details.path).unwrap_or_else(|_| {
-    //                 panic!("failed to get full path {}", config.project_path.display())
-    //             }),
-    //             config.contract_name,
-    //             config.network,
-    //             config.event_name,
-    //         )
-    //             .await
-    //         {
-    //             if let Some(value) = result {
-    //                 if value.is_zero() {
-    //                     return None;
-    //                 }
-    //             }
-    //
-    //             result
-    //         } else {
-    //             error!("Error fetching last synced block from CSV");
-    //             None
-    //         }
-    //     }
-    // }
-    //
-    // // Then check streams if no csv or database to find out last synced block
-    // if config.database.is_none() && !config.contract_csv_enabled && config.stream_details.is_some()
-    // {
-    //     let stream_details = config.stream_details.as_ref().unwrap();
-    //
-    //     // create the path if it does not exist
-    //     stream_details
-    //         .create_full_streams_last_synced_block_path(config.project_path, config.contract_name)
-    //         .await;
-    //
-    //     return if let Ok(result) = get_last_synced_block_number_file(
-    //         &config
-    //             .project_path
-    //             .join(stream_details.get_streams_last_synced_block_path())
-    //             .canonicalize()
-    //             .expect("Failed to canonicalize path"),
-    //         config.contract_name,
-    //         config.network,
-    //         config.event_name,
-    //     )
-    //         .await
-    //     {
-    //         if let Some(value) = result {
-    //             if value.is_zero() {
-    //                 return None;
-    //             }
-    //         }
-    //
-    //         result
-    //     } else {
-    //         error!("Error fetching last synced block from stream");
-    //         None
-    //     }
-    // }
-    //
-    // // Query database for last synced block
-    // if let Some(database) = config.database {
-    //     let schema =
-    //         generate_indexer_contract_schema_name(config.indexer_name, config.contract_name);
-    //     let table_name = generate_internal_event_table_name(&schema, config.event_name);
-    //     let query = format!(
-    //         "SELECT last_synced_block FROM rindexer_internal.{} WHERE network = $1",
-    //         table_name
-    //     );
-    //
-    //     match database.query_one(&query, &[&config.network]).await {
-    //         Ok(row) => {
-    //             let result: Decimal = row.get("last_synced_block");
-    //             let parsed =
-    //                 U64::from_str(&result.to_string()).expect("Failed to parse last_synced_block");
-    //             if parsed.is_zero() {
-    //                 None
-    //             } else {
-    //                 Some(parsed)
-    //             }
-    //         }
-    //         Err(e) => {
-    //             error!("Error fetching last synced block: {:?}", e);
-    //             None
-    //         }
-    //     }
-    // } else {
-    //     None
-    // }
+        // if let Some(database) = &config.database() {
+        //     let schema =
+        //         generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
+        //     let table_name = generate_internal_event_table_name(&schema, &config.event_name());
+        //     let query = format!(
+        //         "UPDATE rindexer_internal.{} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block",
+        //         table_name
+        //     );
+        //     let result = database
+        //         .execute(
+        //             &query,
+        //             &[&EthereumSqlTypeWrapper::U64(to_block), &config.network_contract().network],
+        //         )
+        //         .await;
+        //
+        //     if let Err(e) = result {
+        //         error!("Error updating last synced block: {:?}", e);
+        //     }
+        // } else
+        //
+
+        if let Some(csv_details) = &config.csv_details {
+            let full_path = get_full_path(&config.project_path, &csv_details.path).unwrap();
+
+            let csv_path = build_known_factory_address_file(&full_path, &config.contract_name,
+                                                                 &config.network_contract.network,
+                                                                 &config.event.name);
+            let csv_appender = AsyncCsvAppender::new(&csv_path);
+
+            if !Path::new(&csv_path).exists() {
+                csv_appender.append_header(vec!["factory_deployed_address".to_string()]).await?;
+            }
+
+            csv_appender.append_bulk(addresses.iter().map(|address| vec![address.to_string()]).collect::<Vec<_>>()).await?;
+
+            return Ok(())
+        }
+
+    unreachable!("Can't update known factory deployed addresses without database or csv details")
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum UpdateLastSyncedBlockNumberFile {
-    #[error("File IO error: {0}")]
-    FileIo(#[from] std::io::Error),
-
-    #[error("Failed to parse block number: {0} err: {0}")]
-    ParseError(String, String),
+pub enum GetKnownFactoryDeployedAddressesError {
+    #[error("Could not read addresses from csv: {0}")]
+    CsvReadError(#[from] csv::Error),
 }
 
-pub fn update_factory_deployed_addresses(
-    config: Arc<EventProcessingConfig>,
-    to_block: U64,
-    on_complete: impl FnOnce() + Send + 'static,
-) {
-    // tokio::spawn(async move {
-    //     let update_last_synced_block_result = config
-    //         .progress
-    //         .lock()
-    //         .await
-    //         .update_last_synced_block(&config.network_contract.id, to_block);
+#[derive(Clone)]
+pub struct GetKnownFactoryDeployedAddressesParams {
+    pub project_path: PathBuf,
+    pub contract_address: ValueOrArray<Address>,
+    pub contract_name: String,
+    pub event_name: String,
+    pub network: String,
+
+    pub database: Option<Arc<PostgresClient>>,
+    pub csv_details: Option<CsvDetails>,
+}
+
+pub async fn get_known_factory_deployed_addresses(
+    params: &GetKnownFactoryDeployedAddressesParams,
+) -> Result<Vec<Address>, GetKnownFactoryDeployedAddressesError> {
+    // if let Some(database) = &config.database() {
+    //     let schema =
+    //         generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
+    //     let table_name = generate_internal_event_table_name(&schema, &config.event_name());
+    //     let query = format!(
+    //         "UPDATE rindexer_internal.{} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block",
+    //         table_name
+    //     );
+    //     let result = database
+    //         .execute(
+    //             &query,
+    //             &[&EthereumSqlTypeWrapper::U64(to_block), &config.network_contract().network],
+    //         )
+    //         .await;
     //
-    //     if let Err(e) = update_last_synced_block_result {
+    //     if let Err(e) = result {
     //         error!("Error updating last synced block: {:?}", e);
     //     }
+    // } else
     //
-    //     if let Some(database) = &config.database {
-    //         let schema =
-    //             generate_indexer_contract_schema_name(&config.indexer_name, &config.contract_name);
-    //         let table_name = generate_internal_event_table_name(&schema, &config.event_name);
-    //         let query = format!(
-    //             "UPDATE rindexer_internal.{} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block",
-    //             table_name
-    //         );
-    //         let result = database
-    //             .execute(
-    //                 &query,
-    //                 &[&EthereumSqlTypeWrapper::U64(to_block), &config.network_contract.network],
-    //             )
-    //             .await;
-    //
-    //         if let Err(e) = result {
-    //             error!("Error updating last synced block: {:?}", e);
-    //         }
-    //     } else if let Some(csv_details) = &config.csv_details {
-    //         if let Err(e) = update_last_synced_block_number_for_file(
-    //             &config.contract_name,
-    //             &config.network_contract.network,
-    //             &config.event_name,
-    //             &get_full_path(&config.project_path, &csv_details.path).unwrap_or_else(|_| {
-    //                 panic!("failed to get full path {}", config.project_path.display())
-    //             }),
-    //             to_block,
-    //         )
-    //             .await
-    //         {
-    //             error!(
-    //                 "Error updating last synced block to CSV - path - {} error - {:?}",
-    //                 csv_details.path, e
-    //             );
-    //         }
-    //     } else if let Some(stream_last_synced_block_file_path) =
-    //         &config.stream_last_synced_block_file_path
-    //     {
-    //         if let Err(e) = update_last_synced_block_number_for_file(
-    //             &config.contract_name,
-    //             &config.network_contract.network,
-    //             &config.event_name,
-    //             &config
-    //                 .project_path
-    //                 .join(stream_last_synced_block_file_path)
-    //                 .canonicalize()
-    //                 .expect("Failed to canonicalize path"),
-    //             to_block,
-    //         )
-    //             .await
-    //         {
-    //             error!(
-    //                 "Error updating last synced block to stream - path - {} error - {:?}",
-    //                 stream_last_synced_block_file_path, e
-    //             );
-    //         }
-    //     }
-    //
-    //     on_complete();
-    // });
+
+    if let Some(csv_details) = &params.csv_details {
+        let full_path = get_full_path(&params.project_path, &csv_details.path).unwrap();
+
+        let csv_path = build_known_factory_address_file(&full_path, &params.contract_name,
+                                                        &params.network,
+                                                        &params.event_name);
+        // if !Path::new(&csv_path).exists() {
+        //     csv_reader.append_header(vec!["factory_deployed_address".to_string()]).await.unwrap();
+        // }
+
+        let csv_reader = AsyncCsvReader::new(&csv_path);
+
+        let data = csv_reader.read_all().await?;
+
+        println!("GET ADDRESS {:?}", data);
+
+        return Ok(data.into_iter().map(|row| row[0].parse::<Address>().unwrap()).collect())
+    }
+
+    unreachable!("Can't get known factory deployed addresses without database or csv details")
 }

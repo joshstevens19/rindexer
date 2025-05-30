@@ -41,7 +41,7 @@ start_graphql_base_paint:
 start_indexer_lens_mirrors:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/lens_mirrors indexer
 start_uniswap:
-	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/uniswap_v3_factory all
+	RUSTFLAGS='-C target-cpu=native' cargo run -- start --path $(CURDIR)/../examples/uniswap_v3_factory all
 delete_uniswap:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- delete --path $(CURDIR)/../examples/uniswap_v3_factory
 start_sophon:

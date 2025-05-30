@@ -13,11 +13,11 @@ use crate::{
         AddressDetails, ContractEventMapping, FilterDetails, IndexingContractSetup,
     },
     helpers::get_full_path,
-    indexer::parse_topic,
     manifest::{chat::ChatConfig, stream::StreamsConfig},
     types::single_or_array::StringOrArray,
 };
 use crate::event::contract_setup::FactoryDetails;
+use crate::helpers::parse_topic;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EventInputIndexedFilters {
@@ -57,11 +57,11 @@ pub struct FilterDetailsYaml {
 pub struct FactoryDetailsYaml {
     pub name: String,
 
-    pub address: String,
+    pub address: ValueOrArray<Address>,
 
     pub event_name: String,
 
-    pub parameter_name: String,
+    pub input_name: String,
 
     pub abi: String
 }
@@ -111,7 +111,7 @@ impl ContractDetails {
                     name: factory.name.clone(),
                     address: factory.address.clone(),
                     event_name: factory.event_name.clone(),
-                    parameter_name: factory.parameter_name.clone(),
+                    input_name: factory.input_name.clone(),
                     abi: factory.abi.clone(),
                 })
         } else if let Some(filter) = &self.filter {
@@ -136,9 +136,6 @@ impl ContractDetails {
         if let Some(address) = &self.address {
             return Some(address);
         }
-        // } else if let Some(factory) = &self.factory {
-        //     Some(&factory.address.parse::<Address>().into())
-        // } else {
         None
     }
 
@@ -244,39 +241,7 @@ pub struct Contract {
     pub chat: Option<ChatConfig>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct FactoryContract {
-    pub name: String,
-
-    pub details: Vec<ContractDetails>,
-
-    pub abi: StringOrArray,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub include_events: Option<Vec<String>>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub index_event_in_order: Option<Vec<String>>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dependency_events: Option<DependencyEventTreeYaml>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reorg_safe_distance: Option<bool>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub generate_csv: Option<bool>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub streams: Option<StreamsConfig>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub chat: Option<ChatConfig>,
-}
-
-
 #[derive(thiserror::Error, Debug)]
-
 pub enum ParseAbiError {
     #[error("Could not read ABI string: {0}")]
     CouldNotReadAbiString(String),

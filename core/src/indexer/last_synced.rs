@@ -219,19 +219,19 @@ pub fn update_progress_and_last_synced_task(
 ) {
     tokio::spawn(async move {
         let update_last_synced_block_result = config
-            .progress
+            .progress()
             .lock()
             .await
-            .update_last_synced_block(&config.network_contract.id, to_block);
+            .update_last_synced_block(&config.network_contract().id, to_block);
 
         if let Err(e) = update_last_synced_block_result {
             error!("Error updating last synced block: {:?}", e);
         }
 
-        if let Some(database) = &config.database {
+        if let Some(database) = &config.database() {
             let schema =
-                generate_indexer_contract_schema_name(&config.indexer_name, &config.contract_name);
-            let table_name = generate_internal_event_table_name(&schema, &config.event_name);
+                generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
+            let table_name = generate_internal_event_table_name(&schema, &config.event_name());
             let query = format!(
                 "UPDATE rindexer_internal.{} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block",
                 table_name
@@ -239,20 +239,20 @@ pub fn update_progress_and_last_synced_task(
             let result = database
                 .execute(
                     &query,
-                    &[&EthereumSqlTypeWrapper::U64(to_block), &config.network_contract.network],
+                    &[&EthereumSqlTypeWrapper::U64(to_block), &config.network_contract().network],
                 )
                 .await;
 
             if let Err(e) = result {
                 error!("Error updating last synced block: {:?}", e);
             }
-        } else if let Some(csv_details) = &config.csv_details {
+        } else if let Some(csv_details) = &config.csv_details() {
             if let Err(e) = update_last_synced_block_number_for_file(
-                &config.contract_name,
-                &config.network_contract.network,
-                &config.event_name,
-                &get_full_path(&config.project_path, &csv_details.path).unwrap_or_else(|_| {
-                    panic!("failed to get full path {}", config.project_path.display())
+                &config.contract_name(),
+                &config.network_contract().network,
+                &config.event_name(),
+                &get_full_path(&config.project_path(), &csv_details.path).unwrap_or_else(|_| {
+                    panic!("failed to get full path {}", config.project_path().display())
                 }),
                 to_block,
             )
@@ -264,14 +264,14 @@ pub fn update_progress_and_last_synced_task(
                 );
             }
         } else if let Some(stream_last_synced_block_file_path) =
-            &config.stream_last_synced_block_file_path
+            &config.stream_last_synced_block_file_path()
         {
             if let Err(e) = update_last_synced_block_number_for_file(
-                &config.contract_name,
-                &config.network_contract.network,
-                &config.event_name,
+                &config.contract_name(),
+                &config.network_contract().network,
+                &config.event_name(),
                 &config
-                    .project_path
+                    .project_path()
                     .join(stream_last_synced_block_file_path)
                     .canonicalize()
                     .expect("Failed to canonicalize path"),
