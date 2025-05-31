@@ -1,12 +1,12 @@
+use alloy::primitives::U64;
+use colored::{ColoredString, Colorize};
+use std::collections::HashMap;
 use std::{
     hash::{Hash, Hasher},
     sync::Arc,
 };
-
-use alloy::primitives::U64;
-use colored::{ColoredString, Colorize};
 use tokio::sync::Mutex;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::event::callback_registry::{
     EventCallbackRegistryInformation, TraceCallbackRegistryInformation,
@@ -114,9 +114,26 @@ impl IndexingEventsProgressState {
         event_information: &Vec<EventCallbackRegistryInformation>,
     ) -> Arc<Mutex<IndexingEventsProgressState>> {
         let mut events = Vec::new();
+        let mut network_latest_cache: HashMap<String, U64> = HashMap::new();
+
         for event_info in event_information {
             for network_contract in &event_info.contract.details {
-                let latest_block = network_contract.cached_provider.get_block_number().await;
+                let network = network_contract.network.clone();
+                let latest_block_cached = network_latest_cache.get(&network);
+                let latest_block = match latest_block_cached {
+                    Some(b) => {
+                        debug!("Got block for {} from cache", &network);
+                        Ok(*b)
+                    }
+                    None => {
+                        let block = network_contract.cached_provider.get_block_number().await;
+                        if let Ok(b) = block {
+                            network_latest_cache.insert(network, b);
+                        }
+                        block
+                    }
+                };
+
                 match latest_block {
                     Ok(latest_block) => {
                         let start_block = network_contract.start_block.unwrap_or(latest_block);

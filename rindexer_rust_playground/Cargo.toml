@@ -10,4 +10,4 @@ rindexer = { path = "../core" }
 
 # external dependencies
 tokio = { version = "1", features = ["full"] }
-alloy = { version = "1.0.4", features = ["full"] }
+alloy = { version = "1.0.9", features = ["full"] }

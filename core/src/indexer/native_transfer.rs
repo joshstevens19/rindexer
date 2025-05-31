@@ -149,10 +149,10 @@ async fn provider_call(
     config: &TraceProcessingConfig,
     block: U64,
 ) -> Result<Vec<LocalizedTransactionTrace>, ProviderError> {
-    if config.method == TraceProcessingMethod::DebugTraceBlockByNumber {
-        provider.debug_trace_block_by_number(block).await
-    } else {
+    if config.method == TraceProcessingMethod::TraceBlock {
         provider.trace_block(block).await
+    } else {
+        provider.debug_trace_block_by_number(block).await
     }
 }
 

@@ -1,8 +1,3 @@
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
-
 use alloy::{
     eips::{BlockId, BlockNumberOrTag},
     primitives::{Address, Bytes, TxHash, U256, U64},
@@ -29,12 +24,19 @@ use alloy::{
         RpcError, TransportErrorKind,
     },
 };
+use alloy_chains::{Chain, NamedChain};
 use futures::future::try_join_all;
+use log::debug;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::future::IntoFuture;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use thiserror::Error;
 use tokio::sync::Mutex;
-use tracing::{error, info};
+use tracing::{debug_span, error, Instrument};
 use url::Url;
 
 use crate::{event::RindexerEventFilter, manifest::core::Manifest};
@@ -55,6 +57,7 @@ pub struct JsonRpcCachedProvider {
     is_zk_chain: bool,
     #[allow(unused)]
     chain_id: u64,
+    chain: Chain,
     pub max_block_range: Option<U64>,
 }
 
@@ -83,7 +86,8 @@ pub struct WrappedLog {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraceCall {
     pub from: Address,
-    pub gas: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gas: Option<String>,
     #[serde(rename = "gasUsed")]
     pub gas_used: U256,
     pub to: Option<Address>,
@@ -107,43 +111,84 @@ pub struct TraceCallFrame {
     pub result: TraceCall,
 }
 
+/// A faster than network-call method for determining if a chain is Zk-Rollup.
+fn is_known_zk_evm_compatible_chain(chain: Chain) -> Option<bool> {
+    if let Some(name) = chain.named() {
+        match name {
+            NamedChain::Lens | NamedChain::ZkSync | NamedChain::Sophon | NamedChain::Abstract => {
+                Some(true)
+            }
+            NamedChain::Mainnet
+            | NamedChain::Arbitrum
+            | NamedChain::Soneium
+            | NamedChain::Avalanche
+            | NamedChain::Polygon
+            | NamedChain::Scroll
+            | NamedChain::Blast
+            | NamedChain::World
+            | NamedChain::Unichain
+            | NamedChain::Base => Some(false),
+            _ => None,
+        }
+    } else {
+        None
+    }
+}
+
 impl JsonRpcCachedProvider {
     pub async fn new(
         provider: RindexerProvider,
         chain_id: u64,
         max_block_range: Option<U64>,
     ) -> Self {
-        let response: Result<String, _> = provider.raw_request("zks_L1ChainId".into(), [&()]).await;
-        let is_zk_chain = response.is_ok();
+        let chain = Chain::from(chain_id);
+        let is_zk_evm = match is_known_zk_evm_compatible_chain(chain) {
+            Some(zk) => zk,
+            None => {
+                let response: Result<String, _> =
+                    provider.raw_request("zks_L1ChainId".into(), [&()]).await;
+                let is_zk_chain = response.is_ok();
+                if is_zk_chain {
+                    debug!("Chain {} is zk chain. Trace indexing adjusted if enabled.", chain_id);
+                }
 
-        if is_zk_chain {
-            info!("Chain {} is zk chain. Trace indexing adjusted.", chain_id);
-        }
+                is_zk_chain
+            }
+        };
 
         JsonRpcCachedProvider {
             provider: Arc::new(provider),
             cache: Mutex::new(None),
             max_block_range,
+            chain,
             chain_id,
-            is_zk_chain,
+            is_zk_chain: is_zk_evm,
         }
     }
 
     pub async fn get_latest_block(&self) -> Result<Option<Arc<Block>>, ProviderError> {
         let mut cache_guard = self.cache.lock().await;
+        let block_time =
+            self.chain.average_blocktime_hint().unwrap_or_else(|| Duration::from_millis(1000));
+        let cache_time = block_time;
 
-        // TODO-TODO
+        // Fetches the latest block only if it is likely that a new block has been produced for
+        // this specific network. Consider this to be equal to half the block-time.
         //
-        // This is potentially called way too much. Consider dropping it back.
-        // Also ensure this isn't duplicated by each contract-event.
+        // If we want to reduce RPC calls further at the cost of we could consider indexing delay we
+        // could set this to block-time directly.
         if let Some((timestamp, block)) = &*cache_guard {
-            if timestamp.elapsed() < Duration::from_millis(50) {
+            if timestamp.elapsed() < cache_time {
                 return Ok(Some(Arc::clone(block)));
             }
         }
 
-        let latest_block =
-            self.provider.get_block(BlockId::Number(BlockNumberOrTag::Latest)).await?;
+        let latest_block = self
+            .provider
+            .get_block(BlockId::Number(BlockNumberOrTag::Latest))
+            .into_future()
+            .instrument(debug_span!("fetching latest block", name = ?self.chain.named()))
+            .await?;
 
         if let Some(block) = latest_block {
             let arc_block = Arc::new(block);
@@ -228,12 +273,14 @@ impl JsonRpcCachedProvider {
                                 from: frame.result.from,
                                 to,
                                 value: frame.result.value,
-                                gas: U64::from_str_radix(
-                                    frame.result.gas.trim_start_matches("0x"),
-                                    16,
-                                )
-                                .unwrap_or_default()
-                                .as_limbs()[0],
+                                gas: frame
+                                    .result
+                                    .gas
+                                    .and_then(|a| {
+                                        U64::from_str_radix(a.trim_start_matches("0x"), 16).ok()
+                                    })
+                                    .unwrap_or_default()
+                                    .as_limbs()[0],
                                 input: frame.result.input,
                                 call_type: CallType::Call,
                             }),
@@ -361,6 +408,7 @@ impl CreateNetworkProvider {
                 client: provider,
             })
         });
+
         try_join_all(provider_futures).await
     }
 }
