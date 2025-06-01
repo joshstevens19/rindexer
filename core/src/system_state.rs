@@ -19,7 +19,7 @@ pub async fn initiate_shutdown() {
     loop {
         if active == 0 {
             info!("All active indexing tasks finished shutting down system...");
-            break
+            break;
         }
 
         info!("{} active indexing tasks pending.. shutting them down gracefully", active);

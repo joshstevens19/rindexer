@@ -126,7 +126,7 @@ impl ContractDetails {
                     ),
                     indexed_filters: self.indexed_filters.as_ref().and_then(|f| f.first().cloned()),
                 }),
-            }
+            };
         } else {
             panic!("Contract details must have an address, factory or filter");
         }

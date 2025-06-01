@@ -115,8 +115,8 @@ impl ABIInput {
                                 &input.type_,
                             )]
                         }
-                        GenerateAbiPropertiesType::PostgresColumnsNamesOnly |
-                        GenerateAbiPropertiesType::CsvHeaderNames => {
+                        GenerateAbiPropertiesType::PostgresColumnsNamesOnly
+                        | GenerateAbiPropertiesType::CsvHeaderNames => {
                             let value = format!(
                                 "{}{}",
                                 prefix.map_or_else(|| "".to_string(), |p| format!("{}_", p)),
@@ -393,8 +393,8 @@ pub fn get_abi_item_with_db_map(
                         }
                         db_column_name.push_str(&camel_to_snake(&input.name));
 
-                        if param ==
-                            parameter_mapping
+                        if param
+                            == parameter_mapping
                                 .last()
                                 .expect("Parameter mapping should have at least one element")
                         {

@@ -1,4 +1,4 @@
-use std::{path::Path, sync::Arc, time::Duration};
+use std::{path::Path, str::FromStr, sync::Arc, time::Duration};
 
 use alloy::primitives::U64;
 use futures::future::try_join_all;
@@ -27,7 +27,7 @@ use crate::{database::postgres::client::PostgresConnectionError, event::{
     progress::IndexingEventsProgressState,
     reorg::reorg_safe_distance_for_chain,
     ContractEventDependencies,
-}, manifest::core::Manifest, provider::{JsonRpcCachedProvider, ProviderError}, PostgresClient};
+}, manifest::core::Manifest, provider::{JsonRpcCachedProvider, ProviderError},public_read_env_value, PostgresClient};
 use crate::event::config::{ContractEventProcessingConfig, FactoryEventProcessingConfig};
 
 #[derive(thiserror::Error, Debug)]
@@ -296,7 +296,11 @@ pub async fn start_indexing_contract_events(
     StartIndexingError,
 > {
     let event_progress_state = IndexingEventsProgressState::monitor(&registry.events).await;
-    let semaphore = Arc::new(Semaphore::new(100));
+    let permits = public_read_env_value("CONTRACT_PERMITS").unwrap_or("100".to_string());
+    let permits = usize::from_str(&permits).unwrap_or(100);
+    let semaphore = Arc::new(Semaphore::new(permits));
+
+    info!("Configured {} permits for contract events.", permits);
 
     // need this to keep track of dependency_events cross contracts and events
     // if you are doing advanced dependency events where other contracts depend on the processing of
@@ -306,7 +310,7 @@ pub async fn start_indexing_contract_events(
     let mut non_blocking_process_events = Vec::new();
     let mut processed_network_contracts: Vec<ProcessedNetworkContract> = Vec::new();
     let mut dependency_event_processing_configs: Vec<ContractEventsDependenciesConfig> = Vec::new();
-    
+
     for event in registry.events.iter() {
 
         let stream_details = manifest
@@ -482,7 +486,7 @@ pub async fn start_indexing(
         apply_cross_contract_dependency_events_config_after_processing,
         mut dependency_event_processing_configs,
     ) = contract_events_indexer?;
-    
+
     non_blocking_process_events.extend(trace_indexer_handles?);
     non_blocking_process_events.extend(non_blocking_contract_handles);
 

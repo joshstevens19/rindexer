@@ -64,6 +64,12 @@ fn trace_generate_structs(contract_name: &str) -> Result<Code, GenerateStructsEr
                         pub event_data: {struct_data},
                         pub tx_information: TxInformation
                     }}
+
+                    impl HasTxInformation for {struct_result} {{
+                        fn tx_information(&self) -> &TxInformation {{
+                            &self.tx_information
+                        }}
+                    }}
                 "#,
                 struct_result = struct_result,
                 struct_data = struct_data,
@@ -452,7 +458,7 @@ fn generate_trace_bindings_code(
             event::{{
                 callback_registry::{{
                     TraceCallbackRegistry, TraceCallbackRegistryInformation, TraceCallbackResult,
-                    TraceResult, TxInformation,
+                    TraceResult, TxInformation, HasTxInformation
                 }},
                 contract_setup::{{TraceInformation, NetworkTrace}},
             }},
@@ -933,7 +939,7 @@ pub fn generate_trace_handlers(
                       )
                       .await,
                 )
-                .register(manifest_path, registry);
+                .register(manifest_path, registry).await;
             }}
         "#,
             handler_fn_name = camel_to_snake(&event.name),

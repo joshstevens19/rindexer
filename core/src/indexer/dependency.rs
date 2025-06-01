@@ -141,7 +141,10 @@ impl ContractEventDependencies {
         visited: &mut HashSet<ContractEventMapping>,
     ) -> Arc<EventsDependencyTree> {
         if visited.contains(event) {
-            return Arc::new(EventsDependencyTree { contract_events: vec![], then: Box::new(None) });
+            return Arc::new(EventsDependencyTree {
+                contract_events: vec![],
+                then: Box::new(None),
+            });
         }
 
         visited.insert(event.clone());

@@ -15,12 +15,15 @@ on:
 jobs:
   fmt:
     name: Rustfmt
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --all -- --check
+      # Toolchain file bug workaround: https://github.com/dtolnay/rust-toolchain/issues/153
+      - run: rustup component add rustfmt
+      - name: Run Fmt Check
+        run: cargo fmt --all -- --check
 
   clippy:
     name: Clippy

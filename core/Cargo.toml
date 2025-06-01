@@ -17,7 +17,7 @@ mockito = "1.7.0"
 
 [dependencies]
 # TODO: Trim down alloy features needed later, for now opt in to all.
-alloy = { version = "0.15.6", features = ["full"] }
+alloy = { version = "1.0.4", features = ["full"] }
 async-std = "1.12.0"
 async-trait = "0.1.77"
 aws-config = "1.5.0"
@@ -72,7 +72,8 @@ url = "2.5.0"
 # build
 jemallocator = { version = "0.6.0", package = "tikv-jemallocator", optional = true }
 jemalloc-ctl = { version = "0.6.0", package = "tikv-jemalloc-ctl", optional = true }
-foundry-compilers = "0.14.1"
+foundry-compilers = "0.17.0"
+log = "0.4.27"
 
 [target.'cfg(not(windows))'.dependencies]
 rdkafka = { version = "0.37.0", features = ["tokio"] }

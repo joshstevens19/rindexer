@@ -139,7 +139,9 @@ pub fn is_relevant_block(
     true
 }
 
+/// Take either the halved block range, or 2 blocks from the current. This is to prevent possible
+/// stalling risk and ensure we always make progress.
 pub fn halved_block_number(to_block: U64, from_block: U64) -> U64 {
     let halved_range = (to_block - from_block) / U64::from(2);
-    (from_block + halved_range).max(from_block + U64::from(100))
+    (from_block + halved_range).max(from_block + U64::from(2))
 }
