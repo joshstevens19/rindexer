@@ -265,7 +265,7 @@ impl JsonRpcCachedProvider {
     }
 
     pub async fn get_logs(&self, filter: &RindexerEventFilter) -> Result<Vec<Log>, ProviderError> {
-        let logs = self.provider.get_logs(&filter.raw_filter().await).await?;
+        let logs = self.provider.get_logs(&filter.rpc_request_filter().await).await?;
         Ok(logs)
 
         // rindexer_info!("get_logs DEBUG [{:?}]", filter.raw_filter());

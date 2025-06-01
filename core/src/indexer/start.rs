@@ -306,8 +306,9 @@ pub async fn start_indexing_contract_events(
     let mut non_blocking_process_events = Vec::new();
     let mut processed_network_contracts: Vec<ProcessedNetworkContract> = Vec::new();
     let mut dependency_event_processing_configs: Vec<ContractEventsDependenciesConfig> = Vec::new();
-
+    
     for event in registry.events.iter() {
+
         let stream_details = manifest
             .contracts
             .iter()
@@ -481,7 +482,7 @@ pub async fn start_indexing(
         apply_cross_contract_dependency_events_config_after_processing,
         mut dependency_event_processing_configs,
     ) = contract_events_indexer?;
-
+    
     non_blocking_process_events.extend(trace_indexer_handles?);
     non_blocking_process_events.extend(non_blocking_contract_handles);
 

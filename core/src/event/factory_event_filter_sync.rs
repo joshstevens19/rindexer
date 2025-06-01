@@ -43,9 +43,6 @@ pub async fn update_known_factory_deployed_addresses(
             .and_then(|param| param.value.as_address())
     ).collect::<Option<Vec<_>>>().unwrap();
 
-    println!("ADDRESS {:?}", events.len());
-    println!("ADDRESS {:?}", addresses);
-
         // if let Some(database) = &config.database() {
         //     let schema =
         //         generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
@@ -135,16 +132,15 @@ pub async fn get_known_factory_deployed_addresses(
         let csv_path = build_known_factory_address_file(&full_path, &params.contract_name,
                                                         &params.network,
                                                         &params.event_name);
-        // if !Path::new(&csv_path).exists() {
-        //     csv_reader.append_header(vec!["factory_deployed_address".to_string()]).await.unwrap();
-        // }
+
+        if !Path::new(&csv_path).exists() {
+            return Ok(vec![]);
+        }
 
         let csv_reader = AsyncCsvReader::new(&csv_path);
 
         let data = csv_reader.read_all().await?;
-
-        println!("GET ADDRESS {:?}", data);
-
+        
         return Ok(data.into_iter().map(|row| row[0].parse::<Address>().unwrap()).collect())
     }
 

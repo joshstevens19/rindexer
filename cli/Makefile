@@ -44,6 +44,8 @@ start_uniswap:
 	RUSTFLAGS='-C target-cpu=native' cargo run -- start --path $(CURDIR)/../examples/uniswap_v3_factory all
 delete_uniswap:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- delete --path $(CURDIR)/../examples/uniswap_v3_factory
+codegen_typings_uniswap_rust:
+	cargo run -- codegen --path $(CURDIR)/../examples/uniswap_v3_factory_rust indexer
 start_sophon:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/sophon_testnet_contract_deploy all
 start_indexer_issue:

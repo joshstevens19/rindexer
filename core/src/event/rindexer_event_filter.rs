@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::{PathBuf};
 use std::sync::Arc;
 use alloy::{
     eips::BlockNumberOrTag,
@@ -6,10 +6,9 @@ use alloy::{
     rpc::types::{Filter, ValueOrArray},
 };
 
-use crate::event::contract_setup::{AddressDetails, FactoryDetails, FilterDetails};
+use crate::event::contract_setup::{AddressDetails, FilterDetails};
 use crate::event::factory_event_filter_sync::{get_known_factory_deployed_addresses, GetKnownFactoryDeployedAddressesParams};
 use crate::manifest::storage::CsvDetails;
-use crate::manifest::stream::StreamsConfig;
 use crate::PostgresClient;
 
 #[derive(thiserror::Error, Debug)]
@@ -241,7 +240,7 @@ impl RindexerEventFilter {
         }
     }
 
-    pub async fn raw_filter(&self) -> Filter {
+    pub async fn rpc_request_filter(&self) -> Filter {
         match self {
             RindexerEventFilter::Address(filter) => filter.raw_filter().await,
             RindexerEventFilter::Filter(filter) => filter.raw_filter().await,
