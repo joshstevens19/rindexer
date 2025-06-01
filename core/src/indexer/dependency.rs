@@ -228,43 +228,55 @@ impl ContractEventDependencies {
     pub fn parse(manifest: &Manifest) -> Vec<ContractEventDependencies> {
         let mut dependencies: Vec<ContractEventDependencies> = vec![];
         for contract in &manifest.contracts {
-            // TODO: Revert this back, needs to be merged with factory
-            // if let Some(dependency) = contract.dependency_events.clone() {
-            //     let dependency_event_tree = contract.convert_dependency_event_tree_yaml(dependency);
-            //     let dependency_tree =
-            //         EventsDependencyTree::from_dependency_event_tree(&dependency_event_tree);
-            //
-            //     dependencies.push(ContractEventDependencies {
-            //         contract_name: contract.name.clone(),
-            //         event_dependencies: EventDependencies {
-            //             tree: Arc::new(dependency_tree),
-            //             dependency_events: dependency_event_tree.collect_dependency_events(),
-            //         },
-            //     });
-            // }
-
-            // TODO: May need to be network specific
-            contract.details.iter().filter_map(|d| d.factory.clone()).for_each(|factory| {
-                let dependency_event_tree = DependencyEventTree {
-                    contract_events: vec![ContractEventMapping { contract_name: factory.name, event_name: factory.event_name }],
-                    then: Some(Box::new(DependencyEventTree {
-                        contract_events:  vec![ContractEventMapping { contract_name: contract.clone().name, event_name: "Swap".to_string() }],
-                        then: None,
-                    })),
-                };
+            let contract_dependencies = contract.dependency_events.clone().map(|dependency| {
+                let dependency_event_tree = contract.convert_dependency_event_tree_yaml(dependency);
                 let dependency_tree =
                     EventsDependencyTree::from_dependency_event_tree(&dependency_event_tree);
 
+                EventDependencies {
+                    tree: Arc::new(dependency_tree),
+                    dependency_events: dependency_event_tree.collect_dependency_events(),
+                }
+            });
 
-                println!("ADDED {:?}", dependency_tree);
-                dependencies.push(ContractEventDependencies {
-                    contract_name: contract.name.clone(),
-                    event_dependencies: EventDependencies {
+            let factories = contract.details.iter().filter_map(|d| d.factory.clone()).collect::<Vec<_>>();
+            let factory_dependency = factories.first().cloned();
+
+            if let Some(factory) = factory_dependency {
+                if !factories.iter().all(|f| f.name == factory.name && f.event_name == factory.event_name && f.input_name == factory.input_name) {
+                    panic!("Contract using factory filter must use same factory across all networks. Please raise issue in github if you need different factories across networks");
+                }
+
+                let event_dependencies = contract_dependencies.unwrap_or_else(|| {
+                    let events = contract.include_events.as_ref().expect("Contract using factory filter must specify `include_events`.");
+
+                    let dependency_event_tree = DependencyEventTree {
+                        contract_events: vec![ContractEventMapping {
+                            contract_name: factory.name,
+                            event_name: factory.event_name
+                        }],
+                        then: Some(Box::new(DependencyEventTree {
+                            contract_events: events.iter().map(|event| ContractEventMapping {
+                                contract_name: contract.name.clone(),
+                                event_name: event.clone(),
+                            }).collect(),
+                            then: None,
+                        })),
+                    };
+
+                    let dependency_tree = EventsDependencyTree::from_dependency_event_tree(&dependency_event_tree);
+
+                    EventDependencies {
                         tree: Arc::new(dependency_tree),
                         dependency_events: dependency_event_tree.collect_dependency_events(),
-                    },
+                    }
                 });
-            })
+
+                dependencies.push(ContractEventDependencies {
+                    contract_name: contract.name.clone(),
+                    event_dependencies,
+                });
+            }
         }
 
         dependencies
@@ -359,8 +371,6 @@ impl ContractEventsDependenciesConfig {
         dependency_event_processing_configs: &mut [ContractEventsDependenciesConfig],
         event_processing_config: Arc<EventProcessingConfig>,
     ) {
-        println!("ADD TO EVENT OR PANIC {}", contract_name);
-
         match dependency_event_processing_configs
             .iter_mut()
             .find(|c| c.contract_name == contract_name)
