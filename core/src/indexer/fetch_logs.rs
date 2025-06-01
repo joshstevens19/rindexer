@@ -1,13 +1,5 @@
 use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
 
-use crate::{
-    event::{config::EventProcessingConfig, RindexerEventFilter},
-    indexer::{
-        log_helpers::{halved_block_number, is_relevant_block},
-        IndexingEventProgressStatus,
-    },
-    provider::{JsonRpcCachedProvider, ProviderError},
-};
 use alloy::{
     primitives::{Address, BlockNumber, B256, U64},
     rpc::types::{Log, ValueOrArray},
@@ -61,7 +53,7 @@ pub fn fetch_logs_stream(
             warn!(
                 "{}::{} - {} - max block range limitation of {} blocks applied - block range indexing will be slower then RPC providers supplying the optimal ranges - https://rindexer.xyz/docs/references/rpc-node-providers#rpc-node-providers",
                 config.info_log_name(),
-                config.network_contract.network,
+                config.network_contract().network,
                 IndexingEventProgressStatus::Syncing.log(),
                 max_block_range_limitation.unwrap()
             );
@@ -93,7 +85,7 @@ pub fn fetch_logs_stream(
                             warn!(
                                 "{}::{} - RPC PROVIDER IS SLOW - Slow indexing mode enabled, max block range limitation: {} blocks - we advise using a faster provider who can predict the next block ranges.",
                                 &config.info_log_name(),
-                                &config.network_contract.network,
+                                &config.network_contract().network,
                                 range
                             );
                         }

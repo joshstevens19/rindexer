@@ -443,7 +443,7 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                                                     debug!(
                                                         "{}::{} - {} - No events found between blocks {} - {}",
                                                         &config.info_log_name(),
-                                                        &config.network_contract.network,
+                                                        &config.network_contract().network,
                                                         IndexingEventProgressStatus::Live.log(),
                                                         from_block,
                                                         to_block
