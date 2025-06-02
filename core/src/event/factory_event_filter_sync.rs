@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 use alloy::primitives::{Address};
 use alloy::rpc::types::ValueOrArray;
+use futures::StreamExt;
 use tokio::io::AsyncWriteExt;
 use tracing::error;
 use crate::{AsyncCsvAppender, PostgresClient};
@@ -10,11 +12,33 @@ use crate::event::config::{FactoryEventProcessingConfig};
 use crate::helpers::{get_full_path, parse_log};
 use crate::manifest::storage::CsvDetails;
 use crate::simple_file_formatters::csv::AsyncCsvReader;
+use moka::sync::Cache;
 
 #[derive(thiserror::Error, Debug)]
 pub enum UpdateKnownFactoryDeployedAddressesError {
     #[error("Could not write addresses to csv: {0}")]
     CsvWriteError(#[from] csv::Error),
+
+    #[error("Could not write addresses to cache: {0}")]
+    CacheWriteError(String),
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct KnownFactoryDeployedAddressesCacheKey {
+    contract_name: String,
+    network: String,
+    event_name: String,
+}
+
+// Avoid growing memory, clean up idle keys in case no events are emitted for a specific key
+const CACHE_IDLE_DURATION: Duration = Duration::from_secs(60 * 60 * 5);
+
+type FactoryDeployedAddressesCache = Cache<KnownFactoryDeployedAddressesCacheKey, Vec<Address>>;
+
+static IN_MEMORY_CACHE: OnceLock<Arc<FactoryDeployedAddressesCache>> = OnceLock::new();
+
+fn get_in_memory_cache() -> &'static Arc<FactoryDeployedAddressesCache> {
+    IN_MEMORY_CACHE.get_or_init(|| Arc::new(Cache::builder().time_to_idle(CACHE_IDLE_DURATION).build()))
 }
 
 fn build_known_factory_address_file(
@@ -43,7 +67,26 @@ pub async fn update_known_factory_deployed_addresses(
             .and_then(|param| param.value.as_address())
     ).collect::<Option<Vec<_>>>().unwrap();
 
-        // if let Some(database) = &config.database() {
+    // update in memory cache of factory addresses
+    let cache = get_in_memory_cache();
+
+    let cache_key = KnownFactoryDeployedAddressesCacheKey {
+        contract_name: config.contract_name.clone(),
+        network: config.network_contract.network.clone(),
+        event_name: config.event.name.clone(),
+    };
+
+    cache.entry(cache_key)
+        .and_upsert_with(|maybe_entry| {
+            if let Some(entry) = maybe_entry {
+                [entry.into_value(), addresses.clone()].concat()
+            } else {
+                addresses.clone()
+            }
+        });
+
+
+    // if let Some(database) = &config.database() {
         //     let schema =
         //         generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
         //     let table_name = generate_internal_event_table_name(&schema, &config.event_name());
@@ -64,22 +107,22 @@ pub async fn update_known_factory_deployed_addresses(
         // } else
         //
 
-        if let Some(csv_details) = &config.csv_details {
-            let full_path = get_full_path(&config.project_path, &csv_details.path).unwrap();
+    if let Some(csv_details) = &config.csv_details {
+        let full_path = get_full_path(&config.project_path, &csv_details.path).unwrap();
 
-            let csv_path = build_known_factory_address_file(&full_path, &config.contract_name,
-                                                                 &config.network_contract.network,
-                                                                 &config.event.name);
-            let csv_appender = AsyncCsvAppender::new(&csv_path);
+        let csv_path = build_known_factory_address_file(&full_path, &config.contract_name,
+                                                             &config.network_contract.network,
+                                                             &config.event.name);
+        let csv_appender = AsyncCsvAppender::new(&csv_path);
 
-            if !Path::new(&csv_path).exists() {
-                csv_appender.append_header(vec!["factory_deployed_address".to_string()]).await?;
-            }
-
-            csv_appender.append_bulk(addresses.iter().map(|address| vec![address.to_string()]).collect::<Vec<_>>()).await?;
-
-            return Ok(())
+        if !Path::new(&csv_path).exists() {
+            csv_appender.append_header(vec!["factory_deployed_address".to_string()]).await?;
         }
+
+        csv_appender.append_bulk(addresses.iter().map(|address| vec![address.to_string()]).collect::<Vec<_>>()).await?;
+
+        return Ok(())
+    }
 
     unreachable!("Can't update known factory deployed addresses without database or csv details")
 }
@@ -88,6 +131,9 @@ pub async fn update_known_factory_deployed_addresses(
 pub enum GetKnownFactoryDeployedAddressesError {
     #[error("Could not read addresses from csv: {0}")]
     CsvReadError(#[from] csv::Error),
+
+    #[error("Could not read addresses from cache: {0}")]
+    CacheReadError(String),
 }
 
 #[derive(Clone)]
@@ -104,7 +150,20 @@ pub struct GetKnownFactoryDeployedAddressesParams {
 
 pub async fn get_known_factory_deployed_addresses(
     params: &GetKnownFactoryDeployedAddressesParams,
-) -> Result<Vec<Address>, GetKnownFactoryDeployedAddressesError> {
+) -> Result<Option<Vec<Address>>, GetKnownFactoryDeployedAddressesError> {
+    // check cache first
+    let cache = get_in_memory_cache();
+
+    let cache_key = KnownFactoryDeployedAddressesCacheKey {
+        contract_name: params.contract_name.clone(),
+        network: params.network.clone(),
+        event_name: params.event_name.clone(),
+    };
+
+    if let Some(v) = cache.get(&cache_key) {
+        return Ok(Some(v.clone()));
+    }
+
     // if let Some(database) = &config.database() {
     //     let schema =
     //         generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
@@ -134,14 +193,14 @@ pub async fn get_known_factory_deployed_addresses(
                                                         &params.event_name);
 
         if !Path::new(&csv_path).exists() {
-            return Ok(vec![]);
+            return Ok(None);
         }
 
         let csv_reader = AsyncCsvReader::new(&csv_path);
 
         let data = csv_reader.read_all().await?;
-        
-        return Ok(data.into_iter().map(|row| row[0].parse::<Address>().unwrap()).collect())
+
+        return Ok(Some(data.into_iter().map(|row| row[0].parse::<Address>().unwrap()).collect()))
     }
 
     unreachable!("Can't get known factory deployed addresses without database or csv details")

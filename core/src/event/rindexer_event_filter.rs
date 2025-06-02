@@ -65,8 +65,8 @@ impl SimpleEventFilter {
         address_filter.to_value_or_array()
     }
 
-    async fn raw_filter(&self) -> Filter {
-        self.filter.clone()
+    async fn rpc_request_filter(&self) -> Option<Filter> {
+        Some(self.filter.clone())
     }
 }
 
@@ -120,17 +120,17 @@ impl FactoryFilter {
             csv_details: self.csv_details.clone(),
         }).await.unwrap();
 
-        Some(result.into())
+        result.map(Into::into)
     }
 
-    async fn raw_filter(&self) -> Filter {
-        let addresses = self.contract_address().await.expect("Contract addresses should be provided for factory filter");
+    async fn rpc_request_filter(&self) -> Option<Filter> {
+        let addresses = self.contract_address().await?;
 
-        Filter::new()
+        Some(Filter::new()
             .address(addresses)
             .event_signature(self.topic_id)
             .from_block(self.current_block)
-            .to_block(self.next_block)
+            .to_block(self.next_block))
     }
 }
 
@@ -240,11 +240,11 @@ impl RindexerEventFilter {
         }
     }
 
-    pub async fn rpc_request_filter(&self) -> Filter {
+    pub async fn rpc_request_filter(&self) -> Option<Filter> {
         match self {
-            RindexerEventFilter::Address(filter) => filter.raw_filter().await,
-            RindexerEventFilter::Filter(filter) => filter.raw_filter().await,
-            RindexerEventFilter::Factory(filter) => filter.raw_filter().await,
+            RindexerEventFilter::Address(filter) => filter.rpc_request_filter().await,
+            RindexerEventFilter::Filter(filter) => filter.rpc_request_filter().await,
+            RindexerEventFilter::Factory(filter) => filter.rpc_request_filter().await,
         }
     }
 }
