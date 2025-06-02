@@ -115,19 +115,35 @@ pub struct TraceCallFrame {
 fn is_known_zk_evm_compatible_chain(chain: Chain) -> Option<bool> {
     if let Some(name) = chain.named() {
         match name {
-            NamedChain::Lens | NamedChain::ZkSync | NamedChain::Sophon | NamedChain::Abstract => {
-                Some(true)
-            }
+            // Known zkEVM-compatible chains
+            NamedChain::Lens
+            | NamedChain::ZkSync
+            | NamedChain::Sophon
+            | NamedChain::Abstract
+            | NamedChain::Scroll
+            | NamedChain::PolygonZkEvm
+            | NamedChain::Linea => Some(true),
+
+            // Known non-zkEVM chains
             NamedChain::Mainnet
+            | NamedChain::Sepolia
             | NamedChain::Arbitrum
             | NamedChain::Soneium
             | NamedChain::Avalanche
             | NamedChain::Polygon
-            | NamedChain::Scroll
+            | NamedChain::Hyperliquid
             | NamedChain::Blast
             | NamedChain::World
             | NamedChain::Unichain
-            | NamedChain::Base => Some(false),
+            | NamedChain::Base
+            | NamedChain::Optimism
+            | NamedChain::ApeChain
+            | NamedChain::BinanceSmartChain
+            | NamedChain::Fantom
+            | NamedChain::Cronos
+            | NamedChain::Gnosis => Some(false),
+
+            // Fallback for unknown chains
             _ => None,
         }
     } else {
