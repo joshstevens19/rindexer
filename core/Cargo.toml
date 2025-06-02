@@ -67,7 +67,7 @@ tracing-subscriber = { version = "0.3", features = [
   "fmt",
   "time",
 ] }
-moka = { version = "0.12.10", features = ["sync"] }
+mini-moka = "0.10.3"
 url = "2.5.0"
 
 # build

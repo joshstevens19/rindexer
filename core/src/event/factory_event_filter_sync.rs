@@ -12,7 +12,7 @@ use crate::event::config::{FactoryEventProcessingConfig};
 use crate::helpers::{get_full_path, parse_log};
 use crate::manifest::storage::CsvDetails;
 use crate::simple_file_formatters::csv::AsyncCsvReader;
-use moka::sync::Cache;
+use mini_moka::sync::Cache;
 
 #[derive(thiserror::Error, Debug)]
 pub enum UpdateKnownFactoryDeployedAddressesError {
@@ -76,15 +76,8 @@ pub async fn update_known_factory_deployed_addresses(
         event_name: config.event.name.clone(),
     };
 
-    cache.entry(cache_key)
-        .and_upsert_with(|maybe_entry| {
-            if let Some(entry) = maybe_entry {
-                [entry.into_value(), addresses.clone()].concat()
-            } else {
-                addresses.clone()
-            }
-        });
-
+    let current_value = cache.get(&cache_key);
+    cache.insert(cache_key, [current_value.unwrap_or_default(), addresses.clone()].concat());
 
     // if let Some(database) = &config.database() {
         //     let schema =
