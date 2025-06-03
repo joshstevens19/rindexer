@@ -381,10 +381,10 @@ pub async fn start_indexing_contract_events(
                 let factory_event_processing_config = FactoryEventProcessingConfig {
                     address: factory_details.address.clone(),
                     input_name: factory_details.input_name.clone(),
-                    contract_name: factory_details.name.clone(),
+                    contract_name: factory_details.contract_name.clone(),
                     project_path: project_path.to_path_buf(),
                     indexer_name: event.indexer_name.clone(),
-                    event: factory_details.event(project_path),
+                    event: factory_details.event.clone(),
                     network_contract: Arc::new(network_contract.clone()),
                     start_block,
                     end_block,

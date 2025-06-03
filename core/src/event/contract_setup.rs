@@ -5,7 +5,6 @@ use alloy::{
     rpc::types::ValueOrArray,
 };
 use alloy::json_abi::{Event, JsonAbi};
-use alloy::primitives::B256;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -19,6 +18,7 @@ use crate::{
     provider::{get_network_provider, CreateNetworkProvider, JsonRpcCachedProvider},
     types::single_or_array::StringOrArray,
 };
+use crate::abi::EventInfo;
 use crate::helpers::get_full_path;
 
 #[derive(Clone)]
@@ -59,6 +59,7 @@ pub enum CreateContractInformationError {
 
 impl ContractInformation {
     pub fn create(
+        project_path: &Path,
         contract: &Contract,
         network_providers: &[CreateNetworkProvider],
         decoder: Decoder,
@@ -79,7 +80,7 @@ impl ContractInformation {
                         network: c.network.clone(),
                         cached_provider: Arc::clone(&provider.client),
                         decoder: Arc::clone(&decoder),
-                        indexing_contract_setup: c.indexing_contract_setup(),
+                        indexing_contract_setup: c.indexing_contract_setup(project_path),
                         start_block: c.start_block,
                         end_block: c.end_block,
                         disable_logs_bloom_checks: provider.disable_logs_bloom_checks,
@@ -172,28 +173,28 @@ pub struct AddressDetails {
     pub indexed_filters: Option<Vec<EventInputIndexedFilters>>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, )]
 pub struct FactoryDetails {
-    pub name: String,
-
+    pub contract_name: String,
     pub address: ValueOrArray<Address>,
-
-    pub event_name: String,
-
     pub input_name: String,
-
-    pub abi: String,
+    pub event: Event,
 }
 
-
 impl FactoryDetails {
-    // TODO: Fix unwrap
-    pub fn event(&self, project_path: &Path) -> Event {
-        let full_path = get_full_path(project_path, &self.abi).unwrap();
-        let abi_str = fs::read_to_string(full_path).unwrap();
-        let abi: JsonAbi = serde_json::from_str(&abi_str).unwrap();
+    pub fn from_abi(project_path: &Path, abi: String, contract_name: String, address: ValueOrArray<Address>, event_name: String, input_name: String) -> Result<FactoryDetails, std::io::Error> {
+        let full_path = get_full_path(project_path, &abi)?;
+        let abi_str = fs::read_to_string(full_path)?;
+        let abi: JsonAbi = serde_json::from_str(&abi_str)?;
 
-        abi.event(&self.event_name).unwrap().first().unwrap().clone()
+        let event = abi.event(&event_name).unwrap().first().unwrap().clone();
+
+        Ok(FactoryDetails {
+            contract_name,
+            address,
+            input_name,
+            event,
+        })
     }
 }
 

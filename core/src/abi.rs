@@ -253,16 +253,16 @@ impl ABIItem {
                 .details
                 .iter()
                 .filter_map(|detail| {
-                    if let IndexingContractSetup::Filter(filter) = &detail.indexing_contract_setup()
+                    if let Some(events) = &detail.filter
                     {
-                        Some(filter.events.clone())
+                        Some(events.clone())
                     } else {
                         None
                     }
                 })
                 .flat_map(|events| match events {
-                    ValueOrArray::Value(event) => vec![event.clone()],
-                    ValueOrArray::Array(event_array) => event_array.clone(),
+                    ValueOrArray::Value(event) => vec![event.event_name],
+                    ValueOrArray::Array(event_array) => event_array.into_iter().map(|e| e.event_name).collect(),
                 })
                 .collect();
 
@@ -277,7 +277,7 @@ impl ABIItem {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventInfo {
     pub name: String,
     pub inputs: Vec<ABIInput>,

@@ -5,6 +5,7 @@ use alloy::{
     rpc::types::{ValueOrArray},
 };
 use alloy::rpc::types::Topic;
+use foundry_compilers::ProjectPaths;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -104,22 +105,18 @@ pub struct ContractDetails {
 }
 
 impl ContractDetails {
-    pub fn indexing_contract_setup(&self) -> IndexingContractSetup {
+    pub fn indexing_contract_setup(&self, project_path: &Path) -> IndexingContractSetup {
         if let Some(address) = &self.address {
             IndexingContractSetup::Address(AddressDetails {
                 address: address.clone(),
                 indexed_filters: self.indexed_filters.clone(),
             })
         } else if let Some(factory) = &self.factory {
-                IndexingContractSetup::Factory(FactoryDetails {
-                    name: factory.name.clone(),
-                    address: factory.address.clone(),
-                    event_name: factory.event_name.clone(),
-                    input_name: factory.input_name.clone(),
-                    abi: factory.abi.clone(),
-                })
+                IndexingContractSetup::Factory(
+                    FactoryDetails::from_abi(project_path, factory.abi.clone(), factory.name.clone(), factory.address.clone(), factory.event_name.clone(), factory.input_name.clone()).expect(&format!("Could not parse ABI from path: {}", factory.abi))
+                )
         } else if let Some(filter) = &self.filter {
-            return match filter {
+            match filter {
                 ValueOrArray::Value(filter) => IndexingContractSetup::Filter(FilterDetails {
                     events: ValueOrArray::Value(filter.event_name.clone()),
                     indexed_filters: self.indexed_filters.as_ref().and_then(|f| f.first().cloned()),
@@ -130,7 +127,7 @@ impl ContractDetails {
                     ),
                     indexed_filters: self.indexed_filters.as_ref().and_then(|f| f.first().cloned()),
                 }),
-            };
+            }
         } else {
             panic!("Contract details must have an address, factory or filter");
         }
@@ -160,22 +157,6 @@ impl ContractDetails {
             end_block,
         }
     }
-
-    // pub fn new_with_factory(
-    //     network: String,
-    //     factory: FactoryDetails,
-    //     start_block: Option<U64>,
-    //     end_block: Option<U64>,
-    // ) -> Self {
-    //     Self {
-    //         network,
-    //         address: None,
-    //         filter: None,
-    //         factory: Some(factory),
-    //         start_block,
-    //         end_block,
-    //     }
-    // }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -327,7 +308,7 @@ impl Contract {
         let filter_count = self
             .details
             .iter()
-            .filter(|details| details.indexing_contract_setup().is_filter())
+            .filter(|details| details.filter.is_some())
             .count();
 
         if filter_count > 0 && filter_count != self.details.len() {
@@ -336,38 +317,6 @@ impl Contract {
         }
 
         filter_count > 0
-    }
-
-    pub fn factory_contract(&self) -> Option<Contract> {
-        let factory = self
-            .details
-            .iter()
-            .filter_map(|details| details.factory.clone())
-            .collect::<Vec<_>>();
-
-        // TODO: Handle
-        // if filter_count > 0 && filter_count != self.details.len() {
-        //     // panic as this should never happen as validation has already happened
-        //     panic!("Cannot mix and match address and filter for the same contract definition.");
-        // }
-
-        let first = factory.first().cloned();
-
-        match first {
-            Some(factory) => Some(Contract {
-                name: factory.name,
-                details: vec![],
-                abi: StringOrArray::Single(factory.abi),
-                include_events: None,
-                index_event_in_order: None,
-                dependency_events: None,
-                reorg_safe_distance: None,
-                generate_csv: None,
-                streams: None,
-                chat: None,
-            }),
-            None => None
-        }
     }
 
     fn contract_name_to_filter_name(&self) -> String {

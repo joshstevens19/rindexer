@@ -2,6 +2,7 @@ use std::{path::PathBuf, sync::Arc};
 use alloy::json_abi::Event;
 use alloy::primitives::{Address, B256, U64};
 use alloy::rpc::types::ValueOrArray;
+use serde::Serialize;
 use tokio::sync::{Mutex, Semaphore};
 
 use crate::{
@@ -16,6 +17,7 @@ use crate::{
     manifest::{native_transfer::TraceProcessingMethod, storage::CsvDetails},
     PostgresClient,
 };
+use crate::abi::EventInfo;
 use crate::event::contract_setup::{AddressDetails, IndexingContractSetup};
 use crate::event::factory_event_filter_sync::update_known_factory_deployed_addresses;
 use crate::event::rindexer_event_filter::FactoryFilter;
@@ -67,9 +69,9 @@ impl ContractEventProcessingConfig {
             IndexingContractSetup::Factory(details) =>
                 Ok(RindexerEventFilter::Factory(FactoryFilter {
                     project_path: self.project_path.clone(),
-                    factory_contract_name: details.name.clone(),
+                    factory_contract_name: details.contract_name.clone(),
                     factory_address: details.address.clone(),
-                    factory_event_name: details.event_name.clone(),
+                    factory_event_name: details.event.name.clone(),
                     factory_input_name: details.input_name.clone(),
                     network: self.network_contract.network.clone(),
                     event_signature: self.event_signature,
@@ -94,7 +96,6 @@ pub struct FactoryEventProcessingConfig {
     pub contract_name: String,
     pub address: ValueOrArray<Address>,
     pub input_name: String,
-    // TODO: Use eventinfo from codebase
     pub event: Event,
     pub network_contract: Arc<NetworkContract>,
     pub start_block: U64,

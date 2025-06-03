@@ -630,7 +630,7 @@ async fn process_contract(project_path: &Path, manifest: &Manifest, postgres: Op
             .clone();
 
         let contract_information =
-            ContractInformation::create(contract, network_providers, noop_decoder())?;
+            ContractInformation::create(project_path, contract, network_providers, noop_decoder())?;
 
         let mut csv: Option<Arc<AsyncCsvAppender>> = None;
         if contract.generate_csv.unwrap_or(true) && manifest.storage.csv_enabled() {
