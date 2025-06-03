@@ -95,7 +95,7 @@ impl FactoryFilter {
             network: self.network.clone(),
             database: self.database.clone(),
             csv_details: self.csv_details.clone(),
-        }).await
+        }).await.expect("Failed to get known factory deployed addresses")
     }
 }
 

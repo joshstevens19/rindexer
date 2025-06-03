@@ -129,7 +129,7 @@ impl FactoryEventProcessingConfig {
     }
 
     pub async fn trigger_event(&self, events: Vec<EventResult>) {
-        update_known_factory_deployed_addresses(self, &events).await;
+        update_known_factory_deployed_addresses(self, &events).await.expect("Failed to update known factory deployed addresses");
     }
 
     pub fn info_log_name(&self) -> String {
