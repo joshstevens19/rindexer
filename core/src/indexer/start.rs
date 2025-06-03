@@ -400,19 +400,10 @@ pub async fn start_indexing_contract_events(
                     indexing_distance_from_head,
                 };
 
-                ContractEventsDependenciesConfig::add_to_event_or_new_entry(
-                    &mut dependency_event_processing_configs,
-                    Arc::new(event_processing_config.into()),
-                    dependencies,
-                );
-
                 apply_cross_contract_dependency_events_config_after_processing
                     .push((event.contract.name.clone(), Arc::new(factory_event_processing_config.into())));
-
-                continue;
             }
 
-            // TODO: Fix above dependencies status
             let dependencies_status = ContractEventDependencies::dependencies_status(
                 &event_processing_config.contract_name,
                 &event_processing_config.event_name,

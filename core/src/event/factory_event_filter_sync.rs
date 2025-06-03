@@ -3,8 +3,6 @@ use std::hash::Hash;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use alloy::primitives::{Address};
-use alloy::rpc::types::ValueOrArray;
-use tracing::error;
 use crate::{AsyncCsvAppender, PostgresClient};
 use crate::event::callback_registry::EventResult;
 use crate::event::config::{FactoryEventProcessingConfig};
@@ -17,15 +15,6 @@ use mini_moka::sync::Cache;
 struct KnownFactoryDeployedAddress {
     factory_address: Address,
     address: Address
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum UpdateKnownFactoryDeployedAddressesError {
-    #[error("Could not write addresses to csv: {0}")]
-    CsvWriteError(#[from] csv::Error),
-
-    #[error("Could not write addresses to cache: {0}")]
-    CacheWriteError(String),
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -85,7 +74,7 @@ fn upsert_known_factory_deployed_addresses_cache(key: KnownFactoryDeployedAddres
 pub async fn update_known_factory_deployed_addresses(
     config: &FactoryEventProcessingConfig,
     events: &Vec<EventResult>,
-) -> Result<(), UpdateKnownFactoryDeployedAddressesError> {
+) {
     let addresses: HashSet<KnownFactoryDeployedAddress> = events.iter().map(|event|
         parse_log(&config.event, &event.log)
             .and_then(|log| log.params.iter().find(|log| log.name == config.input_name).cloned())
@@ -94,7 +83,7 @@ pub async fn update_known_factory_deployed_addresses(
                 factory_address: event.tx_information.address,
                 address
             })
-    ).collect::<Option<HashSet<_>>>().unwrap();
+    ).collect::<Option<HashSet<_>>>().expect("Could not parse event log when updating known factory deployed addresses");
 
     // update in memory cache of factory addresses
     let key = KnownFactoryDeployedAddressesCacheKey {
@@ -135,30 +124,20 @@ pub async fn update_known_factory_deployed_addresses(
         let csv_appender = AsyncCsvAppender::new(&csv_path);
 
         if !Path::new(&csv_path).exists() {
-            csv_appender.append_header(vec!["factory_address".to_string(), "factory_deployed_address".to_string()]).await?;
+            csv_appender.append_header(vec!["factory_address".to_string(), "factory_deployed_address".to_string()]).await.expect("Could not write to csv file when updating known factory deployed addresses");
         }
 
-        csv_appender.append_bulk(addresses.iter().map(|item| vec![item.factory_address.to_string(), item.address.to_string()]).collect::<Vec<_>>()).await?;
+        csv_appender.append_bulk(addresses.iter().map(|item| vec![item.factory_address.to_string(), item.address.to_string()]).collect::<Vec<_>>()).await.expect("Could not write to csv file when updating known factory deployed addresses");
 
-        return Ok(())
+        return;
     }
 
     unreachable!("Can't update known factory deployed addresses without database or csv details")
 }
 
-#[derive(thiserror::Error, Debug)]
-pub enum GetKnownFactoryDeployedAddressesError {
-    #[error("Could not read addresses from csv: {0}")]
-    CsvReadError(#[from] csv::Error),
-
-    #[error("Could not read addresses from cache: {0}")]
-    CacheReadError(String),
-}
-
 #[derive(Clone)]
 pub struct GetKnownFactoryDeployedAddressesParams {
     pub project_path: PathBuf,
-    pub contract_address: ValueOrArray<Address>,
     pub contract_name: String,
     pub event_name: String,
     pub input_name: String,
@@ -170,7 +149,7 @@ pub struct GetKnownFactoryDeployedAddressesParams {
 
 pub async fn get_known_factory_deployed_addresses(
     params: &GetKnownFactoryDeployedAddressesParams,
-) -> Result<Option<HashSet<Address>>, GetKnownFactoryDeployedAddressesError> {
+) -> Option<HashSet<Address>> {
     // check cache first
     let key = KnownFactoryDeployedAddressesCacheKey {
         contract_name: params.contract_name.clone(),
@@ -180,7 +159,7 @@ pub async fn get_known_factory_deployed_addresses(
     };
 
     if let Some(cache) = get_known_factory_deployed_addresses_cache(&key) {
-        return Ok(Some(cache));
+        return Some(cache);
     }
 
     // if let Some(database) = &config.database() {
@@ -212,19 +191,19 @@ pub async fn get_known_factory_deployed_addresses(
                                                         &params.event_name, &params.input_name);
 
         if !Path::new(&csv_path).exists() {
-            return Ok(None);
+            return None;
         }
 
         let csv_reader = AsyncCsvReader::new(&csv_path);
 
-        let data = csv_reader.read_all().await?;
+        let data = csv_reader.read_all().await.expect("Could not read csv file when getting known factory deployed addresses");
 
         // extracting only 'factory_deployed_address' from the csv row
         let values = data.into_iter().map(|row| row[1].parse::<Address>().unwrap()).collect::<HashSet<_>>();
 
         set_known_factory_deployed_addresses_cache(key, values.clone());
 
-        return Ok(Some(values))
+        return Some(values)
     }
 
     unreachable!("Can't get known factory deployed addresses without database or csv details")

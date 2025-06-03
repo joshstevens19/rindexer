@@ -90,13 +90,12 @@ impl FactoryFilter {
          get_known_factory_deployed_addresses(&GetKnownFactoryDeployedAddressesParams {
             project_path: self.project_path.clone(),
             contract_name: self.factory_contract_name.clone(),
-            contract_address: self.factory_address.clone(),
             event_name: self.factory_event_name.clone(),
             input_name: self.factory_input_name.clone(),
             network: self.network.clone(),
             database: self.database.clone(),
             csv_details: self.csv_details.clone(),
-        }).await.unwrap()
+        }).await
     }
 }
 

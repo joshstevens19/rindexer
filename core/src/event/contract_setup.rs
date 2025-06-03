@@ -6,7 +6,7 @@ use alloy::{
 };
 use alloy::json_abi::{Event, JsonAbi};
 use serde::{Deserialize, Serialize};
-
+use serde_json::Error;
 use crate::{
     event::callback_registry::Decoder,
     generate_random_id,
@@ -173,6 +173,18 @@ pub struct AddressDetails {
     pub indexed_filters: Option<Vec<EventInputIndexedFilters>>,
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum FactoryDetailsFromAbiError {
+    #[error(transparent)]
+    IOError(#[from] std::io::Error),
+
+    #[error(transparent)]
+    ABIParsingError(#[from] Error),
+
+    #[error("Can not find event {0}")]
+    EventNotFoundError(String),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, )]
 pub struct FactoryDetails {
     pub contract_name: String,
@@ -182,12 +194,12 @@ pub struct FactoryDetails {
 }
 
 impl FactoryDetails {
-    pub fn from_abi(project_path: &Path, abi: String, contract_name: String, address: ValueOrArray<Address>, event_name: String, input_name: String) -> Result<FactoryDetails, std::io::Error> {
+    pub fn from_abi(project_path: &Path, abi: String, contract_name: String, address: ValueOrArray<Address>, event_name: String, input_name: String) -> Result<FactoryDetails, FactoryDetailsFromAbiError> {
         let full_path = get_full_path(project_path, &abi)?;
         let abi_str = fs::read_to_string(full_path)?;
         let abi: JsonAbi = serde_json::from_str(&abi_str)?;
 
-        let event = abi.event(&event_name).unwrap().first().unwrap().clone();
+        let event = abi.event(&event_name).and_then(|v| v.first()).ok_or(FactoryDetailsFromAbiError::EventNotFoundError(event_name.clone()))?.clone();
 
         Ok(FactoryDetails {
             contract_name,

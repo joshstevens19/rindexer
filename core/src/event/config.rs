@@ -17,7 +17,6 @@ use crate::{
     manifest::{native_transfer::TraceProcessingMethod, storage::CsvDetails},
     PostgresClient,
 };
-use crate::abi::EventInfo;
 use crate::event::contract_setup::{AddressDetails, IndexingContractSetup};
 use crate::event::factory_event_filter_sync::update_known_factory_deployed_addresses;
 use crate::event::rindexer_event_filter::FactoryFilter;
