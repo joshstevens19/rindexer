@@ -1,15 +1,17 @@
 use std::{borrow::Cow, collections::HashSet, fs, path::Path};
 
+use alloy::rpc::types::Topic;
 use alloy::{
     primitives::{Address, U64},
-    rpc::types::{ValueOrArray},
+    rpc::types::ValueOrArray,
 };
-use alloy::rpc::types::Topic;
 use foundry_compilers::ProjectPaths;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::core::{deserialize_option_u64_from_string, serialize_option_u64_as_string};
+use crate::event::contract_setup::FactoryDetails;
+use crate::helpers::parse_topic;
 use crate::{
     event::contract_setup::{
         AddressDetails, ContractEventMapping, FilterDetails, IndexingContractSetup,
@@ -18,8 +20,6 @@ use crate::{
     manifest::{chat::ChatConfig, stream::StreamsConfig},
     types::single_or_array::StringOrArray,
 };
-use crate::event::contract_setup::FactoryDetails;
-use crate::helpers::parse_topic;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EventInputIndexedFilters {
@@ -68,7 +68,7 @@ pub struct FactoryDetailsYaml {
 
     pub input_name: String,
 
-    pub abi: String
+    pub abi: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -112,9 +112,17 @@ impl ContractDetails {
                 indexed_filters: self.indexed_filters.clone(),
             })
         } else if let Some(factory) = &self.factory {
-                IndexingContractSetup::Factory(
-                    FactoryDetails::from_abi(project_path, factory.abi.clone(), factory.name.clone(), factory.address.clone(), factory.event_name.clone(), factory.input_name.clone()).expect(&format!("Could not parse ABI from path: {}", factory.abi))
+            IndexingContractSetup::Factory(
+                FactoryDetails::from_abi(
+                    project_path,
+                    factory.abi.clone(),
+                    factory.name.clone(),
+                    factory.address.clone(),
+                    factory.event_name.clone(),
+                    factory.input_name.clone(),
                 )
+                .expect(&format!("Could not parse ABI from path: {}", factory.abi)),
+            )
         } else if let Some(filter) = &self.filter {
             match filter {
                 ValueOrArray::Value(filter) => IndexingContractSetup::Filter(FilterDetails {
@@ -305,11 +313,7 @@ impl Contract {
     }
 
     pub fn is_filter(&self) -> bool {
-        let filter_count = self
-            .details
-            .iter()
-            .filter(|details| details.filter.is_some())
-            .count();
+        let filter_count = self.details.iter().filter(|details| details.filter.is_some()).count();
 
         if filter_count > 0 && filter_count != self.details.len() {
             // panic as this should never happen as validation has already happened

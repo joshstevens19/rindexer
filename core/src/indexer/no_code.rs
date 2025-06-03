@@ -14,6 +14,8 @@ use tokio_postgres::types::Type as PgType;
 use tracing::{debug, error, info, warn};
 
 use super::native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME};
+use crate::helpers::{map_log_params_to_raw_values, parse_log};
+use crate::manifest::contract::Contract;
 use crate::{
     abi::{ABIItem, CreateCsvFileForEvent, EventInfo, ParamTypeError, ReadAbiError},
     chat::ChatClients,
@@ -49,8 +51,6 @@ use crate::{
     types::core::LogParam,
     AsyncCsvAppender, FutureExt, IndexingDetails, StartDetails, StartNoCodeDetails,
 };
-use crate::helpers::{map_log_params_to_raw_values, parse_log};
-use crate::manifest::contract::Contract;
 
 #[derive(thiserror::Error, Debug)]
 pub enum SetupNoCodeError {
@@ -593,7 +593,14 @@ pub async fn process_events(
     let mut events: Vec<EventCallbackRegistryInformation> = vec![];
 
     for mut contract in manifest.contracts.clone() {
-        let contract_events = process_contract(project_path, manifest, postgres.clone(), network_providers, &mut contract).await?;
+        let contract_events = process_contract(
+            project_path,
+            manifest,
+            postgres.clone(),
+            network_providers,
+            &mut contract,
+        )
+        .await?;
 
         events.extend(contract_events);
     }
@@ -601,7 +608,13 @@ pub async fn process_events(
     Ok(events)
 }
 
-async fn process_contract(project_path: &Path, manifest: &Manifest, postgres: Option<Arc<PostgresClient>>, network_providers: &[CreateNetworkProvider], contract: &mut Contract) -> Result<Vec<EventCallbackRegistryInformation>, ProcessIndexersError> {
+async fn process_contract(
+    project_path: &Path,
+    manifest: &Manifest,
+    postgres: Option<Arc<PostgresClient>>,
+    network_providers: &[CreateNetworkProvider],
+    contract: &mut Contract,
+) -> Result<Vec<EventCallbackRegistryInformation>, ProcessIndexersError> {
     if contract.name.to_lowercase() == NATIVE_TRANSFER_CONTRACT_NAME.to_lowercase() {
         return Err(ProcessIndexersError::ContractNameConflict(contract.name.to_string()));
     }
@@ -641,11 +654,8 @@ async fn process_contract(project_path: &Path, manifest: &Manifest, postgres: Op
 
             let headers: Vec<String> = event_info.csv_headers_for_event();
             let csv_path_str = csv_path.to_str().expect("Failed to convert csv path to string");
-            let csv_path = event_info.create_csv_file_for_event(
-                project_path,
-                &contract.name,
-                csv_path_str,
-            )?;
+            let csv_path =
+                event_info.create_csv_file_for_event(project_path, &contract.name, csv_path_str)?;
             let csv_appender = AsyncCsvAppender::new(&csv_path);
             if !Path::new(&csv_path).exists() {
                 csv_appender.append_header(headers).await?;
@@ -696,7 +706,7 @@ async fn process_contract(project_path: &Path, manifest: &Manifest, postgres: Op
                 streams_clients: Arc::new(streams_client),
                 chat_clients: Arc::new(chat_clients),
             }))
-                .event_callback,
+            .event_callback,
         };
 
         events.push(event);

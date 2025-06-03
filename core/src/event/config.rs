@@ -1,10 +1,14 @@
-use std::{path::PathBuf, sync::Arc};
 use alloy::json_abi::Event;
 use alloy::primitives::{Address, B256, U64};
 use alloy::rpc::types::ValueOrArray;
 use serde::Serialize;
+use std::{path::PathBuf, sync::Arc};
 use tokio::sync::{Mutex, Semaphore};
 
+use crate::event::contract_setup::{AddressDetails, IndexingContractSetup};
+use crate::event::factory_event_filter_sync::update_known_factory_deployed_addresses;
+use crate::event::rindexer_event_filter::FactoryFilter;
+use crate::manifest::contract::EventInputIndexedFilters;
 use crate::{
     event::{
         callback_registry::{
@@ -17,10 +21,6 @@ use crate::{
     manifest::{native_transfer::TraceProcessingMethod, storage::CsvDetails},
     PostgresClient,
 };
-use crate::event::contract_setup::{AddressDetails, IndexingContractSetup};
-use crate::event::factory_event_filter_sync::update_known_factory_deployed_addresses;
-use crate::event::rindexer_event_filter::FactoryFilter;
-use crate::manifest::contract::EventInputIndexedFilters;
 
 pub struct ContractEventProcessingConfig {
     pub id: String,
@@ -47,25 +47,21 @@ pub struct ContractEventProcessingConfig {
 impl ContractEventProcessingConfig {
     pub fn to_event_filter(&self) -> Result<RindexerEventFilter, BuildRindexerFilterError> {
         match &self.network_contract.indexing_contract_setup {
-            IndexingContractSetup::Address(details) => {
-                RindexerEventFilter::new_address_filter(
-                    &self.topic_id,
-                    &self.event_name,
-                    details,
-                    self.start_block,
-                    self.end_block,
-                )
-            }
-            IndexingContractSetup::Filter(details) => {
-                RindexerEventFilter::new_filter(
-                    &self.topic_id,
-                    &self.event_name,
-                    details,
-                    self.start_block,
-                    self.end_block,
-                )
-            }
-            IndexingContractSetup::Factory(details) =>
+            IndexingContractSetup::Address(details) => RindexerEventFilter::new_address_filter(
+                &self.topic_id,
+                &self.event_name,
+                details,
+                self.start_block,
+                self.end_block,
+            ),
+            IndexingContractSetup::Filter(details) => RindexerEventFilter::new_filter(
+                &self.topic_id,
+                &self.event_name,
+                details,
+                self.start_block,
+                self.end_block,
+            ),
+            IndexingContractSetup::Factory(details) => {
                 Ok(RindexerEventFilter::Factory(FactoryFilter {
                     project_path: self.project_path.clone(),
                     factory_contract_name: details.contract_name.clone(),
@@ -80,7 +76,7 @@ impl ContractEventProcessingConfig {
                     current_block: self.start_block,
                     next_block: self.end_block,
                 }))
-
+            }
         }
     }
 
@@ -116,7 +112,12 @@ impl FactoryEventProcessingConfig {
 
         let details = AddressDetails {
             address: self.address.clone(),
-            indexed_filters: Some(vec![EventInputIndexedFilters { event_name: event_name.clone(), indexed_1: None, indexed_2: None, indexed_3: None }]),
+            indexed_filters: Some(vec![EventInputIndexedFilters {
+                event_name: event_name.clone(),
+                indexed_1: None,
+                indexed_2: None,
+                indexed_3: None,
+            }]),
         };
 
         RindexerEventFilter::new_address_filter(
@@ -129,7 +130,9 @@ impl FactoryEventProcessingConfig {
     }
 
     pub async fn trigger_event(&self, events: Vec<EventResult>) {
-        update_known_factory_deployed_addresses(self, &events).await.expect("Failed to update known factory deployed addresses");
+        update_known_factory_deployed_addresses(self, &events)
+            .await
+            .expect("Failed to update known factory deployed addresses");
     }
 
     pub fn info_log_name(&self) -> String {
@@ -186,7 +189,7 @@ impl EventProcessingConfig {
     pub fn contract_name(&self) -> String {
         match self {
             Self::ContractEventProcessing(config) => config.contract_name.clone(),
-            Self::FactoryEventProcessing(config) =>  config.contract_name.clone(),
+            Self::FactoryEventProcessing(config) => config.contract_name.clone(),
         }
     }
 
@@ -248,8 +251,12 @@ impl EventProcessingConfig {
 
     pub fn stream_last_synced_block_file_path(&self) -> Option<String> {
         match self {
-            Self::ContractEventProcessing(config) => config.stream_last_synced_block_file_path.clone(),
-            Self::FactoryEventProcessing(config) => config.stream_last_synced_block_file_path.clone(),
+            Self::ContractEventProcessing(config) => {
+                config.stream_last_synced_block_file_path.clone()
+            }
+            Self::FactoryEventProcessing(config) => {
+                config.stream_last_synced_block_file_path.clone()
+            }
         }
     }
 
@@ -263,7 +270,7 @@ impl EventProcessingConfig {
     pub fn to_event_filter(&self) -> Result<RindexerEventFilter, BuildRindexerFilterError> {
         match self {
             Self::ContractEventProcessing(config) => config.to_event_filter(),
-            Self::FactoryEventProcessing(config) => config.to_event_filter()
+            Self::FactoryEventProcessing(config) => config.to_event_filter(),
         }
     }
 

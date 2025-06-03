@@ -10,25 +10,33 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 
-use crate::{database::postgres::client::PostgresConnectionError, event::{
-    callback_registry::{EventCallbackRegistry, TraceCallbackRegistry},
-    config::{EventProcessingConfig, TraceProcessingConfig},
-}, generate_random_id, indexer::{
-    dependency::ContractEventsDependenciesConfig,
-    last_synced::{get_last_synced_block_number, SyncConfig},
-    native_transfer::{
-        native_transfer_block_consumer, native_transfer_block_fetch, EVENT_NAME,
-        NATIVE_TRANSFER_CONTRACT_NAME,
-    },
-    process::{
-        process_contracts_events_with_dependencies, process_event,
-        ProcessContractsEventsWithDependenciesError, ProcessEventError,
-    },
-    progress::IndexingEventsProgressState,
-    reorg::reorg_safe_distance_for_chain,
-    ContractEventDependencies,
-}, manifest::core::Manifest, provider::{JsonRpcCachedProvider, ProviderError},public_read_env_value, PostgresClient};
 use crate::event::config::{ContractEventProcessingConfig, FactoryEventProcessingConfig};
+use crate::{
+    database::postgres::client::PostgresConnectionError,
+    event::{
+        callback_registry::{EventCallbackRegistry, TraceCallbackRegistry},
+        config::{EventProcessingConfig, TraceProcessingConfig},
+    },
+    generate_random_id,
+    indexer::{
+        dependency::ContractEventsDependenciesConfig,
+        last_synced::{get_last_synced_block_number, SyncConfig},
+        native_transfer::{
+            native_transfer_block_consumer, native_transfer_block_fetch, EVENT_NAME,
+            NATIVE_TRANSFER_CONTRACT_NAME,
+        },
+        process::{
+            process_contracts_events_with_dependencies, process_event,
+            ProcessContractsEventsWithDependenciesError, ProcessEventError,
+        },
+        progress::IndexingEventsProgressState,
+        reorg::reorg_safe_distance_for_chain,
+        ContractEventDependencies,
+    },
+    manifest::core::Manifest,
+    provider::{JsonRpcCachedProvider, ProviderError},
+    public_read_env_value, PostgresClient,
+};
 
 #[derive(thiserror::Error, Debug)]
 pub enum CombinedLogEventProcessingError {
@@ -312,7 +320,6 @@ pub async fn start_indexing_contract_events(
     let mut dependency_event_processing_configs: Vec<ContractEventsDependenciesConfig> = Vec::new();
 
     for event in registry.events.iter() {
-
         let stream_details = manifest
             .contracts
             .iter()
@@ -377,7 +384,9 @@ pub async fn start_indexing_contract_events(
                 indexing_distance_from_head,
             };
 
-            if let Some(factory_details) = network_contract.indexing_contract_setup.factory_details() {
+            if let Some(factory_details) =
+                network_contract.indexing_contract_setup.factory_details()
+            {
                 let factory_event_processing_config = FactoryEventProcessingConfig {
                     address: factory_details.address.clone(),
                     input_name: factory_details.input_name.clone(),
@@ -400,8 +409,10 @@ pub async fn start_indexing_contract_events(
                     indexing_distance_from_head,
                 };
 
-                apply_cross_contract_dependency_events_config_after_processing
-                    .push((event.contract.name.clone(), Arc::new(factory_event_processing_config.into())));
+                apply_cross_contract_dependency_events_config_after_processing.push((
+                    event.contract.name.clone(),
+                    Arc::new(factory_event_processing_config.into()),
+                ));
             }
 
             let dependencies_status = ContractEventDependencies::dependencies_status(
@@ -418,8 +429,10 @@ pub async fn start_indexing_contract_events(
                 if let Some(dependency_in_other_contract) =
                     dependencies_status.get_first_dependencies_in_other_contracts()
                 {
-                    apply_cross_contract_dependency_events_config_after_processing
-                        .push((dependency_in_other_contract, Arc::new(event_processing_config.into())));
+                    apply_cross_contract_dependency_events_config_after_processing.push((
+                        dependency_in_other_contract,
+                        Arc::new(event_processing_config.into()),
+                    ));
 
                     continue;
                 }
@@ -430,7 +443,8 @@ pub async fn start_indexing_contract_events(
                     dependencies,
                 );
             } else {
-                let process_event = tokio::spawn(process_event(event_processing_config.into(), false));
+                let process_event =
+                    tokio::spawn(process_event(event_processing_config.into(), false));
                 non_blocking_process_events.push(process_event);
             }
         }

@@ -1,12 +1,5 @@
-use std::{any::Any, fs, sync::Arc};
-use std::path::Path;
-use alloy::{
-    primitives::{Address, Log, U64},
-    rpc::types::ValueOrArray,
-};
-use alloy::json_abi::{Event, JsonAbi};
-use serde::{Deserialize, Serialize};
-use serde_json::Error;
+use crate::abi::EventInfo;
+use crate::helpers::get_full_path;
 use crate::{
     event::callback_registry::Decoder,
     generate_random_id,
@@ -18,8 +11,15 @@ use crate::{
     provider::{get_network_provider, CreateNetworkProvider, JsonRpcCachedProvider},
     types::single_or_array::StringOrArray,
 };
-use crate::abi::EventInfo;
-use crate::helpers::get_full_path;
+use alloy::json_abi::{Event, JsonAbi};
+use alloy::{
+    primitives::{Address, Log, U64},
+    rpc::types::ValueOrArray,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::Error;
+use std::path::Path;
+use std::{any::Any, fs, sync::Arc};
 
 #[derive(Clone)]
 pub struct NetworkContract {
@@ -185,7 +185,7 @@ pub enum FactoryDetailsFromAbiError {
     EventNotFoundError(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, )]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FactoryDetails {
     pub contract_name: String,
     pub address: ValueOrArray<Address>,
@@ -194,19 +194,25 @@ pub struct FactoryDetails {
 }
 
 impl FactoryDetails {
-    pub fn from_abi(project_path: &Path, abi: String, contract_name: String, address: ValueOrArray<Address>, event_name: String, input_name: String) -> Result<FactoryDetails, FactoryDetailsFromAbiError> {
+    pub fn from_abi(
+        project_path: &Path,
+        abi: String,
+        contract_name: String,
+        address: ValueOrArray<Address>,
+        event_name: String,
+        input_name: String,
+    ) -> Result<FactoryDetails, FactoryDetailsFromAbiError> {
         let full_path = get_full_path(project_path, &abi)?;
         let abi_str = fs::read_to_string(full_path)?;
         let abi: JsonAbi = serde_json::from_str(&abi_str)?;
 
-        let event = abi.event(&event_name).and_then(|v| v.first()).ok_or(FactoryDetailsFromAbiError::EventNotFoundError(event_name.clone()))?.clone();
+        let event = abi
+            .event(&event_name)
+            .and_then(|v| v.first())
+            .ok_or(FactoryDetailsFromAbiError::EventNotFoundError(event_name.clone()))?
+            .clone();
 
-        Ok(FactoryDetails {
-            contract_name,
-            address,
-            input_name,
-            event,
-        })
+        Ok(FactoryDetails { contract_name, address, input_name, event })
     }
 }
 

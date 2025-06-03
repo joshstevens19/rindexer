@@ -13,14 +13,12 @@ use tokio::{
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, error, info, warn};
 
+use crate::helpers::{halved_block_number, is_relevant_block};
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
-    indexer::{
-        IndexingEventProgressStatus,
-    },
+    indexer::IndexingEventProgressStatus,
     provider::{JsonRpcCachedProvider, ProviderError},
 };
-use crate::helpers::{halved_block_number, is_relevant_block};
 
 pub struct FetchLogsResult {
     pub logs: Vec<Log>,

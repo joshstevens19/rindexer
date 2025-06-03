@@ -1,15 +1,17 @@
-use std::collections::HashSet;
-use std::path::{PathBuf};
-use std::sync::Arc;
-use alloy::{
-    primitives::{Address, B256, U64},
-    rpc::types::{ValueOrArray},
-};
-use alloy::rpc::types::{Topic};
 use crate::event::contract_setup::{AddressDetails, FilterDetails};
-use crate::event::factory_event_filter_sync::{get_known_factory_deployed_addresses, GetKnownFactoryDeployedAddressesParams};
+use crate::event::factory_event_filter_sync::{
+    get_known_factory_deployed_addresses, GetKnownFactoryDeployedAddressesParams,
+};
 use crate::manifest::storage::CsvDetails;
 use crate::PostgresClient;
+use alloy::rpc::types::Topic;
+use alloy::{
+    primitives::{Address, B256, U64},
+    rpc::types::ValueOrArray,
+};
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(thiserror::Error, Debug)]
 pub enum BuildRindexerFilterError {
@@ -42,7 +44,7 @@ impl SimpleEventFilter {
     fn contract_address(&self) -> Option<HashSet<Address>> {
         self.address.as_ref().map(|address| match address {
             ValueOrArray::Value(address) => HashSet::from([*address]),
-            ValueOrArray::Array(addresses) => addresses.iter().copied().collect()
+            ValueOrArray::Array(addresses) => addresses.iter().copied().collect(),
         })
     }
 }
@@ -87,7 +89,7 @@ impl FactoryFilter {
     }
 
     async fn contract_address(&self) -> Option<HashSet<Address>> {
-         get_known_factory_deployed_addresses(&GetKnownFactoryDeployedAddressesParams {
+        get_known_factory_deployed_addresses(&GetKnownFactoryDeployedAddressesParams {
             project_path: self.project_path.clone(),
             contract_name: self.factory_contract_name.clone(),
             event_name: self.factory_event_name.clone(),
@@ -95,7 +97,9 @@ impl FactoryFilter {
             network: self.network.clone(),
             database: self.database.clone(),
             csv_details: self.csv_details.clone(),
-        }).await.expect("Failed to get known factory deployed addresses")
+        })
+        .await
+        .expect("Failed to get known factory deployed addresses")
     }
 }
 
@@ -121,7 +125,9 @@ impl RindexerEventFilter {
         Ok(RindexerEventFilter::Filter(SimpleEventFilter {
             address: Some(address_details.address.clone()),
             topic_id: *topic_id,
-            topics: index_filter.map(|indexed_filter| indexed_filter.clone().into()).unwrap_or_default(),
+            topics: index_filter
+                .map(|indexed_filter| indexed_filter.clone().into())
+                .unwrap_or_default(),
             current_block,
             next_block,
         }))
@@ -137,7 +143,11 @@ impl RindexerEventFilter {
         Ok(RindexerEventFilter::Filter(SimpleEventFilter {
             address: None,
             topic_id: *topic_id,
-            topics: filter_details.clone().indexed_filters.map(|indexed_filter| indexed_filter.clone().into()).unwrap_or_default(),
+            topics: filter_details
+                .clone()
+                .indexed_filters
+                .map(|indexed_filter| indexed_filter.clone().into())
+                .unwrap_or_default(),
             current_block,
             next_block,
         }))
@@ -201,16 +211,22 @@ impl RindexerEventFilter {
     }
     pub fn set_to_block<R: Into<U64>>(mut self, block: R) -> Self {
         match self {
-            RindexerEventFilter::Address(filter) => RindexerEventFilter::Address(filter.set_to_block(block.into())),
-            RindexerEventFilter::Filter(filter) => RindexerEventFilter::Filter(filter.set_to_block(block.into())),
-            RindexerEventFilter::Factory(filter) => RindexerEventFilter::Factory(filter.set_to_block(block.into())),
+            RindexerEventFilter::Address(filter) => {
+                RindexerEventFilter::Address(filter.set_to_block(block.into()))
+            }
+            RindexerEventFilter::Filter(filter) => {
+                RindexerEventFilter::Filter(filter.set_to_block(block.into()))
+            }
+            RindexerEventFilter::Factory(filter) => {
+                RindexerEventFilter::Factory(filter.set_to_block(block.into()))
+            }
         }
     }
 
     pub async fn contract_addresses(&self) -> Option<HashSet<Address>> {
         match self {
             RindexerEventFilter::Address(filter) => filter.contract_address(),
-            RindexerEventFilter::Filter(filter) =>filter.contract_address(),
+            RindexerEventFilter::Filter(filter) => filter.contract_address(),
             RindexerEventFilter::Factory(filter) => filter.contract_address().await,
         }
     }

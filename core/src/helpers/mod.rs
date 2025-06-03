@@ -2,11 +2,11 @@ mod thread;
 
 pub use thread::set_thread_no_logging;
 
-mod file;
 mod evm_log;
+mod file;
 pub use evm_log::{
-    parse_log, map_log_params_to_raw_values, parse_topic,
-    contract_in_bloom, topic_in_bloom, halved_block_number, is_relevant_block
+    contract_in_bloom, halved_block_number, is_relevant_block, map_log_params_to_raw_values,
+    parse_log, parse_topic, topic_in_bloom,
 };
 
 use std::{

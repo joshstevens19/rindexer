@@ -5,8 +5,8 @@ use std::{
 };
 
 use csv::Writer;
-use tokio::sync::Mutex;
 use csv::{Reader, StringRecord};
+use tokio::sync::Mutex;
 
 pub struct AsyncCsvAppender {
     path: Arc<Path>,
@@ -79,16 +79,13 @@ impl AsyncCsvAppender {
     }
 }
 
-
 pub struct AsyncCsvReader {
     path: Arc<Path>,
 }
 
 impl AsyncCsvReader {
     pub fn new(file_path: &str) -> Self {
-        AsyncCsvReader {
-            path: Arc::from(PathBuf::from(file_path)),
-        }
+        AsyncCsvReader { path: Arc::from(PathBuf::from(file_path)) }
     }
 
     pub async fn read_all(&self) -> Result<Vec<Vec<String>>, csv::Error> {
@@ -106,7 +103,7 @@ impl AsyncCsvReader {
 
             Ok(records)
         })
-            .await
-            .expect("Failed to run CSV read operation")
+        .await
+        .expect("Failed to run CSV read operation")
     }
 }

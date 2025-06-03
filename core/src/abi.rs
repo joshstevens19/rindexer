@@ -253,8 +253,7 @@ impl ABIItem {
                 .details
                 .iter()
                 .filter_map(|detail| {
-                    if let Some(events) = &detail.filter
-                    {
+                    if let Some(events) = &detail.filter {
                         Some(events.clone())
                     } else {
                         None
@@ -262,7 +261,9 @@ impl ABIItem {
                 })
                 .flat_map(|events| match events {
                     ValueOrArray::Value(event) => vec![event.event_name],
-                    ValueOrArray::Array(event_array) => event_array.into_iter().map(|e| e.event_name).collect(),
+                    ValueOrArray::Array(event_array) => {
+                        event_array.into_iter().map(|e| e.event_name).collect()
+                    }
                 })
                 .collect();
 
@@ -297,7 +298,13 @@ impl EventInfo {
         let struct_result = format!("{}Result", item.name);
         let struct_data = format!("{}Data", item.name);
         let signature = item.format_event_signature()?;
-        Ok(EventInfo { name: item.name, inputs: item.inputs, signature, struct_result, struct_data })
+        Ok(EventInfo {
+            name: item.name,
+            inputs: item.inputs,
+            signature,
+            struct_result,
+            struct_data,
+        })
     }
 
     pub fn topic_id(&self) -> B256 {

@@ -229,8 +229,10 @@ pub fn update_progress_and_last_synced_task(
         }
 
         if let Some(database) = &config.database() {
-            let schema =
-                generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
+            let schema = generate_indexer_contract_schema_name(
+                &config.indexer_name(),
+                &config.contract_name(),
+            );
             let table_name = generate_internal_event_table_name(&schema, &config.event_name());
             let query = format!(
                 "UPDATE rindexer_internal.{} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block",

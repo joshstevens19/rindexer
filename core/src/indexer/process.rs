@@ -10,6 +10,7 @@ use tokio::{
 };
 use tracing::{debug, error, info};
 
+use crate::helpers::is_relevant_block;
 use crate::{
     event::{
         callback_registry::EventResult, config::EventProcessingConfig, BuildRindexerFilterError,
@@ -25,7 +26,6 @@ use crate::{
     is_running,
     provider::ProviderError,
 };
-use crate::helpers::is_relevant_block;
 
 #[derive(thiserror::Error, Debug)]
 pub enum ProcessEventError {
