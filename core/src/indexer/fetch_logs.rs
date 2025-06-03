@@ -38,8 +38,8 @@ pub fn fetch_logs_stream(
     tokio::spawn(async move {
         let mut current_filter = config.to_event_filter().unwrap();
 
-        let snapshot_to_block = current_filter.get_to_block();
-        let from_block = current_filter.get_from_block();
+        let snapshot_to_block = current_filter.to_block();
+        let from_block = current_filter.from_block();
 
         // add any max block range limitation before we start processing
         let mut max_block_range_limitation =
@@ -58,7 +58,7 @@ pub fn fetch_logs_stream(
                 max_block_range_limitation.unwrap()
             );
         }
-        while current_filter.get_from_block() <= snapshot_to_block {
+        while current_filter.from_block() <= snapshot_to_block {
             let semaphore_client = Arc::clone(&config.semaphore());
             let permit = semaphore_client.acquire_owned().await;
 
@@ -153,8 +153,8 @@ async fn fetch_historic_logs_stream(
     info_log_name: &str,
     network: &str,
 ) -> Option<ProcessHistoricLogsStreamResult> {
-    let from_block = current_filter.get_from_block();
-    let to_block = current_filter.get_to_block();
+    let from_block = current_filter.from_block();
+    let to_block = current_filter.to_block();
 
     debug!(
         "{}::{} - {} - Process historic events - blocks: {} - {}",
@@ -393,7 +393,7 @@ async fn live_indexing_stream(
                         );
 
                         let safe_block_number = to_block_number - reorg_safe_distance;
-                        let from_block = current_filter.get_from_block();
+                        let from_block = current_filter.from_block();
                         if from_block > safe_block_number {
                             info!(
                                 "{} - {} - not in safe reorg block range yet block: {} > range: {}",
@@ -403,7 +403,7 @@ async fn live_indexing_stream(
                                 safe_block_number
                             );
                         } else {
-                            let contract_address = current_filter.contract_address().await;
+                            let contract_address = current_filter.contract_addresses().await;
 
                             let to_block = safe_block_number;
                             if from_block == to_block

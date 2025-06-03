@@ -2,8 +2,9 @@ use std::{borrow::Cow, collections::HashSet, fs, path::Path};
 
 use alloy::{
     primitives::{Address, U64},
-    rpc::types::{Filter, ValueOrArray},
+    rpc::types::{ValueOrArray},
 };
+use alloy::rpc::types::Topic;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -33,18 +34,21 @@ pub struct EventInputIndexedFilters {
     pub indexed_3: Option<Vec<String>>,
 }
 
-impl EventInputIndexedFilters {
-    pub fn extend_filter_indexed(&self, mut filter: Filter) -> Filter {
-        if let Some(indexed_1) = &self.indexed_1 {
-            filter = filter.topic1(indexed_1.iter().map(|i| parse_topic(i)).collect::<Vec<_>>());
+impl From<EventInputIndexedFilters> for [Topic; 4] {
+    fn from(input: EventInputIndexedFilters) -> Self {
+        let mut topics: [Topic; 4] = Default::default();
+
+        if let Some(indexed_1) = &input.indexed_1 {
+            topics[1] = indexed_1.iter().map(|i| parse_topic(i)).collect::<Vec<_>>().into();
         }
-        if let Some(indexed_2) = &self.indexed_2 {
-            filter = filter.topic2(indexed_2.iter().map(|i| parse_topic(i)).collect::<Vec<_>>());
+        if let Some(indexed_2) = &input.indexed_2 {
+            topics[2] = indexed_2.iter().map(|i| parse_topic(i)).collect::<Vec<_>>().into();
         }
-        if let Some(indexed_3) = &self.indexed_3 {
-            filter = filter.topic3(indexed_3.iter().map(|i| parse_topic(i)).collect::<Vec<_>>());
+        if let Some(indexed_3) = &input.indexed_3 {
+            topics[3] = indexed_3.iter().map(|i| parse_topic(i)).collect::<Vec<_>>().into();
         }
-        filter
+
+        topics
     }
 }
 

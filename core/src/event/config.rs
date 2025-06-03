@@ -27,7 +27,7 @@ pub struct ContractEventProcessingConfig {
     pub indexer_name: String,
     pub contract_name: String,
     pub info_log_name: String,
-    pub topic_id: B256,
+    pub event_signature: B256,
     pub event_name: String,
     pub network_contract: Arc<NetworkContract>,
     pub start_block: U64,
@@ -48,7 +48,7 @@ impl ContractEventProcessingConfig {
         match &self.network_contract.indexing_contract_setup {
             IndexingContractSetup::Address(details) => {
                 RindexerEventFilter::new_address_filter(
-                    &self.topic_id,
+                    &self.event_signature,
                     &self.event_name,
                     details,
                     self.start_block,
@@ -57,7 +57,7 @@ impl ContractEventProcessingConfig {
             }
             IndexingContractSetup::Filter(details) => {
                 RindexerEventFilter::new_filter(
-                    &self.topic_id,
+                    &self.event_signature,
                     &self.event_name,
                     details,
                     self.start_block,
@@ -71,7 +71,7 @@ impl ContractEventProcessingConfig {
                     factory_address: details.address.clone(),
                     factory_event_name: details.event_name.clone(),
                     network: self.network_contract.network.clone(),
-                    topic_id: self.topic_id.clone(),
+                    event_signature: self.event_signature,
                     database: self.database.clone(),
                     csv_details: self.csv_details.clone(),
 
@@ -111,7 +111,7 @@ pub struct FactoryEventProcessingConfig {
 impl FactoryEventProcessingConfig {
     pub fn to_event_filter(&self) -> Result<RindexerEventFilter, BuildRindexerFilterError> {
         let event_name = self.event.name.clone();
-        let topic_id = self.event.selector();
+        let event_selector = self.event.selector();
 
         let details = AddressDetails {
             address: self.address.clone(),
@@ -119,7 +119,7 @@ impl FactoryEventProcessingConfig {
         };
 
         RindexerEventFilter::new_address_filter(
-            &topic_id,
+            &event_selector,
             &event_name,
             &details,
             self.start_block,
@@ -156,7 +156,7 @@ impl From<FactoryEventProcessingConfig> for EventProcessingConfig {
 impl EventProcessingConfig {
     pub fn topic_id(&self) -> B256 {
         match self {
-            Self::ContractEventProcessing(config) => config.topic_id.clone(),
+            Self::ContractEventProcessing(config) => config.event_signature.clone(),
             Self::FactoryEventProcessing(config) => config.event.selector().clone(),
         }
     }

@@ -238,7 +238,7 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
 
     for (config, event_filter) in live_indexing_events.iter() {
         let mut filter = event_filter.clone();
-        let last_seen_block_number = filter.get_to_block();
+        let last_seen_block_number = filter.to_block();
         let next_block_number = last_seen_block_number + U64::from(1);
 
         filter = filter.set_from_block(next_block_number).set_to_block(next_block_number);
@@ -315,7 +315,7 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                             );
                             let reorg_safe_distance = &config.indexing_distance_from_head();
                             let safe_block_number = latest_block_number - reorg_safe_distance;
-                            let from_block = ordering_live_indexing_details.filter.get_from_block();
+                            let from_block = ordering_live_indexing_details.filter.from_block();
                             // check reorg distance and skip if not safe
                             if from_block > safe_block_number {
                                 info!(
@@ -334,7 +334,7 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                                 && !is_relevant_block(
                                     &ordering_live_indexing_details
                                         .filter
-                                        .contract_address()
+                                        .contract_addresses()
                                         .await,
                                     &config.topic_id(),
                                     latest_block,
