@@ -20,7 +20,7 @@ pub enum BuildRindexerFilterError {
 #[derive(Clone, Debug)]
 struct SimpleEventFilter {
     pub address: Option<ValueOrArray<Address>>,
-    pub event_signature: B256,
+    pub topic_id: B256,
     pub topics: [Topic; 4],
     pub current_block: U64,
     pub next_block: U64,
@@ -56,7 +56,7 @@ pub struct FactoryFilter {
     pub factory_input_name: String,
     pub network: String,
 
-    pub event_signature: B256,
+    pub topic_id: B256,
 
     pub database: Option<Arc<PostgresClient>>,
     pub csv_details: Option<CsvDetails>,
@@ -121,7 +121,7 @@ impl RindexerEventFilter {
 
         Ok(RindexerEventFilter::Filter(SimpleEventFilter {
             address: Some(address_details.address.clone()),
-            event_signature: *topic_id,
+            topic_id: *topic_id,
             topics: index_filter.map(|indexed_filter| indexed_filter.clone().into()).unwrap_or_default(),
             current_block,
             next_block,
@@ -137,7 +137,7 @@ impl RindexerEventFilter {
     ) -> Result<RindexerEventFilter, BuildRindexerFilterError> {
         Ok(RindexerEventFilter::Filter(SimpleEventFilter {
             address: None,
-            event_signature: *topic_id,
+            topic_id: *topic_id,
             topics: filter_details.clone().indexed_filters.map(|indexed_filter| indexed_filter.clone().into()).unwrap_or_default(),
             current_block,
             next_block,
@@ -146,9 +146,9 @@ impl RindexerEventFilter {
 
     pub fn event_signature(&self) -> B256 {
         match self {
-            RindexerEventFilter::Address(filter) => filter.event_signature,
-            RindexerEventFilter::Filter(filter) => filter.event_signature,
-            RindexerEventFilter::Factory(filter) => filter.event_signature,
+            RindexerEventFilter::Address(filter) => filter.topic_id,
+            RindexerEventFilter::Filter(filter) => filter.topic_id,
+            RindexerEventFilter::Factory(filter) => filter.topic_id,
         }
     }
 

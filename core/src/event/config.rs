@@ -29,7 +29,7 @@ pub struct ContractEventProcessingConfig {
     pub indexer_name: String,
     pub contract_name: String,
     pub info_log_name: String,
-    pub event_signature: B256,
+    pub topic_id: B256,
     pub event_name: String,
     pub network_contract: Arc<NetworkContract>,
     pub start_block: U64,
@@ -50,7 +50,7 @@ impl ContractEventProcessingConfig {
         match &self.network_contract.indexing_contract_setup {
             IndexingContractSetup::Address(details) => {
                 RindexerEventFilter::new_address_filter(
-                    &self.event_signature,
+                    &self.topic_id,
                     &self.event_name,
                     details,
                     self.start_block,
@@ -59,7 +59,7 @@ impl ContractEventProcessingConfig {
             }
             IndexingContractSetup::Filter(details) => {
                 RindexerEventFilter::new_filter(
-                    &self.event_signature,
+                    &self.topic_id,
                     &self.event_name,
                     details,
                     self.start_block,
@@ -74,7 +74,7 @@ impl ContractEventProcessingConfig {
                     factory_event_name: details.event.name.clone(),
                     factory_input_name: details.input_name.clone(),
                     network: self.network_contract.network.clone(),
-                    event_signature: self.event_signature,
+                    topic_id: self.topic_id,
                     database: self.database.clone(),
                     csv_details: self.csv_details.clone(),
 
@@ -158,7 +158,7 @@ impl From<FactoryEventProcessingConfig> for EventProcessingConfig {
 impl EventProcessingConfig {
     pub fn topic_id(&self) -> B256 {
         match self {
-            Self::ContractEventProcessing(config) => config.event_signature.clone(),
+            Self::ContractEventProcessing(config) => config.topic_id.clone(),
             Self::FactoryEventProcessing(config) => config.event.selector().clone(),
         }
     }

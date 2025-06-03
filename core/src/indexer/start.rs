@@ -355,7 +355,7 @@ pub async fn start_indexing_contract_events(
                 indexer_name: event.indexer_name.clone(),
                 contract_name: event.contract.name.clone(),
                 info_log_name: event.info_log_name(),
-                event_signature: event.topic_id,
+                topic_id: event.topic_id,
                 event_name: event.event_name.clone(),
                 network_contract: Arc::new(network_contract.clone()),
                 start_block,
