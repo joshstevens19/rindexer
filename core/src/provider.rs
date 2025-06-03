@@ -276,10 +276,7 @@ impl JsonRpcCachedProvider {
     }
 
     pub async fn get_logs(&self, event_filter: &RindexerEventFilter) -> Result<Vec<Log>, ProviderError> {
-        let addresses = event_filter.contract_addresses().await.map(|addresses| match addresses {
-            ValueOrArray::Value(value) => vec![value],
-            ValueOrArray::Array(array) => array,
-        });
+        let addresses = event_filter.contract_addresses().await;
 
         let mut base_filter = Filter::new()
             .event_signature(event_filter.event_signature())
@@ -290,20 +287,22 @@ impl JsonRpcCachedProvider {
             .to_block(event_filter.to_block());
 
          match addresses {
-            Some(addresses) if addresses.is_empty() => {
-                // no addresses, which means nothing to get
-                // different rpc providers implement an empty array in a different way,
-                // therefore, we assume an empty addresses array means no events to fetch
-                Ok(vec![])
-            }
-             Some(addresses) if addresses.len() > MAX_RPC_SUPPORTED_ACCOUNT_FILTERS => {
+             // no addresses, which means nothing to get
+             // different rpc providers implement an empty array differently,
+             // therefore, we assume an empty addresses array means no events to fetch
+            Some(addresses) if addresses.is_empty() => Ok(vec![]),
+            // the addresses array is too big, which means we need to fetch all events
+            // and filter them manually
+            Some(addresses) if addresses.len() > MAX_RPC_SUPPORTED_ACCOUNT_FILTERS => {
                  let logs = self.provider.get_logs(&base_filter).await?;
-                 // TODO: filter
-                 Ok(logs)
+
+                let filtered_logs = logs.into_iter().filter(|log| addresses.contains(&log.address())).collect::<Vec<_>>();
+
+                Ok(filtered_logs)
             }
             Some(addresses) => {
                 let filter = base_filter
-                    .address(addresses);
+                    .address(ValueOrArray::Array(addresses.into_iter().collect()));
 
                 Ok(self.provider.get_logs(&filter).await?)
             }

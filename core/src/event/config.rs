@@ -70,6 +70,7 @@ impl ContractEventProcessingConfig {
                     factory_contract_name: details.name.clone(),
                     factory_address: details.address.clone(),
                     factory_event_name: details.event_name.clone(),
+                    factory_input_name: details.input_name.clone(),
                     network: self.network_contract.network.clone(),
                     event_signature: self.event_signature,
                     database: self.database.clone(),

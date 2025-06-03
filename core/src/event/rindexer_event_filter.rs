@@ -1,14 +1,13 @@
+use std::collections::HashSet;
 use std::path::{PathBuf};
 use std::sync::Arc;
 use alloy::{
-    eips::BlockNumberOrTag,
     primitives::{Address, B256, U64},
-    rpc::types::{Filter, ValueOrArray},
+    rpc::types::{ValueOrArray},
 };
-use alloy::rpc::types::{Log, Topic};
+use alloy::rpc::types::{Topic};
 use crate::event::contract_setup::{AddressDetails, FilterDetails};
 use crate::event::factory_event_filter_sync::{get_known_factory_deployed_addresses, GetKnownFactoryDeployedAddressesParams};
-use crate::manifest::contract::EventInputIndexedFilters;
 use crate::manifest::storage::CsvDetails;
 use crate::PostgresClient;
 
@@ -39,6 +38,13 @@ impl SimpleEventFilter {
 
         self
     }
+
+    fn contract_address(&self) -> Option<HashSet<Address>> {
+        self.address.as_ref().map(|address| match address {
+            ValueOrArray::Value(address) => HashSet::from([*address]),
+            ValueOrArray::Array(addresses) => addresses.iter().copied().collect()
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -47,6 +53,7 @@ pub struct FactoryFilter {
     pub factory_address: ValueOrArray<Address>,
     pub factory_contract_name: String,
     pub factory_event_name: String,
+    pub factory_input_name: String,
     pub network: String,
 
     pub event_signature: B256,
@@ -79,18 +86,17 @@ impl FactoryFilter {
         self
     }
 
-    async fn contract_address(&self) -> Option<ValueOrArray<Address>> {
-         let result = get_known_factory_deployed_addresses(&GetKnownFactoryDeployedAddressesParams {
+    async fn contract_address(&self) -> Option<HashSet<Address>> {
+         get_known_factory_deployed_addresses(&GetKnownFactoryDeployedAddressesParams {
             project_path: self.project_path.clone(),
             contract_name: self.factory_contract_name.clone(),
             contract_address: self.factory_address.clone(),
             event_name: self.factory_event_name.clone(),
+            input_name: self.factory_input_name.clone(),
             network: self.network.clone(),
             database: self.database.clone(),
             csv_details: self.csv_details.clone(),
-        }).await.unwrap();
-
-        result.map(Into::into)
+        }).await.unwrap()
     }
 }
 
@@ -202,10 +208,10 @@ impl RindexerEventFilter {
         }
     }
 
-    pub async fn contract_addresses(&self) -> Option<ValueOrArray<Address>> {
+    pub async fn contract_addresses(&self) -> Option<HashSet<Address>> {
         match self {
-            RindexerEventFilter::Address(filter) => filter.address.clone(),
-            RindexerEventFilter::Filter(filter) =>filter.address.clone(),
+            RindexerEventFilter::Address(filter) => filter.contract_address(),
+            RindexerEventFilter::Filter(filter) =>filter.contract_address(),
             RindexerEventFilter::Factory(filter) => filter.contract_address().await,
         }
     }

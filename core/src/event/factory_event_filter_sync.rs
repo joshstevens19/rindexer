@@ -1,9 +1,10 @@
+use std::collections::HashSet;
+use std::hash::Hash;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use alloy::primitives::{Address};
 use alloy::rpc::types::ValueOrArray;
-use futures::StreamExt;
 use tokio::io::AsyncWriteExt;
 use tracing::error;
 use crate::{AsyncCsvAppender, PostgresClient};
@@ -13,6 +14,12 @@ use crate::helpers::{get_full_path, parse_log};
 use crate::manifest::storage::CsvDetails;
 use crate::simple_file_formatters::csv::AsyncCsvReader;
 use mini_moka::sync::Cache;
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct KnownFactoryDeployedAddress {
+    factory_address: Address,
+    address: Address
+}
 
 #[derive(thiserror::Error, Debug)]
 pub enum UpdateKnownFactoryDeployedAddressesError {
@@ -28,17 +35,15 @@ struct KnownFactoryDeployedAddressesCacheKey {
     contract_name: String,
     network: String,
     event_name: String,
+    input_name: String,
 }
 
-// Avoid growing memory, clean up idle keys in case no events are emitted for a specific key
-const CACHE_IDLE_DURATION: Duration = Duration::from_secs(60 * 60 * 5);
-
-type FactoryDeployedAddressesCache = Cache<KnownFactoryDeployedAddressesCacheKey, Vec<Address>>;
+type FactoryDeployedAddressesCache = Cache<KnownFactoryDeployedAddressesCacheKey, HashSet<Address>>;
 
 static IN_MEMORY_CACHE: OnceLock<Arc<FactoryDeployedAddressesCache>> = OnceLock::new();
 
 fn get_in_memory_cache() -> &'static Arc<FactoryDeployedAddressesCache> {
-    IN_MEMORY_CACHE.get_or_init(|| Arc::new(Cache::builder().time_to_idle(CACHE_IDLE_DURATION).build()))
+    IN_MEMORY_CACHE.get_or_init(|| Arc::new(Cache::builder().build()))
 }
 
 fn build_known_factory_address_file(
@@ -46,38 +51,61 @@ fn build_known_factory_address_file(
     contract_name: &str,
     network: &str,
     event_name: &str,
+    input_name: &str,
 ) -> String {
     let path = full_path.join(contract_name).join("known-factory-addresses").join(format!(
-        "{}-{}-{}.csv",
+        "{}-{}-{}-{}.csv",
         contract_name.to_lowercase(),
         network.to_lowercase(),
-        event_name.to_lowercase()
+        event_name.to_lowercase(),
+        input_name.to_lowercase()
     ));
 
     path.to_string_lossy().into_owned()
+}
+
+fn get_known_factory_deployed_addresses_cache(key: &KnownFactoryDeployedAddressesCacheKey) -> Option<HashSet<Address>> {
+    let cache = get_in_memory_cache();
+
+    cache.get(key)
+}
+
+fn set_known_factory_deployed_addresses_cache(key: KnownFactoryDeployedAddressesCacheKey, value: HashSet<Address>) {
+    let cache = get_in_memory_cache();
+
+    cache.insert(key, value);
+}
+
+fn upsert_known_factory_deployed_addresses_cache(key: KnownFactoryDeployedAddressesCacheKey, value: HashSet<Address>) {
+    let cache = get_in_memory_cache();
+
+    let current_value = cache.get(&key).unwrap_or_default();
+
+    cache.insert(key, current_value.union(&value).cloned().collect());
 }
 
 pub async fn update_known_factory_deployed_addresses(
     config: &FactoryEventProcessingConfig,
     events: &Vec<EventResult>,
 ) -> Result<(), UpdateKnownFactoryDeployedAddressesError> {
-    let addresses: Vec<Address> = events.iter().map(|event|
+    let addresses: HashSet<KnownFactoryDeployedAddress> = events.iter().map(|event|
         parse_log(&config.event, &event.log)
-            .and_then(|log| log.params.into_iter().find(|log| log.name == config.input_name))
+            .and_then(|log| log.params.iter().find(|log| log.name == config.input_name).cloned())
             .and_then(|param| param.value.as_address())
-    ).collect::<Option<Vec<_>>>().unwrap();
+            .map(|address| KnownFactoryDeployedAddress {
+                factory_address: event.tx_information.address,
+                address
+            })
+    ).collect::<Option<HashSet<_>>>().unwrap();
 
     // update in memory cache of factory addresses
-    let cache = get_in_memory_cache();
-
-    let cache_key = KnownFactoryDeployedAddressesCacheKey {
+    let key = KnownFactoryDeployedAddressesCacheKey {
         contract_name: config.contract_name.clone(),
         network: config.network_contract.network.clone(),
         event_name: config.event.name.clone(),
+        input_name: config.input_name.clone(),
     };
-
-    let current_value = cache.get(&cache_key);
-    cache.insert(cache_key, [current_value.unwrap_or_default(), addresses.clone()].concat());
+    upsert_known_factory_deployed_addresses_cache(key, addresses.clone().into_iter().map(|item| item.address).collect());
 
     // if let Some(database) = &config.database() {
         //     let schema =
@@ -105,14 +133,14 @@ pub async fn update_known_factory_deployed_addresses(
 
         let csv_path = build_known_factory_address_file(&full_path, &config.contract_name,
                                                              &config.network_contract.network,
-                                                             &config.event.name);
+                                                             &config.event.name, &config.input_name);
         let csv_appender = AsyncCsvAppender::new(&csv_path);
 
         if !Path::new(&csv_path).exists() {
-            csv_appender.append_header(vec!["factory_deployed_address".to_string()]).await?;
+            csv_appender.append_header(vec!["factory_address".to_string(), "factory_deployed_address".to_string()]).await?;
         }
 
-        csv_appender.append_bulk(addresses.iter().map(|address| vec![address.to_string()]).collect::<Vec<_>>()).await?;
+        csv_appender.append_bulk(addresses.iter().map(|item| vec![item.factory_address.to_string(), item.address.to_string()]).collect::<Vec<_>>()).await?;
 
         return Ok(())
     }
@@ -135,6 +163,7 @@ pub struct GetKnownFactoryDeployedAddressesParams {
     pub contract_address: ValueOrArray<Address>,
     pub contract_name: String,
     pub event_name: String,
+    pub input_name: String,
     pub network: String,
 
     pub database: Option<Arc<PostgresClient>>,
@@ -143,18 +172,17 @@ pub struct GetKnownFactoryDeployedAddressesParams {
 
 pub async fn get_known_factory_deployed_addresses(
     params: &GetKnownFactoryDeployedAddressesParams,
-) -> Result<Option<Vec<Address>>, GetKnownFactoryDeployedAddressesError> {
+) -> Result<Option<HashSet<Address>>, GetKnownFactoryDeployedAddressesError> {
     // check cache first
-    let cache = get_in_memory_cache();
-
-    let cache_key = KnownFactoryDeployedAddressesCacheKey {
+    let key = KnownFactoryDeployedAddressesCacheKey {
         contract_name: params.contract_name.clone(),
         network: params.network.clone(),
         event_name: params.event_name.clone(),
+        input_name: "factory_deployed_address".to_string(),
     };
 
-    if let Some(v) = cache.get(&cache_key) {
-        return Ok(Some(v.clone()));
+    if let Some(cache) = get_known_factory_deployed_addresses_cache(&key) {
+        return Ok(Some(cache));
     }
 
     // if let Some(database) = &config.database() {
@@ -183,7 +211,7 @@ pub async fn get_known_factory_deployed_addresses(
 
         let csv_path = build_known_factory_address_file(&full_path, &params.contract_name,
                                                         &params.network,
-                                                        &params.event_name);
+                                                        &params.event_name, &params.input_name);
 
         if !Path::new(&csv_path).exists() {
             return Ok(None);
@@ -193,7 +221,12 @@ pub async fn get_known_factory_deployed_addresses(
 
         let data = csv_reader.read_all().await?;
 
-        return Ok(Some(data.into_iter().map(|row| row[0].parse::<Address>().unwrap()).collect()))
+        // extracting only 'factory_deployed_address' from the csv row
+        let values = data.into_iter().map(|row| row[1].parse::<Address>().unwrap()).collect::<HashSet<_>>();
+
+        set_known_factory_deployed_addresses_cache(key, values.clone());
+
+        return Ok(Some(values))
     }
 
     unreachable!("Can't get known factory deployed addresses without database or csv details")
