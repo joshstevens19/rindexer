@@ -20,7 +20,7 @@ pub enum BuildRindexerFilterError {
 }
 
 #[derive(Clone, Debug)]
-struct SimpleEventFilter {
+pub struct SimpleEventFilter {
     pub address: Option<ValueOrArray<Address>>,
     pub topic_id: B256,
     pub topics: [Topic; 4],
@@ -30,13 +30,13 @@ struct SimpleEventFilter {
 
 impl SimpleEventFilter {
     fn set_from_block(mut self, block: U64) -> Self {
-        self.current_block = block.into();
+        self.current_block = block;
 
         self
     }
 
     fn set_to_block(mut self, block: U64) -> Self {
-        self.next_block = block.into();
+        self.next_block = block;
 
         self
     }
@@ -68,22 +68,14 @@ pub struct FactoryFilter {
 }
 
 impl FactoryFilter {
-    fn get_to_block(&self) -> U64 {
-        self.next_block
-    }
-
-    fn get_from_block(&self) -> U64 {
-        self.current_block
-    }
-
     fn set_from_block(mut self, block: U64) -> Self {
-        self.current_block = block.into();
+        self.current_block = block;
 
         self
     }
 
     fn set_to_block(mut self, block: U64) -> Self {
-        self.next_block = block.into();
+        self.next_block = block;
 
         self
     }
@@ -201,7 +193,7 @@ impl RindexerEventFilter {
         }
     }
 
-    pub fn set_from_block<R: Into<U64>>(mut self, block: R) -> Self {
+    pub fn set_from_block<R: Into<U64>>(self, block: R) -> Self {
         let block = block.into();
         match self {
             Self::Address(filter) => Self::Address(filter.set_from_block(block)),
@@ -209,7 +201,7 @@ impl RindexerEventFilter {
             Self::Factory(filter) => Self::Factory(filter.set_from_block(block)),
         }
     }
-    pub fn set_to_block<R: Into<U64>>(mut self, block: R) -> Self {
+    pub fn set_to_block<R: Into<U64>>(self, block: R) -> Self {
         match self {
             RindexerEventFilter::Address(filter) => {
                 RindexerEventFilter::Address(filter.set_to_block(block.into()))

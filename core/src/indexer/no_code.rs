@@ -111,7 +111,7 @@ pub async fn setup_no_code(
             );
 
             let events =
-                process_events(project_path, &mut manifest, postgres.clone(), &network_providers)
+                process_events(project_path, &manifest, postgres.clone(), &network_providers)
                     .await?;
 
             let registry = EventCallbackRegistry { events };

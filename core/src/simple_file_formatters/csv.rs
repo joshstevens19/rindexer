@@ -5,7 +5,7 @@ use std::{
 };
 
 use csv::Writer;
-use csv::{Reader, StringRecord};
+use csv::Reader;
 use tokio::sync::Mutex;
 
 pub struct AsyncCsvAppender {

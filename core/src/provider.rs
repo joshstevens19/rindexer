@@ -28,7 +28,6 @@ use alloy::{
 use futures::future::try_join_all;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::any::Any;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -280,7 +279,7 @@ impl JsonRpcCachedProvider {
     ) -> Result<Vec<Log>, ProviderError> {
         let addresses = event_filter.contract_addresses().await;
 
-        let mut base_filter = Filter::new()
+        let base_filter = Filter::new()
             .event_signature(event_filter.event_signature())
             .topic1(event_filter.topic1())
             .topic2(event_filter.topic2())

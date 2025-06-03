@@ -1,4 +1,3 @@
-use crate::abi::EventInfo;
 use crate::helpers::get_full_path;
 use crate::{
     event::callback_registry::Decoder,

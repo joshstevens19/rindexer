@@ -5,8 +5,8 @@ pub use thread::set_thread_no_logging;
 mod evm_log;
 mod file;
 pub use evm_log::{
-    contract_in_bloom, halved_block_number, is_relevant_block, map_log_params_to_raw_values,
-    parse_log, parse_topic, topic_in_bloom,
+    halved_block_number, is_relevant_block, map_log_params_to_raw_values,
+    parse_log, parse_topic,
 };
 
 use std::{

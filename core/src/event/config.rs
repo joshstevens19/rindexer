@@ -1,7 +1,6 @@
 use alloy::json_abi::Event;
 use alloy::primitives::{Address, B256, U64};
 use alloy::rpc::types::ValueOrArray;
-use serde::Serialize;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::{Mutex, Semaphore};
 
@@ -160,8 +159,8 @@ impl From<FactoryEventProcessingConfig> for EventProcessingConfig {
 impl EventProcessingConfig {
     pub fn topic_id(&self) -> B256 {
         match self {
-            Self::ContractEventProcessing(config) => config.topic_id.clone(),
-            Self::FactoryEventProcessing(config) => config.event.selector().clone(),
+            Self::ContractEventProcessing(config) => config.topic_id,
+            Self::FactoryEventProcessing(config) => config.event.selector(),
         }
     }
 

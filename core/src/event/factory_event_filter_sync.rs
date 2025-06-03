@@ -5,7 +5,6 @@ use crate::manifest::storage::CsvDetails;
 use crate::simple_file_formatters::csv::AsyncCsvReader;
 use crate::{AsyncCsvAppender, PostgresClient};
 use alloy::primitives::Address;
-use alloy::rpc::types::ValueOrArray;
 use mini_moka::sync::Cache;
 use std::collections::HashSet;
 use std::hash::Hash;
@@ -22,13 +21,13 @@ struct KnownFactoryDeployedAddress {
 #[derive(thiserror::Error, Debug)]
 pub enum UpdateKnownFactoryDeployedAddressesError {
     #[error(transparent)]
-    IOError(#[from] std::io::Error),
+    IO(#[from] std::io::Error),
 
     #[error("Could not write addresses to csv: {0}")]
-    CsvWriteError(#[from] csv::Error),
+    CsvWrite(#[from] csv::Error),
 
     #[error("Could not parse logs")]
-    LogsError,
+    Logs,
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -95,7 +94,7 @@ fn upsert_known_factory_deployed_addresses_cache(
 
 pub async fn update_known_factory_deployed_addresses(
     config: &FactoryEventProcessingConfig,
-    events: &Vec<EventResult>,
+    events: &[EventResult],
 ) -> Result<(), UpdateKnownFactoryDeployedAddressesError> {
     let addresses: HashSet<KnownFactoryDeployedAddress> = events
         .iter()
@@ -111,7 +110,7 @@ pub async fn update_known_factory_deployed_addresses(
                 })
         })
         .collect::<Option<HashSet<_>>>()
-        .ok_or(UpdateKnownFactoryDeployedAddressesError::LogsError)?;
+        .ok_or(UpdateKnownFactoryDeployedAddressesError::Logs)?;
 
     // update in memory cache of factory addresses
     let key = KnownFactoryDeployedAddressesCacheKey {

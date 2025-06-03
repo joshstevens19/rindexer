@@ -17,7 +17,6 @@ use crate::{
         callback_registry::{EventCallbackRegistry, TraceCallbackRegistry},
         config::{EventProcessingConfig, TraceProcessingConfig},
     },
-    generate_random_id,
     indexer::{
         dependency::ContractEventsDependenciesConfig,
         last_synced::{get_last_synced_block_number, SyncConfig},

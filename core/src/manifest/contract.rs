@@ -5,7 +5,6 @@ use alloy::{
     primitives::{Address, U64},
     rpc::types::ValueOrArray,
 };
-use foundry_compilers::ProjectPaths;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -121,7 +120,7 @@ impl ContractDetails {
                     factory.event_name.clone(),
                     factory.input_name.clone(),
                 )
-                .expect(&format!("Could not parse ABI from path: {}", factory.abi)),
+                .unwrap_or_else(|_| panic!("Could not parse ABI from path: {}", factory.abi)),
             )
         } else if let Some(filter) = &self.filter {
             match filter {

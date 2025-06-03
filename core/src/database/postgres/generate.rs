@@ -91,6 +91,23 @@ fn generate_event_table_sql_with_comments(
         .join("\n")
 }
 
+fn generate_internal_factory_event_table_sql(
+    abi_inputs: &[EventInfo],
+    schema_name: &str,
+    networks: Vec<&str>,
+) -> String {
+    abi_inputs.iter().map(|event_info| {
+        let table_name = generate_internal_factory_event_table_name(schema_name, &event_info.name);
+
+        let create_table_query = format!(
+            r#"CREATE TABLE IF NOT EXISTS rindexer_internal.{} ("network" TEXT PRIMARY KEY, "factory_address" CHAR(42), "factory_deployed_address" CHAR(42));"#,
+            table_name
+        );
+
+        create_table_query
+    }).collect::<Vec<_>>().join("\n")
+}
+
 fn generate_internal_event_table_sql(
     abi_inputs: &[EventInfo],
     schema_name: &str,
@@ -190,6 +207,8 @@ pub fn generate_tables_for_indexer_sql(
         }
         // we still need to create the internal tables for the contract
         sql.push_str(&generate_internal_event_table_sql(&event_names, &schema_name, networks));
+
+
     }
 
     if indexer.native_transfers.enabled {
@@ -264,6 +283,26 @@ pub fn generate_indexer_contract_schema_name(indexer_name: &str, contract_name: 
 }
 
 pub fn generate_internal_event_table_name(schema_name: &str, event_name: &str) -> String {
+    let table_name = format!("{}_{}", schema_name, camel_to_snake(event_name));
+    // sql table names cant be as long as 63
+    if table_name.len() > 63 {
+        let hash_bytes = keccak256(table_name.as_bytes());
+        let hash = hash_bytes.iter().map(|byte| format!("{:02x}", byte)).collect::<String>();
+        let hash_prefix = &hash[0..10];
+
+        // Preserve the beginning of the original name, but leave room for the hash
+        let preserved_length = 63 - 11; // 10 for hash plus 1 for underscore
+        let prefix = &table_name[0..preserved_length];
+
+        let shortened_name = format!("{}_{}", prefix, hash_prefix);
+
+        return shortened_name;
+    }
+
+    table_name
+}
+
+pub fn generate_internal_factory_event_table_name(schema_name: &str, event_name: &str) -> String {
     let table_name = format!("{}_{}", schema_name, camel_to_snake(event_name));
     // sql table names cant be as long as 63
     if table_name.len() > 63 {

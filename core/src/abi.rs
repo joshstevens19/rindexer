@@ -11,7 +11,6 @@ use crate::{
         generate::solidity_type_to_db_type,
         sql_type_wrapper::{solidity_type_to_ethereum_sql_type_wrapper, EthereumSqlTypeWrapper},
     },
-    event::contract_setup::IndexingContractSetup,
     helpers::camel_to_snake,
     manifest::contract::{Contract, ParseAbiError},
 };
@@ -253,11 +252,7 @@ impl ABIItem {
                 .details
                 .iter()
                 .filter_map(|detail| {
-                    if let Some(events) = &detail.filter {
-                        Some(events.clone())
-                    } else {
-                        None
-                    }
+                    detail.filter.clone()
                 })
                 .flat_map(|events| match events {
                     ValueOrArray::Value(event) => vec![event.event_name],

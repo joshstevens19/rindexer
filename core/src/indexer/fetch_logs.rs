@@ -1,8 +1,8 @@
 use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
 
 use alloy::{
-    primitives::{Address, BlockNumber, B256, U64},
-    rpc::types::{Log, ValueOrArray},
+    primitives::{BlockNumber, B256, U64},
+    rpc::types::Log,
 };
 use rand::random_ratio;
 use regex::Regex;
