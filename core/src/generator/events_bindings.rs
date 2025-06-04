@@ -267,7 +267,7 @@ fn generate_event_callback_structs_code(
                     async move {{ (custom_logic)(results, context).await }}.boxed()
                 }})
             }}
-            
+
             type {name}EventCallbackType<TExtensions> = Arc<
                 dyn for<'a> Fn(&'a Vec<{struct_result}>, Arc<EventContext<TExtensions>>) -> BoxFuture<'a, EventCallbackResult<()>>
                     + Send
@@ -551,9 +551,9 @@ fn generate_event_bindings_code(
         pub enum {event_type_name}<TExtensions> where TExtensions: 'static + Send + Sync {{
             {event_enums}
         }}
-        
+
         {build_pub_contract_fn}
-        
+
         {decoder_contract_fn}
 
         impl<TExtensions> {event_type_name}<TExtensions> where TExtensions: 'static + Send + Sync {{
@@ -625,7 +625,7 @@ fn generate_event_bindings_code(
                                 .expect("must have a provider")
                                 .clone(),
                             decoder: self.decoder(&c.network),
-                            indexing_contract_setup: c.indexing_contract_setup(),
+                            indexing_contract_setup: c.indexing_contract_setup(manifest_path),
                             start_block: c.start_block,
                             end_block: c.end_block,
                             disable_logs_bloom_checks: rindexer_yaml
@@ -814,7 +814,7 @@ pub fn generate_event_handlers(
                       for result in &results {{
                         {inner_csv_write}
                       }}
-                    
+
                       if !csv_bulk_data.is_empty() {{
                         let csv_result = context.csv.append_bulk(csv_bulk_data).await;
                         if let Err(e) = csv_result {{
@@ -915,7 +915,7 @@ pub fn generate_event_handlers(
                                     &postgres_bulk_data,
                                 )
                                 .await;
-                            
+
                             if let Err(e) = result {{
                                 rindexer_error!("{event_type_name}::{handler_name} inserting bulk data via INSERT: {{:?}}", e);
                                 return Err(e.to_string());

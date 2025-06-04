@@ -1,8 +1,4 @@
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
-
+use alloy::rpc::types::{Filter, ValueOrArray};
 use alloy::{
     eips::{BlockId, BlockNumberOrTag},
     primitives::{Address, Bytes, TxHash, U256, U64},
@@ -32,6 +28,10 @@ use alloy::{
 use futures::future::try_join_all;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use thiserror::Error;
 use tokio::sync::Mutex;
 use tracing::{error, info};
@@ -47,6 +47,10 @@ pub type RindexerProvider = FillProvider<
     >,
     RootProvider,
 >;
+
+// RPC providers have maximum supported addresses that can be provided in a filter
+// We play safe and limit to 100, in future maybe worth to make it provider specific for better performance
+const MAX_RPC_SUPPORTED_ACCOUNT_FILTERS: usize = 100;
 
 #[derive(Debug)]
 pub struct JsonRpcCachedProvider {
@@ -269,9 +273,45 @@ impl JsonRpcCachedProvider {
         Ok(traces)
     }
 
-    pub async fn get_logs(&self, filter: &RindexerEventFilter) -> Result<Vec<Log>, ProviderError> {
-        let logs = self.provider.get_logs(filter.raw_filter()).await?;
-        Ok(logs)
+    pub async fn get_logs(
+        &self,
+        event_filter: &RindexerEventFilter,
+    ) -> Result<Vec<Log>, ProviderError> {
+        let addresses = event_filter.contract_addresses().await;
+
+        let base_filter = Filter::new()
+            .event_signature(event_filter.event_signature())
+            .topic1(event_filter.topic1())
+            .topic2(event_filter.topic2())
+            .topic3(event_filter.topic3())
+            .from_block(event_filter.from_block())
+            .to_block(event_filter.to_block());
+
+        match addresses {
+            // no addresses, which means nothing to get
+            // different rpc providers implement an empty array differently,
+            // therefore, we assume an empty addresses array means no events to fetch
+            Some(addresses) if addresses.is_empty() => Ok(vec![]),
+            // the addresses array is too big, which means we need to fetch all events
+            // and filter them manually
+            Some(addresses) if addresses.len() > MAX_RPC_SUPPORTED_ACCOUNT_FILTERS => {
+                let logs = self.provider.get_logs(&base_filter).await?;
+
+                let filtered_logs = logs
+                    .into_iter()
+                    .filter(|log| addresses.contains(&log.address()))
+                    .collect::<Vec<_>>();
+
+                Ok(filtered_logs)
+            }
+            Some(addresses) => {
+                let filter =
+                    base_filter.address(ValueOrArray::Array(addresses.into_iter().collect()));
+
+                Ok(self.provider.get_logs(&filter).await?)
+            }
+            None => Ok(self.provider.get_logs(&base_filter).await?),
+        }
 
         // rindexer_info!("get_logs DEBUG [{:?}]", filter.raw_filter());
         // LEAVING FOR NOW CONTEXT: TEMP FIX TO MAKE SURE FROM BLOCK IS ALWAYS SET

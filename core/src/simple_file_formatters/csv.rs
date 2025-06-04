@@ -4,6 +4,7 @@ use std::{
     sync::Arc,
 };
 
+use csv::Reader;
 use csv::Writer;
 use tokio::sync::Mutex;
 
@@ -75,5 +76,34 @@ impl AsyncCsvAppender {
         })
         .await
         .expect("Failed to run CSV write operation")
+    }
+}
+
+pub struct AsyncCsvReader {
+    path: Arc<Path>,
+}
+
+impl AsyncCsvReader {
+    pub fn new(file_path: &str) -> Self {
+        AsyncCsvReader { path: Arc::from(PathBuf::from(file_path)) }
+    }
+
+    pub async fn read_all(&self) -> Result<Vec<Vec<String>>, csv::Error> {
+        let path = Arc::clone(&self.path);
+
+        tokio::task::spawn_blocking(move || {
+            let file = File::open(&path)?;
+            let mut reader = Reader::from_reader(file);
+
+            let mut records = Vec::new();
+            for result in reader.records() {
+                let record = result?;
+                records.push(record.iter().map(|s| s.to_string()).collect());
+            }
+
+            Ok(records)
+        })
+        .await
+        .expect("Failed to run CSV read operation")
     }
 }
