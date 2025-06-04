@@ -135,7 +135,7 @@ networks:
 - name: ethereum
   chain_id: 1
   rpc: https://mainnet.gateway.tenderly.co
-  block_poll_frequency: optimized // [!code focus]
+  block_poll_frequency: optimized // [!code focus] # Reduce RPC call volume (at the cost of slightly slower indexing) whilst still aiming to be a non-human-noticeable indexing lag.
 ```
 
 ```yaml [division]
