@@ -89,9 +89,7 @@ fn set_known_factory_deployed_addresses_cache(
     cache.insert(key, value);
 }
 
-fn invalidate_known_factory_deployed_addresses_cache(
-    key: &KnownFactoryDeployedAddressesCacheKey,
-) {
+fn invalidate_known_factory_deployed_addresses_cache(key: &KnownFactoryDeployedAddressesCacheKey) {
     let cache = get_in_memory_cache();
 
     cache.invalidate(key);
@@ -124,9 +122,7 @@ pub async fn update_known_factory_deployed_addresses(
         event_name: config.event.name.clone(),
         input_name: config.input_name.clone(),
     };
-    invalidate_known_factory_deployed_addresses_cache(
-        &key,
-    );
+    invalidate_known_factory_deployed_addresses_cache(&key);
 
     if let Some(database) = &config.database {
         let params = GenerateInternalFactoryEventTableNameParams {
