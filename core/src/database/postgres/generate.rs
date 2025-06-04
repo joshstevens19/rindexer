@@ -1,15 +1,18 @@
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use alloy::primitives::keccak256;
+use std::path::Path;
 use tracing::{error, info};
 
-use crate::{abi::{ABIInput, ABIItem, EventInfo, GenerateAbiPropertiesType, ParamTypeError, ReadAbiError}, helpers::camel_to_snake, indexer::{
-    native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME},
-    Indexer,
-}, manifest::contract::Contract, types::code::Code, PostgresClient};
 use crate::manifest::contract::FactoryDetailsYaml;
-use crate::manifest::storage::CsvDetails;
-
+use crate::{
+    abi::{ABIInput, ABIItem, EventInfo, GenerateAbiPropertiesType, ParamTypeError, ReadAbiError},
+    helpers::camel_to_snake,
+    indexer::{
+        native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME},
+        Indexer,
+    },
+    manifest::contract::Contract,
+    types::code::Code,
+};
 
 fn compact_table_name_if_needed(table_name: String) -> String {
     // sql table names cant be as long as 63
@@ -317,9 +320,17 @@ pub struct GenerateInternalFactoryEventTableNameParams {
     pub input_name: String,
 }
 
-pub fn generate_internal_factory_event_table_name(params: &GenerateInternalFactoryEventTableNameParams) -> String {
-    let schema_name = generate_indexer_contract_schema_name(&params.indexer_name, &params.contract_name);
-    let table_name = format!("{}_{}_{}", schema_name, camel_to_snake(&params.event_name), camel_to_snake(&params.input_name));
+pub fn generate_internal_factory_event_table_name(
+    params: &GenerateInternalFactoryEventTableNameParams,
+) -> String {
+    let schema_name =
+        generate_indexer_contract_schema_name(&params.indexer_name, &params.contract_name);
+    let table_name = format!(
+        "{}_{}_{}",
+        schema_name,
+        camel_to_snake(&params.event_name),
+        camel_to_snake(&params.input_name)
+    );
 
     compact_table_name_if_needed(table_name)
 }
@@ -363,7 +374,7 @@ pub fn drop_tables_for_indexer_sql(project_path: &Path, indexer: &Indexer) -> Co
             };
             let table_name = generate_internal_factory_event_table_name(&params);
             sql.push_str(
-                format!("DROP TABLE IF EXISTS rindexer_internal.{} CASCADE;", table_name).as_str()
+                format!("DROP TABLE IF EXISTS rindexer_internal.{} CASCADE;", table_name).as_str(),
             )
         }
     }

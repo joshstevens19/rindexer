@@ -4,8 +4,8 @@ use std::{
     sync::Arc,
 };
 
-use csv::Writer;
 use csv::Reader;
+use csv::Writer;
 use tokio::sync::Mutex;
 
 pub struct AsyncCsvAppender {

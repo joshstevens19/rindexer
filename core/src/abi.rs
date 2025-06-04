@@ -251,9 +251,7 @@ impl ABIItem {
             let filter_event_names: HashSet<String> = contract
                 .details
                 .iter()
-                .filter_map(|detail| {
-                    detail.filter.clone()
-                })
+                .filter_map(|detail| detail.filter.clone())
                 .flat_map(|events| match events {
                     ValueOrArray::Value(event) => vec![event.event_name],
                     ValueOrArray::Array(event_array) => {

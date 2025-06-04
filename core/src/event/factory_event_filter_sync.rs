@@ -1,3 +1,7 @@
+use crate::database::postgres::client::PostgresError;
+use crate::database::postgres::generate::{
+    generate_internal_factory_event_table_name, GenerateInternalFactoryEventTableNameParams,
+};
 use crate::event::callback_registry::EventResult;
 use crate::event::config::FactoryEventProcessingConfig;
 use crate::helpers::{get_full_path, parse_log};
@@ -12,8 +16,6 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 use tracing::error;
-use crate::database::postgres::client::PostgresError;
-use crate::database::postgres::generate::{generate_internal_factory_event_table_name, GenerateInternalFactoryEventTableNameParams};
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct KnownFactoryDeployedAddress {
@@ -35,7 +37,6 @@ pub enum UpdateKnownFactoryDeployedAddressesError {
     #[error("Could not parse logs")]
     LogsParse,
 }
-
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct KnownFactoryDeployedAddressesCacheKey {
@@ -143,10 +144,25 @@ pub async fn update_known_factory_deployed_addresses(
         database
             .insert_bulk(
                 &format!("rindexer_internal.{}", table_name),
-                &["factory_address".to_string(), "factory_deployed_address".to_string(), "network".to_string()],
-                &addresses.clone().into_iter().map(|item| vec![EthereumSqlTypeWrapper::Address(item.factory_address), EthereumSqlTypeWrapper::Address(item.address), EthereumSqlTypeWrapper::String(config.network_contract.network.clone())]).collect::<Vec<_>>(),
+                &[
+                    "factory_address".to_string(),
+                    "factory_deployed_address".to_string(),
+                    "network".to_string(),
+                ],
+                &addresses
+                    .clone()
+                    .into_iter()
+                    .map(|item| {
+                        vec![
+                            EthereumSqlTypeWrapper::Address(item.factory_address),
+                            EthereumSqlTypeWrapper::Address(item.address),
+                            EthereumSqlTypeWrapper::String(config.network_contract.network.clone()),
+                        ]
+                    })
+                    .collect::<Vec<_>>(),
             )
-            .await.map_err(UpdateKnownFactoryDeployedAddressesError::PostgresWrite)?;
+            .await
+            .map_err(UpdateKnownFactoryDeployedAddressesError::PostgresWrite)?;
 
         return Ok(());
     }
@@ -240,13 +256,16 @@ pub async fn get_known_factory_deployed_addresses(
             table_name
         );
         let result = database
-            .query(
-                &query,
-                &[&EthereumSqlTypeWrapper::String(params.network.clone())],
-            )
+            .query(&query, &[&EthereumSqlTypeWrapper::String(params.network.clone())])
             .await?;
 
-        let values = result.into_iter().map(|row| Address::from_str(row.get("factory_deployed_address")).expect("Factory deployed address not a valid ethereum address")).collect::<HashSet<_>>();
+        let values = result
+            .into_iter()
+            .map(|row| {
+                Address::from_str(row.get("factory_deployed_address"))
+                    .expect("Factory deployed address not a valid ethereum address")
+            })
+            .collect::<HashSet<_>>();
 
         set_known_factory_deployed_addresses_cache(key, values.clone());
 
@@ -273,8 +292,14 @@ pub async fn get_known_factory_deployed_addresses(
         let data = csv_reader.read_all().await?;
 
         // extracting only 'factory_deployed_address' from the csv row
-        let values =
-            data.into_iter().map(|row| row[1].parse::<Address>().expect("Factory deployed address not a valid ethereum address")).collect::<HashSet<_>>();
+        let values = data
+            .into_iter()
+            .map(|row| {
+                row[1]
+                    .parse::<Address>()
+                    .expect("Factory deployed address not a valid ethereum address")
+            })
+            .collect::<HashSet<_>>();
 
         set_known_factory_deployed_addresses_cache(key, values.clone());
 
