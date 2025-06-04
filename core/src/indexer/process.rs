@@ -370,12 +370,12 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                             ordering_live_indexing_details.filter =
                                 ordering_live_indexing_details.filter.set_to_block(to_block);
 
-                            // debug!(
-                            //     "{} - {} - Processing live filter: {:?}",
-                            //     &config.info_log_name(),
-                            //     IndexingEventProgressStatus::Live.log(),
-                            //     ordering_live_indexing_details.filter
-                            // );
+                            debug!(
+                                "{} - {} - Processing live filter: {:?}",
+                                &config.info_log_name(),
+                                IndexingEventProgressStatus::Live.log(),
+                                ordering_live_indexing_details.filter
+                            );
 
                             let semaphore_client = Arc::clone(&config.semaphore());
                             let permit = semaphore_client.acquire_owned().await;

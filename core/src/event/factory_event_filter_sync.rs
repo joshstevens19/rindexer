@@ -89,15 +89,12 @@ fn set_known_factory_deployed_addresses_cache(
     cache.insert(key, value);
 }
 
-fn upsert_known_factory_deployed_addresses_cache(
-    key: KnownFactoryDeployedAddressesCacheKey,
-    value: HashSet<Address>,
+fn invalidate_known_factory_deployed_addresses_cache(
+    key: &KnownFactoryDeployedAddressesCacheKey,
 ) {
     let cache = get_in_memory_cache();
 
-    let current_value = cache.get(&key).unwrap_or_default();
-
-    cache.insert(key, current_value.union(&value).cloned().collect());
+    cache.invalidate(key);
 }
 
 pub async fn update_known_factory_deployed_addresses(
@@ -127,9 +124,8 @@ pub async fn update_known_factory_deployed_addresses(
         event_name: config.event.name.clone(),
         input_name: config.input_name.clone(),
     };
-    upsert_known_factory_deployed_addresses_cache(
-        key,
-        addresses.clone().into_iter().map(|item| item.address).collect(),
+    invalidate_known_factory_deployed_addresses_cache(
+        &key,
     );
 
     if let Some(database) = &config.database {
@@ -236,7 +232,7 @@ pub async fn get_known_factory_deployed_addresses(
         contract_name: params.contract_name.clone(),
         network: params.network.clone(),
         event_name: params.event_name.clone(),
-        input_name: "factory_deployed_address".to_string(),
+        input_name: params.input_name.clone(),
     };
 
     if let Some(cache) = get_known_factory_deployed_addresses_cache(&key) {

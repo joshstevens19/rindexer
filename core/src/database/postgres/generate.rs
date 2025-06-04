@@ -122,7 +122,7 @@ fn generate_internal_factory_event_table_sql(
         let table_name = generate_internal_factory_event_table_name(&params);
 
         let create_table_query = format!(
-            r#"CREATE TABLE IF NOT EXISTS rindexer_internal.{} ("factory_address" CHAR(42), "factory_deployed_address" CHAR(42), "network" TEXT);"#,
+            r#"CREATE TABLE IF NOT EXISTS rindexer_internal.{} ("factory_address" CHAR(42), "factory_deployed_address" CHAR(42), "network" TEXT, PRIMARY KEY ("factory_address", "factory_deployed_address", "network"));"#,
             table_name
         );
 
