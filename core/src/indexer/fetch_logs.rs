@@ -178,12 +178,12 @@ async fn fetch_historic_logs_stream(
         });
     }
 
-    // debug!(
-    //     "{} - {} - Processing filter: {:?}",
-    //     info_log_name,
-    //     IndexingEventProgressStatus::Syncing.log(),
-    //     current_filter
-    // );
+    debug!(
+        "{} - {} - Processing filter: {:?}",
+        info_log_name,
+        IndexingEventProgressStatus::Syncing.log(),
+        current_filter
+    );
 
     match cached_provider.get_logs(&current_filter).await {
         Ok(logs) => {
@@ -426,12 +426,12 @@ async fn live_indexing_stream(
                             } else {
                                 current_filter = current_filter.set_to_block(to_block);
 
-                                // debug!(
-                                //     "{} - {} - Processing live filter: {:?}",
-                                //     info_log_name,
-                                //     IndexingEventProgressStatus::Live.log(),
-                                //     current_filter
-                                // );
+                                debug!(
+                                    "{} - {} - Processing live filter: {:?}",
+                                    info_log_name,
+                                    IndexingEventProgressStatus::Live.log(),
+                                    current_filter
+                                );
 
                                 let semaphore_client = Arc::clone(semaphore);
                                 let permit = semaphore_client.acquire_owned().await;

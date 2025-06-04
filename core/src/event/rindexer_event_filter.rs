@@ -68,6 +68,23 @@ pub struct FactoryFilter {
     pub next_block: U64,
 }
 
+impl std::fmt::Debug for FactoryFilter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FactoryFilter")
+            .field("project_path", &self.project_path)
+            .field("indexer_name", &self.indexer_name)
+            .field("factory_address", &self.factory_address)
+            .field("factory_contract_name", &self.factory_contract_name)
+            .field("factory_event_name", &self.factory_event_name)
+            .field("factory_input_name", &self.factory_input_name)
+            .field("network", &self.network)
+            .field("topic_id", &self.topic_id)
+            .field("current_block", &self.current_block)
+            .field("next_block", &self.next_block)
+            .finish()
+    }
+}
+
 impl FactoryFilter {
     fn set_from_block(mut self, block: U64) -> Self {
         self.current_block = block;
@@ -97,7 +114,7 @@ impl FactoryFilter {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum RindexerEventFilter {
     Address(SimpleEventFilter),
     Filter(SimpleEventFilter),
