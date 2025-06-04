@@ -282,13 +282,13 @@ pub async fn start_indexing_traces(
 
                         if is_rate_limit_error {
                             error!(
-                                "Rate-limited 429 '{}' block traces. Retrying: {}",
+                                "Rate-limited 429 '{}' block traces. Retrying in 1 second: {}",
                                 network_name,
                                 e.to_string(),
                             );
                         } else {
                             warn!(
-                                "Could not process '{}' block traces. Likely too early for {}..{}, Retrying: {}",
+                                "Could not process '{}' block traces. Likely too early for {}..{}, Retrying in 1 second: {}",
                                 network_name,
                                 &buffer.first().map(|n| n.as_limbs()[0]).unwrap_or_else(|| 0),
                                 &buffer.last().map(|n| n.as_limbs()[0]).unwrap_or_else(|| 0),

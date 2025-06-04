@@ -30,6 +30,7 @@ use log::debug;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::future::IntoFuture;
+use std::ops::Div;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -39,6 +40,7 @@ use tokio::sync::Mutex;
 use tracing::{debug_span, error, Instrument};
 use url::Url;
 
+use crate::manifest::network::BlockPollFrequency;
 use crate::{event::RindexerEventFilter, manifest::core::Manifest};
 
 /// An alias type for a complex alloy Provider
@@ -58,6 +60,7 @@ pub struct JsonRpcCachedProvider {
     #[allow(unused)]
     chain_id: u64,
     chain: Chain,
+    block_poll_frequency: Option<BlockPollFrequency>,
     pub max_block_range: Option<U64>,
 }
 
@@ -155,10 +158,11 @@ impl JsonRpcCachedProvider {
     pub async fn new(
         provider: RindexerProvider,
         chain_id: u64,
+        block_poll_frequency: Option<BlockPollFrequency>,
         max_block_range: Option<U64>,
     ) -> Self {
         let chain = Chain::from(chain_id);
-        let is_zk_evm = match is_known_zk_evm_compatible_chain(chain) {
+        let is_zk_chain = match is_known_zk_evm_compatible_chain(chain) {
             Some(zk) => zk,
             None => {
                 let response: Result<String, _> =
@@ -178,15 +182,37 @@ impl JsonRpcCachedProvider {
             max_block_range,
             chain,
             chain_id,
-            is_zk_chain: is_zk_evm,
+            is_zk_chain,
+            block_poll_frequency,
+        }
+    }
+
+    /// Return a duration for block poll caching based on user configuration.
+    fn block_poll_frequency(&self) -> Duration {
+        let Some(block_poll_frequency) = self.block_poll_frequency else {
+            return Duration::from_millis(50);
+        };
+
+        match block_poll_frequency {
+            BlockPollFrequency::Rapid => Duration::from_millis(50),
+            BlockPollFrequency::PollRateMs { millis } => Duration::from_millis(millis),
+            BlockPollFrequency::Division { divisor } => self
+                .chain
+                .average_blocktime_hint()
+                .and_then(|t| t.checked_div(divisor))
+                .unwrap_or(Duration::from_millis(50)),
+            BlockPollFrequency::RpcOptimized => self
+                .chain
+                .average_blocktime_hint()
+                .and_then(|t| t.checked_div(3))
+                .map(|t| t.max(Duration::from_millis(500)))
+                .unwrap_or(Duration::from_millis(1000)),
         }
     }
 
     pub async fn get_latest_block(&self) -> Result<Option<Arc<Block>>, ProviderError> {
         let mut cache_guard = self.cache.lock().await;
-        let block_time =
-            self.chain.average_blocktime_hint().unwrap_or_else(|| Duration::from_millis(1000));
-        let cache_time = block_time;
+        let cache_time = self.block_poll_frequency();
 
         // Fetches the latest block only if it is likely that a new block has been produced for
         // this specific network. Consider this to be equal to half the block-time.
@@ -374,6 +400,7 @@ pub async fn create_client(
     chain_id: u64,
     compute_units_per_second: Option<u64>,
     max_block_range: Option<U64>,
+    block_poll_frequency: Option<BlockPollFrequency>,
     custom_headers: HeaderMap,
 ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
     let rpc_url = Url::parse(rpc_url).map_err(|e| {
@@ -386,7 +413,9 @@ pub async fn create_client(
     let rpc_client = RpcClient::builder().layer(retry_layer).transport(http, false);
     let provider = ProviderBuilder::new().connect_client(rpc_client);
 
-    Ok(Arc::new(JsonRpcCachedProvider::new(provider, chain_id, max_block_range).await))
+    Ok(Arc::new(
+        JsonRpcCachedProvider::new(provider, chain_id, block_poll_frequency, max_block_range).await,
+    ))
 }
 
 pub async fn get_chain_id(rpc_url: &str) -> Result<U256, RpcError<TransportErrorKind>> {
@@ -414,6 +443,7 @@ impl CreateNetworkProvider {
                 network.chain_id,
                 network.compute_units_per_second,
                 network.max_block_range,
+                network.block_poll_frequency,
                 manifest.get_custom_headers(),
             )
             .await?;
@@ -444,14 +474,14 @@ mod tests {
     #[tokio::test]
     async fn test_create_retry_client() {
         let rpc_url = "http://localhost:8545";
-        let result = create_client(rpc_url, 1, Some(660), None, HeaderMap::new()).await;
+        let result = create_client(rpc_url, 1, Some(660), None, None, HeaderMap::new()).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_create_retry_client_invalid_url() {
         let rpc_url = "invalid_url";
-        let result = create_client(rpc_url, 1, Some(660), None, HeaderMap::new()).await;
+        let result = create_client(rpc_url, 1, Some(660), None, None, HeaderMap::new()).await;
         assert!(result.is_err());
         if let Err(RetryClientError::HttpProviderCantBeCreated(url, _)) = result {
             assert_eq!(url, rpc_url);

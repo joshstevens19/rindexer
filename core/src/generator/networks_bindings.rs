@@ -17,7 +17,7 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
         r#"
         {network_name}
             .get_or_init(|| async {{
-                {client_fn}(&public_read_env_value("{network_url}").unwrap_or("{network_url}".to_string()), {chain_id}, {compute_units_per_second}, {max_block_range} {placeholder_headers})
+                {client_fn}(&public_read_env_value("{network_url}").unwrap_or("{network_url}".to_string()), {chain_id}, {compute_units_per_second}, {max_block_range}, {block_poll_frq} {placeholder_headers})
                 .await
                 .expect("Error creating provider")
             }})
@@ -35,6 +35,11 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
             },
         max_block_range = if let Some(max_block_range) = network.max_block_range {
             format!("Some(U64::from({}))", max_block_range)
+        } else {
+            "None".to_string()
+        },
+        block_poll_frq = if let Some(block_frq) = network.block_poll_frequency {
+            format!("Some(BlockPollFrequency::{:?})", block_frq)
         } else {
             "None".to_string()
         },
@@ -100,6 +105,7 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
     use alloy::{primitives::U64, transports::http::reqwest::header::HeaderMap};
     use rindexer::{
         lazy_static,
+        manifest::network::BlockPollFrequency,
         provider::{RindexerProvider, create_client, JsonRpcCachedProvider, RetryClientError},
         public_read_env_value
     };
@@ -111,6 +117,7 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
         rpc_url: &str,
         chain_id: u64,
         compute_units_per_second: Option<u64>,
+        block_poll_frequency: Option<BlockPollFrequency>,
         max_block_range: Option<U64>,
     ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
         let mut header = HeaderMap::new();
@@ -118,7 +125,7 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
             "X-SHADOW-API-KEY",
             public_read_env_value("RINDEXER_PHANTOM_API_KEY").unwrap().parse().unwrap(),
         );
-        create_client(rpc_url, chain_id, compute_units_per_second, max_block_range, header).await
+        create_client(rpc_url, chain_id, compute_units_per_second, max_block_range, block_poll_frequency, header).await
     }
         "#
         .to_string(),
