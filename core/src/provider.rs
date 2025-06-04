@@ -30,7 +30,6 @@ use log::debug;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::future::IntoFuture;
-use std::ops::Div;
 use std::{
     sync::Arc,
     time::{Duration, Instant},

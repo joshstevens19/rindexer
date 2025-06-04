@@ -3,7 +3,6 @@ use alloy::primitives::U64;
 use serde::de::Visitor;
 use serde::{de, Deserialize, Deserializer, Serialize};
 use std::fmt;
-use std::fmt::Write;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Network {
