@@ -63,6 +63,7 @@ impl ContractEventProcessingConfig {
             IndexingContractSetup::Factory(details) => {
                 Ok(RindexerEventFilter::Factory(FactoryFilter {
                     project_path: self.project_path.clone(),
+                    indexer_name: self.indexer_name.clone(),
                     factory_contract_name: details.contract_name.clone(),
                     factory_address: details.address.clone(),
                     factory_event_name: details.event.name.clone(),
@@ -157,6 +158,13 @@ impl From<FactoryEventProcessingConfig> for EventProcessingConfig {
 }
 
 impl EventProcessingConfig {
+    pub fn is_factory_event(&self) -> bool {
+        match self {
+            Self::ContractEventProcessing(_) => false,
+            Self::FactoryEventProcessing(_) => true,
+        }
+    }
+
     pub fn topic_id(&self) -> B256 {
         match self {
             Self::ContractEventProcessing(config) => config.topic_id,

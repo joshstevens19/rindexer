@@ -3,14 +3,17 @@ use crate::event::config::FactoryEventProcessingConfig;
 use crate::helpers::{get_full_path, parse_log};
 use crate::manifest::storage::CsvDetails;
 use crate::simple_file_formatters::csv::AsyncCsvReader;
-use crate::{AsyncCsvAppender, PostgresClient};
+use crate::{AsyncCsvAppender, EthereumSqlTypeWrapper, PostgresClient};
 use alloy::primitives::Address;
 use mini_moka::sync::Cache;
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 use tracing::error;
+use crate::database::postgres::client::PostgresError;
+use crate::database::postgres::generate::{generate_internal_factory_event_table_name, GenerateInternalFactoryEventTableNameParams};
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct KnownFactoryDeployedAddress {
@@ -26,9 +29,13 @@ pub enum UpdateKnownFactoryDeployedAddressesError {
     #[error("Could not write addresses to csv: {0}")]
     CsvWrite(#[from] csv::Error),
 
+    #[error("Could not write addresses to postgres: {0}")]
+    PostgresWrite(String),
+
     #[error("Could not parse logs")]
-    Logs,
+    LogsParse,
 }
+
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct KnownFactoryDeployedAddressesCacheKey {
@@ -110,7 +117,7 @@ pub async fn update_known_factory_deployed_addresses(
                 })
         })
         .collect::<Option<HashSet<_>>>()
-        .ok_or(UpdateKnownFactoryDeployedAddressesError::Logs)?;
+        .ok_or(UpdateKnownFactoryDeployedAddressesError::LogsParse)?;
 
     // update in memory cache of factory addresses
     let key = KnownFactoryDeployedAddressesCacheKey {
@@ -124,26 +131,25 @@ pub async fn update_known_factory_deployed_addresses(
         addresses.clone().into_iter().map(|item| item.address).collect(),
     );
 
-    // if let Some(database) = &config.database() {
-    //     let schema =
-    //         generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
-    //     let table_name = generate_internal_event_table_name(&schema, &config.event_name());
-    //     let query = format!(
-    //         "UPDATE rindexer_internal.{} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block",
-    //         table_name
-    //     );
-    //     let result = database
-    //         .execute(
-    //             &query,
-    //             &[&EthereumSqlTypeWrapper::U64(to_block), &config.network_contract().network],
-    //         )
-    //         .await;
-    //
-    //     if let Err(e) = result {
-    //         error!("Error updating last synced block: {:?}", e);
-    //     }
-    // } else
-    //
+    if let Some(database) = &config.database {
+        let params = GenerateInternalFactoryEventTableNameParams {
+            indexer_name: config.indexer_name.clone(),
+            contract_name: config.contract_name.clone(),
+            event_name: config.event.name.clone(),
+            input_name: config.input_name.clone(),
+        };
+        let table_name = generate_internal_factory_event_table_name(&params);
+
+        database
+            .insert_bulk(
+                &format!("rindexer_internal.{}", table_name),
+                &["factory_address".to_string(), "factory_deployed_address".to_string(), "network".to_string()],
+                &addresses.clone().into_iter().map(|item| vec![EthereumSqlTypeWrapper::Address(item.factory_address), EthereumSqlTypeWrapper::Address(item.address), EthereumSqlTypeWrapper::String(config.network_contract.network.clone())]).collect::<Vec<_>>(),
+            )
+            .await.map_err(UpdateKnownFactoryDeployedAddressesError::PostgresWrite)?;
+
+        return Ok(());
+    }
 
     if let Some(csv_details) = &config.csv_details {
         let full_path = get_full_path(&config.project_path, &csv_details.path)?;
@@ -184,15 +190,19 @@ pub async fn update_known_factory_deployed_addresses(
 #[derive(thiserror::Error, Debug)]
 pub enum GetKnownFactoryDeployedAddressesError {
     #[error(transparent)]
-    IOError(#[from] std::io::Error),
+    IO(#[from] std::io::Error),
 
     #[error("Could not read addresses from csv: {0}")]
-    CsvReadError(#[from] csv::Error),
+    CsvRead(#[from] csv::Error),
+
+    #[error("Could not read addresses from postgres: {0}")]
+    PostgresRead(#[from] PostgresError),
 }
 
 #[derive(Clone)]
 pub struct GetKnownFactoryDeployedAddressesParams {
     pub project_path: PathBuf,
+    pub indexer_name: String,
     pub contract_name: String,
     pub event_name: String,
     pub input_name: String,
@@ -217,29 +227,34 @@ pub async fn get_known_factory_deployed_addresses(
         return Ok(Some(cache));
     }
 
-    // if let Some(database) = &config.database() {
-    //     let schema =
-    //         generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
-    //     let table_name = generate_internal_event_table_name(&schema, &config.event_name());
-    //     let query = format!(
-    //         "UPDATE rindexer_internal.{} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block",
-    //         table_name
-    //     );
-    //     let result = database
-    //         .execute(
-    //             &query,
-    //             &[&EthereumSqlTypeWrapper::U64(to_block), &config.network_contract().network],
-    //         )
-    //         .await;
-    //
-    //     if let Err(e) = result {
-    //         error!("Error updating last synced block: {:?}", e);
-    //     }
-    // } else
-    //
+    if let Some(database) = &params.database {
+        let table_params = GenerateInternalFactoryEventTableNameParams {
+            indexer_name: params.indexer_name.clone(),
+            contract_name: params.contract_name.clone(),
+            event_name: params.event_name.clone(),
+            input_name: params.input_name.clone(),
+        };
+        let table_name = generate_internal_factory_event_table_name(&table_params);
+        let query = format!(
+            "SELECT factory_deployed_address FROM rindexer_internal.{} WHERE network = $1",
+            table_name
+        );
+        let result = database
+            .query(
+                &query,
+                &[&EthereumSqlTypeWrapper::String(params.network.clone())],
+            )
+            .await?;
+
+        let values = result.into_iter().map(|row| Address::from_str(row.get("factory_deployed_address")).expect("Factory deployed address not a valid ethereum address")).collect::<HashSet<_>>();
+
+        set_known_factory_deployed_addresses_cache(key, values.clone());
+
+        return Ok(Some(values));
+    }
 
     if let Some(csv_details) = &params.csv_details {
-        let full_path = get_full_path(&params.project_path, &csv_details.path).unwrap();
+        let full_path = get_full_path(&params.project_path, &csv_details.path)?;
 
         let csv_path = build_known_factory_address_file(
             &full_path,
@@ -259,7 +274,7 @@ pub async fn get_known_factory_deployed_addresses(
 
         // extracting only 'factory_deployed_address' from the csv row
         let values =
-            data.into_iter().map(|row| row[1].parse::<Address>().unwrap()).collect::<HashSet<_>>();
+            data.into_iter().map(|row| row[1].parse::<Address>().expect("Factory deployed address not a valid ethereum address")).collect::<HashSet<_>>();
 
         set_known_factory_deployed_addresses_cache(key, values.clone());
 

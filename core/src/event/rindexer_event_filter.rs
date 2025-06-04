@@ -52,6 +52,7 @@ impl SimpleEventFilter {
 #[derive(Clone)]
 pub struct FactoryFilter {
     pub project_path: PathBuf,
+    pub indexer_name: String,
     pub factory_address: ValueOrArray<Address>,
     pub factory_contract_name: String,
     pub factory_event_name: String,
@@ -83,6 +84,7 @@ impl FactoryFilter {
     async fn contract_address(&self) -> Option<HashSet<Address>> {
         get_known_factory_deployed_addresses(&GetKnownFactoryDeployedAddressesParams {
             project_path: self.project_path.clone(),
+            indexer_name: self.indexer_name.clone(),
             contract_name: self.factory_contract_name.clone(),
             event_name: self.factory_event_name.clone(),
             input_name: self.factory_input_name.clone(),

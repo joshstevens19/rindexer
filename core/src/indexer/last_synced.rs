@@ -18,6 +18,7 @@ use crate::{
     manifest::{storage::CsvDetails, stream::StreamsConfig},
     EthereumSqlTypeWrapper, PostgresClient,
 };
+use crate::database::postgres::generate::{generate_internal_factory_event_table_name, GenerateInternalFactoryEventTableNameParams};
 
 async fn get_last_synced_block_number_file(
     full_path: &Path,

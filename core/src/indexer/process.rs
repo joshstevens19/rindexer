@@ -523,6 +523,13 @@ async fn trigger_event(
     fn_data: Vec<EventResult>,
     to_block: U64,
 ) {
+    if config.is_factory_event() {
+        indexing_event_processing();
+        config.trigger_event(fn_data).await;
+        indexing_event_processed();
+        return;
+    }
+
     indexing_event_processing();
     config.trigger_event(fn_data).await;
     update_progress_and_last_synced_task(config, to_block, indexing_event_processed);
