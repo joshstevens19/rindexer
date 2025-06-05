@@ -100,6 +100,70 @@ networks:
   max_block_range: 10000 // [!code focus]
 ```
 
+### block_poll_frequency
+
+:::info
+This field is optional and may slow down indexing if applied, this is an advanced setting to be used with caution.
+:::
+
+Set the block poll frequency for the network, this allows making a trade-off between RPC use and live indexing speed. The
+default setting will aggressively poll new blocks to ensure that we index as quickly as possible.
+
+This is not always wanted, and you can choose configure to use an rpc "optimized" version, or manually define the millisecond
+polling rate per network, or alternatively, manually define a factor of the polling rate.
+
+:::code-group
+
+```yaml [rapid (default)]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+  block_poll_frequency: rapid // [!code focus] # This will rapid-poll, roughly every ~50ms.
+```
+
+```yaml [optimized]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+  block_poll_frequency: optimized // [!code focus] # Reduce RPC call volume (at the cost of slightly slower indexing) whilst still aiming to be a non-human-noticeable indexing lag.
+```
+
+```yaml [division]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+  block_poll_frequency: "/3" // [!code focus] # At a 12s blocktime, this will poll around every 4s, i.e. `12s / 3`.
+```
+
+```yaml [millis]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+  block_poll_frequency: 1000 // [!code focus] # Poll every 1000ms for the network
+```
+
+:::
+
 ### compute_units_per_second
 
 :::info

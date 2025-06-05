@@ -545,6 +545,7 @@ async fn handle_phantom_deploy(
                         chain_id: network.unwrap().chain_id,
                         rpc: rpc_url.to_string(),
                         compute_units_per_second: None,
+                        block_poll_frequency: None,
                         max_block_range: if phantom.dyrpc_enabled() {
                             Some(U64::from(20_000))
                         } else {

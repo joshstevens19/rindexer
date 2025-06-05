@@ -139,6 +139,7 @@ pub fn handle_new_command(
             name: "ethereum".to_string(),
             chain_id: 1,
             rpc: "https://mainnet.gateway.tenderly.co".to_string(),
+            block_poll_frequency: None,
             compute_units_per_second: None,
             max_block_range: None,
             disable_logs_bloom_checks: None,

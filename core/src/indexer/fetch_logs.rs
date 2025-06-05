@@ -225,7 +225,7 @@ async fn fetch_historic_logs_stream(
             }
 
             if logs_empty {
-                info!(
+                debug!(
                     "{}::{} - No events found between blocks {} - {}",
                     info_log_name, network, from_block, to_block,
                 );
@@ -294,8 +294,10 @@ async fn fetch_historic_logs_stream(
             }
         }
         Err(err) => {
+            // This is fundamental to the rindexer flow. We intentionally fetch a large block range
+            // to get information on what the ideal block range should be.
             if let Some(retry_result) = retry_with_block_range(&err, from_block, to_block) {
-                warn!(
+                debug!(
                     "{}::{} - {} - Overfetched from {} to {} - shrinking to block range: {:?}",
                     info_log_name,
                     network,
@@ -485,7 +487,7 @@ async fn live_indexing_stream(
                                             if logs_empty {
                                                 current_filter = current_filter
                                                     .set_from_block(to_block + U64::from(1));
-                                                info!(
+                                                debug!(
                                                     "{}::{} - {} - No events found between blocks {} - {}",
                                                     info_log_name,
                                                     network,
@@ -513,7 +515,7 @@ async fn live_indexing_stream(
                                             if let Some(retry_result) =
                                                 retry_with_block_range(&err, from_block, to_block)
                                             {
-                                                warn!(
+                                                debug!(
                                                     "{}::{} - {} - Overfetched from {} to {} - shrinking to block range: from {} to {}",
                                                     info_log_name,
                                                     network,
