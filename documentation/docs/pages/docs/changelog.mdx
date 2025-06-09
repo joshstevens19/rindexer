@@ -6,20 +6,11 @@
 ### Features
 -------------------------------------------------
 
-
 ### Bug fixes
 -------------------------------------------------
 
-- Improve RPC Efficiency
-- Make Native Transfer indexing a little more gently on startup, and a bit slower on failure, to prevent overloading apis with concurrency
-- Improve Startup speed significantly by reducing lots of redundant sequential rpc calls
-- Respect native transfer `enabled: false` setting
-- Add some more debug logging, spans, and change some log levels
-
 ### Breaking changes
 -------------------------------------------------
-
-- Add  `block_poll_frequency` to the yaml config to allow better control over block polling behavior. This will require re-running codegen for rust projects as it breaks the existing `create_client` interface.
 
 ## Releases
 -------------------------------------------------
