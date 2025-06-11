@@ -49,8 +49,8 @@ pub type RindexerProvider = FillProvider<
 >;
 
 // RPC providers have maximum supported addresses that can be provided in a filter
-// We play safe and limit to 100, in future maybe worth to make it provider specific for better performance
-const MAX_RPC_SUPPORTED_ACCOUNT_FILTERS: usize = 100;
+// We play safe and limit to 1000, in future maybe worth to make it provider specific for better performance
+const MAX_RPC_SUPPORTED_ACCOUNT_FILTERS: usize = 1000;
 
 #[derive(Debug)]
 pub struct JsonRpcCachedProvider {
