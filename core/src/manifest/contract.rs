@@ -119,6 +119,7 @@ impl ContractDetails {
                     factory.address.clone(),
                     factory.event_name.clone(),
                     factory.input_name.clone(),
+                    self.indexed_filters.clone(),
                 )
                 .unwrap_or_else(|_| panic!("Could not parse ABI from path: {}", factory.abi)),
             )

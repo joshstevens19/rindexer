@@ -190,6 +190,7 @@ pub struct FactoryDetails {
     pub address: ValueOrArray<Address>,
     pub input_name: String,
     pub event: Event,
+    pub indexed_filters: Option<Vec<EventInputIndexedFilters>>,
 }
 
 impl FactoryDetails {
@@ -200,6 +201,7 @@ impl FactoryDetails {
         address: ValueOrArray<Address>,
         event_name: String,
         input_name: String,
+        indexed_filters: Option<Vec<EventInputIndexedFilters>>,
     ) -> Result<FactoryDetails, FactoryDetailsFromAbiError> {
         let full_path = get_full_path(project_path, &abi)?;
         let abi_str = fs::read_to_string(full_path)?;
@@ -211,7 +213,7 @@ impl FactoryDetails {
             .ok_or(FactoryDetailsFromAbiError::EventNotFoundError(event_name.clone()))?
             .clone();
 
-        Ok(FactoryDetails { contract_name, address, input_name, event })
+        Ok(FactoryDetails { contract_name, address, input_name, event, indexed_filters })
     }
 }
 

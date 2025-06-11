@@ -61,6 +61,10 @@ impl ContractEventProcessingConfig {
                 self.end_block,
             ),
             IndexingContractSetup::Factory(details) => {
+                let index_filter = details.indexed_filters.iter().find_map(|indexed_filters| {
+                    indexed_filters.iter().find(|&n| n.event_name == self.event_name)
+                });
+
                 Ok(RindexerEventFilter::Factory(FactoryFilter {
                     project_path: self.project_path.clone(),
                     indexer_name: self.indexer_name.clone(),
@@ -70,6 +74,7 @@ impl ContractEventProcessingConfig {
                     factory_input_name: details.input_name.clone(),
                     network: self.network_contract.network.clone(),
                     topic_id: self.topic_id,
+                    topics: index_filter.cloned().map(Into::into).unwrap_or_default(),
                     database: self.database.clone(),
                     csv_details: self.csv_details.clone(),
 

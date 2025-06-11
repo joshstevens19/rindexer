@@ -60,6 +60,7 @@ pub struct FactoryFilter {
     pub network: String,
 
     pub topic_id: B256,
+    pub topics: [Topic; 4],
 
     pub database: Option<Arc<PostgresClient>>,
     pub csv_details: Option<CsvDetails>,
@@ -176,7 +177,7 @@ impl RindexerEventFilter {
         match self {
             RindexerEventFilter::Address(filter) => filter.topics[1].clone(),
             RindexerEventFilter::Filter(filter) => filter.topics[1].clone(),
-            RindexerEventFilter::Factory(_) => Default::default(),
+            RindexerEventFilter::Factory(filter) => filter.topics[1].clone(),
         }
     }
 
@@ -184,7 +185,7 @@ impl RindexerEventFilter {
         match self {
             RindexerEventFilter::Address(filter) => filter.topics[2].clone(),
             RindexerEventFilter::Filter(filter) => filter.topics[2].clone(),
-            RindexerEventFilter::Factory(_) => Default::default(),
+            RindexerEventFilter::Factory(filter) => filter.topics[2].clone(),
         }
     }
 
@@ -192,7 +193,7 @@ impl RindexerEventFilter {
         match self {
             RindexerEventFilter::Address(filter) => filter.topics[3].clone(),
             RindexerEventFilter::Filter(filter) => filter.topics[3].clone(),
-            RindexerEventFilter::Factory(_) => Default::default(),
+            RindexerEventFilter::Factory(filter) => filter.topics[3].clone(),
         }
     }
 
