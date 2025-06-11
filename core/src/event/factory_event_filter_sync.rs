@@ -103,10 +103,8 @@ pub async fn update_known_factory_deployed_addresses(
         .iter()
         .map(|event| {
             parse_log(&config.event, &event.log)
-                .and_then(|log| {
-                    log.params.iter().find(|log| log.name == config.input_name).cloned()
-                })
-                .and_then(|param| param.value.as_address())
+                .and_then(|log| log.get_param_value(&config.input_name))
+                .and_then(|value| value.as_address())
                 .map(|address| KnownFactoryDeployedAddress {
                     factory_address: event.tx_information.address,
                     address,

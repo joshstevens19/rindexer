@@ -31,7 +31,11 @@ pub fn parse_log(event: &Event, log: &Log) -> Option<ParsedLog> {
                     } else {
                         body_iter.next().expect("Not enough body values")
                     };
-                    LogParam { name: input.name.clone(), value }
+                    LogParam {
+                        name: input.name.clone(),
+                        value,
+                        components: input.components.clone(),
+                    }
                 })
                 .collect();
 

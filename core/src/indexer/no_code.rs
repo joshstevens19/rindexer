@@ -275,18 +275,12 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                     .iter()
                     .map(|result| {
                         let log_params = vec![
-                            LogParam {
-                                name: "from".to_string(),
-                                value: DynSolValue::Address(result.from),
-                            },
-                            LogParam {
-                                name: "to".to_string(),
-                                value: DynSolValue::Address(result.to),
-                            },
-                            LogParam {
-                                name: "value".to_string(),
-                                value: DynSolValue::Uint(result.value, 256),
-                            },
+                            LogParam::new("from".to_string(), DynSolValue::Address(result.from)),
+                            LogParam::new("to".to_string(), DynSolValue::Address(result.to)),
+                            LogParam::new(
+                                "value".to_string(),
+                                DynSolValue::Uint(result.value, 256),
+                            ),
                         ];
 
                         let address = result.tx_information.address;
