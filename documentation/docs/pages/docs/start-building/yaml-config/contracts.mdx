@@ -56,7 +56,8 @@ contracts: // [!code focus]
 ### address
 
 :::info
-The address or addresses of the contract or contracts to listen for events on. If you wish to use a `filter` you can leave this blank.
+The address or addresses of the contract or contracts to listen for events on.
+Only one of `address`, `filter` or `factory` can be provided for a given contract details.
 :::
 
 The contract address to listen for events on.
@@ -106,7 +107,7 @@ contracts: // [!code focus]
 ### filter
 
 :::info
-This is optional, if you do not provide a filter `address` will be required above.
+Only one of `address`, `filter` or `factory` can be provided for a given contract details.
 :::
 
 If you wish to filter based on events only for example you want all transfer events from all contracts you can use the
@@ -114,7 +115,7 @@ filter.
 
 :::warning
 You currently cannot mix and match address and filter within the same contract definition.
-This means if you want to index on a filter and with the same contract definition index on  
+This means if you want to index on a filter and with the same contract definition index on
 an address you will need to do 2 different contract definitions in the yaml file.
 :::
 
@@ -165,6 +166,62 @@ contracts: // [!code focus]
         filter: // [!code focus]
           - event_name: Transfer // [!code focus]
           - event_name: Approval // [!code focus]
+```
+
+### factory
+
+:::info
+Only one of `address`, `filter` or `factory` can be provided for a given contract details.
+:::
+
+Some contracts are deployed through the factory contract (e.g. Uniswap V3). If you wish to track events only from factory-deployed addresses use `factory` filter.
+
+:::warning
+Factory filter requires to specify events which should be included when indexing through `include_events` property on the contract.
+:::
+
+#### name
+
+The name of the factory contract to index.
+
+#### address
+
+The factory contract address to listen for events on. To listen to many factory contract addresses you can provide an array of addresses.
+
+#### abi
+
+The ABI of the contract is pointing to the JSON file in the repository. It can be a relative path or a full path.
+
+#### event_name
+
+The event name to filter on, it must match the ABI event name.
+
+#### input_name
+
+The path to the factory-deployed contract address in the event inputs. Supports deep property access in case of complex event types: `pool.address`.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+contracts: // [!code focus]
+  - name: UniswapV3Pool
+    details:
+      - network: ethereum
+        factory: // [!code focus]
+          name: UniswapV3Factory // [!code focus]
+          address: 0x1F98431c8aD98523631AE4a59f267346ea31F984 // [!code focus]
+          abi: ./abis/UniswapV3Factory.abi.json // [!code focus]
+          event_name: PoolCreated // [!code focus]
+          input_name: "pool" // [!code focus]
 ```
 
 ### indexed_1, indexed_2, indexed_3
@@ -389,7 +446,7 @@ contracts: // [!code focus]
 
 ### Many ABIs
 
-If you need to use many ABIs in the single contract you can pass in an array 
+If you need to use many ABIs in the single contract you can pass in an array
 this is useful if you have a contract which has several different implementations ABIs.
 
 ```yaml [rindexer.yaml]
@@ -411,7 +468,7 @@ contracts: // [!code focus]
         address: "0xae78736cd615f374d3085123a210448e74fc6393"
         start_block: 18600000
         end_block: 18718056
-    abi: 
+    abi:
       - ./abis/RocketTokenRETH.abi.json // [!code focus]
       - ./abis/RocketTokenRETH2.abi.json // [!code focus]
 ```
