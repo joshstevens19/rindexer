@@ -1,6 +1,6 @@
 [package]
 name = "rindexer_cli"
-version = "0.17.2"
+version = "0.17.3"
 edition = "2021"
 description = "A no-code or framework to build blazing fast EVM indexers - built in rust."
 license = "MIT"
@@ -13,7 +13,7 @@ resolver = "2"
 rindexer = { path = "../core" }
 
 # external dependencies
-alloy = { version = "1.0.4", features = ["full"] }
+alloy = { version = "1.0.9", features = ["full"] }
 alloy-chains = "0.2.0"# pegged to version in "foundry-block-explorers"
 foundry-block-explorers = "0.17.0"
 clap = { version = "4.4.11", features = ["derive"] }

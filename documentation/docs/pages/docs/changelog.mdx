@@ -17,6 +17,29 @@
 
 all release branches are deployed through `release/VERSION_NUMBER` branches
 
+# 0.17.3-beta - 9th June 2025
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.17.3
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.17.3/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.17.3/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.17.3/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.17.3/rindexer_win32-amd64.zip
+
+### Bug fixes
+-------------------------------------------------
+
+- Improve RPC Efficiency
+- Make Native Transfer indexing a little more gently on startup, and a bit slower on failure, to prevent overloading apis with concurrency
+- Improve Startup speed significantly by reducing lots of redundant sequential rpc calls
+- Respect native transfer `enabled: false` setting
+- Add some more debug logging, spans, and change some log levels
+
+### Breaking changes
+-------------------------------------------------
+
+- Add  `block_poll_frequency` to the yaml config to allow better control over block polling behavior. This will require re-running codegen for rust projects as it breaks the existing `create_client` interface.
+
 ## 0.17.2-beta - 30th May 2025
 
 github branch - https://github.com/joshstevens19/rindexer/tree/release/0.17.2
@@ -70,6 +93,8 @@ github branch - https://github.com/joshstevens19/rindexer/tree/release/0.17.0
 - Fix bug with breaking out of historical indexing on log fetch error.
 - Fix native transfer indexing bug by adjusting the reorg safe condition to be correct
 - Fix `fetch_logs` block range parsing to include fallback string if no Err variant found (fixes Lens indexing)
+
+all release branches are deployed through `release/VERSION_NUMBER` branches
 
 ## 0.16.1-beta - 20th May 2025
 

@@ -1,6 +1,7 @@
 use std::{path::Path, str::FromStr, sync::Arc, time::Duration};
 
 use alloy::primitives::U64;
+use alloy::transports::{RpcError, TransportErrorKind};
 use futures::future::try_join_all;
 use tokio::{
     join,
@@ -146,7 +147,7 @@ async fn get_start_end_block(
         last_known_start_block.unwrap_or(manifest_start_block.unwrap_or(latest_block));
     let end_block = std::cmp::min(manifest_end_block.unwrap_or(latest_block), latest_block);
 
-    info!("[{}] {} Starting block number - {}", network, event_name, start_block);
+    info!("{}::{} Starting block number - {}", event_name, network, start_block);
 
     if let Some(end_block) = manifest_end_block {
         if end_block > latest_block {
@@ -167,6 +168,11 @@ pub async fn start_indexing_traces(
     database: Option<Arc<PostgresClient>>,
     trace_registry: Arc<TraceCallbackRegistry>,
 ) -> Result<Vec<JoinHandle<Result<(), ProcessEventError>>>, StartIndexingError> {
+    if !manifest.native_transfers.enabled {
+        info!("Native transfer indexing disabled!");
+        return Ok(vec![]);
+    }
+
     let mut non_blocking_process_events = Vec::new();
     let trace_progress_state =
         IndexingEventsProgressState::monitor_traces(&trace_registry.events).await;
@@ -177,6 +183,8 @@ pub async fn start_indexing_traces(
             .iter()
             .find(|c| c.name == event.contract_name)
             .and_then(|c| c.streams.as_ref());
+
+        let networks_count = event.trace_information.details.len();
 
         for network in event.trace_information.details.iter() {
             let sync_config = SyncConfig {
@@ -191,7 +199,7 @@ pub async fn start_indexing_traces(
                 network: &network.network,
             };
 
-            let (block_tx, mut block_rx) = tokio::sync::mpsc::channel(8192);
+            let (block_tx, mut block_rx) = tokio::sync::mpsc::channel(2048);
             let network_name = network.network.clone();
             let (start_block, end_block, indexing_distance_from_head) = get_start_end_block(
                 network.cached_provider.clone(),
@@ -235,10 +243,10 @@ pub async fn start_indexing_traces(
             let provider = network.cached_provider.clone();
             let config = config.clone();
             let native_transfer_consumer_handle = tokio::spawn(async move {
-                // TODO: It would be nice to make the concurrent requests dynamic based on provider
-                // speeds and limits. For now we can just increase slowly on success, and reduce
-                // concurrency on failure.
-                let mut max_concurrent_requests: usize = 100;
+                let initial_concurrent_requests = 1;
+                let limit_concurrent_requests = 200 / networks_count;
+
+                let mut max_concurrent_requests: usize = initial_concurrent_requests;
                 let mut buffer: Vec<U64> = Vec::with_capacity(max_concurrent_requests);
 
                 loop {
@@ -258,23 +266,50 @@ pub async fn start_indexing_traces(
                     .await;
 
                     // If this has an error we need to not and reconsume the blocks. We don't have
-                    // to worry about double-publish because the failure point
-                    // is on the provider call itself, which is before publish.
+                    // to worry about double-publish because the failure point is on the provider
+                    // call itself, which is before publish.
                     if let Err(e) = processed_block {
-                        // On error, reset to original or half the search space.
-                        max_concurrent_requests = std::cmp::max(100, max_concurrent_requests / 2);
+                        // On error, half the block query range. We want a slow increase in
+                        // concurrency and an aggressive backoff.
+                        max_concurrent_requests = std::cmp::max(1, max_concurrent_requests / 2);
 
-                        warn!(
-                            "Could not process '{}' block traces. Likely too early for {}..{}, Retrying: {}",
-                            network_name,
-                            &buffer.first().map(|n| n.as_limbs()[0]).unwrap_or_else(|| 0),
-                            &buffer.last().map(|n| n.as_limbs()[0]).unwrap_or_else(|| 0),
-                            e.to_string().chars().take(2000).collect::<String>(),
+                        let is_rate_limit_error = matches!(&e, ProcessEventError::ProviderCallError(
+                            ProviderError::RequestFailed(
+                                RpcError::Transport(
+                                    TransportErrorKind::HttpError(http_err)
+                                )
+                            )) if http_err.status == 429
                         );
+
+                        if is_rate_limit_error {
+                            error!(
+                                "Rate-limited 429 '{}' block traces. Retrying in 1 second: {}",
+                                network_name,
+                                e.to_string(),
+                            );
+                        } else {
+                            warn!(
+                                "Could not process '{}' block traces. Likely too early for {}..{}, Retrying in 1 second: {}",
+                                network_name,
+                                &buffer.first().map(|n| n.as_limbs()[0]).unwrap_or_else(|| 0),
+                                &buffer.last().map(|n| n.as_limbs()[0]).unwrap_or_else(|| 0),
+                                e.to_string(),
+                            );
+                        }
+
+                        sleep(Duration::from_secs(1)).await;
+
                         continue;
                     } else {
                         buffer.clear();
-                        max_concurrent_requests = (max_concurrent_requests as f64 * 1.25) as usize;
+
+                        // A random chance of increasing the request count helps us not overload
+                        // the ratelimit too rapidly across multi-network trace indexing and have a
+                        // slow ramp-up time.
+                        if rand::random_bool(0.05) {
+                            max_concurrent_requests =
+                                (max_concurrent_requests + 1).min(limit_concurrent_requests);
+                        }
                     };
                 }
             });
