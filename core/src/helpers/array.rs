@@ -1,6 +1,9 @@
 use std::collections::HashSet;
 
-pub fn chunk_hashset<T: Clone + Eq + std::hash::Hash>(set: HashSet<T>, chunk_size: usize) -> Vec<HashSet<T>> {
+pub fn chunk_hashset<T: Clone + Eq + std::hash::Hash>(
+    set: HashSet<T>,
+    chunk_size: usize,
+) -> Vec<HashSet<T>> {
     let mut chunks = Vec::with_capacity(set.len().div_ceil(chunk_size));
     let mut current_chunk = HashSet::with_capacity(chunk_size);
 

@@ -30,10 +30,7 @@ pub struct Network {
     )]
     pub max_block_range: Option<U64>,
 
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub get_logs_settings: Option<GetLogsSettings>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -43,12 +40,12 @@ pub struct Network {
 #[derive(Debug, Serialize, Clone)]
 pub enum AddressFiltering {
     InMemory,
-    Config(AddressFilteringConfig),
+    MaxAddressPerGetLogsRequest(usize),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AddressFilteringConfig {
-    pub max_address_per_get_logs_request: Option<usize>
+    pub max_address_per_get_logs_request: usize,
 }
 
 impl<'de> Deserialize<'de> for AddressFiltering {
@@ -68,12 +65,11 @@ impl<'de> Deserialize<'de> for AddressFiltering {
 
         // Try to deserialize as AddressFilteringConfig
         match AddressFilteringConfig::deserialize(value) {
-            Ok(config) => Ok(AddressFiltering::Config(config)),
+            Ok(config) => Ok(AddressFiltering::MaxAddressPerGetLogsRequest(config.max_address_per_get_logs_request)),
             Err(_) => Err(Error::custom("Invalid AddressFiltering format")),
         }
     }
 }
-
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GetLogsSettings {
