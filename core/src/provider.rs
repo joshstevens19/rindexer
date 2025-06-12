@@ -386,29 +386,29 @@ impl JsonRpcCachedProvider {
             // different rpc providers implement an empty array differently,
             // therefore, we assume an empty addresses array means no events to fetch
             Some(addresses) if addresses.is_empty() => Ok(vec![]),
-            Some(addresses) => {
-                match self.address_filtering {
-                    Some(AddressFiltering::InMemory) => {
-                        self.get_logs_for_address_in_memory(&base_filter, addresses).await
-                    }
-                    Some(AddressFiltering::MaxAddressPerGetLogsRequest(max_address_per_get_logs_request)) => {
-                        self.get_logs_for_address_in_batches(
-                            &base_filter,
-                            addresses,
-                            max_address_per_get_logs_request
-                        )
-                        .await
-                    }
-                    None => {
-                        self.get_logs_for_address_in_batches(
-                            &base_filter,
-                            addresses,
-                            DEFAULT_RPC_SUPPORTED_ACCOUNT_FILTERS,
-                        )
-                        .await
-                    }
+            Some(addresses) => match self.address_filtering {
+                Some(AddressFiltering::InMemory) => {
+                    self.get_logs_for_address_in_memory(&base_filter, addresses).await
                 }
-            }
+                Some(AddressFiltering::MaxAddressPerGetLogsRequest(
+                    max_address_per_get_logs_request,
+                )) => {
+                    self.get_logs_for_address_in_batches(
+                        &base_filter,
+                        addresses,
+                        max_address_per_get_logs_request,
+                    )
+                    .await
+                }
+                None => {
+                    self.get_logs_for_address_in_batches(
+                        &base_filter,
+                        addresses,
+                        DEFAULT_RPC_SUPPORTED_ACCOUNT_FILTERS,
+                    )
+                    .await
+                }
+            },
             None => Ok(self.provider.get_logs(&base_filter).await?),
         }
 

@@ -65,7 +65,9 @@ impl<'de> Deserialize<'de> for AddressFiltering {
 
         // Try to deserialize as AddressFilteringConfig
         match AddressFilteringConfig::deserialize(value) {
-            Ok(config) => Ok(AddressFiltering::MaxAddressPerGetLogsRequest(config.max_address_per_get_logs_request)),
+            Ok(config) => Ok(AddressFiltering::MaxAddressPerGetLogsRequest(
+                config.max_address_per_get_logs_request,
+            )),
             Err(_) => Err(Error::custom("Invalid AddressFiltering format")),
         }
     }
