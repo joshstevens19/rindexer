@@ -74,7 +74,6 @@ url = "2.5.0"
 jemallocator = { version = "0.6.0", package = "tikv-jemallocator", optional = true }
 jemalloc-ctl = { version = "0.6.0", package = "tikv-jemalloc-ctl", optional = true }
 foundry-compilers = "0.17.0"
-log = "0.4.27"
 alloy-chains = "0.2.2"
 
 [target.'cfg(not(windows))'.dependencies]
