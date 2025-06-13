@@ -1,16 +1,8 @@
 use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
 
-use crate::{
-    event::{config::EventProcessingConfig, RindexerEventFilter},
-    indexer::{
-        log_helpers::{halved_block_number, is_relevant_block},
-        IndexingEventProgressStatus,
-    },
-    provider::{JsonRpcCachedProvider, ProviderError},
-};
 use alloy::{
-    primitives::{Address, BlockNumber, B256, U64},
-    rpc::types::{Log, ValueOrArray},
+    primitives::{BlockNumber, B256, U64},
+    rpc::types::Log,
 };
 use rand::random_ratio;
 use regex::Regex;
@@ -20,6 +12,13 @@ use tokio::{
 };
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, error, info, warn};
+
+use crate::helpers::{halved_block_number, is_relevant_block};
+use crate::{
+    event::{config::EventProcessingConfig, RindexerEventFilter},
+    indexer::IndexingEventProgressStatus,
+    provider::{JsonRpcCachedProvider, ProviderError},
+};
 
 pub struct FetchLogsResult {
     pub logs: Vec<Log>,
@@ -34,17 +33,15 @@ pub fn fetch_logs_stream(
 {
     let (tx, rx) = mpsc::unbounded_channel();
 
-    let initial_filter = config.to_event_filter().unwrap();
-    let contract_address = initial_filter.contract_address();
-
     tokio::spawn(async move {
-        let snapshot_to_block = initial_filter.get_to_block();
-        let from_block = initial_filter.get_from_block();
-        let mut current_filter = initial_filter;
+        let mut current_filter = config.to_event_filter().unwrap();
+
+        let snapshot_to_block = current_filter.to_block();
+        let from_block = current_filter.from_block();
 
         // add any max block range limitation before we start processing
         let mut max_block_range_limitation =
-            config.network_contract.cached_provider.max_block_range;
+            config.network_contract().cached_provider.max_block_range;
         if max_block_range_limitation.is_some() {
             current_filter = current_filter.set_to_block(calculate_process_historic_log_to_block(
                 &from_block,
@@ -53,27 +50,27 @@ pub fn fetch_logs_stream(
             ));
             warn!(
                 "{}::{} - {} - max block range limitation of {} blocks applied - block range indexing will be slower then RPC providers supplying the optimal ranges - https://rindexer.xyz/docs/references/rpc-node-providers#rpc-node-providers",
-                config.info_log_name,
-                config.network_contract.network,
+                config.info_log_name(),
+                config.network_contract().network,
                 IndexingEventProgressStatus::Syncing.log(),
                 max_block_range_limitation.unwrap()
             );
         }
-        while current_filter.get_from_block() <= snapshot_to_block {
-            let semaphore_client = Arc::clone(&config.semaphore);
+        while current_filter.from_block() <= snapshot_to_block {
+            let semaphore_client = Arc::clone(&config.semaphore());
             let permit = semaphore_client.acquire_owned().await;
 
             match permit {
                 Ok(permit) => {
                     let result = fetch_historic_logs_stream(
-                        &config.network_contract.cached_provider,
+                        &config.network_contract().cached_provider,
                         &tx,
-                        &config.topic_id,
+                        &config.topic_id(),
                         current_filter.clone(),
                         max_block_range_limitation,
                         snapshot_to_block,
-                        &config.info_log_name,
-                        &config.network_contract.network,
+                        &config.info_log_name(),
+                        &config.network_contract().network,
                     )
                     .await;
 
@@ -85,8 +82,8 @@ pub fn fetch_logs_stream(
                         if random_ratio(1, 50) {
                             warn!(
                                 "{}::{} - RPC PROVIDER IS SLOW - Slow indexing mode enabled, max block range limitation: {} blocks - we advise using a faster provider who can predict the next block ranges.",
-                                &config.info_log_name,
-                                &config.network_contract.network,
+                                &config.info_log_name(),
+                                &config.network_contract().network,
                                 range
                             );
                         }
@@ -102,7 +99,7 @@ pub fn fetch_logs_stream(
                 Err(e) => {
                     error!(
                         "{} - {} - Semaphore error: {}",
-                        &config.info_log_name,
+                        &config.info_log_name(),
                         IndexingEventProgressStatus::Syncing.log(),
                         e
                     );
@@ -113,24 +110,23 @@ pub fn fetch_logs_stream(
 
         info!(
             "{} - {} - Finished indexing historic events",
-            &config.info_log_name,
+            &config.info_log_name(),
             IndexingEventProgressStatus::Completed.log()
         );
 
         // Live indexing mode
-        if config.live_indexing && !force_no_live_indexing {
+        if config.live_indexing() && !force_no_live_indexing {
             live_indexing_stream(
-                &config.network_contract.cached_provider,
+                &config.network_contract().cached_provider,
                 &tx,
                 snapshot_to_block,
-                &contract_address,
-                &config.topic_id,
-                &config.indexing_distance_from_head,
+                &config.topic_id(),
+                &config.indexing_distance_from_head(),
                 current_filter,
-                &config.info_log_name,
-                &config.semaphore,
-                config.network_contract.disable_logs_bloom_checks,
-                &config.network_contract.network,
+                &config.info_log_name(),
+                &config.semaphore(),
+                config.network_contract().disable_logs_bloom_checks,
+                &config.network_contract().network,
             )
             .await;
         }
@@ -155,8 +151,8 @@ async fn fetch_historic_logs_stream(
     info_log_name: &str,
     network: &str,
 ) -> Option<ProcessHistoricLogsStreamResult> {
-    let from_block = current_filter.get_from_block();
-    let to_block = current_filter.get_to_block();
+    let from_block = current_filter.from_block();
+    let to_block = current_filter.to_block();
 
     debug!(
         "{}::{} - {} - Process historic events - blocks: {} - {}",
@@ -347,7 +343,6 @@ async fn live_indexing_stream(
     cached_provider: &Arc<JsonRpcCachedProvider>,
     tx: &mpsc::UnboundedSender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
     last_seen_block_number: U64,
-    contract_address: &Option<ValueOrArray<Address>>,
     topic_id: &B256,
     reorg_safe_distance: &U64,
     mut current_filter: RindexerEventFilter,
@@ -398,7 +393,7 @@ async fn live_indexing_stream(
                         );
 
                         let safe_block_number = to_block_number - reorg_safe_distance;
-                        let from_block = current_filter.get_from_block();
+                        let from_block = current_filter.from_block();
                         if from_block > safe_block_number {
                             info!(
                                 "{} - {} - not in safe reorg block range yet block: {} > range: {}",
@@ -408,10 +403,12 @@ async fn live_indexing_stream(
                                 safe_block_number
                             );
                         } else {
+                            let contract_address = current_filter.contract_addresses().await;
+
                             let to_block = safe_block_number;
                             if from_block == to_block
                                 && !disable_logs_bloom_checks
-                                && !is_relevant_block(contract_address, topic_id, &latest_block)
+                                && !is_relevant_block(&contract_address, topic_id, &latest_block)
                             {
                                 debug!(
                                     "{} - {} - Skipping block {} as it's not relevant",

@@ -5569,6 +5569,7 @@ dependencies = [
  "lapin",
  "lazy_static",
  "log",
+ "mini-moka",
  "mockito",
  "native-tls",
  "once_cell",

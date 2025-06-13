@@ -11,6 +11,7 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 
+use crate::event::config::{ContractEventProcessingConfig, FactoryEventProcessingConfig};
 use crate::{
     database::postgres::client::PostgresConnectionError,
     event::{
@@ -348,7 +349,6 @@ pub async fn start_indexing_contract_events(
     // this contract you will need to apply the dependency after the processing of the other
     // contract to avoid ordering issues
     let mut apply_cross_contract_dependency_events_config_after_processing = Vec::new();
-    let mut event_processing_configs: Vec<Arc<EventProcessingConfig>> = vec![];
     let mut non_blocking_process_events = Vec::new();
     let mut processed_network_contracts: Vec<ProcessedNetworkContract> = Vec::new();
     let mut dependency_event_processing_configs: Vec<ContractEventsDependenciesConfig> = Vec::new();
@@ -390,7 +390,7 @@ pub async fn start_indexing_contract_events(
                 processed_up_to: end_block,
             });
 
-            let event_processing_config = EventProcessingConfig {
+            let event_processing_config = ContractEventProcessingConfig {
                 id: event.id.clone(),
                 project_path: project_path.to_path_buf(),
                 indexer_name: event.indexer_name.clone(),
@@ -418,6 +418,37 @@ pub async fn start_indexing_contract_events(
                 indexing_distance_from_head,
             };
 
+            if let Some(factory_details) =
+                network_contract.indexing_contract_setup.factory_details()
+            {
+                let factory_event_processing_config = FactoryEventProcessingConfig {
+                    address: factory_details.address.clone(),
+                    input_name: factory_details.input_name.clone(),
+                    contract_name: factory_details.contract_name.clone(),
+                    project_path: project_path.to_path_buf(),
+                    indexer_name: event.indexer_name.clone(),
+                    event: factory_details.event.clone(),
+                    network_contract: Arc::new(network_contract.clone()),
+                    start_block,
+                    end_block,
+                    semaphore: Arc::clone(&semaphore),
+                    progress: Arc::clone(&event_progress_state),
+                    database: database.clone(),
+                    csv_details: manifest.storage.csv.clone(),
+                    stream_last_synced_block_file_path: stream_details
+                        .as_ref()
+                        .map(|s| s.get_streams_last_synced_block_path()),
+                    live_indexing: event_processing_config.live_indexing,
+                    index_event_in_order: event.index_event_in_order,
+                    indexing_distance_from_head,
+                };
+
+                apply_cross_contract_dependency_events_config_after_processing.push((
+                    event.contract.name.clone(),
+                    Arc::new(factory_event_processing_config.into()),
+                ));
+            }
+
             let dependencies_status = ContractEventDependencies::dependencies_status(
                 &event_processing_config.contract_name,
                 &event_processing_config.event_name,
@@ -429,25 +460,25 @@ pub async fn start_indexing_contract_events(
             }
 
             if dependencies_status.has_dependencies() {
-                let event_processing_config_arc = Arc::new(event_processing_config);
-                event_processing_configs.push(Arc::clone(&event_processing_config_arc));
-
                 if let Some(dependency_in_other_contract) =
                     dependencies_status.get_first_dependencies_in_other_contracts()
                 {
-                    apply_cross_contract_dependency_events_config_after_processing
-                        .push((dependency_in_other_contract, event_processing_config_arc));
+                    apply_cross_contract_dependency_events_config_after_processing.push((
+                        dependency_in_other_contract,
+                        Arc::new(event_processing_config.into()),
+                    ));
 
                     continue;
                 }
 
                 ContractEventsDependenciesConfig::add_to_event_or_new_entry(
                     &mut dependency_event_processing_configs,
-                    event_processing_config_arc,
+                    Arc::new(event_processing_config.into()),
                     dependencies,
                 );
             } else {
-                let process_event = tokio::spawn(process_event(event_processing_config, false));
+                let process_event =
+                    tokio::spawn(process_event(event_processing_config.into(), false));
                 non_blocking_process_events.push(process_event);
             }
         }

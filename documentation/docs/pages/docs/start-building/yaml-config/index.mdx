@@ -267,3 +267,33 @@ contracts:
       end_block: 18718056
     abi: ./abis/ERC20.abi.json
 ```
+
+
+### Filter for address or addresses deployed by factory contract
+
+Filter events that are emitted from a known factory-deployed contract.
+You can read more about indexed fields [here](/docs/start-building/yaml-config/contracts#factory).
+
+```yaml
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+contracts:
+  - name: UniswapV3Pool
+    details:
+      - network: ethereum
+        factory:
+          name: UniswapV3Factory
+          address: 0x1F98431c8aD98523631AE4a59f267346ea31F984
+          abi: ./abis/UniswapV3Factory.abi.json
+          event_name: PoolCreated
+          input_name: "pool"
+```
