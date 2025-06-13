@@ -1,11 +1,4 @@
-use std::{any::Any, sync::Arc};
-
-use alloy::{
-    primitives::{Address, Log, U64},
-    rpc::types::ValueOrArray,
-};
-use serde::{Deserialize, Serialize};
-
+use crate::helpers::get_full_path;
 use crate::{
     event::callback_registry::Decoder,
     generate_random_id,
@@ -17,6 +10,15 @@ use crate::{
     provider::{get_network_provider, CreateNetworkProvider, JsonRpcCachedProvider},
     types::single_or_array::StringOrArray,
 };
+use alloy::json_abi::{Event, JsonAbi};
+use alloy::{
+    primitives::{Address, Log, U64},
+    rpc::types::ValueOrArray,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::Error;
+use std::path::Path;
+use std::{any::Any, fs, sync::Arc};
 
 #[derive(Clone)]
 pub struct NetworkContract {
@@ -56,6 +58,7 @@ pub enum CreateContractInformationError {
 
 impl ContractInformation {
     pub fn create(
+        project_path: &Path,
         contract: &Contract,
         network_providers: &[CreateNetworkProvider],
         decoder: Decoder,
@@ -76,7 +79,7 @@ impl ContractInformation {
                         network: c.network.clone(),
                         cached_provider: Arc::clone(&provider.client),
                         decoder: Arc::clone(&decoder),
-                        indexing_contract_setup: c.indexing_contract_setup(),
+                        indexing_contract_setup: c.indexing_contract_setup(project_path),
                         start_block: c.start_block,
                         end_block: c.end_block,
                         disable_logs_bloom_checks: provider.disable_logs_bloom_checks,
@@ -169,17 +172,49 @@ pub struct AddressDetails {
     pub indexed_filters: Option<Vec<EventInputIndexedFilters>>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(thiserror::Error, Debug)]
+pub enum FactoryDetailsFromAbiError {
+    #[error(transparent)]
+    IOError(#[from] std::io::Error),
+
+    #[error(transparent)]
+    ABIParsingError(#[from] Error),
+
+    #[error("Can not find event {0}")]
+    EventNotFoundError(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FactoryDetails {
-    pub address: String,
+    pub contract_name: String,
+    pub address: ValueOrArray<Address>,
+    pub input_name: String,
+    pub event: Event,
+    pub indexed_filters: Option<Vec<EventInputIndexedFilters>>,
+}
 
-    #[serde(rename = "eventName")]
-    pub event_name: String,
+impl FactoryDetails {
+    pub fn from_abi(
+        project_path: &Path,
+        abi: String,
+        contract_name: String,
+        address: ValueOrArray<Address>,
+        event_name: String,
+        input_name: String,
+        indexed_filters: Option<Vec<EventInputIndexedFilters>>,
+    ) -> Result<FactoryDetails, FactoryDetailsFromAbiError> {
+        let full_path = get_full_path(project_path, &abi)?;
+        let abi_str = fs::read_to_string(full_path)?;
+        let abi: JsonAbi = serde_json::from_str(&abi_str)?;
 
-    #[serde(rename = "parameterName")]
-    pub parameter_name: String,
+        let event = abi
+            .event(&event_name)
+            .and_then(|v| v.first())
+            .ok_or(FactoryDetailsFromAbiError::EventNotFoundError(event_name.clone()))?
+            .clone();
 
-    pub abi: String,
+        Ok(FactoryDetails { contract_name, address, input_name, event, indexed_filters })
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -199,5 +234,12 @@ pub enum IndexingContractSetup {
 impl IndexingContractSetup {
     pub fn is_filter(&self) -> bool {
         matches!(self, IndexingContractSetup::Filter(_))
+    }
+
+    pub fn factory_details(&self) -> Option<FactoryDetails> {
+        match self {
+            IndexingContractSetup::Factory(details) => Some(details.clone()),
+            _ => None,
+        }
     }
 }

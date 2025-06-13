@@ -11,7 +11,6 @@ use crate::{
         generate::solidity_type_to_db_type,
         sql_type_wrapper::{solidity_type_to_ethereum_sql_type_wrapper, EthereumSqlTypeWrapper},
     },
-    event::contract_setup::IndexingContractSetup,
     helpers::camel_to_snake,
     manifest::contract::{Contract, ParseAbiError},
 };
@@ -217,9 +216,7 @@ impl ABIItem {
         let mut events = Vec::new();
         for item in abi_json.into_iter() {
             if item.type_ == "event" {
-                let signature = item.format_event_signature()?;
-                // println!("signature {}", signature);
-                events.push(EventInfo::new(item, signature));
+                events.push(EventInfo::new(item)?);
             }
         }
         Ok(events)
@@ -254,17 +251,12 @@ impl ABIItem {
             let filter_event_names: HashSet<String> = contract
                 .details
                 .iter()
-                .filter_map(|detail| {
-                    if let IndexingContractSetup::Filter(filter) = &detail.indexing_contract_setup()
-                    {
-                        Some(filter.events.clone())
-                    } else {
-                        None
-                    }
-                })
+                .filter_map(|detail| detail.filter.clone())
                 .flat_map(|events| match events {
-                    ValueOrArray::Value(event) => vec![event.clone()],
-                    ValueOrArray::Array(event_array) => event_array.clone(),
+                    ValueOrArray::Value(event) => vec![event.event_name],
+                    ValueOrArray::Array(event_array) => {
+                        event_array.into_iter().map(|e| e.event_name).collect()
+                    }
                 })
                 .collect();
 
@@ -279,7 +271,7 @@ impl ABIItem {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventInfo {
     pub name: String,
     pub inputs: Vec<ABIInput>,
@@ -295,10 +287,17 @@ pub enum CreateCsvFileForEvent {
 }
 
 impl EventInfo {
-    pub fn new(item: ABIItem, signature: String) -> Self {
+    pub fn new(item: ABIItem) -> Result<Self, ParamTypeError> {
         let struct_result = format!("{}Result", item.name);
         let struct_data = format!("{}Data", item.name);
-        EventInfo { name: item.name, inputs: item.inputs, signature, struct_result, struct_data }
+        let signature = item.format_event_signature()?;
+        Ok(EventInfo {
+            name: item.name,
+            inputs: item.inputs,
+            signature,
+            struct_result,
+            struct_data,
+        })
     }
 
     pub fn topic_id(&self) -> B256 {

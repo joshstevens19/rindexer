@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::str::FromStr;
 
 use alloy::{
@@ -9,6 +10,7 @@ use alloy::{
 use tracing::error;
 
 use crate::types::core::{LogParam, ParsedLog};
+
 pub fn parse_log(event: &Event, log: &Log) -> Option<ParsedLog> {
     // as topic[0] is the event signature
     let topics_length = log.topics().len() - 1;
@@ -29,7 +31,11 @@ pub fn parse_log(event: &Event, log: &Log) -> Option<ParsedLog> {
                     } else {
                         body_iter.next().expect("Not enough body values")
                     };
-                    LogParam { name: input.name.clone(), value }
+                    LogParam {
+                        name: input.name.clone(),
+                        value,
+                        components: input.components.clone(),
+                    }
                 })
                 .collect();
 
@@ -110,24 +116,15 @@ pub fn topic_in_bloom(topic_id: B256, logs_bloom: Bloom) -> bool {
 }
 
 pub fn is_relevant_block(
-    contract_address: &Option<ValueOrArray<Address>>,
+    contract_address: &Option<HashSet<Address>>,
     topic_id: &B256,
     latest_block: &Block,
 ) -> bool {
     let logs_bloom = latest_block.header.logs_bloom;
 
     if let Some(contract_address) = contract_address {
-        match contract_address {
-            ValueOrArray::Value(address) => {
-                if !contract_in_bloom(*address, logs_bloom) {
-                    return false;
-                }
-            }
-            ValueOrArray::Array(addresses) => {
-                if addresses.iter().all(|addr| !contract_in_bloom(*addr, logs_bloom)) {
-                    return false;
-                }
-            }
+        if contract_address.iter().all(|addr| !contract_in_bloom(*addr, logs_bloom)) {
+            return false;
         }
     }
 

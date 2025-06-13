@@ -31,7 +31,51 @@ pub struct Network {
     pub max_block_range: Option<U64>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub get_logs_settings: Option<GetLogsSettings>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disable_logs_bloom_checks: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub enum AddressFiltering {
+    InMemory,
+    MaxAddressPerGetLogsRequest(usize),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AddressFilteringConfig {
+    pub max_address_per_get_logs_request: usize,
+}
+
+impl<'de> Deserialize<'de> for AddressFiltering {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::Error;
+
+        let value = serde_yaml::Value::deserialize(deserializer)?;
+
+        if let Some(s) = value.as_str() {
+            if s == "in-memory" {
+                return Ok(AddressFiltering::InMemory);
+            }
+        }
+
+        // Try to deserialize as AddressFilteringConfig
+        match AddressFilteringConfig::deserialize(value) {
+            Ok(config) => Ok(AddressFiltering::MaxAddressPerGetLogsRequest(
+                config.max_address_per_get_logs_request,
+            )),
+            Err(_) => Err(Error::custom("Invalid AddressFiltering format")),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GetLogsSettings {
+    pub address_filtering: AddressFiltering,
 }
 
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
