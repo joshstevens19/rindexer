@@ -27,7 +27,6 @@ use alloy::{
 };
 use alloy_chains::{Chain, NamedChain};
 use futures::future::try_join_all;
-use log::debug;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashSet;
@@ -38,7 +37,7 @@ use std::{
 };
 use thiserror::Error;
 use tokio::sync::Mutex;
-use tracing::{debug_span, error, Instrument};
+use tracing::{debug, debug_span, error, Instrument};
 use url::Url;
 
 use crate::helpers::chunk_hashset;
