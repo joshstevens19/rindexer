@@ -416,6 +416,7 @@ where
                 .map(|c| NetworkContract {
                     id: generate_random_id(10),
                     network: c.network.clone(),
+                    chain_id: None,
                     cached_provider: providers
                         .get(&c.network)
                         .expect("must have a provider")

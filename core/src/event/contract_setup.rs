@@ -30,6 +30,7 @@ pub struct NetworkContract {
     pub start_block: Option<U64>,
     pub end_block: Option<U64>,
     pub disable_logs_bloom_checks: bool,
+    pub chain_id: Option<u64>,
 }
 
 impl NetworkContract {
@@ -77,6 +78,7 @@ impl ContractInformation {
                     details.push(NetworkContract {
                         id: generate_random_id(10),
                         network: c.network.clone(),
+                        chain_id: None,
                         cached_provider: Arc::clone(&provider.client),
                         decoder: Arc::clone(&decoder),
                         indexing_contract_setup: c.indexing_contract_setup(project_path),

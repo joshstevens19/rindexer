@@ -40,6 +40,7 @@ pub enum CallbackResult {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TxInformation {
+    pub chain_id: u64,
     pub network: String,
     pub address: Address,
     pub block_hash: BlockHash,
@@ -83,6 +84,7 @@ impl EventResult {
             log: log.clone(),
             decoded_data: network_contract.decode_log(log.inner),
             tx_information: TxInformation {
+                chain_id: network_contract.chain_id.unwrap_or(0),
                 network: network_contract.network.to_string(),
                 address: log_address,
                 block_hash: log.block_hash.expect("log should contain block_hash"),
@@ -249,6 +251,7 @@ impl TraceResult {
             tx_information: TxInformation {
                 network: network.to_string(),
                 address: Address::ZERO,
+                chain_id: 0, // TODO: Chain ID should be set correctly if available.
                 // TODO: Unclear in what situation this would be `None`.
                 block_number: trace.block_number.map(U64::from).unwrap_or_else(|| U64::ZERO),
                 block_timestamp: None,
