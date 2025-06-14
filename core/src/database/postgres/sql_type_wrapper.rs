@@ -63,6 +63,7 @@ pub enum EthereumSqlTypeWrapper {
     I256BytesNullable(I256),
     VecU256(Vec<U256>),
     VecU256Bytes(Vec<U256>),
+    VecU256Numeric(Vec<U256>),
     VecI256(Vec<I256>),
     VecI256Bytes(Vec<I256>),
 
@@ -163,6 +164,7 @@ impl EthereumSqlTypeWrapper {
             EthereumSqlTypeWrapper::I256BytesNullable(_) => "I256BytesNullable",
             EthereumSqlTypeWrapper::VecU256(_) => "VecU256",
             EthereumSqlTypeWrapper::VecU256Bytes(_) => "VecU256Bytes",
+            EthereumSqlTypeWrapper::VecU256Numeric(_) => "VecU256Numeric",
             EthereumSqlTypeWrapper::VecI256(_) => "VecI256",
             EthereumSqlTypeWrapper::VecI256Bytes(_) => "VecI256Bytes",
 
@@ -265,6 +267,7 @@ impl EthereumSqlTypeWrapper {
             }
             EthereumSqlTypeWrapper::VecU256(_) => PgType::VARCHAR_ARRAY,
             EthereumSqlTypeWrapper::VecU256Bytes(_) => PgType::BYTEA_ARRAY,
+            EthereumSqlTypeWrapper::VecU256Numeric(_) => PgType::NUMERIC_ARRAY,
             EthereumSqlTypeWrapper::VecI256(_) => PgType::VARCHAR_ARRAY,
             EthereumSqlTypeWrapper::VecI256Bytes(_) => PgType::BYTEA_ARRAY,
 
@@ -471,6 +474,35 @@ impl EthereumSqlTypeWrapper {
         out.extend_from_slice(&buf);
         Ok(IsNull::No)
     }
+
+    fn serialize_numeric_u256_array<T>(
+        values: &[T],
+        out: &mut BytesMut,
+        value_converter: impl Fn(&T) -> (U256, bool), // (absolute value, is_negative)
+    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        if values.is_empty() {
+            return Ok(IsNull::Yes);
+        }
+
+        let mut buf = BytesMut::new();
+        buf.extend_from_slice(&(1i32.to_be_bytes()));
+        buf.extend_from_slice(&(0i32.to_be_bytes()));
+        buf.extend_from_slice(&PgType::NUMERIC.oid().to_be_bytes());
+        buf.extend_from_slice(&(values.len() as i32).to_be_bytes());
+        buf.extend_from_slice(&(1i32.to_be_bytes()));
+
+        for value in values {
+            let (abs_value, is_negative) = value_converter(value);
+            let mut elem_buf = BytesMut::new();
+            Self::write_u256_numeric_to_postgres(abs_value, is_negative, &mut elem_buf)?;
+
+            buf.extend_from_slice(&(elem_buf.len() as i32).to_be_bytes());
+            buf.extend_from_slice(&elem_buf);
+        }
+
+        out.extend_from_slice(&buf);
+        Ok(IsNull::No)
+    }
 }
 
 impl ToSql for EthereumSqlTypeWrapper {
@@ -556,6 +588,9 @@ impl ToSql for EthereumSqlTypeWrapper {
                     }
                     Ok(IsNull::No)
                 }
+            }
+            EthereumSqlTypeWrapper::VecU256Numeric(values) => {
+                Self::serialize_numeric_u256_array(values, out, |v| (*v, false))
             }
             EthereumSqlTypeWrapper::I256(value) => {
                 let value = value.to_string();
@@ -1562,6 +1597,7 @@ pub fn map_ethereum_wrapper_to_json(
                         json!(u.to_string())
                     }
                     EthereumSqlTypeWrapper::VecU256(u256s)
+                    | EthereumSqlTypeWrapper::VecU256Numeric(u256s)
                     | EthereumSqlTypeWrapper::VecU256Bytes(u256s) => {
                         json!(u256s.iter().map(|u| u.to_string()).collect::<Vec<_>>())
                     }
