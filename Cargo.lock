@@ -5568,7 +5568,7 @@ dependencies = [
  "hex",
  "lapin",
  "lazy_static",
- "log",
+ "mini-moka",
  "mockito",
  "native-tls",
  "once_cell",
@@ -5599,7 +5599,7 @@ dependencies = [
 
 [[package]]
 name = "rindexer_cli"
-version = "0.17.3"
+version = "0.18.0"
 dependencies = [
  "alloy",
  "alloy-chains",

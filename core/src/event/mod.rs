@@ -10,4 +10,6 @@ mod message;
 pub use message::EventMessage;
 
 mod conditions;
+mod factory_event_filter_sync;
+
 pub use conditions::filter_event_data_by_conditions;

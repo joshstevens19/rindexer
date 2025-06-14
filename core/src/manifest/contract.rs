@@ -1,19 +1,21 @@
 use std::{borrow::Cow, collections::HashSet, fs, path::Path};
 
+use alloy::rpc::types::Topic;
 use alloy::{
     primitives::{Address, U64},
-    rpc::types::{Filter, ValueOrArray},
+    rpc::types::ValueOrArray,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::core::{deserialize_option_u64_from_string, serialize_option_u64_as_string};
+use crate::event::contract_setup::FactoryDetails;
+use crate::helpers::parse_topic;
 use crate::{
     event::contract_setup::{
         AddressDetails, ContractEventMapping, FilterDetails, IndexingContractSetup,
     },
     helpers::get_full_path,
-    indexer::parse_topic,
     manifest::{chat::ChatConfig, stream::StreamsConfig},
     types::single_or_array::StringOrArray,
 };
@@ -32,18 +34,21 @@ pub struct EventInputIndexedFilters {
     pub indexed_3: Option<Vec<String>>,
 }
 
-impl EventInputIndexedFilters {
-    pub fn extend_filter_indexed(&self, mut filter: Filter) -> Filter {
-        if let Some(indexed_1) = &self.indexed_1 {
-            filter = filter.topic1(indexed_1.iter().map(|i| parse_topic(i)).collect::<Vec<_>>());
+impl From<EventInputIndexedFilters> for [Topic; 4] {
+    fn from(input: EventInputIndexedFilters) -> Self {
+        let mut topics: [Topic; 4] = Default::default();
+
+        if let Some(indexed_1) = &input.indexed_1 {
+            topics[1] = indexed_1.iter().map(|i| parse_topic(i)).collect::<Vec<_>>().into();
         }
-        if let Some(indexed_2) = &self.indexed_2 {
-            filter = filter.topic2(indexed_2.iter().map(|i| parse_topic(i)).collect::<Vec<_>>());
+        if let Some(indexed_2) = &input.indexed_2 {
+            topics[2] = indexed_2.iter().map(|i| parse_topic(i)).collect::<Vec<_>>().into();
         }
-        if let Some(indexed_3) = &self.indexed_3 {
-            filter = filter.topic3(indexed_3.iter().map(|i| parse_topic(i)).collect::<Vec<_>>());
+        if let Some(indexed_3) = &input.indexed_3 {
+            topics[3] = indexed_3.iter().map(|i| parse_topic(i)).collect::<Vec<_>>().into();
         }
-        filter
+
+        topics
     }
 }
 
@@ -53,11 +58,24 @@ pub struct FilterDetailsYaml {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FactoryDetailsYaml {
+    pub name: String,
+
+    pub address: ValueOrArray<Address>,
+
+    pub event_name: String,
+
+    pub input_name: String,
+
+    pub abi: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ContractDetails {
     pub network: String,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    address: Option<ValueOrArray<Address>>,
+    pub address: Option<ValueOrArray<Address>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filter: Option<ValueOrArray<FilterDetailsYaml>>,
@@ -65,8 +83,9 @@ pub struct ContractDetails {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub indexed_filters: Option<Vec<EventInputIndexedFilters>>,
 
-    // #[serde(default, skip_serializing_if = "Option::is_none")]
-    // factory: Option<FactoryDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub factory: Option<FactoryDetailsYaml>,
+
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -85,16 +104,27 @@ pub struct ContractDetails {
 }
 
 impl ContractDetails {
-    pub fn indexing_contract_setup(&self) -> IndexingContractSetup {
+    pub fn indexing_contract_setup(&self, project_path: &Path) -> IndexingContractSetup {
         if let Some(address) = &self.address {
             IndexingContractSetup::Address(AddressDetails {
                 address: address.clone(),
                 indexed_filters: self.indexed_filters.clone(),
             })
-            // } else if let Some(factory) = &self.factory {
-            //     IndexingContractSetup::Factory(factory.clone())
+        } else if let Some(factory) = &self.factory {
+            IndexingContractSetup::Factory(
+                FactoryDetails::from_abi(
+                    project_path,
+                    factory.abi.clone(),
+                    factory.name.clone(),
+                    factory.address.clone(),
+                    factory.event_name.clone(),
+                    factory.input_name.clone(),
+                    self.indexed_filters.clone(),
+                )
+                .unwrap_or_else(|_| panic!("Could not parse ABI from path: {}", factory.abi)),
+            )
         } else if let Some(filter) = &self.filter {
-            return match filter {
+            match filter {
                 ValueOrArray::Value(filter) => IndexingContractSetup::Filter(FilterDetails {
                     events: ValueOrArray::Value(filter.event_name.clone()),
                     indexed_filters: self.indexed_filters.as_ref().and_then(|f| f.first().cloned()),
@@ -105,7 +135,7 @@ impl ContractDetails {
                     ),
                     indexed_filters: self.indexed_filters.as_ref().and_then(|f| f.first().cloned()),
                 }),
-            };
+            }
         } else {
             panic!("Contract details must have an address, factory or filter");
         }
@@ -115,9 +145,6 @@ impl ContractDetails {
         if let Some(address) = &self.address {
             return Some(address);
         }
-        // } else if let Some(factory) = &self.factory {
-        //     Some(&factory.address.parse::<Address>().into())
-        // } else {
         None
     }
 
@@ -133,27 +160,11 @@ impl ContractDetails {
             address: Some(address),
             filter: None,
             indexed_filters,
-            //factory: None,
+            factory: None,
             start_block,
             end_block,
         }
     }
-
-    // pub fn new_with_factory(
-    //     network: String,
-    //     factory: FactoryDetails,
-    //     start_block: Option<U64>,
-    //     end_block: Option<U64>,
-    // ) -> Self {
-    //     Self {
-    //         network,
-    //         address: None,
-    //         filter: None,
-    //         factory: Some(factory),
-    //         start_block,
-    //         end_block,
-    //     }
-    // }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -224,7 +235,6 @@ pub struct Contract {
 }
 
 #[derive(thiserror::Error, Debug)]
-
 pub enum ParseAbiError {
     #[error("Could not read ABI string: {0}")]
     CouldNotReadAbiString(String),
@@ -303,11 +313,7 @@ impl Contract {
     }
 
     pub fn is_filter(&self) -> bool {
-        let filter_count = self
-            .details
-            .iter()
-            .filter(|details| details.indexing_contract_setup().is_filter())
-            .count();
+        let filter_count = self.details.iter().filter(|details| details.filter.is_some()).count();
 
         if filter_count > 0 && filter_count != self.details.len() {
             // panic as this should never happen as validation has already happened

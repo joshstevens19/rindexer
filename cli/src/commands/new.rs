@@ -143,6 +143,7 @@ pub fn handle_new_command(
             compute_units_per_second: None,
             max_block_range: None,
             disable_logs_bloom_checks: None,
+            get_logs_settings: None,
         }],
         contracts: vec![Contract {
             name: "RocketPoolETH".to_string(),
