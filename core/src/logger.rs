@@ -91,7 +91,7 @@ pub fn setup_logger(log_level: LevelFilter) {
 }
 
 pub fn setup_info_logger() {
-    setup_logger(LevelFilter::DEBUG);
+    setup_logger(LevelFilter::INFO);
 }
 
 // Call this when starting shutdown
