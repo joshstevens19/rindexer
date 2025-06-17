@@ -11,7 +11,7 @@ use crate::{
     database::postgres::generate::{
         generate_column_names_only_with_base_properties, generate_event_table_full_name,
     },
-    helpers::{camel_to_snake},
+    helpers::camel_to_snake,
     manifest::{
         contract::{Contract, ContractDetails, ParseAbiError},
         storage::{CsvDetails, Storage},
