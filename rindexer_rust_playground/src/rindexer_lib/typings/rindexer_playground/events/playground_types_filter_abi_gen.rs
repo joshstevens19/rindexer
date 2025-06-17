@@ -89,6 +89,19 @@ sol!(
     ],
     "name": "Swap",
     "type": "event"
+  },
+  {
+    "type": "event",
+    "name": "Two_Word",
+    "inputs": [
+      {
+        "name": "foo",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
   }
 ]"#
 );

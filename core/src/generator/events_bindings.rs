@@ -11,7 +11,7 @@ use crate::{
     database::postgres::generate::{
         generate_column_names_only_with_base_properties, generate_event_table_full_name,
     },
-    helpers::{camel_to_snake, to_pascal_case},
+    helpers::{camel_to_snake},
     manifest::{
         contract::{Contract, ContractDetails, ParseAbiError},
         storage::{CsvDetails, Storage},
@@ -61,7 +61,7 @@ fn generate_structs(
 
             structs.push_str(&Code::new(format!(
                 r#"
-                    pub type {struct_data} = {abigen_name}::{pascal_event_name};
+                    pub type {struct_data} = {abigen_name}::{event_name};
 
                     #[derive(Debug, Clone)]
                     pub struct {struct_result} {{
@@ -78,7 +78,6 @@ fn generate_structs(
                 struct_result = struct_result,
                 struct_data = struct_data,
                 abigen_name = abigen_contract_name(contract),
-                pascal_event_name = to_pascal_case(event_name)
             )));
         }
     }

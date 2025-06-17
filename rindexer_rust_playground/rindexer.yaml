@@ -53,6 +53,7 @@ contracts:
     abi: ./abis/playground-types-abi.json
     include_events:
       - Swap
+      - Two_Word
 global:
   contracts:
     - name: USDT
