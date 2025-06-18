@@ -55,6 +55,20 @@ impl HasTxInformation for SwapResult {
     }
 }
 
+pub type Two_WordData = RindexerPlaygroundTypesFilterGen::Two_Word;
+
+#[derive(Debug, Clone)]
+pub struct Two_WordResult {
+    pub event_data: Two_WordData,
+    pub tx_information: TxInformation,
+}
+
+impl HasTxInformation for Two_WordResult {
+    fn tx_information(&self) -> &TxInformation {
+        &self.tx_information
+    }
+}
+
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 #[async_trait]
