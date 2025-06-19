@@ -35,7 +35,9 @@ use crate::{
     },
     manifest::core::Manifest,
     provider::{JsonRpcCachedProvider, ProviderError},
-    public_read_env_value, PostgresClient,
+    public_read_env_value,
+    reth::types::RethChannels,
+    PostgresClient,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -328,6 +330,7 @@ pub async fn start_indexing_contract_events(
     registry: Arc<EventCallbackRegistry>,
     dependencies: &[ContractEventDependencies],
     no_live_indexing_forced: bool,
+    reth_channels: &RethChannels,
 ) -> Result<
     (
         Vec<JoinHandle<Result<(), ProcessEventError>>>,
@@ -390,6 +393,14 @@ pub async fn start_indexing_contract_events(
                 processed_up_to: end_block,
             });
 
+            let (reth_tx, is_reth_exex) = match reth_channels.get(&network_contract.network) {
+                Some(tx) => (Some(tx.clone()), true),
+                None => {
+                    info!("No reth channel found for network: {}", network_contract.network);
+                    (None, false)
+                }
+            };
+
             let event_processing_config = ContractEventProcessingConfig {
                 id: event.id.clone(),
                 project_path: project_path.to_path_buf(),
@@ -416,6 +427,7 @@ pub async fn start_indexing_contract_events(
                 },
                 index_event_in_order: event.index_event_in_order,
                 indexing_distance_from_head,
+                is_reth_exex,
             };
 
             if let Some(factory_details) =
@@ -478,7 +490,7 @@ pub async fn start_indexing_contract_events(
                 );
             } else {
                 let process_event =
-                    tokio::spawn(process_event(event_processing_config.into(), false));
+                    tokio::spawn(process_event(event_processing_config.into(), false, reth_tx));
                 non_blocking_process_events.push(process_event);
             }
         }
@@ -499,6 +511,7 @@ pub async fn start_indexing(
     no_live_indexing_forced: bool,
     registry: Arc<EventCallbackRegistry>,
     trace_registry: Arc<TraceCallbackRegistry>,
+    reth_channels: &RethChannels,
 ) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
     let start = Instant::now();
     let database = initialize_database(manifest).await?;
@@ -516,6 +529,7 @@ pub async fn start_indexing(
             registry.clone(),
             dependencies,
             no_live_indexing_forced,
+            reth_channels,
         )
     );
 
@@ -539,9 +553,11 @@ pub async fn start_indexing(
         );
     }
 
+    let exex_channels = reth_channels.clone();
     let dependency_handle: JoinHandle<Result<(), ProcessContractsEventsWithDependenciesError>> =
         tokio::spawn(process_contracts_events_with_dependencies(
             dependency_event_processing_configs,
+            exex_channels,
         ));
 
     let mut handles: Vec<JoinHandle<Result<(), CombinedLogEventProcessingError>>> = Vec::new();
