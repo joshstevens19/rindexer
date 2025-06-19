@@ -2,7 +2,7 @@ use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
 
 use alloy::{
     primitives::{BlockNumber, B256, U64},
-    rpc::types::Log,
+    rpc::types::{Filter, Log},
 };
 use futures::stream::StreamExt;
 use rand::random_ratio;
@@ -39,7 +39,7 @@ pub fn fetch_logs_stream(
     tokio::spawn(async move {
         // if we have a reth exex tx, we need to process the exex stream instead of using the
         // rpc provider
-        if config.is_reth_exex && reth_tx.is_some() {
+        if config.is_reth_exex() && reth_tx.is_some() {
             info!("Processing ExEx stream");
             let reth_tx = reth_tx.unwrap();
             // Process ExEx stream for both historical and live data
@@ -157,10 +157,26 @@ async fn process_exex_stream(
     let reth_tx = reth_tx.clone();
 
     let event_filter = config.to_event_filter().unwrap();
-    let filter = event_filter.raw_filter();
+    
+    // Convert RindexerEventFilter to alloy Filter
+    let mut filter = Filter::new()
+        .from_block(event_filter.from_block())
+        .to_block(event_filter.to_block());
+    
+    // Add contract addresses if available
+    if let Some(addresses) = event_filter.contract_addresses().await {
+        let addr_vec: Vec<_> = addresses.into_iter().collect();
+        if !addr_vec.is_empty() {
+            filter = filter.address(addr_vec);
+        }
+    }
+    
+    // Add topic filters
+    let topic_id = config.topic_id();
+    filter = filter.event_signature(topic_id);
 
     // Process backfill data
-    let to_block = config.to_event_filter().unwrap().get_to_block();
+    let to_block = event_filter.to_block();
 
     let (response_tx, response_rx) = oneshot::channel();
 
@@ -172,7 +188,7 @@ async fn process_exex_stream(
     if let Err(e) = res {
         error!(
             "{} - {} - Failed to start backfill: {}",
-            config.info_log_name,
+            config.info_log_name(),
             IndexingEventProgressStatus::Syncing.log(),
             e
         );
@@ -184,7 +200,7 @@ async fn process_exex_stream(
     } else {
         error!(
             "{} - {} - Failed to start backfill",
-            config.info_log_name,
+            config.info_log_name(),
             IndexingEventProgressStatus::Syncing.log(),
         );
         return;
@@ -207,7 +223,7 @@ async fn process_exex_stream(
         })) {
             error!(
                 "{} - {} - Failed to send logs to stream consumer: {}",
-                config.info_log_name,
+                config.info_log_name(),
                 IndexingEventProgressStatus::Syncing.log(),
                 e
             );
@@ -216,7 +232,7 @@ async fn process_exex_stream(
 
     info!("Pure backfill complete for job {}", job_id);
 
-    if config.live_indexing {
+    if config.live_indexing() {
         let next_from_block = to_block + U64::from(1);
         let filter = filter.clone().from_block(next_from_block);
         let (response_tx, response_rx) = oneshot::channel();
@@ -228,7 +244,7 @@ async fn process_exex_stream(
         if let Err(e) = res {
             error!(
                 "{} - {} - Failed to start live backfill: {}",
-                config.info_log_name,
+                config.info_log_name(),
                 IndexingEventProgressStatus::Syncing.log(),
                 e
             );
@@ -240,7 +256,7 @@ async fn process_exex_stream(
         } else {
             error!(
                 "{} - {} - Failed to start live backfill",
-                config.info_log_name,
+                config.info_log_name(),
                 IndexingEventProgressStatus::Syncing.log()
             );
             return;
@@ -255,7 +271,7 @@ async fn process_exex_stream(
             })) {
                 error!(
                     "{} - {} - Failed to send logs to stream consumer: {}",
-                    config.info_log_name,
+                    config.info_log_name(),
                     IndexingEventProgressStatus::Syncing.log(),
                     e
                 );

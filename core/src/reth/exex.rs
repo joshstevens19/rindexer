@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use alloy_rpc_types::{BlockNumberOrTag, Filter, FilteredParams, Log};
+use alloy::rpc::types::{BlockNumberOrTag, Filter, FilteredParams, Log};
 use futures::StreamExt;
 use reth::{
     providers::{HeaderProvider, ReceiptProvider, TransactionsProvider},

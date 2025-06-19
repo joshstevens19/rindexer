@@ -2,7 +2,7 @@
 use std::{collections::HashMap, iter::StepBy, ops::RangeInclusive, sync::Arc};
 
 use alloy_primitives::FixedBytes;
-use alloy_rpc_types::{Filter, Log};
+use alloy::rpc::types::{Filter, Log};
 use tokio::sync::{mpsc, oneshot};
 
 /// The response to an ExExRequest

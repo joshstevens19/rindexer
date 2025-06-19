@@ -293,6 +293,13 @@ impl EventProcessingConfig {
             Self::FactoryEventProcessing(config) => config.trigger_event(fn_data).await,
         }
     }
+
+    pub fn is_reth_exex(&self) -> bool {
+        match self {
+            Self::ContractEventProcessing(config) => config.is_reth_exex,
+            Self::FactoryEventProcessing(_) => false,
+        }
+    }
 }
 
 #[derive(Clone)]

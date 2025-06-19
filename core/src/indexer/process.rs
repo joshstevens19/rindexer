@@ -180,7 +180,7 @@ async fn process_contract_events_with_dependencies(
                     ))?;
 
                 let reth_tx = reth_channels
-                    .get(&event_processing_config.network_contract.network)
+                    .get(&event_processing_config.network_contract().network)
                     .unwrap()
                     .clone();
 
