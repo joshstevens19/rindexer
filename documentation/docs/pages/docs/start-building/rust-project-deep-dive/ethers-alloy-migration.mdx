@@ -22,7 +22,7 @@ this will the newer `alloy` crate. It should be pegged to the same version used 
 Replace in `Cargo.toml`
 ```diff
 - ethers = "2.0.14"
-+ alloy = { version = "0.15.6", features = ["full"] }
++ alloy = { version = "1.0.9", features = ["full"] }
 ```
 
 Then any references to ethers types in your own code can be replaced with the alloy types. You can read more
@@ -96,13 +96,13 @@ A simple find and replace should handle most of these cases
 Most projects will by default use the underlying type, this is for when manual type manipulation is needed.
 :::
 
-The final step may be to replace any methods that are erroring out, that previously were not. The most common of this
+Replace any methods that are erroring out that previously were not. The most common of this
 will be the existence of `as_u[BITS]`.
 
 These methods are no longer exposed directly on all solidity primitive `uint` types. For example the `as_u32()` method
 which existed on a `U256` is no longer directly accessible.
 
-Instead now, if you wish to downcast, you can use the `TryInto` trait on most `uint` types to achieve the same outcome and
+Instead, now, if you wish to downcast, you can use the `TryInto` trait on most `uint` types to achieve the same outcome and
 handle errors gracefully in the event of an overflow (where before a panic would occur implicitly).
 
 ```diff
@@ -115,4 +115,28 @@ You may also opt to match the underlying type
 ```diff
 - EthereumSqlTypeWrapper::U32(t.tx_information.log_index.as_u32()),
 + EthereumSqlTypeWrapper::U256(t.tx_information.log_index),
+```
+
+## 5. Await `EventCallbackRegistry` `register` calls
+
+The `register` function is now `async`, requiring `.await` to be called for the `Future` to complete execution. This is a breaking change that requires modification of existing custom handler code:
+
+```diff
+async fn transfer_handler(
+    manifest_path: &PathBuf,
+    registry: &mut EventCallbackRegistry,
+) {
+    RocketPoolETHEventType::Transfer(
+        TransferEvent::handler(
+            |results, context| async move {
+                ...
+                return Ok(());
+            },
+            no_extensions(),
+        )
+        .await,
+    )
+-   .register(manifest_path, registry);
++   .register(manifest_path, registry).await; // [!code focus]
+}
 ```

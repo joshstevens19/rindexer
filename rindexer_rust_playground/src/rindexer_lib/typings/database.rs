@@ -1,6 +1,5 @@
-use std::sync::Arc;
-
 use rindexer::PostgresClient;
+use std::sync::Arc;
 use tokio::sync::OnceCell;
 
 static POSTGRES_CLIENT: OnceCell<Arc<PostgresClient>> = OnceCell::const_new();

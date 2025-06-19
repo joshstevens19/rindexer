@@ -504,7 +504,7 @@ async fn handle_phantom_deploy(
                 .details
                 .iter_mut()
                 .find(|c| c.network == args.network || c.network == name);
-            if contract_network.is_some() {
+            if let Some(contract_network) = contract_network {
                 let clone_meta = read_contract_clone_metadata(&deploy_in)?;
 
                 let phantom = manifest.phantom.as_ref().expect("Failed to get phantom");
@@ -545,12 +545,14 @@ async fn handle_phantom_deploy(
                         chain_id: network.unwrap().chain_id,
                         rpc: rpc_url.to_string(),
                         compute_units_per_second: None,
+                        block_poll_frequency: None,
                         max_block_range: if phantom.dyrpc_enabled() {
                             Some(U64::from(20_000))
                         } else {
                             Some(U64::from(2_000))
                         },
                         disable_logs_bloom_checks: None,
+                        get_logs_settings: None,
                         reth: None,
                     });
                 }
@@ -563,7 +565,7 @@ async fn handle_phantom_deploy(
                 )?;
 
                 contract.abi = StringOrArray::Single(format!("./abis/{}.abi.json", name));
-                contract_network.unwrap().network = name;
+                contract_network.network = name;
 
                 write_manifest(&manifest, &rindexer_yaml_path)?;
 

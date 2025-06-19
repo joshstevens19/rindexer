@@ -14,6 +14,8 @@ use tokio_postgres::types::Type as PgType;
 use tracing::{debug, error, info, warn};
 
 use super::native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME};
+use crate::helpers::{map_log_params_to_raw_values, parse_log};
+use crate::manifest::contract::Contract;
 use crate::{
     abi::{ABIItem, CreateCsvFileForEvent, EventInfo, ParamTypeError, ReadAbiError},
     chat::ChatClients,
@@ -38,7 +40,6 @@ use crate::{
         EventMessage,
     },
     generate_random_id,
-    indexer::log_helpers::{map_log_params_to_raw_values, parse_log},
     manifest::{
         contract::ParseAbiError,
         core::Manifest,
@@ -110,7 +111,7 @@ pub async fn setup_no_code(
             );
 
             let events =
-                process_events(project_path, &mut manifest, postgres.clone(), &network_providers)
+                process_events(project_path, &manifest, postgres.clone(), &network_providers)
                     .await?;
 
             let registry = EventCallbackRegistry { events };
@@ -274,18 +275,12 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                     .iter()
                     .map(|result| {
                         let log_params = vec![
-                            LogParam {
-                                name: "from".to_string(),
-                                value: DynSolValue::Address(result.from),
-                            },
-                            LogParam {
-                                name: "to".to_string(),
-                                value: DynSolValue::Address(result.to),
-                            },
-                            LogParam {
-                                name: "value".to_string(),
-                                value: DynSolValue::Uint(result.value, 256),
-                            },
+                            LogParam::new("from".to_string(), DynSolValue::Address(result.from)),
+                            LogParam::new("to".to_string(), DynSolValue::Address(result.to)),
+                            LogParam::new(
+                                "value".to_string(),
+                                DynSolValue::Uint(result.value, 256),
+                            ),
                         ];
 
                         let address = result.tx_information.address;
@@ -585,118 +580,130 @@ pub enum ProcessIndexersError {
 
 pub async fn process_events(
     project_path: &Path,
-    manifest: &mut Manifest,
+    manifest: &Manifest,
     postgres: Option<Arc<PostgresClient>>,
     network_providers: &[CreateNetworkProvider],
 ) -> Result<Vec<EventCallbackRegistryInformation>, ProcessIndexersError> {
     let mut events: Vec<EventCallbackRegistryInformation> = vec![];
 
-    for contract in &mut manifest.contracts {
-        if contract.name.to_lowercase() == NATIVE_TRANSFER_CONTRACT_NAME.to_lowercase() {
-            return Err(ProcessIndexersError::ContractNameConflict(contract.name.to_string()));
-        }
+    for mut contract in manifest.contracts.clone() {
+        let contract_events = process_contract(
+            project_path,
+            manifest,
+            postgres.clone(),
+            network_providers,
+            &mut contract,
+        )
+        .await?;
 
-        // TODO - this could be shared with `get_abi_items`
-        let abi_str = contract.parse_abi(project_path)?;
-        let abi: JsonAbi = serde_json::from_str(&abi_str)?;
-        let is_filter = contract.identify_and_modify_filter();
-        let abi_items = ABIItem::get_abi_items(project_path, contract, is_filter)?;
-        let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
+        events.extend(contract_events);
+    }
 
-        for event_info in event_names {
-            let event_name = event_info.name.clone();
-            let event = &abi
-                .events
-                .iter()
-                .find(|(name, _)| *name == &event_name)
-                .map(|(_, event)| event)
-                .ok_or_else(|| {
-                    ProcessIndexersError::EventNameNotFoundInAbi(
-                        contract.name.clone(),
-                        event_name.clone(),
-                    )
-                })?
-                .first()
-                .ok_or_else(|| {
-                    ProcessIndexersError::EventNameNotFoundInAbi(
-                        contract.name.clone(),
-                        event_name.clone(),
-                    )
-                })?
-                .clone();
+    Ok(events)
+}
 
-            let contract_information =
-                ContractInformation::create(contract, network_providers, noop_decoder())?;
+async fn process_contract(
+    project_path: &Path,
+    manifest: &Manifest,
+    postgres: Option<Arc<PostgresClient>>,
+    network_providers: &[CreateNetworkProvider],
+    contract: &mut Contract,
+) -> Result<Vec<EventCallbackRegistryInformation>, ProcessIndexersError> {
+    if contract.name.to_lowercase() == NATIVE_TRANSFER_CONTRACT_NAME.to_lowercase() {
+        return Err(ProcessIndexersError::ContractNameConflict(contract.name.to_string()));
+    }
 
-            let mut csv: Option<Arc<AsyncCsvAppender>> = None;
-            if contract.generate_csv.unwrap_or(true) && manifest.storage.csv_enabled() {
-                let csv_path =
-                    manifest.storage.csv.as_ref().map_or(PathBuf::from("generated_csv"), |c| {
-                        PathBuf::from(c.path.strip_prefix("./").unwrap())
-                    });
+    // TODO - this could be shared with `get_abi_items`
+    let abi_str = contract.parse_abi(project_path)?;
+    let abi: JsonAbi = serde_json::from_str(&abi_str)?;
+    let is_filter = contract.identify_and_modify_filter();
+    let abi_items = ABIItem::get_abi_items(project_path, contract, is_filter)?;
+    let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
 
-                let headers: Vec<String> = event_info.csv_headers_for_event();
-                let csv_path_str = csv_path.to_str().expect("Failed to convert csv path to string");
-                let csv_path = event_info.create_csv_file_for_event(
-                    project_path,
-                    &contract.name,
-                    csv_path_str,
-                )?;
-                let csv_appender = AsyncCsvAppender::new(&csv_path);
-                if !Path::new(&csv_path).exists() {
-                    csv_appender.append_header(headers).await?;
-                }
+    let mut events: Vec<EventCallbackRegistryInformation> = vec![];
 
-                csv = Some(Arc::new(csv_appender));
+    for event_info in event_names {
+        let event_name = event_info.name.clone();
+        let event = abi
+            .events
+            .get(&event_name)
+            .and_then(|events| events.first())
+            .ok_or_else(|| {
+                ProcessIndexersError::EventNameNotFoundInAbi(
+                    contract.name.clone(),
+                    event_name.clone(),
+                )
+            })?
+            .clone();
+
+        let contract_information =
+            ContractInformation::create(project_path, contract, network_providers, noop_decoder())?;
+
+        let mut csv: Option<Arc<AsyncCsvAppender>> = None;
+        if contract.generate_csv.unwrap_or(true) && manifest.storage.csv_enabled() {
+            let csv_path =
+                manifest.storage.csv.as_ref().map_or(PathBuf::from("generated_csv"), |c| {
+                    PathBuf::from(c.path.strip_prefix("./").unwrap())
+                });
+
+            let headers: Vec<String> = event_info.csv_headers_for_event();
+            let csv_path_str = csv_path.to_str().expect("Failed to convert csv path to string");
+            let csv_path =
+                event_info.create_csv_file_for_event(project_path, &contract.name, csv_path_str)?;
+            let csv_appender = AsyncCsvAppender::new(&csv_path);
+            if !Path::new(&csv_path).exists() {
+                csv_appender.append_header(headers).await?;
             }
 
-            let postgres_column_names =
-                generate_column_names_only_with_base_properties(&event_info.inputs);
-            let postgres_event_table_name =
-                generate_event_table_full_name(&manifest.name, &contract.name, &event_info.name);
-
-            let streams_client = if let Some(streams) = &contract.streams {
-                Some(StreamsClients::new(streams.clone()).await)
-            } else {
-                None
-            };
-
-            let chat_clients = if let Some(chats) = &contract.chat {
-                Some(ChatClients::new(chats.clone()).await)
-            } else {
-                None
-            };
-
-            let index_event_in_order = contract
-                .index_event_in_order
-                .as_ref()
-                .is_some_and(|vec| vec.contains(&event_info.name));
-
-            let event = EventCallbackRegistryInformation {
-                id: generate_random_id(10),
-                indexer_name: manifest.name.clone(),
-                event_name: event_info.name.clone(),
-                index_event_in_order,
-                topic_id: event_info.topic_id(),
-                contract: contract_information,
-                callback: no_code_callback(Arc::new(NoCodeCallbackParams {
-                    event_info,
-                    indexer_name: manifest.name.clone(),
-                    contract_name: contract.name.clone(),
-                    event: event.clone(),
-                    index_event_in_order,
-                    csv,
-                    postgres: postgres.clone(),
-                    postgres_event_table_name,
-                    postgres_column_names,
-                    streams_clients: Arc::new(streams_client),
-                    chat_clients: Arc::new(chat_clients),
-                }))
-                .event_callback,
-            };
-
-            events.push(event);
+            csv = Some(Arc::new(csv_appender));
         }
+
+        let postgres_column_names =
+            generate_column_names_only_with_base_properties(&event_info.inputs);
+        let postgres_event_table_name =
+            generate_event_table_full_name(&manifest.name, &contract.name, &event_info.name);
+
+        let streams_client = if let Some(streams) = &contract.streams {
+            Some(StreamsClients::new(streams.clone()).await)
+        } else {
+            None
+        };
+
+        let chat_clients = if let Some(chats) = &contract.chat {
+            Some(ChatClients::new(chats.clone()).await)
+        } else {
+            None
+        };
+
+        let index_event_in_order = contract
+            .index_event_in_order
+            .as_ref()
+            .is_some_and(|vec| vec.contains(&event_info.name));
+
+        let event = EventCallbackRegistryInformation {
+            id: generate_random_id(10),
+            indexer_name: manifest.name.clone(),
+            event_name: event_info.name.clone(),
+            index_event_in_order,
+            topic_id: event_info.topic_id(),
+            contract: contract_information,
+            callback: no_code_callback(Arc::new(NoCodeCallbackParams {
+                event_info,
+                indexer_name: manifest.name.clone(),
+                contract_name: contract.name.clone(),
+                event: event.clone(),
+                index_event_in_order,
+                csv,
+                postgres: postgres.clone(),
+                postgres_event_table_name,
+                postgres_column_names,
+                streams_clients: Arc::new(streams_client),
+                chat_clients: Arc::new(chat_clients),
+            }))
+            .event_callback,
+        };
+
+        events.push(event);
     }
 
     Ok(events)

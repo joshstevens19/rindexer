@@ -6,6 +6,7 @@ networks:
 - name: ethereum
   chain_id: 1
   rpc: https://mainnet.gateway.tenderly.co
+  block_poll_frequency: rapid
 storage:
   postgres:
     enabled: true

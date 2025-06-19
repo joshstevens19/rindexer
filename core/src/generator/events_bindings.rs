@@ -11,7 +11,7 @@ use crate::{
     database::postgres::generate::{
         generate_column_names_only_with_base_properties, generate_event_table_full_name,
     },
-    helpers::{camel_to_snake, to_pascal_case},
+    helpers::camel_to_snake,
     manifest::{
         contract::{Contract, ContractDetails, ParseAbiError},
         storage::{CsvDetails, Storage},
@@ -61,18 +61,23 @@ fn generate_structs(
 
             structs.push_str(&Code::new(format!(
                 r#"
-                    pub type {struct_data} = {abigen_name}::{pascal_event_name};
+                    pub type {struct_data} = {abigen_name}::{event_name};
 
                     #[derive(Debug, Clone)]
                     pub struct {struct_result} {{
                         pub event_data: {struct_data},
                         pub tx_information: TxInformation
                     }}
+
+                    impl HasTxInformation for {struct_result} {{
+                        fn tx_information(&self) -> &TxInformation {{
+                            &self.tx_information
+                        }}
+                    }}
                 "#,
                 struct_result = struct_result,
                 struct_data = struct_data,
                 abigen_name = abigen_contract_name(contract),
-                pascal_event_name = to_pascal_case(event_name)
             )));
         }
     }
@@ -261,7 +266,7 @@ fn generate_event_callback_structs_code(
                     async move {{ (custom_logic)(results, context).await }}.boxed()
                 }})
             }}
-            
+
             type {name}EventCallbackType<TExtensions> = Arc<
                 dyn for<'a> Fn(&'a Vec<{struct_result}>, Arc<EventContext<TExtensions>>) -> BoxFuture<'a, EventCallbackResult<()>>
                     + Send
@@ -504,7 +509,7 @@ fn generate_event_bindings_code(
             event::{{
                 callback_registry::{{
                     EventCallbackRegistry, EventCallbackRegistryInformation, EventCallbackResult,
-                    EventResult, TxInformation,
+                    EventResult, TxInformation, HasTxInformation
                 }},
                 contract_setup::{{ContractInformation, NetworkContract}},
             }},
@@ -545,9 +550,9 @@ fn generate_event_bindings_code(
         pub enum {event_type_name}<TExtensions> where TExtensions: 'static + Send + Sync {{
             {event_enums}
         }}
-        
+
         {build_pub_contract_fn}
-        
+
         {decoder_contract_fn}
 
         impl<TExtensions> {event_type_name}<TExtensions> where TExtensions: 'static + Send + Sync {{
@@ -619,7 +624,7 @@ fn generate_event_bindings_code(
                                 .expect("must have a provider")
                                 .clone(),
                             decoder: self.decoder(&c.network),
-                            indexing_contract_setup: c.indexing_contract_setup(),
+                            indexing_contract_setup: c.indexing_contract_setup(manifest_path),
                             start_block: c.start_block,
                             end_block: c.end_block,
                             disable_logs_bloom_checks: rindexer_yaml
@@ -808,7 +813,7 @@ pub fn generate_event_handlers(
                       for result in &results {{
                         {inner_csv_write}
                       }}
-                    
+
                       if !csv_bulk_data.is_empty() {{
                         let csv_result = context.csv.append_bulk(csv_bulk_data).await;
                         if let Err(e) = csv_result {{
@@ -909,7 +914,7 @@ pub fn generate_event_handlers(
                                     &postgres_bulk_data,
                                 )
                                 .await;
-                            
+
                             if let Err(e) = result {{
                                 rindexer_error!("{event_type_name}::{handler_name} inserting bulk data via INSERT: {{:?}}", e);
                                 return Err(e.to_string());
@@ -974,7 +979,7 @@ pub fn generate_event_handlers(
                       )
                       .await,
                 )
-                .register(manifest_path, registry);
+                .register(manifest_path, registry).await;
             }}
         "#,
             handler_fn_name = camel_to_snake(&event.name),

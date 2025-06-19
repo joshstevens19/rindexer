@@ -4,6 +4,7 @@ networks:
   - name: ethereum
     chain_id: 1
     rpc: https://mainnet.gateway.tenderly.co
+    block_poll_frequency: "/4"
   - name: base
     chain_id: 8453
     rpc: https://mainnet.base.org
@@ -52,6 +53,7 @@ contracts:
     abi: ./abis/playground-types-abi.json
     include_events:
       - Swap
+      - Two_Word
 global:
   contracts:
     - name: USDT

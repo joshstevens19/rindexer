@@ -2,7 +2,13 @@ mod thread;
 
 pub use thread::set_thread_no_logging;
 
+mod array;
+mod evm_log;
 mod file;
+pub use array::chunk_hashset;
+pub use evm_log::{
+    halved_block_number, is_relevant_block, map_log_params_to_raw_values, parse_log, parse_topic,
+};
 
 use std::{
     env,
@@ -32,13 +38,10 @@ pub fn camel_to_snake_advanced(s: &str, numbers_attach_to_last_word: bool) -> St
     for (i, c) in s.chars().enumerate() {
         if c.is_alphanumeric() || c == '_' {
             if c.is_uppercase() {
-                if i > 0 &&
-                    (!previous_was_uppercase ||
-                        (i + 1 < s.len() &&
-                            s.chars()
-                                .nth(i + 1)
-                                .expect("Failed to get char")
-                                .is_lowercase()))
+                if i > 0
+                    && (!previous_was_uppercase
+                        || (i + 1 < s.len()
+                            && s.chars().nth(i + 1).expect("Failed to get char").is_lowercase()))
                 {
                     snake_case.push('_');
                 }
@@ -47,11 +50,11 @@ pub fn camel_to_snake_advanced(s: &str, numbers_attach_to_last_word: bool) -> St
                 previous_was_digit = false;
                 uppercase_sequence_length += 1;
             } else if c.is_ascii_digit() {
-                if !numbers_attach_to_last_word &&
-                    i > 0 &&
-                    !previous_was_digit &&
-                    !snake_case.ends_with('_') &&
-                    uppercase_sequence_length != 1
+                if !numbers_attach_to_last_word
+                    && i > 0
+                    && !previous_was_digit
+                    && !snake_case.ends_with('_')
+                    && uppercase_sequence_length != 1
                 {
                     snake_case.push('_');
                 }

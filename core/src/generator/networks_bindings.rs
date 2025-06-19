@@ -17,7 +17,7 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
         r#"
         {network_name}
             .get_or_init(|| async {{
-                {client_fn}(&public_read_env_value("{network_url}").unwrap_or("{network_url}".to_string()), {chain_id}, {compute_units_per_second}, {max_block_range} {placeholder_headers})
+                {client_fn}(&public_read_env_value("{network_url}").unwrap_or("{network_url}".to_string()), {chain_id}, {compute_units_per_second}, {max_block_range}, {block_poll_frq} {placeholder_headers}, {get_logs_settings})
                 .await
                 .expect("Error creating provider")
             }})
@@ -38,6 +38,16 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
         } else {
             "None".to_string()
         },
+        block_poll_frq = if let Some(block_frq) = network.block_poll_frequency {
+            format!("Some(BlockPollFrequency::{:?})", block_frq)
+        } else {
+            "None".to_string()
+        },
+        get_logs_settings = if let Some(settings) = &network.get_logs_settings {
+            format!("Some(AddressFiltering::{:?})", settings.address_filtering)
+        } else {
+            "None".to_string()
+        },
         client_fn =
             if network.rpc.contains("shadow") { "create_shadow_client" } else { "create_client" },
         placeholder_headers =
@@ -51,7 +61,7 @@ fn generate_network_provider_code(network: &Network) -> Code {
             pub async fn {fn_name}_cache() -> Arc<JsonRpcCachedProvider> {{
                 {provider_init_fn}
             }}
-            
+
             pub async fn {fn_name}() -> Arc<RindexerProvider> {{
                 {fn_name}_cache().await.get_inner_provider()
             }}
@@ -100,6 +110,7 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
     use alloy::{primitives::U64, transports::http::reqwest::header::HeaderMap};
     use rindexer::{
         lazy_static,
+        manifest::network::{AddressFiltering, BlockPollFrequency},
         provider::{RindexerProvider, create_client, JsonRpcCachedProvider, RetryClientError},
         public_read_env_value
     };
@@ -111,14 +122,16 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
         rpc_url: &str,
         chain_id: u64,
         compute_units_per_second: Option<u64>,
+        block_poll_frequency: Option<BlockPollFrequency>,
         max_block_range: Option<U64>,
+        address_filtering: Option<AddressFiltering>,
     ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
         let mut header = HeaderMap::new();
         header.insert(
             "X-SHADOW-API-KEY",
             public_read_env_value("RINDEXER_PHANTOM_API_KEY").unwrap().parse().unwrap(),
         );
-        create_client(rpc_url, chain_id, compute_units_per_second, max_block_range, header).await
+        create_client(rpc_url, chain_id, compute_units_per_second, max_block_range, block_poll_frequency, header, address_filtering).await
     }
         "#
         .to_string(),

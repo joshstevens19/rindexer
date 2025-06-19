@@ -1,8 +1,4 @@
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
-
+use alloy::rpc::types::{Filter, ValueOrArray};
 use alloy::{
     eips::{BlockId, BlockNumberOrTag},
     primitives::{Address, Bytes, TxHash, U256, U64},
@@ -29,13 +25,23 @@ use alloy::{
         RpcError, TransportErrorKind,
     },
 };
+use alloy_chains::{Chain, NamedChain};
+use futures::future::try_join_all;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashSet;
+use std::future::IntoFuture;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use thiserror::Error;
 use tokio::sync::Mutex;
-use tracing::{error, info};
+use tracing::{debug, debug_span, error, Instrument};
 use url::Url;
 
+use crate::helpers::chunk_hashset;
+use crate::manifest::network::{AddressFiltering, BlockPollFrequency};
 use crate::{event::RindexerEventFilter, manifest::core::Manifest};
 
 /// An alias type for a complex alloy Provider
@@ -47,6 +53,10 @@ pub type RindexerProvider = FillProvider<
     RootProvider,
 >;
 
+// RPC providers have maximum supported addresses that can be provided in a filter
+// We play safe and limit to 5000 by default, but that can be overridden in the configuration
+const DEFAULT_RPC_SUPPORTED_ACCOUNT_FILTERS: usize = 5000;
+
 #[derive(Debug)]
 pub struct JsonRpcCachedProvider {
     provider: Arc<RindexerProvider>,
@@ -54,6 +64,9 @@ pub struct JsonRpcCachedProvider {
     is_zk_chain: bool,
     #[allow(unused)]
     chain_id: u64,
+    chain: Chain,
+    block_poll_frequency: Option<BlockPollFrequency>,
+    address_filtering: Option<AddressFiltering>,
     pub max_block_range: Option<U64>,
 }
 
@@ -82,7 +95,8 @@ pub struct WrappedLog {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraceCall {
     pub from: Address,
-    pub gas: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gas: Option<String>,
     #[serde(rename = "gasUsed")]
     pub gas_used: U256,
     pub to: Option<Address>,
@@ -106,39 +120,125 @@ pub struct TraceCallFrame {
     pub result: TraceCall,
 }
 
+/// A faster than network-call method for determining if a chain is Zk-Rollup.
+fn is_known_zk_evm_compatible_chain(chain: Chain) -> Option<bool> {
+    if let Some(name) = chain.named() {
+        match name {
+            // Known zkEVM-compatible chains
+            NamedChain::Lens
+            | NamedChain::ZkSync
+            | NamedChain::Sophon
+            | NamedChain::Abstract
+            | NamedChain::Scroll
+            | NamedChain::PolygonZkEvm
+            | NamedChain::Linea => Some(true),
+
+            // Known non-zkEVM chains
+            NamedChain::Mainnet
+            | NamedChain::Sepolia
+            | NamedChain::Arbitrum
+            | NamedChain::Soneium
+            | NamedChain::Avalanche
+            | NamedChain::Polygon
+            | NamedChain::Hyperliquid
+            | NamedChain::Blast
+            | NamedChain::World
+            | NamedChain::Unichain
+            | NamedChain::Base
+            | NamedChain::Optimism
+            | NamedChain::ApeChain
+            | NamedChain::BinanceSmartChain
+            | NamedChain::Fantom
+            | NamedChain::Cronos
+            | NamedChain::Gnosis => Some(false),
+
+            // Fallback for unknown chains
+            _ => None,
+        }
+    } else {
+        None
+    }
+}
+
 impl JsonRpcCachedProvider {
     pub async fn new(
         provider: RindexerProvider,
         chain_id: u64,
+        block_poll_frequency: Option<BlockPollFrequency>,
         max_block_range: Option<U64>,
+        address_filtering: Option<AddressFiltering>,
     ) -> Self {
-        let response: Result<String, _> = provider.raw_request("zks_L1ChainId".into(), [&()]).await;
-        let is_zk_chain = response.is_ok();
+        let chain = Chain::from(chain_id);
+        let is_zk_chain = match is_known_zk_evm_compatible_chain(chain) {
+            Some(zk) => zk,
+            None => {
+                let response: Result<String, _> =
+                    provider.raw_request("zks_L1ChainId".into(), [&()]).await;
+                let is_zk_chain = response.is_ok();
+                if is_zk_chain {
+                    debug!("Chain {} is zk chain. Trace indexing adjusted if enabled.", chain_id);
+                }
 
-        if is_zk_chain {
-            info!("Chain {} is zk chain. Trace indexing adjusted.", chain_id);
-        }
+                is_zk_chain
+            }
+        };
 
         JsonRpcCachedProvider {
             provider: Arc::new(provider),
             cache: Mutex::new(None),
             max_block_range,
+            chain,
             chain_id,
             is_zk_chain,
+            block_poll_frequency,
+            address_filtering,
+        }
+    }
+
+    /// Return a duration for block poll caching based on user configuration.
+    fn block_poll_frequency(&self) -> Duration {
+        let Some(block_poll_frequency) = self.block_poll_frequency else {
+            return Duration::from_millis(50);
+        };
+
+        match block_poll_frequency {
+            BlockPollFrequency::Rapid => Duration::from_millis(50),
+            BlockPollFrequency::PollRateMs { millis } => Duration::from_millis(millis),
+            BlockPollFrequency::Division { divisor } => self
+                .chain
+                .average_blocktime_hint()
+                .and_then(|t| t.checked_div(divisor))
+                .unwrap_or(Duration::from_millis(50)),
+            BlockPollFrequency::RpcOptimized => self
+                .chain
+                .average_blocktime_hint()
+                .and_then(|t| t.checked_div(3))
+                .map(|t| t.max(Duration::from_millis(500)))
+                .unwrap_or(Duration::from_millis(1000)),
         }
     }
 
     pub async fn get_latest_block(&self) -> Result<Option<Arc<Block>>, ProviderError> {
         let mut cache_guard = self.cache.lock().await;
+        let cache_time = self.block_poll_frequency();
 
+        // Fetches the latest block only if it is likely that a new block has been produced for
+        // this specific network. Consider this to be equal to half the block-time.
+        //
+        // If we want to reduce RPC calls further at the cost of we could consider indexing delay we
+        // could set this to block-time directly.
         if let Some((timestamp, block)) = &*cache_guard {
-            if timestamp.elapsed() < Duration::from_millis(50) {
+            if timestamp.elapsed() < cache_time {
                 return Ok(Some(Arc::clone(block)));
             }
         }
 
-        let latest_block =
-            self.provider.get_block(BlockId::Number(BlockNumberOrTag::Latest)).await?;
+        let latest_block = self
+            .provider
+            .get_block(BlockId::Number(BlockNumberOrTag::Latest))
+            .into_future()
+            .instrument(debug_span!("fetching latest block", name = ?self.chain.named()))
+            .await?;
 
         if let Some(block) = latest_block {
             let arc_block = Arc::new(block);
@@ -223,12 +323,14 @@ impl JsonRpcCachedProvider {
                                 from: frame.result.from,
                                 to,
                                 value: frame.result.value,
-                                gas: U64::from_str_radix(
-                                    frame.result.gas.trim_start_matches("0x"),
-                                    16,
-                                )
-                                .unwrap_or_default()
-                                .as_limbs()[0],
+                                gas: frame
+                                    .result
+                                    .gas
+                                    .and_then(|a| {
+                                        U64::from_str_radix(a.trim_start_matches("0x"), 16).ok()
+                                    })
+                                    .unwrap_or_default()
+                                    .as_limbs()[0],
                                 input: frame.result.input,
                                 call_type: CallType::Call,
                             }),
@@ -264,9 +366,50 @@ impl JsonRpcCachedProvider {
         Ok(traces)
     }
 
-    pub async fn get_logs(&self, filter: &RindexerEventFilter) -> Result<Vec<Log>, ProviderError> {
-        let logs = self.provider.get_logs(filter.raw_filter()).await?;
-        Ok(logs)
+    pub async fn get_logs(
+        &self,
+        event_filter: &RindexerEventFilter,
+    ) -> Result<Vec<Log>, ProviderError> {
+        let addresses = event_filter.contract_addresses().await;
+
+        let base_filter = Filter::new()
+            .event_signature(event_filter.event_signature())
+            .topic1(event_filter.topic1())
+            .topic2(event_filter.topic2())
+            .topic3(event_filter.topic3())
+            .from_block(event_filter.from_block())
+            .to_block(event_filter.to_block());
+
+        match addresses {
+            // no addresses, which means nothing to get
+            // different rpc providers implement an empty array differently,
+            // therefore, we assume an empty addresses array means no events to fetch
+            Some(addresses) if addresses.is_empty() => Ok(vec![]),
+            Some(addresses) => match self.address_filtering {
+                Some(AddressFiltering::InMemory) => {
+                    self.get_logs_for_address_in_memory(&base_filter, addresses).await
+                }
+                Some(AddressFiltering::MaxAddressPerGetLogsRequest(
+                    max_address_per_get_logs_request,
+                )) => {
+                    self.get_logs_for_address_in_batches(
+                        &base_filter,
+                        addresses,
+                        max_address_per_get_logs_request,
+                    )
+                    .await
+                }
+                None => {
+                    self.get_logs_for_address_in_batches(
+                        &base_filter,
+                        addresses,
+                        DEFAULT_RPC_SUPPORTED_ACCOUNT_FILTERS,
+                    )
+                    .await
+                }
+            },
+            None => Ok(self.provider.get_logs(&base_filter).await?),
+        }
 
         // rindexer_info!("get_logs DEBUG [{:?}]", filter.raw_filter());
         // LEAVING FOR NOW CONTEXT: TEMP FIX TO MAKE SURE FROM BLOCK IS ALWAYS SET
@@ -278,6 +421,40 @@ impl JsonRpcCachedProvider {
         // let result = self.provider.raw_request("eth_getLogs".into(),
         // [filter.raw_filter()]).await?; rindexer_info!("get_logs RESULT [{:?}]", result);
         // Ok(result)
+    }
+
+    /// Get logs by chunking addresses and fetching asynchronously in batches
+    async fn get_logs_for_address_in_batches(
+        &self,
+        filter: &Filter,
+        addresses: HashSet<Address>,
+        chunk_size: usize,
+    ) -> Result<Vec<Log>, ProviderError> {
+        let address_chunks = chunk_hashset(addresses, chunk_size);
+
+        let logs_futures = address_chunks.into_iter().map(|chunk| async move {
+            let filter =
+                filter.clone().address(ValueOrArray::Array(chunk.into_iter().collect::<Vec<_>>()));
+            self.provider.get_logs(&filter).await
+        });
+
+        let chunked_logs = try_join_all(logs_futures).await?;
+
+        Ok(chunked_logs.concat())
+    }
+
+    /// Gets all logs for a given filter and then filters by addresses in memory
+    async fn get_logs_for_address_in_memory(
+        &self,
+        filter: &Filter,
+        addresses: HashSet<Address>,
+    ) -> Result<Vec<Log>, ProviderError> {
+        let logs = self.provider.get_logs(filter).await?;
+
+        let filtered_logs =
+            logs.into_iter().filter(|log| addresses.contains(&log.address())).collect::<Vec<_>>();
+
+        Ok(filtered_logs)
     }
 
     pub async fn get_chain_id(&self) -> Result<U256, ProviderError> {
@@ -306,7 +483,9 @@ pub async fn create_client(
     chain_id: u64,
     compute_units_per_second: Option<u64>,
     max_block_range: Option<U64>,
+    block_poll_frequency: Option<BlockPollFrequency>,
     custom_headers: HeaderMap,
+    address_filtering: Option<AddressFiltering>,
 ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
     let rpc_url = Url::parse(rpc_url).map_err(|e| {
         RetryClientError::HttpProviderCantBeCreated(rpc_url.to_string(), e.to_string())
@@ -318,7 +497,16 @@ pub async fn create_client(
     let rpc_client = RpcClient::builder().layer(retry_layer).transport(http, false);
     let provider = ProviderBuilder::new().connect_client(rpc_client);
 
-    Ok(Arc::new(JsonRpcCachedProvider::new(provider, chain_id, max_block_range).await))
+    Ok(Arc::new(
+        JsonRpcCachedProvider::new(
+            provider,
+            chain_id,
+            block_poll_frequency,
+            max_block_range,
+            address_filtering,
+        )
+        .await,
+    ))
 }
 
 pub async fn get_chain_id(rpc_url: &str) -> Result<U256, RpcError<TransportErrorKind>> {
@@ -340,24 +528,26 @@ impl CreateNetworkProvider {
     pub async fn create(
         manifest: &Manifest,
     ) -> Result<Vec<CreateNetworkProvider>, RetryClientError> {
-        let mut result: Vec<CreateNetworkProvider> = vec![];
-        for network in &manifest.networks {
+        let provider_futures = manifest.networks.iter().map(|network| async move {
             let provider = create_client(
                 &network.rpc,
                 network.chain_id,
                 network.compute_units_per_second,
                 network.max_block_range,
+                network.block_poll_frequency,
                 manifest.get_custom_headers(),
+                network.get_logs_settings.clone().map(|settings| settings.address_filtering),
             )
             .await?;
-            result.push(CreateNetworkProvider {
+
+            Ok::<_, RetryClientError>(CreateNetworkProvider {
                 network_name: network.name.clone(),
                 disable_logs_bloom_checks: network.disable_logs_bloom_checks.unwrap_or_default(),
                 client: provider,
-            });
-        }
+            })
+        });
 
-        Ok(result)
+        try_join_all(provider_futures).await
     }
 }
 
@@ -376,14 +566,14 @@ mod tests {
     #[tokio::test]
     async fn test_create_retry_client() {
         let rpc_url = "http://localhost:8545";
-        let result = create_client(rpc_url, 1, Some(660), None, HeaderMap::new()).await;
+        let result = create_client(rpc_url, 1, Some(660), None, None, HeaderMap::new(), None).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_create_retry_client_invalid_url() {
         let rpc_url = "invalid_url";
-        let result = create_client(rpc_url, 1, Some(660), None, HeaderMap::new()).await;
+        let result = create_client(rpc_url, 1, Some(660), None, None, HeaderMap::new(), None).await;
         assert!(result.is_err());
         if let Err(RetryClientError::HttpProviderCantBeCreated(url, _)) = result {
             assert_eq!(url, rpc_url);

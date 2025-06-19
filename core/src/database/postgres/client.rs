@@ -119,9 +119,9 @@ impl PostgresClient {
                     Ok(Ok((client, connection))) => (client, connection),
                     Ok(Err(e)) => {
                         // retry without ssl if ssl has been attempted and failed
-                        if !disable_ssl &&
-                            config.get_ssl_mode() != SslMode::Disable &&
-                            !connection_str.contains("sslmode=require")
+                        if !disable_ssl
+                            && config.get_ssl_mode() != SslMode::Disable
+                            && !connection_str.contains("sslmode=require")
                         {
                             return Box::pin(_new(true)).await;
                         }
@@ -315,8 +315,16 @@ impl PostgresClient {
         let writer = BinaryCopyInWriter::new(sink, column_types);
         pin_mut!(writer);
 
+        // This can cause issues with Binary Copy command not completing and leaving hanging
+        // processes. See similar: https://github.com/sfackler/rust-postgres/issues/1109
+        //
+        // We have to call `finish` manually on any write error.
         for row in prepared_data.iter() {
-            writer.as_mut().write(row).await?;
+            if let Err(e) = writer.as_mut().write(row).await {
+                error!("Error writing binary data, aborting early: {}", e);
+                writer.finish().await?;
+                return Err(e)?;
+            };
         }
 
         writer.finish().await?;
@@ -332,19 +340,17 @@ impl PostgresClient {
     ) -> Result<u64, PostgresError> {
         let total_columns = column_names.len();
 
-        // Good for debugging
-        // if table_name == "sponsorship.rate_limit" {
-        //     for (i, row) in bulk_data.iter().enumerate() {
-        //         for (j, param) in row.iter().enumerate() {
-        //             info!(
-        //                 "Row {} Column {} ({:?}) -> Value: {:?}, Type: {:?}",
-        //                 i,
-        //                 j,
-        //                 column_names.get(j),
-        //                 param,
-        //                 param.to_type()
-        //             );
-        //         }
+        // good for debugging
+        // for (i, row) in bulk_data.iter().enumerate() {
+        //     for (j, param) in row.iter().enumerate() {
+        //         tracing::info!(
+        //             "Row {} Column {} ({:?}) -> Value: {:?}, Type: {:?}",
+        //             i,
+        //             j,
+        //             column_names.get(j),
+        //             param,
+        //             param.to_type()
+        //         );
         //     }
         // }
 
@@ -371,13 +377,11 @@ impl PostgresClient {
         }
 
         // Good for debugging
-        // if table_name == "sponsorship.rate_limit" {
-        //     info!("query: {:?}", query);
-        //     info!(
-        //         "params original types: {:?}",
-        //         bulk_data.iter().flat_map(|row| row.iter().map(|p|
+        // tracing::info!("query: {:?}", query);
+        // tracing::info!(
+        //     "params original types: {:?}",
+        //     bulk_data.iter().flat_map(|row| row.iter().map(|p|
         // p.to_type())).collect::<Vec<_>>()     );
-        // }
 
         self.execute(&query, &params).await
     }

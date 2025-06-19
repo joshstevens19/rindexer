@@ -17,6 +17,143 @@
 
 all release branches are deployed through `release/VERSION_NUMBER` branches
 
+# 0.19.1-beta - 17th June 2025
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.19.1
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.19.1/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.19.1/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.19.1/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.19.1/rindexer_win32-amd64.zip
+
+### Bug fixes
+-------------------------------------------------
+- fix: Fix code generation for complex event names (with `_` separator)
+
+# 0.19.0-beta - 17th June 2025
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.19.0
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.19.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.19.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.19.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.19.0/rindexer_win32-amd64.zip
+
+### Features
+-------------------------------------------------
+- feat: Numeric U256 Array EthereumSqlTypeWrapper
+- feat: U64BigInt and I256Numeric
+
+### Bug fixes
+-------------------------------------------------
+- fix: Fix dependency events handling after regression introduced with factory filtering
+
+# 0.18.0-beta - 13th June 2025
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.18.0
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.18.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.18.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.18.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.18.0/rindexer_win32-amd64.zip
+
+### Features
+-------------------------------------------------
+
+- Add support for indexing events from a factory-deployed smart contract by introducing a `factory` filter option in `contract` configuration.
+
+# 0.17.3-beta - 9th June 2025
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.17.3
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.17.3/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.17.3/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.17.3/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.17.3/rindexer_win32-amd64.zip
+
+### Bug fixes
+-------------------------------------------------
+
+- Improve RPC Efficiency
+- Make Native Transfer indexing a little more gently on startup, and a bit slower on failure, to prevent overloading apis with concurrency
+- Improve Startup speed significantly by reducing lots of redundant sequential rpc calls
+- Respect native transfer `enabled: false` setting
+- Add some more debug logging, spans, and change some log levels
+
+### Breaking changes
+-------------------------------------------------
+
+- Add  `block_poll_frequency` to the yaml config to allow better control over block polling behavior. This will require re-running codegen for rust projects as it breaks the existing `create_client` interface.
+
+## 0.17.2-beta - 30th May 2025
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.17.2
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.17.2/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.17.2/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.17.2/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.17.2/rindexer_win32-amd64.zip
+
+### Bug fixes
+-------------------------------------------------
+
+- fix: await register call in event handlers generated on rust projects
+- fix: resolve foundry compiler mismatch version
+
+## 0.17.1-beta - 27th May 2025
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.17.1
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.17.1/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.17.1/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.17.1/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.17.1/rindexer_win32-amd64.zip
+
+### Bug fixes
+-------------------------------------------------
+
+- Resolve Docker image crashes with "Illegal instruction (core dumped)" on various x86-64 processors
+
+## 0.17.0-beta - 26th May 2025
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.17.0
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.17.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.17.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.17.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.17.0/rindexer_win32-amd64.zip
+
+### Features
+-------------------------------------------------
+
+- Alter full toolchain to stable, drop some nightly rustfmt options and re-run fmt.
+- Improve logging experience by including more `errors` and `network` info where possible.
+- Add a currently undocumented `CONTRACT_PERMITS` env var to control manually the concurrency via an env var.
+- Add `HasTxInformation` trait to allow working with generics over Network Contract Events.
+
+### Bug fixes
+-------------------------------------------------
+
+- Fix a bug with broken binary copy in the Postgres client. `finish` should be called manually on a bad write.
+- Fix bug with breaking out of historical indexing on log fetch error.
+- Fix native transfer indexing bug by adjusting the reorg safe condition to be correct
+- Fix `fetch_logs` block range parsing to include fallback string if no Err variant found (fixes Lens indexing)
+
+all release branches are deployed through `release/VERSION_NUMBER` branches
+
+## 0.16.1-beta - 20th May 2025
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.16.1
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.16.1/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.16.1/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.16.1/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.16.1/rindexer_win32-amd64.zip
+
+### Bug fixes
+-------------------------------------------------
+- fix: alloy stable + alloy dependency mismatch
+
 ## 0.16.0-beta - 6th May 2025
 
 github branch - https://github.com/joshstevens19/rindexer/tree/release/0.16.0
