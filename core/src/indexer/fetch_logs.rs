@@ -75,7 +75,7 @@ pub fn fetch_logs_stream(
                         &config.info_log_name(),
                         &config.network_contract().network,
                         reth_tx.clone(),
-                        &config,
+                        config.is_reth_exex(),
                     )
                     .await;
 
@@ -133,7 +133,7 @@ pub fn fetch_logs_stream(
                 config.network_contract().disable_logs_bloom_checks,
                 &config.network_contract().network,
                 reth_tx.clone(),
-                &config,
+                config.is_reth_exex(),
             )
             .await;
         }
@@ -158,10 +158,10 @@ async fn fetch_historic_logs_stream(
     info_log_name: &str,
     network: &str,
     reth_tx: Option<Arc<ExExTx>>,
-    config: &EventProcessingConfig,
+    is_reth_exex: bool,
 ) -> Option<ProcessHistoricLogsStreamResult> {
     // Check if we should use ExEx instead of RPC
-    if config.is_reth_exex() && reth_tx.is_some() {
+    if is_reth_exex && reth_tx.is_some() {
         info!("Using ExEx for historic logs fetch");
         
         // Use ExEx for fetching
@@ -382,10 +382,10 @@ async fn live_indexing_stream(
     disable_logs_bloom_checks: bool,
     network: &str,
     reth_tx: Option<Arc<ExExTx>>,
-    config: &EventProcessingConfig,
+    is_reth_exex: bool,
 ) {
     // Check if we should use ExEx for live indexing
-    if config.is_reth_exex() && reth_tx.is_some() {
+    if is_reth_exex && reth_tx.is_some() {
         info!("Using ExEx for live indexing");
         
         let from_block = last_seen_block_number + U64::from(1);
