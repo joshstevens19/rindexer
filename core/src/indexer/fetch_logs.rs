@@ -1,20 +1,26 @@
 use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
 
-use alloy::primitives::{BlockNumber, B256, U64};
-use alloy::rpc::types::Log;
+use alloy::{
+    primitives::{BlockNumber, B256, U64},
+    rpc::types::Log,
+};
 use rand::random_ratio;
 use regex::Regex;
-use tokio::sync::{mpsc, Semaphore};
-use tokio::time::Instant;
+use tokio::{
+    sync::{mpsc, Semaphore},
+    time::Instant,
+};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, error, info, warn};
 
-use crate::event::{config::EventProcessingConfig, RindexerEventFilter};
 use crate::helpers::{halved_block_number, is_relevant_block};
-use crate::indexer::IndexingEventProgressStatus;
-use crate::provider::{JsonRpcCachedProvider, ProviderError};
 use crate::reth::fetch_logs::{fetch_historic_logs_exex, start_live_indexing_exex};
 use crate::reth::types::ExExTx;
+use crate::{
+    event::{config::EventProcessingConfig, RindexerEventFilter},
+    indexer::IndexingEventProgressStatus,
+    provider::{JsonRpcCachedProvider, ProviderError},
+};
 
 pub struct FetchLogsResult {
     pub logs: Vec<Log>,
@@ -31,22 +37,20 @@ pub fn fetch_logs_stream(
     let (tx, rx) = mpsc::unbounded_channel();
 
     tokio::spawn(async move {
-        info!("Starting backfill using rpc from block:");
-        let initial_filter = config.to_event_filter().unwrap();
-        let snapshot_to_block = initial_filter.to_block();
-        let from_block = initial_filter.from_block();
-        let mut current_filter = initial_filter;
+        let mut current_filter = config.to_event_filter().unwrap();
+
+        let snapshot_to_block = current_filter.to_block();
+        let from_block = current_filter.from_block();
 
         // add any max block range limitation before we start processing
         let mut max_block_range_limitation =
             config.network_contract().cached_provider.max_block_range;
         if max_block_range_limitation.is_some() {
-            current_filter =
-                current_filter.set_to_block(calculate_process_historic_log_to_block(
-                    &from_block,
-                    &snapshot_to_block,
-                    &max_block_range_limitation,
-                ));
+            current_filter = current_filter.set_to_block(calculate_process_historic_log_to_block(
+                &from_block,
+                &snapshot_to_block,
+                &max_block_range_limitation,
+            ));
             warn!(
                 "{}::{} - {} - max block range limitation of {} blocks applied - block range indexing will be slower then RPC providers supplying the optimal ranges - https://rindexer.xyz/docs/references/rpc-node-providers#rpc-node-providers",
                 config.info_log_name(),
