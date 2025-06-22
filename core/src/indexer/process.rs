@@ -4,7 +4,7 @@ use alloy::primitives::{B256, U64};
 use async_std::prelude::StreamExt;
 use futures::future::join_all;
 use tokio::{
-    sync::{Mutex, MutexGuard},
+    sync::{broadcast, Mutex, MutexGuard},
     task::{JoinError, JoinHandle},
     time::Instant,
 };
@@ -24,7 +24,7 @@ use crate::{
         task_tracker::{indexing_event_processed, indexing_event_processing},
     },
     is_running,
-    provider::ProviderError,
+    provider::{ChainStateNotification, ProviderError},
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -42,10 +42,11 @@ pub enum ProcessEventError {
 pub async fn process_event(
     config: EventProcessingConfig,
     block_until_indexed: bool,
+    state_notifications: Option<broadcast::Receiver<ChainStateNotification>>,
 ) -> Result<(), ProcessEventError> {
     debug!("{} - Processing events", config.info_log_name());
 
-    process_event_logs(Arc::new(config), false, block_until_indexed).await?;
+    process_event_logs(Arc::new(config), false, block_until_indexed, state_notifications).await?;
 
     Ok(())
 }
@@ -57,8 +58,9 @@ async fn process_event_logs(
     config: Arc<EventProcessingConfig>,
     force_no_live_indexing: bool,
     block_until_indexed: bool,
+    state_notifications: Option<broadcast::Receiver<ChainStateNotification>>,
 ) -> Result<(), Box<ProviderError>> {
-    let mut logs_stream = fetch_logs_stream(Arc::clone(&config), force_no_live_indexing);
+    let mut logs_stream = fetch_logs_stream(Arc::clone(&config), force_no_live_indexing, state_notifications);
     let mut tasks = Vec::new();
 
     while let Some(result) = logs_stream.next().await {
@@ -172,7 +174,7 @@ async fn process_contract_events_with_dependencies(
                     ))?;
 
                 // forces live indexing off as it has to handle it a bit differently
-                process_event_logs(Arc::clone(event_processing_config), true, true).await?;
+                process_event_logs(Arc::clone(event_processing_config), true, true, None).await?;
 
                 if event_processing_config.live_indexing() {
                     let rindexer_event_filter = event_processing_config.to_event_filter()?;

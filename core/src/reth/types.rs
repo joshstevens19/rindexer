@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 
 use alloy_primitives::FixedBytes;
-use tokio::sync::mpsc;
+use tokio::sync::broadcast;
 
 /// Log metadata for each returned log
 #[derive(Clone, Debug)]
@@ -18,10 +18,10 @@ pub struct LogMetadata {
 }
 
 pub struct RethChannels {
-    // Map of network name to notification channels
+    // Map of network name to notification senders
     pub channels: HashMap<
         String,
-        mpsc::UnboundedReceiver<crate::provider::notifications::ChainStateNotification>,
+        broadcast::Sender<crate::provider::notifications::ChainStateNotification>,
     >,
 }
 
@@ -33,19 +33,19 @@ impl RethChannels {
     pub fn insert(
         &mut self,
         network_name: String,
-        notification_rx: mpsc::UnboundedReceiver<
+        notification_tx: broadcast::Sender<
             crate::provider::notifications::ChainStateNotification,
         >,
     ) {
-        self.channels.insert(network_name, notification_rx);
+        self.channels.insert(network_name, notification_tx);
     }
 
-    pub fn take(
-        &mut self,
+    pub fn subscribe(
+        &self,
         network_name: &str,
-    ) -> Option<mpsc::UnboundedReceiver<crate::provider::notifications::ChainStateNotification>>
+    ) -> Option<broadcast::Receiver<crate::provider::notifications::ChainStateNotification>>
     {
-        self.channels.remove(network_name)
+        self.channels.get(network_name).map(|tx| tx.subscribe())
     }
 }
 

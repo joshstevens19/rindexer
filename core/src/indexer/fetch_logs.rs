@@ -7,7 +7,7 @@ use alloy::{
 use rand::random_ratio;
 use regex::Regex;
 use tokio::{
-    sync::{mpsc, Semaphore},
+    sync::{broadcast, mpsc, Semaphore},
     time::Instant,
 };
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -68,6 +68,7 @@ pub struct FetchLogsResult {
 pub fn fetch_logs_stream(
     config: Arc<EventProcessingConfig>,
     force_no_live_indexing: bool,
+    state_notifications: Option<broadcast::Receiver<ChainStateNotification>>,
 ) -> impl tokio_stream::Stream<Item = Result<FetchLogsResult, Box<dyn Error + Send>>> + Send + Unpin
 {
     let (tx, rx) = mpsc::unbounded_channel();
@@ -77,8 +78,6 @@ pub fn fetch_logs_stream(
 
         let snapshot_to_block = current_filter.to_block();
 
-        // Extract the notification receiver if available
-        let notification_rx = config.network_contract().state_notifications.clone();
         let from_block = current_filter.from_block();
 
         // add any max block range limitation before we start processing
@@ -158,16 +157,6 @@ pub fn fetch_logs_stream(
 
         // Live indexing mode
         if config.live_indexing() && !force_no_live_indexing {
-            // Take the notification receiver if available
-            let notification_rx = if let Some(notifications) = notification_rx {
-                match Arc::try_unwrap(notifications) {
-                    Ok(mutex) => Some(mutex.into_inner()),
-                    Err(_) => None,
-                }
-            } else {
-                None
-            };
-
             live_indexing_stream(
                 &config.network_contract().cached_provider,
                 &tx,
@@ -179,7 +168,7 @@ pub fn fetch_logs_stream(
                 &config.semaphore(),
                 config.network_contract().disable_logs_bloom_checks,
                 &config.network_contract().network,
-                notification_rx,
+                state_notifications,
             )
             .await;
         }
@@ -403,7 +392,7 @@ async fn live_indexing_stream(
     semaphore: &Arc<Semaphore>,
     disable_logs_bloom_checks: bool,
     network: &str,
-    mut state_notifications: Option<mpsc::UnboundedReceiver<ChainStateNotification>>,
+    mut state_notifications: Option<broadcast::Receiver<ChainStateNotification>>,
 ) {
     let mut last_seen_block_number = last_seen_block_number;
     let mut log_response_to_large_to_block: Option<U64> = None;
@@ -420,10 +409,10 @@ async fn live_indexing_stream(
             notification = async {
                 match &mut state_notifications {
                     Some(notifications) => notifications.recv().await,
-                    None => std::future::pending().await,
+                    None => std::future::pending::<Result<ChainStateNotification, broadcast::error::RecvError>>().await,
                 }
             } => {
-                if let Some(notification) = notification {
+                if let Ok(notification) = notification {
                     handle_chain_notification(notification, info_log_name, network);
                     // Process notification immediately by continuing to next iteration
                     continue;

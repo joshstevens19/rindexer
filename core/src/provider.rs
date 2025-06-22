@@ -37,7 +37,7 @@ use std::{
     time::{Duration, Instant},
 };
 use thiserror::Error;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{broadcast, Mutex};
 use tracing::{debug, debug_span, error, Instrument};
 use url::Url;
 
@@ -48,6 +48,7 @@ use crate::{event::RindexerEventFilter, manifest::core::Manifest};
 
 pub mod notifications;
 pub use notifications::ChainStateNotification;
+
 
 /// An alias type for a complex alloy Provider
 pub type RindexerProvider = FillProvider<
@@ -558,7 +559,7 @@ pub struct CreateNetworkProvider {
     pub network_name: String,
     pub disable_logs_bloom_checks: bool,
     pub client: Arc<JsonRpcCachedProvider>,
-    pub state_notifications: Option<mpsc::UnboundedReceiver<ChainStateNotification>>,
+    pub state_notifications: Option<broadcast::Receiver<ChainStateNotification>>,
 }
 
 impl CreateNetworkProvider {
@@ -570,7 +571,7 @@ impl CreateNetworkProvider {
 
     pub async fn create_with_channels(
         manifest: &Manifest,
-        reth_channels: Option<&mut crate::reth::types::RethChannels>,
+        reth_channels: Option<&crate::reth::types::RethChannels>,
     ) -> Result<Vec<CreateNetworkProvider>, RetryClientError> {
         let provider_futures = manifest.networks.iter().map(|network| async move {
             let provider = if network.reth.as_ref().is_some_and(|r| r.enabled) {
@@ -623,7 +624,7 @@ impl CreateNetworkProvider {
         // Connect reth notification channels if available
         if let Some(reth_channels) = reth_channels {
             for provider in &mut providers {
-                if let Some(notification_rx) = reth_channels.take(&provider.network_name) {
+                if let Some(notification_rx) = reth_channels.subscribe(&provider.network_name) {
                     debug!(
                         "Connecting reth notification channel for network: {}",
                         provider.network_name
@@ -639,9 +640,17 @@ impl CreateNetworkProvider {
     /// Set the notification channel for this provider
     pub fn set_notification_channel(
         &mut self,
-        rx: mpsc::UnboundedReceiver<ChainStateNotification>,
+        rx: broadcast::Receiver<ChainStateNotification>,
     ) {
         self.state_notifications = Some(rx);
+    }
+
+    /// Subscribe to notifications from a broadcast sender
+    pub fn subscribe_notifications(
+        &mut self,
+        tx: &broadcast::Sender<ChainStateNotification>,
+    ) {
+        self.state_notifications = Some(tx.subscribe());
     }
 }
 
@@ -660,7 +669,7 @@ pub fn get_network_provider_with_notifications(
 ) -> Option<(
     Arc<JsonRpcCachedProvider>,
     bool,
-    Option<mpsc::UnboundedReceiver<ChainStateNotification>>,
+    Option<broadcast::Receiver<ChainStateNotification>>,
 )> {
     providers.iter_mut().find(|item| item.network_name == network).map(|provider| {
         (

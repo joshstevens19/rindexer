@@ -632,7 +632,6 @@ fn generate_event_bindings_code(
                                                         .iter()
                                                         .find(|n| n.name == c.network)
                                                         .map_or(false, |n| n.disable_logs_bloom_checks.unwrap_or_default()),
-                            state_notifications: None,
                         }})
                         .collect(),
                     abi: contract_details.abi,

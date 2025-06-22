@@ -3,7 +3,7 @@ use std::thread::Builder;
 use futures::FutureExt;
 use reth::cli::Cli;
 use reth_node_ethereum::EthereumNode;
-use tokio::sync::mpsc;
+use tokio::sync::broadcast;
 
 use crate::provider::notifications::ChainStateNotification;
 use crate::reth::exex::RindexerExEx;
@@ -17,10 +17,13 @@ const EXECUTION_EXTENSION_NAME: &str = "rindexer";
 /// Starts a Reth node with the execution extension that forwards chain state notifications to the provided channel.
 pub fn start_reth_node_with_exex(
     cli: Cli,
-) -> eyre::Result<mpsc::UnboundedReceiver<ChainStateNotification>> {
-    // Create a channel for chain state notifications. Sender will go to ExEx, receiver
-    // will be returned to the caller.
-    let (notification_tx, notification_rx) = mpsc::unbounded_channel::<ChainStateNotification>();
+) -> eyre::Result<broadcast::Sender<ChainStateNotification>> {
+    // Create a broadcast channel for chain state notifications. Sender will go to ExEx, receiver
+    // will be returned to the caller. Buffer size of 1000 to handle bursts.
+    let (notification_tx, _notification_rx) = broadcast::channel::<ChainStateNotification>(1000);
+
+    // Clone the sender to return it
+    let notification_tx_clone = notification_tx.clone();
 
     // Spawn the node with a larger stack size, otherwise it will crash with a stack overflow
     let builder = Builder::new().stack_size(STACK_SIZE);
@@ -47,5 +50,5 @@ pub fn start_reth_node_with_exex(
         }
     });
 
-    Ok(notification_rx)
+    Ok(notification_tx_clone)
 }

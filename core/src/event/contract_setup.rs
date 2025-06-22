@@ -33,13 +33,6 @@ pub struct NetworkContract {
     pub start_block: Option<U64>,
     pub end_block: Option<U64>,
     pub disable_logs_bloom_checks: bool,
-    pub state_notifications: Option<
-        Arc<
-            tokio::sync::Mutex<
-                tokio::sync::mpsc::UnboundedReceiver<crate::provider::ChainStateNotification>,
-            >,
-        >,
-    >,
 }
 
 impl NetworkContract {
@@ -84,7 +77,7 @@ impl ContractInformation {
                         c.network.clone(),
                     ));
                 }
-                Some((client, disable_logs_bloom_checks, state_notifications)) => {
+                Some((client, disable_logs_bloom_checks, _state_notifications)) => {
                     details.push(NetworkContract {
                         id: generate_random_id(10),
                         network: c.network.clone(),
@@ -94,8 +87,6 @@ impl ContractInformation {
                         start_block: c.start_block,
                         end_block: c.end_block,
                         disable_logs_bloom_checks,
-                        state_notifications: state_notifications
-                            .map(|rx| Arc::new(tokio::sync::Mutex::new(rx))),
                     });
                 }
             }

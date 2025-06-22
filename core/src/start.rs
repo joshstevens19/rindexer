@@ -139,10 +139,10 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     StartRindexerError::RethCliError(Box::new(std::io::Error::other(e)))
                 })?;
                 info!("Starting Reth node for network: {}", network.name);
-                let reth_rx = start_reth_node_with_exex(reth_cli)?;
+                let reth_tx = start_reth_node_with_exex(reth_cli)?;
                 info!("Started Reth node for network: {}", network.name);
 
-                reth_channels.insert(network.name.clone(), reth_rx);
+                reth_channels.insert(network.name.clone(), reth_tx);
             }
 
             if manifest.project_type != ProjectType::NoCode {
@@ -200,7 +200,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     !relationships.is_empty(),
                     indexing_details.registry.complete(),
                     indexing_details.trace_registry.complete(),
-                    Some(&mut reth_channels),
+                    Some(&reth_channels),
                 )
                 .await?;
 
@@ -237,7 +237,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                                 .registry
                                 .reapply_after_historic(processed_network_contracts),
                             indexing_details.trace_registry.complete(),
-                            Some(&mut reth_channels),
+                            Some(&reth_channels),
                         )
                         .await
                         .map_err(StartRindexerError::CouldNotStartIndexing)?;

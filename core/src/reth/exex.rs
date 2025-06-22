@@ -3,21 +3,21 @@ use futures::StreamExt;
 use reth_exex::{ExExContext, ExExNotification};
 use reth_node_api::FullNodeComponents;
 use reth_tracing::tracing::info;
-use tokio::sync::mpsc;
+use tokio::sync::broadcast;
 
 /// Minimal ExEx that only translates ExExNotifications to ChainStateNotifications
 pub struct RindexerExEx<Node: FullNodeComponents> {
     /// The context of the ExEx
     ctx: ExExContext<Node>,
     /// Channel to send chain state notifications
-    notification_tx: mpsc::UnboundedSender<ChainStateNotification>,
+    notification_tx: broadcast::Sender<ChainStateNotification>,
 }
 
 impl<Node: FullNodeComponents> RindexerExEx<Node> {
     /// Creates a new instance of the ExEx
     pub fn new(
         ctx: ExExContext<Node>,
-        notification_tx: mpsc::UnboundedSender<ChainStateNotification>,
+        notification_tx: broadcast::Sender<ChainStateNotification>,
     ) -> Self {
         Self { ctx, notification_tx }
     }

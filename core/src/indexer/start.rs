@@ -1,11 +1,12 @@
 use std::{path::Path, str::FromStr, sync::Arc, time::Duration};
+use std::collections::HashMap;
 
 use alloy::primitives::U64;
 use alloy::transports::{RpcError, TransportErrorKind};
 use futures::future::try_join_all;
 use tokio::{
     join,
-    sync::Semaphore,
+    sync::{broadcast, Semaphore},
     task::{JoinError, JoinHandle},
     time::{sleep, Instant},
 };
@@ -34,9 +35,12 @@ use crate::{
         ContractEventDependencies,
     },
     manifest::core::Manifest,
-    provider::{JsonRpcCachedProvider, ProviderError},
+    provider::{ChainStateNotification, JsonRpcCachedProvider, ProviderError},
     public_read_env_value, PostgresClient,
 };
+
+/// Map of network names to notification receivers
+type NotificationChannels = HashMap<String, broadcast::Receiver<ChainStateNotification>>;
 
 #[derive(thiserror::Error, Debug)]
 pub enum CombinedLogEventProcessingError {
@@ -328,6 +332,7 @@ pub async fn start_indexing_contract_events(
     registry: Arc<EventCallbackRegistry>,
     dependencies: &[ContractEventDependencies],
     no_live_indexing_forced: bool,
+    reth_channels: Option<&crate::reth::types::RethChannels>,
 ) -> Result<
     (
         Vec<JoinHandle<Result<(), ProcessEventError>>>,
@@ -337,6 +342,16 @@ pub async fn start_indexing_contract_events(
     ),
     StartIndexingError,
 > {
+    // Extract notification channels from reth_channels
+    let mut notification_channels = NotificationChannels::new();
+    if let Some(reth_channels) = reth_channels {
+        for network_name in reth_channels.channels.keys() {
+            if let Some(rx) = reth_channels.subscribe(network_name) {
+                notification_channels.insert(network_name.clone(), rx);
+            }
+        }
+    }
+
     let event_progress_state = IndexingEventsProgressState::monitor(&registry.events).await;
     let permits = public_read_env_value("CONTRACT_PERMITS").unwrap_or("100".to_string());
     let permits = usize::from_str(&permits).unwrap_or(100);
@@ -477,9 +492,13 @@ pub async fn start_indexing_contract_events(
                     dependencies,
                 );
             } else {
-                let process_event =
-                    tokio::spawn(process_event(event_processing_config.into(), false));
-                non_blocking_process_events.push(process_event);
+                // Get notification channel for this network
+                let network_name = &network_contract.network;
+                let notification_rx = notification_channels.remove(network_name);
+                
+                let process_event_handle =
+                    tokio::spawn(process_event(event_processing_config.into(), false, notification_rx));
+                non_blocking_process_events.push(process_event_handle);
             }
         }
     }
@@ -499,7 +518,7 @@ pub async fn start_indexing(
     no_live_indexing_forced: bool,
     registry: Arc<EventCallbackRegistry>,
     trace_registry: Arc<TraceCallbackRegistry>,
-    _reth_channels: Option<&mut crate::reth::types::RethChannels>,
+    reth_channels: Option<&crate::reth::types::RethChannels>,
 ) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
     let start = Instant::now();
     let database = initialize_database(manifest).await?;
@@ -517,6 +536,7 @@ pub async fn start_indexing(
             registry.clone(),
             dependencies,
             no_live_indexing_forced,
+            reth_channels,
         )
     );
 
