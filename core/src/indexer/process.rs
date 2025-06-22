@@ -60,7 +60,8 @@ async fn process_event_logs(
     block_until_indexed: bool,
     state_notifications: Option<broadcast::Receiver<ChainStateNotification>>,
 ) -> Result<(), Box<ProviderError>> {
-    let mut logs_stream = fetch_logs_stream(Arc::clone(&config), force_no_live_indexing, state_notifications);
+    let mut logs_stream =
+        fetch_logs_stream(Arc::clone(&config), force_no_live_indexing, state_notifications);
     let mut tasks = Vec::new();
 
     while let Some(result) = logs_stream.next().await {

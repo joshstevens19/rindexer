@@ -100,7 +100,7 @@ pub async fn setup_no_code(
                 });
             }
 
-            let mut network_providers = CreateNetworkProvider::create(&manifest).await?;
+            let network_providers = CreateNetworkProvider::create(&manifest).await?;
             info!(
                 "Networks enabled: {}",
                 network_providers
@@ -111,7 +111,7 @@ pub async fn setup_no_code(
             );
 
             let events =
-                process_events(project_path, &manifest, postgres.clone(), &mut network_providers)
+                process_events(project_path, &manifest, postgres.clone(), &network_providers)
                     .await?;
 
             let registry = EventCallbackRegistry { events };
@@ -126,7 +126,7 @@ pub async fn setup_no_code(
             );
 
             let trace_events =
-                process_trace_events(project_path, &mut manifest, postgres, &mut network_providers)
+                process_trace_events(project_path, &mut manifest, postgres, &network_providers)
                     .await?;
             let trace_registry = TraceCallbackRegistry { events: trace_events };
 
@@ -582,7 +582,7 @@ pub async fn process_events(
     project_path: &Path,
     manifest: &Manifest,
     postgres: Option<Arc<PostgresClient>>,
-    network_providers: &mut [CreateNetworkProvider],
+    network_providers: &[CreateNetworkProvider],
 ) -> Result<Vec<EventCallbackRegistryInformation>, ProcessIndexersError> {
     let mut events: Vec<EventCallbackRegistryInformation> = vec![];
 
@@ -606,7 +606,7 @@ async fn process_contract(
     project_path: &Path,
     manifest: &Manifest,
     postgres: Option<Arc<PostgresClient>>,
-    network_providers: &mut [CreateNetworkProvider],
+    network_providers: &[CreateNetworkProvider],
     contract: &mut Contract,
 ) -> Result<Vec<EventCallbackRegistryInformation>, ProcessIndexersError> {
     if contract.name.to_lowercase() == NATIVE_TRANSFER_CONTRACT_NAME.to_lowercase() {
@@ -713,7 +713,7 @@ pub async fn process_trace_events(
     project_path: &Path,
     manifest: &mut Manifest,
     postgres: Option<Arc<PostgresClient>>,
-    network_providers: &mut [CreateNetworkProvider],
+    network_providers: &[CreateNetworkProvider],
 ) -> Result<Vec<TraceCallbackRegistryInformation>, ProcessIndexersError> {
     let mut events: Vec<TraceCallbackRegistryInformation> = vec![];
 

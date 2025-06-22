@@ -5,7 +5,3 @@ members = [
     "cli",
     "rindexer_rust_playground"
 ]
-
-[workspace.dependencies]
-# Add reth-exex-examples as an external workspace member
-reth-exex-examples = { path = "../reth-exex-examples" }

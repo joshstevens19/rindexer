@@ -481,9 +481,12 @@ pub async fn start_indexing_contract_events(
                 // Get notification channel for this network if reth is enabled
                 let notification_rx = reth_channels
                     .and_then(|channels| channels.subscribe(&network_contract.network));
-                
-                let process_event_handle =
-                    tokio::spawn(process_event(event_processing_config.into(), false, notification_rx));
+
+                let process_event_handle = tokio::spawn(process_event(
+                    event_processing_config.into(),
+                    false,
+                    notification_rx,
+                ));
                 non_blocking_process_events.push(process_event_handle);
             }
         }

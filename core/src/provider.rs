@@ -49,7 +49,6 @@ use crate::{event::RindexerEventFilter, manifest::core::Manifest};
 pub mod notifications;
 pub use notifications::ChainStateNotification;
 
-
 /// An alias type for a complex alloy Provider
 pub type RindexerProvider = FillProvider<
     JoinFill<
@@ -638,18 +637,12 @@ impl CreateNetworkProvider {
     }
 
     /// Set the notification channel for this provider
-    pub fn set_notification_channel(
-        &mut self,
-        rx: broadcast::Receiver<ChainStateNotification>,
-    ) {
+    pub fn set_notification_channel(&mut self, rx: broadcast::Receiver<ChainStateNotification>) {
         self.state_notifications = Some(rx);
     }
 
     /// Subscribe to notifications from a broadcast sender
-    pub fn subscribe_notifications(
-        &mut self,
-        tx: &broadcast::Sender<ChainStateNotification>,
-    ) {
+    pub fn subscribe_notifications(&mut self, tx: &broadcast::Sender<ChainStateNotification>) {
         self.state_notifications = Some(tx.subscribe());
     }
 }
@@ -666,11 +659,8 @@ pub fn get_network_provider<'a>(
 pub fn get_network_provider_with_notifications(
     network: &str,
     providers: &mut [CreateNetworkProvider],
-) -> Option<(
-    Arc<JsonRpcCachedProvider>,
-    bool,
-    Option<broadcast::Receiver<ChainStateNotification>>,
-)> {
+) -> Option<(Arc<JsonRpcCachedProvider>, bool, Option<broadcast::Receiver<ChainStateNotification>>)>
+{
     providers.iter_mut().find(|item| item.network_name == network).map(|provider| {
         (
             Arc::clone(&provider.client),

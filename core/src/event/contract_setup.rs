@@ -7,10 +7,7 @@ use crate::{
         contract::{Contract, EventInputIndexedFilters},
         native_transfer::{NativeTransfers, TraceProcessingMethod},
     },
-    provider::{
-        get_network_provider, get_network_provider_with_notifications, CreateNetworkProvider,
-        JsonRpcCachedProvider,
-    },
+    provider::{get_network_provider, CreateNetworkProvider, JsonRpcCachedProvider},
     types::single_or_array::StringOrArray,
 };
 use alloy::json_abi::{Event, JsonAbi};
@@ -63,30 +60,29 @@ impl ContractInformation {
     pub fn create(
         project_path: &Path,
         contract: &Contract,
-        network_providers: &mut [CreateNetworkProvider],
+        network_providers: &[CreateNetworkProvider],
         decoder: Decoder,
     ) -> Result<ContractInformation, CreateContractInformationError> {
         let mut details = vec![];
         for c in &contract.details {
-            let provider_info =
-                get_network_provider_with_notifications(&c.network, network_providers);
+            let provider = get_network_provider(&c.network, network_providers);
 
-            match provider_info {
+            match provider {
                 None => {
                     return Err(CreateContractInformationError::CanNotFindNetworkFromProviders(
                         c.network.clone(),
                     ));
                 }
-                Some((client, disable_logs_bloom_checks, _state_notifications)) => {
+                Some(provider) => {
                     details.push(NetworkContract {
                         id: generate_random_id(10),
                         network: c.network.clone(),
-                        cached_provider: client,
+                        cached_provider: Arc::clone(&provider.client),
                         decoder: Arc::clone(&decoder),
                         indexing_contract_setup: c.indexing_contract_setup(project_path),
                         start_block: c.start_block,
                         end_block: c.end_block,
-                        disable_logs_bloom_checks,
+                        disable_logs_bloom_checks: provider.disable_logs_bloom_checks,
                     });
                 }
             }

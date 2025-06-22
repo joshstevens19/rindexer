@@ -19,10 +19,8 @@ pub struct LogMetadata {
 
 pub struct RethChannels {
     // Map of network name to notification senders
-    pub channels: HashMap<
-        String,
-        broadcast::Sender<crate::provider::notifications::ChainStateNotification>,
-    >,
+    pub channels:
+        HashMap<String, broadcast::Sender<crate::provider::notifications::ChainStateNotification>>,
 }
 
 impl RethChannels {
@@ -33,9 +31,7 @@ impl RethChannels {
     pub fn insert(
         &mut self,
         network_name: String,
-        notification_tx: broadcast::Sender<
-            crate::provider::notifications::ChainStateNotification,
-        >,
+        notification_tx: broadcast::Sender<crate::provider::notifications::ChainStateNotification>,
     ) {
         self.channels.insert(network_name, notification_tx);
     }
@@ -43,8 +39,7 @@ impl RethChannels {
     pub fn subscribe(
         &self,
         network_name: &str,
-    ) -> Option<broadcast::Receiver<crate::provider::notifications::ChainStateNotification>>
-    {
+    ) -> Option<broadcast::Receiver<crate::provider::notifications::ChainStateNotification>> {
         self.channels.get(network_name).map(|tx| tx.subscribe())
     }
 }
