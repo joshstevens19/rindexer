@@ -2,35 +2,6 @@ use std::time::{Duration, Instant};
 
 use crate::provider::RetryClientError;
 
-/// Get the default reth IPC path for the current platform
-pub fn get_default_reth_ipc_path() -> String {
-    #[cfg(unix)]
-    {
-        "/tmp/reth.ipc".to_string()
-    }
-
-    #[cfg(windows)]
-    {
-        r"\\.\pipe\reth.ipc".to_string()
-    }
-}
-
-/// Get the IPC path from reth CLI args
-pub fn get_reth_ipc_path(cli: &reth::cli::Cli) -> Option<String> {
-    use reth::cli::Commands;
-
-    match &cli.command {
-        Commands::Node(node_cmd) => {
-            if node_cmd.rpc.ipcdisable {
-                None
-            } else {
-                Some(node_cmd.rpc.ipcpath.clone())
-            }
-        }
-        _ => None,
-    }
-}
-
 /// Wait for IPC to be ready with retry logic
 pub async fn wait_for_ipc_ready(ipc_path: &str, timeout: Duration) -> Result<(), RetryClientError> {
     let start = Instant::now();
