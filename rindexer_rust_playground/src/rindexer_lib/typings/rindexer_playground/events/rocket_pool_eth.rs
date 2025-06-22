@@ -145,9 +145,9 @@ where
         Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
     {
         let csv = AsyncCsvAppender::new(
-            r"/Users/jackedgson/Development/avara/rindexer/rindexer_rust_playground/generated_csv/RocketPoolETH/rocketpooleth-approval.csv",
+            r"/Users/skanda/Projects/rindexer/cli/../rindexer_rust_playground/generated_csv/RocketPoolETH/rocketpooleth-approval.csv",
         );
-        if !Path::new(r"/Users/jackedgson/Development/avara/rindexer/rindexer_rust_playground/generated_csv/RocketPoolETH/rocketpooleth-approval.csv").exists() {
+        if !Path::new(r"/Users/skanda/Projects/rindexer/cli/../rindexer_rust_playground/generated_csv/RocketPoolETH/rocketpooleth-approval.csv").exists() {
             csv.append_header(vec!["contract_address".into(), "owner".into(), "spender".into(), "value".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()].into())
                 .await
                 .expect("Failed to write CSV header");
@@ -248,9 +248,9 @@ where
         Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
     {
         let csv = AsyncCsvAppender::new(
-            r"/Users/jackedgson/Development/avara/rindexer/rindexer_rust_playground/generated_csv/RocketPoolETH/rocketpooleth-transfer.csv",
+            r"/Users/skanda/Projects/rindexer/cli/../rindexer_rust_playground/generated_csv/RocketPoolETH/rocketpooleth-transfer.csv",
         );
-        if !Path::new(r"/Users/jackedgson/Development/avara/rindexer/rindexer_rust_playground/generated_csv/RocketPoolETH/rocketpooleth-transfer.csv").exists() {
+        if !Path::new(r"/Users/skanda/Projects/rindexer/cli/../rindexer_rust_playground/generated_csv/RocketPoolETH/rocketpooleth-transfer.csv").exists() {
             csv.append_header(vec!["contract_address".into(), "from".into(), "to".into(), "value".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()].into())
                 .await
                 .expect("Failed to write CSV header");
@@ -446,6 +446,7 @@ where
                         .iter()
                         .find(|n| n.name == c.network)
                         .map_or(false, |n| n.disable_logs_bloom_checks.unwrap_or_default()),
+                    state_notifications: None,
                 })
                 .collect(),
             abi: contract_details.abi,

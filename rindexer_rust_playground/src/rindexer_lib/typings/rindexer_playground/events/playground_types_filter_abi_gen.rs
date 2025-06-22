@@ -103,5 +103,6 @@ sol!(
     ],
     "anonymous": false
   }
-]"#
+]
+"#
 );
