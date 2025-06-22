@@ -25,7 +25,6 @@ use crate::{
     },
     is_running,
     provider::ProviderError,
-    reth::types::{ExExTx, RethChannels},
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -43,11 +42,10 @@ pub enum ProcessEventError {
 pub async fn process_event(
     config: EventProcessingConfig,
     block_until_indexed: bool,
-    reth_tx: Option<Arc<ExExTx>>,
 ) -> Result<(), ProcessEventError> {
     debug!("{} - Processing events", config.info_log_name());
 
-    process_event_logs(Arc::new(config), false, block_until_indexed, reth_tx).await?;
+    process_event_logs(Arc::new(config), false, block_until_indexed).await?;
 
     Ok(())
 }
@@ -59,9 +57,8 @@ async fn process_event_logs(
     config: Arc<EventProcessingConfig>,
     force_no_live_indexing: bool,
     block_until_indexed: bool,
-    reth_tx: Option<Arc<ExExTx>>,
 ) -> Result<(), Box<ProviderError>> {
-    let mut logs_stream = fetch_logs_stream(Arc::clone(&config), force_no_live_indexing, reth_tx);
+    let mut logs_stream = fetch_logs_stream(Arc::clone(&config), force_no_live_indexing);
     let mut tasks = Vec::new();
 
     while let Some(result) = logs_stream.next().await {
@@ -93,18 +90,15 @@ pub enum ProcessContractsEventsWithDependenciesError {
 
 pub async fn process_contracts_events_with_dependencies(
     contracts_events_config: Vec<ContractEventsDependenciesConfig>,
-    reth_channels: RethChannels,
 ) -> Result<(), ProcessContractsEventsWithDependenciesError> {
     let mut handles: Vec<JoinHandle<Result<(), ProcessContractEventsWithDependenciesError>>> =
         Vec::new();
 
     for contract_events in contracts_events_config {
-        let reth_channels = reth_channels.clone();
         let handle = tokio::spawn(async move {
             process_contract_events_with_dependencies(
                 contract_events.event_dependencies,
                 Arc::new(contract_events.events_config),
-                reth_channels,
             )
             .await
         });
@@ -150,7 +144,6 @@ pub struct OrderedLiveIndexingDetails {
 async fn process_contract_events_with_dependencies(
     dependencies: EventDependencies,
     events_processing_config: Arc<Vec<Arc<EventProcessingConfig>>>,
-    reth_channels: RethChannels,
 ) -> Result<(), ProcessContractEventsWithDependenciesError> {
     let mut stack = vec![dependencies.tree];
 
@@ -164,7 +157,6 @@ async fn process_contract_events_with_dependencies(
             let event_processing_config = Arc::clone(&events_processing_config);
             let dependency = dependency.clone();
             let live_indexing_events = Arc::clone(&live_indexing_events);
-            let reth_channels = reth_channels.clone();
             let task = tokio::spawn(async move {
                 let event_processing_config = event_processing_config
                     .iter()
@@ -179,13 +171,8 @@ async fn process_contract_events_with_dependencies(
                         dependency.event_name,
                     ))?;
 
-                let reth_tx = reth_channels
-                    .get(&event_processing_config.network_contract().network)
-                    .unwrap()
-                    .clone();
-
                 // forces live indexing off as it has to handle it a bit differently
-                process_event_logs(Arc::clone(event_processing_config), true, true, Some(reth_tx))
+                process_event_logs(Arc::clone(event_processing_config), true, true)
                     .await?;
 
                 if event_processing_config.live_indexing() {

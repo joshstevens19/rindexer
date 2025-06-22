@@ -14,8 +14,6 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{debug, error, info, warn};
 
 use crate::helpers::{halved_block_number, is_relevant_block};
-use crate::reth::fetch_logs::{fetch_historic_logs_exex, start_live_indexing_exex};
-use crate::reth::types::ExExTx;
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
     indexer::IndexingEventProgressStatus,
@@ -31,7 +29,6 @@ pub struct FetchLogsResult {
 pub fn fetch_logs_stream(
     config: Arc<EventProcessingConfig>,
     force_no_live_indexing: bool,
-    reth_tx: Option<Arc<ExExTx>>,
 ) -> impl tokio_stream::Stream<Item = Result<FetchLogsResult, Box<dyn Error + Send>>> + Send + Unpin
 {
     let (tx, rx) = mpsc::unbounded_channel();
@@ -74,8 +71,6 @@ pub fn fetch_logs_stream(
                         snapshot_to_block,
                         &config.info_log_name(),
                         &config.network_contract().network,
-                        reth_tx.clone(),
-                        config.is_reth_exex(),
                     )
                     .await;
 
@@ -132,8 +127,6 @@ pub fn fetch_logs_stream(
                 &config.semaphore(),
                 config.network_contract().disable_logs_bloom_checks,
                 &config.network_contract().network,
-                reth_tx.clone(),
-                config.is_reth_exex(),
             )
             .await;
         }
@@ -157,31 +150,7 @@ async fn fetch_historic_logs_stream(
     snapshot_to_block: U64,
     info_log_name: &str,
     network: &str,
-    reth_tx: Option<Arc<ExExTx>>,
-    is_reth_exex: bool,
 ) -> Option<ProcessHistoricLogsStreamResult> {
-    // Check if we should use ExEx instead of RPC
-    if is_reth_exex && reth_tx.is_some() {
-        info!("Using ExEx for historic logs fetch");
-        
-        // Use ExEx for fetching
-        let result = fetch_historic_logs_exex(
-            reth_tx.unwrap(),
-            tx,
-            topic_id,
-            current_filter.clone(),
-            info_log_name,
-            network,
-        ).await;
-        
-        if result.is_some() {
-            // For ExEx, we processed everything in one go, so return None to exit the loop
-            return None;
-        } else {
-            // If ExEx failed, fall back to RPC
-            warn!("ExEx historic fetch failed, falling back to RPC");
-        }
-    }
     let from_block = current_filter.from_block();
     let to_block = current_filter.to_block();
 
@@ -381,27 +350,7 @@ async fn live_indexing_stream(
     semaphore: &Arc<Semaphore>,
     disable_logs_bloom_checks: bool,
     network: &str,
-    reth_tx: Option<Arc<ExExTx>>,
-    is_reth_exex: bool,
 ) {
-    // Check if we should use ExEx for live indexing
-    if is_reth_exex && reth_tx.is_some() {
-        info!("Using ExEx for live indexing");
-        
-        let from_block = last_seen_block_number + U64::from(1);
-        let _ = start_live_indexing_exex(
-            reth_tx.unwrap(),
-            tx.clone(),
-            from_block,
-            *topic_id,
-            current_filter.clone(),
-            info_log_name.to_string(),
-            network.to_string(),
-        ).await;
-        
-        // ExEx handles its own loop, so we return here
-        return;
-    }
     let mut last_seen_block_number = last_seen_block_number;
     let mut log_response_to_large_to_block: Option<U64> = None;
     let mut last_no_new_block_log_time = Instant::now();

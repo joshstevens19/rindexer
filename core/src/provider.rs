@@ -21,6 +21,7 @@ use alloy::{
             reqwest::{header::HeaderMap, Client, Error as ReqwestError},
             Http,
         },
+        ipc::IpcConnect,
         layers::RetryBackoffLayer,
         RpcError, TransportErrorKind,
     },
@@ -42,6 +43,7 @@ use url::Url;
 
 use crate::helpers::chunk_hashset;
 use crate::manifest::network::{AddressFiltering, BlockPollFrequency};
+use crate::reth::utils::wait_for_ipc_ready;
 use crate::{event::RindexerEventFilter, manifest::core::Manifest};
 
 /// An alias type for a complex alloy Provider
@@ -517,6 +519,37 @@ pub async fn get_chain_id(rpc_url: &str) -> Result<U256, RpcError<TransportError
     Ok(U256::from(call))
 }
 
+pub async fn create_reth_client(
+    ipc_path: &str,
+    chain_id: u64,
+    compute_units_per_second: Option<u64>,
+    max_block_range: Option<U64>,
+    block_poll_frequency: Option<BlockPollFrequency>,
+    address_filtering: Option<AddressFiltering>,
+) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
+    let ipc = IpcConnect::new(ipc_path.to_string());
+    
+    let retry_layer = RetryBackoffLayer::new(5000, 500, compute_units_per_second.unwrap_or(660));
+    let rpc_client = RpcClient::builder().layer(retry_layer).ipc(ipc).await.map_err(|e| {
+        RetryClientError::HttpProviderCantBeCreated(
+            ipc_path.to_string(),
+            format!("Failed to connect to IPC: {}", e)
+        )
+    })?;
+    let provider = ProviderBuilder::new().connect_client(rpc_client);
+
+    Ok(Arc::new(
+        JsonRpcCachedProvider::new(
+            provider,
+            chain_id,
+            block_poll_frequency,
+            max_block_range,
+            address_filtering,
+        )
+        .await,
+    ))
+}
+
 #[derive(Debug)]
 pub struct CreateNetworkProvider {
     pub network_name: String,
@@ -529,16 +562,41 @@ impl CreateNetworkProvider {
         manifest: &Manifest,
     ) -> Result<Vec<CreateNetworkProvider>, RetryClientError> {
         let provider_futures = manifest.networks.iter().map(|network| async move {
-            let provider = create_client(
-                &network.rpc,
-                network.chain_id,
-                network.compute_units_per_second,
-                network.max_block_range,
-                network.block_poll_frequency,
-                manifest.get_custom_headers(),
-                network.get_logs_settings.clone().map(|settings| settings.address_filtering),
-            )
-            .await?;
+            let provider = if network.reth.as_ref().map_or(false, |r| r.enabled) {
+                // Use reth IPC client
+                let ipc_path = network.get_reth_ipc_path()
+                    .ok_or_else(|| RetryClientError::HttpProviderCantBeCreated(
+                        network.name.clone(),
+                        "IPC is disabled or reth is not configured as node command".to_string()
+                    ))?;
+                debug!("Using reth IPC client for network {} at path: {}", network.name, ipc_path);
+                
+                // Wait for IPC to be ready with retry logic
+                wait_for_ipc_ready(&ipc_path, Duration::from_secs(30)).await?;
+                
+                create_reth_client(
+                    &ipc_path,
+                    network.chain_id,
+                    network.compute_units_per_second,
+                    network.max_block_range,
+                    network.block_poll_frequency,
+                    network.get_logs_settings.clone().map(|settings| settings.address_filtering),
+                )
+                .await?
+            } else {
+                // Use standard HTTP client
+                debug!("Using HTTP client for network {} at URL: {}", network.name, network.rpc);
+                create_client(
+                    &network.rpc,
+                    network.chain_id,
+                    network.compute_units_per_second,
+                    network.max_block_range,
+                    network.block_poll_frequency,
+                    manifest.get_custom_headers(),
+                    network.get_logs_settings.clone().map(|settings| settings.address_filtering),
+                )
+                .await?
+            };
 
             Ok::<_, RetryClientError>(CreateNetworkProvider {
                 network_name: network.name.clone(),
@@ -558,6 +616,7 @@ pub fn get_network_provider<'a>(
 ) -> Option<&'a CreateNetworkProvider> {
     providers.iter().find(|item| item.network_name == network)
 }
+
 
 #[cfg(test)]
 mod tests {

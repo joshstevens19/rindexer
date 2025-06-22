@@ -135,7 +135,8 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
 
             // Start Reth nodes for enabled networks
             for network in manifest.reth_enabled_networks() {
-                let reth_cli = network.reth.as_ref().unwrap().to_cli()?;
+                let reth_cli = network.reth.as_ref().unwrap().to_cli()
+                    .map_err(|e| StartRindexerError::RethCliError(Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))))?;
                 info!("Starting Reth node for network: {}", network.name);
                 let reth_tx = start_reth_node_with_exex(reth_cli)?;
                 info!("Started Reth node for network: {}", network.name);
@@ -198,7 +199,6 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     !relationships.is_empty(),
                     indexing_details.registry.complete(),
                     indexing_details.trace_registry.complete(),
-                    &reth_channels,
                 )
                 .await?;
 
@@ -235,7 +235,6 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                                 .registry
                                 .reapply_after_historic(processed_network_contracts),
                             indexing_details.trace_registry.complete(),
-                            &reth_channels,
                         )
                         .await
                         .map_err(StartRindexerError::CouldNotStartIndexing)?;
