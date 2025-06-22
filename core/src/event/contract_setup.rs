@@ -7,7 +7,10 @@ use crate::{
         contract::{Contract, EventInputIndexedFilters},
         native_transfer::{NativeTransfers, TraceProcessingMethod},
     },
-    provider::{get_network_provider, CreateNetworkProvider, JsonRpcCachedProvider},
+    provider::{
+        get_network_provider, get_network_provider_with_notifications, CreateNetworkProvider,
+        JsonRpcCachedProvider,
+    },
     types::single_or_array::StringOrArray,
 };
 use alloy::json_abi::{Event, JsonAbi};
@@ -30,6 +33,13 @@ pub struct NetworkContract {
     pub start_block: Option<U64>,
     pub end_block: Option<U64>,
     pub disable_logs_bloom_checks: bool,
+    pub state_notifications: Option<
+        Arc<
+            tokio::sync::Mutex<
+                tokio::sync::mpsc::UnboundedReceiver<crate::provider::ChainStateNotification>,
+            >,
+        >,
+    >,
 }
 
 impl NetworkContract {
@@ -60,29 +70,32 @@ impl ContractInformation {
     pub fn create(
         project_path: &Path,
         contract: &Contract,
-        network_providers: &[CreateNetworkProvider],
+        network_providers: &mut [CreateNetworkProvider],
         decoder: Decoder,
     ) -> Result<ContractInformation, CreateContractInformationError> {
         let mut details = vec![];
         for c in &contract.details {
-            let provider = get_network_provider(&c.network, network_providers);
+            let provider_info =
+                get_network_provider_with_notifications(&c.network, network_providers);
 
-            match provider {
+            match provider_info {
                 None => {
                     return Err(CreateContractInformationError::CanNotFindNetworkFromProviders(
                         c.network.clone(),
                     ));
                 }
-                Some(provider) => {
+                Some((client, disable_logs_bloom_checks, state_notifications)) => {
                     details.push(NetworkContract {
                         id: generate_random_id(10),
                         network: c.network.clone(),
-                        cached_provider: Arc::clone(&provider.client),
+                        cached_provider: client,
                         decoder: Arc::clone(&decoder),
                         indexing_contract_setup: c.indexing_contract_setup(project_path),
                         start_block: c.start_block,
                         end_block: c.end_block,
-                        disable_logs_bloom_checks: provider.disable_logs_bloom_checks,
+                        disable_logs_bloom_checks,
+                        state_notifications: state_notifications
+                            .map(|rx| Arc::new(tokio::sync::Mutex::new(rx))),
                     });
                 }
             }

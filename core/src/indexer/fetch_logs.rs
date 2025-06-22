@@ -17,8 +17,47 @@ use crate::helpers::{halved_block_number, is_relevant_block};
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
     indexer::IndexingEventProgressStatus,
-    provider::{JsonRpcCachedProvider, ProviderError},
+    provider::{ChainStateNotification, JsonRpcCachedProvider, ProviderError},
 };
+
+fn handle_chain_notification(
+    notification: ChainStateNotification,
+    info_log_name: &str,
+    network: &str,
+) {
+    match notification {
+        ChainStateNotification::Reorged {
+            revert_from_block,
+            revert_to_block,
+            new_from_block,
+            new_to_block,
+            new_tip_hash,
+        } => {
+            warn!(
+                "{}::{} - REORG DETECTED! Need to revert blocks {} to {} and re-index {} to {} (new tip: {})",
+                info_log_name,
+                network,
+                revert_from_block, revert_to_block,
+                new_from_block, new_to_block,
+                new_tip_hash
+            );
+            // TODO: In future PR, move this to reorg.rs and actually handle the reorg
+        }
+        ChainStateNotification::Reverted { from_block, to_block } => {
+            warn!(
+                "{}::{} - CHAIN REVERTED! Blocks {} to {} have been reverted",
+                info_log_name, network, from_block, to_block
+            );
+            // TODO: In future PR, move this to reorg.rs and mark affected logs as removed
+        }
+        ChainStateNotification::Committed { from_block, to_block, tip_hash } => {
+            debug!(
+                "{}::{} - Chain committed: blocks {} to {} (tip: {})",
+                info_log_name, network, from_block, to_block, tip_hash
+            );
+        }
+    }
+}
 
 pub struct FetchLogsResult {
     pub logs: Vec<Log>,
@@ -37,6 +76,9 @@ pub fn fetch_logs_stream(
         let mut current_filter = config.to_event_filter().unwrap();
 
         let snapshot_to_block = current_filter.to_block();
+
+        // Extract the notification receiver if available
+        let notification_rx = config.network_contract().state_notifications.clone();
         let from_block = current_filter.from_block();
 
         // add any max block range limitation before we start processing
@@ -116,6 +158,16 @@ pub fn fetch_logs_stream(
 
         // Live indexing mode
         if config.live_indexing() && !force_no_live_indexing {
+            // Take the notification receiver if available
+            let notification_rx = if let Some(notifications) = notification_rx {
+                match Arc::try_unwrap(notifications) {
+                    Ok(mutex) => Some(mutex.into_inner()),
+                    Err(_) => None,
+                }
+            } else {
+                None
+            };
+
             live_indexing_stream(
                 &config.network_contract().cached_provider,
                 &tx,
@@ -127,6 +179,7 @@ pub fn fetch_logs_stream(
                 &config.semaphore(),
                 config.network_contract().disable_logs_bloom_checks,
                 &config.network_contract().network,
+                notification_rx,
             )
             .await;
         }
@@ -350,6 +403,7 @@ async fn live_indexing_stream(
     semaphore: &Arc<Semaphore>,
     disable_logs_bloom_checks: bool,
     network: &str,
+    mut state_notifications: Option<mpsc::UnboundedReceiver<ChainStateNotification>>,
 ) {
     let mut last_seen_block_number = last_seen_block_number;
     let mut log_response_to_large_to_block: Option<U64> = None;
@@ -359,6 +413,28 @@ async fn live_indexing_stream(
 
     loop {
         let iteration_start = Instant::now();
+
+        // Use tokio::select! to handle both timer and notifications
+        tokio::select! {
+            // Check for chain state notifications
+            notification = async {
+                match &mut state_notifications {
+                    Some(notifications) => notifications.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                if let Some(notification) = notification {
+                    handle_chain_notification(notification, info_log_name, network);
+                    // Process notification immediately by continuing to next iteration
+                    continue;
+                }
+            }
+
+            // Regular timer-based polling
+            _ = tokio::time::sleep(Duration::from_millis(0)) => {
+                // Continue with regular block polling immediately
+            }
+        }
 
         let latest_block = cached_provider.get_latest_block().await;
         match latest_block {

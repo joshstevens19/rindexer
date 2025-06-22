@@ -35,8 +35,7 @@ use crate::{
     },
     manifest::core::Manifest,
     provider::{JsonRpcCachedProvider, ProviderError},
-    public_read_env_value,
-    PostgresClient,
+    public_read_env_value, PostgresClient,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -391,7 +390,6 @@ pub async fn start_indexing_contract_events(
                 processed_up_to: end_block,
             });
 
-
             let event_processing_config = ContractEventProcessingConfig {
                 id: event.id.clone(),
                 project_path: project_path.to_path_buf(),
@@ -501,6 +499,7 @@ pub async fn start_indexing(
     no_live_indexing_forced: bool,
     registry: Arc<EventCallbackRegistry>,
     trace_registry: Arc<TraceCallbackRegistry>,
+    _reth_channels: Option<&mut crate::reth::types::RethChannels>,
 ) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
     let start = Instant::now();
     let database = initialize_database(manifest).await?;

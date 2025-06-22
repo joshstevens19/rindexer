@@ -5,7 +5,7 @@ use serde::de::Visitor;
 use serde::{de, Deserialize, Deserializer, Serialize};
 
 use super::core::{deserialize_option_u64_from_string, serialize_option_u64_as_string};
-use super::reth::RethConfig;
+pub use super::reth::RethConfig;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Network {
@@ -47,10 +47,10 @@ pub struct Network {
 impl Network {
     pub fn get_reth_ipc_path(&self) -> Option<String> {
         use reth::cli::Commands;
-        
+
         let reth = self.reth.as_ref()?;
         let cli = reth.to_cli().ok()?;
-        
+
         match &cli.command {
             Commands::Node(node_cmd) if !node_cmd.rpc.ipcdisable => {
                 Some(node_cmd.rpc.ipcpath.clone())
@@ -59,7 +59,6 @@ impl Network {
         }
     }
 }
-
 
 #[derive(Debug, Serialize, Clone)]
 pub enum AddressFiltering {

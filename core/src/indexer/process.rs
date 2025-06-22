@@ -172,8 +172,7 @@ async fn process_contract_events_with_dependencies(
                     ))?;
 
                 // forces live indexing off as it has to handle it a bit differently
-                process_event_logs(Arc::clone(event_processing_config), true, true)
-                    .await?;
+                process_event_logs(Arc::clone(event_processing_config), true, true).await?;
 
                 if event_processing_config.live_indexing() {
                     let rindexer_event_filter = event_processing_config.to_event_filter()?;

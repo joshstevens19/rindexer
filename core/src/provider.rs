@@ -37,7 +37,7 @@ use std::{
     time::{Duration, Instant},
 };
 use thiserror::Error;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, debug_span, error, Instrument};
 use url::Url;
 
@@ -45,6 +45,9 @@ use crate::helpers::chunk_hashset;
 use crate::manifest::network::{AddressFiltering, BlockPollFrequency};
 use crate::reth::utils::wait_for_ipc_ready;
 use crate::{event::RindexerEventFilter, manifest::core::Manifest};
+
+pub mod notifications;
+pub use notifications::ChainStateNotification;
 
 /// An alias type for a complex alloy Provider
 pub type RindexerProvider = FillProvider<
@@ -528,12 +531,12 @@ pub async fn create_reth_client(
     address_filtering: Option<AddressFiltering>,
 ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
     let ipc = IpcConnect::new(ipc_path.to_string());
-    
+
     let retry_layer = RetryBackoffLayer::new(5000, 500, compute_units_per_second.unwrap_or(660));
     let rpc_client = RpcClient::builder().layer(retry_layer).ipc(ipc).await.map_err(|e| {
         RetryClientError::HttpProviderCantBeCreated(
             ipc_path.to_string(),
-            format!("Failed to connect to IPC: {}", e)
+            format!("Failed to connect to IPC: {}", e),
         )
     })?;
     let provider = ProviderBuilder::new().connect_client(rpc_client);
@@ -555,25 +558,34 @@ pub struct CreateNetworkProvider {
     pub network_name: String,
     pub disable_logs_bloom_checks: bool,
     pub client: Arc<JsonRpcCachedProvider>,
+    pub state_notifications: Option<mpsc::UnboundedReceiver<ChainStateNotification>>,
 }
 
 impl CreateNetworkProvider {
     pub async fn create(
         manifest: &Manifest,
     ) -> Result<Vec<CreateNetworkProvider>, RetryClientError> {
+        Self::create_with_channels(manifest, None).await
+    }
+
+    pub async fn create_with_channels(
+        manifest: &Manifest,
+        reth_channels: Option<&mut crate::reth::types::RethChannels>,
+    ) -> Result<Vec<CreateNetworkProvider>, RetryClientError> {
         let provider_futures = manifest.networks.iter().map(|network| async move {
-            let provider = if network.reth.as_ref().map_or(false, |r| r.enabled) {
+            let provider = if network.reth.as_ref().is_some_and(|r| r.enabled) {
                 // Use reth IPC client
-                let ipc_path = network.get_reth_ipc_path()
-                    .ok_or_else(|| RetryClientError::HttpProviderCantBeCreated(
+                let ipc_path = network.get_reth_ipc_path().ok_or_else(|| {
+                    RetryClientError::HttpProviderCantBeCreated(
                         network.name.clone(),
-                        "IPC is disabled or reth is not configured as node command".to_string()
-                    ))?;
+                        "IPC is disabled or reth is not configured as node command".to_string(),
+                    )
+                })?;
                 debug!("Using reth IPC client for network {} at path: {}", network.name, ipc_path);
-                
+
                 // Wait for IPC to be ready with retry logic
                 wait_for_ipc_ready(&ipc_path, Duration::from_secs(30)).await?;
-                
+
                 create_reth_client(
                     &ipc_path,
                     network.chain_id,
@@ -602,10 +614,34 @@ impl CreateNetworkProvider {
                 network_name: network.name.clone(),
                 disable_logs_bloom_checks: network.disable_logs_bloom_checks.unwrap_or_default(),
                 client: provider,
+                state_notifications: None,
             })
         });
 
-        try_join_all(provider_futures).await
+        let mut providers = try_join_all(provider_futures).await?;
+
+        // Connect reth notification channels if available
+        if let Some(reth_channels) = reth_channels {
+            for provider in &mut providers {
+                if let Some(notification_rx) = reth_channels.take(&provider.network_name) {
+                    debug!(
+                        "Connecting reth notification channel for network: {}",
+                        provider.network_name
+                    );
+                    provider.set_notification_channel(notification_rx);
+                }
+            }
+        }
+
+        Ok(providers)
+    }
+
+    /// Set the notification channel for this provider
+    pub fn set_notification_channel(
+        &mut self,
+        rx: mpsc::UnboundedReceiver<ChainStateNotification>,
+    ) {
+        self.state_notifications = Some(rx);
     }
 }
 
@@ -617,6 +653,23 @@ pub fn get_network_provider<'a>(
     providers.iter().find(|item| item.network_name == network)
 }
 
+/// Get a provider for a specific network and take its notification channel
+pub fn get_network_provider_with_notifications(
+    network: &str,
+    providers: &mut [CreateNetworkProvider],
+) -> Option<(
+    Arc<JsonRpcCachedProvider>,
+    bool,
+    Option<mpsc::UnboundedReceiver<ChainStateNotification>>,
+)> {
+    providers.iter_mut().find(|item| item.network_name == network).map(|provider| {
+        (
+            Arc::clone(&provider.client),
+            provider.disable_logs_bloom_checks,
+            provider.state_notifications.take(),
+        )
+    })
+}
 
 #[cfg(test)]
 mod tests {

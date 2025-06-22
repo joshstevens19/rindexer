@@ -292,7 +292,6 @@ impl EventProcessingConfig {
             Self::FactoryEventProcessing(config) => config.trigger_event(fn_data).await,
         }
     }
-
 }
 
 #[derive(Clone)]
