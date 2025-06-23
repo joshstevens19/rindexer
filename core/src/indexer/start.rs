@@ -1,15 +1,14 @@
-use std::{path::Path, str::FromStr, sync::Arc, time::Duration};
+use std::{path::Path, str::FromStr, sync::Arc};
 
 use alloy::primitives::U64;
-use alloy::transports::{RpcError, TransportErrorKind};
 use futures::future::try_join_all;
 use tokio::{
     join,
     sync::Semaphore,
     task::{JoinError, JoinHandle},
-    time::{sleep, Instant},
+    time::Instant,
 };
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::event::config::{ContractEventProcessingConfig, FactoryEventProcessingConfig};
 use crate::indexer::native_transfer::native_transfer_block_processor;
@@ -22,10 +21,7 @@ use crate::{
     indexer::{
         dependency::ContractEventsDependenciesConfig,
         last_synced::{get_last_synced_block_number, SyncConfig},
-        native_transfer::{
-            native_transfer_block_consumer, native_transfer_block_fetch, EVENT_NAME,
-            NATIVE_TRANSFER_CONTRACT_NAME,
-        },
+        native_transfer::{native_transfer_block_fetch, EVENT_NAME, NATIVE_TRANSFER_CONTRACT_NAME},
         process::{
             process_contracts_events_with_dependencies, process_event,
             ProcessContractsEventsWithDependenciesError, ProcessEventError,

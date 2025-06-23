@@ -6,7 +6,7 @@ use alloy::{
     dyn_abi::{DynSolValue, EventExt},
     json_abi::Event,
     primitives::{keccak256, Address, Bloom, B256, U256, U64},
-    rpc::types::{Block, FilterSet, FilteredParams, Log, ValueOrArray},
+    rpc::types::{FilterSet, FilteredParams, Log, ValueOrArray},
 };
 use tracing::error;
 

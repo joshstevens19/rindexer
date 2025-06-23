@@ -269,7 +269,7 @@ pub async fn native_transfer_block_consumer(
             let has_to_address = tx.to().is_some();
 
             if has_to_address && is_empty_input && !is_value_zero {
-                let to = tx.to().clone().unwrap();
+                let to = tx.to().unwrap();
                 Some(TraceResult::new_native_transfer(
                     tx,
                     ts,
@@ -362,7 +362,7 @@ pub async fn native_transfer_block_consumer_debug(
 
             if is_native_transfer {
                 Some(TraceResult::new_debug_native_transfer(
-                    &action,
+                    action,
                     &trace,
                     network_name,
                     from_block,

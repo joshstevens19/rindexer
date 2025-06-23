@@ -14,7 +14,7 @@ use alloy::{
             trace::parity::{
                 Action, CallAction, CallType, LocalizedTransactionTrace, TransactionTrace,
             },
-            Block, Log,
+            Log,
         },
     },
     transports::{
@@ -419,7 +419,7 @@ impl JsonRpcCachedProvider {
                     // Send the batch request.
                     if let Err(e) = batch.send().await {
                         error!("Failed to send batch request: {:?}", e);
-                        return Err(e.into());
+                        return Err(e);
                     }
 
                     // Await all the individual call futures in the batch.
@@ -475,7 +475,7 @@ impl JsonRpcCachedProvider {
                     // Send the batch request.
                     if let Err(e) = batch.send().await {
                         error!("Failed to send batch request: {:?}", e);
-                        return Err(e.into());
+                        return Err(e);
                     }
 
                     // Await all the individual call futures in the batch.
