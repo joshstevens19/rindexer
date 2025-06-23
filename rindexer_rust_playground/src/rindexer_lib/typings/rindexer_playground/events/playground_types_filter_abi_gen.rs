@@ -1,4 +1,3 @@
-
 use alloy::sol;
 
 sol!(

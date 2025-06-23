@@ -395,7 +395,7 @@ fn build_pub_contract_fn(
     let contract_name = camel_to_snake(contract_name);
 
     Code::new(format!(
-        r#"pub async fn {contract_name}_contract(network: &str, address: Address) -> {abi_gen_name}Instance<Arc<RindexerProvider>> {{
+        r#"pub async fn {contract_name}_contract(network: &str, address: Address) -> {abi_gen_name}Instance<Arc<RindexerProvider>, AnyNetwork> {{
                 {abi_gen_name}::new(
                     address,
                     get_provider_cache_for_network(network).await.get_inner_provider(),
