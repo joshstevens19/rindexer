@@ -6,8 +6,15 @@
 ### Features
 -------------------------------------------------
 
+- Indexing with `eth_getBlockByNumber` for more efficiency (but still retain all debug/trace logic for future options)
+- Add a `Nullable` Numeric256 SQL type
+- Add tx receipt endpoint as useful prep work for raw transaction indexing option
+
 ### Bug fixes
 -------------------------------------------------
+
+- Use correct provider base which is `AnyProvider` that can handle optimism, rollups, and all evm chain style responses.
+- Misc tweaks to optimise how this native transfer fetching is done with batching, and pass rpc provider to allow for better batching in other endpoints
 
 ### Breaking changes
 -------------------------------------------------

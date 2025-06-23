@@ -379,15 +379,6 @@ impl JsonRpcCachedProvider {
     }
 
     /// Fetches blocks in concurrent rpc batches.
-    ///
-    /// # Arguments
-    ///
-    /// * `block_numbers`: A slice of block numbers to fetch.
-    /// * `include_txs`: A boolean indicating whether to include full transaction objects.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing a vector of `AnyRpcBlock` or a `ProviderError`.
     pub async fn get_block_by_number_batch(
         &self,
         block_numbers: &[U64],
@@ -397,15 +388,12 @@ impl JsonRpcCachedProvider {
             return Ok(Vec::new());
         }
 
-        // Create a vector of futures, where each future processes one chunk.
         let futures = block_numbers
             .chunks(RPC_CHUNK_SIZE)
             .map(|chunk| {
-                // Clone the client for each concurrent task. Arc makes this cheap.
                 let client = self.client.clone();
                 let owned_chunk = chunk.to_vec();
 
-                // Spawn a new asynchronous task for each chunk.
                 tokio::spawn(async move {
                     let mut batch = client.new_batch();
                     let mut request_futures = Vec::with_capacity(owned_chunk.len());
@@ -416,13 +404,11 @@ impl JsonRpcCachedProvider {
                         request_futures.push(call)
                     }
 
-                    // Send the batch request.
                     if let Err(e) = batch.send().await {
                         error!("Failed to send batch request: {:?}", e);
                         return Err(e);
                     }
 
-                    // Await all the individual call futures in the batch.
                     try_join_all(request_futures).await
                 })
             })
@@ -448,15 +434,12 @@ impl JsonRpcCachedProvider {
             return Ok(Vec::new());
         }
 
-        // Create a vector of futures, where each future processes one chunk.
         let futures = hashes
             .chunks(RPC_CHUNK_SIZE)
             .map(|chunk| {
-                // Clone the client for each concurrent task. Arc makes this cheap.
                 let client = self.client.clone();
                 let owned_chunk = chunk.to_vec();
 
-                // Spawn a new asynchronous task for each chunk.
                 tokio::spawn(async move {
                     let mut batch = client.new_batch();
                     let mut request_futures = Vec::with_capacity(owned_chunk.len());
@@ -472,13 +455,11 @@ impl JsonRpcCachedProvider {
                         request_futures.push(call)
                     }
 
-                    // Send the batch request.
                     if let Err(e) = batch.send().await {
                         error!("Failed to send batch request: {:?}", e);
                         return Err(e);
                     }
 
-                    // Await all the individual call futures in the batch.
                     try_join_all(request_futures).await
                 })
             })
