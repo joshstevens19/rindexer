@@ -15,11 +15,13 @@ enum StringOrNum {
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Default, Deserialize, Serialize)]
 pub enum TraceProcessingMethod {
-    #[default]
     #[serde(rename = "trace_block")]
     TraceBlock,
     #[serde(rename = "debug_traceBlockByNumber")]
     DebugTraceBlockByNumber,
+    #[default]
+    #[serde(rename = "eth_getBlockByNumber")]
+    EthGetBlockByNumber,
 }
 
 /// Deserialize a number or string into a U64. This is required for the untagged deserialize of

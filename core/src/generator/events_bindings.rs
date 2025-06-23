@@ -366,7 +366,7 @@ fn generate_event_callback_structs_code(
 fn decoder_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &str) -> Code {
     let mut function = String::new();
     function.push_str(&format!(
-        r#"pub async fn decoder_contract(network: &str) -> {abi_gen_name}Instance<Arc<RindexerProvider>> {{"#,
+        r#"pub async fn decoder_contract(network: &str) -> {abi_gen_name}Instance<Arc<RindexerProvider>, AnyNetwork> {{"#,
         abi_gen_name = abi_gen_name
     ));
 

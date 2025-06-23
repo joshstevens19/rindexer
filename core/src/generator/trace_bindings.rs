@@ -350,7 +350,7 @@ fn generate_trace_callback_structs_code(
 fn decoder_contract_fn(contracts_details: Vec<NativeTransferDetails>, abi_gen_name: &str) -> Code {
     let mut function = String::new();
     function.push_str(&format!(
-        r#"pub async fn decoder_contract(network: &str) -> {abi_gen_name}Instance<Arc<RindexerProvider>> {{"#,
+        r#"pub async fn decoder_contract(network: &str) -> {abi_gen_name}Instance<Arc<RindexerProvider>, AnyNetwork> {{"#,
         abi_gen_name = abi_gen_name
     ));
 
@@ -447,6 +447,7 @@ fn generate_trace_bindings_code(
         use std::collections::HashMap;
         use std::pin::Pin;
         use std::path::{{Path, PathBuf}};
+        use alloy::network::AnyNetwork;
         use alloy::primitives::{{Address, Bytes, B256}};
         use alloy::sol_types::{{SolEvent, SolEventInterface, SolType}};
         use rindexer::{{

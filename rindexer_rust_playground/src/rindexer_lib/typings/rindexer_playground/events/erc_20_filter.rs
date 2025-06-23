@@ -15,6 +15,7 @@ use super::super::super::super::typings::networks::get_provider_cache_for_networ
 use super::erc_20_filter_abi_gen::RindexerERC20FilterGen::{
     self, RindexerERC20FilterGenEvents, RindexerERC20FilterGenInstance,
 };
+use alloy::network::AnyNetwork;
 use alloy::primitives::{Address, Bytes, B256};
 use alloy::sol_types::{SolEvent, SolEventInterface, SolType};
 use rindexer::{
@@ -297,7 +298,7 @@ where
 pub async fn erc_20_filter_contract(
     network: &str,
     address: Address,
-) -> RindexerERC20FilterGenInstance<Arc<RindexerProvider>> {
+) -> RindexerERC20FilterGenInstance<Arc<RindexerProvider>, AnyNetwork> {
     RindexerERC20FilterGen::new(
         address,
         get_provider_cache_for_network(network).await.get_inner_provider(),
@@ -306,7 +307,7 @@ pub async fn erc_20_filter_contract(
 
 pub async fn decoder_contract(
     network: &str,
-) -> RindexerERC20FilterGenInstance<Arc<RindexerProvider>> {
+) -> RindexerERC20FilterGenInstance<Arc<RindexerProvider>, AnyNetwork> {
     if network == "ethereum" {
         RindexerERC20FilterGen::new(
             // do not care about address here its decoding makes it easier to handle ValueOrArray

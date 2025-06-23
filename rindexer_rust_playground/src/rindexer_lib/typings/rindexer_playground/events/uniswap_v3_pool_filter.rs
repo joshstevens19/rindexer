@@ -15,6 +15,7 @@ use super::super::super::super::typings::networks::get_provider_cache_for_networ
 use super::uniswap_v3_pool_filter_abi_gen::RindexerUniswapV3PoolFilterGen::{
     self, RindexerUniswapV3PoolFilterGenEvents, RindexerUniswapV3PoolFilterGenInstance,
 };
+use alloy::network::AnyNetwork;
 use alloy::primitives::{Address, Bytes, B256};
 use alloy::sol_types::{SolEvent, SolEventInterface, SolType};
 use rindexer::{
@@ -296,7 +297,7 @@ where
 pub async fn uniswap_v3_pool_filter_contract(
     network: &str,
     address: Address,
-) -> RindexerUniswapV3PoolFilterGenInstance<Arc<RindexerProvider>> {
+) -> RindexerUniswapV3PoolFilterGenInstance<Arc<RindexerProvider>, AnyNetwork> {
     RindexerUniswapV3PoolFilterGen::new(
         address,
         get_provider_cache_for_network(network).await.get_inner_provider(),
@@ -305,7 +306,7 @@ pub async fn uniswap_v3_pool_filter_contract(
 
 pub async fn decoder_contract(
     network: &str,
-) -> RindexerUniswapV3PoolFilterGenInstance<Arc<RindexerProvider>> {
+) -> RindexerUniswapV3PoolFilterGenInstance<Arc<RindexerProvider>, AnyNetwork> {
     if network == "base" {
         RindexerUniswapV3PoolFilterGen::new(
             // do not care about address here its decoding makes it easier to handle ValueOrArray

@@ -30,7 +30,7 @@ fn generate_contract_code(
                             "{contract_path}"
                         );
 
-                        pub async fn {contract_fn_name}_{network_fn_name}_contract() -> {contract_name}{network_suffix}::{contract_name}{network_suffix}Instance<Arc<RindexerProvider>> {{
+                        pub async fn {contract_fn_name}_{network_fn_name}_contract() -> {contract_name}{network_suffix}::{contract_name}{network_suffix}Instance<Arc<RindexerProvider>, AnyNetwork> {{
                             let address: Address = "{contract_address}"
                                 .parse()
                                 .expect("Invalid address");
@@ -58,7 +58,7 @@ fn generate_contract_code(
                             "{contract_path}"
                         );
 
-                        pub fn {contract_fn_name}_contract(address: Address) -> {contract_name}{network_suffix}::{contract_name}{network_suffix}Instance<Arc<RindexerProvider> {{
+                        pub fn {contract_fn_name}_contract(address: Address) -> {contract_name}{network_suffix}::{contract_name}{network_suffix}Instance<Arc<RindexerProvider>, AnyNetwork> {{
                             {contract_name}{network_suffix}::new(address, {network_fn_name}().clone())
                         }}
                     "#,
@@ -87,6 +87,7 @@ fn generate_contracts_code(contracts: &[Contract], networks: &[Network]) -> Code
         
         use super::networks::{{{}}};
         use std::sync::Arc;
+        use alloy::network::AnyNetwork;
         use rindexer::provider::RindexerProvider;
         use alloy::primitives::Address;
         use alloy::sol;

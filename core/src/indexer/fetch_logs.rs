@@ -48,13 +48,15 @@ pub fn fetch_logs_stream(
                 &snapshot_to_block,
                 &max_block_range_limitation,
             ));
-            warn!(
-                "{}::{} - {} - max block range limitation of {} blocks applied - block range indexing will be slower then RPC providers supplying the optimal ranges - https://rindexer.xyz/docs/references/rpc-node-providers#rpc-node-providers",
-                config.info_log_name(),
-                config.network_contract().network,
-                IndexingEventProgressStatus::Syncing.log(),
-                max_block_range_limitation.unwrap()
-            );
+            if random_ratio(1, 50) {
+                warn!(
+                    "{}::{} - {} - max block range limitation of {} blocks applied - block range indexing will be slower then RPC providers supplying the optimal ranges - https://rindexer.xyz/docs/references/rpc-node-providers#rpc-node-providers",
+                    config.info_log_name(),
+                    config.network_contract().network,
+                    IndexingEventProgressStatus::Syncing.log(),
+                    max_block_range_limitation.unwrap()
+                );
+            }
         }
         while current_filter.from_block() <= snapshot_to_block {
             let semaphore_client = Arc::clone(&config.semaphore());
