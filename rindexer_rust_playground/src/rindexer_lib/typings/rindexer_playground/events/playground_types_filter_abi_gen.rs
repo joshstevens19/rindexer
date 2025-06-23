@@ -1,3 +1,4 @@
+
 use alloy::sol;
 
 sol!(
@@ -103,5 +104,6 @@ sol!(
     ],
     "anonymous": false
   }
-]"#
+]
+"#
 );

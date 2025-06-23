@@ -15,7 +15,6 @@ use super::super::super::super::typings::networks::get_provider_cache_for_networ
 use super::rocket_pool_eth_abi_gen::RindexerRocketPoolETHGen::{
     self, RindexerRocketPoolETHGenEvents, RindexerRocketPoolETHGenInstance,
 };
-use alloy::network::AnyNetwork;
 use alloy::primitives::{Address, Bytes, B256};
 use alloy::sol_types::{SolEvent, SolEventInterface, SolType};
 use rindexer::{
@@ -309,7 +308,7 @@ where
 
 pub async fn rocket_pool_eth_contract(
     network: &str,
-) -> RindexerRocketPoolETHGenInstance<Arc<RindexerProvider>, AnyNetwork> {
+) -> RindexerRocketPoolETHGenInstance<Arc<RindexerProvider>> {
     let address: Address =
         "0xae78736cd615f374d3085123a210448e74fc6393".parse().expect("Invalid address");
     RindexerRocketPoolETHGen::new(

@@ -15,7 +15,6 @@ use super::super::super::super::typings::networks::get_provider_cache_for_networ
 use super::playground_types_filter_abi_gen::RindexerPlaygroundTypesFilterGen::{
     self, RindexerPlaygroundTypesFilterGenEvents, RindexerPlaygroundTypesFilterGenInstance,
 };
-use alloy::network::AnyNetwork;
 use alloy::primitives::{Address, Bytes, B256};
 use alloy::sol_types::{SolEvent, SolEventInterface, SolType};
 use rindexer::{
@@ -198,7 +197,7 @@ where
 pub async fn playground_types_filter_contract(
     network: &str,
     address: Address,
-) -> RindexerPlaygroundTypesFilterGenInstance<Arc<RindexerProvider>, AnyNetwork> {
+) -> RindexerPlaygroundTypesFilterGenInstance<Arc<RindexerProvider>> {
     RindexerPlaygroundTypesFilterGen::new(
         address,
         get_provider_cache_for_network(network).await.get_inner_provider(),

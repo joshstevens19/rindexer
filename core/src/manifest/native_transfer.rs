@@ -157,7 +157,7 @@ mod tests {
         assert_eq!(networks[0].network, "ethereum");
         assert_eq!(networks[0].start_block.unwrap().as_limbs()[0], 100);
         assert_eq!(networks[0].end_block.unwrap().as_limbs()[0], 200);
-        assert_eq!(networks[0].method, TraceProcessingMethod::TraceBlock);
+        assert_eq!(networks[0].method, TraceProcessingMethod::EthGetBlockByNumber);
     }
 
     #[test]
@@ -175,7 +175,7 @@ mod tests {
         assert_eq!(networks[0].network, "base");
         assert_eq!(networks[0].start_block.unwrap().as_limbs()[0], 100);
         assert_eq!(networks[0].end_block, None);
-        assert_eq!(networks[0].method, TraceProcessingMethod::TraceBlock);
+        assert_eq!(networks[0].method, TraceProcessingMethod::EthGetBlockByNumber);
     }
 
     #[test]
@@ -209,6 +209,6 @@ mod tests {
 
         assert!(transfer.enabled);
         assert_eq!(networks[3].network, "optimism");
-        assert_eq!(networks[3].method, TraceProcessingMethod::TraceBlock);
+        assert_eq!(networks[3].method, TraceProcessingMethod::EthGetBlockByNumber);
     }
 }

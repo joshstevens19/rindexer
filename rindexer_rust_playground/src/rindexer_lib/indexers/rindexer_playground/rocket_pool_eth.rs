@@ -1,14 +1,13 @@
 #![allow(non_snake_case)]
-use std::{path::PathBuf, sync::Arc};
-
+use super::super::super::typings::rindexer_playground::events::rocket_pool_eth::{
+    no_extensions, ApprovalEvent, RocketPoolETHEventType, TransferEvent,
+};
 use rindexer::{
     event::callback_registry::EventCallbackRegistry, rindexer_error, rindexer_info,
     EthereumSqlTypeWrapper, PgType, RindexerColorize,
 };
-
-use super::super::super::typings::rindexer_playground::events::rocket_pool_eth::{
-    no_extensions, ApprovalEvent, RocketPoolETHEventType, TransferEvent,
-};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 async fn approval_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegistry) {
     RocketPoolETHEventType::Approval(
