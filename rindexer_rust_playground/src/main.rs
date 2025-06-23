@@ -7,6 +7,7 @@ use rindexer::{
 
 use self::rindexer_lib::indexers::all_handlers::register_all_handlers;
 
+#[allow(clippy::all)]
 mod rindexer_lib;
 
 #[tokio::main]
