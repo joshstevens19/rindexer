@@ -781,20 +781,20 @@ pub fn generate_event_handlers(
 
             for item in &abi_name_properties {
                 if item.abi_type == "address" {
-                    let key = format!("result.event_data.{},", item.value);
+                    let key = format!("result.event_data.{},", item.abi_name);
                     csv_data.push_str(&format!(r#"format!("{{:?}}", {}),"#, key));
                 } else if item.abi_type.contains("bytes") {
                     csv_data.push_str(&format!(
                         r#"result.event_data.{}.iter().map(|byte| format!("{{:02x}}", byte)).collect::<Vec<_>>().join(""),"#,
-                        item.value
+                        item.abi_name
                     ));
                 } else if item.abi_type.contains("[]") {
                     csv_data.push_str(&format!(
                         r#"result.event_data.{}.iter().map(ToString::to_string).collect::<Vec<_>>().join(","),"#,
-                        item.value
+                        item.abi_name
                     ));
                 } else {
-                    csv_data.push_str(&format!("result.event_data.{}.to_string(),", item.value));
+                    csv_data.push_str(&format!("result.event_data.{}.to_string(),", item.abi_name));
                 }
             }
 
@@ -868,7 +868,7 @@ pub fn generate_event_handlers(
             );
             data.push_str("EthereumSqlTypeWrapper::U64(result.tx_information.transaction_index),");
             data.push_str("EthereumSqlTypeWrapper::U256(result.tx_information.log_index)");
-            data.push_str("];");
+            data.push_str("]");
 
             postgres_write = format!(
                 r#"

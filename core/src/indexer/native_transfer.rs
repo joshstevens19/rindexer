@@ -160,13 +160,16 @@ pub async fn native_transfer_block_processor(
     // Currently, `eth_getBlockByNumber` is a single JSON-RPC batch, and others are individual
     // network calls so can be treated differently.
     let (initial_concurrent_requests, limit_concurrent_requests) =
-        if is_rcp_batchable { (5, RPC_CHUNK_SIZE) } else { (5, 100) };
+        if is_rcp_batchable { (50, RPC_CHUNK_SIZE) } else { (5, 100) };
 
     let mut concurrent_requests: usize = initial_concurrent_requests;
     let mut buffer: Vec<U64> = Vec::with_capacity(limit_concurrent_requests);
 
     loop {
-        sleep(Duration::from_millis(50)).await;
+        let Ok(permit) = config.semaphore.clone().acquire_owned().await else {
+            sleep(Duration::from_secs(1)).await;
+            continue;
+        };
 
         let recv = block_rx.recv_many(&mut buffer, concurrent_requests).await;
 
@@ -229,6 +232,8 @@ pub async fn native_transfer_block_processor(
                 concurrent_requests = (concurrent_requests + 2).min(limit_concurrent_requests);
             }
         };
+
+        drop(permit)
     }
 }
 

@@ -170,6 +170,9 @@ pub async fn start_indexing_traces(
         return Ok(vec![]);
     }
 
+    let permits = public_read_env_value("NATIVE_PERMITS").unwrap_or("10".to_string());
+    let permits = usize::from_str(&permits).unwrap_or(10);
+    let semaphore = Arc::new(Semaphore::new(permits));
     let mut non_blocking_process_events = Vec::new();
     let trace_progress_state =
         IndexingEventsProgressState::monitor_traces(&trace_registry.events).await;
@@ -213,6 +216,7 @@ pub async fn start_indexing_traces(
                 start_block,
                 end_block,
                 indexer_name: event.indexer_name.clone(),
+                semaphore: semaphore.clone(),
                 contract_name: NATIVE_TRANSFER_CONTRACT_NAME.to_string(),
                 event_name: EVENT_NAME.to_string(),
                 network: network_name.to_string(),

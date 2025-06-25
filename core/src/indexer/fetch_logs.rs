@@ -111,8 +111,9 @@ pub fn fetch_logs_stream(
         }
 
         info!(
-            "{} - {} - Finished indexing historic events",
+            "{}::{} - {} - Finished indexing historic events",
             &config.info_log_name(),
+            &config.network_contract().network,
             IndexingEventProgressStatus::Completed.log()
         );
 

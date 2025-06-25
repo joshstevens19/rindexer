@@ -304,6 +304,7 @@ pub struct TraceProcessingConfig {
     pub contract_name: String,
     pub event_name: String,
     pub network: String,
+    pub semaphore: Arc<Semaphore>,
     pub progress: Arc<Mutex<IndexingEventsProgressState>>,
     pub database: Option<Arc<PostgresClient>>,
     pub csv_details: Option<CsvDetails>,
