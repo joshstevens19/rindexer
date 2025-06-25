@@ -33,6 +33,7 @@ pub struct ContractEventProcessingConfig {
     pub start_block: U64,
     pub end_block: U64,
     pub semaphore: Arc<Semaphore>,
+    pub permits: usize,
     pub registry: Arc<EventCallbackRegistry>,
     pub progress: Arc<Mutex<IndexingEventsProgressState>>,
     pub database: Option<Arc<PostgresClient>>,
@@ -101,6 +102,7 @@ pub struct FactoryEventProcessingConfig {
     pub start_block: U64,
     pub end_block: U64,
     pub semaphore: Arc<Semaphore>,
+    pub permits: usize,
     pub progress: Arc<Mutex<IndexingEventsProgressState>>,
     pub database: Option<Arc<PostgresClient>>,
     pub csv_details: Option<CsvDetails>,
@@ -174,6 +176,13 @@ impl EventProcessingConfig {
         match self {
             Self::ContractEventProcessing(config) => config.topic_id,
             Self::FactoryEventProcessing(config) => config.event.selector(),
+        }
+    }
+
+    pub fn permits(&self) -> usize {
+        match self {
+            Self::ContractEventProcessing(config) => config.permits,
+            Self::FactoryEventProcessing(config) => config.permits,
         }
     }
 
@@ -305,6 +314,7 @@ pub struct TraceProcessingConfig {
     pub event_name: String,
     pub network: String,
     pub semaphore: Arc<Semaphore>,
+    pub permits: usize,
     pub progress: Arc<Mutex<IndexingEventsProgressState>>,
     pub database: Option<Arc<PostgresClient>>,
     pub csv_details: Option<CsvDetails>,

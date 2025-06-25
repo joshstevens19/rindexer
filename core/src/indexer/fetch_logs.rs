@@ -10,7 +10,7 @@ use tokio::{
     sync::{mpsc, Semaphore},
     time::Instant,
 };
-use tokio_stream::wrappers::UnboundedReceiverStream;
+use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, error, info, warn};
 
 use crate::helpers::{halved_block_number, is_relevant_block};
@@ -31,7 +31,16 @@ pub fn fetch_logs_stream(
     force_no_live_indexing: bool,
 ) -> impl tokio_stream::Stream<Item = Result<FetchLogsResult, Box<dyn Error + Send>>> + Send + Unpin
 {
-    let (tx, rx) = mpsc::unbounded_channel();
+    // User can configure `n` permits for concurrent indexing. This can cause problems if the sink
+    // is slower than the producer, and can lead to unbounded memory growth and a system kill.
+    //
+    // To prevent this we can maintain a memory bounding which is some reasonable multiple of `n` to
+    // give the system time to catch up and backpressure the producer. Some of the RPC responses can
+    // be large (many MBs) so this is important.
+    //
+    // It's important to remember this is per network-contract-event.
+    let channel_size = config.permits().min(16);
+    let (tx, rx) = mpsc::channel(channel_size);
 
     tokio::spawn(async move {
         let mut current_filter = config.to_event_filter().unwrap();
@@ -135,7 +144,7 @@ pub fn fetch_logs_stream(
         }
     });
 
-    UnboundedReceiverStream::new(rx)
+    ReceiverStream::new(rx)
 }
 
 struct ProcessHistoricLogsStreamResult {
@@ -146,7 +155,7 @@ struct ProcessHistoricLogsStreamResult {
 #[allow(clippy::too_many_arguments)]
 async fn fetch_historic_logs_stream(
     cached_provider: &Arc<JsonRpcCachedProvider>,
-    tx: &mpsc::UnboundedSender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
+    tx: &mpsc::Sender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
     topic_id: &B256,
     current_filter: RindexerEventFilter,
     max_block_range_limitation: Option<U64>,
@@ -213,7 +222,7 @@ async fn fetch_historic_logs_stream(
             // clone here over the full logs way less overhead
             let last_log = logs.last().cloned();
 
-            if tx.send(Ok(FetchLogsResult { logs, from_block, to_block })).is_err() {
+            if tx.send(Ok(FetchLogsResult { logs, from_block, to_block })).await.is_err() {
                 error!(
                     "{} - {} - {} - Failed to send logs to stream consumer!",
                     IndexingEventProgressStatus::Syncing.log(),
@@ -344,7 +353,7 @@ async fn fetch_historic_logs_stream(
 #[allow(clippy::too_many_arguments)]
 async fn live_indexing_stream(
     cached_provider: &Arc<JsonRpcCachedProvider>,
-    tx: &mpsc::UnboundedSender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
+    tx: &mpsc::Sender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
     last_seen_block_number: U64,
     topic_id: &B256,
     reorg_safe_distance: &U64,
@@ -468,11 +477,14 @@ async fn live_indexing_stream(
                                             let logs_empty = logs.is_empty();
                                             let last_log = logs.last().cloned();
 
-                                            if let Err(e) = tx.send(Ok(FetchLogsResult {
-                                                logs,
-                                                from_block,
-                                                to_block,
-                                            })) {
+                                            if let Err(e) = tx
+                                                .send(Ok(FetchLogsResult {
+                                                    logs,
+                                                    from_block,
+                                                    to_block,
+                                                }))
+                                                .await
+                                            {
                                                 error!(
                                                         "{}::{} - {} - Failed to send logs to stream consumer! Err: {}",
                                                         info_log_name,
