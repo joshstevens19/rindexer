@@ -5568,6 +5568,7 @@ dependencies = [
  "hex",
  "lapin",
  "lazy_static",
+ "log",
  "mini-moka",
  "mockito",
  "native-tls",

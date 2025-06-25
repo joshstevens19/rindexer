@@ -166,8 +166,8 @@ pub async fn native_transfer_block_processor(
     let mut buffer: Vec<U64> = Vec::with_capacity(limit_concurrent_requests);
 
     loop {
-        let Ok(permit) = config.semaphore.clone().acquire_owned().await else {
-            sleep(Duration::from_secs(1)).await;
+        let Ok(_) = config.semaphore.clone().acquire_owned().await else {
+            sleep(Duration::from_millis(500)).await;
             continue;
         };
 
@@ -233,8 +233,6 @@ pub async fn native_transfer_block_processor(
                     ((concurrent_requests * 20) / 10).min(limit_concurrent_requests);
             }
         };
-
-        drop(permit)
     }
 }
 

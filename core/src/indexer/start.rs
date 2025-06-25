@@ -170,8 +170,8 @@ pub async fn start_indexing_traces(
         return Ok(vec![]);
     }
 
-    let permits = public_read_env_value("NATIVE_PERMITS").unwrap_or("10".to_string());
-    let permits = usize::from_str(&permits).unwrap_or(10);
+    let permits = public_read_env_value("NATIVE_PERMITS").unwrap_or("100".to_string());
+    let permits = usize::from_str(&permits).unwrap_or(100);
     let semaphore = Arc::new(Semaphore::new(permits));
     let mut non_blocking_process_events = Vec::new();
     let trace_progress_state =
