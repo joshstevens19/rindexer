@@ -32,6 +32,7 @@ mod abi;
 pub use abi::ABIItem;
 mod chat;
 pub mod event;
+mod notifications;
 pub mod phantom;
 pub mod provider;
 mod start;

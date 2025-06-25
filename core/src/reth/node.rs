@@ -5,7 +5,7 @@ use reth::cli::Cli;
 use reth_node_ethereum::EthereumNode;
 use tokio::sync::broadcast;
 
-use crate::provider::notifications::ChainStateNotification;
+use crate::notifications::ChainStateNotification;
 use crate::reth::exex::RindexerExEx;
 
 /// The stack size for the Reth node thread.

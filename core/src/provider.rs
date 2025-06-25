@@ -37,17 +37,15 @@ use std::{
     time::{Duration, Instant},
 };
 use thiserror::Error;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::Mutex;
 use tracing::{debug, debug_span, error, Instrument};
 use url::Url;
 
 use crate::helpers::chunk_hashset;
 use crate::manifest::network::{AddressFiltering, BlockPollFrequency};
+pub use crate::notifications::ChainStateNotification;
 use crate::reth::utils::wait_for_ipc_ready;
 use crate::{event::RindexerEventFilter, manifest::core::Manifest};
-
-pub mod notifications;
-pub use notifications::ChainStateNotification;
 
 /// An alias type for a complex alloy Provider
 pub type RindexerProvider = FillProvider<
@@ -558,19 +556,11 @@ pub struct CreateNetworkProvider {
     pub network_name: String,
     pub disable_logs_bloom_checks: bool,
     pub client: Arc<JsonRpcCachedProvider>,
-    pub state_notifications: Option<broadcast::Receiver<ChainStateNotification>>,
 }
 
 impl CreateNetworkProvider {
     pub async fn create(
         manifest: &Manifest,
-    ) -> Result<Vec<CreateNetworkProvider>, RetryClientError> {
-        Self::create_with_channels(manifest, None).await
-    }
-
-    pub async fn create_with_channels(
-        manifest: &Manifest,
-        reth_channels: Option<&crate::reth::types::RethChannels>,
     ) -> Result<Vec<CreateNetworkProvider>, RetryClientError> {
         let provider_futures = manifest.networks.iter().map(|network| async move {
             let provider = if network.reth.as_ref().is_some_and(|r| r.enabled) {
@@ -614,36 +604,11 @@ impl CreateNetworkProvider {
                 network_name: network.name.clone(),
                 disable_logs_bloom_checks: network.disable_logs_bloom_checks.unwrap_or_default(),
                 client: provider,
-                state_notifications: None,
             })
         });
 
-        let mut providers = try_join_all(provider_futures).await?;
-
-        // Connect reth notification channels if available
-        if let Some(reth_channels) = reth_channels {
-            for provider in &mut providers {
-                if let Some(notification_rx) = reth_channels.subscribe(&provider.network_name) {
-                    debug!(
-                        "Connecting reth notification channel for network: {}",
-                        provider.network_name
-                    );
-                    provider.set_notification_channel(notification_rx);
-                }
-            }
-        }
-
+        let providers = try_join_all(provider_futures).await?;
         Ok(providers)
-    }
-
-    /// Set the notification channel for this provider
-    pub fn set_notification_channel(&mut self, rx: broadcast::Receiver<ChainStateNotification>) {
-        self.state_notifications = Some(rx);
-    }
-
-    /// Subscribe to notifications from a broadcast sender
-    pub fn subscribe_notifications(&mut self, tx: &broadcast::Sender<ChainStateNotification>) {
-        self.state_notifications = Some(tx.subscribe());
     }
 }
 
@@ -653,21 +618,6 @@ pub fn get_network_provider<'a>(
     providers: &'a [CreateNetworkProvider],
 ) -> Option<&'a CreateNetworkProvider> {
     providers.iter().find(|item| item.network_name == network)
-}
-
-/// Get a provider for a specific network and take its notification channel
-pub fn get_network_provider_with_notifications(
-    network: &str,
-    providers: &mut [CreateNetworkProvider],
-) -> Option<(Arc<JsonRpcCachedProvider>, bool, Option<broadcast::Receiver<ChainStateNotification>>)>
-{
-    providers.iter_mut().find(|item| item.network_name == network).map(|provider| {
-        (
-            Arc::clone(&provider.client),
-            provider.disable_logs_bloom_checks,
-            provider.state_notifications.take(),
-        )
-    })
 }
 
 #[cfg(test)]

@@ -353,7 +353,7 @@ async fn live_indexing_stream(
     semaphore: &Arc<Semaphore>,
     disable_logs_bloom_checks: bool,
     network: &str,
-    mut state_notifications: Option<broadcast::Receiver<ChainStateNotification>>,
+    state_notifications: Option<broadcast::Receiver<ChainStateNotification>>,
 ) {
     let mut last_seen_block_number = last_seen_block_number;
     let mut log_response_to_large_to_block: Option<U64> = None;
@@ -361,30 +361,19 @@ async fn live_indexing_stream(
     let log_no_new_block_interval = Duration::from_secs(300);
     let target_iteration_duration = Duration::from_millis(200);
 
+    // Spawn a separate task to handle notifications
+    if let Some(mut notifications) = state_notifications {
+        let info_log_name = info_log_name.to_string();
+        let network = network.to_string();
+        tokio::spawn(async move {
+            while let Ok(notification) = notifications.recv().await {
+                handle_chain_notification(notification, &info_log_name, &network);
+            }
+        });
+    }
+
     loop {
         let iteration_start = Instant::now();
-
-        // Use tokio::select! to handle both timer and notifications
-        tokio::select! {
-            // Check for chain state notifications
-            notification = async {
-                match &mut state_notifications {
-                    Some(notifications) => notifications.recv().await,
-                    None => std::future::pending::<Result<ChainStateNotification, broadcast::error::RecvError>>().await,
-                }
-            } => {
-                if let Ok(notification) = notification {
-                    handle_chain_notification(notification, info_log_name, network);
-                    // Process notification immediately by continuing to next iteration
-                    continue;
-                }
-            }
-
-            // Regular timer-based polling
-            _ = tokio::time::sleep(Duration::from_millis(0)) => {
-                // Continue with regular block polling immediately
-            }
-        }
 
         let latest_block = cached_provider.get_latest_block().await;
         match latest_block {

@@ -1,5 +1,4 @@
 use alloy::primitives::{BlockNumber, B256};
-use tokio::sync::mpsc;
 
 /// Represents different types of chain state changes
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,15 +34,10 @@ pub enum ChainStateNotification {
     },
 }
 
-/// Trait for components that can provide chain state notifications
-pub trait ChainStateNotifier: Send + Sync {
-    /// Subscribe to chain state notifications
-    fn subscribe(&self) -> mpsc::UnboundedReceiver<ChainStateNotification>;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::mpsc;
 
     #[test]
     fn test_notification_creation() {

@@ -25,6 +25,7 @@ use crate::{
     },
     is_running,
     provider::{ChainStateNotification, ProviderError},
+    reth::types::{RethChannels, RethChannelsExt},
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -42,9 +43,13 @@ pub enum ProcessEventError {
 pub async fn process_event(
     config: EventProcessingConfig,
     block_until_indexed: bool,
-    state_notifications: Option<broadcast::Receiver<ChainStateNotification>>,
+    reth_channels: Option<Arc<RethChannels>>,
 ) -> Result<(), ProcessEventError> {
     debug!("{} - Processing events", config.info_log_name());
+
+    // Subscribe to notifications for this network
+    let network = config.network_contract().network.clone();
+    let state_notifications = reth_channels.subscribe_to_network(&network);
 
     process_event_logs(Arc::new(config), false, block_until_indexed, state_notifications).await?;
 
@@ -175,6 +180,7 @@ async fn process_contract_events_with_dependencies(
                     ))?;
 
                 // forces live indexing off as it has to handle it a bit differently
+                // Note: Dependencies don't support notifications yet
                 process_event_logs(Arc::clone(event_processing_config), true, true, None).await?;
 
                 if event_processing_config.live_indexing() {

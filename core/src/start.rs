@@ -1,4 +1,5 @@
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use tokio::signal;
 use tracing::{error, info};
@@ -145,6 +146,9 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                 reth_channels.insert(network.name.clone(), reth_tx);
             }
 
+            // Wrap in Arc for sharing across threads
+            let reth_channels = reth_channels.into_arc_option();
+
             if manifest.project_type != ProjectType::NoCode {
                 setup_info_logger();
                 info!("Starting rindexer rust project");
@@ -200,7 +204,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     !relationships.is_empty(),
                     indexing_details.registry.complete(),
                     indexing_details.trace_registry.complete(),
-                    Some(&reth_channels),
+                    reth_channels.clone(),
                 )
                 .await?;
 
@@ -237,7 +241,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                                 .registry
                                 .reapply_after_historic(processed_network_contracts),
                             indexing_details.trace_registry.complete(),
-                            Some(&reth_channels),
+                            reth_channels.clone(),
                         )
                         .await
                         .map_err(StartRindexerError::CouldNotStartIndexing)?;

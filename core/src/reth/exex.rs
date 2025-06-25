@@ -1,4 +1,4 @@
-use crate::provider::notifications::ChainStateNotification;
+use crate::notifications::ChainStateNotification;
 use futures::StreamExt;
 use reth_exex::{ExExContext, ExExNotification};
 use reth_node_api::FullNodeComponents;
