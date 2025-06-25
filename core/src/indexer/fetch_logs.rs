@@ -1,5 +1,11 @@
 use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
 
+use crate::helpers::{halved_block_number, is_relevant_block};
+use crate::{
+    event::{config::EventProcessingConfig, RindexerEventFilter},
+    indexer::IndexingEventProgressStatus,
+    provider::{JsonRpcCachedProvider, ProviderError},
+};
 use alloy::{
     primitives::{BlockNumber, B256, U64},
     rpc::types::Log,
@@ -12,12 +18,6 @@ use tokio::{
 };
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, error, info, warn};
-use crate::helpers::{halved_block_number, is_relevant_block};
-use crate::{
-    event::{config::EventProcessingConfig, RindexerEventFilter},
-    indexer::IndexingEventProgressStatus,
-    provider::{JsonRpcCachedProvider, ProviderError},
-};
 
 pub struct FetchLogsResult {
     pub logs: Vec<Log>,
@@ -224,7 +224,7 @@ async fn fetch_historic_logs_stream(
             if tx.capacity() < 1 {
                 warn!(
                     "{}::{} - {} - Log channel is full, indexing tx will backpressure.",
-                    info_log_name
+                    info_log_name,
                     network,
                     IndexingEventProgressStatus::Syncing.log(),
                 );
