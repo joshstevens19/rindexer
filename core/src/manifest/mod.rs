@@ -6,6 +6,7 @@ pub mod graphql;
 pub mod native_transfer;
 pub mod network;
 pub mod phantom;
+pub mod reth;
 pub mod storage;
 pub mod stream;
 pub mod yaml;

@@ -1,8 +1,11 @@
-use super::core::{deserialize_option_u64_from_string, serialize_option_u64_as_string};
+use std::fmt;
+
 use alloy::primitives::U64;
 use serde::de::Visitor;
 use serde::{de, Deserialize, Deserializer, Serialize};
-use std::fmt;
+
+use super::core::{deserialize_option_u64_from_string, serialize_option_u64_as_string};
+pub use super::reth::RethConfig;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Network {
@@ -35,6 +38,26 @@ pub struct Network {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disable_logs_bloom_checks: Option<bool>,
+
+    /// Reth configuration for this network
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reth: Option<RethConfig>,
+}
+
+impl Network {
+    pub fn get_reth_ipc_path(&self) -> Option<String> {
+        use reth::cli::Commands;
+
+        let reth = self.reth.as_ref()?;
+        let cli = reth.to_cli().ok()?;
+
+        match &cli.command {
+            Commands::Node(node_cmd) if !node_cmd.rpc.ipcdisable => {
+                Some(node_cmd.rpc.ipcpath.clone())
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -210,5 +233,62 @@ mod tests {
             network.block_poll_frequency,
             Some(BlockPollFrequency::PollRateMs { millis: 100 })
         );
+    }
+
+    #[test]
+    fn test_network_with_reth_config() {
+        let network: Network = serde_yaml::from_str(
+            r#"
+            name: ethereum
+            chain_id: 1
+            rpc: https://mainnet.gateway.tenderly.co
+            reth:
+                enabled: true
+                cli_args: ["--ipcpath", "/custom/reth.ipc"]
+            "#,
+        )
+        .unwrap();
+
+        assert!(network.reth.is_some());
+        let reth = network.reth.as_ref().unwrap();
+        assert!(reth.enabled);
+        assert_eq!(reth.cli_args, vec!["--ipcpath", "/custom/reth.ipc"]);
+
+        // Test get_reth_ipc_path
+        let ipc_path = network.get_reth_ipc_path();
+        assert_eq!(ipc_path, Some("/custom/reth.ipc".to_string()));
+    }
+
+    #[test]
+    fn test_network_reth_ipc_disabled() {
+        let network: Network = serde_yaml::from_str(
+            r#"
+            name: ethereum
+            chain_id: 1
+            rpc: https://mainnet.gateway.tenderly.co
+            reth:
+                enabled: true
+                cli_args: ["--ipcdisable"]
+            "#,
+        )
+        .unwrap();
+
+        // Should return None when IPC is disabled
+        assert_eq!(network.get_reth_ipc_path(), None);
+    }
+
+    #[test]
+    fn test_network_no_reth_config() {
+        let network: Network = serde_yaml::from_str(
+            r#"
+            name: ethereum
+            chain_id: 1
+            rpc: https://mainnet.gateway.tenderly.co
+            "#,
+        )
+        .unwrap();
+
+        assert!(network.reth.is_none());
+        assert_eq!(network.get_reth_ipc_path(), None);
     }
 }

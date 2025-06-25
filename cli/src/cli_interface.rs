@@ -44,6 +44,16 @@ pub enum Commands {
         /// optional - The path to create the project in, default will be where the command is run.
         #[clap(long, short)]
         path: Option<String>,
+
+        /// optional - Enable Reth support
+        /// Example: rindexer new no-code --reth -- --data-dir /path --http true
+        #[clap(long, short)]
+        reth: bool,
+
+        /// Additional arguments to pass to reth when --reth is enabled
+        /// These should be provided after -- e.g. -- --data-dir /path --http true
+        #[clap(last = true)]
+        reth_args: Vec<String>,
     },
     /// Start various services like indexers, GraphQL APIs or both together
     ///

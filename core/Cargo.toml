@@ -69,12 +69,56 @@ tracing-subscriber = { version = "0.3", features = [
 ] }
 mini-moka = "0.10.3"
 url = "2.5.0"
+eyre = { version = "0.6.10" }
 
 # build
 jemallocator = { version = "0.6.0", package = "tikv-jemallocator", optional = true }
 jemalloc-ctl = { version = "0.6.0", package = "tikv-jemalloc-ctl", optional = true }
 foundry-compilers = "0.17.0"
 alloy-chains = "0.2.2"
+
+# reth
+reth = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
+reth-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", features = ["full"] }
+reth-chainspec = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
+reth-ethereum-cli = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
+reth-discv5 = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
+reth-execution-errors = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
+reth-execution-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
+reth-exex = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", features = ["serde"] }
+reth-eth-wire = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
+reth-evm = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
+reth-network = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", features = ["test-utils"] }
+reth-network-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
+reth-network-peers = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
+reth-node-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
+reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
+reth-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
+reth-provider = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
+reth-revm = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
+reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
+reth-tracing = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
+reth-stages-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
+
+# alloy
+alloy-genesis = { version = "0.15.6", default-features = false }
+alloy-consensus = { version = "0.15.6", default-features = false }
+alloy-rlp = "0.3.4"
+alloy-rpc-types = { version = "0.15.6", features = [
+    "eth",
+], default-features = false }
+alloy-signer = { version = "0.15.6", default-features = false }
+alloy-signer-local = { version = "0.15.6", default-features = false }
+
+alloy-primitives = { version = "1.0", default-features = false }
+alloy-sol-types  = { version = "1.0", features = ["json"] }
+foundry-blob-explorers = "0.13"
+
+discv5 = "0.9"
+enr = "0.13"
+secp256k1 = { version = "0.30", default-features = false, features = [
+ "global-context", "std", "recovery",
+] }
 
 [target.'cfg(not(windows))'.dependencies]
 rdkafka = { version = "0.37.0", features = ["tokio"] }

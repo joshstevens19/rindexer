@@ -7,7 +7,7 @@ use alloy::{
 use rand::random_ratio;
 use regex::Regex;
 use tokio::{
-    sync::{mpsc, Semaphore},
+    sync::{broadcast, mpsc, Semaphore},
     time::Instant,
 };
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -16,8 +16,8 @@ use tracing::{debug, error, info, warn};
 use crate::helpers::{halved_block_number, is_relevant_block};
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
-    indexer::IndexingEventProgressStatus,
-    provider::{JsonRpcCachedProvider, ProviderError},
+    indexer::{reorg::handle_chain_notification, IndexingEventProgressStatus},
+    provider::{ChainStateNotification, JsonRpcCachedProvider, ProviderError},
 };
 
 pub struct FetchLogsResult {
@@ -29,6 +29,7 @@ pub struct FetchLogsResult {
 pub fn fetch_logs_stream(
     config: Arc<EventProcessingConfig>,
     force_no_live_indexing: bool,
+    state_notifications: Option<broadcast::Receiver<ChainStateNotification>>,
 ) -> impl tokio_stream::Stream<Item = Result<FetchLogsResult, Box<dyn Error + Send>>> + Send + Unpin
 {
     let (tx, rx) = mpsc::unbounded_channel();
@@ -37,6 +38,7 @@ pub fn fetch_logs_stream(
         let mut current_filter = config.to_event_filter().unwrap();
 
         let snapshot_to_block = current_filter.to_block();
+
         let from_block = current_filter.from_block();
 
         // add any max block range limitation before we start processing
@@ -127,6 +129,7 @@ pub fn fetch_logs_stream(
                 &config.semaphore(),
                 config.network_contract().disable_logs_bloom_checks,
                 &config.network_contract().network,
+                state_notifications,
             )
             .await;
         }
@@ -350,12 +353,24 @@ async fn live_indexing_stream(
     semaphore: &Arc<Semaphore>,
     disable_logs_bloom_checks: bool,
     network: &str,
+    state_notifications: Option<broadcast::Receiver<ChainStateNotification>>,
 ) {
     let mut last_seen_block_number = last_seen_block_number;
     let mut log_response_to_large_to_block: Option<U64> = None;
     let mut last_no_new_block_log_time = Instant::now();
     let log_no_new_block_interval = Duration::from_secs(300);
     let target_iteration_duration = Duration::from_millis(200);
+
+    // Spawn a separate task to handle notifications
+    if let Some(mut notifications) = state_notifications {
+        let info_log_name = info_log_name.to_string();
+        let network = network.to_string();
+        tokio::spawn(async move {
+            while let Ok(notification) = notifications.recv().await {
+                handle_chain_notification(notification, &info_log_name, &network);
+            }
+        });
+    }
 
     loop {
         let iteration_start = Instant::now();
