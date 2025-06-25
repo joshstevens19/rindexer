@@ -160,7 +160,7 @@ pub async fn native_transfer_block_processor(
     // Currently, `eth_getBlockByNumber` is a single JSON-RPC batch, and others are individual
     // network calls so can be treated differently.
     let (initial_concurrent_requests, limit_concurrent_requests) =
-        if is_rcp_batchable { (50, RPC_CHUNK_SIZE) } else { (5, 100) };
+        if is_rcp_batchable { (100, RPC_CHUNK_SIZE) } else { (5, 100) };
 
     let mut concurrent_requests: usize = initial_concurrent_requests;
     let mut buffer: Vec<U64> = Vec::with_capacity(limit_concurrent_requests);
@@ -228,8 +228,9 @@ pub async fn native_transfer_block_processor(
             // A random chance of increasing the request count helps us not overload
             // the ratelimit too rapidly across multi-network trace indexing and have a
             // slow ramp-up time (if rpc batching isn't available)
-            if rand::random_bool(0.05) {
-                concurrent_requests = (concurrent_requests + 2).min(limit_concurrent_requests);
+            if rand::random_bool(0.1) {
+                concurrent_requests =
+                    ((concurrent_requests * 20) / 10).min(limit_concurrent_requests);
             }
         };
 
