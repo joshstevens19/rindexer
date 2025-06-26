@@ -30,16 +30,14 @@ pub fn fetch_logs_stream(
     force_no_live_indexing: bool,
 ) -> impl tokio_stream::Stream<Item = Result<FetchLogsResult, Box<dyn Error + Send>>> + Send + Unpin
 {
-    // User can configure `n` permits for concurrent indexing. This can cause problems if the sink
-    // is slower than the producer, and can lead to unbounded memory growth and a system kill.
+    // If the sink is slower than the producer it can lead to unbounded memory growth and
+    // a system OOM kill.
     //
-    // To prevent this we can maintain a memory bounding which is some reasonable multiple of `n` to
-    // give the system time to catch up and backpressure the producer. Some of the RPC responses can
-    // be large (many MBs) so this is important.
+    // To prevent this, we maintain a memory bound to give the system time to catch up and
+    // backpressure the producer. Many RPC responses are large, so this is important.
     //
-    // It's important to remember this is per network-contract-event.
-    // let channel_size = config.permits().clamp(4, 16);
-    let (tx, rx) = mpsc::channel(8);
+    // This is per network contract-event, so it should be relatively small.
+    let (tx, rx) = mpsc::channel(2);
 
     tokio::spawn(async move {
         let mut current_filter = config.to_event_filter().unwrap();
@@ -67,19 +65,6 @@ pub fn fetch_logs_stream(
             }
         }
         while current_filter.from_block() <= snapshot_to_block {
-            // let semaphore_client = Arc::clone(&config.semaphore());
-            // if semaphore_client.available_permits() == 0 {
-            //     warn!(
-            //         "{}::{} - {} Waiting on available concurrency permit",
-            //         config.info_log_name(),
-            //         config.network_contract().network,
-            //         IndexingEventProgressStatus::Syncing.log()
-            //     );
-            // }
-            // let permit = semaphore_client.acquire_owned().await;
-
-            // match permit {
-            //     Ok(permit) => {
             let result = fetch_historic_logs_stream(
                 &config.network_contract().cached_provider,
                 &tx,
@@ -91,8 +76,6 @@ pub fn fetch_logs_stream(
                 &config.network_contract().network,
             )
             .await;
-
-            // drop(permit);
 
             // This check can be very noisy. We want to only sample this warning to notify
             // the user, rather than warn on every log fetch.
@@ -115,17 +98,6 @@ pub fn fetch_logs_stream(
             } else {
                 break;
             }
-            // }
-            // Err(e) => {
-            //     error!(
-            //         "{} - {} - Semaphore error: {}",
-            //         &config.info_log_name(),
-            //         IndexingEventProgressStatus::Syncing.log(),
-            //         e
-            //     );
-            //     continue;
-            // }
-            // }
         }
 
         info!(
@@ -387,7 +359,7 @@ async fn live_indexing_stream(
     reorg_safe_distance: &U64,
     mut current_filter: RindexerEventFilter,
     info_log_name: &str,
-    semaphore: &Arc<Semaphore>,
+    _semaphore: &Arc<Semaphore>,
     disable_logs_bloom_checks: bool,
     network: &str,
 ) {
@@ -475,59 +447,63 @@ async fn live_indexing_stream(
                                     current_filter
                                 );
 
-                                let semaphore_client = Arc::clone(semaphore);
-                                let permit = semaphore_client.acquire_owned().await;
+                                match cached_provider.get_logs(&current_filter).await {
+                                    Ok(logs) => {
+                                        debug!(
+                                            "{} - {} - Live topic_id {}, Logs: {} from {} to {}",
+                                            info_log_name,
+                                            IndexingEventProgressStatus::Live.log(),
+                                            topic_id,
+                                            logs.len(),
+                                            from_block,
+                                            to_block
+                                        );
 
-                                if let Ok(permit) = permit {
-                                    match cached_provider.get_logs(&current_filter).await {
-                                        Ok(logs) => {
-                                            debug!(
-                                                    "{} - {} - Live topic_id {}, Logs: {} from {} to {}",
-                                                    info_log_name,
-                                                    IndexingEventProgressStatus::Live.log(),
-                                                    topic_id,
-                                                    logs.len(),
-                                                    from_block,
-                                                    to_block
-                                                );
+                                        debug!(
+                                            "{} - {} - Fetched {} event logs - blocks: {} - {}",
+                                            info_log_name,
+                                            IndexingEventProgressStatus::Live.log(),
+                                            logs.len(),
+                                            from_block,
+                                            to_block
+                                        );
 
-                                            debug!(
-                                                "{} - {} - Fetched {} event logs - blocks: {} - {}",
+                                        last_seen_block_number = to_block;
+
+                                        let logs_empty = logs.is_empty();
+                                        let last_log = logs.last().cloned();
+
+                                        if tx.capacity() == 0 {
+                                            warn!(
+                                                "{}::{} - {} - Log channel is full, live indexing producer will backpressure.",
                                                 info_log_name,
+                                                network,
                                                 IndexingEventProgressStatus::Live.log(),
-                                                logs.len(),
-                                                from_block,
-                                                to_block
                                             );
+                                        }
 
-                                            last_seen_block_number = to_block;
+                                        if let Err(e) = tx
+                                            .send(Ok(FetchLogsResult {
+                                                logs,
+                                                from_block,
+                                                to_block,
+                                            }))
+                                            .await
+                                        {
+                                            error!(
+                                                "{}::{} - {} - Failed to send logs to stream consumer! Err: {}",
+                                                info_log_name,
+                                                network,
+                                                IndexingEventProgressStatus::Live.log(),
+                                                e
+                                            );
+                                            break;
+                                        }
 
-                                            let logs_empty = logs.is_empty();
-                                            let last_log = logs.last().cloned();
-
-                                            if let Err(e) = tx
-                                                .send(Ok(FetchLogsResult {
-                                                    logs,
-                                                    from_block,
-                                                    to_block,
-                                                }))
-                                                .await
-                                            {
-                                                error!(
-                                                        "{}::{} - {} - Failed to send logs to stream consumer! Err: {}",
-                                                        info_log_name,
-                                                        network,
-                                                        IndexingEventProgressStatus::Live.log(),
-                                                        e
-                                                    );
-                                                drop(permit);
-                                                break;
-                                            }
-
-                                            if logs_empty {
-                                                current_filter = current_filter
-                                                    .set_from_block(to_block + U64::from(1));
-                                                debug!(
+                                        if logs_empty {
+                                            current_filter = current_filter
+                                                .set_from_block(to_block + U64::from(1));
+                                            debug!(
                                                     "{}::{} - {} - No events found between blocks {} - {}",
                                                     info_log_name,
                                                     network,
@@ -535,28 +511,25 @@ async fn live_indexing_stream(
                                                     from_block,
                                                     to_block,
                                                 );
-                                            } else if let Some(last_log) = last_log {
-                                                if let Some(last_log_block_number) =
-                                                    last_log.block_number
-                                                {
-                                                    current_filter = current_filter.set_from_block(
-                                                        U64::from(last_log_block_number + 1),
-                                                    );
-                                                } else {
-                                                    error!("Failed to get last log block number the provider returned null (should never happen) - try again in 200ms");
-                                                }
-                                            }
-
-                                            log_response_to_large_to_block = None;
-
-                                            drop(permit);
-                                        }
-                                        Err(err) => {
-                                            if let Some(retry_result) =
-                                                retry_with_block_range(&err, from_block, to_block)
-                                                    .await
+                                        } else if let Some(last_log) = last_log {
+                                            if let Some(last_log_block_number) =
+                                                last_log.block_number
                                             {
-                                                debug!(
+                                                current_filter = current_filter.set_from_block(
+                                                    U64::from(last_log_block_number + 1),
+                                                );
+                                            } else {
+                                                error!("Failed to get last log block number the provider returned null (should never happen) - try again in 200ms");
+                                            }
+                                        }
+
+                                        log_response_to_large_to_block = None;
+                                    }
+                                    Err(err) => {
+                                        if let Some(retry_result) =
+                                            retry_with_block_range(&err, from_block, to_block).await
+                                        {
+                                            debug!(
                                                     "{}::{} - {} - Overfetched from {} to {} - shrinking to block range: from {} to {}",
                                                     info_log_name,
                                                     network,
@@ -567,13 +540,12 @@ async fn live_indexing_stream(
                                                     retry_result.to
                                                     );
 
-                                                log_response_to_large_to_block =
-                                                    Some(retry_result.to);
-                                            } else {
-                                                let halved_to_block =
-                                                    halved_block_number(to_block, from_block);
+                                            log_response_to_large_to_block = Some(retry_result.to);
+                                        } else {
+                                            let halved_to_block =
+                                                halved_block_number(to_block, from_block);
 
-                                                error!(
+                                            error!(
                                                     "{}::{} - {} - Unexpected error fetching logs in range {} - {}. Retry fetching {} - {}: {:?}",
                                                     info_log_name,
                                                     network,
@@ -585,11 +557,7 @@ async fn live_indexing_stream(
                                                     err
                                                 );
 
-                                                log_response_to_large_to_block =
-                                                    Some(halved_to_block);
-                                            }
-
-                                            drop(permit);
+                                            log_response_to_large_to_block = Some(halved_to_block);
                                         }
                                     }
                                 }
