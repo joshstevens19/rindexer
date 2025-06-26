@@ -38,7 +38,7 @@ pub fn fetch_logs_stream(
     // be large (many MBs) so this is important.
     //
     // It's important to remember this is per network-contract-event.
-    let channel_size = config.permits().max(16);
+    let channel_size = config.permits().min(16).max(4);
     let (tx, rx) = mpsc::channel(channel_size);
 
     tokio::spawn(async move {
@@ -221,7 +221,7 @@ async fn fetch_historic_logs_stream(
             // clone here over the full logs way less overhead
             let last_log = logs.last().cloned();
 
-            if tx.capacity() < 1 {
+            if tx.capacity() == 0 {
                 warn!(
                     "{}::{} - {} - Log channel is full, indexing tx will backpressure.",
                     info_log_name,
