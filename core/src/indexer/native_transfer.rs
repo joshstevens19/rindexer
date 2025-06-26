@@ -288,10 +288,8 @@ pub async fn native_transfer_block_consumer(
         })
         .collect::<Vec<_>>();
 
-    if native_transfers.is_empty() {
-        return Ok(());
-    }
-
+    // Important that we call this for every event even if there are no logs.
+    // This is because we need to sync the last seen block number still.
     indexing_event_processing();
     config.trigger_event(native_transfers.clone()).await;
     evm_trace_update_progress_and_last_synced_task(

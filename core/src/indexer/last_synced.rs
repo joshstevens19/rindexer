@@ -1,6 +1,7 @@
 use std::{path::Path, str::FromStr, sync::Arc};
 
 use alloy::primitives::U64;
+use log::info;
 use rust_decimal::Decimal;
 use tokio::{
     fs,
@@ -238,6 +239,7 @@ pub fn update_progress_and_last_synced_task(
                 "UPDATE rindexer_internal.{} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block",
                 table_name
             );
+
             let result = database
                 .execute(
                     &query,
@@ -246,6 +248,31 @@ pub fn update_progress_and_last_synced_task(
                 .await;
 
             if let Err(e) = result {
+                error!("Error updating last synced block: {:?}", e);
+            }
+
+            let latest = config
+                .network_contract()
+                .cached_provider
+                .get_latest_block()
+                .await
+                .ok()
+                .flatten()
+                .map(|b| b.header.number)
+                .unwrap_or(0); // This should basically never happen and should self-recover
+
+            let latest_query = "UPDATE rindexer_internal.latest_block SET block = $1 WHERE network = $2 AND $1 > block".to_string();
+            let latest_result = database
+                .execute(
+                    &latest_query,
+                    &[
+                        &EthereumSqlTypeWrapper::U64(U64::from(latest)),
+                        &config.network_contract().network,
+                    ],
+                )
+                .await;
+
+            if let Err(e) = latest_result {
                 error!("Error updating last synced block: {:?}", e);
             }
         } else if let Some(csv_details) = &config.csv_details() {

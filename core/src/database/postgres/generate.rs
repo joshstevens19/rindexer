@@ -151,7 +151,16 @@ fn generate_internal_event_table_sql(
             )
         }).collect::<Vec<_>>().join("\n");
 
-        format!("{}\n{}", create_table_query, insert_queries)
+        let create_latest_block_query = r#"CREATE TABLE IF NOT EXISTS rindexer_internal.latest_block ("network" TEXT PRIMARY KEY, "block" NUMERIC);"#.to_string();
+
+        let latest_block_insert_queries = networks.iter().map(|network| {
+            format!(
+                r#"INSERT INTO rindexer_internal.latest_block ("network", "block") VALUES ('{}', 0) ON CONFLICT ("network") DO NOTHING;"#,
+                network
+            )
+        }).collect::<Vec<_>>().join("\n");
+
+        format!("{}\n{}\n{}\n{}", create_table_query, insert_queries, create_latest_block_query, latest_block_insert_queries)
     }).collect::<Vec<_>>().join("\n")
 }
 

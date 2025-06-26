@@ -1,8 +1,8 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
-
 use alloy::primitives::{B256, U64};
 use async_std::prelude::StreamExt;
 use futures::future::join_all;
+use std::ops::Deref;
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{
     sync::{Mutex, MutexGuard},
     task::{JoinError, JoinHandle},
@@ -561,19 +561,17 @@ async fn handle_logs_result(
                 tokio::time::sleep(Duration::from_millis(1000)).await;
             }
 
-            if !fn_data.is_empty() {
-                return if config.index_event_in_order() {
+            // Important that we call this for every event even if there are no logs.
+            // This is because we need to sync the last seen block
+            if config.index_event_in_order() {
+                trigger_event(config, fn_data, result.to_block).await;
+                Ok(tokio::spawn(async {}))
+            } else {
+                let task = tokio::spawn(async move {
                     trigger_event(config, fn_data, result.to_block).await;
-                    Ok(tokio::spawn(async {}))
-                } else {
-                    let task = tokio::spawn(async move {
-                        trigger_event(config, fn_data, result.to_block).await;
-                    });
-                    Ok(task)
-                };
+                });
+                Ok(task)
             }
-
-            Ok(tokio::spawn(async {})) // Return a completed task
         }
         Err(e) => {
             error!(

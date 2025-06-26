@@ -602,9 +602,10 @@ pub async fn create_client(
         RetryClientError::HttpProviderCantBeCreated(rpc_url.to_string(), e.to_string())
     })?;
 
+    // Most log responses return in this timeout, any others retry on failure with smaller range
     let client_with_auth = Client::builder()
         .default_headers(custom_headers)
-        .timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(90))
         .build()?;
 
     let http = Http::with_client(client_with_auth, rpc_url);

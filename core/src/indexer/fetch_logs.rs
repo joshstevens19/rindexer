@@ -38,8 +38,8 @@ pub fn fetch_logs_stream(
     // be large (many MBs) so this is important.
     //
     // It's important to remember this is per network-contract-event.
-    let channel_size = config.permits().min(16).max(4);
-    let (tx, rx) = mpsc::channel(channel_size);
+    // let channel_size = config.permits().clamp(4, 16);
+    let (tx, rx) = mpsc::channel(8);
 
     tokio::spawn(async move {
         let mut current_filter = config.to_event_filter().unwrap();
@@ -56,7 +56,7 @@ pub fn fetch_logs_stream(
                 &snapshot_to_block,
                 &max_block_range_limitation,
             ));
-            if random_ratio(1, 50) {
+            if random_ratio(1, 20) {
                 warn!(
                     "{}::{} - {} - max block range limitation of {} blocks applied - block range indexing will be slower then RPC providers supplying the optimal ranges - https://rindexer.xyz/docs/references/rpc-node-providers#rpc-node-providers",
                     config.info_log_name(),
@@ -67,55 +67,65 @@ pub fn fetch_logs_stream(
             }
         }
         while current_filter.from_block() <= snapshot_to_block {
-            let semaphore_client = Arc::clone(&config.semaphore());
-            let permit = semaphore_client.acquire_owned().await;
+            // let semaphore_client = Arc::clone(&config.semaphore());
+            // if semaphore_client.available_permits() == 0 {
+            //     warn!(
+            //         "{}::{} - {} Waiting on available concurrency permit",
+            //         config.info_log_name(),
+            //         config.network_contract().network,
+            //         IndexingEventProgressStatus::Syncing.log()
+            //     );
+            // }
+            // let permit = semaphore_client.acquire_owned().await;
 
-            match permit {
-                Ok(permit) => {
-                    let result = fetch_historic_logs_stream(
-                        &config.network_contract().cached_provider,
-                        &tx,
-                        &config.topic_id(),
-                        current_filter.clone(),
-                        max_block_range_limitation,
-                        snapshot_to_block,
-                        &config.info_log_name(),
-                        &config.network_contract().network,
-                    )
-                    .await;
+            // match permit {
+            //     Ok(permit) => {
+            let result = fetch_historic_logs_stream(
+                &config.network_contract().cached_provider,
+                &tx,
+                &config.topic_id(),
+                current_filter.clone(),
+                max_block_range_limitation,
+                snapshot_to_block,
+                &config.info_log_name(),
+                &config.network_contract().network,
+            )
+            .await;
 
-                    drop(permit);
+            // drop(permit);
 
-                    // This check can be very noisy. We want to only sample this warning to notify
-                    // the user, rather than warn on every log fetch.
-                    if let Some(range) = max_block_range_limitation {
-                        if random_ratio(1, 50) {
-                            warn!(
-                                "{}::{} - RPC PROVIDER IS SLOW - Slow indexing mode enabled, max block range limitation: {} blocks - we advise using a faster provider who can predict the next block ranges.",
-                                &config.info_log_name(),
-                                &config.network_contract().network,
-                                range
-                            );
-                        }
+            // This check can be very noisy. We want to only sample this warning to notify
+            // the user, rather than warn on every log fetch.
+            if let Some(range) = max_block_range_limitation {
+                if range.to::<u64>() <= 5000 {
+                    if random_ratio(1, 20) {
+                        warn!(
+                            "{}::{} - RPC PROVIDER IS SLOW - Slow indexing mode enabled, max block range limitation: {} blocks - we advise using a faster provider who can predict the next block ranges.",
+                            &config.info_log_name(),
+                            &config.network_contract().network,
+                            range
+                        );
                     }
-
-                    if let Some(result) = result {
-                        current_filter = result.next;
-                        max_block_range_limitation = result.max_block_range_limitation;
-                    } else {
-                        break;
-                    }
-                }
-                Err(e) => {
-                    error!(
-                        "{} - {} - Semaphore error: {}",
-                        &config.info_log_name(),
-                        IndexingEventProgressStatus::Syncing.log(),
-                        e
-                    );
-                    continue;
                 }
             }
+
+            if let Some(result) = result {
+                current_filter = result.next;
+                max_block_range_limitation = result.max_block_range_limitation;
+            } else {
+                break;
+            }
+            // }
+            // Err(e) => {
+            //     error!(
+            //         "{} - {} - Semaphore error: {}",
+            //         &config.info_log_name(),
+            //         IndexingEventProgressStatus::Syncing.log(),
+            //         e
+            //     );
+            //     continue;
+            // }
+            // }
         }
 
         info!(
@@ -175,7 +185,7 @@ async fn fetch_historic_logs_stream(
     );
 
     if from_block > to_block {
-        debug!(
+        error!(
             "{} - {} - from_block {:?} > to_block {:?}",
             info_log_name,
             IndexingEventProgressStatus::Syncing.log(),
@@ -208,22 +218,25 @@ async fn fetch_historic_logs_stream(
                 to_block
             );
 
-            debug!(
-                "{} - {} - Fetched {} event logs - blocks: {} - {}",
-                info_log_name,
-                IndexingEventProgressStatus::Syncing.log(),
-                logs.len(),
-                from_block,
-                to_block
-            );
-
             let logs_empty = logs.is_empty();
             // clone here over the full logs way less overhead
             let last_log = logs.last().cloned();
 
+            if !logs_empty {
+                info!(
+                    "{}::{} - {} - Fetched {} event logs - blocks: {} - {}",
+                    info_log_name,
+                    network,
+                    IndexingEventProgressStatus::Syncing.log(),
+                    logs.len(),
+                    from_block,
+                    to_block
+                );
+            }
+
             if tx.capacity() == 0 {
                 warn!(
-                    "{}::{} - {} - Log channel is full, indexing tx will backpressure.",
+                    "{}::{} - {} - Log channel is full, indexing producer will backpressure.",
                     info_log_name,
                     network,
                     IndexingEventProgressStatus::Syncing.log(),
@@ -241,10 +254,6 @@ async fn fetch_historic_logs_stream(
             }
 
             if logs_empty {
-                debug!(
-                    "{}::{} - No events found between blocks {} - {}",
-                    info_log_name, network, from_block, to_block,
-                );
                 let next_from_block = to_block + U64::from(1);
                 return if next_from_block > snapshot_to_block {
                     None
@@ -253,6 +262,17 @@ async fn fetch_historic_logs_stream(
                         &next_from_block,
                         &snapshot_to_block,
                         &max_block_range_limitation,
+                    );
+
+                    info!(
+                        "{}::{} - No events found between blocks {} - {}. Next {} range: {} - {}",
+                        info_log_name,
+                        network,
+                        from_block,
+                        to_block,
+                        new_to_block - next_from_block,
+                        next_from_block,
+                        new_to_block
                     );
 
                     debug!(
@@ -312,8 +332,8 @@ async fn fetch_historic_logs_stream(
         Err(err) => {
             // This is fundamental to the rindexer flow. We intentionally fetch a large block range
             // to get information on what the ideal block range should be.
-            if let Some(retry_result) = retry_with_block_range(&err, from_block, to_block) {
-                debug!(
+            if let Some(retry_result) = retry_with_block_range(&err, from_block, to_block).await {
+                info!(
                     "{}::{} - {} - Overfetched from {} to {} - shrinking to block range: {:?}",
                     info_log_name,
                     network,
@@ -534,6 +554,7 @@ async fn live_indexing_stream(
                                         Err(err) => {
                                             if let Some(retry_result) =
                                                 retry_with_block_range(&err, from_block, to_block)
+                                                    .await
                                             {
                                                 debug!(
                                                     "{}::{} - {} - Overfetched from {} to {} - shrinking to block range: from {} to {}",
@@ -584,7 +605,7 @@ async fn live_indexing_stream(
                     "Error getting latest block, will try again in 1 seconds - err: {}",
                     e.to_string()
                 );
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
                 continue;
             }
         }
@@ -608,7 +629,7 @@ struct RetryWithBlockRangeResult {
 }
 
 /// Attempts to retry with a new block range based on the error message.
-fn retry_with_block_range(
+async fn retry_with_block_range(
     error: &ProviderError,
     from_block: U64,
     to_block: U64,
@@ -624,31 +645,26 @@ fn retry_with_block_range(
         let empty_string = String::from("");
         let error_data = error_data_binding.unwrap_or(empty_string);
 
-        (error_message, error_data)
+        (error_message.to_lowercase(), error_data.to_lowercase())
     } else {
         let str_err = error.to_string();
         debug!("Failed to parse structured error, trying with raw string: {}", &str_err);
-        (str_err, "".to_string())
+        (str_err.to_lowercase(), "".to_string())
     };
 
-    fn compile_regex(pattern: &str) -> Result<Regex, regex::Error> {
-        Regex::new(pattern)
-    }
-
     // Thanks Ponder for the regex patterns - https://github.com/ponder-sh/ponder/blob/889096a3ef5f54a0c5a06df82b0da9cf9a113996/packages/utils/src/getLogsRetryHelper.ts#L34
-
     // Alchemy
     if let Ok(re) =
-        compile_regex(r"this block range should work: \[(0x[0-9a-fA-F]+),\s*(0x[0-9a-fA-F]+)]")
+        Regex::new(r"this block range should work: \[0x([0-9a-fA-F]+),\s*0x([0-9a-fA-F]+)\]")
     {
         if let Some(captures) = re.captures(&error_message).or_else(|| re.captures(&error_data)) {
             if let (Some(start_block), Some(end_block)) = (captures.get(1), captures.get(2)) {
                 let start_block_str = start_block.as_str();
                 let end_block_str = end_block.as_str();
-
-                if let (Ok(from), Ok(to)) =
-                    (BlockNumber::from_str(start_block_str), BlockNumber::from_str(end_block_str))
-                {
+                if let (Ok(from), Ok(to)) = (
+                    u64::from_str_radix(start_block_str, 16),
+                    u64::from_str_radix(end_block_str, 16),
+                ) {
                     if from > to {
                         error!(
                             "Alchemy returned a negative block range. Overriding to single block fetch."
@@ -666,6 +682,11 @@ fn retry_with_block_range(
                         to: U64::from(to),
                         max_block_range: None,
                     });
+                } else {
+                    info!(
+                        "Failed to parse block numbers {} and {}",
+                        start_block_str, end_block_str
+                    );
                 }
             }
         }
@@ -673,15 +694,14 @@ fn retry_with_block_range(
 
     // Infura, Thirdweb, zkSync, Tenderly
     if let Ok(re) =
-        compile_regex(r"Try with this block range \[0x([0-9a-fA-F]+),\s*0x([0-9a-fA-F]+)\]")
+        Regex::new(r"try with this block range \[0x([0-9a-fA-F]+),\s*0x([0-9a-fA-F]+)\]")
     {
         if let Some(captures) = re.captures(&error_message).or_else(|| re.captures(&error_data)) {
             if let (Some(start_block), Some(end_block)) = (captures.get(1), captures.get(2)) {
-                let start_block_str = format!("0x{}", start_block.as_str());
-                let end_block_str = format!("0x{}", end_block.as_str());
-                if let (Ok(from), Ok(to)) =
-                    (BlockNumber::from_str(&start_block_str), BlockNumber::from_str(&end_block_str))
-                {
+                if let (Ok(from), Ok(to)) = (
+                    u64::from_str_radix(start_block.as_str(), 16),
+                    u64::from_str_radix(end_block.as_str(), 16),
+                ) {
                     return Some(RetryWithBlockRangeResult {
                         from: U64::from(from),
                         to: U64::from(to),
@@ -702,7 +722,7 @@ fn retry_with_block_range(
     }
 
     // QuickNode, 1RPC, zkEVM, Blast, BlockPI
-    if let Ok(re) = compile_regex(r"limited to a ([\d,.]+)") {
+    if let Ok(re) = Regex::new(r"limited to a ([\d,.]+)") {
         if let Some(captures) = re.captures(&error_message).or_else(|| re.captures(&error_data)) {
             if let Some(range_str_match) = captures.get(1) {
                 let range_str = range_str_match.as_str().replace(&['.', ','][..], "");
@@ -726,12 +746,38 @@ fn retry_with_block_range(
         });
     }
 
+    // Response size issue
+    if error_message.contains("response is too big") {
+        let halved_to_block = halved_block_number(to_block, from_block);
+        return Some(RetryWithBlockRangeResult {
+            from: from_block,
+            to: halved_to_block,
+            max_block_range: None,
+        });
+    }
+
+    // We can't keep up with our own send rate. Backoff.
+    if error_message.contains("error sending request") {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let halved_to_block = halved_block_number(to_block, from_block);
+        return Some(RetryWithBlockRangeResult {
+            from: from_block,
+            to: halved_to_block,
+            max_block_range: None,
+        });
+    }
+
     // Fallback range
     if to_block > from_block {
         let diff = to_block - from_block;
 
         let mut block_range = FallbackBlockRange::from_diff(diff);
         let mut next_to_block = from_block + block_range.value();
+
+        warn!(
+            "Computed a fallback block range {:?}. Provider did not provide information in error: {:?}",
+            block_range, error_message
+        );
 
         if next_to_block == to_block {
             block_range = block_range.lower();
