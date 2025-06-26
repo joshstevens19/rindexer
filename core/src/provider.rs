@@ -405,7 +405,11 @@ impl JsonRpcCachedProvider {
                     }
 
                     if let Err(e) = batch.send().await {
-                        error!("Failed to send batch request: {:?}", e);
+                        error!(
+                            "Failed to send {} batch block number request: {:?}",
+                            request_futures.len(),
+                            e
+                        );
                         return Err(e);
                     }
 
@@ -456,7 +460,7 @@ impl JsonRpcCachedProvider {
                     }
 
                     if let Err(e) = batch.send().await {
-                        error!("Failed to send batch request: {:?}", e);
+                        error!("Failed to send batch tx receipt request: {:?}", e);
                         return Err(e);
                     }
 

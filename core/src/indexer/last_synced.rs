@@ -226,7 +226,7 @@ pub fn update_progress_and_last_synced_task(
             .update_last_synced_block(&config.network_contract().id, to_block);
 
         if let Err(e) = update_last_synced_block_result {
-            error!("Error updating last synced block: {:?}", e);
+            error!("Error updating in-mem last synced block result: {:?}", e);
         }
 
         if let Some(database) = &config.database() {
@@ -248,7 +248,7 @@ pub fn update_progress_and_last_synced_task(
                 .await;
 
             if let Err(e) = result {
-                error!("Error updating last synced block: {:?}", e);
+                error!("Error updating db last synced block: {:?}", e);
             }
 
             let latest = config
@@ -273,7 +273,7 @@ pub fn update_progress_and_last_synced_task(
                 .await;
 
             if let Err(e) = latest_result {
-                error!("Error updating last synced block: {:?}", e);
+                error!("Error updating latest block: {:?}", e);
             }
         } else if let Some(csv_details) = &config.csv_details() {
             if let Err(e) = update_last_synced_block_number_for_file(
@@ -329,7 +329,7 @@ pub fn evm_trace_update_progress_and_last_synced_task(
             config.progress.lock().await.update_last_synced_block(&config.id, to_block);
 
         if let Err(e) = update_last_synced_block_result {
-            error!("Error updating last synced block: {:?}", e);
+            error!("Error updating last synced trace block in-mem: {:?}", e);
         }
 
         if let Some(database) = &config.database {
@@ -345,7 +345,7 @@ pub fn evm_trace_update_progress_and_last_synced_task(
                 .await;
 
             if let Err(e) = result {
-                error!("Error updating last synced block: {:?}", e);
+                error!("Error updating last synced trace block db: {:?}", e);
             }
         } else if let Some(csv_details) = &config.csv_details {
             if let Err(e) = update_last_synced_block_number_for_file(

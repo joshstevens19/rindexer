@@ -186,7 +186,7 @@ pub async fn native_transfer_block_processor(
         )
         .await;
 
-        // If this has an error we need to not and reconsume the blocks. We don't have
+        // If this has an error, we need to not and reconsume the blocks. We don't have
         // to worry about double-publish because the failure point is on the provider
         // call itself, which is before publish.
         if let Err(e) = processed_block {
@@ -220,7 +220,7 @@ pub async fn native_transfer_block_processor(
                 );
             }
 
-            sleep(Duration::from_millis(500)).await;
+            sleep(Duration::from_secs(1)).await;
             continue;
         } else {
             buffer.clear();
@@ -232,6 +232,8 @@ pub async fn native_transfer_block_processor(
                 concurrent_requests =
                     ((concurrent_requests * 20) / 10).min(limit_concurrent_requests);
             }
+
+            sleep(Duration::from_millis(50)).await;
         };
     }
 }

@@ -56,7 +56,7 @@ pub fn fetch_logs_stream(
             ));
             if random_ratio(1, 20) {
                 warn!(
-                    "{}::{} - {} - max block range limitation of {} blocks applied - block range indexing will be slower then RPC providers supplying the optimal ranges - https://rindexer.xyz/docs/references/rpc-node-providers#rpc-node-providers",
+                    "{}::{} - {} - max block range of {} applied - indexing will be slower than providers supplying the optimal ranges - https://rindexer.xyz/docs/references/rpc-node-providers#rpc-node-providers",
                     config.info_log_name(),
                     config.network_contract().network,
                     IndexingEventProgressStatus::Syncing.log(),
@@ -196,7 +196,7 @@ async fn fetch_historic_logs_stream(
 
             if !logs_empty {
                 info!(
-                    "{}::{} - {} - Fetched {} event logs - blocks: {} - {}",
+                    "{}::{} - {} - Fetched {} logs between: {} - {}",
                     info_log_name,
                     network,
                     IndexingEventProgressStatus::Syncing.log(),
@@ -304,16 +304,23 @@ async fn fetch_historic_logs_stream(
         Err(err) => {
             // This is fundamental to the rindexer flow. We intentionally fetch a large block range
             // to get information on what the ideal block range should be.
-            if let Some(retry_result) = retry_with_block_range(&err, from_block, to_block).await {
-                info!(
-                    "{}::{} - {} - Overfetched from {} to {} - shrinking to block range: {:?}",
-                    info_log_name,
-                    network,
-                    IndexingEventProgressStatus::Syncing.log(),
-                    from_block,
-                    to_block,
-                    retry_result
-                );
+            if let Some(retry_result) =
+                retry_with_block_range(info_log_name, network, &err, from_block, to_block).await
+            {
+                // Log if we "overshrink"
+                if retry_result.to - retry_result.from < U64::from(1000) {
+                    info!(
+                        "{}::{} - {} - Over-fetched {} to {}. Shrunk: {} to {} (max {:?})",
+                        info_log_name,
+                        network,
+                        IndexingEventProgressStatus::Syncing.log(),
+                        from_block,
+                        to_block,
+                        retry_result.from,
+                        retry_result.to,
+                        retry_result.max_block_range
+                    );
+                }
 
                 return Some(ProcessHistoricLogsStreamResult {
                     next: current_filter
@@ -526,8 +533,14 @@ async fn live_indexing_stream(
                                         log_response_to_large_to_block = None;
                                     }
                                     Err(err) => {
-                                        if let Some(retry_result) =
-                                            retry_with_block_range(&err, from_block, to_block).await
+                                        if let Some(retry_result) = retry_with_block_range(
+                                            info_log_name,
+                                            network,
+                                            &err,
+                                            from_block,
+                                            to_block,
+                                        )
+                                        .await
                                         {
                                             debug!(
                                                     "{}::{} - {} - Overfetched from {} to {} - shrinking to block range: from {} to {}",
@@ -598,6 +611,8 @@ struct RetryWithBlockRangeResult {
 
 /// Attempts to retry with a new block range based on the error message.
 async fn retry_with_block_range(
+    info_log_name: &str,
+    network: &str,
     error: &ProviderError,
     from_block: U64,
     to_block: U64,
@@ -635,7 +650,8 @@ async fn retry_with_block_range(
                 ) {
                     if from > to {
                         error!(
-                            "Alchemy returned a negative block range. Overriding to single block fetch."
+                            "{}::{} Alchemy returned a negative block range. Overriding to single block fetch.",
+                            info_log_name,network
                         );
 
                         return Some(RetryWithBlockRangeResult {
@@ -652,8 +668,8 @@ async fn retry_with_block_range(
                     });
                 } else {
                     info!(
-                        "Failed to parse block numbers {} and {}",
-                        start_block_str, end_block_str
+                        "{}::{} Failed to parse block numbers {} and {}",
+                        info_log_name, network, start_block_str, end_block_str
                     );
                 }
             }
@@ -714,8 +730,10 @@ async fn retry_with_block_range(
         });
     }
 
-    // Response size issue
-    if error_message.contains("response is too big") {
+    // Transient response errors, likely solved by halving the range or just retrying
+    if error_message.contains("response is too big")
+        || error_message.contains("error decoding response body")
+    {
         let halved_to_block = halved_block_number(to_block, from_block);
         return Some(RetryWithBlockRangeResult {
             from: from_block,
@@ -743,8 +761,8 @@ async fn retry_with_block_range(
         let mut next_to_block = from_block + block_range.value();
 
         warn!(
-            "Computed a fallback block range {:?}. Provider did not provide information in error: {:?}",
-            block_range, error_message
+            "{}::{} Computed a fallback block range {:?}. Provider did not provide information in error: {:?}",
+            info_log_name,network, block_range, error_message
         );
 
         if next_to_block == to_block {
@@ -753,7 +771,7 @@ async fn retry_with_block_range(
         }
 
         if next_to_block < from_block {
-            error!("Computed a negative fallback block range. Overriding to single block fetch.");
+            error!("{}::{} Computed a negative fallback block range. Overriding to single block fetch.",info_log_name,network);
 
             return Some(RetryWithBlockRangeResult {
                 from: from_block,
