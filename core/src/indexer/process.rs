@@ -377,70 +377,62 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                                 ordering_live_indexing_details.filter
                             );
 
-                            let semaphore_client = Arc::clone(&config.semaphore());
-                            let permit = semaphore_client.acquire_owned().await;
+                            match config
+                                .network_contract()
+                                .cached_provider
+                                .get_logs(&ordering_live_indexing_details.filter)
+                                .await
+                            {
+                                Ok(logs) => {
+                                    debug!(
+                                        "{} - {} - Live topic_id {}, Logs: {} from {} to {}",
+                                        &config.info_log_name(),
+                                        IndexingEventProgressStatus::Live.log(),
+                                        &config.topic_id(),
+                                        logs.len(),
+                                        from_block,
+                                        to_block
+                                    );
 
-                            if let Ok(permit) = permit {
-                                match config
-                                    .network_contract()
-                                    .cached_provider
-                                    .get_logs(&ordering_live_indexing_details.filter)
-                                    .await
-                                {
-                                    Ok(logs) => {
-                                        debug!(
-                                            "{} - {} - Live topic_id {}, Logs: {} from {} to {}",
-                                            &config.info_log_name(),
-                                            IndexingEventProgressStatus::Live.log(),
-                                            &config.topic_id(),
-                                            logs.len(),
-                                            from_block,
-                                            to_block
-                                        );
+                                    debug!(
+                                        "{} - {} - Fetched {} event logs - blocks: {} - {}",
+                                        &config.info_log_name(),
+                                        IndexingEventProgressStatus::Live.log(),
+                                        logs.len(),
+                                        from_block,
+                                        to_block
+                                    );
 
-                                        debug!(
-                                            "{} - {} - Fetched {} event logs - blocks: {} - {}",
-                                            &config.info_log_name(),
-                                            IndexingEventProgressStatus::Live.log(),
-                                            logs.len(),
-                                            from_block,
-                                            to_block
-                                        );
+                                    let logs_empty = logs.is_empty();
+                                    // clone here over the full logs way less overhead
+                                    let last_log = logs.last().cloned();
 
-                                        let logs_empty = logs.is_empty();
-                                        // clone here over the full logs way less overhead
-                                        let last_log = logs.last().cloned();
+                                    let fetched_logs =
+                                        Ok(FetchLogsResult { logs, from_block, to_block });
 
-                                        let fetched_logs =
-                                            Ok(FetchLogsResult { logs, from_block, to_block });
+                                    let result =
+                                        handle_logs_result(Arc::clone(config), fetched_logs).await;
 
-                                        let result =
-                                            handle_logs_result(Arc::clone(config), fetched_logs)
-                                                .await;
-
-                                        match result {
-                                            Ok(task) => {
-                                                let complete = task.await;
-                                                if let Err(e) = complete {
-                                                    error!(
+                                    match result {
+                                        Ok(task) => {
+                                            let complete = task.await;
+                                            if let Err(e) = complete {
+                                                error!(
                                                         "{} - {} - Error indexing task: {} - will try again in 200ms",
                                                         &config.info_log_name(),
                                                         IndexingEventProgressStatus::Live.log(),
                                                         e
                                                     );
-                                                    drop(permit);
-                                                    break;
-                                                }
-                                                ordering_live_indexing_details
-                                                    .last_seen_block_number = to_block;
-                                                if logs_empty {
-                                                    ordering_live_indexing_details.filter =
-                                                        ordering_live_indexing_details
-                                                            .filter
-                                                            .set_from_block(
-                                                                to_block + U64::from(1),
-                                                            );
-                                                    debug!(
+                                                break;
+                                            }
+                                            ordering_live_indexing_details.last_seen_block_number =
+                                                to_block;
+                                            if logs_empty {
+                                                ordering_live_indexing_details.filter =
+                                                    ordering_live_indexing_details
+                                                        .filter
+                                                        .set_from_block(to_block + U64::from(1));
+                                                debug!(
                                                         "{}::{} - {} - No events found between blocks {} - {}",
                                                         &config.info_log_name(),
                                                         &config.network_contract().network,
@@ -448,51 +440,46 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                                                         from_block,
                                                         to_block
                                                     );
-                                                } else if let Some(last_log) = last_log {
-                                                    if let Some(last_log_block_number) =
-                                                        last_log.block_number
-                                                    {
-                                                        ordering_live_indexing_details.filter =
-                                                            ordering_live_indexing_details
-                                                                .filter
-                                                                .set_from_block(U64::from(
-                                                                    last_log_block_number + 1,
-                                                                ));
-                                                    } else {
-                                                        error!("Failed to get last log block number the provider returned null (should never happen) - try again in 200ms");
-                                                    }
+                                            } else if let Some(last_log) = last_log {
+                                                if let Some(last_log_block_number) =
+                                                    last_log.block_number
+                                                {
+                                                    ordering_live_indexing_details.filter =
+                                                        ordering_live_indexing_details
+                                                            .filter
+                                                            .set_from_block(U64::from(
+                                                                last_log_block_number + 1,
+                                                            ));
+                                                } else {
+                                                    error!("Failed to get last log block number the provider returned null (should never happen) - try again in 200ms");
                                                 }
+                                            }
 
-                                                *ordering_live_indexing_details_map
+                                            *ordering_live_indexing_details_map
                                                     .get(&config.topic_id())
                                                     .expect("Failed to get ordering_live_indexing_details_map")
                                                     .lock()
                                                     .await = ordering_live_indexing_details;
-
-                                                drop(permit);
-                                            }
-                                            Err(err) => {
-                                                error!(
+                                        }
+                                        Err(err) => {
+                                            error!(
                                                     "{} - {} - Error fetching logs: {} - will try again in 200ms",
                                                     &config.info_log_name(),
                                                     IndexingEventProgressStatus::Live.log(),
                                                     err
                                                 );
-                                                drop(permit);
-                                                break;
-                                            }
+                                            break;
                                         }
                                     }
-                                    Err(err) => {
-                                        error!(
+                                }
+                                Err(err) => {
+                                    error!(
                                             "{} - {} - Error fetching logs: {} - will try again in 200ms",
                                             &config.info_log_name(),
                                             IndexingEventProgressStatus::Live.log(),
                                             err
                                         );
-                                        drop(permit);
-                                        break;
-                                    }
+                                    break;
                                 }
                             }
                         } else {

@@ -170,9 +170,6 @@ pub async fn start_indexing_traces(
         return Ok(vec![]);
     }
 
-    let permits = public_read_env_value("NATIVE_PERMITS").unwrap_or("100".to_string());
-    let permits = usize::from_str(&permits).unwrap_or(100);
-    let semaphore = Arc::new(Semaphore::new(permits));
     let mut non_blocking_process_events = Vec::new();
     let trace_progress_state =
         IndexingEventsProgressState::monitor_traces(&trace_registry.events).await;
@@ -216,8 +213,6 @@ pub async fn start_indexing_traces(
                 start_block,
                 end_block,
                 indexer_name: event.indexer_name.clone(),
-                permits,
-                semaphore: semaphore.clone(),
                 contract_name: NATIVE_TRANSFER_CONTRACT_NAME.to_string(),
                 event_name: EVENT_NAME.to_string(),
                 network: network_name.to_string(),
@@ -274,11 +269,6 @@ pub async fn start_indexing_contract_events(
     StartIndexingError,
 > {
     let event_progress_state = IndexingEventsProgressState::monitor(&registry.events).await;
-    let permits = public_read_env_value("CONTRACT_PERMITS").unwrap_or("100".to_string());
-    let permits = usize::from_str(&permits).unwrap_or(100);
-    let semaphore = Arc::new(Semaphore::new(permits));
-
-    info!("Configured {} permits for contract events.", permits);
 
     // need this to keep track of dependency_events cross contracts and events
     // if you are doing advanced dependency events where other contracts depend on the processing of
@@ -337,8 +327,6 @@ pub async fn start_indexing_contract_events(
                 network_contract: Arc::new(network_contract.clone()),
                 start_block,
                 end_block,
-                permits,
-                semaphore: Arc::clone(&semaphore),
                 registry: Arc::clone(&registry),
                 progress: Arc::clone(&event_progress_state),
                 database: database.clone(),
@@ -368,8 +356,6 @@ pub async fn start_indexing_contract_events(
                     network_contract: Arc::new(network_contract.clone()),
                     start_block,
                     end_block,
-                    permits,
-                    semaphore: Arc::clone(&semaphore),
                     progress: Arc::clone(&event_progress_state),
                     database: database.clone(),
                     csv_details: manifest.storage.csv.clone(),

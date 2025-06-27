@@ -7,15 +7,12 @@ use crate::{
     provider::{JsonRpcCachedProvider, ProviderError},
 };
 use alloy::{
-    primitives::{BlockNumber, B256, U64},
+    primitives::{B256, U64},
     rpc::types::Log,
 };
 use rand::random_ratio;
 use regex::Regex;
-use tokio::{
-    sync::{mpsc, Semaphore},
-    time::Instant,
-};
+use tokio::{sync::mpsc, time::Instant};
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, error, info, warn};
 
@@ -37,7 +34,10 @@ pub fn fetch_logs_stream(
     // backpressure the producer. Many RPC responses are large, so this is important.
     //
     // This is per network contract-event, so it should be relatively small.
-    let (tx, rx) = mpsc::channel(2);
+    //
+    // TODO: If the yaml config has many network-events, this should be 2-3. If it has a few, it can
+    //       probably be much higher to build a better backlog and max-throughput.
+    let (tx, rx) = mpsc::channel(3);
 
     tokio::spawn(async move {
         let mut current_filter = config.to_event_filter().unwrap();
@@ -80,7 +80,7 @@ pub fn fetch_logs_stream(
             // This check can be very noisy. We want to only sample this warning to notify
             // the user, rather than warn on every log fetch.
             if let Some(range) = max_block_range_limitation {
-                if range.to::<u64>() <= 5000 {
+                if range.to::<u64>() < 5000 {
                     if random_ratio(1, 20) {
                         warn!(
                             "{}::{} - RPC PROVIDER IS SLOW - Slow indexing mode enabled, max block range limitation: {} blocks - we advise using a faster provider who can predict the next block ranges.",
@@ -117,7 +117,6 @@ pub fn fetch_logs_stream(
                 &config.indexing_distance_from_head(),
                 current_filter,
                 &config.info_log_name(),
-                &config.semaphore(),
                 config.network_contract().disable_logs_bloom_checks,
                 &config.network_contract().network,
             )
@@ -207,8 +206,8 @@ async fn fetch_historic_logs_stream(
             }
 
             if tx.capacity() == 0 {
-                warn!(
-                    "{}::{} - {} - Log channel is full, indexing producer will backpressure.",
+                info!(
+                    "{}::{} - {} - Log channel full, indexer will backpressure (this is normal).",
                     info_log_name,
                     network,
                     IndexingEventProgressStatus::Syncing.log(),
@@ -237,14 +236,12 @@ async fn fetch_historic_logs_stream(
                     );
 
                     info!(
-                        "{}::{} - No events found between blocks {} - {}. Next {} range: {} - {}",
+                        "{}::{} - No events between {} - {}. Searching next {} blocks.",
                         info_log_name,
                         network,
                         from_block,
                         to_block,
-                        new_to_block - next_from_block,
-                        next_from_block,
-                        new_to_block
+                        new_to_block - next_from_block
                     );
 
                     debug!(
@@ -310,15 +307,19 @@ async fn fetch_historic_logs_stream(
                 // Log if we "overshrink"
                 if retry_result.to - retry_result.from < U64::from(1000) {
                     info!(
-                        "{}::{} - {} - Over-fetched {} to {}. Shrunk: {} to {} (max {:?})",
+                        "{}::{} - {} - Over-fetched {} to {}. Shrunk ({}): {} to {}{}",
                         info_log_name,
                         network,
                         IndexingEventProgressStatus::Syncing.log(),
                         from_block,
                         to_block,
+                        retry_result.to - retry_result.from,
                         retry_result.from,
                         retry_result.to,
-                        retry_result.max_block_range
+                        retry_result
+                            .max_block_range
+                            .map(|m| format!(" (max {m})"))
+                            .unwrap_or("".to_owned()),
                     );
                 }
 
@@ -366,7 +367,6 @@ async fn live_indexing_stream(
     reorg_safe_distance: &U64,
     mut current_filter: RindexerEventFilter,
     info_log_name: &str,
-    _semaphore: &Arc<Semaphore>,
     disable_logs_bloom_checks: bool,
     network: &str,
 ) {
@@ -650,13 +650,13 @@ async fn retry_with_block_range(
                 ) {
                     if from > to {
                         error!(
-                            "{}::{} Alchemy returned a negative block range. Overriding to single block fetch.",
-                            info_log_name,network
+                            "{}::{} Alchemy returned a negative block range {} to {}. Overriding to halved initial range.",
+                            info_log_name, network, from, to
                         );
 
                         return Some(RetryWithBlockRangeResult {
                             from: from_block,
-                            to: from_block + U64::from(1),
+                            to: halved_block_number(to_block, from_block),
                             max_block_range: None,
                         });
                     }
@@ -742,13 +742,12 @@ async fn retry_with_block_range(
         });
     }
 
-    // We can't keep up with our own send rate. Backoff.
+    // We can't keep up with our own sending rate. This is rare, but we must backoff throughput.
     if error_message.contains("error sending request") {
         tokio::time::sleep(Duration::from_secs(3)).await;
-        let halved_to_block = halved_block_number(to_block, from_block);
         return Some(RetryWithBlockRangeResult {
             from: from_block,
-            to: halved_to_block,
+            to: halved_block_number(to_block, from_block),
             max_block_range: None,
         });
     }
@@ -775,7 +774,7 @@ async fn retry_with_block_range(
 
             return Some(RetryWithBlockRangeResult {
                 from: from_block,
-                to: from_block + U64::from(1),
+                to: halved_block_number(to_block, from_block),
                 max_block_range: None,
             });
         }

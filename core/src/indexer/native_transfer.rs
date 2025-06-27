@@ -166,11 +166,6 @@ pub async fn native_transfer_block_processor(
     let mut buffer: Vec<U64> = Vec::with_capacity(limit_concurrent_requests);
 
     loop {
-        let Ok(_) = config.semaphore.clone().acquire_owned().await else {
-            sleep(Duration::from_millis(500)).await;
-            continue;
-        };
-
         let recv = block_rx.recv_many(&mut buffer, concurrent_requests).await;
 
         if recv == 0 {
@@ -212,7 +207,7 @@ pub async fn native_transfer_block_processor(
                 continue;
             } else {
                 warn!(
-                    "Could not process '{}' block requests. Likely too early for {}..{}, Retrying in 500ms: {}",
+                    "Could not process '{}' block requests for {}..{}, Retrying in 500ms: {}",
                     network_name,
                     &buffer.first().map(|n| n.as_limbs()[0]).unwrap_or_else(|| 0),
                     &buffer.last().map(|n| n.as_limbs()[0]).unwrap_or_else(|| 0),

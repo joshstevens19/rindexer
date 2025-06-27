@@ -226,6 +226,9 @@ impl IndexingEventsProgressState {
                                 )
                             })?;
 
+                        // Error updating last synced trace block in-mem
+                        // BlockNumberConversionSyncedBlocksError
+                        // 51207, 20090000
                         let blocks_synced: u64 = new_last_synced_block
                             .checked_sub(event.starting_block)
                             .ok_or(SyncError::BlockNumberConversionSyncedBlocksError(

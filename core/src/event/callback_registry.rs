@@ -122,7 +122,7 @@ pub struct EventCallbackRegistryInformation {
 
 impl EventCallbackRegistryInformation {
     pub fn info_log_name(&self) -> String {
-        format!("{}::{}", self.contract.name, self.event_name)
+        format!("{}::{}", self.contract.name.replace("Filter", ""), self.event_name)
     }
 }
 

@@ -384,6 +384,7 @@ impl JsonRpcCachedProvider {
         block_numbers: &[U64],
         include_txs: bool,
     ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
+        let chain = self.chain_id;
         if block_numbers.is_empty() {
             return Ok(Vec::new());
         }
@@ -406,8 +407,9 @@ impl JsonRpcCachedProvider {
 
                     if let Err(e) = batch.send().await {
                         error!(
-                            "Failed to send {} batch block number request: {:?}",
+                            "Failed to send {} batch 'eth_getBlockByNumber' request for {}: {:?}",
                             request_futures.len(),
+                            chain,
                             e
                         );
                         return Err(e);
