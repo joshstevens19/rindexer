@@ -37,7 +37,7 @@ pub fn fetch_logs_stream(
     //
     // TODO: If the yaml config has many network-events, this should be 2-3. If it has a few, it can
     //       probably be much higher to build a better backlog and max-throughput.
-    let (tx, rx) = mpsc::channel(2);
+    let (tx, rx) = mpsc::channel(3);
 
     tokio::spawn(async move {
         let mut current_filter = config.to_event_filter().unwrap();
@@ -304,7 +304,7 @@ async fn fetch_historic_logs_stream(
             {
                 // Log if we "overshrink"
                 if retry_result.to - retry_result.from < U64::from(1000) {
-                    info!(
+                    debug!(
                         "{}::{} - {} - Over-fetched {} to {}. Shrunk ({}): {} to {}{}",
                         info_log_name,
                         network,
