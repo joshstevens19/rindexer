@@ -802,7 +802,7 @@ pub fn generate_event_handlers(
                 } else {
                     csv_data.push_str(&format!("result.event_data.{}.to_string(),", item.abi_name));
                 }
-                csv_data.push_str("\n")
+                csv_data.push('\n')
             }
 
             csv_data.push_str(r#"result.tx_information.transaction_hash.to_string(),"#);
