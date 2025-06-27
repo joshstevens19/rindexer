@@ -35,7 +35,7 @@ fn get_graphql_exe() -> Result<PathBuf, ()> {
         "linux" => "rindexer-graphql-linux",
         _ => {
             panic!("Unsupported OS: {}", env::consts::OS);
-        }
+        },
     };
 
     let mut paths = vec![];
@@ -212,16 +212,16 @@ fn spawn_start_server(
                                         } else {
                                             error!("GraphQL: Could not start up API: Child process exited with errors");
                                         }
-                                    }
+                                    },
                                     Err(e) => {
                                         error!("GraphQL: Failed to wait on child process: {}", e);
-                                    }
+                                    },
                                 },
                                 None => error!("GraphQL: Child process is None"),
                             },
                             Err(e) => {
                                 error!("GraphQL: Failed to lock child process for waiting: {}", e);
-                            }
+                            },
                         }
                     });
 
@@ -240,11 +240,11 @@ fn spawn_start_server(
                     } else {
                         break;
                     }
-                }
+                },
                 Err(e) => {
                     error!("Failed to start GraphQL server: {}", e);
                     tokio::time::sleep(Duration::from_secs(1)).await;
-                }
+                },
             }
         }
     });
@@ -296,15 +296,15 @@ async fn perform_health_check(
                             );
                             break;
                         }
-                    }
+                    },
                     Err(_) => {
                         // try again
                         info!("🦀 GraphQL API not healthy yet...");
                         continue;
-                    }
+                    },
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
         health_check_attempts += 1;
         tokio::time::sleep(Duration::from_millis(250)).await;

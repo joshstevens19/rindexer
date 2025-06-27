@@ -260,7 +260,7 @@ impl Contract {
                 let full_path = get_full_path(project_path, abi_path)?;
                 let abi_str = fs::read_to_string(full_path)?;
                 Ok(abi_str)
-            }
+            },
             StringOrArray::Multiple(abis) => {
                 let mut unique_entries = HashSet::new();
                 let mut merged_abi_value = Vec::new();
@@ -287,7 +287,7 @@ impl Contract {
 
                 let merged_abi_str = serde_json::to_string(&json!(merged_abi_value))?;
                 Ok(merged_abi_str)
-            }
+            },
         }
     }
 
@@ -303,7 +303,7 @@ impl Contract {
                     SimpleEventOrContractEvent::ContractEvent(contract_event) => contract_event,
                     SimpleEventOrContractEvent::SimpleEvent(event_name) => {
                         ContractEventMapping { contract_name: self.name.clone(), event_name }
-                    }
+                    },
                 })
                 .collect(),
             then: yaml

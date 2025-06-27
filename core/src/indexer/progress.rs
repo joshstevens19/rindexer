@@ -124,14 +124,14 @@ impl IndexingEventsProgressState {
                     Some(b) => {
                         debug!("Got block for {} from cache", &network);
                         Ok(*b)
-                    }
+                    },
                     None => {
                         let block = network_contract.cached_provider.get_block_number().await;
                         if let Ok(b) = block {
                             network_latest_cache.insert(network, b);
                         }
                         block
-                    }
+                    },
                 };
 
                 match latest_block {
@@ -150,13 +150,13 @@ impl IndexingEventsProgressState {
                             network_contract.end_block.is_none(),
                             event_info.info_log_name(),
                         ));
-                    }
+                    },
                     Err(e) => {
                         error!(
                             "Failed to get latest block for network {}: {}",
                             network_contract.network, e
                         );
-                    }
+                    },
                 }
             }
         }
@@ -188,13 +188,13 @@ impl IndexingEventsProgressState {
                             network_traces.end_block.is_none(),
                             event_info.info_log_name(),
                         ));
-                    }
+                    },
                     Err(e) => {
                         error!(
                             "Failed to get latest block for tracing network {}: {}",
                             network_traces.network, e
                         );
-                    }
+                    },
                 }
             }
         }

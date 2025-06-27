@@ -17,6 +17,7 @@ use crate::{
         storage::{CsvDetails, Storage},
     },
     types::code::Code,
+    EthereumSqlTypeWrapper,
 };
 
 pub fn abigen_contract_name(contract: &Contract) -> String {
@@ -434,7 +435,7 @@ fn build_pub_contract_fn(
         match contract.address() {
             None => {
                 panic!("Contract details should have an address");
-            }
+            },
             Some(value) => match value {
                 ValueOrArray::Value(address) => {
                     let address = format!("{:?}", address);
@@ -451,10 +452,10 @@ fn build_pub_contract_fn(
                         contract_name = contract_name,
                         address = address,
                     ))
-                }
+                },
                 ValueOrArray::Array(_) => {
                     unreachable!("Contract details should always be an single address");
-                }
+                },
             },
         }
     }
@@ -748,6 +749,7 @@ pub fn generate_event_handlers(
     imports.push_str("use std::sync::Arc;\n");
     imports.push_str(&format!(
         r#"use std::path::PathBuf;
+        use alloy::primitives::{{U256, I256}};
         use super::super::super::typings::{indexer_name_formatted}::events::{handler_registry_name}::{{no_extensions, {event_type_name}"#,
         indexer_name_formatted = camel_to_snake(indexer_name),
         handler_registry_name = camel_to_snake(&contract.name),
@@ -777,12 +779,16 @@ pub fn generate_event_handlers(
         // this checks storage enabled as well
         if !storage.csv_disable_create_headers() {
             let mut csv_data = String::new();
-            csv_data.push_str(r#"format!("{:?}", result.tx_information.address),"#);
+            csv_data.push_str(r#"result.tx_information.address.to_string(),"#);
 
             for item in &abi_name_properties {
                 if item.abi_type == "address" {
-                    let key = format!("result.event_data.{},", item.abi_name);
-                    csv_data.push_str(&format!(r#"format!("{{:?}}", {}),"#, key));
+                    let key = format!(
+                        "result.event_data.{}\
+                    ",
+                        item.abi_name
+                    );
+                    csv_data.push_str(&format!(r#"{}.to_string(),"#, key));
                 } else if item.abi_type.contains("bytes") {
                     csv_data.push_str(&format!(
                         r#"result.event_data.{}.iter().map(|byte| format!("{{:02x}}", byte)).collect::<Vec<_>>().join(""),"#,
@@ -796,9 +802,10 @@ pub fn generate_event_handlers(
                 } else {
                     csv_data.push_str(&format!("result.event_data.{}.to_string(),", item.abi_name));
                 }
+                csv_data.push_str("\n")
             }
 
-            csv_data.push_str(r#"format!("{:?}", result.tx_information.transaction_hash),"#);
+            csv_data.push_str(r#"result.tx_information.transaction_hash.to_string(),"#);
             csv_data.push_str(r#"result.tx_information.block_number.to_string(),"#);
             csv_data.push_str(r#"result.tx_information.block_hash.to_string(),"#);
             csv_data.push_str(r#"result.tx_information.network.to_string(),"#);
@@ -834,21 +841,37 @@ pub fn generate_event_handlers(
 
         // this checks storage enabled as well
         if !storage.postgres_disable_create_tables() {
-            let mut data =
-                "vec![EthereumSqlTypeWrapper::Address(result.tx_information.address),".to_string();
+            let mut data = "vec![\nEthereumSqlTypeWrapper::Address(result.tx_information.address),"
+                .to_string();
 
             for item in &abi_name_properties {
                 if let Some(wrapper) = &item.ethereum_sql_type_wrapper {
                     data.push_str(&format!(
-                        "EthereumSqlTypeWrapper::{}(result.event_data.{}{}),",
+                        "\nEthereumSqlTypeWrapper::{}({}result.event_data.{}{}),",
                         wrapper.raw_name(),
-                        item.value,
+                        match wrapper {
+                            EthereumSqlTypeWrapper::U256(_) => "U256::from(",
+                            EthereumSqlTypeWrapper::I256(_) => "I256::from(",
+                            _ => "",
+                        },
+                        item.abi_name,
                         if item.abi_type.contains("bytes") {
                             let static_bytes = item.abi_type.replace("bytes", "").replace("[]", "");
                             if !static_bytes.is_empty() {
                                 ".into()"
                             } else {
                                 ".clone()"
+                            }
+                        } else if item.abi_type.starts_with("int")
+                            || item.abi_type.starts_with("uint")
+                        {
+                            match wrapper {
+                                EthereumSqlTypeWrapper::I32(_) if &item.abi_type == "int24" => {
+                                    ".as_i32()"
+                                },
+                                EthereumSqlTypeWrapper::I256(_)
+                                | EthereumSqlTypeWrapper::U256(_) => ")",
+                                _ => "",
                             }
                         } else {
                             ""
@@ -860,15 +883,19 @@ pub fn generate_event_handlers(
                 }
             }
 
-            data.push_str("EthereumSqlTypeWrapper::B256(result.tx_information.transaction_hash),");
-            data.push_str("EthereumSqlTypeWrapper::U64(result.tx_information.block_number),");
-            data.push_str("EthereumSqlTypeWrapper::B256(result.tx_information.block_hash),");
             data.push_str(
-                "EthereumSqlTypeWrapper::String(result.tx_information.network.to_string()),",
+                "\nEthereumSqlTypeWrapper::B256(result.tx_information.transaction_hash),",
             );
-            data.push_str("EthereumSqlTypeWrapper::U64(result.tx_information.transaction_index),");
-            data.push_str("EthereumSqlTypeWrapper::U256(result.tx_information.log_index)");
-            data.push_str("]");
+            data.push_str("\nEthereumSqlTypeWrapper::U64(result.tx_information.block_number),");
+            data.push_str("\nEthereumSqlTypeWrapper::B256(result.tx_information.block_hash),");
+            data.push_str(
+                "\nEthereumSqlTypeWrapper::String(result.tx_information.network.to_string()),",
+            );
+            data.push_str(
+                "\nEthereumSqlTypeWrapper::U64(result.tx_information.transaction_index),",
+            );
+            data.push_str("\nEthereumSqlTypeWrapper::U256(result.tx_information.log_index)");
+            data.push_str("\n]");
 
             postgres_write = format!(
                 r#"
@@ -886,12 +913,14 @@ pub fn generate_event_handlers(
                         return Ok(());
                     }}
 
-                     if postgres_bulk_data.len() > 100 {{
+                    let rows = [{columns_names}];
+
+                    if postgres_bulk_data.len() > 100 {{
                         let result = context
                             .database
                             .bulk_insert_via_copy(
                                 "{table_name}",
-                                &[{columns_names}],
+                                &rows,
                                 &postgres_bulk_data
                                     .first()
                                     .ok_or("No first element in bulk data, impossible")?
@@ -911,7 +940,7 @@ pub fn generate_event_handlers(
                                 .database
                                 .bulk_insert(
                                     "{table_name}",
-                                    &[{columns_names}],
+                                    &rows,
                                     &postgres_bulk_data,
                                 )
                                 .await;
@@ -959,28 +988,27 @@ pub fn generate_event_handlers(
         let handler = format!(
             r#"
             async fn {handler_fn_name}_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegistry) {{
-                {event_type_name}::{handler_name}(
-                    {handler_name}Event::handler(|results, context| async move {{
-                            if results.is_empty() {{
-                                return Ok(());
-                            }}
+                let handler = {handler_name}Event::handler(|results, context| async move {{
+                                if results.is_empty() {{
+                                    return Ok(());
+                                }}
 
-                            {csv_write}
-                            {postgres_write}
+                                {csv_write}
+                                {postgres_write}
 
-                            rindexer_info!(
-                                "{contract_name}::{handler_name} - {{}} - {{}} events",
-                                "INDEXED".green(),
-                                results.len(),
-                            );
+                                rindexer_info!(
+                                    "{contract_name}::{handler_name} - {{}} - {{}} events",
+                                    "INDEXED".green(),
+                                    results.len(),
+                                );
 
-                            Ok(())
-                        }},
-                        no_extensions(),
-                      )
-                      .await,
-                )
-                .register(manifest_path, registry).await;
+                                Ok(())
+                            }},
+                            no_extensions(),
+                          )
+                          .await;
+
+                {event_type_name}::{handler_name}(handler).register(manifest_path, registry).await;
             }}
         "#,
             handler_fn_name = camel_to_snake(&event.name),

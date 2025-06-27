@@ -137,12 +137,12 @@ pub async fn native_transfer_block_fetch(
                     drop(block_tx);
                     return Ok(());
                 }
-            }
-            Ok(None) => {}
+            },
+            Ok(None) => {},
             Err(e) => {
                 error!("Error fetching '{}' blocks: {}", network, e.to_string());
                 sleep(Duration::from_secs(1)).await;
-            }
+            },
         }
     }
 }
@@ -242,7 +242,7 @@ async fn provider_trace_call(
         TraceProcessingMethod::TraceBlock => provider.trace_block(block).await,
         TraceProcessingMethod::DebugTraceBlockByNumber => {
             provider.debug_trace_block_by_number(block).await
-        }
+        },
         _ => unimplemented!("Unsupported trace method"),
     }
 }

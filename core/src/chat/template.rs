@@ -85,7 +85,7 @@ impl Template {
                     return integer_part.to_string();
                 }
                 format!("{}.{}", integer_part, fractional_part)
-            }
+            },
             Err(_) => value.to_string(),
         }
     }

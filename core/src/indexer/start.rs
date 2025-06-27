@@ -1,10 +1,9 @@
-use std::{path::Path, str::FromStr, sync::Arc};
+use std::{path::Path, sync::Arc};
 
 use alloy::primitives::U64;
 use futures::future::try_join_all;
 use tokio::{
     join,
-    sync::Semaphore,
     task::{JoinError, JoinHandle},
     time::Instant,
 };
@@ -32,7 +31,7 @@ use crate::{
     },
     manifest::core::Manifest,
     provider::{JsonRpcCachedProvider, ProviderError},
-    public_read_env_value, PostgresClient,
+    PostgresClient,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -490,7 +489,7 @@ pub async fn start_indexing(
 
     for result in results {
         match result {
-            Ok(()) => {}
+            Ok(()) => {},
             Err(e) => return Err(StartIndexingError::CombinedError(e)),
         }
     }
@@ -511,7 +510,7 @@ pub async fn initialize_database(
             Err(e) => {
                 error!("Error connecting to Postgres: {:?}", e);
                 Err(StartIndexingError::PostgresConnectionError(e))
-            }
+            },
         }
     } else {
         Ok(None)

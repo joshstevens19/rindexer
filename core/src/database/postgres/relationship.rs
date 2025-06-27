@@ -370,7 +370,7 @@ pub async fn create_relationships(
                     "Contract {} not found in `contracts` make sure it is defined",
                     foreign_key.contract_name
                 )));
-            }
+            },
             Some(contract) => {
                 let abi_items = ABIItem::read_abi_items(project_path, contract)?;
 
@@ -444,7 +444,7 @@ pub async fn create_relationships(
                     dropping_sql.extend(sql);
                     relationships.push(relationship);
                 }
-            }
+            },
         }
     }
 

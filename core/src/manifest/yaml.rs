@@ -32,7 +32,7 @@ fn substitute_env_variables(contents: &str) -> Result<String, regex::Error> {
             Err(_) => {
                 error!("Environment variable {} not found", var_name);
                 panic!("Environment variable {} not found", var_name)
-            }
+            },
         }
     });
     Ok(result.into_owned())
@@ -124,7 +124,7 @@ fn validate_manifest(
                                 ),
                             );
                         }
-                    }
+                    },
                     ValueOrArray::Array(filters) => {
                         for filter_details in filters {
                             if !events.iter().any(|e| e.name == *filter_details.event_name) {
@@ -136,7 +136,7 @@ fn validate_manifest(
                                 );
                             }
                         }
-                    }
+                    },
                 }
             }
 
@@ -219,7 +219,7 @@ fn validate_manifest(
         if let Some(contracts) = &global.contracts {
             for contract in contracts {
                 match &contract.abi {
-                    StringOrArray::Single(_) => {}
+                    StringOrArray::Single(_) => {},
                     StringOrArray::Multiple(value) => {
                         return Err(ValidateManifestError::GlobalAbiCanOnlyBeASingleString(
                             format!(
@@ -227,7 +227,7 @@ fn validate_manifest(
                                 value
                             ),
                         ));
-                    }
+                    },
                 }
             }
         }
@@ -268,7 +268,7 @@ pub fn read_manifest_raw(file_path: &PathBuf) -> Result<Manifest, ReadManifestEr
         Some(project_path) => {
             validate_manifest(project_path, &manifest)?;
             Ok(manifest)
-        }
+        },
     }
 }
 
@@ -332,7 +332,7 @@ pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError>
         Some(project_path) => {
             validate_manifest(project_path, &manifest_after_transform)?;
             Ok(manifest_after_transform)
-        }
+        },
     }
 }
 

@@ -62,11 +62,11 @@ fn resolve_path(override_path: &Option<String>) -> Result<PathBuf, String> {
         Some(path) => {
             let path = PathBuf::from_str(path).map_err(|_| "Invalid path provided.".to_string())?;
             Ok(path)
-        }
+        },
         None => {
             Ok(std::env::current_dir()
                 .map_err(|_| "Failed to get current directory.".to_string())?)
-        }
+        },
     }
 }
 
@@ -87,7 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             handle_new_command(resolved_path, project_type)
-        }
+        },
         Commands::Add { subcommand, path } => {
             let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;
             load_env_from_project_path(&resolved_path);
@@ -95,26 +95,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match subcommand {
                 AddSubcommands::Contract => handle_add_contract_command(resolved_path).await,
             }
-        }
+        },
         Commands::Codegen { subcommand, path } => {
             let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;
             load_env_from_project_path(&resolved_path);
             handle_codegen_command(resolved_path, subcommand).await
-        }
+        },
         Commands::Start { subcommand, path } => {
             let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;
             load_env_from_project_path(&resolved_path);
             start(resolved_path, subcommand).await
-        }
+        },
         Commands::Delete { path } => {
             let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;
             load_env_from_project_path(&resolved_path);
             handle_delete_command(resolved_path).await
-        }
+        },
         Commands::Phantom { subcommand, path } => {
             let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;
             load_env_from_project_path(&resolved_path);
             handle_phantom_commands(resolved_path, subcommand).await
-        }
+        },
     }
 }

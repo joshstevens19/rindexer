@@ -16,8 +16,8 @@ sol!(
     "./abis/erc20-abi.json"
 );
 
-pub async fn usdt_get_ethereum_provider_contract(
-) -> USDTEthereum::USDTEthereumInstance<Arc<RindexerProvider>, AnyNetwork> {
+pub async fn usdt_get_ethereum_provider_contract()
+-> USDTEthereum::USDTEthereumInstance<Arc<RindexerProvider>, AnyNetwork> {
     let address: Address =
         "0xdac17f958d2ee523a2206206994597c13d831ec7".parse().expect("Invalid address");
 
@@ -31,8 +31,8 @@ sol!(
     "./abis/erc20-abi.json"
 );
 
-pub async fn usdt_get_base_provider_contract(
-) -> USDTBase::USDTBaseInstance<Arc<RindexerProvider>, AnyNetwork> {
+pub async fn usdt_get_base_provider_contract()
+-> USDTBase::USDTBaseInstance<Arc<RindexerProvider>, AnyNetwork> {
     let address: Address =
         "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2".parse().expect("Invalid address");
 

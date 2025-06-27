@@ -237,7 +237,7 @@ pub async fn prepare_indexes(
                     return Err(PrepareIndexesError::ContractMissing(
                         contract_event_indexes.name.clone(),
                     ));
-                }
+                },
                 Some(contract) => {
                     let abi_items = ABIItem::read_abi_items(project_path, contract)?;
 
@@ -299,7 +299,7 @@ pub async fn prepare_indexes(
                             index_results.push(index_result);
                         }
                     }
-                }
+                },
             }
         }
     }

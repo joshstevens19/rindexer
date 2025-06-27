@@ -1,8 +1,8 @@
 use std::{env, path::PathBuf, str::FromStr};
 
 use rindexer::{
-    event::callback_registry::TraceCallbackRegistry, manifest::yaml::read_manifest, start_rindexer,
     GraphqlOverrideSettings, IndexingDetails, StartDetails,
+    event::callback_registry::TraceCallbackRegistry, manifest::yaml::read_manifest, start_rindexer,
 };
 
 use self::rindexer_lib::indexers::all_handlers::register_all_handlers;
@@ -37,11 +37,11 @@ async fn main() {
                         Err(_) => {
                             println!("Invalid port number");
                             return;
-                        }
+                        },
                     }
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 
@@ -72,15 +72,15 @@ async fn main() {
             .await;
 
             match result {
-                Ok(_) => {}
+                Ok(_) => {},
                 Err(e) => {
                     println!("Error starting rindexer: {:?}", e);
-                }
+                },
             }
-        }
+        },
         Err(e) => {
             println!("Error getting current directory: {:?}", e);
-        }
+        },
     }
 }
 

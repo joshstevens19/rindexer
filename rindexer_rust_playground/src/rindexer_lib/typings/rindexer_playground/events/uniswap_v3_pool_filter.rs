@@ -16,10 +16,10 @@ use super::uniswap_v3_pool_filter_abi_gen::RindexerUniswapV3PoolFilterGen::{
     self, RindexerUniswapV3PoolFilterGenEvents, RindexerUniswapV3PoolFilterGenInstance,
 };
 use alloy::network::AnyNetwork;
-use alloy::primitives::{Address, Bytes, B256};
+use alloy::primitives::{Address, B256, Bytes};
 use alloy::sol_types::{SolEvent, SolEventInterface, SolType};
 use rindexer::{
-    async_trait,
+    AsyncCsvAppender, FutureExt, PostgresClient, async_trait,
     event::{
         callback_registry::{
             EventCallbackRegistry, EventCallbackRegistryInformation, EventCallbackResult,
@@ -33,7 +33,6 @@ use rindexer::{
         yaml::read_manifest,
     },
     provider::{JsonRpcCachedProvider, RindexerProvider},
-    AsyncCsvAppender, FutureExt, PostgresClient,
 };
 use std::collections::HashMap;
 use std::error::Error;
@@ -326,7 +325,7 @@ where
         match self {
             UniswapV3PoolFilterEventType::Swap(_) => {
                 "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67"
-            }
+            },
         }
     }
 
@@ -357,11 +356,11 @@ where
                         Ok(event) => {
                             let result: SwapData = event;
                             Arc::new(result) as Arc<dyn Any + Send + Sync>
-                        }
+                        },
                         Err(error) => Arc::new(error) as Arc<dyn Any + Send + Sync>,
                     }
                 })
-            }
+            },
         }
     }
 
@@ -432,7 +431,7 @@ where
                     let event = Arc::clone(&event);
                     async move { event.call(result).await }.boxed()
                 })
-            }
+            },
         };
 
         registry.register_event(EventCallbackRegistryInformation {

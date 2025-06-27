@@ -80,7 +80,7 @@ impl ContractEventProcessingConfig {
                     current_block: self.start_block,
                     next_block: self.end_block,
                 }))
-            }
+            },
         }
     }
 
@@ -256,10 +256,10 @@ impl EventProcessingConfig {
         match self {
             Self::ContractEventProcessing(config) => {
                 config.stream_last_synced_block_file_path.clone()
-            }
+            },
             Self::FactoryEventProcessing(config) => {
                 config.stream_last_synced_block_file_path.clone()
-            }
+            },
         }
     }
 

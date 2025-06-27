@@ -30,10 +30,10 @@ fn generate_rindexer_rust_project(project_path: &Path) {
     match generated {
         Ok(_) => {
             print_success_message("Successfully generated rindexer rust project.");
-        }
+        },
         Err(err) => {
             print_error_message(&format!("Failed to generate rindexer rust project: {}", err));
-        }
+        },
     }
 }
 

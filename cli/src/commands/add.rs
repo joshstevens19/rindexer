@@ -115,7 +115,7 @@ pub async fn handle_add_contract_command(
                 retry_attempts += 1;
                 timeout *= retry_attempts * 2;
                 continue;
-            }
+            },
         };
 
         if metadata.items.is_empty() {

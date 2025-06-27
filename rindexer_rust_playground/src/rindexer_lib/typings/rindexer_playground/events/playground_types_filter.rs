@@ -16,10 +16,10 @@ use super::playground_types_filter_abi_gen::RindexerPlaygroundTypesFilterGen::{
     self, RindexerPlaygroundTypesFilterGenEvents, RindexerPlaygroundTypesFilterGenInstance,
 };
 use alloy::network::AnyNetwork;
-use alloy::primitives::{Address, Bytes, B256};
+use alloy::primitives::{Address, B256, Bytes};
 use alloy::sol_types::{SolEvent, SolEventInterface, SolType};
 use rindexer::{
-    async_trait,
+    AsyncCsvAppender, FutureExt, PostgresClient, async_trait,
     event::{
         callback_registry::{
             EventCallbackRegistry, EventCallbackRegistryInformation, EventCallbackResult,
@@ -33,7 +33,6 @@ use rindexer::{
         yaml::read_manifest,
     },
     provider::{JsonRpcCachedProvider, RindexerProvider},
-    AsyncCsvAppender, FutureExt, PostgresClient,
 };
 use std::collections::HashMap;
 use std::error::Error;
@@ -227,7 +226,7 @@ where
         match self {
             PlaygroundTypesFilterEventType::Swap(_) => {
                 "0xd05a7c246337c1ef3460a6bf033445dc2004f4e65a9c755d82104f902aa300a4"
-            }
+            },
         }
     }
 
@@ -258,11 +257,11 @@ where
                         Ok(event) => {
                             let result: SwapData = event;
                             Arc::new(result) as Arc<dyn Any + Send + Sync>
-                        }
+                        },
                         Err(error) => Arc::new(error) as Arc<dyn Any + Send + Sync>,
                     }
                 })
-            }
+            },
         }
     }
 
@@ -333,7 +332,7 @@ where
                     let event = Arc::clone(&event);
                     async move { event.call(result).await }.boxed()
                 })
-            }
+            },
         };
 
         registry.register_event(EventCallbackRegistryInformation {

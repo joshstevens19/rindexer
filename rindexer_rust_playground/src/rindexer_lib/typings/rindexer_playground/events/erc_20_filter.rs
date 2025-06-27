@@ -16,10 +16,10 @@ use super::erc_20_filter_abi_gen::RindexerERC20FilterGen::{
     self, RindexerERC20FilterGenEvents, RindexerERC20FilterGenInstance,
 };
 use alloy::network::AnyNetwork;
-use alloy::primitives::{Address, Bytes, B256};
+use alloy::primitives::{Address, B256, Bytes};
 use alloy::sol_types::{SolEvent, SolEventInterface, SolType};
 use rindexer::{
-    async_trait,
+    AsyncCsvAppender, FutureExt, PostgresClient, async_trait,
     event::{
         callback_registry::{
             EventCallbackRegistry, EventCallbackRegistryInformation, EventCallbackResult,
@@ -33,7 +33,6 @@ use rindexer::{
         yaml::read_manifest,
     },
     provider::{JsonRpcCachedProvider, RindexerProvider},
-    AsyncCsvAppender, FutureExt, PostgresClient,
 };
 use std::collections::HashMap;
 use std::error::Error;
@@ -327,10 +326,10 @@ where
         match self {
             ERC20FilterEventType::Approval(_) => {
                 "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925"
-            }
+            },
             ERC20FilterEventType::Transfer(_) => {
                 "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
-            }
+            },
         }
     }
 
@@ -361,7 +360,7 @@ where
                     Ok(event) => {
                         let result: ApprovalData = event;
                         Arc::new(result) as Arc<dyn Any + Send + Sync>
-                    }
+                    },
                     Err(error) => Arc::new(error) as Arc<dyn Any + Send + Sync>,
                 }
             }),
@@ -371,7 +370,7 @@ where
                     Ok(event) => {
                         let result: TransferData = event;
                         Arc::new(result) as Arc<dyn Any + Send + Sync>
-                    }
+                    },
                     Err(error) => Arc::new(error) as Arc<dyn Any + Send + Sync>,
                 }
             }),
@@ -445,7 +444,7 @@ where
                     let event = Arc::clone(&event);
                     async move { event.call(result).await }.boxed()
                 })
-            }
+            },
 
             ERC20FilterEventType::Transfer(event) => {
                 let event = Arc::new(event);
@@ -453,7 +452,7 @@ where
                     let event = Arc::clone(&event);
                     async move { event.call(result).await }.boxed()
                 })
-            }
+            },
         };
 
         registry.register_event(EventCallbackRegistryInformation {

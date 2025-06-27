@@ -827,7 +827,7 @@ pub fn generate_trace_handlers(
             );
             data.push_str("EthereumSqlTypeWrapper::U64(result.tx_information.transaction_index),");
             data.push_str("EthereumSqlTypeWrapper::U256(result.tx_information.log_index)");
-            data.push_str("]");
+            data.push(']');
 
             postgres_write = format!(
                 r#"

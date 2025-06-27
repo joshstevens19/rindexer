@@ -46,11 +46,11 @@ impl SNS {
         match client.list_topics().send().await {
             Ok(_) => {
                 info!("Successfully connected to SNS.");
-            }
+            },
             Err(error) => {
                 error!("Error connecting to SNS: {}", error);
                 panic!("Error connecting to SNS: {}", error);
-            }
+            },
         }
 
         Self { client }

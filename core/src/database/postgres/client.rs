@@ -127,11 +127,11 @@ impl PostgresClient {
                         }
                         error!("Error connecting to database: {}", e);
                         return Err(PostgresConnectionError::CanNotConnectToDatabase);
-                    }
+                    },
                     Err(e) => {
                         error!("Timeout connecting to database: {}", e);
                         return Err(PostgresConnectionError::CanNotConnectToDatabase);
-                    }
+                    },
                 };
 
             // Spawn the connection future to ensure the connection is established
@@ -139,7 +139,7 @@ impl PostgresClient {
 
             // Perform a simple query to check the connection
             match client.query_one("SELECT 1", &[]).await {
-                Ok(_) => {}
+                Ok(_) => {},
                 Err(_) => return Err(PostgresConnectionError::CanNotConnectToDatabase),
             };
 

@@ -200,10 +200,10 @@ impl Storage {
                     match relationships_result {
                         Ok(result) => {
                             relationships = result;
-                        }
+                        },
                         Err(e) => {
                             return Err(RelationshipsAndIndexersError::RelationshipError(e));
-                        }
+                        },
                     }
                 }
 
@@ -217,12 +217,12 @@ impl Storage {
                     match indexes_result {
                         Ok(result) => {
                             postgres_indexes = result;
-                        }
+                        },
                         Err(e) => {
                             return Err(
                                 RelationshipsAndIndexersError::FailedToPrepareAndDropIndexes(e),
                             );
-                        }
+                        },
                     }
                 }
 

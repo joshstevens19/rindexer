@@ -46,7 +46,7 @@ fn generate_contract_code(
                     contract_path = abi_location
                 );
                 Code::new(code)
-            }
+            },
             // let them pass in the address
             ValueOrArray::Array(_) => {
                 let code = format!(
@@ -69,7 +69,7 @@ fn generate_contract_code(
                     contract_path = abi_location
                 );
                 Code::new(code)
-            }
+            },
         }
     } else {
         Code::blank()

@@ -80,15 +80,13 @@ pub fn fetch_logs_stream(
             // This check can be very noisy. We want to only sample this warning to notify
             // the user, rather than warn on every log fetch.
             if let Some(range) = max_block_range_limitation {
-                if range.to::<u64>() < 5000 {
-                    if random_ratio(1, 20) {
-                        warn!(
-                            "{}::{} - RPC PROVIDER IS SLOW - Slow indexing mode enabled, max block range limitation: {} blocks - we advise using a faster provider who can predict the next block ranges.",
-                            &config.info_log_name(),
-                            &config.network_contract().network,
-                            range
-                        );
-                    }
+                if range.to::<u64>() < 5000 && random_ratio(1, 20) {
+                    warn!(
+                        "{}::{} - RPC PROVIDER IS SLOW - Slow indexing mode enabled, max block range limitation: {} blocks - we advise using a faster provider who can predict the next block ranges.",
+                        &config.info_log_name(),
+                        &config.network_contract().network,
+                        range
+                    );
                 }
             }
 
@@ -297,7 +295,7 @@ async fn fetch_historic_logs_stream(
                     })
                 };
             }
-        }
+        },
         Err(err) => {
             // This is fundamental to the rindexer flow. We intentionally fetch a large block range
             // to get information on what the ideal block range should be.
@@ -350,7 +348,7 @@ async fn fetch_historic_logs_stream(
                 next: current_filter.set_from_block(from_block).set_to_block(halved_to_block),
                 max_block_range_limitation,
             });
-        }
+        },
     }
 
     None
@@ -531,7 +529,7 @@ async fn live_indexing_stream(
                                         }
 
                                         log_response_to_large_to_block = None;
-                                    }
+                                    },
                                     Err(err) => {
                                         if let Some(retry_result) = retry_with_block_range(
                                             info_log_name,
@@ -572,7 +570,7 @@ async fn live_indexing_stream(
 
                                             log_response_to_large_to_block = Some(halved_to_block);
                                         }
-                                    }
+                                    },
                                 }
                             }
                         }
@@ -580,7 +578,7 @@ async fn live_indexing_stream(
                 } else {
                     info!("WARNING - empty latest block returned from provider, will try again in 200ms");
                 }
-            }
+            },
             Err(e) => {
                 error!(
                     "Error getting latest block, will try again in 1 seconds - err: {}",
@@ -588,7 +586,7 @@ async fn live_indexing_stream(
                 );
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 continue;
-            }
+            },
         }
 
         let elapsed = iteration_start.elapsed();

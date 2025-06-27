@@ -52,37 +52,37 @@ sol!(
       },
       {
         "indexed": false,
-        "internalType": "int24",
+        "internalType": "int8",
         "name": "tick2",
         "type": "int8"
       },
       {
         "indexed": false,
-        "internalType": "int24",
+        "internalType": "int16",
         "name": "tick3",
         "type": "int16"
       },
       {
         "indexed": false,
-        "internalType": "int24",
+        "internalType": "int32",
         "name": "tick4",
         "type": "int32"
       },
       {
         "indexed": false,
-        "internalType": "int24",
+        "internalType": "int64",
         "name": "tick5",
         "type": "int64"
       },
       {
         "indexed": false,
-        "internalType": "int24",
+        "internalType": "int128",
         "name": "tick6",
         "type": "int128"
       },
       {
         "indexed": false,
-        "internalType": "int24",
+        "internalType": "int192",
         "name": "tick7",
         "type": "int192"
       }

@@ -1,7 +1,6 @@
 use std::{path::Path, str::FromStr, sync::Arc};
 
 use alloy::primitives::U64;
-use log::info;
 use rust_decimal::Decimal;
 use tokio::{
     fs,
@@ -46,7 +45,7 @@ async fn get_last_synced_block_number_file(
             Ok(value) => Ok(Some(value)),
             Err(e) => {
                 Err(UpdateLastSyncedBlockNumberFile::ParseError(value.to_string(), e.to_string()))
-            }
+            },
         };
     }
 
@@ -164,11 +163,11 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
                 } else {
                     Some(parsed)
                 }
-            }
+            },
             Err(e) => {
                 error!("Error fetching last synced block: {:?}", e);
                 None
-            }
+            },
         }
     } else {
         None
