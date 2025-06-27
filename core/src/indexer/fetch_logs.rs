@@ -37,7 +37,7 @@ pub fn fetch_logs_stream(
     //
     // TODO: If the yaml config has many network-events, this should be 2-3. If it has a few, it can
     //       probably be much higher to build a better backlog and max-throughput.
-    let (tx, rx) = mpsc::channel(3);
+    let (tx, rx) = mpsc::channel(2);
 
     tokio::spawn(async move {
         let mut current_filter = config.to_event_filter().unwrap();
