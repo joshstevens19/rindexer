@@ -53,7 +53,7 @@ pub async fn handle_codegen_command(
             })?;
             format_all_files_for_project(project_path);
             print_success_message("Generated rindexer typings.");
-        },
+        }
         CodegenSubcommands::Indexer => {
             generate_rindexer_handlers(manifest, &rindexer_yaml_path, true).map_err(|e| {
                 print_error_message(&format!(
@@ -64,10 +64,10 @@ pub async fn handle_codegen_command(
             })?;
             format_all_files_for_project(project_path);
             print_success_message("Generated rindexer indexer handlers.");
-        },
+        }
         CodegenSubcommands::GraphQL { endpoint: _endpoint } => {
             unreachable!("This should not be reachable");
-        },
+        }
     }
 
     Ok(())

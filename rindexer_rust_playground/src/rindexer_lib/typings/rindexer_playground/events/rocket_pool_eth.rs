@@ -339,10 +339,10 @@ where
         match self {
             RocketPoolETHEventType::Approval(_) => {
                 "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925"
-            },
+            }
             RocketPoolETHEventType::Transfer(_) => {
                 "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
-            },
+            }
         }
     }
 
@@ -374,11 +374,11 @@ where
                         Ok(event) => {
                             let result: ApprovalData = event;
                             Arc::new(result) as Arc<dyn Any + Send + Sync>
-                        },
+                        }
                         Err(error) => Arc::new(error) as Arc<dyn Any + Send + Sync>,
                     }
                 })
-            },
+            }
 
             RocketPoolETHEventType::Transfer(_) => {
                 Arc::new(move |topics: Vec<B256>, data: Bytes| {
@@ -386,11 +386,11 @@ where
                         Ok(event) => {
                             let result: TransferData = event;
                             Arc::new(result) as Arc<dyn Any + Send + Sync>
-                        },
+                        }
                         Err(error) => Arc::new(error) as Arc<dyn Any + Send + Sync>,
                     }
                 })
-            },
+            }
         }
     }
 
@@ -461,7 +461,7 @@ where
                     let event = Arc::clone(&event);
                     async move { event.call(result).await }.boxed()
                 })
-            },
+            }
 
             RocketPoolETHEventType::Transfer(event) => {
                 let event = Arc::new(event);
@@ -469,7 +469,7 @@ where
                     let event = Arc::clone(&event);
                     async move { event.call(result).await }.boxed()
                 })
-            },
+            }
         };
 
         registry.register_event(EventCallbackRegistryInformation {

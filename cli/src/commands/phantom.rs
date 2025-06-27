@@ -69,7 +69,7 @@ pub async fn handle_phantom_commands(
                 },
             )
             .await
-        },
+        }
     }
 }
 
@@ -149,7 +149,7 @@ async fn handle_phantom_init(project_path: &Path) -> Result<(), Box<dyn Error>> 
             });
 
             write_manifest(&manifest, &rindexer_yaml_path)?;
-        },
+        }
         "shadow" => {
             let fork_id = prompt_for_input("Enter the fork ID", None, None, None);
 
@@ -162,7 +162,7 @@ async fn handle_phantom_init(project_path: &Path) -> Result<(), Box<dyn Error>> 
             });
 
             write_manifest(&manifest, &rindexer_yaml_path)?;
-        },
+        }
         value => panic!("Unknown phantom provider: {}", value),
     }
 
@@ -276,7 +276,7 @@ fn handle_phantom_clone(project_path: &Path, args: &PhantomBaseArgs) -> Result<(
                         ValueOrArray::Array(addresses) => {
                             print_warn_message(&format!("Multiple addresses found for contract {} on network {} rindexer.yaml, using first one", args.contract_name.as_str(), args.network.as_str()));
                             addresses.first().unwrap()
-                        },
+                        }
                     };
 
                     if !project_path.join("phantom").exists() {
@@ -325,13 +325,13 @@ fn handle_phantom_clone(project_path: &Path, args: &PhantomBaseArgs) -> Result<(
                 print_error_message(&error_message);
                 Err(error_message.into())
             }
-        },
+        }
         None => {
             let error_message =
                 format!("Contract {} not found in rindexer.yaml", args.contract_name);
             print_error_message(&error_message);
             Err(error_message.into())
-        },
+        }
     }
 }
 
@@ -434,13 +434,13 @@ fn handle_phantom_compile(
                 print_error_message(&error_message);
                 Err(error_message.into())
             }
-        },
+        }
         None => {
             let error_message =
                 format!("Contract {} not found in rindexer.yaml", args.contract_name);
             print_error_message(&error_message);
             Err(error_message.into())
-        },
+        }
     }
 }
 
@@ -578,12 +578,12 @@ async fn handle_phantom_deploy(
                 print_error_message(&error_message);
                 Err(error_message.into())
             }
-        },
+        }
         None => {
             let error_message =
                 format!("Contract {} not found in rindexer.yaml", args.contract_name);
             print_error_message(&error_message);
             Err(error_message.into())
-        },
+        }
     }
 }

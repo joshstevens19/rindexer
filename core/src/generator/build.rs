@@ -265,7 +265,7 @@ pub fn generate_rindexer_typings(
             }
 
             Ok(())
-        },
+        }
         None => {
             let manifest_location = manifest_location.to_str();
             match manifest_location {
@@ -273,10 +273,10 @@ pub fn generate_rindexer_typings(
                     Err(GenerateRindexerTypingsError::ManifestLocationDoesNotHaveAParent(
                         manifest_location.to_string(),
                     ))
-                },
+                }
                 None => Err(GenerateRindexerTypingsError::ManifestLocationCanNotBeResolved),
             }
-        },
+        }
     }
 }
 
@@ -409,7 +409,7 @@ pub fn generate_rindexer_handlers(
             }
 
             Ok(())
-        },
+        }
     }
 }
 
@@ -445,7 +445,7 @@ pub fn generate_rindexer_typings_and_handlers(
         Some(parent) => {
             format_all_files_for_project(parent);
             Ok(())
-        },
+        }
         None => {
             let manifest_location = manifest_location.to_str();
             match manifest_location {
@@ -454,7 +454,7 @@ pub fn generate_rindexer_typings_and_handlers(
                 )),
                 None => Err(GenerateError::ManifestLocationCanNotBeResolved),
             }
-        },
+        }
     }
 }
 

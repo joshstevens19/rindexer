@@ -295,7 +295,7 @@ async fn fetch_historic_logs_stream(
                     })
                 };
             }
-        },
+        }
         Err(err) => {
             // This is fundamental to the rindexer flow. We intentionally fetch a large block range
             // to get information on what the ideal block range should be.
@@ -348,7 +348,7 @@ async fn fetch_historic_logs_stream(
                 next: current_filter.set_from_block(from_block).set_to_block(halved_to_block),
                 max_block_range_limitation,
             });
-        },
+        }
     }
 
     None
@@ -529,7 +529,7 @@ async fn live_indexing_stream(
                                         }
 
                                         log_response_to_large_to_block = None;
-                                    },
+                                    }
                                     Err(err) => {
                                         if let Some(retry_result) = retry_with_block_range(
                                             info_log_name,
@@ -570,7 +570,7 @@ async fn live_indexing_stream(
 
                                             log_response_to_large_to_block = Some(halved_to_block);
                                         }
-                                    },
+                                    }
                                 }
                             }
                         }
@@ -578,7 +578,7 @@ async fn live_indexing_stream(
                 } else {
                     info!("WARNING - empty latest block returned from provider, will try again in 200ms");
                 }
-            },
+            }
             Err(e) => {
                 error!(
                     "Error getting latest block, will try again in 1 seconds - err: {}",
@@ -586,7 +586,7 @@ async fn live_indexing_stream(
                 );
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 continue;
-            },
+            }
         }
 
         let elapsed = iteration_start.elapsed();

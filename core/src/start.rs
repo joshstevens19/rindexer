@@ -244,7 +244,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
             })?;
 
             Ok(())
-        },
+        }
         None => Err(StartRindexerError::NoProjectPathFoundUsingParentOfManifestPath),
     }
 }

@@ -45,7 +45,7 @@ async fn get_last_synced_block_number_file(
             Ok(value) => Ok(Some(value)),
             Err(e) => {
                 Err(UpdateLastSyncedBlockNumberFile::ParseError(value.to_string(), e.to_string()))
-            },
+            }
         };
     }
 
@@ -163,11 +163,11 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
                 } else {
                     Some(parsed)
                 }
-            },
+            }
             Err(e) => {
                 error!("Error fetching last synced block: {:?}", e);
                 None
-            },
+            }
         }
     } else {
         None

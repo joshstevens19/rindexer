@@ -325,7 +325,7 @@ where
         match self {
             UniswapV3PoolFilterEventType::Swap(_) => {
                 "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67"
-            },
+            }
         }
     }
 
@@ -356,11 +356,11 @@ where
                         Ok(event) => {
                             let result: SwapData = event;
                             Arc::new(result) as Arc<dyn Any + Send + Sync>
-                        },
+                        }
                         Err(error) => Arc::new(error) as Arc<dyn Any + Send + Sync>,
                     }
                 })
-            },
+            }
         }
     }
 
@@ -431,7 +431,7 @@ where
                     let event = Arc::clone(&event);
                     async move { event.call(result).await }.boxed()
                 })
-            },
+            }
         };
 
         registry.register_event(EventCallbackRegistryInformation {

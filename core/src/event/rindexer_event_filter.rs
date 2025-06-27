@@ -225,13 +225,13 @@ impl RindexerEventFilter {
         match self {
             RindexerEventFilter::Address(filter) => {
                 RindexerEventFilter::Address(filter.set_to_block(block.into()))
-            },
+            }
             RindexerEventFilter::Filter(filter) => {
                 RindexerEventFilter::Filter(filter.set_to_block(block.into()))
-            },
+            }
             RindexerEventFilter::Factory(filter) => {
                 RindexerEventFilter::Factory(filter.set_to_block(block.into()))
-            },
+            }
         }
     }
 

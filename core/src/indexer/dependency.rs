@@ -162,13 +162,13 @@ impl ContractEventDependencies {
                 match next_tree {
                     None => {
                         next_tree = Some(tree);
-                    },
+                    }
                     Some(next_tree_value) => {
                         next_tree = Some(Arc::new(ContractEventDependencies::merge_trees(
                             &next_tree_value,
                             &tree,
                         )));
-                    },
+                    }
                 }
             }
         }
@@ -291,7 +291,7 @@ impl ContractEventDependencies {
                                 .collect_dependency_events(),
                         },
                     });
-                },
+                }
                 None => {
                     if let Some(dependency_event_tree) = contract_dependencies_tree {
                         let dependency_tree = EventsDependencyTree::from_dependency_event_tree(
@@ -307,7 +307,7 @@ impl ContractEventDependencies {
                             },
                         });
                     }
-                },
+                }
             }
         }
 
@@ -382,7 +382,7 @@ impl ContractEventsDependenciesConfig {
         {
             Some(contract_events_config) => {
                 contract_events_config.add_event_config(event_processing_config)
-            },
+            }
             None => {
                 dependency_event_processing_configs.push(ContractEventsDependenciesConfig {
                     contract_name: event_processing_config.contract_name().clone(),
@@ -394,7 +394,7 @@ impl ContractEventsDependenciesConfig {
                         .clone(),
                     events_config: vec![event_processing_config],
                 });
-            },
+            }
         }
     }
 
@@ -409,14 +409,14 @@ impl ContractEventsDependenciesConfig {
         {
             Some(contract_events_config) => {
                 contract_events_config.add_event_config(event_processing_config)
-            },
+            }
             None => {
                 panic!("Contract events config not found for {} dependency event processing config make sure it registered - trying to add to it - contract {} - event {}",
                        contract_name,
                        event_processing_config.contract_name(),
                        event_processing_config.event_name()
                 );
-            },
+            }
         }
     }
 }

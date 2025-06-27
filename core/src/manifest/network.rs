@@ -117,11 +117,11 @@ impl<'de> Deserialize<'de> for BlockPollFrequency {
                     _ if value.starts_with('/') => {
                         let divisor = value[1..].parse::<u32>().map_err(E::custom)?;
                         Ok(BlockPollFrequency::Division { divisor })
-                    },
+                    }
                     _ => {
                         let millis = value.parse::<u64>().map_err(E::custom)?;
                         Ok(BlockPollFrequency::PollRateMs { millis })
-                    },
+                    }
                 }
             }
         }

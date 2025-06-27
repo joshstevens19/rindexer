@@ -380,7 +380,7 @@ async fn trigger_event<T>(
                     id, event_identifier
                 );
                 break;
-            },
+            }
             Err(e) => {
                 if !is_running() {
                     info!("Detected shutdown, stopping event trigger");
@@ -395,7 +395,7 @@ async fn trigger_event<T>(
                 delay = (delay * 2).min(Duration::from_secs(15));
 
                 sleep(delay).await;
-            },
+            }
         }
     }
 }

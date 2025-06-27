@@ -111,7 +111,7 @@ pub async fn process_contracts_events_with_dependencies(
             Ok(inner_result) => inner_result?,
             Err(join_error) => {
                 return Err(ProcessContractsEventsWithDependenciesError::JoinError(join_error))
-            },
+            }
         }
     }
 
@@ -192,16 +192,16 @@ async fn process_contract_events_with_dependencies(
         for result in results {
             match result {
                 Ok(result) => match result {
-                    Ok(_) => {},
+                    Ok(_) => {}
                     Err(e) => {
                         error!("Error processing logs due to dependencies error: {:?}", e);
                         return Err(e);
-                    },
+                    }
                 },
                 Err(e) => {
                     error!("Error processing logs: {:?}", e);
                     return Err(ProcessContractEventsWithDependenciesError::JoinError(e));
-                },
+                }
             }
         }
 
@@ -459,7 +459,7 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                                                     .expect("Failed to get ordering_live_indexing_details_map")
                                                     .lock()
                                                     .await = ordering_live_indexing_details;
-                                        },
+                                        }
                                         Err(err) => {
                                             error!(
                                                     "{} - {} - Error fetching logs: {} - will try again in 200ms",
@@ -468,9 +468,9 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                                                     err
                                                 );
                                             break;
-                                        },
+                                        }
                                     }
-                                },
+                                }
                                 Err(err) => {
                                     error!(
                                             "{} - {} - Error fetching logs: {} - will try again in 200ms",
@@ -479,7 +479,7 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                                             err
                                         );
                                     break;
-                                },
+                                }
                             }
                         } else {
                             info!("WARNING - empty latest block returned from provider, will try again in 200ms");
@@ -487,13 +487,13 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                     } else {
                         info!("WARNING - empty latest block returned from provider, will try again in 200ms");
                     }
-                },
+                }
                 Err(error) => {
                     error!(
                         "Failed to get latest block, will try again in 200ms - error: {}",
                         error.to_string()
                     );
-                },
+                }
             }
         }
 
@@ -558,7 +558,7 @@ async fn handle_logs_result(
                 });
                 Ok(task)
             }
-        },
+        }
         Err(e) => {
             error!(
                 "[{}] - {} - {} - Error fetching logs: {}",
@@ -568,6 +568,6 @@ async fn handle_logs_result(
                 e
             );
             Err(e)
-        },
+        }
     }
 }

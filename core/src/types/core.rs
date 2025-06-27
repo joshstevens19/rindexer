@@ -63,7 +63,7 @@ impl LogParam {
                         .get(idx)
                         .expect("Complex type value must be present")
                         .clone();
-                },
+                }
                 None => return None,
             }
         }
@@ -90,7 +90,7 @@ impl ParsedLog {
                 .and_then(|param| param.get_param_value(rest)),
             _ => {
                 self.params.iter().find(|param| param.name == name).map(|param| param.value.clone())
-            },
+            }
         }
     }
 }

@@ -54,29 +54,29 @@ fn map_token_to_raw_values(token: &DynSolValue) -> Vec<String> {
         DynSolValue::Bytes(bytes) => vec![format!("{:?}", bytes)],
         DynSolValue::Int(int, _) => {
             vec![int.to_string()]
-        },
+        }
         DynSolValue::Uint(uint, _) => {
             vec![uint.to_string()]
-        },
+        }
         DynSolValue::Bool(b) => vec![b.to_string()],
         DynSolValue::String(s) => vec![s.clone()],
         DynSolValue::FixedArray(tokens) | DynSolValue::Array(tokens) => {
             let values: Vec<String> = tokens.iter().flat_map(map_token_to_raw_values).collect();
             vec![format!("[{}]", values.join(", "))]
-        },
+        }
         DynSolValue::Tuple(tokens) => {
             let mut values = vec![];
             for token in tokens {
                 values.extend(map_token_to_raw_values(token));
             }
             values
-        },
+        }
         _ => {
             error!("Error parsing unsupported token {:?}", token);
             unimplemented!(
                 "Functions and CustomStruct are not supported yet for `map_token_to_raw_values`"
             );
-        },
+        }
     }
 }
 
@@ -100,7 +100,7 @@ pub fn parse_topic(input: &str) -> B256 {
             } else {
                 B256::from(keccak256(input))
             }
-        },
+        }
     }
 }
 

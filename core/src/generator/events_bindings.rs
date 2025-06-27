@@ -435,7 +435,7 @@ fn build_pub_contract_fn(
         match contract.address() {
             None => {
                 panic!("Contract details should have an address");
-            },
+            }
             Some(value) => match value {
                 ValueOrArray::Value(address) => {
                     let address = format!("{:?}", address);
@@ -452,10 +452,10 @@ fn build_pub_contract_fn(
                         contract_name = contract_name,
                         address = address,
                     ))
-                },
+                }
                 ValueOrArray::Array(_) => {
                     unreachable!("Contract details should always be an single address");
-                },
+                }
             },
         }
     }
@@ -868,7 +868,7 @@ pub fn generate_event_handlers(
                             match wrapper {
                                 EthereumSqlTypeWrapper::I32(_) if &item.abi_type == "int24" => {
                                     ".as_i32()"
-                                },
+                                }
                                 EthereumSqlTypeWrapper::I256(_)
                                 | EthereumSqlTypeWrapper::U256(_) => ")",
                                 _ => "",

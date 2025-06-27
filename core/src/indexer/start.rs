@@ -489,7 +489,7 @@ pub async fn start_indexing(
 
     for result in results {
         match result {
-            Ok(()) => {},
+            Ok(()) => {}
             Err(e) => return Err(StartIndexingError::CombinedError(e)),
         }
     }
@@ -510,7 +510,7 @@ pub async fn initialize_database(
             Err(e) => {
                 error!("Error connecting to Postgres: {:?}", e);
                 Err(StartIndexingError::PostgresConnectionError(e))
-            },
+            }
         }
     } else {
         Ok(None)

@@ -417,7 +417,7 @@ pub fn solidity_type_to_db_type(abi_type: &str) -> String {
                 | 240 | 248 | 256 => "VARCHAR(78)",
                 _ => panic!("Unsupported {}N size: {}", prefix, size),
             }
-        },
+        }
         _ => panic!("Unsupported type: {}", base_type),
     };
 

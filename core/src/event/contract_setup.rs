@@ -72,7 +72,7 @@ impl ContractInformation {
                     return Err(CreateContractInformationError::CanNotFindNetworkFromProviders(
                         c.network.clone(),
                     ));
-                },
+                }
                 Some(provider) => {
                     details.push(NetworkContract {
                         id: generate_random_id(10),
@@ -84,7 +84,7 @@ impl ContractInformation {
                         end_block: c.end_block,
                         disable_logs_bloom_checks: provider.disable_logs_bloom_checks,
                     });
-                },
+                }
             }
         }
 
@@ -137,7 +137,7 @@ impl TraceInformation {
                     return Err(CreateContractInformationError::CanNotFindNetworkFromProviders(
                         name,
                     ));
-                },
+                }
                 Some(provider) => {
                     details.push(NetworkTrace {
                         id: generate_random_id(10),
@@ -147,7 +147,7 @@ impl TraceInformation {
                         end_block: n.end_block,
                         method: n.method,
                     });
-                },
+                }
             }
         }
 

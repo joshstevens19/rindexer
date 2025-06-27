@@ -37,7 +37,7 @@ where
     match s {
         Some(StringOrNum::String(string)) => {
             U64::from_str(&string).map(Some).map_err(serde::de::Error::custom)
-        },
+        }
         Some(StringOrNum::Num(num)) => Ok(Some(U64::from(num))),
         None => Ok(None),
     }

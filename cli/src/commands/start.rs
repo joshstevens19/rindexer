@@ -138,10 +138,10 @@ pub async fn start(
             match start_docker_compose(&project_path) {
                 Ok(_) => {
                     rindexer_info!("Docker postgres containers started up successfully");
-                },
+                }
                 Err(e) => {
                     return Err(e.into());
-                },
+                }
             }
             // print_error_message("Could not connect to the postgres database, please make sure it
             // is running. If running locally you can run docker compose up -d");
@@ -172,7 +172,7 @@ pub async fn start(
             if !status.success() {
                 panic!("cargo run failed with status: {:?}", status);
             }
-        },
+        }
         ProjectType::NoCode => match command {
             StartSubcommands::Indexer => {
                 let details = StartNoCodeDetails {
@@ -188,7 +188,7 @@ pub async fn start(
                     print_error_message(&format!("Error starting the server: {}", e));
                     e
                 })?;
-            },
+            }
             StartSubcommands::Graphql { port } => {
                 let details = StartNoCodeDetails {
                     manifest_path: &project_path.join(YAML_CONFIG_NAME),
@@ -203,7 +203,7 @@ pub async fn start(
                     print_error_message(&format!("Error starting the indexer: {}", e));
                     e
                 })?;
-            },
+            }
             StartSubcommands::All { port } => {
                 let details = StartNoCodeDetails {
                     manifest_path: &project_path.join(YAML_CONFIG_NAME),
@@ -217,7 +217,7 @@ pub async fn start(
                 let _ = start_rindexer_no_code(details).await.map_err(|e| {
                     print_error_message(&format!("Error starting the server: {}", e));
                 });
-            },
+            }
         },
     }
 

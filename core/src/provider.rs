@@ -191,7 +191,7 @@ impl JsonRpcCachedProvider {
                 }
 
                 is_zk_chain
-            },
+            }
         };
 
         JsonRpcCachedProvider {
@@ -505,7 +505,7 @@ impl JsonRpcCachedProvider {
             Some(addresses) => match self.address_filtering {
                 Some(AddressFiltering::InMemory) => {
                     self.get_logs_for_address_in_memory(&base_filter, addresses).await
-                },
+                }
                 Some(AddressFiltering::MaxAddressPerGetLogsRequest(
                     max_address_per_get_logs_request,
                 )) => {
@@ -515,7 +515,7 @@ impl JsonRpcCachedProvider {
                         max_address_per_get_logs_request,
                     )
                     .await
-                },
+                }
                 None => {
                     self.get_logs_for_address_in_batches(
                         &base_filter,
@@ -523,7 +523,7 @@ impl JsonRpcCachedProvider {
                         DEFAULT_RPC_SUPPORTED_ACCOUNT_FILTERS,
                     )
                     .await
-                },
+                }
             },
             None => Ok(self.provider.get_logs(&base_filter).await?),
         }

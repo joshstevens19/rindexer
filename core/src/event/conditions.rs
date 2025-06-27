@@ -44,19 +44,19 @@ fn evaluate_condition(value: &Value, condition: &str) -> bool {
                     ">=" => {
                         U64::from_str_radix(value.as_str().unwrap_or("0"), 10).unwrap_or_default()
                             >= U64::from_str_radix(comp, 10).unwrap_or_default()
-                    },
+                    }
                     "<=" => {
                         U64::from_str_radix(value.as_str().unwrap_or("0"), 10).unwrap_or_default()
                             <= U64::from_str_radix(comp, 10).unwrap_or_default()
-                    },
+                    }
                     ">" => {
                         U64::from_str_radix(value.as_str().unwrap_or("0"), 10).unwrap_or_default()
                             > U64::from_str_radix(comp, 10).unwrap_or_default()
-                    },
+                    }
                     "<" => {
                         U64::from_str_radix(value.as_str().unwrap_or("0"), 10).unwrap_or_default()
                             < U64::from_str_radix(comp, 10).unwrap_or_default()
-                    },
+                    }
                     "=" => value == &Value::String(comp.to_string()),
                     "" => value == &Value::String(subpart.to_string()),
                     _ => false,

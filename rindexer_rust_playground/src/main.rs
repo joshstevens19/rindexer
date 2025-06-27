@@ -37,11 +37,11 @@ async fn main() {
                         Err(_) => {
                             println!("Invalid port number");
                             return;
-                        },
+                        }
                     }
                 }
-            },
-            _ => {},
+            }
+            _ => {}
         }
     }
 
@@ -72,15 +72,15 @@ async fn main() {
             .await;
 
             match result {
-                Ok(_) => {},
+                Ok(_) => {}
                 Err(e) => {
                     println!("Error starting rindexer: {:?}", e);
-                },
+                }
             }
-        },
+        }
         Err(e) => {
             println!("Error getting current directory: {:?}", e);
-        },
+        }
     }
 }
 

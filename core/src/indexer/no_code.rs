@@ -149,7 +149,7 @@ pub async fn setup_no_code(
                 indexing_details: Some(IndexingDetails { registry, trace_registry }),
                 graphql_details: details.graphql_details,
             })
-        },
+        }
         None => Err(SetupNoCodeError::NoProjectPathFoundUsingParentOfManifestPath),
     }
 }
@@ -212,10 +212,10 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             let network = match &results {
                 CallbackResult::Event(event) => {
                     event.first().unwrap().tx_information.network.clone()
-                },
+                }
                 CallbackResult::Trace(event) => {
                     event.first().unwrap().tx_information.network.clone()
-                },
+                }
             };
 
             let mut indexed_count = 0;
@@ -470,11 +470,11 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                                 )
                             );
                         }
-                    },
+                    }
                     Err(e) => {
                         error!("Error streaming event: {}", e);
                         return Err(e.to_string());
-                    },
+                    }
                 }
             }
 
@@ -511,11 +511,11 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                                     )
                                 );
                             }
-                        },
+                        }
                         Err(e) => {
                             error!("Error sending chat messages: {}", e);
                             return Err(e.to_string());
-                        },
+                        }
                     }
                 }
             }

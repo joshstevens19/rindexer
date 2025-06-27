@@ -226,7 +226,7 @@ where
         match self {
             PlaygroundTypesFilterEventType::Swap(_) => {
                 "0xd05a7c246337c1ef3460a6bf033445dc2004f4e65a9c755d82104f902aa300a4"
-            },
+            }
         }
     }
 
@@ -257,11 +257,11 @@ where
                         Ok(event) => {
                             let result: SwapData = event;
                             Arc::new(result) as Arc<dyn Any + Send + Sync>
-                        },
+                        }
                         Err(error) => Arc::new(error) as Arc<dyn Any + Send + Sync>,
                     }
                 })
-            },
+            }
         }
     }
 
@@ -332,7 +332,7 @@ where
                     let event = Arc::clone(&event);
                     async move { event.call(result).await }.boxed()
                 })
-            },
+            }
         };
 
         registry.register_event(EventCallbackRegistryInformation {

@@ -557,7 +557,7 @@ impl StreamsClients {
                         match task.await {
                             Ok(Ok(streamed)) => {
                                 streamed_total += streamed;
-                            },
+                            }
                             Ok(Err(e)) => return Err(e),
                             Err(e) => return Err(StreamError::JoinError(e)),
                         }
@@ -570,7 +570,7 @@ impl StreamsClients {
                     match result {
                         Ok(Ok(streamed)) => {
                             streamed_total += streamed;
-                        },
+                        }
                         Ok(Err(e)) => return Err(e),
                         Err(e) => return Err(StreamError::JoinError(e)),
                     }
