@@ -324,8 +324,7 @@ pub fn update_progress_and_last_synced_task(
             }
         }).await;
 
-        // If timeout occurred or we're shutting down, just complete
-        if update_result.is_err() || !crate::is_running() {
+        if update_result.is_err() {
             error!("Timeout or shutdown detected in update_progress_and_last_synced_task, completing early");
         }
 
