@@ -217,82 +217,116 @@ pub fn update_progress_and_last_synced_task(
     to_block: U64,
     on_complete: impl FnOnce() + Send + 'static,
 ) {
+    // Check if we're shutting down - if so, don't spawn new tasks
+    if !crate::is_running() {
+        // During shutdown, just call the completion callback directly
+        on_complete();
+        return;
+    }
+
     tokio::spawn(async move {
-        let update_last_synced_block_result = config
-            .progress()
-            .lock()
-            .await
-            .update_last_synced_block(&config.network_contract().id, to_block);
-
-        let latest = config
-            .network_contract()
-            .cached_provider
-            .get_latest_block()
-            .await
-            .ok()
-            .flatten()
-            .map(|b| b.header.number)
-            .unwrap_or(0); // This should basically never happen and should self-recover
-
-        if let Err(e) = update_last_synced_block_result {
-            error!("Error updating in-mem last synced block result: {:?}", e);
+        // Check again inside the spawned task
+        if !crate::is_running() {
+            on_complete();
+            return;
         }
 
-        if let Some(database) = &config.database() {
-            let schema = generate_indexer_contract_schema_name(
-                &config.indexer_name(),
-                &config.contract_name(),
-            );
-            let table_name = generate_internal_event_table_name(&schema, &config.event_name());
-            let network = &config.network_contract().network;
-            let query = format!(
-                "UPDATE rindexer_internal.{table_name} SET last_synced_block = {to_block} WHERE network = '{network}' AND {to_block} > last_synced_block;
-                UPDATE rindexer_internal.latest_block SET block = {latest} WHERE network = '{network}' AND {latest} > block;"
-            );
+        // Add timeout to prevent hanging during shutdown
+        let timeout_duration = std::time::Duration::from_secs(5);
 
-            let result = database.batch_execute(&query).await;
+        let update_result = tokio::time::timeout(timeout_duration, async {
+            let update_last_synced_block_result = config
+                .progress()
+                .lock()
+                .await
+                .update_last_synced_block(&config.network_contract().id, to_block);
 
-            if let Err(e) = result {
-                error!("Error updating db last synced block: {:?}", e);
+            // Only make RPC calls if we're still running
+            let latest = if crate::is_running() {
+                config
+                    .network_contract()
+                    .cached_provider
+                    .get_latest_block()
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|b| b.header.number)
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+
+            if let Err(e) = update_last_synced_block_result {
+                error!("Error updating in-mem last synced block result: {:?}", e);
             }
-        } else if let Some(csv_details) = &config.csv_details() {
-            if let Err(e) = update_last_synced_block_number_for_file(
-                &config.contract_name(),
-                &config.network_contract().network,
-                &config.event_name(),
-                &get_full_path(&config.project_path(), &csv_details.path).unwrap_or_else(|_| {
-                    panic!("failed to get full path {}", config.project_path().display())
-                }),
-                to_block,
-            )
-            .await
-            {
-                error!(
-                    "Error updating last synced block to CSV - path - {} error - {:?}",
-                    csv_details.path, e
-                );
+
+            // Only update database if we're still running
+            if crate::is_running() {
+                if let Some(database) = &config.database() {
+                    let schema = generate_indexer_contract_schema_name(
+                        &config.indexer_name(),
+                        &config.contract_name(),
+                    );
+                    let table_name = generate_internal_event_table_name(&schema, &config.event_name());
+                    let network = &config.network_contract().network;
+                    let query = format!(
+                        "UPDATE rindexer_internal.{table_name} SET last_synced_block = {to_block} WHERE network = '{network}' AND {to_block} > last_synced_block;
+                        UPDATE rindexer_internal.latest_block SET block = {latest} WHERE network = '{network}' AND {latest} > block;"
+                    );
+
+                    let result = database.batch_execute(&query).await;
+
+                    if let Err(e) = result {
+                        error!("Error updating db last synced block: {:?}", e);
+                    }
+                }
+
+                // Only update CSV if we're still running
+                if let Some(csv_details) = &config.csv_details() {
+                    if let Err(e) = update_last_synced_block_number_for_file(
+                        &config.contract_name(),
+                        &config.network_contract().network,
+                        &config.event_name(),
+                        &get_full_path(&config.project_path(), &csv_details.path).unwrap_or_else(
+                            |_| panic!("failed to get full path {}", config.project_path().display()),
+                        ),
+                        to_block,
+                    )
+                    .await
+                    {
+                        error!(
+                            "Error updating last synced block to CSV - path - {} error - {:?}",
+                            csv_details.path, e
+                        );
+                    }
+                } else if let Some(stream_last_synced_block_file_path) =
+                    &config.stream_last_synced_block_file_path()
+                {
+                    if let Err(e) = update_last_synced_block_number_for_file(
+                        &config.contract_name(),
+                        &config.network_contract().network,
+                        &config.event_name(),
+                        &config
+                            .project_path()
+                            .join(stream_last_synced_block_file_path)
+                            .canonicalize()
+                            .expect("Failed to canonicalize path"),
+                        to_block,
+                    )
+                    .await
+                    {
+                        error!(
+                            "Error updating last synced block to stream - path - {} error - {:?}",
+                            stream_last_synced_block_file_path, e
+                        );
+                    }
+                }
             }
-        } else if let Some(stream_last_synced_block_file_path) =
-            &config.stream_last_synced_block_file_path()
-        {
-            if let Err(e) = update_last_synced_block_number_for_file(
-                &config.contract_name(),
-                &config.network_contract().network,
-                &config.event_name(),
-                &config
-                    .project_path()
-                    .join(stream_last_synced_block_file_path)
-                    .canonicalize()
-                    .expect("Failed to canonicalize path"),
-                to_block,
-            )
-            .await
-            {
-                error!(
-                    "Error updating last synced block to stream - path - {} error - {:?}",
-                    stream_last_synced_block_file_path, e
-                );
-            }
+        }).await;
+
+        // If timeout occurred or we're shutting down, just complete
+        if update_result.is_err() || !crate::is_running() {
+            error!("Timeout or shutdown detected in update_progress_and_last_synced_task, completing early");
         }
 
         on_complete();
@@ -304,67 +338,98 @@ pub fn evm_trace_update_progress_and_last_synced_task(
     to_block: U64,
     on_complete: impl FnOnce() + Send + 'static,
 ) {
-    tokio::spawn(async move {
-        let update_last_synced_block_result =
-            config.progress.lock().await.update_last_synced_block(&config.id, to_block);
+    // Check if we're shutting down - if so, don't spawn new tasks
+    if !crate::is_running() {
+        // During shutdown, just call the completion callback directly
+        on_complete();
+        return;
+    }
 
-        if let Err(e) = update_last_synced_block_result {
-            error!("Error updating last synced trace block in-mem: {:?}", e);
+    tokio::spawn(async move {
+        // Check again inside the spawned task
+        if !crate::is_running() {
+            on_complete();
+            return;
         }
 
-        if let Some(database) = &config.database {
-            let schema =
-                generate_indexer_contract_schema_name(&config.indexer_name, &config.contract_name);
-            let table_name = generate_internal_event_table_name(&schema, &config.event_name);
-            let query = format!(
-                "UPDATE rindexer_internal.{} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block",
-                table_name
-            );
-            let result = database
-                .execute(&query, &[&EthereumSqlTypeWrapper::U64(to_block), &config.network])
-                .await;
+        // Add timeout to prevent hanging during shutdown
+        let timeout_duration = std::time::Duration::from_secs(5);
 
-            if let Err(e) = result {
-                error!("Error updating last synced trace block db: {:?}", e);
+        let update_result = tokio::time::timeout(timeout_duration, async {
+            let update_last_synced_block_result =
+                config.progress.lock().await.update_last_synced_block(&config.id, to_block);
+
+            if let Err(e) = update_last_synced_block_result {
+                error!("Error updating last synced trace block in-mem: {:?}", e);
             }
-        } else if let Some(csv_details) = &config.csv_details {
-            if let Err(e) = update_last_synced_block_number_for_file(
-                &config.contract_name,
-                &config.network,
-                &config.event_name,
-                &get_full_path(&config.project_path, &csv_details.path).unwrap_or_else(|_| {
-                    panic!("failed to get full path {}", config.project_path.display())
-                }),
-                to_block,
-            )
-            .await
-            {
-                error!(
-                    "Error updating last synced block to CSV - path - {} error - {:?}",
-                    csv_details.path, e
-                );
+
+            // Only update database if we're still running
+            if crate::is_running() {
+                if let Some(database) = &config.database {
+                    let schema = generate_indexer_contract_schema_name(
+                        &config.indexer_name,
+                        &config.contract_name,
+                    );
+                    let table_name = generate_internal_event_table_name(&schema, &config.event_name);
+                    let query = format!(
+                        "UPDATE rindexer_internal.{} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block",
+                        table_name
+                    );
+                    let result = database
+                        .execute(&query, &[&EthereumSqlTypeWrapper::U64(to_block), &config.network])
+                        .await;
+
+                    if let Err(e) = result {
+                        error!("Error updating last synced trace block db: {:?}", e);
+                    }
+                }
+
+                // Only update CSV if we're still running
+                if let Some(csv_details) = &config.csv_details {
+                    if let Err(e) = update_last_synced_block_number_for_file(
+                        &config.contract_name,
+                        &config.network,
+                        &config.event_name,
+                        &get_full_path(&config.project_path, &csv_details.path).unwrap_or_else(|_| {
+                            panic!("failed to get full path {}", config.project_path.display())
+                        }),
+                        to_block,
+                    )
+                    .await
+                    {
+                        error!(
+                            "Error updating last synced block to CSV - path - {} error - {:?}",
+                            csv_details.path, e
+                        );
+                    }
+                } else if let Some(stream_last_synced_block_file_path) =
+                    &config.stream_last_synced_block_file_path
+                {
+                    if let Err(e) = update_last_synced_block_number_for_file(
+                        &config.contract_name,
+                        &config.network,
+                        &config.event_name,
+                        &config
+                            .project_path
+                            .join(stream_last_synced_block_file_path)
+                            .canonicalize()
+                            .expect("Failed to canonicalize path"),
+                        to_block,
+                    )
+                    .await
+                    {
+                        error!(
+                            "Error updating last synced block to stream - path - {} error - {:?}",
+                            stream_last_synced_block_file_path, e
+                        );
+                    }
+                }
             }
-        } else if let Some(stream_last_synced_block_file_path) =
-            &config.stream_last_synced_block_file_path
-        {
-            if let Err(e) = update_last_synced_block_number_for_file(
-                &config.contract_name,
-                &config.network,
-                &config.event_name,
-                &config
-                    .project_path
-                    .join(stream_last_synced_block_file_path)
-                    .canonicalize()
-                    .expect("Failed to canonicalize path"),
-                to_block,
-            )
-            .await
-            {
-                error!(
-                    "Error updating last synced block to stream - path - {} error - {:?}",
-                    stream_last_synced_block_file_path, e
-                );
-            }
+        }).await;
+
+        // If timeout occurred or we're shutting down, just complete
+        if update_result.is_err() || !crate::is_running() {
+            error!("Timeout or shutdown detected in evm_trace_update_progress_and_last_synced_task, completing early");
         }
 
         on_complete();

@@ -4,6 +4,7 @@ use crate::helpers::{halved_block_number, is_relevant_block};
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
     indexer::IndexingEventProgressStatus,
+    is_running,
     provider::{JsonRpcCachedProvider, ProviderError},
     public_read_env_value,
 };
@@ -43,7 +44,7 @@ pub fn fetch_logs_stream(
         .parse()
         .unwrap_or(3);
 
-    warn!(
+    info!(
         "{}::{} Configured with {} event buffer",
         config.info_log_name(),
         config.network_contract().network,
@@ -79,6 +80,10 @@ pub fn fetch_logs_stream(
             }
         }
         while current_filter.from_block() <= snapshot_to_block {
+            if !is_running() {
+                break;
+            }
+
             let result = fetch_historic_logs_stream(
                 &config.network_contract().cached_provider,
                 &tx,
@@ -139,6 +144,7 @@ pub fn fetch_logs_stream(
                 &config.info_log_name(),
                 config.network_contract().disable_logs_bloom_checks,
                 &config.network_contract().network,
+                original_max_limit,
             )
             .await;
         }
@@ -197,6 +203,17 @@ async fn fetch_historic_logs_stream(
         current_filter
     );
 
+    let sender = tx.reserve().await.ok()?;
+
+    if tx.capacity() == 0 {
+        info!(
+            "{}::{} - {} - Log channel full, waiting for events to be processed.",
+            info_log_name,
+            network,
+            IndexingEventProgressStatus::Syncing.log(),
+        );
+    }
+
     match cached_provider.get_logs(&current_filter).await {
         Ok(logs) => {
             debug!(
@@ -225,24 +242,7 @@ async fn fetch_historic_logs_stream(
                 );
             }
 
-            if tx.capacity() == 0 {
-                info!(
-                    "{}::{} - {} - Log channel full, waiting for events to be processed.",
-                    info_log_name,
-                    network,
-                    IndexingEventProgressStatus::Syncing.log(),
-                );
-            }
-
-            if tx.send(Ok(FetchLogsResult { logs, from_block, to_block })).await.is_err() {
-                error!(
-                    "{} - {} - {} - Failed to send logs to stream consumer!",
-                    IndexingEventProgressStatus::Syncing.log(),
-                    network,
-                    info_log_name
-                );
-                return None;
-            }
+            sender.send(Ok(FetchLogsResult { logs, from_block, to_block }));
 
             if logs_empty {
                 let next_from_block = to_block + U64::from(1);
@@ -321,8 +321,15 @@ async fn fetch_historic_logs_stream(
         Err(err) => {
             // This is fundamental to the rindexer flow. We intentionally fetch a large block range
             // to get information on what the ideal block range should be.
-            if let Some(retry_result) =
-                retry_with_block_range(info_log_name, network, &err, from_block, to_block).await
+            if let Some(retry_result) = retry_with_block_range(
+                info_log_name,
+                network,
+                &err,
+                from_block,
+                to_block,
+                max_block_range_limitation,
+            )
+            .await
             {
                 // Log if we "overshrink"
                 if retry_result.to - retry_result.from < U64::from(1000) {
@@ -389,6 +396,7 @@ async fn live_indexing_stream(
     info_log_name: &str,
     disable_logs_bloom_checks: bool,
     network: &str,
+    original_max_limit: Option<U64>,
 ) {
     let mut last_seen_block_number = last_seen_block_number;
     let mut log_response_to_large_to_block: Option<U64> = None;
@@ -398,6 +406,10 @@ async fn live_indexing_stream(
 
     loop {
         let iteration_start = Instant::now();
+
+        if !is_running() {
+            break;
+        }
 
         let latest_block = cached_provider.get_latest_block().await;
         match latest_block {
@@ -527,6 +539,9 @@ async fn live_indexing_stream(
                                             break;
                                         }
 
+                                        // Clear any remaining references to reduce memory pressure
+                                        log_response_to_large_to_block = None;
+
                                         if logs_empty {
                                             current_filter = current_filter
                                                 .set_from_block(to_block + U64::from(1));
@@ -549,8 +564,6 @@ async fn live_indexing_stream(
                                                 error!("Failed to get last log block number the provider returned null (should never happen) - try again in 200ms");
                                             }
                                         }
-
-                                        log_response_to_large_to_block = None;
                                     }
                                     Err(err) => {
                                         if let Some(retry_result) = retry_with_block_range(
@@ -559,6 +572,7 @@ async fn live_indexing_stream(
                                             &err,
                                             from_block,
                                             to_block,
+                                            original_max_limit,
                                         )
                                         .await
                                         {
@@ -636,6 +650,7 @@ async fn retry_with_block_range(
     error: &ProviderError,
     from_block: U64,
     to_block: U64,
+    max_block_range_limitation: Option<U64>,
 ) -> Option<RetryWithBlockRangeResult> {
     let error_struct = match error {
         ProviderError::RequestFailed(json_rpc_err) => json_rpc_err.as_error_resp(),
@@ -670,21 +685,24 @@ async fn retry_with_block_range(
                 ) {
                     if from > to {
                         error!(
-                            "{}::{} Alchemy returned a negative block range {} to {}. Overriding to halved initial range.",
+                            "{}::{} Alchemy returned a negative block range {} to {}. Inverting.",
                             info_log_name, network, from, to
                         );
 
+                        // Negative range fixed by inverting.
+                        let to = U64::from(from);
+
                         return Some(RetryWithBlockRangeResult {
                             from: from_block,
-                            to: halved_block_number(to_block, from_block),
-                            max_block_range: None,
+                            to,
+                            max_block_range: max_block_range_limitation,
                         });
                     }
 
                     return Some(RetryWithBlockRangeResult {
                         from: U64::from(from),
                         to: U64::from(to),
-                        max_block_range: None,
+                        max_block_range: max_block_range_limitation,
                     });
                 } else {
                     info!(
@@ -709,7 +727,7 @@ async fn retry_with_block_range(
                     return Some(RetryWithBlockRangeResult {
                         from: U64::from(from),
                         to: U64::from(to),
-                        max_block_range: None,
+                        max_block_range: max_block_range_limitation,
                     });
                 }
             }
@@ -718,10 +736,15 @@ async fn retry_with_block_range(
 
     // Ankr
     if error_message.contains("block range is too wide") {
+        // Use the minimum of original config or 3000
+        let suggested_range = max_block_range_limitation
+            .map(|original| std::cmp::min(original, U64::from(3000)))
+            .unwrap_or(U64::from(3000));
+
         return Some(RetryWithBlockRangeResult {
             from: from_block,
-            to: from_block + U64::from(3000),
-            max_block_range: Some(U64::from(3000)),
+            to: from_block + suggested_range,
+            max_block_range: Some(suggested_range),
         });
     }
 
@@ -731,10 +754,15 @@ async fn retry_with_block_range(
             if let Some(range_str_match) = captures.get(1) {
                 let range_str = range_str_match.as_str().replace(&['.', ','][..], "");
                 if let Ok(range) = U64::from_str(&range_str) {
+                    // Use the minimum of original config or provider suggestion
+                    let suggested_range = max_block_range_limitation
+                        .map(|original| std::cmp::min(original, range))
+                        .unwrap_or(range);
+
                     return Some(RetryWithBlockRangeResult {
                         from: from_block,
-                        to: from_block + range,
-                        max_block_range: Some(range),
+                        to: from_block + suggested_range,
+                        max_block_range: Some(suggested_range),
                     });
                 }
             }
@@ -743,10 +771,15 @@ async fn retry_with_block_range(
 
     // Base
     if error_message.contains("block range too large") {
+        // Use the minimum of original config or 2000
+        let suggested_range = max_block_range_limitation
+            .map(|original| std::cmp::min(original, U64::from(2000)))
+            .unwrap_or(U64::from(2000));
+
         return Some(RetryWithBlockRangeResult {
             from: from_block,
-            to: from_block + U64::from(2000),
-            max_block_range: Some(U64::from(2000)),
+            to: from_block + suggested_range,
+            max_block_range: Some(suggested_range),
         });
     }
 
@@ -758,7 +791,7 @@ async fn retry_with_block_range(
         return Some(RetryWithBlockRangeResult {
             from: from_block,
             to: halved_to_block,
-            max_block_range: None,
+            max_block_range: max_block_range_limitation,
         });
     }
 
@@ -768,7 +801,7 @@ async fn retry_with_block_range(
         return Some(RetryWithBlockRangeResult {
             from: from_block,
             to: halved_block_number(to_block, from_block),
-            max_block_range: None,
+            max_block_range: max_block_range_limitation,
         });
     }
 
@@ -795,14 +828,20 @@ async fn retry_with_block_range(
             return Some(RetryWithBlockRangeResult {
                 from: from_block,
                 to: halved_block_number(to_block, from_block),
-                max_block_range: None,
+                max_block_range: max_block_range_limitation,
             });
         }
 
+        // Use the minimum of original config or fallback range
+        let fallback_range = U64::from(block_range.value());
+        let suggested_range = max_block_range_limitation
+            .map(|original| std::cmp::min(original, fallback_range))
+            .unwrap_or(fallback_range);
+
         return Some(RetryWithBlockRangeResult {
             from: from_block,
-            to: next_to_block,
-            max_block_range: Some(U64::from(block_range.value())),
+            to: from_block + suggested_range,
+            max_block_range: Some(suggested_range),
         });
     }
 

@@ -63,6 +63,11 @@ const DEFAULT_RPC_SUPPORTED_ACCOUNT_FILTERS: usize = 5000;
 /// Maximum RPC batching size available for the provider.
 pub const RPC_CHUNK_SIZE: usize = 1000;
 
+/// Recommended chunk sizes for batch RPC requests.
+///
+/// See: https://www.alchemy.com/docs/best-practices-when-using-alchemy#2-avoid-high-batch-cardinality
+pub const RECOMMENDED_RPC_CHUNK_SIZE: usize = 50;
+
 #[derive(Debug)]
 pub struct JsonRpcCachedProvider {
     provider: Arc<RindexerProvider>,

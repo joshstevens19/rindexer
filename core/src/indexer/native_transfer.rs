@@ -11,7 +11,8 @@ use serde::Serialize;
 use tokio::{sync::mpsc, time::sleep};
 use tracing::{debug, error, info, warn};
 
-use crate::provider::RPC_CHUNK_SIZE;
+use crate::is_running;
+use crate::provider::{RECOMMENDED_RPC_CHUNK_SIZE, RPC_CHUNK_SIZE};
 use crate::{
     event::{
         callback_registry::{TraceResult, TxInformation},
@@ -160,13 +161,23 @@ pub async fn native_transfer_block_processor(
     // Currently, `eth_getBlockByNumber` is a single JSON-RPC batch, and others are individual
     // network calls so can be treated differently.
     let (initial_concurrent_requests, limit_concurrent_requests) =
-        if is_rcp_batchable { (100, RPC_CHUNK_SIZE) } else { (5, 100) };
+        if is_rcp_batchable { (10, RECOMMENDED_RPC_CHUNK_SIZE) } else { (5, 100) };
 
     let mut concurrent_requests: usize = initial_concurrent_requests;
     let mut buffer: Vec<U64> = Vec::with_capacity(limit_concurrent_requests);
 
     loop {
-        let recv = block_rx.recv_many(&mut buffer, concurrent_requests).await;
+        if !is_running() {
+            info!("Exiting native transfer indexing block processor!");
+            break Ok(());
+        }
+
+        // Fetch more only if buffer was processed ok last time and cleared.
+        let recv = if buffer.is_empty() {
+            block_rx.recv_many(&mut buffer, concurrent_requests).await
+        } else {
+            buffer.len()
+        };
 
         if recv == 0 {
             sleep(Duration::from_secs(1)).await;
