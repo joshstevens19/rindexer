@@ -1,4 +1,4 @@
-use alloy::primitives::keccak256;
+use alloy::primitives::{keccak256, U64};
 use std::path::Path;
 use tracing::{error, info};
 
@@ -134,20 +134,22 @@ fn generate_internal_event_table_sql(
     abi_inputs: &[EventInfo],
     schema_name: &str,
     networks: Vec<&str>,
+    start_blocks: Vec<Option<U64>>,
 ) -> String {
     abi_inputs.iter().map(|event_info| {
         let table_name = generate_internal_event_table_name(schema_name, &event_info.name);
 
         let create_table_query = format!(
-            r#"CREATE TABLE IF NOT EXISTS rindexer_internal.{} ("network" TEXT PRIMARY KEY, "last_synced_block" NUMERIC);"#,
+            r#"CREATE TABLE IF NOT EXISTS rindexer_internal.{} ("network" TEXT PRIMARY KEY, "start_block" NUMERIC, "last_synced_block" NUMERIC);"#,
             table_name
         );
 
-        let insert_queries = networks.iter().map(|network| {
+        let insert_queries = networks.iter().zip(start_blocks.clone()).map(|(network, start_block)| {
             format!(
-                r#"INSERT INTO rindexer_internal.{} ("network", "last_synced_block") VALUES ('{}', 0) ON CONFLICT ("network") DO NOTHING;"#,
+                r#"INSERT INTO rindexer_internal.{} ("network", "start_block", "last_synced_block") VALUES ('{}', '{}', 0) ON CONFLICT ("network") DO NOTHING;"#,
                 table_name,
-                network
+                network,
+                start_block.map(|block| block.to_string()).unwrap_or_else(|| "null".to_string())
             )
         }).collect::<Vec<_>>().join("\n");
 
@@ -217,6 +219,7 @@ pub fn generate_tables_for_indexer_sql(
         let events = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
         let schema_name = generate_indexer_contract_schema_name(&indexer.name, &contract_name);
         let networks: Vec<&str> = contract.details.iter().map(|d| d.network.as_str()).collect();
+        let start_blocks: Vec<_> = contract.details.iter().map(|d| d.start_block).collect();
         let factories = contract.details.iter().flat_map(|d| d.factory.clone()).collect::<Vec<_>>();
 
         if !disable_event_tables {
@@ -239,7 +242,12 @@ pub fn generate_tables_for_indexer_sql(
         }
 
         // we still need to create the internal tables for the contract
-        sql.push_str(&generate_internal_event_table_sql(&events, &schema_name, networks));
+        sql.push_str(&generate_internal_event_table_sql(
+            &events,
+            &schema_name,
+            networks,
+            start_blocks,
+        ));
 
         // generate internal tables for contract factories indexing
         sql.push_str(&generate_internal_factory_event_table_sql(&indexer.name, &factories));
@@ -253,6 +261,7 @@ pub fn generate_tables_for_indexer_sql(
         let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
         let schema_name = generate_indexer_contract_schema_name(&indexer.name, &contract_name);
         let networks = indexer.clone().native_transfers.networks.unwrap();
+        let start_blocks: Vec<_> = networks.iter().map(|d| d.start_block).collect();
         let networks: Vec<&str> = networks.iter().map(|d| d.network.as_str()).collect();
 
         if !disable_event_tables {
@@ -273,7 +282,12 @@ pub fn generate_tables_for_indexer_sql(
                 event_matching_name_on_other,
             ));
         }
-        sql.push_str(&generate_internal_event_table_sql(&event_names, &schema_name, networks));
+        sql.push_str(&generate_internal_event_table_sql(
+            &event_names,
+            &schema_name,
+            networks,
+            start_blocks,
+        ));
     }
 
     sql.push_str(&format!(
