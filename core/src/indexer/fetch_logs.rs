@@ -10,7 +10,7 @@ use alloy::{
     primitives::{B256, U64},
     rpc::types::Log,
 };
-use rand::random_ratio;
+use rand::{random_bool, random_ratio};
 use regex::Regex;
 use tokio::{sync::mpsc, time::Instant};
 use tokio_stream::wrappers::ReceiverStream;
@@ -46,6 +46,7 @@ pub fn fetch_logs_stream(
         let from_block = current_filter.from_block();
 
         // add any max block range limitation before we start processing
+        let original_max_limit = config.network_contract().cached_provider.max_block_range;
         let mut max_block_range_limitation =
             config.network_contract().cached_provider.max_block_range;
         if max_block_range_limitation.is_some() {
@@ -91,8 +92,20 @@ pub fn fetch_logs_stream(
             }
 
             if let Some(result) = result {
+                // Useful for occasionally breaking out of temporary limitations or parsing errors
+                // that lock down to a `1` block limitation. Returns back to the original
+                let new_max_block_range_limitation = if random_bool(0.10) {
+                    if let Some(max) = original_max_limit {
+                        Some(max)
+                    } else {
+                        None
+                    }
+                } else {
+                    result.max_block_range_limitation
+                };
+
                 current_filter = result.next;
-                max_block_range_limitation = result.max_block_range_limitation;
+                max_block_range_limitation = new_max_block_range_limitation;
             } else {
                 break;
             }

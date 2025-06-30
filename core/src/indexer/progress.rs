@@ -11,6 +11,7 @@ use tracing::{debug, error, info};
 use crate::event::callback_registry::{
     EventCallbackRegistryInformation, TraceCallbackRegistryInformation,
 };
+use crate::manifest::yaml::read_manifest;
 
 #[derive(Clone, Debug, Hash)]
 pub enum IndexingEventProgressStatus {
@@ -251,7 +252,7 @@ impl IndexingEventsProgressState {
                     if new_last_synced_block >= event.syncing_to_block {
                         event.progress = 1.0;
                         info!(
-                            "{} - network {} - {:.2}% progress",
+                            "{}::{} - {:.2}% progress",
                             event.info_log,
                             event.network,
                             event.progress * 100.0
@@ -265,7 +266,7 @@ impl IndexingEventsProgressState {
 
                     if event.progress != 1.0 {
                         info!(
-                            "{} - network {} - {:.2}% progress",
+                            "{}::{} - {:.2}% progress",
                             event.info_log,
                             event.network,
                             event.progress * 100.0
