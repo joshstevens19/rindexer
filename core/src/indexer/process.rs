@@ -1,6 +1,7 @@
 use alloy::primitives::{B256, U64};
-use async_std::prelude::StreamExt;
+
 use futures::future::join_all;
+use futures::StreamExt;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{
     sync::{Mutex, MutexGuard},
@@ -24,6 +25,7 @@ use crate::{
     },
     is_running,
     provider::ProviderError,
+    public_read_env_value,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -49,34 +51,59 @@ pub async fn process_event(
     Ok(())
 }
 
-/// note block_until_indexed:
-/// Whether to wait for all indexing tasks to complete for an event before returning
-//  (needed for dependency indexing)
+// HIGHLY EXPERIMENTAL!!!!!!!!!!!
 async fn process_event_logs(
     config: Arc<EventProcessingConfig>,
     force_no_live_indexing: bool,
-    block_until_indexed: bool,
+    _block_until_indexed: bool,
 ) -> Result<(), Box<ProviderError>> {
-    let mut logs_stream = fetch_logs_stream(Arc::clone(&config), force_no_live_indexing);
-    let mut tasks = Vec::new();
+    let max_concurrency: usize = public_read_env_value("MAX_TASK_CONCURRENCY")
+        .ok()
+        .and_then(|a| a.parse::<usize>().ok())
+        .unwrap_or(3usize);
 
-    while let Some(result) = logs_stream.next().await {
-        let task = handle_logs_result(Arc::clone(&config), result)
-            .await
-            .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
-
-        tasks.push(task);
-    }
-
-    if block_until_indexed {
-        // Wait for all tasks in parallel
-        futures::future::try_join_all(tasks)
-            .await
-            .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
-    }
+    fetch_logs_stream(Arc::clone(&config), force_no_live_indexing)
+        .for_each_concurrent(max_concurrency, |result| {
+            let config = Arc::clone(&config);
+            async move {
+                if let Err(err) = handle_logs_result(config, result).await {
+                    error!("Error in handle_logs_result: {:?}", err);
+                }
+            }
+        })
+        .await;
 
     Ok(())
 }
+
+// /// note block_until_indexed:
+// /// Whether to wait for all indexing tasks to complete for an event before returning
+// //  (needed for dependency indexing)
+// async fn process_event_logs(
+//     config: Arc<EventProcessingConfig>,
+//     force_no_live_indexing: bool,
+//     _block_until_indexed: bool,
+// ) -> Result<(), Box<ProviderError>> {
+//     let mut logs_stream = fetch_logs_stream(Arc::clone(&config), force_no_live_indexing);
+//     let mut tasks = Vec::new();
+//
+//     while let Some(result) = logs_stream.next().await {
+//         let task = handle_logs_result(Arc::clone(&config), result)
+//             .await
+//             .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
+//
+//         tasks.push(task);
+//     }
+//
+//     if block_until_indexed {
+//         // Wait for all tasks in parallel
+//         futures::future::try_join_all(tasks)
+//             .await
+//             .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
+//     }
+//
+//     Ok(())
+// }
 
 #[derive(thiserror::Error, Debug)]
 pub enum ProcessContractsEventsWithDependenciesError {
@@ -455,10 +482,10 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                                             }
 
                                             *ordering_live_indexing_details_map
-                                                    .get(&config.topic_id())
-                                                    .expect("Failed to get ordering_live_indexing_details_map")
-                                                    .lock()
-                                                    .await = ordering_live_indexing_details;
+                                                .get(&config.topic_id())
+                                                .expect("Failed to get ordering_live_indexing_details_map")
+                                                .lock()
+                                                .await = ordering_live_indexing_details;
                                         }
                                         Err(err) => {
                                             error!(
