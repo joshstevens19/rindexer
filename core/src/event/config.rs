@@ -2,7 +2,7 @@ use alloy::json_abi::Event;
 use alloy::primitives::{Address, B256, U64};
 use alloy::rpc::types::ValueOrArray;
 use std::{path::PathBuf, sync::Arc};
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::Mutex;
 
 use crate::event::contract_setup::{AddressDetails, IndexingContractSetup};
 use crate::event::factory_event_filter_sync::update_known_factory_deployed_addresses;
@@ -32,7 +32,6 @@ pub struct ContractEventProcessingConfig {
     pub network_contract: Arc<NetworkContract>,
     pub start_block: U64,
     pub end_block: U64,
-    pub semaphore: Arc<Semaphore>,
     pub registry: Arc<EventCallbackRegistry>,
     pub progress: Arc<Mutex<IndexingEventsProgressState>>,
     pub database: Option<Arc<PostgresClient>>,
@@ -100,7 +99,6 @@ pub struct FactoryEventProcessingConfig {
     pub network_contract: Arc<NetworkContract>,
     pub start_block: U64,
     pub end_block: U64,
-    pub semaphore: Arc<Semaphore>,
     pub progress: Arc<Mutex<IndexingEventsProgressState>>,
     pub database: Option<Arc<PostgresClient>>,
     pub csv_details: Option<CsvDetails>,
@@ -216,13 +214,6 @@ impl EventProcessingConfig {
         match self {
             Self::ContractEventProcessing(config) => config.event_name.clone(),
             Self::FactoryEventProcessing(config) => config.event.name.clone(),
-        }
-    }
-
-    pub fn semaphore(&self) -> Arc<Semaphore> {
-        match self {
-            Self::ContractEventProcessing(config) => config.semaphore.clone(),
-            Self::FactoryEventProcessing(config) => config.semaphore.clone(),
         }
     }
 

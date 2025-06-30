@@ -1,17 +1,16 @@
-use std::{path::Path, str::FromStr, sync::Arc, time::Duration};
+use std::{path::Path, sync::Arc};
 
 use alloy::primitives::U64;
-use alloy::transports::{RpcError, TransportErrorKind};
 use futures::future::try_join_all;
 use tokio::{
     join,
-    sync::Semaphore,
     task::{JoinError, JoinHandle},
-    time::{sleep, Instant},
+    time::Instant,
 };
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::event::config::{ContractEventProcessingConfig, FactoryEventProcessingConfig};
+use crate::indexer::native_transfer::native_transfer_block_processor;
 use crate::{
     database::postgres::client::PostgresConnectionError,
     event::{
@@ -21,10 +20,7 @@ use crate::{
     indexer::{
         dependency::ContractEventsDependenciesConfig,
         last_synced::{get_last_synced_block_number, SyncConfig},
-        native_transfer::{
-            native_transfer_block_consumer, native_transfer_block_fetch, EVENT_NAME,
-            NATIVE_TRANSFER_CONTRACT_NAME,
-        },
+        native_transfer::{native_transfer_block_fetch, EVENT_NAME, NATIVE_TRANSFER_CONTRACT_NAME},
         process::{
             process_contracts_events_with_dependencies, process_event,
             ProcessContractsEventsWithDependenciesError, ProcessEventError,
@@ -35,7 +31,7 @@ use crate::{
     },
     manifest::core::Manifest,
     provider::{JsonRpcCachedProvider, ProviderError},
-    public_read_env_value, PostgresClient,
+    PostgresClient,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -184,8 +180,6 @@ pub async fn start_indexing_traces(
             .find(|c| c.name == event.contract_name)
             .and_then(|c| c.streams.as_ref());
 
-        let networks_count = event.trace_information.details.len();
-
         for network in event.trace_information.details.iter() {
             let sync_config = SyncConfig {
                 project_path,
@@ -199,7 +193,7 @@ pub async fn start_indexing_traces(
                 network: &network.network,
             };
 
-            let (block_tx, mut block_rx) = tokio::sync::mpsc::channel(2048);
+            let (block_tx, block_rx) = tokio::sync::mpsc::channel(4096);
             let network_name = network.network.clone();
             let (start_block, end_block, indexing_distance_from_head) = get_start_end_block(
                 network.cached_provider.clone(),
@@ -242,77 +236,13 @@ pub async fn start_indexing_traces(
 
             let provider = network.cached_provider.clone();
             let config = config.clone();
-            let native_transfer_consumer_handle = tokio::spawn(async move {
-                let initial_concurrent_requests = 1;
-                let limit_concurrent_requests = 200 / networks_count;
 
-                let mut max_concurrent_requests: usize = initial_concurrent_requests;
-                let mut buffer: Vec<U64> = Vec::with_capacity(max_concurrent_requests);
-
-                loop {
-                    let recv = block_rx.recv_many(&mut buffer, max_concurrent_requests).await;
-
-                    if recv == 0 {
-                        sleep(Duration::from_secs(1)).await;
-                        continue;
-                    }
-
-                    let processed_block = native_transfer_block_consumer(
-                        provider.clone(),
-                        &buffer[..recv],
-                        &network_name,
-                        config.clone(),
-                    )
-                    .await;
-
-                    // If this has an error we need to not and reconsume the blocks. We don't have
-                    // to worry about double-publish because the failure point is on the provider
-                    // call itself, which is before publish.
-                    if let Err(e) = processed_block {
-                        // On error, half the block query range. We want a slow increase in
-                        // concurrency and an aggressive backoff.
-                        max_concurrent_requests = std::cmp::max(1, max_concurrent_requests / 2);
-
-                        let is_rate_limit_error = matches!(&e, ProcessEventError::ProviderCallError(
-                            ProviderError::RequestFailed(
-                                RpcError::Transport(
-                                    TransportErrorKind::HttpError(http_err)
-                                )
-                            )) if http_err.status == 429
-                        );
-
-                        if is_rate_limit_error {
-                            error!(
-                                "Rate-limited 429 '{}' block traces. Retrying in 1 second: {}",
-                                network_name,
-                                e.to_string(),
-                            );
-                        } else {
-                            warn!(
-                                "Could not process '{}' block traces. Likely too early for {}..{}, Retrying in 1 second: {}",
-                                network_name,
-                                &buffer.first().map(|n| n.as_limbs()[0]).unwrap_or_else(|| 0),
-                                &buffer.last().map(|n| n.as_limbs()[0]).unwrap_or_else(|| 0),
-                                e.to_string(),
-                            );
-                        }
-
-                        sleep(Duration::from_secs(1)).await;
-
-                        continue;
-                    } else {
-                        buffer.clear();
-
-                        // A random chance of increasing the request count helps us not overload
-                        // the ratelimit too rapidly across multi-network trace indexing and have a
-                        // slow ramp-up time.
-                        if rand::random_bool(0.05) {
-                            max_concurrent_requests =
-                                (max_concurrent_requests + 1).min(limit_concurrent_requests);
-                        }
-                    };
-                }
-            });
+            let native_transfer_consumer_handle = tokio::spawn(native_transfer_block_processor(
+                network_name,
+                provider,
+                config,
+                block_rx,
+            ));
 
             non_blocking_process_events.push(native_transfer_consumer_handle);
         }
@@ -338,11 +268,6 @@ pub async fn start_indexing_contract_events(
     StartIndexingError,
 > {
     let event_progress_state = IndexingEventsProgressState::monitor(&registry.events).await;
-    let permits = public_read_env_value("CONTRACT_PERMITS").unwrap_or("100".to_string());
-    let permits = usize::from_str(&permits).unwrap_or(100);
-    let semaphore = Arc::new(Semaphore::new(permits));
-
-    info!("Configured {} permits for contract events.", permits);
 
     // need this to keep track of dependency_events cross contracts and events
     // if you are doing advanced dependency events where other contracts depend on the processing of
@@ -401,7 +326,6 @@ pub async fn start_indexing_contract_events(
                 network_contract: Arc::new(network_contract.clone()),
                 start_block,
                 end_block,
-                semaphore: Arc::clone(&semaphore),
                 registry: Arc::clone(&registry),
                 progress: Arc::clone(&event_progress_state),
                 database: database.clone(),
@@ -431,7 +355,6 @@ pub async fn start_indexing_contract_events(
                     network_contract: Arc::new(network_contract.clone()),
                     start_block,
                     end_block,
-                    semaphore: Arc::clone(&semaphore),
                     progress: Arc::clone(&event_progress_state),
                     database: database.clone(),
                     csv_details: manifest.storage.csv.clone(),

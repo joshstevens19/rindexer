@@ -15,10 +15,11 @@ use super::super::super::super::typings::networks::get_provider_cache_for_networ
 use super::rocket_pool_eth_abi_gen::RindexerRocketPoolETHGen::{
     self, RindexerRocketPoolETHGenEvents, RindexerRocketPoolETHGenInstance,
 };
-use alloy::primitives::{Address, Bytes, B256};
+use alloy::network::AnyNetwork;
+use alloy::primitives::{Address, B256, Bytes};
 use alloy::sol_types::{SolEvent, SolEventInterface, SolType};
 use rindexer::{
-    async_trait,
+    AsyncCsvAppender, FutureExt, PostgresClient, async_trait,
     event::{
         callback_registry::{
             EventCallbackRegistry, EventCallbackRegistryInformation, EventCallbackResult,
@@ -32,7 +33,6 @@ use rindexer::{
         yaml::read_manifest,
     },
     provider::{JsonRpcCachedProvider, RindexerProvider},
-    AsyncCsvAppender, FutureExt, PostgresClient,
 };
 use std::collections::HashMap;
 use std::error::Error;
@@ -308,7 +308,7 @@ where
 
 pub async fn rocket_pool_eth_contract(
     network: &str,
-) -> RindexerRocketPoolETHGenInstance<Arc<RindexerProvider>> {
+) -> RindexerRocketPoolETHGenInstance<Arc<RindexerProvider>, AnyNetwork> {
     let address: Address =
         "0xae78736cd615f374d3085123a210448e74fc6393".parse().expect("Invalid address");
     RindexerRocketPoolETHGen::new(
@@ -319,7 +319,7 @@ pub async fn rocket_pool_eth_contract(
 
 pub async fn decoder_contract(
     network: &str,
-) -> RindexerRocketPoolETHGenInstance<Arc<RindexerProvider>> {
+) -> RindexerRocketPoolETHGenInstance<Arc<RindexerProvider>, AnyNetwork> {
     if network == "ethereum" {
         RindexerRocketPoolETHGen::new(
             // do not care about address here its decoding makes it easier to handle ValueOrArray

@@ -226,6 +226,9 @@ impl IndexingEventsProgressState {
                                 )
                             })?;
 
+                        // Error updating last synced trace block in-mem
+                        // BlockNumberConversionSyncedBlocksError
+                        // 51207, 20090000
                         let blocks_synced: u64 = new_last_synced_block
                             .checked_sub(event.starting_block)
                             .ok_or(SyncError::BlockNumberConversionSyncedBlocksError(
@@ -248,7 +251,7 @@ impl IndexingEventsProgressState {
                     if new_last_synced_block >= event.syncing_to_block {
                         event.progress = 1.0;
                         info!(
-                            "{} - network {} - {:.2}% progress",
+                            "{}::{} - {:.2}% progress",
                             event.info_log,
                             event.network,
                             event.progress * 100.0
@@ -262,7 +265,7 @@ impl IndexingEventsProgressState {
 
                     if event.progress != 1.0 {
                         info!(
-                            "{} - network {} - {:.2}% progress",
+                            "{}::{} - {:.2}% progress",
                             event.info_log,
                             event.network,
                             event.progress * 100.0
