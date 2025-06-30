@@ -95,11 +95,7 @@ pub fn fetch_logs_stream(
                 // Useful for occasionally breaking out of temporary limitations or parsing errors
                 // that lock down to a `1` block limitation. Returns back to the original
                 let new_max_block_range_limitation = if random_bool(0.10) {
-                    if let Some(max) = original_max_limit {
-                        Some(max)
-                    } else {
-                        None
-                    }
+                    original_max_limit
                 } else {
                     result.max_block_range_limitation
                 };

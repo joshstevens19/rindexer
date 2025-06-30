@@ -512,7 +512,7 @@ async fn trigger_event(
 ) {
     if config.is_factory_event() {
         indexing_event_processing();
-        if fn_data.len() > 0 {
+        if !fn_data.is_empty() {
             config.trigger_event(fn_data).await;
         }
         indexing_event_processed();
@@ -520,7 +520,7 @@ async fn trigger_event(
     }
 
     indexing_event_processing();
-    if fn_data.len() > 0 {
+    if !fn_data.is_empty() {
         config.trigger_event(fn_data).await;
     }
     update_progress_and_last_synced_task(config, to_block, indexing_event_processed);

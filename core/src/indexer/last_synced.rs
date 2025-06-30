@@ -246,8 +246,8 @@ pub fn update_progress_and_last_synced_task(
             let table_name = generate_internal_event_table_name(&schema, &config.event_name());
             let network = &config.network_contract().network;
             let query = format!(
-                "UPDATE rindexer_internal.{table_name} SET last_synced_block = {to_block} WHERE network = {network} AND {to_block} > last_synced_block;
-                UPDATE rindexer_internal.latest_block SET block = {latest} WHERE network = {network} AND {latest} > block;"
+                "UPDATE rindexer_internal.{table_name} SET last_synced_block = {to_block} WHERE network = '{network}' AND {to_block} > last_synced_block;
+                UPDATE rindexer_internal.latest_block SET block = {latest} WHERE network = '{network}' AND {latest} > block;"
             );
 
             let result = database.batch_execute(&query).await;
