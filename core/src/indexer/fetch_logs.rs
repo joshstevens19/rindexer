@@ -41,7 +41,15 @@ pub fn fetch_logs_stream(
     let channel_size = public_read_env_value("RINDEXER_CHANNEL_SIZE")
         .unwrap_or("3".to_string())
         .parse()
-        .unwrap_or(2);
+        .unwrap_or(3);
+
+    warn!(
+        "{}::{} Configured with {} event buffer",
+        config.info_log_name(),
+        config.network_contract().network,
+        channel_size
+    );
+
     let (tx, rx) = mpsc::channel(channel_size);
 
     tokio::spawn(async move {
