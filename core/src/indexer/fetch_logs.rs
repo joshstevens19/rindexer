@@ -167,7 +167,7 @@ async fn fetch_historic_logs_stream(
     );
 
     if from_block > to_block {
-        error!(
+        warn!(
             "{} - {} - from_block {:?} > to_block {:?}",
             info_log_name,
             IndexingEventProgressStatus::Syncing.log(),
@@ -218,7 +218,7 @@ async fn fetch_historic_logs_stream(
 
             if tx.capacity() == 0 {
                 info!(
-                    "{}::{} - {} - Log channel full, indexer will backpressure (this is normal).",
+                    "{}::{} - {} - Log channel full, waiting for events to be processed.",
                     info_log_name,
                     network,
                     IndexingEventProgressStatus::Syncing.log(),
@@ -755,7 +755,7 @@ async fn retry_with_block_range(
 
     // We can't keep up with our own sending rate. This is rare, but we must backoff throughput.
     if error_message.contains("error sending request") {
-        tokio::time::sleep(Duration::from_secs(3)).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
         return Some(RetryWithBlockRangeResult {
             from: from_block,
             to: halved_block_number(to_block, from_block),

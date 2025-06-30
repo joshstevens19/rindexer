@@ -25,7 +25,6 @@ use crate::{
     },
     is_running,
     provider::ProviderError,
-    public_read_env_value,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -51,59 +50,34 @@ pub async fn process_event(
     Ok(())
 }
 
-// HIGHLY EXPERIMENTAL!!!!!!!!!!!
+/// note block_until_indexed:
+/// Whether to wait for all indexing tasks to complete for an event before returning
+//  (needed for dependency indexing)
 async fn process_event_logs(
     config: Arc<EventProcessingConfig>,
     force_no_live_indexing: bool,
-    _block_until_indexed: bool,
+    block_until_indexed: bool,
 ) -> Result<(), Box<ProviderError>> {
-    let max_concurrency: usize = public_read_env_value("MAX_TASK_CONCURRENCY")
-        .ok()
-        .and_then(|a| a.parse::<usize>().ok())
-        .unwrap_or(3usize);
+    let mut logs_stream = fetch_logs_stream(Arc::clone(&config), force_no_live_indexing);
+    let mut tasks = Vec::new();
 
-    fetch_logs_stream(Arc::clone(&config), force_no_live_indexing)
-        .for_each_concurrent(max_concurrency, |result| {
-            let config = Arc::clone(&config);
-            async move {
-                if let Err(err) = handle_logs_result(config, result).await {
-                    error!("Error in handle_logs_result: {:?}", err);
-                }
-            }
-        })
-        .await;
+    while let Some(result) = logs_stream.next().await {
+        let task = handle_logs_result(Arc::clone(&config), result)
+            .await
+            .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
+
+        tasks.push(task);
+    }
+
+    if block_until_indexed {
+        // Wait for all tasks in parallel
+        futures::future::try_join_all(tasks)
+            .await
+            .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
+    }
 
     Ok(())
 }
-
-// /// note block_until_indexed:
-// /// Whether to wait for all indexing tasks to complete for an event before returning
-// //  (needed for dependency indexing)
-// async fn process_event_logs(
-//     config: Arc<EventProcessingConfig>,
-//     force_no_live_indexing: bool,
-//     _block_until_indexed: bool,
-// ) -> Result<(), Box<ProviderError>> {
-//     let mut logs_stream = fetch_logs_stream(Arc::clone(&config), force_no_live_indexing);
-//     let mut tasks = Vec::new();
-//
-//     while let Some(result) = logs_stream.next().await {
-//         let task = handle_logs_result(Arc::clone(&config), result)
-//             .await
-//             .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
-//
-//         tasks.push(task);
-//     }
-//
-//     if block_until_indexed {
-//         // Wait for all tasks in parallel
-//         futures::future::try_join_all(tasks)
-//             .await
-//             .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
-//     }
-//
-//     Ok(())
-// }
 
 #[derive(thiserror::Error, Debug)]
 pub enum ProcessContractsEventsWithDependenciesError {
@@ -538,13 +512,17 @@ async fn trigger_event(
 ) {
     if config.is_factory_event() {
         indexing_event_processing();
-        config.trigger_event(fn_data).await;
+        if fn_data.len() > 0 {
+            config.trigger_event(fn_data).await;
+        }
         indexing_event_processed();
         return;
     }
 
     indexing_event_processing();
-    config.trigger_event(fn_data).await;
+    if fn_data.len() > 0 {
+        config.trigger_event(fn_data).await;
+    }
     update_progress_and_last_synced_task(config, to_block, indexing_event_processed);
 }
 

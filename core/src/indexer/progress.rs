@@ -11,7 +11,6 @@ use tracing::{debug, error, info};
 use crate::event::callback_registry::{
     EventCallbackRegistryInformation, TraceCallbackRegistryInformation,
 };
-use crate::manifest::yaml::read_manifest;
 
 #[derive(Clone, Debug, Hash)]
 pub enum IndexingEventProgressStatus {

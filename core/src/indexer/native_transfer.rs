@@ -198,7 +198,7 @@ pub async fn native_transfer_block_processor(
             );
 
             if is_rate_limit_error {
-                error!(
+                warn!(
                     "Rate-limited 429 '{}' block requests. Retrying in 2s: {}",
                     network_name,
                     e.to_string(),
@@ -288,7 +288,9 @@ pub async fn native_transfer_block_consumer(
     // Important that we call this for every event even if there are no logs.
     // This is because we need to sync the last seen block number still.
     indexing_event_processing();
-    config.trigger_event(native_transfers.clone()).await;
+    if native_transfers.len() > 0 {
+        config.trigger_event(native_transfers).await;
+    }
     evm_trace_update_progress_and_last_synced_task(
         config.clone(),
         to_block,
@@ -378,7 +380,9 @@ pub async fn native_transfer_block_consumer_debug(
     }
 
     indexing_event_processing();
-    config.trigger_event(native_transfers).await;
+    if native_transfers.len() > 0 {
+        config.trigger_event(native_transfers).await;
+    }
     evm_trace_update_progress_and_last_synced_task(config, to_block, indexing_event_processed);
 
     Ok(())
