@@ -16,9 +16,12 @@ use crate::{
         AddressDetails, ContractEventMapping, FilterDetails, IndexingContractSetup,
     },
     helpers::get_full_path,
-    manifest::{chat::ChatConfig, stream::StreamsConfig},
+    manifest::stream::StreamsConfig,
     types::single_or_array::StringOrArray,
 };
+
+#[cfg(any(feature = "discord", feature = "slack", feature = "telegram"))]
+use crate::manifest::chat::ChatConfig;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EventInputIndexedFilters {
@@ -230,6 +233,7 @@ pub struct Contract {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub streams: Option<StreamsConfig>,
 
+    #[cfg(any(feature = "discord", feature = "slack", feature = "telegram"))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat: Option<ChatConfig>,
 }

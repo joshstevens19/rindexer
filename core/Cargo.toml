@@ -20,8 +20,8 @@ mockito = "1.7.0"
 alloy = { version = "1.0.9", features = ["full"] }
 async-std = "1.12.0"
 async-trait = "0.1.77"
-aws-config = "1.5.0"
-aws-sdk-sns = "1.37.0"
+aws-config = { version = "1.5.0", optional = true }
+aws-sdk-sns = { version = "1.37.0", optional = true }
 bb8 = "0.9.0"
 bb8-postgres = "0.9.0"
 bb8-redis = "0.22.0"
@@ -30,11 +30,11 @@ chrono = { version = "0.4", features = ["serde"] }
 colored = "3.0.0"
 csv = "1.3.1"
 deadpool = { version = "0.12", features = ["rt_tokio_1"] }
-deadpool-lapin = "0.12"
+deadpool-lapin = { version = "0.12", optional = true }
 dotenv = "0.15.0"
 futures = "0.3.30"
 hex = "0.4.3"
-lapin = "2.5.0"
+lapin = { version = "2.5.0", optional = true }
 lazy_static = "1.4.0"
 native-tls = "0.2"
 once_cell = "1.19.0"
@@ -49,8 +49,8 @@ rust_decimal = { version = "1.35.0", features = ["db-tokio-postgres"] }
 serde = "1.0"
 serde_json = "1.0"
 serde_yaml = "0.9.30"
-serenity = { version = "0.12", features = ["client", "framework"] }
-teloxide = "0.15"
+serenity = { version = "0.12", features = ["client", "framework"], optional = true }
+teloxide = { version = "0.15", optional = true }
 tempfile = "3.9.0"
 thiserror = "2.0.12"
 thread_local = "1.1"
@@ -77,10 +77,10 @@ foundry-compilers = "0.17.0"
 alloy-chains = "0.2.2"
 
 [target.'cfg(not(windows))'.dependencies]
-rdkafka = { version = "0.37.0", features = ["tokio"] }
+rdkafka = { version = "0.37.0", features = ["tokio"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
-rdkafka = { version = "0.37.0", features = ["tokio", "cmake-build"] }
+rdkafka = { version = "0.37.0", features = ["tokio", "cmake-build"], optional = true }
 
 [profile.release]
 lto = "fat"
@@ -89,3 +89,10 @@ incremental = false
 
 [features]
 jemalloc = ["dep:jemallocator", "dep:jemalloc-ctl"]
+default = []
+kafka = ["dep:rdkafka"]
+rabbitmq = ["dep:lapin", "dep:deadpool-lapin"]
+telegram = ["dep:teloxide"]
+discord = ["dep:serenity"]
+slack = []
+sns = ["dep:aws-config", "dep:aws-sdk-sns"]

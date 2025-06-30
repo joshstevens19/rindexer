@@ -1,40 +1,55 @@
-use std::sync::Arc;
-
 use alloy::primitives::U64;
 use futures::future::join_all;
 use serde_json::Value;
-use serenity::all::ChannelId;
-use teloxide::types::ChatId;
 use thiserror::Error;
-use tokio::{
-    task,
-    task::{JoinError, JoinHandle},
+use tokio::task::{JoinError, JoinHandle};
+
+#[cfg(any(feature = "discord", feature = "telegram", feature = "slack"))]
+use std::sync::Arc;
+#[cfg(any(feature = "discord", feature = "telegram", feature = "slack"))]
+use tokio::task;
+
+#[cfg(feature = "discord")]
+use crate::{
+    chat::discord::{DiscordBot, DiscordError},
+    manifest::chat::{DiscordConfig, DiscordEvent},
+};
+#[cfg(feature = "discord")]
+use serenity::all::ChannelId;
+
+#[cfg(feature = "slack")]
+use crate::{
+    chat::slack::{SlackBot, SlackError},
+    manifest::chat::{SlackConfig, SlackEvent},
 };
 
+#[cfg(feature = "telegram")]
 use crate::{
     chat::{
-        discord::{DiscordBot, DiscordError},
-        slack::{SlackBot, SlackError},
         telegram::{TelegramBot, TelegramError},
         template::Template,
     },
-    event::{filter_event_data_by_conditions, EventMessage},
-    manifest::chat::{
-        ChatConfig, DiscordConfig, DiscordEvent, SlackConfig, SlackEvent, TelegramConfig,
-        TelegramEvent,
-    },
+    manifest::chat::{TelegramConfig, TelegramEvent},
 };
+#[cfg(feature = "telegram")]
+use teloxide::types::ChatId;
+
+use crate::event::{filter_event_data_by_conditions, EventMessage};
+use crate::manifest::chat::ChatConfig;
 
 type SendMessage = Vec<JoinHandle<Result<(), ChatError>>>;
 
 #[derive(Error, Debug)]
 pub enum ChatError {
+    #[cfg(feature = "telegram")]
     #[error("Telegram error: {0}")]
     Telegram(#[from] TelegramError),
 
+    #[cfg(feature = "discord")]
     #[error("Discord error: {0}")]
     Discord(#[from] DiscordError),
 
+    #[cfg(feature = "slack")]
     #[error("Slack error: {0}")]
     Slack(#[from] SlackError),
 
@@ -42,12 +57,14 @@ pub enum ChatError {
     JoinError(JoinError),
 }
 
+#[cfg(feature = "telegram")]
 #[derive(Debug, Clone)]
 struct TelegramInstance {
     config: TelegramConfig,
     client: Arc<TelegramBot>,
 }
 
+#[cfg(feature = "discord")]
 #[derive(Debug)]
 struct DiscordInstance {
     config: DiscordConfig,
@@ -55,19 +72,24 @@ struct DiscordInstance {
 }
 
 #[derive(Debug)]
+#[cfg(feature = "slack")]
 struct SlackInstance {
     config: SlackConfig,
     client: Arc<SlackBot>,
 }
 
 pub struct ChatClients {
+    #[cfg(feature = "telegram")]
     telegram: Option<Vec<TelegramInstance>>,
+    #[cfg(feature = "discord")]
     discord: Option<Vec<DiscordInstance>>,
+    #[cfg(feature = "slack")]
     slack: Option<Vec<SlackInstance>>,
 }
 
 impl ChatClients {
     pub async fn new(chat_config: ChatConfig) -> Self {
+        #[cfg(feature = "telegram")]
         let telegram = chat_config.telegram.map(|config| {
             config
                 .into_iter()
@@ -78,6 +100,7 @@ impl ChatClients {
                 .collect()
         });
 
+        #[cfg(feature = "discord")]
         let discord = chat_config.discord.map(|config| {
             config
                 .into_iter()
@@ -88,6 +111,7 @@ impl ChatClients {
                 .collect()
         });
 
+        #[cfg(feature = "slack")]
         let slack = chat_config.slack.map(|config| {
             config
                 .into_iter()
@@ -98,7 +122,14 @@ impl ChatClients {
                 .collect()
         });
 
-        Self { telegram, discord, slack }
+        Self {
+            #[cfg(feature = "telegram")]
+            telegram,
+            #[cfg(feature = "discord")]
+            discord,
+            #[cfg(feature = "slack")]
+            slack,
+        }
     }
 
     fn find_accepted_block_range(&self, from_block: &U64, to_block: &U64) -> U64 {
@@ -118,9 +149,25 @@ impl ChatClients {
     }
 
     fn has_any_chat(&self) -> bool {
-        self.telegram.is_some() || self.discord.is_some() || self.slack.is_some()
+        #[cfg(feature = "telegram")]
+        let has_telegram = self.telegram.is_some();
+        #[cfg(not(feature = "telegram"))]
+        let has_telegram = false;
+
+        #[cfg(feature = "discord")]
+        let has_discord = self.discord.is_some();
+        #[cfg(not(feature = "discord"))]
+        let has_discord = false;
+
+        #[cfg(feature = "slack")]
+        let has_slack = self.slack.is_some();
+        #[cfg(not(feature = "slack"))]
+        let has_slack = false;
+
+        has_telegram || has_discord || has_slack
     }
 
+    #[cfg(feature = "telegram")]
     fn telegram_send_message_tasks(
         &self,
         instance: &TelegramInstance,
@@ -150,6 +197,7 @@ impl ChatClients {
         tasks
     }
 
+    #[cfg(feature = "discord")]
     fn discord_send_message_tasks(
         &self,
         instance: &DiscordInstance,
@@ -179,6 +227,7 @@ impl ChatClients {
         tasks
     }
 
+    #[cfg(feature = "slack")]
     fn slack_send_message_tasks(
         &self,
         instance: &SlackInstance,
@@ -223,6 +272,7 @@ impl ChatClients {
         if let Value::Array(data_array) = &event_message.event_data {
             let mut messages: Vec<SendMessage> = Vec::new();
 
+            #[cfg(feature = "telegram")]
             if let Some(telegram) = &self.telegram {
                 for instance in telegram {
                     if instance.config.networks.contains(&event_message.network) {
@@ -244,6 +294,7 @@ impl ChatClients {
                 }
             }
 
+            #[cfg(feature = "discord")]
             if let Some(discord) = &self.discord {
                 for instance in discord {
                     if instance.config.networks.contains(&event_message.network) {
@@ -265,6 +316,7 @@ impl ChatClients {
                 }
             }
 
+            #[cfg(feature = "slack")]
             if let Some(slack) = &self.slack {
                 for instance in slack {
                     if instance.config.networks.contains(&event_message.network) {

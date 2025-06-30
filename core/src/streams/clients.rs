@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+#[cfg(feature = "sns")]
 use aws_sdk_sns::{config::http::HttpResponse, error::SdkError, operation::publish::PublishError};
 use futures::future::join_all;
 use serde_json::Value;
@@ -14,15 +15,25 @@ use crate::{
     event::{filter_event_data_by_conditions, EventMessage},
     indexer::native_transfer::EVENT_NAME,
     manifest::stream::{
-        KafkaStreamConfig, KafkaStreamQueueConfig, RabbitMQStreamConfig, RabbitMQStreamQueueConfig,
-        RedisStreamConfig, RedisStreamStreamConfig, SNSStreamTopicConfig, StreamEvent,
-        StreamsConfig, WebhookStreamConfig,
+        RedisStreamConfig, RedisStreamStreamConfig, StreamEvent, StreamsConfig, WebhookStreamConfig,
     },
-    streams::{
-        kafka::{Kafka, KafkaError},
-        RabbitMQ, RabbitMQError, Redis, RedisError, Webhook, WebhookError, SNS,
-    },
+    streams::{Redis, RedisError, Webhook, WebhookError},
 };
+
+#[cfg(feature = "kafka")]
+use crate::manifest::stream::{KafkaStreamConfig, KafkaStreamQueueConfig};
+#[cfg(feature = "kafka")]
+use crate::streams::kafka::{Kafka, KafkaError};
+
+#[cfg(feature = "rabbitmq")]
+use crate::manifest::stream::{RabbitMQStreamConfig, RabbitMQStreamQueueConfig};
+#[cfg(feature = "rabbitmq")]
+use crate::streams::{RabbitMQ, RabbitMQError};
+
+#[cfg(feature = "sns")]
+use crate::manifest::stream::SNSStreamTopicConfig;
+#[cfg(feature = "sns")]
+use crate::streams::SNS;
 
 // we should limit the max chunk size we send over when streaming to 70KB - 100KB is most limits
 // we can add this to yaml if people need it
@@ -30,6 +41,7 @@ const MAX_CHUNK_SIZE: usize = 75 * 1024; // 75 KB
 
 type StreamPublishes = Vec<JoinHandle<Result<usize, StreamError>>>;
 
+#[cfg(feature = "sns")]
 #[derive(Debug, Clone)]
 struct SNSStream {
     config: Vec<SNSStreamTopicConfig>,
@@ -39,6 +51,7 @@ struct SNSStream {
 #[allow(clippy::large_enum_variant)]
 #[derive(Error, Debug)]
 pub enum StreamError {
+    #[cfg(feature = "sns")]
     #[error("SNS could not publish - {0}")]
     SnsCouldNotPublish(#[from] SdkError<PublishError, HttpResponse>),
 
@@ -46,9 +59,11 @@ pub enum StreamError {
     WebhookCouldNotPublish(#[from] WebhookError),
 
     #[error("RabbitMQ could not publish: {0}")]
+    #[cfg(feature = "rabbitmq")]
     RabbitMQCouldNotPublish(#[from] RabbitMQError),
 
     #[error("Kafka could not publish: {0}")]
+    #[cfg(feature = "kafka")]
     KafkaCouldNotPublish(#[from] KafkaError),
 
     #[error("Redis could not publish: {0}")]
@@ -65,12 +80,14 @@ struct WebhookStream {
 }
 
 #[derive(Debug)]
+#[cfg(feature = "rabbitmq")]
 pub struct RabbitMQStream {
     config: RabbitMQStreamConfig,
     client: Arc<RabbitMQ>,
 }
 
 #[derive(Debug)]
+#[cfg(feature = "kafka")]
 pub struct KafkaStream {
     config: KafkaStreamConfig,
     client: Arc<Kafka>,
@@ -84,15 +101,19 @@ pub struct RedisStream {
 
 #[derive(Debug)]
 pub struct StreamsClients {
+    #[cfg(feature = "sns")]
     sns: Option<SNSStream>,
     webhook: Option<WebhookStream>,
+    #[cfg(feature = "rabbitmq")]
     rabbitmq: Option<RabbitMQStream>,
+    #[cfg(feature = "kafka")]
     kafka: Option<KafkaStream>,
     redis: Option<RedisStream>,
 }
 
 impl StreamsClients {
     pub async fn new(stream_config: StreamsConfig) -> Self {
+        #[cfg(feature = "sns")]
         let sns = if let Some(config) = &stream_config.sns {
             Some(SNSStream {
                 config: config.topics.clone(),
@@ -107,6 +128,7 @@ impl StreamsClients {
             client: Arc::new(Webhook::new()),
         });
 
+        #[cfg(feature = "rabbitmq")]
         let rabbitmq = if let Some(config) = stream_config.rabbitmq.as_ref() {
             Some(RabbitMQStream {
                 config: config.clone(),
@@ -116,6 +138,7 @@ impl StreamsClients {
             None
         };
 
+        #[cfg(feature = "kafka")]
         let kafka = if let Some(config) = stream_config.kafka.as_ref() {
             Some(KafkaStream {
                 config: config.clone(),
@@ -142,15 +165,35 @@ impl StreamsClients {
             None
         };
 
-        Self { sns, webhook, rabbitmq, kafka, redis }
+        Self {
+            #[cfg(feature = "sns")]
+            sns,
+            webhook,
+            #[cfg(feature = "rabbitmq")]
+            rabbitmq,
+            #[cfg(feature = "kafka")]
+            kafka,
+            redis,
+        }
     }
 
     fn has_any_streams(&self) -> bool {
-        self.sns.is_some()
-            || self.webhook.is_some()
-            || self.rabbitmq.is_some()
-            || self.kafka.is_some()
-            || self.redis.is_some()
+        #[cfg(feature = "sns")]
+        let has_sns = self.sns.is_some();
+        #[cfg(not(feature = "sns"))]
+        let has_sns = false;
+
+        #[cfg(feature = "rabbitmq")]
+        let has_rabbitmq = self.rabbitmq.is_some();
+        #[cfg(not(feature = "rabbitmq"))]
+        let has_rabbitmq = false;
+
+        #[cfg(feature = "kafka")]
+        let has_kafka = self.kafka.is_some();
+        #[cfg(not(feature = "kafka"))]
+        let has_kafka = false;
+
+        self.webhook.is_some() || self.redis.is_some() || has_sns || has_rabbitmq || has_kafka
     }
 
     fn chunk_data(&self, data_array: &Vec<Value>) -> Vec<Vec<Value>> {
@@ -189,6 +232,7 @@ impl StreamsClients {
         alias_name.unwrap_or_else(|| event_message.event_name.clone())
     }
 
+    #[cfg(feature = "sns")]
     fn create_chunk_message_raw(
         &self,
         events: &[StreamEvent],
@@ -266,6 +310,7 @@ impl StreamsClients {
         filtered_chunk
     }
 
+    #[cfg(feature = "sns")]
     fn sns_stream_tasks(
         &self,
         config: &SNSStreamTopicConfig,
@@ -339,6 +384,7 @@ impl StreamsClients {
         tasks
     }
 
+    #[cfg(feature = "rabbitmq")]
     fn rabbitmq_stream_tasks(
         &self,
         config: &RabbitMQStreamQueueConfig,
@@ -382,6 +428,7 @@ impl StreamsClients {
         tasks
     }
 
+    #[cfg(feature = "kafka")]
     fn kafka_stream_tasks(
         &self,
         config: &KafkaStreamQueueConfig,
@@ -455,7 +502,7 @@ impl StreamsClients {
         id: String,
         event_message: &EventMessage,
         index_event_in_order: bool,
-        is_trace_event: bool,
+        _is_trace_event: bool,
     ) -> Result<usize, StreamError> {
         if !self.has_any_streams() {
             return Ok(0);
@@ -466,12 +513,13 @@ impl StreamsClients {
             let chunks = Arc::new(self.chunk_data(data_array));
             let mut streams: Vec<StreamPublishes> = Vec::new();
 
+            #[cfg(feature = "sns")]
             if let Some(sns) = &self.sns {
                 for config in &sns.config {
                     let is_user_event =
                         config.events.iter().any(|e| e.event_name == event_message.event_name);
 
-                    if (is_user_event || is_trace_event)
+                    if (is_user_event || _is_trace_event)
                         && config.networks.contains(&event_message.network)
                     {
                         streams.push(self.sns_stream_tasks(
@@ -501,6 +549,7 @@ impl StreamsClients {
                 }
             }
 
+            #[cfg(feature = "rabbitmq")]
             if let Some(rabbitmq) = &self.rabbitmq {
                 for config in &rabbitmq.config.exchanges {
                     if config.events.iter().any(|e| e.event_name == event_message.event_name)
@@ -517,6 +566,7 @@ impl StreamsClients {
                 }
             }
 
+            #[cfg(feature = "kafka")]
             if let Some(kafka) = &self.kafka {
                 for config in &kafka.config.topics {
                     if config.events.iter().any(|e| e.event_name == event_message.event_name)

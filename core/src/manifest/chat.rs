@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+#[cfg(feature = "telegram")]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TelegramConfig {
     pub bot_token: String,
@@ -9,6 +10,7 @@ pub struct TelegramConfig {
     pub messages: Vec<TelegramEvent>,
 }
 
+#[cfg(feature = "telegram")]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TelegramEvent {
     pub event_name: String,
@@ -19,6 +21,7 @@ pub struct TelegramEvent {
     pub template_inline: String,
 }
 
+#[cfg(feature = "discord")]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DiscordConfig {
     pub bot_token: String,
@@ -27,6 +30,7 @@ pub struct DiscordConfig {
     pub messages: Vec<DiscordEvent>,
 }
 
+#[cfg(feature = "discord")]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DiscordEvent {
     pub event_name: String,
@@ -37,6 +41,7 @@ pub struct DiscordEvent {
     pub template_inline: String,
 }
 
+#[cfg(feature = "slack")]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SlackConfig {
     pub bot_token: String,
@@ -45,6 +50,7 @@ pub struct SlackConfig {
     pub messages: Vec<SlackEvent>,
 }
 
+#[cfg(feature = "slack")]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SlackEvent {
     pub event_name: String,
@@ -57,12 +63,15 @@ pub struct SlackEvent {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChatConfig {
+    #[cfg(feature = "telegram")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telegram: Option<Vec<TelegramConfig>>,
 
+    #[cfg(feature = "discord")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub discord: Option<Vec<DiscordConfig>>,
 
+    #[cfg(feature = "slack")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slack: Option<Vec<SlackConfig>>,
 }

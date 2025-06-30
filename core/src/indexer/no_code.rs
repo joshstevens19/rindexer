@@ -11,14 +11,19 @@ use alloy::{
 use colored::Colorize;
 use serde_json::Value;
 use tokio_postgres::types::Type as PgType;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use super::native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME};
 use crate::helpers::{map_log_params_to_raw_values, parse_log};
 use crate::manifest::contract::Contract;
+
+#[cfg(any(feature = "discord", feature = "slack", feature = "telegram"))]
+use crate::chat::ChatClients;
+#[cfg(any(feature = "discord", feature = "slack", feature = "telegram"))]
+use tracing::warn;
+
 use crate::{
     abi::{ABIItem, CreateCsvFileForEvent, EventInfo, ParamTypeError, ReadAbiError},
-    chat::ChatClients,
     database::postgres::{
         client::PostgresClient,
         generate::{
@@ -166,6 +171,8 @@ struct NoCodeCallbackParams {
     postgres_event_table_name: String,
     postgres_column_names: Vec<String>,
     streams_clients: Arc<Option<StreamsClients>>,
+
+    #[cfg(any(feature = "discord", feature = "slack", feature = "telegram"))]
     chat_clients: Arc<Option<ChatClients>>,
 }
 
@@ -338,7 +345,12 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                 end_global_parameters,
             ) in owned_results
             {
-                if params.streams_clients.is_some() || params.chat_clients.is_some() {
+                #[cfg(any(feature = "discord", feature = "slack", feature = "telegram"))]
+                let has_chat_clients = params.chat_clients.is_some();
+                #[cfg(not(any(feature = "discord", feature = "slack", feature = "telegram")))]
+                let has_chat_clients = false;
+
+                if params.streams_clients.is_some() || has_chat_clients {
                     let event_result = map_ethereum_wrapper_to_json(
                         &params.event_info.inputs,
                         &event_parameters,
@@ -478,6 +490,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                 }
             }
 
+            #[cfg(any(feature = "discord", feature = "slack", feature = "telegram"))]
             if let Some(chat_clients) = params.chat_clients.as_ref() {
                 if !chat_clients.is_in_block_range_to_send(&from_block, &to_block) {
                     warn!(
@@ -669,6 +682,7 @@ async fn process_contract(
             None
         };
 
+        #[cfg(any(feature = "discord", feature = "slack", feature = "telegram"))]
         let chat_clients = if let Some(chats) = &contract.chat {
             Some(ChatClients::new(chats.clone()).await)
         } else {
@@ -698,6 +712,7 @@ async fn process_contract(
                 postgres_event_table_name,
                 postgres_column_names,
                 streams_clients: Arc::new(streams_client),
+                #[cfg(any(feature = "discord", feature = "slack", feature = "telegram"))]
                 chat_clients: Arc::new(chat_clients),
             }))
             .event_callback,
@@ -786,6 +801,7 @@ pub async fn process_trace_events(
             None
         };
 
+        #[cfg(any(feature = "discord", feature = "slack", feature = "telegram"))]
         let chat_clients = if let Some(chats) = &contract.chat {
             Some(ChatClients::new(chats.clone()).await)
         } else {
@@ -803,6 +819,7 @@ pub async fn process_trace_events(
             postgres_event_table_name,
             postgres_column_names,
             streams_clients: Arc::new(streams_client),
+            #[cfg(any(feature = "discord", feature = "slack", feature = "telegram"))]
             chat_clients: Arc::new(chat_clients),
         });
 
