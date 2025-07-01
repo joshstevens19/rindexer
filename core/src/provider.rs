@@ -394,8 +394,12 @@ impl JsonRpcCachedProvider {
             return Ok(Vec::new());
         }
 
+        let mut block_numbers = block_numbers.to_vec();
+        block_numbers.dedup();
+
+        // Use less than the max chunk as recommended in most provider docs
         let futures = block_numbers
-            .chunks(RPC_CHUNK_SIZE)
+            .chunks(RPC_CHUNK_SIZE / 2)
             .map(|chunk| {
                 let client = self.client.clone();
                 let owned_chunk = chunk.to_vec();

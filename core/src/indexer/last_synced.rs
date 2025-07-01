@@ -1,7 +1,7 @@
-use std::{path::Path, str::FromStr, sync::Arc};
-
 use alloy::primitives::U64;
 use rust_decimal::Decimal;
+use std::time::Duration;
+use std::{path::Path, str::FromStr, sync::Arc};
 use tokio::{
     fs,
     fs::File,
@@ -232,100 +232,108 @@ pub fn update_progress_and_last_synced_task(
         }
 
         // Add timeout to prevent hanging during shutdown
-        let timeout_duration = std::time::Duration::from_secs(5);
+        let timeout_duration = std::time::Duration::from_secs(2);
 
-        let update_result = tokio::time::timeout(timeout_duration, async {
-            let update_last_synced_block_result = config
+        let update_last_synced_block_result = tokio::time::timeout(timeout_duration, async {
+            config
                 .progress()
                 .lock()
                 .await
-                .update_last_synced_block(&config.network_contract().id, to_block);
+                .update_last_synced_block(&config.network_contract().id, to_block)
+        })
+        .await;
 
-            // Only make RPC calls if we're still running
-            let latest = if crate::is_running() {
-                config
-                    .network_contract()
-                    .cached_provider
-                    .get_latest_block()
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|b| b.header.number)
-                    .unwrap_or(0)
-            } else {
-                0
-            };
+        if let Err(_) = update_last_synced_block_result {
+            error!(
+                "Timeout or shutdown detected in update_last_synced_block_result, completing early"
+            );
+        }
 
-            if let Err(e) = update_last_synced_block_result {
-                error!("Error updating in-mem last synced block result: {:?}", e);
-            }
+        let update_last_synced_block_result = update_last_synced_block_result.unwrap();
 
-            // Only update database if we're still running
-            if crate::is_running() {
-                if let Some(database) = &config.database() {
-                    let schema = generate_indexer_contract_schema_name(
-                        &config.indexer_name(),
-                        &config.contract_name(),
-                    );
-                    let table_name = generate_internal_event_table_name(&schema, &config.event_name());
-                    let network = &config.network_contract().network;
-                    let query = format!(
-                        "UPDATE rindexer_internal.{table_name} SET last_synced_block = {to_block} WHERE network = '{network}' AND {to_block} > last_synced_block;
+        if let Err(e) = update_last_synced_block_result {
+            error!("Error updating in-mem last synced block result: {:?}", e);
+        }
+
+        // Only make RPC calls if we're still running
+        let latest = config
+            .network_contract()
+            .cached_provider
+            .get_latest_block()
+            .await
+            .ok()
+            .flatten()
+            .map(|b| b.header.number)
+            .unwrap_or(0);
+
+        // Only update database if we're still running
+
+        let db = tokio::time::timeout(Duration::from_secs(5), async {
+            if let Some(database) = &config.database() {
+                let schema = generate_indexer_contract_schema_name(
+                    &config.indexer_name(),
+                    &config.contract_name(),
+                );
+                let table_name = generate_internal_event_table_name(&schema, &config.event_name());
+                let network = &config.network_contract().network;
+                let query = format!(
+                    "UPDATE rindexer_internal.{table_name} SET last_synced_block = {to_block} WHERE network = '{network}' AND {to_block} > last_synced_block;
                         UPDATE rindexer_internal.latest_block SET block = {latest} WHERE network = '{network}' AND {latest} > block;"
-                    );
+                );
 
-                    let result = database.batch_execute(&query).await;
+                let result = database.batch_execute(&query).await;
 
-                    if let Err(e) = result {
-                        error!("Error updating db last synced block: {:?}", e);
-                    }
-                }
-
-                // Only update CSV if we're still running
-                if let Some(csv_details) = &config.csv_details() {
-                    if let Err(e) = update_last_synced_block_number_for_file(
-                        &config.contract_name(),
-                        &config.network_contract().network,
-                        &config.event_name(),
-                        &get_full_path(&config.project_path(), &csv_details.path).unwrap_or_else(
-                            |_| panic!("failed to get full path {}", config.project_path().display()),
-                        ),
-                        to_block,
-                    )
-                    .await
-                    {
-                        error!(
-                            "Error updating last synced block to CSV - path - {} error - {:?}",
-                            csv_details.path, e
-                        );
-                    }
-                } else if let Some(stream_last_synced_block_file_path) =
-                    &config.stream_last_synced_block_file_path()
-                {
-                    if let Err(e) = update_last_synced_block_number_for_file(
-                        &config.contract_name(),
-                        &config.network_contract().network,
-                        &config.event_name(),
-                        &config
-                            .project_path()
-                            .join(stream_last_synced_block_file_path)
-                            .canonicalize()
-                            .expect("Failed to canonicalize path"),
-                        to_block,
-                    )
-                    .await
-                    {
-                        error!(
-                            "Error updating last synced block to stream - path - {} error - {:?}",
-                            stream_last_synced_block_file_path, e
-                        );
-                    }
+                if let Err(e) = result {
+                    error!("Error updating db last synced block: {:?}", e);
                 }
             }
         }).await;
 
-        if update_result.is_err() {
-            error!("Timeout or shutdown detected in update_progress_and_last_synced_task, completing early");
+        if let Err(_) = db {
+            error!(
+                "Timeout or shutdown detected in database.batch_execute, completing early"
+            );
+        }
+
+        // Only update CSV if we're still running
+        if let Some(csv_details) = &config.csv_details() {
+            if let Err(e) = update_last_synced_block_number_for_file(
+                &config.contract_name(),
+                &config.network_contract().network,
+                &config.event_name(),
+                &get_full_path(&config.project_path(), &csv_details.path).unwrap_or_else(|_| {
+                    panic!("failed to get full path {}", config.project_path().display())
+                }),
+                to_block,
+            )
+            .await
+            {
+                error!(
+                    "Error updating last synced block to CSV - path - {} error - {:?}",
+                    csv_details.path, e
+                );
+            }
+        } else if let Some(stream_last_synced_block_file_path) =
+            &config.stream_last_synced_block_file_path()
+        {
+            if let Err(e) = update_last_synced_block_number_for_file(
+                &config.contract_name(),
+                &config.network_contract().network,
+                &config.event_name(),
+                &config
+                    .project_path()
+                    .join(stream_last_synced_block_file_path)
+                    .canonicalize()
+                    .expect("Failed to canonicalize path"),
+                to_block,
+            )
+            .await
+            {
+                error!(
+                    "Error updating last synced block to stream - path - {} error - {:?}",
+                    stream_last_synced_block_file_path, e
+                );
+            }
         }
 
         on_complete();
@@ -394,7 +402,7 @@ pub fn evm_trace_update_progress_and_last_synced_task(
                         }),
                         to_block,
                     )
-                    .await
+                        .await
                     {
                         error!(
                             "Error updating last synced block to CSV - path - {} error - {:?}",
@@ -415,7 +423,7 @@ pub fn evm_trace_update_progress_and_last_synced_task(
                             .expect("Failed to canonicalize path"),
                         to_block,
                     )
-                    .await
+                        .await
                     {
                         error!(
                             "Error updating last synced block to stream - path - {} error - {:?}",

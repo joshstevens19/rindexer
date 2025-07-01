@@ -206,7 +206,7 @@ async fn fetch_historic_logs_stream(
     let sender = tx.reserve().await.ok()?;
 
     if tx.capacity() == 0 {
-        info!(
+        debug!(
             "{}::{} - {} - Log channel full, waiting for events to be processed.",
             info_log_name,
             network,
@@ -514,7 +514,7 @@ async fn live_indexing_stream(
 
                                         if tx.capacity() == 0 {
                                             warn!(
-                                                "{}::{} - {} - Log channel is full, live indexing producer will backpressure.",
+                                                "{}::{} - {} - Log channel full, live indexer will wait for events to be processed.",
                                                 info_log_name,
                                                 network,
                                                 IndexingEventProgressStatus::Live.log(),
@@ -662,12 +662,14 @@ async fn retry_with_block_range(
         let error_data_binding = error.data.as_ref().map(|data| data.to_string());
         let empty_string = String::from("");
         let error_data = error_data_binding.unwrap_or(empty_string);
+        let trimmed = error_message.chars().take(5000).collect::<String>();
 
-        (error_message.to_lowercase(), error_data.to_lowercase())
+        (trimmed.to_lowercase(), error_data.to_lowercase())
     } else {
         let str_err = error.to_string();
+        let trimmed = str_err.chars().take(5000).collect::<String>();
         debug!("Failed to parse structured error, trying with raw string: {}", &str_err);
-        (str_err.to_lowercase(), "".to_string())
+        (trimmed.to_lowercase(), "".to_string())
     };
 
     // Thanks Ponder for the regex patterns - https://github.com/ponder-sh/ponder/blob/889096a3ef5f54a0c5a06df82b0da9cf9a113996/packages/utils/src/getLogsRetryHelper.ts#L34
@@ -684,7 +686,7 @@ async fn retry_with_block_range(
                     u64::from_str_radix(end_block_str, 16),
                 ) {
                     if from > to {
-                        error!(
+                        warn!(
                             "{}::{} Alchemy returned a negative block range {} to {}. Inverting.",
                             info_log_name, network, from, to
                         );

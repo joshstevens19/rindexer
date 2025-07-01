@@ -2,6 +2,8 @@ use std::{path::Path, sync::Arc};
 
 use alloy::primitives::U64;
 use futures::future::try_join_all;
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
 use tokio::{
     join,
     task::{JoinError, JoinHandle},
@@ -269,14 +271,12 @@ pub async fn start_indexing_contract_events(
 > {
     let event_progress_state = IndexingEventsProgressState::monitor(&registry.events).await;
 
-    // need this to keep track of dependency_events cross contracts and events
-    // if you are doing advanced dependency events where other contracts depend on the processing of
-    // this contract you will need to apply the dependency after the processing of the other
-    // contract to avoid ordering issues
     let mut apply_cross_contract_dependency_events_config_after_processing = Vec::new();
     let mut non_blocking_process_events = Vec::new();
     let mut processed_network_contracts: Vec<ProcessedNetworkContract> = Vec::new();
     let mut dependency_event_processing_configs: Vec<ContractEventsDependenciesConfig> = Vec::new();
+
+    let mut block_tasks = FuturesUnordered::new();
 
     for event in registry.events.iter() {
         let stream_details = manifest
@@ -286,124 +286,164 @@ pub async fn start_indexing_contract_events(
             .and_then(|c| c.streams.as_ref());
 
         for network_contract in event.contract.details.iter() {
-            let config = SyncConfig {
-                project_path,
-                database: &database,
-                csv_details: &manifest.storage.csv,
-                contract_csv_enabled: manifest.contract_csv_enabled(&event.contract.name),
-                stream_details: &stream_details,
-                indexer_name: &event.indexer_name,
-                contract_name: &event.contract.name,
-                event_name: &event.event_name,
-                network: &network_contract.network,
-            };
+            let event = event.clone();
+            let stream_details = stream_details.clone();
+            let network_contract = network_contract.clone();
+            let project_path = project_path.to_path_buf();
+            let database = database.clone();
+            let manifest_csv_details = manifest.storage.csv.clone();
+            let registry = Arc::clone(&registry);
+            let event_progress_state = Arc::clone(&event_progress_state);
+            let dependencies = dependencies.to_vec();
 
-            let (start_block, end_block, indexing_distance_from_head) = get_start_end_block(
-                network_contract.cached_provider.clone(),
-                network_contract.start_block,
-                network_contract.end_block,
-                config,
-                &event.info_log_name(),
-                &network_contract.network,
-                event.contract.reorg_safe_distance,
-            )
-            .await?;
+            block_tasks.push(async move {
+                let config = SyncConfig {
+                    project_path: &project_path,
+                    database: &database,
+                    csv_details: &manifest_csv_details,
+                    contract_csv_enabled: manifest.contract_csv_enabled(&event.contract.name),
+                    stream_details: &stream_details,
+                    indexer_name: &event.indexer_name,
+                    contract_name: &event.contract.name,
+                    event_name: &event.event_name,
+                    network: &network_contract.network,
+                };
 
-            // push status to the processed state
-            processed_network_contracts.push(ProcessedNetworkContract {
-                id: network_contract.id.clone(),
-                processed_up_to: end_block,
+                let result = get_start_end_block(
+                    network_contract.cached_provider.clone(),
+                    network_contract.start_block,
+                    network_contract.end_block,
+                    config,
+                    &event.info_log_name(),
+                    &network_contract.network,
+                    event.contract.reorg_safe_distance,
+                )
+                    .await;
+
+                result.map(|blocks| {
+                    (
+                        event,
+                        network_contract,
+                        stream_details,
+                        blocks,
+                        project_path,
+                        database,
+                        manifest_csv_details,
+                        registry,
+                        event_progress_state,
+                        no_live_indexing_forced,
+                        dependencies,
+                    )
+                })
             });
+        }
+    }
 
-            let event_processing_config = ContractEventProcessingConfig {
-                id: event.id.clone(),
-                project_path: project_path.to_path_buf(),
+    while let Some(res) = block_tasks.next().await {
+        let (
+            event,
+            network_contract,
+            stream_details,
+            (start_block, end_block, indexing_distance_from_head),
+            project_path,
+            database,
+            manifest_csv_details,
+            registry,
+            event_progress_state,
+            no_live_indexing_forced,
+            dependencies,
+        ) = res?;
+
+        processed_network_contracts.push(ProcessedNetworkContract {
+            id: network_contract.id.clone(),
+            processed_up_to: end_block,
+        });
+
+        let event_processing_config = ContractEventProcessingConfig {
+            id: event.id.clone(),
+            project_path: project_path.clone(),
+            indexer_name: event.indexer_name.clone(),
+            contract_name: event.contract.name.clone(),
+            info_log_name: event.info_log_name(),
+            topic_id: event.topic_id,
+            event_name: event.event_name.clone(),
+            network_contract: Arc::new(network_contract.clone()),
+            start_block,
+            end_block,
+            registry: Arc::clone(&registry),
+            progress: Arc::clone(&event_progress_state),
+            database: database.clone(),
+            csv_details: manifest_csv_details.clone(),
+            stream_last_synced_block_file_path: stream_details
+                .as_ref()
+                .map(|s| s.get_streams_last_synced_block_path()),
+            live_indexing: if no_live_indexing_forced {
+                false
+            } else {
+                network_contract.is_live_indexing()
+            },
+            index_event_in_order: event.index_event_in_order,
+            indexing_distance_from_head,
+        };
+
+        if let Some(factory_details) = network_contract.indexing_contract_setup.factory_details() {
+            let factory_event_processing_config = FactoryEventProcessingConfig {
+                address: factory_details.address.clone(),
+                input_name: factory_details.input_name.clone(),
+                contract_name: factory_details.contract_name.clone(),
+                project_path: project_path.clone(),
                 indexer_name: event.indexer_name.clone(),
-                contract_name: event.contract.name.clone(),
-                info_log_name: event.info_log_name(),
-                topic_id: event.topic_id,
-                event_name: event.event_name.clone(),
+                event: factory_details.event.clone(),
                 network_contract: Arc::new(network_contract.clone()),
                 start_block,
                 end_block,
-                registry: Arc::clone(&registry),
                 progress: Arc::clone(&event_progress_state),
                 database: database.clone(),
-                csv_details: manifest.storage.csv.clone(),
+                csv_details: manifest_csv_details.clone(),
                 stream_last_synced_block_file_path: stream_details
                     .as_ref()
                     .map(|s| s.get_streams_last_synced_block_path()),
-                live_indexing: if no_live_indexing_forced {
-                    false
-                } else {
-                    network_contract.is_live_indexing()
-                },
+                live_indexing: event_processing_config.live_indexing,
                 index_event_in_order: event.index_event_in_order,
                 indexing_distance_from_head,
             };
 
-            if let Some(factory_details) =
-                network_contract.indexing_contract_setup.factory_details()
+            apply_cross_contract_dependency_events_config_after_processing.push((
+                event.contract.name.clone(),
+                Arc::new(factory_event_processing_config.into()),
+            ));
+        }
+
+        let dependencies_status = ContractEventDependencies::dependencies_status(
+            &event_processing_config.contract_name,
+            &event_processing_config.event_name,
+            &dependencies,
+        );
+
+        if dependencies_status.has_dependency_in_other_contracts_multiple_times() {
+            panic!("Multiple dependencies of the same event on different contracts not supported yet - please raise an issue if you need this feature");
+        }
+
+        if dependencies_status.has_dependencies() {
+            if let Some(dependency_in_other_contract) =
+                dependencies_status.get_first_dependencies_in_other_contracts()
             {
-                let factory_event_processing_config = FactoryEventProcessingConfig {
-                    address: factory_details.address.clone(),
-                    input_name: factory_details.input_name.clone(),
-                    contract_name: factory_details.contract_name.clone(),
-                    project_path: project_path.to_path_buf(),
-                    indexer_name: event.indexer_name.clone(),
-                    event: factory_details.event.clone(),
-                    network_contract: Arc::new(network_contract.clone()),
-                    start_block,
-                    end_block,
-                    progress: Arc::clone(&event_progress_state),
-                    database: database.clone(),
-                    csv_details: manifest.storage.csv.clone(),
-                    stream_last_synced_block_file_path: stream_details
-                        .as_ref()
-                        .map(|s| s.get_streams_last_synced_block_path()),
-                    live_indexing: event_processing_config.live_indexing,
-                    index_event_in_order: event.index_event_in_order,
-                    indexing_distance_from_head,
-                };
-
                 apply_cross_contract_dependency_events_config_after_processing.push((
-                    event.contract.name.clone(),
-                    Arc::new(factory_event_processing_config.into()),
-                ));
-            }
-
-            let dependencies_status = ContractEventDependencies::dependencies_status(
-                &event_processing_config.contract_name,
-                &event_processing_config.event_name,
-                dependencies,
-            );
-
-            if dependencies_status.has_dependency_in_other_contracts_multiple_times() {
-                panic!("Multiple dependencies of the same event on different contracts not supported yet - please raise an issue if you need this feature");
-            }
-
-            if dependencies_status.has_dependencies() {
-                if let Some(dependency_in_other_contract) =
-                    dependencies_status.get_first_dependencies_in_other_contracts()
-                {
-                    apply_cross_contract_dependency_events_config_after_processing.push((
-                        dependency_in_other_contract,
-                        Arc::new(event_processing_config.into()),
-                    ));
-
-                    continue;
-                }
-
-                ContractEventsDependenciesConfig::add_to_event_or_new_entry(
-                    &mut dependency_event_processing_configs,
+                    dependency_in_other_contract,
                     Arc::new(event_processing_config.into()),
-                    dependencies,
-                );
-            } else {
-                let process_event =
-                    tokio::spawn(process_event(event_processing_config.into(), false));
-                non_blocking_process_events.push(process_event);
+                ));
+
+                continue;
             }
+
+            ContractEventsDependenciesConfig::add_to_event_or_new_entry(
+                &mut dependency_event_processing_configs,
+                Arc::new(event_processing_config.into()),
+                &dependencies,
+            );
+        } else {
+            let process_event = tokio::spawn(process_event(event_processing_config.into(), false));
+            non_blocking_process_events.push(process_event);
         }
     }
 
@@ -414,6 +454,7 @@ pub async fn start_indexing_contract_events(
         dependency_event_processing_configs,
     ))
 }
+
 
 pub async fn start_indexing(
     manifest: &Manifest,
