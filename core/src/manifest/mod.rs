@@ -1,3 +1,4 @@
+#[cfg(any(feature = "discord", feature = "slack", feature = "telegram"))]
 pub mod chat;
 pub mod contract;
 pub mod core;

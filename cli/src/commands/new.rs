@@ -165,7 +165,6 @@ pub fn handle_new_command(
             reorg_safe_distance: None,
             generate_csv: None,
             streams: None,
-            chat: None,
         }],
         native_transfers: NativeTransfers::default(),
         phantom: None,

@@ -4,7 +4,10 @@ use alloy::primitives::U64;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::core::serialize_option_u64_as_string;
-use crate::manifest::{chat::ChatConfig, stream::StreamsConfig};
+use crate::manifest::stream::StreamsConfig;
+
+#[cfg(any(feature = "discord", feature = "slack", feature = "telegram"))]
+use crate::manifest::chat::ChatConfig;
 
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
@@ -87,6 +90,7 @@ pub struct NativeTransfers {
     pub streams: Option<StreamsConfig>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg(any(feature = "discord", feature = "slack", feature = "telegram"))]
     pub chat: Option<ChatConfig>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -123,6 +127,7 @@ where
             enabled,
             networks: None,
             streams: None,
+            #[cfg(any(feature = "discord", feature = "slack", feature = "telegram"))]
             chat: None,
             generate_csv: None,
             reorg_safe_distance: None,
