@@ -83,7 +83,10 @@ async fn push_range(block_tx: &mpsc::Sender<U64>, last: U64, latest: U64) {
     while let Some(block) = range.pop_front() {
         if let Err(e) = block_tx.send(U64::from(block)).await {
             if block_tx.is_closed() {
-                error!("Failed to send block via channel. Channel closed: {}", e.to_string());
+                // Log error if not shutting down
+                if is_running() {
+                    error!("Failed to send block via channel: {}", e.to_string());
+                }
                 break;
             }
 
@@ -111,7 +114,10 @@ pub async fn native_transfer_block_fetch(
     let mut last_seen_block = start_block;
 
     loop {
-        sleep(Duration::from_millis(200)).await;
+        if !is_running() {
+            info!("Exiting native transfer indexing block processor!");
+            break Ok(());
+        }
 
         let latest_block = publisher.get_latest_block().await;
 

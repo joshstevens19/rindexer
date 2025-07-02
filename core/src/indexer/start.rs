@@ -318,7 +318,7 @@ pub async fn start_indexing_contract_events(
                     &network_contract.network,
                     event.contract.reorg_safe_distance,
                 )
-                    .await;
+                .await;
 
                 result.map(|blocks| {
                     (
@@ -428,10 +428,8 @@ pub async fn start_indexing_contract_events(
             if let Some(dependency_in_other_contract) =
                 dependencies_status.get_first_dependencies_in_other_contracts()
             {
-                apply_cross_contract_dependency_events_config_after_processing.push((
-                    dependency_in_other_contract,
-                    Arc::new(event_processing_config.into()),
-                ));
+                apply_cross_contract_dependency_events_config_after_processing
+                    .push((dependency_in_other_contract, Arc::new(event_processing_config.into())));
 
                 continue;
             }
@@ -454,7 +452,6 @@ pub async fn start_indexing_contract_events(
         dependency_event_processing_configs,
     ))
 }
-
 
 pub async fn start_indexing(
     manifest: &Manifest,

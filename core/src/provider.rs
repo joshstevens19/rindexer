@@ -235,6 +235,7 @@ impl JsonRpcCachedProvider {
         }
     }
 
+    #[tracing::instrument(skip_all)]
     pub async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
         let mut cache_guard = self.cache.lock().await;
         let cache_time = self.block_poll_frequency();
@@ -268,6 +269,7 @@ impl JsonRpcCachedProvider {
         Ok(None)
     }
 
+    #[tracing::instrument(skip_all)]
     pub async fn get_block_number(&self) -> Result<U64, ProviderError> {
         let number = self.provider.get_block_number().await?;
         Ok(U64::from(number))
@@ -291,6 +293,7 @@ impl JsonRpcCachedProvider {
     ///       options,
     ///   ).await?;
     /// ```
+    #[tracing::instrument(skip_all)]
     pub async fn debug_trace_block_by_number(
         &self,
         block_number: U64,
@@ -371,6 +374,7 @@ impl JsonRpcCachedProvider {
     }
 
     /// Request `trace_block` information. This currently does not support batched multi-calls.
+    #[tracing::instrument(skip_all)]
     pub async fn trace_block(
         &self,
         block_number: U64,
@@ -384,6 +388,7 @@ impl JsonRpcCachedProvider {
     }
 
     /// Fetches blocks in concurrent rpc batches.
+    #[tracing::instrument(skip_all, fields(len = block_numbers.len()))]
     pub async fn get_block_by_number_batch(
         &self,
         block_numbers: &[U64],
@@ -399,7 +404,7 @@ impl JsonRpcCachedProvider {
 
         // Use less than the max chunk as recommended in most provider docs
         let futures = block_numbers
-            .chunks(RPC_CHUNK_SIZE / 2)
+            .chunks(RPC_CHUNK_SIZE / 3)
             .map(|chunk| {
                 let client = self.client.clone();
                 let owned_chunk = chunk.to_vec();
@@ -441,6 +446,7 @@ impl JsonRpcCachedProvider {
     }
 
     /// Fetch tx receipts in a batch rpc call
+    #[tracing::instrument(skip_all)]
     pub async fn get_tx_receipts_batch(
         &self,
         hashes: &[TxHash],
@@ -492,6 +498,7 @@ impl JsonRpcCachedProvider {
         Ok(results)
     }
 
+    #[tracing::instrument(skip_all)]
     pub async fn get_logs(
         &self,
         event_filter: &RindexerEventFilter,
@@ -550,6 +557,7 @@ impl JsonRpcCachedProvider {
     }
 
     /// Get logs by chunking addresses and fetching asynchronously in batches
+    #[tracing::instrument(skip_all)]
     async fn get_logs_for_address_in_batches(
         &self,
         filter: &Filter,
@@ -570,6 +578,7 @@ impl JsonRpcCachedProvider {
     }
 
     /// Gets all logs for a given filter and then filters by addresses in memory
+    #[tracing::instrument(skip_all)]
     async fn get_logs_for_address_in_memory(
         &self,
         filter: &Filter,
@@ -583,6 +592,7 @@ impl JsonRpcCachedProvider {
         Ok(filtered_logs)
     }
 
+    #[tracing::instrument(skip_all)]
     pub async fn get_chain_id(&self) -> Result<U256, ProviderError> {
         let chain_id = self.provider.get_chain_id().await?;
         Ok(U256::from(chain_id))

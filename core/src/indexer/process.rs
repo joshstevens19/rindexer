@@ -536,7 +536,9 @@ async fn trigger_event(
     if !fn_data.is_empty() {
         config.trigger_event(fn_data).await;
     }
-    update_progress_and_last_synced_task(config, to_block, indexing_event_processed);
+    // TODO: There is a double-index race condition here. If we get a crash or failure between
+    //       triggering the event and syncing the last updated block, we may double index.
+    update_progress_and_last_synced_task(config, to_block, indexing_event_processed).await;
 }
 
 async fn handle_logs_result(

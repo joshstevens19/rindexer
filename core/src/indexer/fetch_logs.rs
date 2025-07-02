@@ -255,7 +255,7 @@ async fn fetch_historic_logs_stream(
                         &max_block_range_limitation,
                     );
 
-                    info!(
+                    debug!(
                         "{}::{} - No events between {} - {}. Searching next {} blocks.",
                         info_log_name,
                         network,
