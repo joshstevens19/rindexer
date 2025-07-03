@@ -67,10 +67,8 @@ async fn process_event_logs(
             .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
 
         if block_until_indexed {
-            // Wait for the task to complete before processing the next batch
             task.await.map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
         } else {
-            // Store the task handle for later cleanup
             tasks.push(task);
         }
     }
@@ -240,7 +238,7 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
     let mut ordering_live_indexing_details_map: HashMap<
         B256,
         Arc<Mutex<OrderedLiveIndexingDetails>>,
-    > = HashMap::with_capacity(live_indexing_events.len()); // Pre-allocate capacity
+    > = HashMap::with_capacity(live_indexing_events.len());
 
     for (config, event_filter) in live_indexing_events.iter() {
         let mut filter = event_filter.clone();
@@ -513,9 +511,6 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
             tokio::time::sleep(target_iteration_duration - elapsed).await;
         }
     }
-
-    // Clean up the HashMap to free memory
-    ordering_live_indexing_details_map.clear();
 }
 
 async fn trigger_event(
@@ -549,23 +544,18 @@ async fn handle_logs_result(
         Ok(result) => {
             debug!("Processing logs {} - length {}", config.event_name(), result.logs.len());
 
-            // Only create EventResult if we have logs to process
-            let fn_data = if result.logs.is_empty() {
-                Vec::new()
-            } else {
-                result
-                    .logs
-                    .into_iter()
-                    .map(|log| {
-                        EventResult::new(
-                            Arc::clone(&config.network_contract()),
-                            log,
-                            result.from_block,
-                            result.to_block,
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            };
+            let fn_data = result
+                .logs
+                .into_iter()
+                .map(|log| {
+                    EventResult::new(
+                        Arc::clone(&config.network_contract()),
+                        log,
+                        result.from_block,
+                        result.to_block,
+                    )
+                })
+                .collect::<Vec<_>>();
 
             // Important that we call this for every event even if there are no logs.
             // This is because we need to sync the last seen block

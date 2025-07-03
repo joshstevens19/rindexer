@@ -783,11 +783,7 @@ pub fn generate_event_handlers(
 
             for item in &abi_name_properties {
                 if item.abi_type == "address" {
-                    let key = format!(
-                        "result.event_data.{}\
-                    ",
-                        item.abi_name
-                    );
+                    let key = format!("result.event_data.{}", item.abi_name);
                     csv_data.push_str(&format!(r#"{}.to_string(),"#, key));
                 } else if item.abi_type.contains("bytes") {
                     csv_data.push_str(&format!(

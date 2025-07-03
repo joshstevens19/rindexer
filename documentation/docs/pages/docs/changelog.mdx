@@ -7,7 +7,7 @@
 -------------------------------------------------
 
 - Indexing with `eth_getBlockByNumber` for more efficiency (but still retain all debug/trace logic for future options)
-- Add a `Nullable` Numeric256 SQL type
+- Add a `Nullable` Numeric256 SQL type, and `Nullable` DateTime SQL type
 - Add tx receipt endpoint as useful prep work for raw transaction indexing option
 - Add an ever-so-slightly backpressured queue per "network-event" for super fair scheduling, decreased write contention on the database, and improved memory utilisation, can use 1/4 of memory with no throughput drop in some cases.
 
@@ -20,6 +20,7 @@
 - We weren't writing to the db if no events were found in a block range... this was a major problem for highly infrequent events as rindexer wouldn't write the "last seen block", fixed.
 - Fixed a pretty major bug with the "optimal log parsing regex" (where the BlockNumber::from_str() wasn't actually parsing the hex, so it silently failed and used sub-optimal fallbacks)
 - Fix indexer codegen to use correct names and types, as well as fix formatting problems where rustfmt couldn't parse the nesting we were doing
+- Other memory optimisations
 
 ### Breaking changes
 -------------------------------------------------
