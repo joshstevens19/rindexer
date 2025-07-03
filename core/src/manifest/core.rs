@@ -163,10 +163,6 @@ impl Manifest {
         }
         headers
     }
-
-    pub fn reth_enabled_networks(&self) -> Vec<&Network> {
-        self.networks.iter().filter(|n| n.reth.as_ref().is_some_and(|r| r.enabled)).collect()
-    }
 }
 
 pub fn deserialize_option_u64_from_string<'de, D>(deserializer: D) -> Result<Option<U64>, D::Error>

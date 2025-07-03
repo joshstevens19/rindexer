@@ -1,7 +1,7 @@
 use alloy::primitives::{U256, U64};
 use tracing::{debug, warn};
 
-use crate::provider::ChainStateNotification;
+use crate::notifications::ChainStateNotification;
 
 /// Handles chain state notifications (reorgs, reverts, commits)
 pub fn handle_chain_notification(

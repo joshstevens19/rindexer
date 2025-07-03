@@ -90,8 +90,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             // get the reth config if it is enabled
-            let reth_config =
-                reth.then_some(RethConfig { enabled: true, cli_args: reth_args.clone() });
+            let reth_config = if *reth {
+                match RethConfig::from_cli_args(reth_args.clone()) {
+                    Ok(config) => Some(config),
+                    Err(e) => {
+                        print_error_message(&format!("Invalid reth arguments: {}", e));
+                        return Err(e.into());
+                    }
+                }
+            } else {
+                None
+            };
 
             handle_new_command(resolved_path, project_type, reth_config)
         }

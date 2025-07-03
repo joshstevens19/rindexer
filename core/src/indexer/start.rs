@@ -35,9 +35,7 @@ use crate::{
     },
     manifest::core::Manifest,
     provider::{JsonRpcCachedProvider, ProviderError},
-    public_read_env_value,
-    reth::types::{RethChannels, RethChannelsExt},
-    PostgresClient,
+    public_read_env_value, PostgresClient,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -169,7 +167,6 @@ pub async fn start_indexing_traces(
     project_path: &Path,
     database: Option<Arc<PostgresClient>>,
     trace_registry: Arc<TraceCallbackRegistry>,
-    reth_channels: Option<Arc<RethChannels>>,
 ) -> Result<Vec<JoinHandle<Result<(), ProcessEventError>>>, StartIndexingError> {
     if !manifest.native_transfers.enabled {
         info!("Native transfer indexing disabled!");
@@ -232,9 +229,6 @@ pub async fn start_indexing_traces(
                 stream_last_synced_block_file_path: None,
             });
 
-            // Subscribe to notifications for this network
-            let notification_rx = reth_channels.subscribe_to_network(&network.network);
-
             let native_transfer_handle = tokio::spawn(native_transfer_block_fetch(
                 network.cached_provider.clone(),
                 block_tx,
@@ -242,7 +236,6 @@ pub async fn start_indexing_traces(
                 network.end_block,
                 indexing_distance_from_head,
                 network_name.clone(),
-                notification_rx,
             ));
 
             non_blocking_process_events.push(native_transfer_handle);
@@ -335,7 +328,6 @@ pub async fn start_indexing_contract_events(
     registry: Arc<EventCallbackRegistry>,
     dependencies: &[ContractEventDependencies],
     no_live_indexing_forced: bool,
-    reth_channels: Option<Arc<RethChannels>>,
 ) -> Result<
     (
         Vec<JoinHandle<Result<(), ProcessEventError>>>,
@@ -485,12 +477,8 @@ pub async fn start_indexing_contract_events(
                     dependencies,
                 );
             } else {
-                let reth_channels_clone = reth_channels.clone();
-                let process_event_handle = tokio::spawn(process_event(
-                    event_processing_config.into(),
-                    false,
-                    reth_channels_clone,
-                ));
+                let process_event_handle =
+                    tokio::spawn(process_event(event_processing_config.into(), false));
                 non_blocking_process_events.push(process_event_handle);
             }
         }
@@ -511,7 +499,6 @@ pub async fn start_indexing(
     no_live_indexing_forced: bool,
     registry: Arc<EventCallbackRegistry>,
     trace_registry: Arc<TraceCallbackRegistry>,
-    reth_channels: Option<Arc<RethChannels>>,
 ) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
     let start = Instant::now();
     let database = initialize_database(manifest).await?;
@@ -521,13 +508,7 @@ pub async fn start_indexing(
 
     // Start the sub-indexers concurrently to ensure fast startup times
     let (trace_indexer_handles, contract_events_indexer) = join!(
-        start_indexing_traces(
-            manifest,
-            project_path,
-            database.clone(),
-            trace_registry.clone(),
-            reth_channels.clone()
-        ),
+        start_indexing_traces(manifest, project_path, database.clone(), trace_registry.clone(),),
         start_indexing_contract_events(
             manifest,
             project_path,
@@ -535,7 +516,6 @@ pub async fn start_indexing(
             registry.clone(),
             dependencies,
             no_live_indexing_forced,
-            reth_channels.clone(),
         )
     );
 

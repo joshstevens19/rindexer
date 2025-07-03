@@ -25,7 +25,6 @@ use crate::{
         storage::RelationshipsAndIndexersError,
         yaml::{read_manifest, ReadManifestError},
     },
-    reth::{node::start_reth_node_with_exex, types::RethChannels},
     setup_info_logger,
 };
 pub struct IndexingDetails {
@@ -131,24 +130,6 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
 
             let manifest = Arc::new(read_manifest(details.manifest_path)?);
 
-            // Channels for Reth block data
-            let mut reth_channels = RethChannels::new();
-
-            // Start Reth nodes for enabled networks
-            for network in manifest.reth_enabled_networks() {
-                let reth_cli = network.reth.as_ref().unwrap().to_cli().map_err(|e| {
-                    StartRindexerError::RethCliError(Box::new(std::io::Error::other(e)))
-                })?;
-                info!("Starting Reth node for network: {}", network.name);
-                let reth_tx = start_reth_node_with_exex(reth_cli)?;
-                info!("Started Reth node for network: {}", network.name);
-
-                reth_channels.insert(network.name.clone(), reth_tx);
-            }
-
-            // Wrap in Arc for sharing across threads
-            let reth_channels = reth_channels.into_arc_option();
-
             if manifest.project_type != ProjectType::NoCode {
                 setup_info_logger();
                 info!("Starting rindexer rust project");
@@ -204,7 +185,6 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     !relationships.is_empty(),
                     indexing_details.registry.complete(),
                     indexing_details.trace_registry.complete(),
-                    reth_channels.clone(),
                 )
                 .await?;
 
@@ -241,7 +221,6 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                                 .registry
                                 .reapply_after_historic(processed_network_contracts),
                             indexing_details.trace_registry.complete(),
-                            reth_channels.clone(),
                         )
                         .await
                         .map_err(StartRindexerError::CouldNotStartIndexing)?;

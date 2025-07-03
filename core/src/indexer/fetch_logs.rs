@@ -7,7 +7,7 @@ use alloy::{
 use rand::random_ratio;
 use regex::Regex;
 use tokio::{
-    sync::{broadcast, mpsc, Semaphore},
+    sync::{mpsc, Semaphore},
     time::Instant,
 };
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -17,7 +17,7 @@ use crate::helpers::{halved_block_number, is_relevant_block};
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
     indexer::{reorg::handle_chain_notification, IndexingEventProgressStatus},
-    provider::{ChainStateNotification, JsonRpcCachedProvider, ProviderError},
+    provider::{JsonRpcCachedProvider, ProviderError},
 };
 
 pub struct FetchLogsResult {
@@ -29,7 +29,6 @@ pub struct FetchLogsResult {
 pub fn fetch_logs_stream(
     config: Arc<EventProcessingConfig>,
     force_no_live_indexing: bool,
-    state_notifications: Option<broadcast::Receiver<ChainStateNotification>>,
 ) -> impl tokio_stream::Stream<Item = Result<FetchLogsResult, Box<dyn Error + Send>>> + Send + Unpin
 {
     let (tx, rx) = mpsc::unbounded_channel();
@@ -129,7 +128,6 @@ pub fn fetch_logs_stream(
                 &config.semaphore(),
                 config.network_contract().disable_logs_bloom_checks,
                 &config.network_contract().network,
-                state_notifications,
             )
             .await;
         }
@@ -353,7 +351,6 @@ async fn live_indexing_stream(
     semaphore: &Arc<Semaphore>,
     disable_logs_bloom_checks: bool,
     network: &str,
-    state_notifications: Option<broadcast::Receiver<ChainStateNotification>>,
 ) {
     let mut last_seen_block_number = last_seen_block_number;
     let mut log_response_to_large_to_block: Option<U64> = None;
@@ -361,12 +358,15 @@ async fn live_indexing_stream(
     let log_no_new_block_interval = Duration::from_secs(300);
     let target_iteration_duration = Duration::from_millis(200);
 
+    let chain_state_notification = cached_provider.get_chain_state_notification();
+
     // Spawn a separate task to handle notifications
-    if let Some(mut notifications) = state_notifications {
+    if let Some(notifications) = chain_state_notification {
         let info_log_name = info_log_name.to_string();
         let network = network.to_string();
         tokio::spawn(async move {
-            while let Ok(notification) = notifications.recv().await {
+            let mut notifications_clone = notifications.subscribe();
+            while let Ok(notification) = notifications_clone.recv().await {
                 handle_chain_notification(notification, &info_log_name, &network);
             }
         });

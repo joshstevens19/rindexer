@@ -6,10 +6,7 @@ use alloy::{
 };
 use futures::future::try_join_all;
 use serde::Serialize;
-use tokio::{
-    sync::{broadcast, mpsc},
-    time::sleep,
-};
+use tokio::{sync::mpsc, time::sleep};
 use tracing::{debug, error, info};
 
 use crate::{
@@ -24,7 +21,7 @@ use crate::{
         task_tracker::{indexing_event_processed, indexing_event_processing},
     },
     manifest::native_transfer::TraceProcessingMethod,
-    provider::{ChainStateNotification, JsonRpcCachedProvider, ProviderError},
+    provider::{JsonRpcCachedProvider, ProviderError},
 };
 
 /// An imaginary contract name to ensure native transfer "debug trace" indexing is compatible
@@ -107,15 +104,18 @@ pub async fn native_transfer_block_fetch(
     end_block: Option<U64>,
     indexing_distance_from_head: U64,
     network: String,
-    state_notifications: Option<broadcast::Receiver<ChainStateNotification>>,
 ) -> Result<(), ProcessEventError> {
     let mut last_seen_block = start_block;
 
+    let chain_state_notification = publisher.get_chain_state_notification();
+
     // Spawn a separate task to handle notifications
-    if let Some(mut notifications) = state_notifications {
+    if let Some(notifications) = chain_state_notification {
+        // Subscribe to notifications for this network
         let network_clone = network.clone();
+        let mut notifications_clone = notifications.subscribe();
         tokio::spawn(async move {
-            while let Ok(notification) = notifications.recv().await {
+            while let Ok(notification) = notifications_clone.recv().await {
                 handle_chain_notification(notification, "NativeTransfer", &network_clone);
             }
         });

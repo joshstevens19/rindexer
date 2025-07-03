@@ -7,6 +7,7 @@ use tokio::sync::broadcast;
 
 use crate::notifications::ChainStateNotification;
 use crate::reth::exex::RindexerExEx;
+use broadcast::Sender;
 
 /// The stack size for the Reth node thread.
 const STACK_SIZE: usize = 32 * 1024 * 1024; // 32 MB
@@ -15,9 +16,7 @@ const STACK_SIZE: usize = 32 * 1024 * 1024; // 32 MB
 const EXECUTION_EXTENSION_NAME: &str = "rindexer";
 
 /// Starts a Reth node with the execution extension that forwards chain state notifications to the provided channel.
-pub fn start_reth_node_with_exex(
-    cli: Cli,
-) -> eyre::Result<broadcast::Sender<ChainStateNotification>> {
+pub fn start_reth_node_with_exex(cli: Cli) -> eyre::Result<Sender<ChainStateNotification>> {
     // Create a broadcast channel for chain state notifications. Sender will go to ExEx, receiver
     // will be returned to the caller. Buffer size of 1000 to handle bursts.
     let (notification_tx, _notification_rx) = broadcast::channel::<ChainStateNotification>(1000);
