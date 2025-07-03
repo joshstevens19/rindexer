@@ -6,7 +6,7 @@ use alloy::{primitives::U64, transports::http::reqwest::header::HeaderMap};
 use rindexer::{
     lazy_static,
     manifest::network::{AddressFiltering, BlockPollFrequency},
-    provider::{create_client, JsonRpcCachedProvider, RetryClientError, RindexerProvider},
+    provider::{JsonRpcCachedProvider, RetryClientError, RindexerProvider, create_client},
     public_read_env_value,
 };
 use std::sync::Arc;

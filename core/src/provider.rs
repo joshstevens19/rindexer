@@ -1,3 +1,4 @@
+use alloy::network::{AnyNetwork, AnyRpcBlock, AnyTransactionReceipt};
 use alloy::rpc::types::{Filter, ValueOrArray};
 use alloy::{
     eips::{BlockId, BlockNumberOrTag},
@@ -13,7 +14,7 @@ use alloy::{
             trace::parity::{
                 Action, CallAction, CallType, LocalizedTransactionTrace, TransactionTrace,
             },
-            Block, Log,
+            Log,
         },
     },
     transports::{
@@ -37,6 +38,7 @@ use std::{
 };
 use thiserror::Error;
 use tokio::sync::Mutex;
+use tokio::task::JoinError;
 use tracing::{debug, debug_span, error, Instrument};
 use url::Url;
 
@@ -50,17 +52,27 @@ pub type RindexerProvider = FillProvider<
         Identity,
         JoinFill<GasFiller, JoinFill<BlobGasFiller, JoinFill<NonceFiller, ChainIdFiller>>>,
     >,
-    RootProvider,
+    RootProvider<AnyNetwork>,
+    AnyNetwork,
 >;
 
 // RPC providers have maximum supported addresses that can be provided in a filter
 // We play safe and limit to 5000 by default, but that can be overridden in the configuration
 const DEFAULT_RPC_SUPPORTED_ACCOUNT_FILTERS: usize = 5000;
 
+/// Maximum RPC batching size available for the provider.
+pub const RPC_CHUNK_SIZE: usize = 1000;
+
+/// Recommended chunk sizes for batch RPC requests.
+///
+/// See: https://www.alchemy.com/docs/best-practices-when-using-alchemy#2-avoid-high-batch-cardinality
+pub const RECOMMENDED_RPC_CHUNK_SIZE: usize = 50;
+
 #[derive(Debug)]
 pub struct JsonRpcCachedProvider {
     provider: Arc<RindexerProvider>,
-    cache: Mutex<Option<(Instant, Arc<Block>)>>,
+    client: RpcClient,
+    cache: Mutex<Option<(Instant, Arc<AnyRpcBlock>)>>,
     is_zk_chain: bool,
     #[allow(unused)]
     chain_id: u64,
@@ -74,6 +86,9 @@ pub struct JsonRpcCachedProvider {
 pub enum ProviderError {
     #[error("Failed to make rpc request: {0}")]
     RequestFailed(#[from] RpcError<TransportErrorKind>),
+
+    #[error("Failed to make batched rpc request: {0}")]
+    BatchRequestFailed(#[from] JoinError),
 
     #[error("Failed to serialize rpc request data: {0}")]
     SerializationError(#[from] serde_json::Error),
@@ -164,6 +179,7 @@ impl JsonRpcCachedProvider {
     pub async fn new(
         provider: RindexerProvider,
         chain_id: u64,
+        client: RpcClient,
         block_poll_frequency: Option<BlockPollFrequency>,
         max_block_range: Option<U64>,
         address_filtering: Option<AddressFiltering>,
@@ -187,6 +203,7 @@ impl JsonRpcCachedProvider {
             provider: Arc::new(provider),
             cache: Mutex::new(None),
             max_block_range,
+            client,
             chain,
             chain_id,
             is_zk_chain,
@@ -218,7 +235,8 @@ impl JsonRpcCachedProvider {
         }
     }
 
-    pub async fn get_latest_block(&self) -> Result<Option<Arc<Block>>, ProviderError> {
+    #[tracing::instrument(skip_all)]
+    pub async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
         let mut cache_guard = self.cache.lock().await;
         let cache_time = self.block_poll_frequency();
 
@@ -251,6 +269,7 @@ impl JsonRpcCachedProvider {
         Ok(None)
     }
 
+    #[tracing::instrument(skip_all)]
     pub async fn get_block_number(&self) -> Result<U64, ProviderError> {
         let number = self.provider.get_block_number().await?;
         Ok(U64::from(number))
@@ -274,6 +293,7 @@ impl JsonRpcCachedProvider {
     ///       options,
     ///   ).await?;
     /// ```
+    #[tracing::instrument(skip_all)]
     pub async fn debug_trace_block_by_number(
         &self,
         block_number: U64,
@@ -354,6 +374,7 @@ impl JsonRpcCachedProvider {
     }
 
     /// Request `trace_block` information. This currently does not support batched multi-calls.
+    #[tracing::instrument(skip_all)]
     pub async fn trace_block(
         &self,
         block_number: U64,
@@ -366,6 +387,118 @@ impl JsonRpcCachedProvider {
         Ok(traces)
     }
 
+    /// Fetches blocks in concurrent rpc batches.
+    #[tracing::instrument(skip_all, fields(len = block_numbers.len()))]
+    pub async fn get_block_by_number_batch(
+        &self,
+        block_numbers: &[U64],
+        include_txs: bool,
+    ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
+        let chain = self.chain_id;
+        if block_numbers.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut block_numbers = block_numbers.to_vec();
+        block_numbers.dedup();
+
+        // Use less than the max chunk as recommended in most provider docs
+        let futures = block_numbers
+            .chunks(RPC_CHUNK_SIZE / 3)
+            .map(|chunk| {
+                let client = self.client.clone();
+                let owned_chunk = chunk.to_vec();
+
+                tokio::spawn(async move {
+                    let mut batch = client.new_batch();
+                    let mut request_futures = Vec::with_capacity(owned_chunk.len());
+
+                    for block_num in owned_chunk {
+                        let params = (BlockNumberOrTag::Number(block_num.to()), include_txs);
+                        let call = batch.add_call("eth_getBlockByNumber", &params)?;
+                        request_futures.push(call)
+                    }
+
+                    if let Err(e) = batch.send().await {
+                        error!(
+                            "Failed to send {} batch 'eth_getBlockByNumber' request for {}: {:?}",
+                            request_futures.len(),
+                            chain,
+                            e
+                        );
+                        return Err(e);
+                    }
+
+                    try_join_all(request_futures).await
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let chunk_results: Vec<Result<Vec<AnyRpcBlock>, _>> = try_join_all(futures).await?;
+        let results = chunk_results
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect();
+
+        Ok(results)
+    }
+
+    /// Fetch tx receipts in a batch rpc call
+    #[tracing::instrument(skip_all)]
+    pub async fn get_tx_receipts_batch(
+        &self,
+        hashes: &[TxHash],
+    ) -> Result<Vec<AnyTransactionReceipt>, ProviderError> {
+        if hashes.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let futures = hashes
+            .chunks(RPC_CHUNK_SIZE)
+            .map(|chunk| {
+                let client = self.client.clone();
+                let owned_chunk = chunk.to_vec();
+
+                tokio::spawn(async move {
+                    let mut batch = client.new_batch();
+                    let mut request_futures = Vec::with_capacity(owned_chunk.len());
+
+                    for hash in owned_chunk {
+                        let call = batch.add_call(
+                            "eth_getTransactionReceipt",
+                            &(
+                                hash,
+                                /* one element tuple from dangling comma */
+                            ),
+                        )?;
+                        request_futures.push(call)
+                    }
+
+                    if let Err(e) = batch.send().await {
+                        error!("Failed to send batch tx receipt request: {:?}", e);
+                        return Err(e);
+                    }
+
+                    try_join_all(request_futures).await
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let chunk_results: Vec<Result<Vec<AnyTransactionReceipt>, _>> =
+            try_join_all(futures).await?;
+        let results = chunk_results
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect();
+
+        Ok(results)
+    }
+
+    #[tracing::instrument(skip_all)]
     pub async fn get_logs(
         &self,
         event_filter: &RindexerEventFilter,
@@ -424,6 +557,7 @@ impl JsonRpcCachedProvider {
     }
 
     /// Get logs by chunking addresses and fetching asynchronously in batches
+    #[tracing::instrument(skip_all)]
     async fn get_logs_for_address_in_batches(
         &self,
         filter: &Filter,
@@ -444,6 +578,7 @@ impl JsonRpcCachedProvider {
     }
 
     /// Gets all logs for a given filter and then filters by addresses in memory
+    #[tracing::instrument(skip_all)]
     async fn get_logs_for_address_in_memory(
         &self,
         filter: &Filter,
@@ -457,6 +592,7 @@ impl JsonRpcCachedProvider {
         Ok(filtered_logs)
     }
 
+    #[tracing::instrument(skip_all)]
     pub async fn get_chain_id(&self) -> Result<U256, ProviderError> {
         let chain_id = self.provider.get_chain_id().await?;
         Ok(U256::from(chain_id))
@@ -491,16 +627,23 @@ pub async fn create_client(
         RetryClientError::HttpProviderCantBeCreated(rpc_url.to_string(), e.to_string())
     })?;
 
-    let client_with_auth = Client::builder().default_headers(custom_headers).build()?;
+    // Most log responses return in this timeout, any others retry on failure with smaller range
+    let client_with_auth = Client::builder()
+        .default_headers(custom_headers)
+        .timeout(Duration::from_secs(90))
+        .build()?;
+
     let http = Http::with_client(client_with_auth, rpc_url);
-    let retry_layer = RetryBackoffLayer::new(5000, 500, compute_units_per_second.unwrap_or(660));
+    let retry_layer = RetryBackoffLayer::new(5000, 1000, compute_units_per_second.unwrap_or(660));
     let rpc_client = RpcClient::builder().layer(retry_layer).transport(http, false);
-    let provider = ProviderBuilder::new().connect_client(rpc_client);
+    let provider =
+        ProviderBuilder::new().network::<AnyNetwork>().connect_client(rpc_client.clone());
 
     Ok(Arc::new(
         JsonRpcCachedProvider::new(
             provider,
             chain_id,
+            rpc_client,
             block_poll_frequency,
             max_block_range,
             address_filtering,

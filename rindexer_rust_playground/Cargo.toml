@@ -1,8 +1,7 @@
 [package]
 name = "rindexer_rust_playground"
 version = "0.1.0"
-edition = "2021"
-resolver = "2"
+edition = "2024"
 
 [dependencies]
 # internal dependencies

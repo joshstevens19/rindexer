@@ -44,7 +44,7 @@ rand = "0.9.1"
 # bb8-redis once https://github.com/djc/bb8/pull/183 is merged.
 redis = { version = "0.30.0", features = ["streams"] }
 regex = "1.10.4"
-reqwest = { version = "0.12.15", features = ["json"] }
+reqwest = { version = "0.12.15", features = ["json", "gzip"] }
 rust_decimal = { version = "1.35.0", features = ["db-tokio-postgres"] }
 serde = "1.0"
 serde_json = "1.0"

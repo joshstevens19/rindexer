@@ -15,10 +15,11 @@ use super::super::super::super::typings::networks::get_provider_cache_for_networ
 use super::playground_types_filter_abi_gen::RindexerPlaygroundTypesFilterGen::{
     self, RindexerPlaygroundTypesFilterGenEvents, RindexerPlaygroundTypesFilterGenInstance,
 };
-use alloy::primitives::{Address, Bytes, B256};
+use alloy::network::AnyNetwork;
+use alloy::primitives::{Address, B256, Bytes};
 use alloy::sol_types::{SolEvent, SolEventInterface, SolType};
 use rindexer::{
-    async_trait,
+    AsyncCsvAppender, FutureExt, PostgresClient, async_trait,
     event::{
         callback_registry::{
             EventCallbackRegistry, EventCallbackRegistryInformation, EventCallbackResult,
@@ -32,7 +33,6 @@ use rindexer::{
         yaml::read_manifest,
     },
     provider::{JsonRpcCachedProvider, RindexerProvider},
-    AsyncCsvAppender, FutureExt, PostgresClient,
 };
 use std::collections::HashMap;
 use std::error::Error;
@@ -197,7 +197,7 @@ where
 pub async fn playground_types_filter_contract(
     network: &str,
     address: Address,
-) -> RindexerPlaygroundTypesFilterGenInstance<Arc<RindexerProvider>> {
+) -> RindexerPlaygroundTypesFilterGenInstance<Arc<RindexerProvider>, AnyNetwork> {
     RindexerPlaygroundTypesFilterGen::new(
         address,
         get_provider_cache_for_network(network).await.get_inner_provider(),
@@ -206,7 +206,7 @@ pub async fn playground_types_filter_contract(
 
 pub async fn decoder_contract(
     network: &str,
-) -> RindexerPlaygroundTypesFilterGenInstance<Arc<RindexerProvider>> {
+) -> RindexerPlaygroundTypesFilterGenInstance<Arc<RindexerProvider>, AnyNetwork> {
     if network == "base" {
         RindexerPlaygroundTypesFilterGen::new(
             // do not care about address here its decoding makes it easier to handle ValueOrArray
