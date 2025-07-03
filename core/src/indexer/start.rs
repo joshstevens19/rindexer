@@ -287,7 +287,6 @@ pub async fn start_indexing_contract_events(
 
         for network_contract in event.contract.details.iter() {
             let event = event.clone();
-            let stream_details = stream_details.clone();
             let network_contract = network_contract.clone();
             let project_path = project_path.to_path_buf();
             let database = database.clone();

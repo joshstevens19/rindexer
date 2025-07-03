@@ -12,7 +12,7 @@ use tokio::{sync::mpsc, time::sleep};
 use tracing::{debug, error, info, warn};
 
 use crate::is_running;
-use crate::provider::{RECOMMENDED_RPC_CHUNK_SIZE, RPC_CHUNK_SIZE};
+use crate::provider::RECOMMENDED_RPC_CHUNK_SIZE;
 use crate::{
     event::{
         callback_registry::{TraceResult, TxInformation},
@@ -166,8 +166,11 @@ pub async fn native_transfer_block_processor(
     //
     // Currently, `eth_getBlockByNumber` is a single JSON-RPC batch, and others are individual
     // network calls so can be treated differently.
-    let (initial_concurrent_requests, limit_concurrent_requests) =
-        if is_rcp_batchable { (10, RECOMMENDED_RPC_CHUNK_SIZE) } else { (5, 100) };
+    let (initial_concurrent_requests, limit_concurrent_requests) = if is_rcp_batchable {
+        (RECOMMENDED_RPC_CHUNK_SIZE / 2, RECOMMENDED_RPC_CHUNK_SIZE * 2)
+    } else {
+        (5, 100)
+    };
 
     let mut concurrent_requests: usize = initial_concurrent_requests;
     let mut buffer: Vec<U64> = Vec::with_capacity(limit_concurrent_requests);
