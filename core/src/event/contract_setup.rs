@@ -1,4 +1,5 @@
 use crate::helpers::get_full_path;
+use crate::notifications::ChainStateNotification;
 use crate::{
     event::callback_registry::Decoder,
     generate_random_id,
@@ -17,8 +18,8 @@ use alloy::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Error;
-use std::path::Path;
-use std::{any::Any, fs, sync::Arc};
+use std::{any::Any, fs, path::Path, sync::Arc};
+use tokio::sync::broadcast::Sender;
 
 #[derive(Clone)]
 pub struct NetworkContract {
@@ -39,6 +40,10 @@ impl NetworkContract {
 
     pub fn is_live_indexing(&self) -> bool {
         self.end_block.is_none()
+    }
+
+    pub fn chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
+        self.cached_provider.chain_state_notification.clone()
     }
 }
 
@@ -110,6 +115,10 @@ pub struct NetworkTrace {
 impl NetworkTrace {
     pub fn is_live_indexing(&self) -> bool {
         self.end_block.is_none()
+    }
+
+    pub fn chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
+        self.cached_provider.chain_state_notification.clone()
     }
 }
 

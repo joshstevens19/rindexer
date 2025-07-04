@@ -157,7 +157,6 @@ async fn process_contract_events_with_dependencies(
             let event_processing_config = Arc::clone(&events_processing_config);
             let dependency = dependency.clone();
             let live_indexing_events = Arc::clone(&live_indexing_events);
-
             let task = tokio::spawn(async move {
                 let event_processing_config = event_processing_config
                     .iter()
@@ -173,6 +172,7 @@ async fn process_contract_events_with_dependencies(
                     ))?;
 
                 // forces live indexing off as it has to handle it a bit differently
+                // Note: Dependencies don't support notifications yet
                 process_event_logs(Arc::clone(event_processing_config), true, true).await?;
 
                 if event_processing_config.live_indexing() {

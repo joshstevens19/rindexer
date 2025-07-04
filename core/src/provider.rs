@@ -1,3 +1,4 @@
+use crate::notifications::ChainStateNotification;
 use alloy::rpc::types::{Filter, ValueOrArray};
 use alloy::{
     eips::{BlockId, BlockNumberOrTag},
@@ -5,7 +6,7 @@ use alloy::{
     providers::{
         ext::TraceApi,
         fillers::{BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller},
-        Identity, Provider, ProviderBuilder, RootProvider,
+        Identity, IpcConnect, Provider, ProviderBuilder, RootProvider,
     },
     rpc::{
         client::RpcClient,
@@ -36,7 +37,7 @@ use std::{
     time::{Duration, Instant},
 };
 use thiserror::Error;
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast::Sender, Mutex};
 use tracing::{debug, debug_span, error, Instrument};
 use url::Url;
 
@@ -68,6 +69,7 @@ pub struct JsonRpcCachedProvider {
     block_poll_frequency: Option<BlockPollFrequency>,
     address_filtering: Option<AddressFiltering>,
     pub max_block_range: Option<U64>,
+    pub chain_state_notification: Option<Sender<ChainStateNotification>>,
 }
 
 #[derive(Error, Debug)]
@@ -167,6 +169,7 @@ impl JsonRpcCachedProvider {
         block_poll_frequency: Option<BlockPollFrequency>,
         max_block_range: Option<U64>,
         address_filtering: Option<AddressFiltering>,
+        chain_state_notification: Option<Sender<ChainStateNotification>>,
     ) -> Self {
         let chain = Chain::from(chain_id);
         let is_zk_chain = match is_known_zk_evm_compatible_chain(chain) {
@@ -192,6 +195,7 @@ impl JsonRpcCachedProvider {
             is_zk_chain,
             block_poll_frequency,
             address_filtering,
+            chain_state_notification,
         }
     }
 
@@ -465,9 +469,16 @@ impl JsonRpcCachedProvider {
     pub fn get_inner_provider(&self) -> Arc<RindexerProvider> {
         Arc::clone(&self.provider)
     }
+
+    pub fn get_chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
+        self.chain_state_notification.clone()
+    }
 }
 #[derive(Error, Debug)]
 pub enum RetryClientError {
+    #[error("IPC provider can't be created for {0}: {1}")]
+    IpcProviderCantBeCreated(String, String),
+
     #[error("http provider can't be created for {0}: {1}")]
     HttpProviderCantBeCreated(String, String),
 
@@ -476,8 +487,12 @@ pub enum RetryClientError {
 
     #[error("Could not connect to client for chain_id: {0}")]
     CouldNotConnectClient(#[from] RpcError<TransportErrorKind>),
+
+    #[error("Could not start reth node for network {0}: {1}")]
+    RethNodeStartError(String, String),
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn create_client(
     rpc_url: &str,
     chain_id: u64,
@@ -486,16 +501,30 @@ pub async fn create_client(
     block_poll_frequency: Option<BlockPollFrequency>,
     custom_headers: HeaderMap,
     address_filtering: Option<AddressFiltering>,
+    chain_state_notification: Option<Sender<ChainStateNotification>>,
 ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
-    let rpc_url = Url::parse(rpc_url).map_err(|e| {
-        RetryClientError::HttpProviderCantBeCreated(rpc_url.to_string(), e.to_string())
-    })?;
+    let provider = if rpc_url.ends_with(".ipc") {
+        // IPC connection
+        let ipc = IpcConnect::new(rpc_url.to_string());
+        ProviderBuilder::new().connect_ipc(ipc).await.map_err(|e| {
+            RetryClientError::HttpProviderCantBeCreated(
+                rpc_url.to_string(),
+                format!("IPC connection failed: {}", e),
+            )
+        })?
+    } else {
+        // HTTP connection
+        let rpc_url = Url::parse(rpc_url).map_err(|e| {
+            RetryClientError::HttpProviderCantBeCreated(rpc_url.to_string(), e.to_string())
+        })?;
 
-    let client_with_auth = Client::builder().default_headers(custom_headers).build()?;
-    let http = Http::with_client(client_with_auth, rpc_url);
-    let retry_layer = RetryBackoffLayer::new(5000, 500, compute_units_per_second.unwrap_or(660));
-    let rpc_client = RpcClient::builder().layer(retry_layer).transport(http, false);
-    let provider = ProviderBuilder::new().connect_client(rpc_client);
+        let client_with_auth = Client::builder().default_headers(custom_headers).build()?;
+        let http = Http::with_client(client_with_auth, rpc_url);
+        let retry_layer =
+            RetryBackoffLayer::new(5000, 500, compute_units_per_second.unwrap_or(660));
+        let rpc_client = RpcClient::builder().layer(retry_layer).transport(http, false);
+        ProviderBuilder::new().connect_client(rpc_client)
+    };
 
     Ok(Arc::new(
         JsonRpcCachedProvider::new(
@@ -504,6 +533,7 @@ pub async fn create_client(
             block_poll_frequency,
             max_block_range,
             address_filtering,
+            chain_state_notification,
         )
         .await,
     ))
@@ -529,14 +559,30 @@ impl CreateNetworkProvider {
         manifest: &Manifest,
     ) -> Result<Vec<CreateNetworkProvider>, RetryClientError> {
         let provider_futures = manifest.networks.iter().map(|network| async move {
+            // if reth is enabled for this network, we need to start the reth node.
+            // once reth is started, we can use the reth ipc path to create a provider.
+            let reth_tx = network.try_start_reth_node().await.map_err(|e| {
+                RetryClientError::RethNodeStartError(network.name.clone(), e.to_string())
+            })?;
+
+            // if reth is enabled and started successfully, we can use the reth ipc path to create a provider.
+            // else, we will use the rpc url provided in the manifest.
+            let provider_url = if reth_tx.is_some() {
+                network.get_reth_ipc_path().unwrap()
+            } else {
+                network.rpc.clone()
+            };
+
+            // create the provider
             let provider = create_client(
-                &network.rpc,
+                &provider_url,
                 network.chain_id,
                 network.compute_units_per_second,
                 network.max_block_range,
                 network.block_poll_frequency,
                 manifest.get_custom_headers(),
                 network.get_logs_settings.clone().map(|settings| settings.address_filtering),
+                reth_tx.clone(),
             )
             .await?;
 
@@ -548,6 +594,11 @@ impl CreateNetworkProvider {
         });
 
         try_join_all(provider_futures).await
+    }
+
+    /// Get the chain state notification for this network
+    pub fn chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
+        self.client.chain_state_notification.clone()
     }
 }
 
@@ -566,14 +617,16 @@ mod tests {
     #[tokio::test]
     async fn test_create_retry_client() {
         let rpc_url = "http://localhost:8545";
-        let result = create_client(rpc_url, 1, Some(660), None, None, HeaderMap::new(), None).await;
+        let result =
+            create_client(rpc_url, 1, Some(660), None, None, HeaderMap::new(), None, None).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_create_retry_client_invalid_url() {
         let rpc_url = "invalid_url";
-        let result = create_client(rpc_url, 1, Some(660), None, None, HeaderMap::new(), None).await;
+        let result =
+            create_client(rpc_url, 1, Some(660), None, None, HeaderMap::new(), None, None).await;
         assert!(result.is_err());
         if let Err(RetryClientError::HttpProviderCantBeCreated(url, _)) = result {
             assert_eq!(url, rpc_url);

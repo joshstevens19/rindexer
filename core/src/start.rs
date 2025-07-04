@@ -1,4 +1,5 @@
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use tokio::signal;
 use tracing::{error, info};
@@ -26,7 +27,6 @@ use crate::{
     },
     setup_info_logger,
 };
-
 pub struct IndexingDetails {
     pub registry: EventCallbackRegistry,
     pub trace_registry: TraceCallbackRegistry,
@@ -77,6 +77,12 @@ pub enum StartRindexerError {
 
     #[error("Shutdown handler failed with error: {0}")]
     ShutdownHandlerFailed(String),
+
+    #[error("Could not start Reth node: {0}")]
+    CouldNotStartRethNode(#[from] eyre::Error),
+
+    #[error("Reth CLI error: {0}")]
+    RethCliError(#[from] Box<dyn std::error::Error>),
 }
 
 async fn handle_shutdown(signal: &str) {
