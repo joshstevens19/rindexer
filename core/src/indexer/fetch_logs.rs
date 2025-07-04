@@ -36,13 +36,10 @@ pub fn fetch_logs_stream(
     // backpressure the producer. Many RPC responses are large, so this is important.
     //
     // This is per network contract-event, so it should be relatively small.
-    //
-    // TODO: If the yaml config has many network-events, this should be 2-3. If it has a few, it can
-    //       probably be much higher to build a better backlog and max-throughput.
     let channel_size = public_read_env_value("RINDEXER_CHANNEL_SIZE")
-        .unwrap_or("3".to_string())
+        .unwrap_or("4".to_string())
         .parse()
-        .unwrap_or(3);
+        .unwrap_or(4);
 
     info!(
         "{}::{} Configured with {} event buffer",

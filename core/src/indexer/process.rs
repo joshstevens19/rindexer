@@ -66,7 +66,7 @@ async fn process_event_logs(
     //
     // We default to `2`, but the user will ideally override this based on the logic in the handler.
     let callback_concurrency = config.index_event_in_order().then(|| 1usize).unwrap_or_else(|| {
-        public_read_env_value("EVENT_CONCURRENCY")
+        public_read_env_value("RINDEXER_EVENT_CONCURRENCY")
             .ok()
             .and_then(|a| a.parse::<usize>().ok())
             .unwrap_or(2)
