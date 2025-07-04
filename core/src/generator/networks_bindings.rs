@@ -23,11 +23,12 @@ fn generate_reth_init_fn(network: &Network) -> Code {
             "#
         ))
     } else {
-        Code::new(format!(
+        Code::new(
             r#"
             let chain_state_notification = None;
             "#
-        ))
+            .to_string(),
+        )
     }
 }
 

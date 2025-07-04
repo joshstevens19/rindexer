@@ -492,6 +492,7 @@ pub enum RetryClientError {
     RethNodeStartError(String, String),
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn create_client(
     rpc_url: &str,
     chain_id: u64,
