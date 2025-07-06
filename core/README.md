@@ -11,4 +11,6 @@ rindexer out the box also gives you a GraphQL API to query the data you have ind
 
 You can get to the full rindexer [documentation](https://rindexer.xyz/).
 
+rust crate is [here](https://crates.io/crates/rindexer) but you can also install via github.
+
 all rust documentation can be found [here](https://rindexer.xyz/docs/start-building/rust-project-deep-dive)
