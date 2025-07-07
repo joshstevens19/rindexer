@@ -373,6 +373,7 @@ pub async fn start_indexing_contract_events(
             progress: Arc::clone(&event_progress_state),
             database: database.clone(),
             csv_details: manifest_csv_details.clone(),
+            config: manifest.config.clone(),
             stream_last_synced_block_file_path: stream_details
                 .as_ref()
                 .map(|s| s.get_streams_last_synced_block_path()),
@@ -398,6 +399,7 @@ pub async fn start_indexing_contract_events(
                 end_block,
                 progress: Arc::clone(&event_progress_state),
                 database: database.clone(),
+                config: manifest.config.clone(),
                 csv_details: manifest_csv_details.clone(),
                 stream_last_synced_block_file_path: stream_details
                     .as_ref()

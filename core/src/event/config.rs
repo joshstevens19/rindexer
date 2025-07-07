@@ -7,6 +7,7 @@ use tokio::sync::Mutex;
 use crate::event::contract_setup::{AddressDetails, IndexingContractSetup};
 use crate::event::factory_event_filter_sync::update_known_factory_deployed_addresses;
 use crate::event::rindexer_event_filter::FactoryFilter;
+use crate::manifest::config::Config;
 use crate::manifest::contract::EventInputIndexedFilters;
 use crate::{
     event::{
@@ -29,6 +30,7 @@ pub struct ContractEventProcessingConfig {
     pub info_log_name: String,
     pub topic_id: B256,
     pub event_name: String,
+    pub config: Config,
     pub network_contract: Arc<NetworkContract>,
     pub start_block: U64,
     pub end_block: U64,
@@ -96,6 +98,7 @@ pub struct FactoryEventProcessingConfig {
     pub address: ValueOrArray<Address>,
     pub input_name: String,
     pub event: Event,
+    pub config: Config,
     pub network_contract: Arc<NetworkContract>,
     pub start_block: U64,
     pub end_block: U64,
@@ -172,6 +175,13 @@ impl EventProcessingConfig {
         match self {
             Self::ContractEventProcessing(config) => config.topic_id,
             Self::FactoryEventProcessing(config) => config.event.selector(),
+        }
+    }
+
+    pub fn config(&self) -> &Config {
+        match self {
+            Self::ContractEventProcessing(config) => &config.config,
+            Self::FactoryEventProcessing(config) => &config.config,
         }
     }
 

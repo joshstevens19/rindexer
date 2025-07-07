@@ -25,8 +25,7 @@ use crate::{
         task_tracker::{indexing_event_processed, indexing_event_processing},
     },
     is_running,
-    provider::ProviderError,
-    public_read_env_value,
+    provider::ProviderError
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -65,12 +64,11 @@ async fn process_event_logs(
     // best for the application.
     //
     // We default to `2`, but the user will ideally override this based on the logic in the handler.
-    let callback_concurrency = config.index_event_in_order().then(|| 1usize).unwrap_or_else(|| {
-        public_read_env_value("RINDEXER_EVENT_CONCURRENCY")
-            .ok()
-            .and_then(|a| a.parse::<usize>().ok())
-            .unwrap_or(2)
-    });
+    let callback_concurrency = if config.index_event_in_order() {
+        1usize
+    } else {
+        config.config().concurrency.unwrap_or(2)
+    };
 
     let callback_permits = Arc::new(Semaphore::new(callback_concurrency));
 

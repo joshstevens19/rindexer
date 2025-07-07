@@ -4,6 +4,7 @@ use alloy::{primitives::U64, transports::http::reqwest::header::HeaderMap};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_yaml::Value;
 
+use crate::manifest::config::Config;
 use crate::{
     indexer::Indexer,
     manifest::{
@@ -67,6 +68,9 @@ pub struct Manifest {
     #[serde(deserialize_with = "deserialize_project_type")]
     #[serde(serialize_with = "serialize_project_type")]
     pub project_type: ProjectType,
+
+    #[serde(default)]
+    pub config: Config,
 
     pub networks: Vec<Network>,
 
@@ -280,5 +284,20 @@ mod tests {
 
         let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
         assert!(!manifest.native_transfers.enabled);
+    }
+
+    #[test]
+    fn test_config_simple() {
+        let yaml = r#"
+        name: test
+        project_type: no-code
+        networks: []
+        contracts: []
+        "#;
+
+        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+
+        assert_eq!(manifest.config.concurrency, None);
+        assert_eq!(manifest.config.buffer, None);
     }
 }

@@ -5,8 +5,7 @@ use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
     indexer::IndexingEventProgressStatus,
     is_running,
-    provider::{JsonRpcCachedProvider, ProviderError},
-    public_read_env_value,
+    provider::{JsonRpcCachedProvider, ProviderError}
 };
 use alloy::{
     primitives::{B256, U64},
@@ -36,10 +35,7 @@ pub fn fetch_logs_stream(
     // backpressure the producer. Many RPC responses are large, so this is important.
     //
     // This is per network contract-event, so it should be relatively small.
-    let channel_size = public_read_env_value("RINDEXER_CHANNEL_SIZE")
-        .unwrap_or("4".to_string())
-        .parse()
-        .unwrap_or(4);
+    let channel_size = config.config().buffer.unwrap_or(4);
 
     info!(
         "{}::{} Configured with {} event buffer",
