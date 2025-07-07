@@ -13,7 +13,7 @@ pub struct Config {
     ///
     /// If `index_event_in_order` is used, this option will always be set as `1` (sequential).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub concurrency: Option<usize>,
+    pub callback_concurrency: Option<usize>,
 }
 
 #[cfg(test)]
@@ -25,27 +25,25 @@ mod tests {
     #[test]
     fn test_config_simple() {
         let yaml = r#"
-          config:
-              buffer: 4
-              concurrency: 2
+          buffer: 4
+          callback_concurrency: 2
         "#;
 
         let transfer: Config = serde_yaml::from_str(yaml).unwrap();
 
         assert_eq!(transfer.buffer, Some(4));
-        assert_eq!(transfer.concurrency, Some(2));
+        assert_eq!(transfer.callback_concurrency, Some(2));
     }
 
     #[test]
     fn test_config_optional() {
         let yaml = r#"
-          config:
-              buffer: 4
+          buffer: 4
         "#;
 
         let transfer: Config = serde_yaml::from_str(yaml).unwrap();
 
         assert_eq!(transfer.buffer, Some(4));
-        assert_eq!(transfer.concurrency, None);
+        assert_eq!(transfer.callback_concurrency, None);
     }
 }

@@ -67,7 +67,7 @@ async fn process_event_logs(
     let callback_concurrency = if config.index_event_in_order() {
         1usize
     } else {
-        config.config().concurrency.unwrap_or(2)
+        config.config().callback_concurrency.unwrap_or(2)
     };
 
     let callback_permits = Arc::new(Semaphore::new(callback_concurrency));

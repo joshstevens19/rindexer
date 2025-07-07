@@ -125,6 +125,7 @@ async fn approval_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
         no_extensions(),
     )
     .await;
+
     RocketPoolETHEventType::Approval(handler).register(manifest_path, registry).await;
 }
 
@@ -243,6 +244,7 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
         no_extensions(),
     )
     .await;
+
     RocketPoolETHEventType::Transfer(handler).register(manifest_path, registry).await;
 }
 pub async fn rocket_pool_eth_handlers(

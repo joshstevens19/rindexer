@@ -137,7 +137,7 @@ pub fn handle_new_command(
         project_type,
         config: Config {
             buffer: None,
-            concurrency: None,
+            callback_concurrency: None,
         },
         networks: vec![Network {
             name: "ethereum".to_string(),

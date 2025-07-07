@@ -297,7 +297,7 @@ mod tests {
 
         let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
 
-        assert_eq!(manifest.config.concurrency, None);
+        assert_eq!(manifest.config.callback_concurrency, None);
         assert_eq!(manifest.config.buffer, None);
     }
 }

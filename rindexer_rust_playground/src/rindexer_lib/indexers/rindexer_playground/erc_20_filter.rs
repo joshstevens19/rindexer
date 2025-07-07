@@ -125,6 +125,7 @@ async fn approval_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
         no_extensions(),
     )
     .await;
+
     ERC20FilterEventType::Approval(handler).register(manifest_path, registry).await;
 }
 
@@ -243,6 +244,7 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
         no_extensions(),
     )
     .await;
+
     ERC20FilterEventType::Transfer(handler).register(manifest_path, registry).await;
 }
 pub async fn erc_20_filter_handlers(manifest_path: &PathBuf, registry: &mut EventCallbackRegistry) {
