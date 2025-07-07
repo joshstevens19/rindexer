@@ -1,10 +1,34 @@
-mod ast;
-mod evaluation;
-mod helpers;
-mod parsing;
+pub mod ast;
+pub mod evaluation;
+pub mod helpers;
+pub mod parsing;
 
-use alloy::primitives::U64;
-use serde_json::{Map, Value};
+use self::evaluation::EvaluationError;
+use serde_json::{json, Map, Value};
+use thiserror::Error;
+use winnow::error::{ContextError, ParseError};
+
+#[derive(Debug, Error)]
+pub enum ConditionError<'a> {
+    #[error("Failed to parse expression: {0}")]
+    Parse(ParseError<&'a str, ContextError>),
+
+    #[error("Failed to evaluate expression: {0}")]
+    Evaluation(#[from] EvaluationError),
+}
+
+/// Evaluates a filter expression against a given JSON object.
+///
+/// This is the main public entry point for the new conditions module. It orchestrates
+/// the parsing of the expression string and the evaluation of the resulting AST
+/// against the provided data.
+pub fn evaluate_expression<'a>(
+    expression_str: &'a str,
+    data: &Value,
+) -> Result<bool, ConditionError<'a>> {
+    let parsed_expr = parsing::parse(expression_str).map_err(ConditionError::Parse)?;
+    evaluation::evaluate(&parsed_expr, data).map_err(ConditionError::from)
+}
 
 fn get_nested_value(data: &Value, path: &str) -> Option<Value> {
     let keys: Vec<&str> = path.split('.').collect();
@@ -18,63 +42,34 @@ fn get_nested_value(data: &Value, path: &str) -> Option<Value> {
     Some(current.clone())
 }
 
-#[allow(clippy::manual_strip)]
 fn evaluate_condition(value: &Value, condition: &str) -> bool {
-    if condition.contains("||")
-        || condition.contains("&&")
-        || condition.contains('>')
-        || condition.contains('<')
-        || condition.contains('=')
-    {
-        let parts: Vec<&str> = condition.split("||").collect();
-        for part in parts {
-            let subparts: Vec<&str> = part.split("&&").collect();
-            let mut and_result = true;
-            for subpart in subparts {
-                let (op, comp) = if subpart.starts_with(">=") {
-                    (">=", &subpart[2..])
-                } else if subpart.starts_with("<=") {
-                    ("<=", &subpart[2..])
-                } else if subpart.starts_with(">") {
-                    (">", &subpart[1..])
-                } else if subpart.starts_with("<") {
-                    ("<", &subpart[1..])
-                } else if subpart.starts_with("=") {
-                    ("=", &subpart[1..])
-                } else {
-                    ("", subpart)
-                };
+    if !condition.contains(|c: char| c == '&' || c == '|' || c == '>' || c == '<' || c == '=') {
+        return value == &Value::String(condition.to_string());
+    }
 
-                and_result &= match op {
-                    ">=" => {
-                        U64::from_str_radix(value.as_str().unwrap_or("0"), 10).unwrap_or_default()
-                            >= U64::from_str_radix(comp, 10).unwrap_or_default()
-                    }
-                    "<=" => {
-                        U64::from_str_radix(value.as_str().unwrap_or("0"), 10).unwrap_or_default()
-                            <= U64::from_str_radix(comp, 10).unwrap_or_default()
-                    }
-                    ">" => {
-                        U64::from_str_radix(value.as_str().unwrap_or("0"), 10).unwrap_or_default()
-                            > U64::from_str_radix(comp, 10).unwrap_or_default()
-                    }
-                    "<" => {
-                        U64::from_str_radix(value.as_str().unwrap_or("0"), 10).unwrap_or_default()
-                            < U64::from_str_radix(comp, 10).unwrap_or_default()
-                    }
-                    "=" => value == &Value::String(comp.to_string()),
-                    "" => value == &Value::String(subpart.to_string()),
-                    _ => false,
-                };
-            }
-            if and_result {
-                return true;
+    // Replicate the old splitting logic,
+    // but use the new evaluation engine for each part.
+    let parts: Vec<&str> = condition.split("||").collect();
+    for part in parts {
+        let subparts: Vec<&str> = part.split("&&").collect();
+        let mut and_result = true;
+        for subpart in subparts {
+            // Construct a valid expression for the new engine.
+            let expr_str = format!("_placeholder_{}", subpart.trim());
+            let context = json!({ "_placeholder_": value });
+
+            // Evaluate the sub-expression
+            if !evaluate_expression(&expr_str, &context).unwrap_or(false) {
+                and_result = false;
+                break;
             }
         }
-        false
-    } else {
-        value == &Value::String(condition.to_string())
+        if and_result {
+            return true;
+        }
     }
+
+    false
 }
 
 pub fn filter_event_data_by_conditions(
