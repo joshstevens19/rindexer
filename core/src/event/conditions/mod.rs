@@ -1,3 +1,6 @@
+mod ast;
+mod parsing;
+
 use alloy::primitives::U64;
 use serde_json::{Map, Value};
 

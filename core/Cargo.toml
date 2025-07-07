@@ -76,6 +76,7 @@ jemallocator = { version = "0.6.0", package = "tikv-jemallocator", optional = tr
 jemalloc-ctl = { version = "0.6.0", package = "tikv-jemalloc-ctl", optional = true }
 foundry-compilers = "0.17.0"
 alloy-chains = "0.2.2"
+winnow = "0.7.11"
 
 # reth
 reth = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
