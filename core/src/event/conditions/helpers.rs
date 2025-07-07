@@ -10,20 +10,28 @@ pub fn are_same_address(address1: &str, address2: &str) -> bool {
 }
 
 /// Normalizes an address string by removing "0x" prefix and converting to lowercase.
-fn normalize_address(address: &str) -> String {
-    address.strip_prefix("0x").unwrap_or(address).to_lowercase()
+pub fn normalize_address(address: &str) -> String {
+    address.strip_prefix("0x").unwrap_or(address).replace(" ", "").to_lowercase()
 }
 
-/// Converts a string to a U256 value, handling decimal and hex formats.
+/// Converts a string to a U256 value.
 pub fn string_to_u256(value_str: &str) -> Result<U256, String> {
     let trimmed = value_str.trim();
+
     if trimmed.is_empty() {
         return Err("Input string is empty".to_string());
     }
+
     if let Some(hex_val) = trimmed.strip_prefix("0x").or_else(|| trimmed.strip_prefix("0X")) {
-        U256::from_str_radix(hex_val, 16).map_err(|e| e.to_string())
+        // Hexadecimal parsing
+        if hex_val.is_empty() {
+            return Err("Hex string '0x' is missing value digits".to_string());
+        }
+        U256::from_str_radix(hex_val, 16)
+            .map_err(|e| format!("Failed to parse hex '{}': {}", hex_val, e))
     } else {
-        U256::from_str(trimmed).map_err(|e| e.to_string())
+        // Decimal parsing
+        U256::from_str(trimmed).map_err(|e| format!("Failed to parse decimal '{}': {}", trimmed, e))
     }
 }
 
@@ -33,10 +41,18 @@ pub fn string_to_i256(value_str: &str) -> Result<I256, String> {
     if trimmed.is_empty() {
         return Err("Input string is empty".to_string());
     }
-    if let Some(hex_val) = trimmed.strip_prefix("0x").or_else(|| trimmed.strip_prefix("0X")) {
-        U256::from_str_radix(hex_val, 16).map(I256::from_raw).map_err(|e| e.to_string())
+
+    if let Some(hex_val_no_sign) = trimmed.strip_prefix("0x").or_else(|| trimmed.strip_prefix("0X"))
+    {
+        if hex_val_no_sign.is_empty() {
+            return Err("Hex string '0x' is missing value digits".to_string());
+        }
+        // Parse hex as U256 first
+        U256::from_str_radix(hex_val_no_sign, 16)
+            .map_err(|e| format!("Failed to parse hex magnitude '{}': {}", hex_val_no_sign, e))
+            .map(I256::from_raw)
     } else {
-        I256::from_str(trimmed).map_err(|e| e.to_string())
+        I256::from_str(trimmed).map_err(|e| format!("Failed to parse decimal '{}': {}", trimmed, e))
     }
 }
 
@@ -59,7 +75,6 @@ pub fn compare_ordered_values<T: Ord>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::primitives::{hex, Address, B256};
 
     #[test]
     fn test_string_to_u256() {
