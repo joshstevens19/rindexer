@@ -22,10 +22,7 @@ type ParserResult<T> = winnow::Result<T, ErrMode<ContextError>>;
 // Helper to check for keywords
 // These words cannot be used as unquoted string literals or variable names
 fn is_keyword(ident: &str) -> bool {
-	matches!(
-		ident.to_ascii_lowercase().as_str(),
-		"true" | "false"
-	)
+    matches!(ident.to_ascii_lowercase().as_str(), "true" | "false")
 }
 
 /// Common delimiters that can follow a literal value
@@ -314,9 +311,8 @@ fn parse_term<'a>(input: &mut Input<'a>) -> ParserResult<Expression<'a>> {
 fn parse_and_expression<'a>(input: &mut Input<'a>) -> ParserResult<Expression<'a>> {
     let left = parse_term.parse_next(input)?;
 
-    let and_operator_parser =
-		delimited(space0, literal("&&").value(LogicalOperator::And), space0)
-			.context(StrContext::Expected(StrContextValue::Description("logical operator &&")));
+    let and_operator_parser = delimited(space0, literal("&&").value(LogicalOperator::And), space0)
+        .context(StrContext::Expected(StrContextValue::Description("logical operator &&")));
 
     let trailing_parser = (and_operator_parser, parse_term);
 
@@ -337,9 +333,8 @@ fn parse_and_expression<'a>(input: &mut Input<'a>) -> ParserResult<Expression<'a
 /// Parses the OR operator and its components
 fn parse_or_expression<'a>(input: &mut Input<'a>) -> ParserResult<Expression<'a>> {
     let left = parse_and_expression.parse_next(input)?;
-    let or_operator_parser =
-		delimited(space0, literal("||").value(LogicalOperator::Or), space0)
-			.context(StrContext::Expected(StrContextValue::Description("logical operator ||")));
+    let or_operator_parser = delimited(space0, literal("||").value(LogicalOperator::Or), space0)
+        .context(StrContext::Expected(StrContextValue::Description("logical operator ||")));
     let trailing_parser = (or_operator_parser, parse_and_expression);
     let folded_or_parser = repeat(0.., trailing_parser).fold(
         move || left.clone(),

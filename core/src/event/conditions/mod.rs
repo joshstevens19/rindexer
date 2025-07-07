@@ -1,4 +1,6 @@
 mod ast;
+mod evaluation;
+mod helpers;
 mod parsing;
 
 use alloy::primitives::U64;
