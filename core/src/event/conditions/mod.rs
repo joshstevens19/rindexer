@@ -43,7 +43,7 @@ fn get_nested_value(data: &Value, path: &str) -> Option<Value> {
 }
 
 fn evaluate_condition(value: &Value, condition: &str) -> bool {
-    if !condition.contains(|c: char| c == '&' || c == '|' || c == '>' || c == '<' || c == '=') {
+    if !condition.contains(['&', '|', '>', '<', '=']) {
         return value == &Value::String(condition.to_string());
     }
 
