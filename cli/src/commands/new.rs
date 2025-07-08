@@ -3,10 +3,15 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::console::{
+    print_error_message, print_success_message, prompt_for_input, prompt_for_input_list,
+    prompt_for_optional_input,
+};
 use alloy::{
     primitives::{Address, U64},
     rpc::types::ValueOrArray,
 };
+use rindexer::manifest::config::Config;
 use rindexer::{
     generator::{build::generate_rust_project, generate_docker_file},
     manifest::{
@@ -18,11 +23,6 @@ use rindexer::{
         yaml::{write_manifest, YAML_CONFIG_NAME},
     },
     write_file, StringOrArray, WriteFileError,
-};
-use rindexer::manifest::config::Config;
-use crate::console::{
-    print_error_message, print_success_message, prompt_for_input, prompt_for_input_list,
-    prompt_for_optional_input,
 };
 
 fn generate_rindexer_rust_project(project_path: &Path) {
@@ -135,10 +135,7 @@ pub fn handle_new_command(
         description: project_description,
         repository,
         project_type,
-        config: Config {
-            buffer: None,
-            callback_concurrency: None,
-        },
+        config: Config { buffer: None, callback_concurrency: None },
         networks: vec![Network {
             name: "ethereum".to_string(),
             chain_id: 1,

@@ -5,7 +5,7 @@ use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
     indexer::IndexingEventProgressStatus,
     is_running,
-    provider::{JsonRpcCachedProvider, ProviderError}
+    provider::{JsonRpcCachedProvider, ProviderError},
 };
 use alloy::{
     primitives::{B256, U64},

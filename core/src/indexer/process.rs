@@ -25,7 +25,7 @@ use crate::{
         task_tracker::{indexing_event_processed, indexing_event_processing},
     },
     is_running,
-    provider::ProviderError
+    provider::ProviderError,
 };
 
 #[derive(thiserror::Error, Debug)]
