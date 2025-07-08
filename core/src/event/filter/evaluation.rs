@@ -394,7 +394,7 @@ fn get_kind_from_json_value(value: &JsonValue) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::conditions::parsing::parse;
+    use crate::event::filter::parsing::parse;
     use serde_json::json;
 
     #[test]

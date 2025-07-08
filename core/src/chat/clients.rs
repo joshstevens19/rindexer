@@ -18,7 +18,7 @@ use crate::{
         telegram::{TelegramBot, TelegramError},
         template::Template,
     },
-    event::{evaluate_expression, filter_event_data_by_conditions, EventMessage},
+    event::{filter_by_expression, filter_event_data_by_conditions, EventMessage},
     manifest::chat::{
         ChatConfig, DiscordConfig, DiscordEvent, SlackConfig, SlackEvent, TelegramConfig,
         TelegramEvent,
@@ -130,8 +130,11 @@ impl ChatClients {
         let tasks: Vec<_> = events_data
             .iter()
             .filter(|event_data| {
+                // Filter expression has priority over conditions
+                // If both are present, the filter expression will be used
+                // If neither is present, all events will be sent
                 if let Some(expression) = &event_for.filter_expression {
-                    return evaluate_expression(expression, event_data).unwrap_or(false);
+                    return filter_by_expression(expression, event_data).unwrap_or(false);
                 }
                 if let Some(conditions) = &event_for.conditions {
                     return filter_event_data_by_conditions(event_data, conditions);
@@ -161,8 +164,11 @@ impl ChatClients {
         let tasks: Vec<_> = events_data
             .iter()
             .filter(|event_data| {
+                // Filter expression has priority over conditions
+                // If both are present, the filter expression will be used
+                // If neither is present, all events will be sent
                 if let Some(expression) = &event_for.filter_expression {
-                    return evaluate_expression(expression, event_data).unwrap_or(false);
+                    return filter_by_expression(expression, event_data).unwrap_or(false);
                 }
                 if let Some(conditions) = &event_for.conditions {
                     return filter_event_data_by_conditions(event_data, conditions);
@@ -192,8 +198,11 @@ impl ChatClients {
         let tasks: Vec<_> = events_data
             .iter()
             .filter(|event_data| {
+                // Filter expression has priority over conditions
+                // If both are present, the filter expression will be used
+                // If neither is present, all events will be sent
                 if let Some(expression) = &event_for.filter_expression {
-                    return evaluate_expression(expression, event_data).unwrap_or(false);
+                    return filter_by_expression(expression, event_data).unwrap_or(false);
                 }
                 if let Some(conditions) = &event_for.conditions {
                     return filter_event_data_by_conditions(event_data, conditions);

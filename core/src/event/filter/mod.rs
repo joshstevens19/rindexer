@@ -9,7 +9,7 @@ use thiserror::Error;
 use winnow::error::{ContextError, ParseError};
 
 #[derive(Debug, Error)]
-pub enum ConditionError<'a> {
+pub enum FilterError<'a> {
     #[error("Failed to parse expression: {0}")]
     Parse(ParseError<&'a str, ContextError>),
 
@@ -22,12 +22,12 @@ pub enum ConditionError<'a> {
 /// This is the main public entry point for the new conditions module. It orchestrates
 /// the parsing of the expression string and the evaluation of the resulting AST
 /// against the provided data.
-pub fn evaluate_expression<'a>(
+pub fn filter_by_expression<'a>(
     expression_str: &'a str,
     data: &Value,
-) -> Result<bool, ConditionError<'a>> {
-    let parsed_expr = parsing::parse(expression_str).map_err(ConditionError::Parse)?;
-    evaluation::evaluate(&parsed_expr, data).map_err(ConditionError::from)
+) -> Result<bool, FilterError<'a>> {
+    let parsed_expr = parsing::parse(expression_str).map_err(FilterError::Parse)?;
+    evaluation::evaluate(&parsed_expr, data).map_err(FilterError::from)
 }
 
 fn get_nested_value(data: &Value, path: &str) -> Option<Value> {
@@ -59,7 +59,7 @@ fn evaluate_condition(value: &Value, condition: &str) -> bool {
             let context = json!({ "_placeholder_": value });
 
             // Evaluate the sub-expression
-            if !evaluate_expression(&expr_str, &context).unwrap_or(false) {
+            if !filter_by_expression(&expr_str, &context).unwrap_or(false) {
                 and_result = false;
                 break;
             }
