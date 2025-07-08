@@ -28,10 +28,10 @@ pub fn string_to_u256(value_str: &str) -> Result<U256, String> {
             return Err("Hex string '0x' is missing value digits".to_string());
         }
         U256::from_str_radix(hex_val, 16)
-            .map_err(|e| format!("Failed to parse hex '{}': {}", hex_val, e))
+            .map_err(|e| format!("Failed to parse hex '{hex_val}': {e}"))
     } else {
         // Decimal parsing
-        U256::from_str(trimmed).map_err(|e| format!("Failed to parse decimal '{}': {}", trimmed, e))
+        U256::from_str(trimmed).map_err(|e| format!("Failed to parse decimal '{trimmed}': {e}"))
     }
 }
 
@@ -49,10 +49,10 @@ pub fn string_to_i256(value_str: &str) -> Result<I256, String> {
         }
         // Parse hex as U256 first
         U256::from_str_radix(hex_val_no_sign, 16)
-            .map_err(|e| format!("Failed to parse hex magnitude '{}': {}", hex_val_no_sign, e))
+            .map_err(|e| format!("Failed to parse hex magnitude '{hex_val_no_sign}': {e}"))
             .map(I256::from_raw)
     } else {
-        I256::from_str(trimmed).map_err(|e| format!("Failed to parse decimal '{}': {}", trimmed, e))
+        I256::from_str(trimmed).map_err(|e| format!("Failed to parse decimal '{trimmed}': {e}"))
     }
 }
 

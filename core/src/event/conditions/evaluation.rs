@@ -130,9 +130,8 @@ fn resolve_path<'a>(
                 .ok_or_else(|| EvaluationError::IndexOutOfBounds(index.to_string()))?,
             _ => {
                 return Err(EvaluationError::TypeMismatch(format!(
-                    "Cannot apply accessor {:?} to value {:?}",
-                    accessor, current
-                )))
+                    "Cannot apply accessor {accessor:?} to value {current:?}"
+                )));
             }
         };
     }
@@ -164,8 +163,7 @@ fn compare_final_values(
         "string" | "bytes" | "bytes32" => compare_string(lhs_value_str, operator, rhs_literal),
         "bool" => compare_boolean(lhs_value_str, operator, rhs_literal),
         _ => Err(EvaluationError::TypeMismatch(format!(
-            "Unsupported parameter kind for comparison: {}",
-            lhs_kind_str
+            "Unsupported parameter kind for comparison: {lhs_kind_str}",
         ))),
     }
 }
@@ -180,8 +178,7 @@ fn compare_array(
         LiteralValue::Str(s) => *s,
         _ => {
             return Err(EvaluationError::TypeMismatch(format!(
-                "Expected string literal for 'array' comparison, found: {:?}",
-                rhs_literal
+                "Expected string literal for 'array' comparison, found: {rhs_literal:?}"
             )));
         }
     };
@@ -203,8 +200,7 @@ fn compare_array(
             Ok(if *operator == ComparisonOperator::Eq { are_equal } else { !are_equal })
         }
         _ => Err(EvaluationError::UnsupportedOperator(format!(
-            "Operator {:?} not supported for 'array' type. Supported: Eq, Ne.",
-            operator
+            "Operator {operator:?} not supported for 'array' type. Supported: Eq, Ne.",
         ))),
     }
 }
@@ -215,21 +211,20 @@ fn compare_u256(
     right_literal: &LiteralValue<'_>,
 ) -> Result<bool, EvaluationError> {
     let left = string_to_u256(left_str).map_err(|e| {
-        EvaluationError::ParseError(format!("Failed to parse LHS '{}' as U256: {}", left_str, e))
+        EvaluationError::ParseError(format!("Failed to parse LHS '{left_str}' as U256: {e}"))
     })?;
 
     let right_str = match right_literal {
         LiteralValue::Number(s) | LiteralValue::Str(s) => s,
         _ => {
             return Err(EvaluationError::TypeMismatch(format!(
-                "Expected number or string for U256 comparison, found: {:?}",
-                right_literal
+                "Expected number or string for U256 comparison, found: {right_literal:?}"
             )))
         }
     };
 
     let right = string_to_u256(right_str).map_err(|e| {
-        EvaluationError::ParseError(format!("Failed to parse RHS '{}' as U256: {}", right_str, e))
+        EvaluationError::ParseError(format!("Failed to parse RHS '{right_str}' as U256: {e}"))
     })?;
 
     compare_ordered_values(&left, operator, &right)
@@ -241,21 +236,20 @@ fn compare_i256(
     right_literal: &LiteralValue<'_>,
 ) -> Result<bool, EvaluationError> {
     let left = string_to_i256(left_str).map_err(|e| {
-        EvaluationError::ParseError(format!("Failed to parse LHS '{}' as I256: {}", left_str, e))
+        EvaluationError::ParseError(format!("Failed to parse LHS '{left_str}' as I256: {e}"))
     })?;
 
     let right_str = match right_literal {
         LiteralValue::Number(s) | LiteralValue::Str(s) => s,
         _ => {
             return Err(EvaluationError::TypeMismatch(format!(
-                "Expected number or string for I256 comparison, found: {:?}",
-                right_literal
+                "Expected number or string for I256 comparison, found: {right_literal:?}"
             )))
         }
     };
 
     let right = string_to_i256(right_str).map_err(|e| {
-        EvaluationError::ParseError(format!("Failed to parse RHS '{}' as I256: {}", right_str, e))
+        EvaluationError::ParseError(format!("Failed to parse RHS '{right_str}' as I256: {e}"))
     })?;
 
     compare_ordered_values(&left, operator, &right)
@@ -270,8 +264,7 @@ fn compare_address(
         LiteralValue::Str(s) => *s,
         _ => {
             return Err(EvaluationError::TypeMismatch(format!(
-                "Expected string literal for address comparison, found: {:?}",
-                right_literal
+                "Expected string literal for address comparison, found: {right_literal:?}"
             )))
         }
     };
@@ -280,8 +273,7 @@ fn compare_address(
         ComparisonOperator::Eq => Ok(are_same_address(left, right)),
         ComparisonOperator::Ne => Ok(!are_same_address(left, right)),
         _ => Err(EvaluationError::UnsupportedOperator(format!(
-            "Unsupported operator {:?} for address type",
-            operator
+            "Unsupported operator {operator:?} for address type"
         ))),
     }
 }
@@ -296,8 +288,7 @@ fn compare_string(
         LiteralValue::Str(s) => s.to_lowercase(),
         _ => {
             return Err(EvaluationError::TypeMismatch(format!(
-                "Expected string literal for string comparison, found: {:?}",
-                rhs_literal
+                "Expected string literal for string comparison, found: {rhs_literal:?}"
             )))
         }
     };
@@ -306,8 +297,7 @@ fn compare_string(
         ComparisonOperator::Eq => Ok(left == right),
         ComparisonOperator::Ne => Ok(left != right),
         _ => Err(EvaluationError::UnsupportedOperator(format!(
-            "Operator {:?} not supported for type String",
-            operator
+            "Operator {operator:?} not supported for type String",
         ))),
     }
 }
@@ -318,21 +308,20 @@ fn compare_fixed_point(
     rhs_literal: &LiteralValue<'_>,
 ) -> Result<bool, EvaluationError> {
     let left_decimal = Decimal::from_str(lhs_str).map_err(|e| {
-        EvaluationError::ParseError(format!("Failed to parse LHS '{}' as Decimal: {}", lhs_str, e))
+        EvaluationError::ParseError(format!("Failed to parse LHS '{lhs_str}' as Decimal: {e}"))
     })?;
 
     let rhs_str = match rhs_literal {
         LiteralValue::Number(s) | LiteralValue::Str(s) => *s,
         _ => {
             return Err(EvaluationError::TypeMismatch(format!(
-                "Expected number or string for Decimal comparison, found: {:?}",
-                rhs_literal
+                "Expected number or string for Decimal comparison, found: {rhs_literal:?}"
             )))
         }
     };
 
     let right_decimal = Decimal::from_str(rhs_str).map_err(|e| {
-        EvaluationError::ParseError(format!("Failed to parse RHS '{}' as Decimal: {}", rhs_str, e))
+        EvaluationError::ParseError(format!("Failed to parse RHS '{rhs_str}' as Decimal: {e}"))
     })?;
 
     compare_ordered_values(&left_decimal, operator, &right_decimal)
@@ -344,17 +333,13 @@ fn compare_boolean(
     rhs_literal: &LiteralValue<'_>,
 ) -> Result<bool, EvaluationError> {
     let lhs = lhs_value_str.parse::<bool>().map_err(|e| {
-        EvaluationError::ParseError(format!(
-            "Failed to parse LHS '{}' as bool: {}",
-            lhs_value_str, e
-        ))
+        EvaluationError::ParseError(format!("Failed to parse LHS '{lhs_value_str}' as bool: {e}"))
     })?;
     let rhs = match rhs_literal {
         LiteralValue::Bool(b) => *b,
         _ => {
             return Err(EvaluationError::TypeMismatch(format!(
-                "Expected bool literal for Bool comparison, found: {:?}",
-                rhs_literal
+                "Expected bool literal for Bool comparison, found: {rhs_literal:?}",
             )))
         }
     };
@@ -363,8 +348,7 @@ fn compare_boolean(
         ComparisonOperator::Eq => Ok(lhs == rhs),
         ComparisonOperator::Ne => Ok(lhs != rhs),
         _ => Err(EvaluationError::UnsupportedOperator(format!(
-            "Unsupported operator {:?} for Bool comparison",
-            operator
+            "Unsupported operator {operator:?} for Bool comparison",
         ))),
     }
 }
