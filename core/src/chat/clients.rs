@@ -18,7 +18,7 @@ use crate::{
         telegram::{TelegramBot, TelegramError},
         template::Template,
     },
-    event::{filter_event_data_by_conditions, EventMessage},
+    event::{evaluate_expression, filter_event_data_by_conditions, EventMessage},
     manifest::chat::{
         ChatConfig, DiscordConfig, DiscordEvent, SlackConfig, SlackEvent, TelegramConfig,
         TelegramEvent,
@@ -130,11 +130,13 @@ impl ChatClients {
         let tasks: Vec<_> = events_data
             .iter()
             .filter(|event_data| {
-                if let Some(conditions) = &event_for.conditions {
-                    filter_event_data_by_conditions(event_data, conditions)
-                } else {
-                    true
+                if let Some(expression) = &event_for.filter_expression {
+                    return evaluate_expression(expression, event_data).unwrap_or(false);
                 }
+                if let Some(conditions) = &event_for.conditions {
+                    return filter_event_data_by_conditions(event_data, conditions);
+                }
+                true
             })
             .map(|event_data| {
                 let client = Arc::clone(&instance.client);
@@ -159,11 +161,13 @@ impl ChatClients {
         let tasks: Vec<_> = events_data
             .iter()
             .filter(|event_data| {
-                if let Some(conditions) = &event_for.conditions {
-                    filter_event_data_by_conditions(event_data, conditions)
-                } else {
-                    true
+                if let Some(expression) = &event_for.filter_expression {
+                    return evaluate_expression(expression, event_data).unwrap_or(false);
                 }
+                if let Some(conditions) = &event_for.conditions {
+                    return filter_event_data_by_conditions(event_data, conditions);
+                }
+                true
             })
             .map(|event_data| {
                 let client = Arc::clone(&instance.client);
@@ -188,11 +192,13 @@ impl ChatClients {
         let tasks: Vec<_> = events_data
             .iter()
             .filter(|event_data| {
-                if let Some(conditions) = &event_for.conditions {
-                    filter_event_data_by_conditions(event_data, conditions)
-                } else {
-                    true
+                if let Some(expression) = &event_for.filter_expression {
+                    return evaluate_expression(expression, event_data).unwrap_or(false);
                 }
+                if let Some(conditions) = &event_for.conditions {
+                    return filter_event_data_by_conditions(event_data, conditions);
+                }
+                true
             })
             .map(|event_data| {
                 let client = Arc::clone(&instance.client);
