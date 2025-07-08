@@ -80,18 +80,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = CLI::parse();
 
     match &cli.command {
-        Commands::New { subcommand, path, reth, reth_args } => {
+        Commands::New { subcommand, path } => {
             let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;
             load_env_from_project_path(&resolved_path);
 
-            let project_type = match subcommand {
-                NewSubcommands::NoCode => ProjectType::NoCode,
-                NewSubcommands::Rust => ProjectType::Rust,
+            let (project_type, reth_args) = match subcommand {
+                NewSubcommands::NoCode { reth } => (ProjectType::NoCode, reth),
+                NewSubcommands::Rust { reth } => (ProjectType::Rust, reth),
             };
 
-            // get the reth config if it is enabled
-            let reth_config = if *reth {
-                match RethConfig::from_cli_args(reth_args.clone()) {
+            let reth_config = if reth_args.reth {
+                match RethConfig::from_cli_args(reth_args.reth_args.clone()) {
                     Ok(config) => Some(config),
                     Err(e) => {
                         print_error_message(&format!("Invalid reth arguments: {}", e));
