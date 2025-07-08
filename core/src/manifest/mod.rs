@@ -1,4 +1,5 @@
 pub mod chat;
+pub mod config;
 pub mod contract;
 pub mod core;
 pub mod global;

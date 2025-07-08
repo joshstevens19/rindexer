@@ -1,0 +1,78 @@
+# Configuration Parameters
+
+More advanced configuration options for fine-tuning memory usage, event throughput, and more. Most of the time you will
+not need to adjust these values.
+
+### Useful background
+
+It is useful to become familiar with how rindexer controls concurrency across events and networks.
+
+By nature of blockchain indexing, we must index events separately per network. However, we also try to
+optimize throughput via `eth_getLogs` requests **per event**.
+
+This means we ultimately run an indexing process per "network-event".
+
+:::info
+This "network-event" is where concurrency is controlled.
+:::
+
+## Buffer
+
+_Default: `4`_
+
+This parameter controls "buffer" of events we will hold in memory, per "network-event". This is extremely useful for
+limiting the upper memory-bound during large scale backfill operations for high-frequency events (like ERC20 transfers).
+
+What happens if the handler does not release events as fast as they can queried? Well,a backlog of events we've indexed
+would build up in memory and ultimately the process would OOM and be killed.
+
+We avoid that by maintaining a bounded channel (buffer) of events. This way when the handler is ready it will pull the
+next event, and it will trigger a new indexing fetch to fill the freed slot.
+
+The default should be enough to balance memory use with high-throughput, however can be tweaked to constrain memory by
+lowering the value. Or potentially increasing throughput by increasing the value.
+
+:::info
+This concept is known as "back-pressuring".
+:::
+
+```yaml [rindexer.yaml]
+name: rIndexer
+description: My native transfers rindexer project
+repository: https://github.com/joshstevens19/rindexer
+config:
+  buffer: 1 // [!code focus]
+```
+
+## Callback Concurrency
+
+_Default: `2`_
+
+:::warn
+When "index_event_in_order" is enabled for an event, it will override this setting with `1` to ensure FIFO ordering.
+:::
+
+This setting controls the "network-event" handler callback rate. This allows us to have `n` concurrent handlers being
+called per "network event". This may or may not be desirable based on the use-case and code present in the handler callback function.
+
+A case where this may not be desirable is if there is any kind of "per network-event global locking" which would mean that
+trying to run 2 batches in parallel would simply result in one batch holding the other up.
+
+Imagine setting this to some very high number, `999999`, representing unbounded concurrency. In this case
+you can imagine that there is essentially no "back-pressure". This would work in the case where events are simply being
+discarded, being maintained in memory, or some other hyper-efficient mechanism. But in reality, the most common case for
+indexing will be to persist the events to a database, and in these cases there are factors such as data structure locks,
+database connection pool limits, and resource constraints.
+
+This means we cannot reasonably benefit from increasing this number too high, and on the contrary, can suffer a decrease
+in throughput due to lock contention, and unwanted situations like connection pool exhaustion, deadlocks, and more.
+
+You may benefit from increasing this above `2` for very simple workloads, generally a value of `1` or `2` is optimal.
+
+```yaml [rindexer.yaml]
+name: rIndexer
+description: My native transfers rindexer project
+repository: https://github.com/joshstevens19/rindexer
+config:
+  callback_concurrency: 2 // [!code focus]
+```

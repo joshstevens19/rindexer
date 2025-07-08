@@ -3,6 +3,7 @@ use alloy::primitives::{B256, U64};
 use futures::future::join_all;
 use futures::StreamExt;
 use std::{collections::HashMap, sync::Arc, time::Duration};
+use tokio::sync::Semaphore;
 use tokio::{
     sync::{Mutex, MutexGuard},
     task::{JoinError, JoinHandle},
@@ -58,11 +59,24 @@ async fn process_event_logs(
     force_no_live_indexing: bool,
     block_until_indexed: bool,
 ) -> Result<(), Box<ProviderError>> {
+    // The concurrency with which we can call the trigger. If the indexer is running in-order
+    // we can only call one at a time, otherwise we can call multiple in parallel based on what is
+    // best for the application.
+    //
+    // We default to `2`, but the user will ideally override this based on the logic in the handler.
+    let callback_concurrency = if config.index_event_in_order() {
+        1usize
+    } else {
+        config.config().callback_concurrency.unwrap_or(2)
+    };
+
+    let callback_permits = Arc::new(Semaphore::new(callback_concurrency));
+
     let mut logs_stream = fetch_logs_stream(Arc::clone(&config), force_no_live_indexing);
     let mut tasks = Vec::new();
 
     while let Some(result) = logs_stream.next().await {
-        let task = handle_logs_result(Arc::clone(&config), result)
+        let task = handle_logs_result(Arc::clone(&config), callback_permits.clone(), result)
             .await
             .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
 
@@ -260,6 +274,7 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
     // this is used for less busy chains to make sure they know rindexer is still alive
     let log_no_new_block_interval = Duration::from_secs(300);
     let target_iteration_duration = Duration::from_millis(200);
+    let callback_permits = Arc::new(Semaphore::new(1));
 
     loop {
         let iteration_start = Instant::now();
@@ -418,8 +433,12 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                                     let fetched_logs =
                                         Ok(FetchLogsResult { logs, from_block, to_block });
 
-                                    let result =
-                                        handle_logs_result(Arc::clone(config), fetched_logs).await;
+                                    let result = handle_logs_result(
+                                        Arc::clone(config),
+                                        callback_permits.clone(),
+                                        fetched_logs,
+                                    )
+                                    .await;
 
                                     match result {
                                         Ok(task) => {
@@ -538,6 +557,7 @@ async fn trigger_event(
 
 async fn handle_logs_result(
     config: Arc<EventProcessingConfig>,
+    callback_permits: Arc<Semaphore>,
     result: Result<FetchLogsResult, Box<dyn std::error::Error + Send>>,
 ) -> Result<JoinHandle<()>, Box<dyn std::error::Error + Send>> {
     match result {
@@ -557,16 +577,16 @@ async fn handle_logs_result(
                 })
                 .collect::<Vec<_>>();
 
-            // Important that we call this for every event even if there are no logs.
-            // This is because we need to sync the last seen block
-            if config.index_event_in_order() {
-                trigger_event(config, fn_data, result.to_block).await;
-                Ok(tokio::spawn(async {}))
-            } else {
+            if let Ok(permit) = callback_permits.clone().acquire_owned().await {
                 let task = tokio::spawn(async move {
                     trigger_event(config, fn_data, result.to_block).await;
+                    drop(permit)
                 });
+
                 Ok(task)
+            } else {
+                trigger_event(config, fn_data, result.to_block).await;
+                Ok(tokio::spawn(async {}))
             }
         }
         Err(e) => {

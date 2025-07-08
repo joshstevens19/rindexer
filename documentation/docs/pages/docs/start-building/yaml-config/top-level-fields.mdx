@@ -73,3 +73,18 @@ description: My first rindexer project
 repository: https://github.com/joshstevens19/rindexer
 project_type: rust // [!code focus]
 ```
+
+## config
+
+More advanced opt-in configuration parameters.
+
+### no-code
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+config:
+  buffer: 2 // [!code focus]
+  callback_concurrency: 4 // [!code focus]
+```

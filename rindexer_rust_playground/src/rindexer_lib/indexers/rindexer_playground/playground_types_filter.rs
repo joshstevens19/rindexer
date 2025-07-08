@@ -158,6 +158,7 @@ async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegis
         no_extensions(),
     )
     .await;
+
     PlaygroundTypesFilterEventType::Swap(handler).register(manifest_path, registry).await;
 }
 pub async fn playground_types_filter_handlers(
