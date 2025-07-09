@@ -113,7 +113,7 @@ pub fn handle_new_command(
 
         // prompt for datadir only if reth_cfg does not have a datadir
         let datadir: Option<String> =
-            if reth_cfg.cli_args.iter().find(|arg| arg.starts_with("--datadir")).is_none() {
+            if !reth_cfg.cli_args.iter().any(|arg| arg.starts_with("--datadir")) {
                 prompt_for_optional_input("Data Directory (e.g. ~/.reth/)", None)
             } else {
                 None
@@ -121,7 +121,7 @@ pub fn handle_new_command(
 
         // prompt for chain only if reth_cfg does not have a chain
         let chain: Option<String> =
-            if reth_cfg.cli_args.iter().find(|arg| arg.starts_with("--chain")).is_none() {
+            if !reth_cfg.cli_args.iter().any(|arg| arg.starts_with("--chain")) {
                 prompt_for_optional_input("Chain (e.g. mainnet, sepolia, holesky)", None)
             } else {
                 None
@@ -129,7 +129,7 @@ pub fn handle_new_command(
 
         // prompt for enable_http only if reth_cfg does not have a http
         let enable_http: Option<String> =
-            if reth_cfg.cli_args.iter().find(|arg| arg.starts_with("--http")).is_none() {
+            if !reth_cfg.cli_args.iter().any(|arg| arg.starts_with("--http")) {
                 prompt_for_optional_input("Enable HTTP RPC?", None)
             } else {
                 None
