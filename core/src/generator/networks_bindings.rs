@@ -12,12 +12,33 @@ pub fn network_provider_fn_name(network: &Network) -> String {
     format!("get_{fn_name}", fn_name = network_provider_name(network).to_lowercase())
 }
 
+fn generate_reth_init_fn(network: &Network) -> Code {
+    if network.is_reth_enabled() {
+        let reth_cli_args = network.reth.as_ref().unwrap().to_cli_args();
+        Code::new(format!(
+            r#"
+            let cli = reth::cli::Cli::try_parse_args_from({reth_cli_args:?}).unwrap();
+            let chain_state_notification = start_reth_node_with_exex(cli).await.unwrap();
+            let chain_state_notification = Some(chain_state_notification);
+            "#
+        ))
+    } else {
+        Code::new(
+            r#"
+            let chain_state_notification = None;
+            "#
+            .to_string(),
+        )
+    }
+}
+
 fn generate_network_lazy_provider_code(network: &Network) -> Code {
     Code::new(format!(
         r#"
         {network_name}
             .get_or_init(|| async {{
-                {client_fn}(&public_read_env_value("{network_url}").unwrap_or("{network_url}".to_string()), {chain_id}, {compute_units_per_second}, {max_block_range}, {block_poll_frq} {placeholder_headers}, {get_logs_settings})
+                {reth_init_fn}
+                {client_fn}(&public_read_env_value("{network_url}").unwrap_or("{network_url}".to_string()), {chain_id}, {compute_units_per_second}, {max_block_range}, {block_poll_frq} {placeholder_headers}, {get_logs_settings}, {chain_state_notification})
                 .await
                 .expect("Error creating provider")
             }})
@@ -25,7 +46,15 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
             .clone()
         "#,
         network_name = network_provider_name(network),
-        network_url = network.rpc,
+        network_url = if network.is_reth_enabled() {
+            if let Some(ipc_path) = network.get_reth_ipc_path() {
+                ipc_path
+            } else {
+                network.rpc.clone()
+            }
+        } else {
+            network.rpc.clone()
+        },
         chain_id = network.chain_id,
         compute_units_per_second =
             if let Some(compute_units_per_second) = network.compute_units_per_second {
@@ -52,6 +81,8 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
             if network.rpc.contains("shadow") { "create_shadow_client" } else { "create_client" },
         placeholder_headers =
             if network.rpc.contains("shadow") { "" } else { ", HeaderMap::new()" },
+        chain_state_notification = "chain_state_notification",
+        reth_init_fn = generate_reth_init_fn(network),
     ))
 }
 
@@ -112,10 +143,13 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
         lazy_static,
         manifest::network::{AddressFiltering, BlockPollFrequency},
         provider::{RindexerProvider, create_client, JsonRpcCachedProvider, RetryClientError},
+        notifications::ChainStateNotification,
+        reth::node::start_reth_node_with_exex,
         public_read_env_value
     };
     use std::sync::Arc;
     use tokio::sync::OnceCell;
+    use tokio::sync::broadcast::Sender;
 
     #[allow(dead_code)]
     async fn create_shadow_client(
@@ -125,13 +159,14 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
         block_poll_frequency: Option<BlockPollFrequency>,
         max_block_range: Option<U64>,
         address_filtering: Option<AddressFiltering>,
+        chain_state_notification: Option<Sender<ChainStateNotification>>,
     ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
         let mut header = HeaderMap::new();
         header.insert(
             "X-SHADOW-API-KEY",
             public_read_env_value("RINDEXER_PHANTOM_API_KEY").unwrap().parse().unwrap(),
         );
-        create_client(rpc_url, chain_id, compute_units_per_second, max_block_range, block_poll_frequency, header, address_filtering).await
+        create_client(rpc_url, chain_id, compute_units_per_second, max_block_range, block_poll_frequency, header, address_filtering, chain_state_notification).await
     }
         "#
         .to_string(),

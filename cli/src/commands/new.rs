@@ -13,7 +13,7 @@ use rindexer::{
         contract::{Contract, ContractDetails},
         core::{Manifest, ProjectType},
         native_transfer::NativeTransfers,
-        network::Network,
+        network::{Network, RethConfig},
         storage::{CsvDetails, PostgresDetails, Storage},
         yaml::{write_manifest, YAML_CONFIG_NAME},
     },
@@ -65,8 +65,14 @@ fn write_gitignore(path: &Path) -> Result<(), WriteFileError> {
 pub fn handle_new_command(
     project_path: PathBuf,
     project_type: ProjectType,
+    reth_config: Option<RethConfig>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    print_success_message("Initializing new rindexer project...");
+    let init_message = if reth_config.is_some() {
+        "Initializing new rindexer project with Reth support..."
+    } else {
+        "Initializing new rindexer project..."
+    };
+    print_success_message(init_message);
 
     let project_name = prompt_for_input(
         "Project Name",
@@ -100,6 +106,56 @@ pub fn handle_new_command(
     let postgres_enabled = storage_choice == "postgres" || storage_choice == "both";
     let csv_enabled = storage_choice == "csv" || storage_choice == "both";
 
+    // Handle Reth configuration if enabled
+    let final_reth_config = if let Some(mut reth_cfg) = reth_config {
+        let mut new_args = vec![];
+        print_success_message("\nReth Configuration:");
+
+        // prompt for datadir only if reth_cfg does not have a datadir
+        let datadir: Option<String> =
+            if !reth_cfg.cli_args.iter().any(|arg| arg.starts_with("--datadir")) {
+                prompt_for_optional_input("Data Directory (e.g. ~/.reth/)", None)
+            } else {
+                None
+            };
+
+        // prompt for chain only if reth_cfg does not have a chain
+        let chain: Option<String> =
+            if !reth_cfg.cli_args.iter().any(|arg| arg.starts_with("--chain")) {
+                prompt_for_optional_input("Chain (e.g. mainnet, sepolia, holesky)", None)
+            } else {
+                None
+            };
+
+        // prompt for enable_http only if reth_cfg does not have a http
+        let enable_http: Option<String> =
+            if !reth_cfg.cli_args.iter().any(|arg| arg.starts_with("--http")) {
+                prompt_for_optional_input("Enable HTTP RPC?", None)
+            } else {
+                None
+            };
+
+        if datadir.is_some() {
+            new_args.push(format!("--datadir {}", datadir.unwrap()));
+        }
+
+        if chain.is_some() {
+            new_args.push(format!("--chain {}", chain.unwrap()));
+        }
+
+        if enable_http.is_some() && enable_http.unwrap() == "yes" {
+            new_args.push("--http".to_string());
+        }
+
+        new_args.extend(reth_cfg.cli_args);
+
+        reth_cfg.cli_args = new_args;
+
+        Some(reth_cfg)
+    } else {
+        None
+    };
+
     let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
     let rindexer_abis_folder = project_path.join("abis");
 
@@ -121,10 +177,12 @@ pub fn handle_new_command(
     })?;
 
     // for later to avoid cloning
+    let reth_mode_text = if final_reth_config.is_some() { " with Reth support" } else { "" };
+
     let success_message = if project_type == ProjectType::Rust {
-        format!("rindexer rust project created with a rETH transfer events YAML template.\n cd ./{} \n- use rindexer codegen commands to regenerate the code\n- run `rindexer start all` to start rindexer\n- run `rindexer add contract` to add new contracts to your project", &project_name)
+        format!("rindexer rust project created{} with a rETH transfer events YAML template.\n cd ./{} \n- use rindexer codegen commands to regenerate the code\n- run `rindexer start all` to start rindexer\n- run `rindexer add contract` to add new contracts to your project", reth_mode_text, &project_name)
     } else {
-        format!("rindexer no-code project created with a rETH transfer events YAML template.\n cd ./{} \n- run `rindexer start all` to start rindexer\n- run `rindexer add contract` to add new contracts to your project", &project_name)
+        format!("rindexer no-code project created{} with a rETH transfer events YAML template.\n cd ./{} \n- run `rindexer start all` to start rindexer\n- run `rindexer add contract` to add new contracts to your project", reth_mode_text, &project_name)
     };
 
     // for later to avoid cloning
@@ -144,6 +202,7 @@ pub fn handle_new_command(
             max_block_range: None,
             disable_logs_bloom_checks: None,
             get_logs_settings: None,
+            reth: final_reth_config,
         }],
         contracts: vec![Contract {
             name: "RocketPoolETH".to_string(),

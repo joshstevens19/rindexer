@@ -477,9 +477,9 @@ pub async fn start_indexing_contract_events(
                     dependencies,
                 );
             } else {
-                let process_event =
+                let process_event_handle =
                     tokio::spawn(process_event(event_processing_config.into(), false));
-                non_blocking_process_events.push(process_event);
+                non_blocking_process_events.push(process_event_handle);
             }
         }
     }
@@ -508,7 +508,7 @@ pub async fn start_indexing(
 
     // Start the sub-indexers concurrently to ensure fast startup times
     let (trace_indexer_handles, contract_events_indexer) = join!(
-        start_indexing_traces(manifest, project_path, database.clone(), trace_registry.clone()),
+        start_indexing_traces(manifest, project_path, database.clone(), trace_registry.clone(),),
         start_indexing_contract_events(
             manifest,
             project_path,

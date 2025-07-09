@@ -157,7 +157,6 @@ async fn process_contract_events_with_dependencies(
             let event_processing_config = Arc::clone(&events_processing_config);
             let dependency = dependency.clone();
             let live_indexing_events = Arc::clone(&live_indexing_events);
-
             let task = tokio::spawn(async move {
                 let event_processing_config = event_processing_config
                     .iter()

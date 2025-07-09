@@ -1,0 +1,50 @@
+# Create New Project
+
+rindexer provides two modes for creating new projects, each optimized for different use cases and infrastructure setups.
+
+## Choose Your Mode
+
+### Standard Mode
+
+The default way to create and run rindexer projects. This mode connects to blockchain nodes via RPC endpoints and is suitable for most use cases.
+
+**Best for:**
+- Getting started quickly
+- Using hosted RPC providers
+- Standard indexing requirements
+- Development and testing
+
+[Create a Standard Project →](/docs/start-building/create-new-project/standard)
+
+### Reth Mode
+
+An advanced mode that integrates directly with Reth nodes using Execution Extensions (ExEx). This provides superior performance and reorg handling(coming soon) by connecting directly to your Reth archive node.
+
+**Best for:**
+- High-performance production deployments
+- Projects requiring minimal latency
+- Advanced reorg handling(coming soon)
+- Running your own infrastructure
+
+**Requirements:**
+- Running Reth archive node
+- Advanced knowledge of Ethereum infrastructure
+
+[Create a Reth Project →](/docs/start-building/create-new-project/reth-mode)
+
+## Quick Comparison
+
+| Feature | Standard Mode | Reth Mode |
+|---------|--------------|-----------|
+| Setup Complexity | Simple | Advanced |
+| Infrastructure | Any RPC provider | Reth archive node required |
+| Performance | Good | Excellent |
+| Reorg Handling | Standard | Native ExEx support |
+| Latency | Network dependent | Minimal |
+| Best For | Most projects | High-performance production |
+
+## Not Sure Which to Choose?
+
+If you're just getting started with rindexer or don't have specific performance requirements, we recommend starting with **Standard Mode**. You can always migrate to Reth Mode later if your project requirements change.
+
+For production deployments with high-performance requirements or if you're already running Reth infrastructure, **Reth Mode** provides the best indexing experience.
