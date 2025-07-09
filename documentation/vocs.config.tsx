@@ -68,6 +68,16 @@ export default defineConfig({
         {
           text: "Create New Project",
           link: "/docs/start-building/create-new-project",
+          items: [
+            {
+              text: "Standard Mode",
+              link: "/docs/start-building/create-new-project/standard",
+            },
+            {
+              text: "Reth Mode",
+              link: "/docs/start-building/create-new-project/reth-mode",
+            },
+          ],
         },
         {
           text: "Live indexing vs Historic indexing",
