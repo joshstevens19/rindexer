@@ -197,7 +197,7 @@ Advanced configuration options that allow fine-grained control of event fetching
 Specifies how events that require address filtering (one that use either address filter or factory filter) are fetched from the network.
 
 Can be one of:
-- with `max_address_per_get_logs_request` configuration _(default behaviour)_ - events are fetched with addresses filter, log fetching happens in batches that consist of addresses chunks up to the specified value. Useful when events are often happening, but there is no huge number of addresses that are being watched for. The default value is 5000 addresses, which fits most of the RPC provider limits.
+- with `max_address_per_get_logs_request` configuration _(default behaviour)_ - events are fetched with addresses filter, log fetching happens in batches that consist of addresses chunks up to the specified value. Useful when events are often happening, but there is no huge number of addresses that are being watched for. The default value is 1000 addresses, which fits most of the RPC provider limits.
 - `in-memory` - all matching events are fetched and then filtered in memory by addresses. Useful when events are not happening often, but there are a huge number of addresses that are being watched for.
 
 :::code-group
