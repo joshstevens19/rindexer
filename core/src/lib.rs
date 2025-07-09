@@ -2,6 +2,7 @@
 pub mod generator;
 pub mod indexer;
 pub mod manifest;
+pub mod reth;
 
 mod system_state;
 pub use system_state::{initiate_shutdown, is_running};
@@ -31,6 +32,8 @@ mod abi;
 pub use abi::ABIItem;
 mod chat;
 pub mod event;
+pub mod notifications;
+pub use notifications::ChainStateNotification;
 pub mod phantom;
 pub mod provider;
 mod start;

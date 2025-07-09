@@ -6,10 +6,13 @@ use alloy::{primitives::U64, transports::http::reqwest::header::HeaderMap};
 use rindexer::{
     lazy_static,
     manifest::network::{AddressFiltering, BlockPollFrequency},
+    notifications::ChainStateNotification,
     provider::{create_client, JsonRpcCachedProvider, RetryClientError, RindexerProvider},
     public_read_env_value,
+    reth::node::start_reth_node_with_exex,
 };
 use std::sync::Arc;
+use tokio::sync::broadcast::Sender;
 use tokio::sync::OnceCell;
 
 #[allow(dead_code)]
@@ -20,6 +23,7 @@ async fn create_shadow_client(
     block_poll_frequency: Option<BlockPollFrequency>,
     max_block_range: Option<U64>,
     address_filtering: Option<AddressFiltering>,
+    chain_state_notification: Option<Sender<ChainStateNotification>>,
 ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
     let mut header = HeaderMap::new();
     header.insert(
@@ -34,6 +38,7 @@ async fn create_shadow_client(
         block_poll_frequency,
         header,
         address_filtering,
+        chain_state_notification,
     )
     .await
 }
@@ -45,6 +50,8 @@ static BASE_PROVIDER: OnceCell<Arc<JsonRpcCachedProvider>> = OnceCell::const_new
 pub async fn get_ethereum_provider_cache() -> Arc<JsonRpcCachedProvider> {
     ETHEREUM_PROVIDER
         .get_or_init(|| async {
+            let chain_state_notification = None;
+
             create_client(
                 &public_read_env_value("https://mainnet.gateway.tenderly.co")
                     .unwrap_or("https://mainnet.gateway.tenderly.co".to_string()),
@@ -54,6 +61,7 @@ pub async fn get_ethereum_provider_cache() -> Arc<JsonRpcCachedProvider> {
                 Some(BlockPollFrequency::Division { divisor: 4 }),
                 HeaderMap::new(),
                 None,
+                chain_state_notification,
             )
             .await
             .expect("Error creating provider")
@@ -69,6 +77,8 @@ pub async fn get_ethereum_provider() -> Arc<RindexerProvider> {
 pub async fn get_base_provider_cache() -> Arc<JsonRpcCachedProvider> {
     BASE_PROVIDER
         .get_or_init(|| async {
+            let chain_state_notification = None;
+
             create_client(
                 &public_read_env_value("https://mainnet.base.org")
                     .unwrap_or("https://mainnet.base.org".to_string()),
@@ -78,6 +88,7 @@ pub async fn get_base_provider_cache() -> Arc<JsonRpcCachedProvider> {
                 None,
                 HeaderMap::new(),
                 None,
+                chain_state_notification,
             )
             .await
             .expect("Error creating provider")

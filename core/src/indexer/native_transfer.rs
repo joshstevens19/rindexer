@@ -17,6 +17,7 @@ use crate::{
     indexer::{
         last_synced::evm_trace_update_progress_and_last_synced_task,
         process::ProcessEventError,
+        reorg::handle_chain_notification,
         task_tracker::{indexing_event_processed, indexing_event_processing},
     },
     manifest::native_transfer::TraceProcessingMethod,
@@ -106,7 +107,22 @@ pub async fn native_transfer_block_fetch(
 ) -> Result<(), ProcessEventError> {
     let mut last_seen_block = start_block;
 
+    let chain_state_notification = publisher.get_chain_state_notification();
+
+    // Spawn a separate task to handle notifications
+    if let Some(notifications) = chain_state_notification {
+        // Subscribe to notifications for this network
+        let network_clone = network.clone();
+        let mut notifications_clone = notifications.subscribe();
+        tokio::spawn(async move {
+            while let Ok(notification) = notifications_clone.recv().await {
+                handle_chain_notification(notification, "NativeTransfer", &network_clone);
+            }
+        });
+    }
+
     loop {
+        // Regular polling with delay
         sleep(Duration::from_millis(200)).await;
 
         let latest_block = publisher.get_latest_block().await;

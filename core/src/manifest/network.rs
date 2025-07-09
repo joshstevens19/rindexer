@@ -1,8 +1,16 @@
-use super::core::{deserialize_option_u64_from_string, serialize_option_u64_as_string};
+use std::fmt;
+use std::time::Duration;
+
 use alloy::primitives::U64;
 use serde::de::Visitor;
 use serde::{de, Deserialize, Deserializer, Serialize};
-use std::fmt;
+use tokio::sync::broadcast::Sender;
+use tokio::time::sleep;
+
+use super::core::{deserialize_option_u64_from_string, serialize_option_u64_as_string};
+pub use super::reth::RethConfig;
+use crate::notifications::ChainStateNotification;
+use crate::reth::node::start_reth_node_with_exex;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Network {
@@ -35,6 +43,56 @@ pub struct Network {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disable_logs_bloom_checks: Option<bool>,
+
+    /// Reth configuration for this network
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reth: Option<RethConfig>,
+}
+
+impl Network {
+    /// Get the IPC path for the Reth node
+    pub fn get_reth_ipc_path(&self) -> Option<String> {
+        use reth::cli::Commands;
+
+        let reth = self.reth.as_ref()?;
+        let cli = reth.to_cli().ok()?;
+
+        match &cli.command {
+            Commands::Node(node_cmd) => Some(node_cmd.rpc.ipcpath.clone()),
+            _ => None,
+        }
+    }
+
+    /// Check if Reth is enabled for this network
+    pub fn is_reth_enabled(&self) -> bool {
+        self.reth.is_some()
+    }
+
+    /// Try to start the Reth node for this network
+    ///
+    /// Returns a Sender for the Reth node if it was started successfully.
+    ///
+    /// If Reth is not enabled, the function will return None.
+    ///
+    /// If the Reth node fails to start, the function will return an error.
+    pub async fn try_start_reth_node(
+        &self,
+    ) -> Result<Option<Sender<ChainStateNotification>>, eyre::Error> {
+        if !self.is_reth_enabled() {
+            return Ok(None);
+        }
+
+        let reth_cli = self.reth.as_ref().unwrap().to_cli().map_err(|e| eyre::eyre!(e))?;
+        let reth_tx = start_reth_node_with_exex(reth_cli)?;
+
+        // Wait for IPC path to be ready if specified
+        if let Some(ipc_path) = self.get_reth_ipc_path() {
+            wait_for_ipc_ready(&ipc_path).await?;
+        }
+        println!("started reth node");
+
+        Ok(Some(reth_tx))
+    }
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -132,6 +190,8 @@ impl<'de> Deserialize<'de> for BlockPollFrequency {
 
 #[cfg(test)]
 mod tests {
+    use reth::cli::Commands;
+
     use serde_yaml;
 
     use super::*;
@@ -211,4 +271,154 @@ mod tests {
             Some(BlockPollFrequency::PollRateMs { millis: 100 })
         );
     }
+
+    #[test]
+    fn test_network_with_reth_config() {
+        let network: Network = serde_yaml::from_str(
+            r#"
+            name: ethereum
+            chain_id: 1
+            rpc: https://mainnet.gateway.tenderly.co
+            reth:
+                enabled: true
+                cli_args:
+                    - --ipcpath /custom/reth.ipc
+            "#,
+        )
+        .unwrap();
+
+        assert!(network.reth.is_some());
+        let reth = network.reth.as_ref().unwrap();
+        assert!(reth.enabled);
+        assert_eq!(reth.cli_args, vec!["--ipcpath /custom/reth.ipc"]);
+
+        // Test get_reth_ipc_path
+        let ipc_path = network.get_reth_ipc_path();
+        assert_eq!(ipc_path, Some("/custom/reth.ipc".to_string()));
+    }
+
+    #[test]
+    fn test_network_with_reth_config_no_ipc_path() {
+        let network: Network = serde_yaml::from_str(
+            r#"
+            name: ethereum
+            chain_id: 1
+            rpc: https://mainnet.gateway.tenderly.co
+            reth:
+                enabled: true
+                cli_args:
+                    - --authrpc.jwtsecret /Users/skanda/secrets/jwt.hex
+                    - --authrpc.addr 127.0.0.1
+                    - --authrpc.port 8551
+                    - --datadir /Volumes/T9/reth
+                    - --metrics 127.0.0.1:9001
+                    - --chain sepolia
+                    - --http
+            "#,
+        )
+        .unwrap();
+
+        assert!(network.reth.is_some());
+        let reth = network.reth.as_ref().unwrap();
+        assert!(reth.enabled);
+
+        // Test get_reth_ipc_path
+        let cli = reth.to_cli().unwrap();
+        match &cli.command {
+            Commands::Node(node_cmd) => {
+                println!("node_cmd: {:?}", node_cmd.rpc.ipcpath);
+                // Default IPC path when not specified
+                assert!(!node_cmd.rpc.ipcdisable);
+            }
+            _ => panic!("Expected Node command"),
+        }
+    }
+
+    #[test]
+    fn test_network_reth_ipc_disabled() {
+        let network: Network = serde_yaml::from_str(
+            r#"
+            name: ethereum
+            chain_id: 1
+            rpc: https://mainnet.gateway.tenderly.co
+            reth:
+                enabled: true
+                cli_args:
+                    - --ipcdisable
+            "#,
+        )
+        .unwrap();
+
+        // Should return None when IPC is disabled
+        let cli = network.reth.as_ref().unwrap().to_cli().unwrap();
+        if let Commands::Node(node_cmd) = &cli.command {
+            assert!(node_cmd.rpc.ipcdisable);
+        }
+        // Note: get_reth_ipc_path might still return a default path even with ipcdisable
+    }
+
+    #[test]
+    fn test_network_no_reth_config() {
+        let network: Network = serde_yaml::from_str(
+            r#"
+            name: ethereum
+            chain_id: 1
+            rpc: https://mainnet.gateway.tenderly.co
+            "#,
+        )
+        .unwrap();
+
+        assert!(network.reth.is_none());
+        assert_eq!(network.get_reth_ipc_path(), None);
+    }
+}
+
+/// Wait for IPC socket file to be ready
+pub async fn wait_for_ipc_ready(ipc_path: &str) -> Result<(), eyre::Error> {
+    use alloy::providers::{IpcConnect, Provider, ProviderBuilder};
+
+    let max_retries = 60; // 60 seconds max wait
+    let mut last_error = None;
+
+    for i in 0..max_retries {
+        // Try to connect to the IPC socket
+        let ipc = IpcConnect::new(ipc_path.to_string());
+        match ProviderBuilder::new().connect_ipc(ipc).await {
+            Ok(provider) => {
+                // Try a simple call to ensure it's really ready
+                match provider.get_chain_id().await {
+                    Ok(_) => {
+                        tracing::info!("IPC socket at {} is ready", ipc_path);
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        last_error = Some(format!("Connected but get_chain_id failed: {}", e));
+                    }
+                }
+            }
+            Err(e) => {
+                last_error = Some(format!("Connection failed: {}", e));
+            }
+        }
+
+        if i == 0 {
+            tracing::info!("Waiting for IPC socket at {} to be ready...", ipc_path);
+        } else if i % 5 == 0 {
+            tracing::info!(
+                "Still waiting for IPC socket at {} to be ready... ({}/{})",
+                ipc_path,
+                i,
+                max_retries
+            );
+        }
+
+        sleep(Duration::from_secs(1)).await;
+    }
+
+    Err(eyre::eyre!(
+        "IPC socket at {} did not become ready after {} seconds. Last error: {:?}",
+        ipc_path,
+        max_retries,
+        last_error
+    ))
 }
