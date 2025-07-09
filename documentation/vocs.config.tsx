@@ -82,6 +82,10 @@ export default defineConfig({
               link: "/docs/start-building/yaml-config/top-level-fields",
             },
             {
+              text: "Config",
+              link: "/docs/start-building/yaml-config/config",
+            },
+            {
               text: "Networks",
               link: "/docs/start-building/yaml-config/networks",
             },
