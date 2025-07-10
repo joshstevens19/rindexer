@@ -1,5 +1,7 @@
-use std::{collections::VecDeque, ops::RangeInclusive, sync::Arc, time::Duration};
+use std::{cmp, collections::VecDeque, ops::RangeInclusive, sync::Arc, time::Duration};
 
+use alloy::consensus::Transaction;
+use alloy::transports::{RpcError, TransportErrorKind};
 use alloy::{
     primitives::{Address, Bytes, U256, U64},
     rpc::types::trace::parity::{Action, LocalizedTransactionTrace},
@@ -7,8 +9,10 @@ use alloy::{
 use futures::future::try_join_all;
 use serde::Serialize;
 use tokio::{sync::mpsc, time::sleep};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
+use crate::is_running;
+use crate::provider::RECOMMENDED_RPC_CHUNK_SIZE;
 use crate::{
     event::{
         callback_registry::{TraceResult, TxInformation},
@@ -32,7 +36,7 @@ pub const NATIVE_TRANSFER_CONTRACT_NAME: &str = "EvmTraces";
 /// with the streams and sinks to which rindexer writes.
 pub const EVENT_NAME: &str = "NativeTransfer";
 
-/// Invent an ABI to mimic an ERC0 Transfer.
+/// Invent an ABI to mimic an ERC20 Transfer.
 ///
 /// This will allow indexer consumers, which will typically be configured to consume contract events
 /// to simply ingest an ERC20 compatible event for the native tokens.
@@ -63,7 +67,7 @@ pub const NATIVE_TRANSFER_ABI: &str = r#"[{
 
 /// Refer to [`NATIVE_TRANSFER_ABI`] as an imaginary associated ABI for this Native Transfer
 /// "event" struct.
-#[derive(Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct NativeTransfer {
     pub from: Address,
     pub to: Address,
@@ -80,7 +84,10 @@ async fn push_range(block_tx: &mpsc::Sender<U64>, last: U64, latest: U64) {
     while let Some(block) = range.pop_front() {
         if let Err(e) = block_tx.send(U64::from(block)).await {
             if block_tx.is_closed() {
-                error!("Failed to send block via channel. Channel closed: {}", e.to_string());
+                // Log error if not shutting down
+                if is_running() {
+                    error!("Failed to send block via channel: {}", e.to_string());
+                }
                 break;
             }
 
@@ -122,8 +129,10 @@ pub async fn native_transfer_block_fetch(
     }
 
     loop {
-        // Regular polling with delay
-        sleep(Duration::from_millis(200)).await;
+        if !is_running() {
+            info!("Exiting native transfer indexing block processor!");
+            break Ok(());
+        }
 
         let latest_block = publisher.get_latest_block().await;
 
@@ -153,38 +162,198 @@ pub async fn native_transfer_block_fetch(
             }
             Ok(None) => {}
             Err(e) => {
-                error!("Error fetching '{}' block traces: {}", network, e.to_string());
+                error!("Error fetching '{}' blocks: {}", network, e.to_string());
                 sleep(Duration::from_secs(1)).await;
             }
         }
     }
 }
 
-async fn provider_call(
+pub async fn native_transfer_block_processor(
+    network_name: String,
+    provider: Arc<JsonRpcCachedProvider>,
+    config: Arc<TraceProcessingConfig>,
+    mut block_rx: mpsc::Receiver<U64>,
+) -> Result<(), ProcessEventError> {
+    let is_rcp_batchable = config.method == TraceProcessingMethod::EthGetBlockByNumber;
+
+    // Set the concurrency used to make requests based on the method.
+    //
+    // Currently, `eth_getBlockByNumber` is a single JSON-RPC batch, and others are individual
+    // network calls so can be treated differently.
+    let (initial_concurrent_requests, limit_concurrent_requests) = if is_rcp_batchable {
+        (RECOMMENDED_RPC_CHUNK_SIZE / 2, RECOMMENDED_RPC_CHUNK_SIZE * 2)
+    } else {
+        (5, 100)
+    };
+
+    let mut concurrent_requests: usize = initial_concurrent_requests;
+    let mut buffer: Vec<U64> = Vec::with_capacity(limit_concurrent_requests);
+
+    loop {
+        if !is_running() {
+            info!("Exiting native transfer indexing block processor!");
+            break Ok(());
+        }
+
+        // Fetch more only if buffer was processed ok last time and cleared.
+        let recv = if buffer.is_empty() {
+            block_rx.recv_many(&mut buffer, concurrent_requests).await
+        } else {
+            buffer.len()
+        };
+
+        if recv == 0 {
+            sleep(Duration::from_secs(1)).await;
+            continue;
+        }
+
+        let processed_block = native_transfer_block_consumer(
+            provider.clone(),
+            &buffer[..recv],
+            &network_name,
+            &config,
+        )
+        .await;
+
+        // If this has an error, we need to not and reconsume the blocks. We don't have
+        // to worry about double-publish because the failure point is on the provider
+        // call itself, which is before publish.
+        if let Err(e) = processed_block {
+            // On error, drop the block query range. We want a slow increase in concurrency and a
+            // relatively aggressive backoff.
+            concurrent_requests = cmp::max(1, (concurrent_requests as f64 * 0.8) as usize);
+
+            let is_rate_limit_error = matches!(&e, ProcessEventError::ProviderCallError(
+                ProviderError::RequestFailed(
+                    RpcError::Transport(
+                        TransportErrorKind::HttpError(http_err)
+                    )
+                )) if http_err.status == 429
+            );
+
+            if is_rate_limit_error {
+                warn!(
+                    "Rate-limited 429 '{}' block requests. Retrying in 2s: {}",
+                    network_name,
+                    e.to_string(),
+                );
+                sleep(Duration::from_secs(2)).await;
+                continue;
+            } else {
+                warn!(
+                    "Could not process '{}' block requests for {}..{}, Retrying in 500ms: {}",
+                    network_name,
+                    &buffer.first().map(|n| n.as_limbs()[0]).unwrap_or_else(|| 0),
+                    &buffer.last().map(|n| n.as_limbs()[0]).unwrap_or_else(|| 0),
+                    e.to_string(),
+                );
+            }
+
+            sleep(Duration::from_secs(1)).await;
+            continue;
+        } else {
+            buffer.clear();
+
+            // A random chance of increasing the request count helps us not overload
+            // the ratelimit too rapidly across multi-network trace indexing and have a
+            // slow ramp-up time (if rpc batching isn't available)
+            if rand::random_bool(0.1) {
+                concurrent_requests =
+                    ((concurrent_requests * 20) / 10).min(limit_concurrent_requests);
+            }
+
+            sleep(Duration::from_millis(50)).await;
+        };
+    }
+}
+
+async fn provider_trace_call(
     provider: Arc<JsonRpcCachedProvider>,
     config: &TraceProcessingConfig,
     block: U64,
 ) -> Result<Vec<LocalizedTransactionTrace>, ProviderError> {
-    if config.method == TraceProcessingMethod::TraceBlock {
-        provider.trace_block(block).await
-    } else {
-        provider.debug_trace_block_by_number(block).await
+    match config.method {
+        TraceProcessingMethod::TraceBlock => provider.trace_block(block).await,
+        TraceProcessingMethod::DebugTraceBlockByNumber => {
+            provider.debug_trace_block_by_number(block).await
+        }
+        _ => unimplemented!("Unsupported trace method"),
     }
 }
 
+/// Index native transfers via batched rpc block call method
 pub async fn native_transfer_block_consumer(
+    provider: Arc<JsonRpcCachedProvider>,
+    block_numbers: &[U64],
+    network_name: &str,
+    config: &Arc<TraceProcessingConfig>,
+) -> Result<(), ProcessEventError> {
+    let blocks = provider.get_block_by_number_batch(block_numbers, true).await?;
+    let (from_block, to_block) = block_numbers
+        .iter()
+        .fold((U64::MAX, U64::ZERO), |(min, max), &num| (cmp::min(min, num), cmp::max(max, num)));
+
+    let native_transfers = blocks
+        .into_iter()
+        .flat_map(|b| {
+            b.transactions.clone().into_transactions().map(move |tx| (b.header.timestamp, tx))
+        })
+        .filter_map(|(ts, tx)| {
+            let is_empty_input = tx.input().is_empty();
+            let is_value_zero = tx.value().is_zero();
+            let has_to_address = tx.to().is_some();
+
+            if has_to_address && is_empty_input && !is_value_zero {
+                let to = tx.to().unwrap();
+                Some(TraceResult::new_native_transfer(
+                    tx,
+                    ts,
+                    to,
+                    network_name,
+                    from_block,
+                    to_block,
+                ))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    // Important that we call this for every event even if there are no logs.
+    // This is because we need to sync the last seen block number still.
+    indexing_event_processing();
+    if !native_transfers.is_empty() {
+        config.trigger_event(native_transfers).await;
+    }
+    evm_trace_update_progress_and_last_synced_task(
+        config.clone(),
+        to_block,
+        indexing_event_processed,
+    )
+    .await;
+
+    Ok(())
+}
+
+// Indexing native transfers if debug or trace indexing is enabled.
+///
+/// NOTE: This is currently unused as we have temporarily migrated to exclusively using
+/// `eth_getBlockByNumber` calls instead, this is being retained for posterity should we
+/// choose to continue to support `debug` and `trace` based native transfer indexing.
+#[allow(unused)]
+pub async fn native_transfer_block_consumer_debug(
     provider: Arc<JsonRpcCachedProvider>,
     block_numbers: &[U64],
     network_name: &str,
     config: Arc<TraceProcessingConfig>,
 ) -> Result<(), ProcessEventError> {
     let trace_futures: Vec<_> =
-        block_numbers.iter().map(|n| provider_call(provider.clone(), &config, *n)).collect();
+        block_numbers.iter().map(|n| provider_trace_call(provider.clone(), &config, *n)).collect();
     let trace_calls = try_join_all(trace_futures).await?;
-    let (from_block, to_block) =
-        block_numbers.iter().fold((U64::MAX, U64::ZERO), |(min, max), &num| {
-            (std::cmp::min(min, num), std::cmp::max(max, num))
-        });
+    let (from_block, to_block) = block_numbers
+        .iter()
+        .fold((U64::MAX, U64::ZERO), |(min, max), &num| (cmp::min(min, num), cmp::max(max, num)));
 
     // We're not ready to support complete "trace" indexing for zksync chains. So we can
     // effectively only get what we need for native transfers by removing calls to "system
@@ -226,11 +395,10 @@ pub async fn native_transfer_block_consumer(
             let has_value = !action.value.is_zero();
             let is_zksync_system_transfer = zksync_system_contracts.contains(&action.from)
                 || zksync_system_contracts.contains(&action.to);
-
             let is_native_transfer = has_value && no_input && !is_zksync_system_transfer;
 
             if is_native_transfer {
-                Some(TraceResult::new_native_transfer(
+                Some(TraceResult::new_debug_native_transfer(
                     action,
                     &trace,
                     network_name,
@@ -248,8 +416,11 @@ pub async fn native_transfer_block_consumer(
     }
 
     indexing_event_processing();
-    config.trigger_event(native_transfers).await;
-    evm_trace_update_progress_and_last_synced_task(config, to_block, indexing_event_processed);
+    if !native_transfers.is_empty() {
+        config.trigger_event(native_transfers).await;
+    }
+    evm_trace_update_progress_and_last_synced_task(config, to_block, indexing_event_processed)
+        .await;
 
     Ok(())
 }

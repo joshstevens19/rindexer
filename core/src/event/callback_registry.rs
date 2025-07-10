@@ -1,5 +1,7 @@
 use std::{any::Any, sync::Arc, time::Duration};
 
+use alloy::consensus::Transaction;
+use alloy::network::{AnyRpcTransaction, TransactionResponse};
 use alloy::{
     primitives::{Address, BlockHash, Bytes, TxHash, B256, U256, U64},
     rpc::types::{
@@ -228,7 +230,7 @@ pub struct TraceResult {
 
 impl TraceResult {
     /// Create a "NativeTransfer" TraceResult for sinking and streaming.
-    pub fn new_native_transfer(
+    pub fn new_debug_native_transfer(
         action: &CallAction,
         trace: &LocalizedTransactionTrace,
         network: &str,
@@ -255,6 +257,38 @@ impl TraceResult {
                 transaction_hash: trace.transaction_hash.unwrap_or(TxHash::ZERO),
                 block_hash: trace.block_hash.unwrap_or(BlockHash::ZERO),
                 transaction_index: U64::from(trace.transaction_position.unwrap_or(0)),
+                log_index: U256::from(0),
+            },
+            found_in_request: LogFoundInRequest { from_block: start_block, to_block: end_block },
+        }
+    }
+
+    /// Create a "NativeTransfer" TraceResult from a `eth_getBlockByNumber` Transaction.
+    pub fn new_native_transfer(
+        tx: AnyRpcTransaction,
+        ts: u64,
+        to: Address,
+        network: &str,
+        start_block: U64,
+        end_block: U64,
+    ) -> Self {
+        Self {
+            to,
+            from: tx.from(),
+            value: tx.value(),
+            tx_information: TxInformation {
+                network: network.to_string(),
+                address: Address::ZERO,
+                block_number: tx
+                    .block_number
+                    .map(U64::from)
+                    .expect("block_number should be present"),
+                block_timestamp: Some(U256::from(ts)),
+                transaction_hash: tx.tx_hash(),
+                block_hash: tx.block_hash.expect("block_hash should be present"),
+                transaction_index: U64::from(
+                    tx.transaction_index.expect("transaction_index should be present"),
+                ),
                 log_index: U256::from(0),
             },
             found_in_request: LogFoundInRequest { from_block: start_block, to_block: end_block },
