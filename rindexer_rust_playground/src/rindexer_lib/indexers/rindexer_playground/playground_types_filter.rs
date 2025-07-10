@@ -1,19 +1,18 @@
 #![allow(non_snake_case)]
-use std::{path::PathBuf, sync::Arc};
-
-use alloy::primitives::{I128, I256, U256};
-use rindexer::{
-    event::callback_registry::EventCallbackRegistry, rindexer_error, rindexer_info,
-    EthereumSqlTypeWrapper, PgType, RindexerColorize,
-};
-
 use super::super::super::typings::rindexer_playground::events::playground_types_filter::{
-    no_extensions, PlaygroundTypesFilterEventType, SwapEvent,
+    PlaygroundTypesFilterEventType, SwapEvent, no_extensions,
 };
+use alloy::primitives::{I256, U256};
+use rindexer::{
+    EthereumSqlTypeWrapper, PgType, RindexerColorize,
+    event::callback_registry::EventCallbackRegistry, rindexer_error, rindexer_info,
+};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegistry) {
-    PlaygroundTypesFilterEventType::Swap(
-        SwapEvent::handler(|results, context| async move {
+    let handler = SwapEvent::handler(
+        |results, context| async move {
             if results.is_empty() {
                 return Ok(());
             }
@@ -22,9 +21,9 @@ async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegis
             let mut csv_bulk_data: Vec<Vec<String>> = vec![];
             for result in results.iter() {
                 csv_bulk_data.push(vec![
-                    format!("{:?}", result.tx_information.address),
-                    format!("{:?}", result.event_data.sender,),
-                    format!("{:?}", result.event_data.recipient,),
+                    result.tx_information.address.to_string(),
+                    result.event_data.sender.to_string(),
+                    result.event_data.recipient.to_string(),
                     result.event_data.amount0.to_string(),
                     result.event_data.amount1.to_string(),
                     result.event_data.sqrtPriceX96.to_string(),
@@ -36,34 +35,34 @@ async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegis
                     result.event_data.tick5.to_string(),
                     result.event_data.tick6.to_string(),
                     result.event_data.tick7.to_string(),
-                    format!("{:?}", result.tx_information.transaction_hash),
+                    result.tx_information.transaction_hash.to_string(),
                     result.tx_information.block_number.to_string(),
                     result.tx_information.block_hash.to_string(),
                     result.tx_information.network.to_string(),
                     result.tx_information.transaction_index.to_string(),
-                    result.tx_information.log_index.to_string()
+                    result.tx_information.log_index.to_string(),
                 ]);
                 let data = vec![
                     EthereumSqlTypeWrapper::Address(result.tx_information.address),
                     EthereumSqlTypeWrapper::Address(result.event_data.sender),
                     EthereumSqlTypeWrapper::Address(result.event_data.recipient),
-                    EthereumSqlTypeWrapper::I256(result.event_data.amount0),
-                    EthereumSqlTypeWrapper::I256(result.event_data.amount1),
+                    EthereumSqlTypeWrapper::I256(I256::from(result.event_data.amount0)),
+                    EthereumSqlTypeWrapper::I256(I256::from(result.event_data.amount1)),
                     EthereumSqlTypeWrapper::U256(U256::from(result.event_data.sqrtPriceX96)),
                     EthereumSqlTypeWrapper::U128(result.event_data.liquidity),
                     EthereumSqlTypeWrapper::I32(result.event_data.tick.as_i32()),
-                    EthereumSqlTypeWrapper::I8(result.event_data.tick2.as_i8()),
-                    EthereumSqlTypeWrapper::I16(result.event_data.tick3.as_i16()),
-                    EthereumSqlTypeWrapper::I32(result.event_data.tick4.as_i32()),
-                    EthereumSqlTypeWrapper::I64(result.event_data.tick5.as_i64()),
-                    EthereumSqlTypeWrapper::I128(i128::from_be_bytes(result.event_data.tick6.to_be_bytes())),
-                    EthereumSqlTypeWrapper::I256(I256::from_dec_str(&result.event_data.tick7.to_dec_string()).expect("I24 fits in I256")),
+                    EthereumSqlTypeWrapper::I8(result.event_data.tick2),
+                    EthereumSqlTypeWrapper::I16(result.event_data.tick3),
+                    EthereumSqlTypeWrapper::I32(result.event_data.tick4),
+                    EthereumSqlTypeWrapper::I64(result.event_data.tick5),
+                    EthereumSqlTypeWrapper::I128(result.event_data.tick6),
+                    EthereumSqlTypeWrapper::I256(I256::from(result.event_data.tick7)),
                     EthereumSqlTypeWrapper::B256(result.tx_information.transaction_hash),
                     EthereumSqlTypeWrapper::U64(result.tx_information.block_number),
                     EthereumSqlTypeWrapper::B256(result.tx_information.block_hash),
                     EthereumSqlTypeWrapper::String(result.tx_information.network.to_string()),
                     EthereumSqlTypeWrapper::U64(result.tx_information.transaction_index),
-                    EthereumSqlTypeWrapper::U256(result.tx_information.log_index)
+                    EthereumSqlTypeWrapper::U256(result.tx_information.log_index),
                 ];
                 postgres_bulk_data.push(data);
             }
@@ -71,7 +70,10 @@ async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegis
             if !csv_bulk_data.is_empty() {
                 let csv_result = context.csv.append_bulk(csv_bulk_data).await;
                 if let Err(e) = csv_result {
-                    rindexer_error!("PlaygroundTypesFilterEventType::Swap inserting csv data: {:?}", e);
+                    rindexer_error!(
+                        "PlaygroundTypesFilterEventType::Swap inserting csv data: {:?}",
+                        e
+                    );
                     return Err(e.to_string());
                 }
             }
@@ -80,33 +82,35 @@ async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegis
                 return Ok(());
             }
 
-             if postgres_bulk_data.len() > 100 {
+            let rows = [
+                "contract_address".to_string(),
+                "sender".to_string(),
+                "recipient".to_string(),
+                "amount_0".to_string(),
+                "amount_1".to_string(),
+                "sqrt_price_x96".to_string(),
+                "liquidity".to_string(),
+                "tick".to_string(),
+                "tick_2".to_string(),
+                "tick_3".to_string(),
+                "tick_4".to_string(),
+                "tick_5".to_string(),
+                "tick_6".to_string(),
+                "tick_7".to_string(),
+                "tx_hash".to_string(),
+                "block_number".to_string(),
+                "block_hash".to_string(),
+                "network".to_string(),
+                "tx_index".to_string(),
+                "log_index".to_string(),
+            ];
+
+            if postgres_bulk_data.len() > 100 {
                 let result = context
                     .database
                     .bulk_insert_via_copy(
                         "rindexer_playground_playground_types_filter.swap",
-                        &[
-                            "contract_address".to_string(),
-                            "sender".to_string(),
-                            "recipient".to_string(),
-                            "amount_0".to_string(),
-                            "amount_1".to_string(),
-                            "sqrt_price_x96".to_string(),
-                            "liquidity".to_string(),
-                            "tick".to_string(),
-                            "tick_2".to_string(),
-                            "tick_3".to_string(),
-                            "tick_4".to_string(),
-                            "tick_5".to_string(),
-                            "tick_6".to_string(),
-                            "tick_7".to_string(),
-                            "tx_hash".to_string(),
-                            "block_number".to_string(),
-                            "block_hash".to_string(),
-                            "network".to_string(),
-                            "tx_index".to_string(),
-                            "log_index".to_string()
-                        ],
+                        &rows,
                         &postgres_bulk_data
                             .first()
                             .ok_or("No first element in bulk data, impossible")?
@@ -117,60 +121,45 @@ async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegis
                     )
                     .await;
 
-                    if let Err(e) = result {
-                        rindexer_error!("PlaygroundTypesFilterEventType::Swap inserting bulk data via COPY: {:?}", e);
-                        return Err(e.to_string());
-                    }
-                } else {
-                    let result = context
-                        .database
-                        .bulk_insert(
-                            "rindexer_playground_playground_types_filter.swap",
-                            &[
-                                "contract_address".to_string(),
-                                "sender".to_string(),
-                                "recipient".to_string(),
-                                "amount_0".to_string(),
-                                "amount_1".to_string(),
-                                "sqrt_price_x96".to_string(),
-                                "liquidity".to_string(),
-                                "tick".to_string(),
-                                "tick_2".to_string(),
-                                "tick_3".to_string(),
-                                "tick_4".to_string(),
-                                "tick_5".to_string(),
-                                "tick_6".to_string(),
-                                "tick_7".to_string(),
-                                "tx_hash".to_string(),
-                                "block_number".to_string(),
-                                "block_hash".to_string(),
-                                "network".to_string(),
-                                "tx_index".to_string(),
-                                "log_index".to_string()
-                            ],
-                            &postgres_bulk_data,
-                        )
-                        .await;
-
-                    if let Err(e) = result {
-                        rindexer_error!("PlaygroundTypesFilterEventType::Swap inserting bulk data via INSERT: {:?}", e);
-                        return Err(e.to_string());
-                    }
+                if let Err(e) = result {
+                    rindexer_error!(
+                        "PlaygroundTypesFilterEventType::Swap inserting bulk data via COPY: {:?}",
+                        e
+                    );
+                    return Err(e.to_string());
                 }
+            } else {
+                let result = context
+                    .database
+                    .bulk_insert(
+                        "rindexer_playground_playground_types_filter.swap",
+                        &rows,
+                        &postgres_bulk_data,
+                    )
+                    .await;
 
-                rindexer_info!(
-                    "PlaygroundTypesFilter::Swap - {} - {} events",
-                    "INDEXED".green(),
-                    results.len(),
-                );
+                if let Err(e) = result {
+                    rindexer_error!(
+                        "PlaygroundTypesFilterEventType::Swap inserting bulk data via INSERT: {:?}",
+                        e
+                    );
+                    return Err(e.to_string());
+                }
+            }
 
-                Ok(())
-            },
-            no_extensions(),
-          )
-          .await,
+            rindexer_info!(
+                "PlaygroundTypesFilter::Swap - {} - {} events",
+                "INDEXED".green(),
+                results.len(),
+            );
+
+            Ok(())
+        },
+        no_extensions(),
     )
-    .register(manifest_path, registry).await;
+    .await;
+
+    PlaygroundTypesFilterEventType::Swap(handler).register(manifest_path, registry).await;
 }
 pub async fn playground_types_filter_handlers(
     manifest_path: &PathBuf,

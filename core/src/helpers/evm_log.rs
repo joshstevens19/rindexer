@@ -1,11 +1,12 @@
 use std::collections::HashSet;
 use std::str::FromStr;
 
+use alloy::network::AnyRpcBlock;
 use alloy::{
     dyn_abi::{DynSolValue, EventExt},
     json_abi::Event,
     primitives::{keccak256, Address, Bloom, B256, U256, U64},
-    rpc::types::{Block, FilterSet, FilteredParams, Log, ValueOrArray},
+    rpc::types::{FilterSet, FilteredParams, Log, ValueOrArray},
 };
 use tracing::error;
 
@@ -118,7 +119,7 @@ pub fn topic_in_bloom(topic_id: B256, logs_bloom: Bloom) -> bool {
 pub fn is_relevant_block(
     contract_address: &Option<HashSet<Address>>,
     topic_id: &B256,
-    latest_block: &Block,
+    latest_block: &AnyRpcBlock,
 ) -> bool {
     let logs_bloom = latest_block.header.logs_bloom;
 

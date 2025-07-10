@@ -15,11 +15,13 @@ enum StringOrNum {
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Default, Deserialize, Serialize)]
 pub enum TraceProcessingMethod {
-    #[default]
     #[serde(rename = "trace_block")]
     TraceBlock,
     #[serde(rename = "debug_traceBlockByNumber")]
     DebugTraceBlockByNumber,
+    #[default]
+    #[serde(rename = "eth_getBlockByNumber")]
+    EthGetBlockByNumber,
 }
 
 /// Deserialize a number or string into a U64. This is required for the untagged deserialize of
@@ -155,7 +157,7 @@ mod tests {
         assert_eq!(networks[0].network, "ethereum");
         assert_eq!(networks[0].start_block.unwrap().as_limbs()[0], 100);
         assert_eq!(networks[0].end_block.unwrap().as_limbs()[0], 200);
-        assert_eq!(networks[0].method, TraceProcessingMethod::TraceBlock);
+        assert_eq!(networks[0].method, TraceProcessingMethod::EthGetBlockByNumber);
     }
 
     #[test]
@@ -173,7 +175,7 @@ mod tests {
         assert_eq!(networks[0].network, "base");
         assert_eq!(networks[0].start_block.unwrap().as_limbs()[0], 100);
         assert_eq!(networks[0].end_block, None);
-        assert_eq!(networks[0].method, TraceProcessingMethod::TraceBlock);
+        assert_eq!(networks[0].method, TraceProcessingMethod::EthGetBlockByNumber);
     }
 
     #[test]
@@ -207,6 +209,6 @@ mod tests {
 
         assert!(transfer.enabled);
         assert_eq!(networks[3].network, "optimism");
-        assert_eq!(networks[3].method, TraceProcessingMethod::TraceBlock);
+        assert_eq!(networks[3].method, TraceProcessingMethod::EthGetBlockByNumber);
     }
 }

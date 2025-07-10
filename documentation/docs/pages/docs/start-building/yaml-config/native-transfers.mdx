@@ -8,11 +8,6 @@ You can expect the event to be defined as if you were indexing an ERC20 Transfer
 This is **experimental** functionality which has not yet been extensively tested in production.
 :::
 
-:::info
-**IMPORTANT**: The `rpc` provider passed into the `networks` configuration must support the `trace_block` RPC method or `debug_traceBlockByNumber` RPC method. Not
-all providers currently support this.
-:::
-
 Supported stream providers:
 
 - [Simple](/docs/start-building/yaml-config/native-transfers#simple) - Simple opt-in (for csv, and postgres)
@@ -130,17 +125,35 @@ contracts: []
 ### method
 
 :::info
-This is optional, if you do not provide a method it will default to using `trace_block` as
-it provides a `block_hash` in the response.
+This is optional, if you do not provide a method it will default to using `eth_getBlockByNumber` it is the most efficient,
+well supported, and simple RPC method available.
 :::
 
 The method field is an advanced option, and typically does not need to be defined. By default it 
-will use `trace_block` and it is only recommended to manually override this in the event that your 
-RPC provider does not have adequate support for `trace_block` (i.e. in the case of Alchemy L2 Support).
+will use `eth_getBlockByNumber` and it is only recommended to manually override this in the event that your
+RPC provider does not have adequate support or there is some reason you would prefer to use `trace_block` or `debug_traceBlockByNumber`.
 
-Valid options are: `debug_traceBlockByNumber` or `trace_block`.
+Valid options are: `eth_getBlockByNumber` `debug_traceBlockByNumber` or `trace_block`.
 
 :::code-group
+
+```yaml [debug_traceBlockByNumber]
+name: rIndexer
+description: My native transfers rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+native_transfers:
+  networks: // [!code focus]
+    - network: ethereum
+      start_block: 18600000
+      end_block: 18718056
+      method: eth_getBlockByNumber
+contracts: []
+```
 
 ```yaml [debug_traceBlockByNumber]
 name: rIndexer
@@ -173,7 +186,7 @@ native_transfers:
   networks: // [!code focus]
     - network: ethereum
       start_block: 18600000
-      end_block: 18718056 
+      end_block: 18718056
       method: trace_block // [!code focus]
 contracts: []
 ```

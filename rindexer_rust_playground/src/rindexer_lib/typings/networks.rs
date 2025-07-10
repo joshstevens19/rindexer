@@ -7,13 +7,13 @@ use rindexer::{
     lazy_static,
     manifest::network::{AddressFiltering, BlockPollFrequency},
     notifications::ChainStateNotification,
-    provider::{create_client, JsonRpcCachedProvider, RetryClientError, RindexerProvider},
+    provider::{JsonRpcCachedProvider, RetryClientError, RindexerProvider, create_client},
     public_read_env_value,
     reth::node::start_reth_node_with_exex,
 };
 use std::sync::Arc;
-use tokio::sync::broadcast::Sender;
 use tokio::sync::OnceCell;
+use tokio::sync::broadcast::Sender;
 
 #[allow(dead_code)]
 async fn create_shadow_client(
