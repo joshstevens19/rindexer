@@ -5,6 +5,29 @@
 
 ### Features
 -------------------------------------------------
+
+### Bug fixes
+-------------------------------------------------
+
+### Breaking changes
+-------------------------------------------------
+
+## Releases
+-------------------------------------------------
+
+all release branches are deployed through `release/VERSION_NUMBER` branches
+
+# 0.20.0-beta - 10th July 2025
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.20.0
+
+- linux binary - https://rindexer.xyz/releases/linux-amd64/0.20.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://rindexer.xyz/releases/darwin-arm64/0.20.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://rindexer.xyz/releases/darwin-amd64/0.20.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://rindexer/releases.xyz/win32-amd64/0.20.0/rindexer_win32-amd64.zip
+
+### Features
+-------------------------------------------------
 - feat: support reth natively in rindexer https://rindexer.xyz/docs/start-building/create-new-project/reth-mode + https://rindexer.xyz/docs/advanced/using-reth-exex
 
 - Indexing with `eth_getBlockByNumber` for more efficiency (but still retain all debug/trace logic for future options)
@@ -23,14 +46,6 @@
 - Fixed a pretty major bug with the "optimal log parsing regex" (where the BlockNumber::from_str() wasn't actually parsing the hex, so it silently failed and used sub-optimal fallbacks)
 - Fix indexer codegen to use correct names and types, as well as fix formatting problems where rustfmt couldn't parse the nesting we were doing
 - Other memory optimisations
-
-### Breaking changes
--------------------------------------------------
-
-## Releases
--------------------------------------------------
-
-all release branches are deployed through `release/VERSION_NUMBER` branches
 
 # 0.19.1-beta - 17th June 2025
 
