@@ -23,6 +23,19 @@ pub struct NewDetails {
     database: Option<bool>,
 }
 
+#[derive(Args, Debug, Clone)]
+pub struct RethArgs {
+    /// optional - Enable Reth support
+    /// Example: rindexer new no-code --reth -- --data-dir /path --http true
+    #[clap(long, short)]
+    pub reth: bool,
+
+    /// Additional arguments to pass to reth when --reth is enabled
+    /// These should be provided after -- e.g. -- --data-dir /path --http true
+    #[clap(last = true)]
+    pub reth_args: Vec<String>,
+}
+
 #[derive(Parser, Debug)]
 #[clap(author = "Josh Stevens", version = "1.0", about = "Blazing fast EVM indexing tool built in rust", long_about = None)]
 pub enum Commands {
@@ -126,16 +139,24 @@ pub enum NewSubcommands {
     /// Best choice when starting, no extra code required.
     /// Example:
     /// `rindexer new no-code`
+    /// `rindexer new no-code --reth -- --data-dir /path --http true`
     #[clap(name = "no-code")]
-    NoCode,
+    NoCode {
+        #[clap(flatten)]
+        reth: RethArgs,
+    },
 
     /// Creates a new rust project
     ///
     /// Customise advanced indexer by writing rust code
     /// Example:
     /// `rindexer new rust`
+    /// `rindexer new rust --reth -- --data-dir /path --http true`
     #[clap(name = "rust")]
-    Rust,
+    Rust {
+        #[clap(flatten)]
+        reth: RethArgs,
+    },
 }
 
 #[derive(Subcommand, Debug)]

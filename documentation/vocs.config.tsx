@@ -68,6 +68,16 @@ export default defineConfig({
         {
           text: "Create New Project",
           link: "/docs/start-building/create-new-project",
+          items: [
+            {
+              text: "Standard Mode",
+              link: "/docs/start-building/create-new-project/standard",
+            },
+            {
+              text: "Reth Mode",
+              link: "/docs/start-building/create-new-project/reth-mode",
+            },
+          ],
         },
         {
           text: "Live indexing vs Historic indexing",
@@ -199,7 +209,7 @@ export default defineConfig({
       items: [
         { text: "From A Foundry Project - coming soon" },
         { text: "From A Hardhat Project - coming soon" },
-        { text: "Using Reth ExExes - coming soon" },
+        { text: "Using Reth ExExes", link: "/docs/advanced/using-reth-exex" },
       ],
     },
     {

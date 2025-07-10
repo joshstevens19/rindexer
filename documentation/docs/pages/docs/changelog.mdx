@@ -5,6 +5,7 @@
 
 ### Features
 -------------------------------------------------
+- feat: support reth natively in rindexer https://rindexer.xyz/docs/start-building/create-new-project/reth-mode + https://rindexer.xyz/docs/advanced/using-reth-exex
 
 - Indexing with `eth_getBlockByNumber` for more efficiency (but still retain all debug/trace logic for future options)
 - Add a `Nullable` Numeric256 SQL type, and `Nullable` DateTime SQL type
@@ -13,6 +14,7 @@
 
 ### Bug fixes
 -------------------------------------------------
+- fix: https://github.com/ethereum/go-ethereum/pull/31876 changed max address per logs to 1000 to be aligned with geth
 
 - Use correct provider base which is `AnyProvider` that can handle optimism, rollups, and all evm chain style responses.
 - Misc tweaks to optimise how this native transfer fetching is done with batching, and pass rpc provider to allow for better batching in other endpoints

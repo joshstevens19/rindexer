@@ -1,0 +1,233 @@
+# Create New Project - Reth Mode
+
+:::warning
+Reth mode requires running a Reth archive node and is intended for advanced users. If you're just getting started, consider using [Standard Mode](/docs/start-building/create-new-project/standard) instead.
+:::
+
+:::info
+Make sure you have the CLI installed before starting a new project.
+You can find the installation instructions [here](/docs/introduction/installation).
+:::
+
+## Prerequisites
+
+Before creating a Reth mode project, ensure you have:
+
+1. **Reth Archive Node**: A fully synced Reth archive node running locally or on your infrastructure
+2. **Hardware Requirements**: Sufficient disk space and memory for running both Reth and rindexer
+
+:::tip
+For detailed instructions on setting up a Reth archive node, see the official [Running Reth on Ethereum](https://reth.rs/run/ethereum) guide.
+:::
+
+## 1. Create a New Reth Project
+
+The `--reth` flag enables Reth mode when creating a new project. You can also pass additional Reth configuration arguments after `--`.
+
+:::code-group
+
+```bash [no-code]
+rindexer new no-code --reth
+```
+
+```bash [rust]
+rindexer new rust --reth
+```
+
+```bash [with custom args]
+rindexer new no-code --reth -- --datadir /custom/path --http true
+```
+
+:::
+
+### Example New with Reth
+
+```bash
+rindexer new no-code --reth
+
+Initializing new rindexer project with Reth support...
+
+Project Name: RocketPoolETHIndexer
+Project Description (skip by pressing Enter): High-performance rETH indexer using Reth
+Repository (skip by pressing Enter): https://github.com/joshstevens19/rindexer
+What Storages To Enable? (graphql can only be supported if postgres is enabled) [postgres, csv, both, none]: postgres
+Postgres Docker Support Out The Box? [yes, no]: yes
+
+Reth Configuration:
+Data Directory (default: ~/.reth): /data/reth
+Chain (default: mainnet) [mainnet, sepolia, holesky]: mainnet
+Enable HTTP RPC? [yes, no]: yes
+Auth RPC Port (default: 8551): 8551
+
+rindexer no-code project created with Reth support with a rETH transfer events YAML template.
+```
+
+## 2. Reth Configuration in YAML
+
+When you create a project with `--reth`, the generated `rindexer.yaml` includes Reth configuration:
+
+```yaml
+name: RocketPoolETHIndexer
+description: High-performance rETH indexer using Reth
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co  # Fallback RPC
+    reth:
+      enabled: true
+      logging: true  # Show Reth logs in stdout
+      cli_args:
+        - "--datadir /data/reth"
+        - "--http"
+        - "--full false"  # Archive mode
+storage:
+  postgres:
+    enabled: true
+contracts:
+  - name: RocketPoolETH
+    details:
+    - network: ethereum
+      address: "0xae78736cd615f374d3085123a210448e74fc6393"
+      start_block: 18600000
+      end_block: 18718056
+    abi: ./abis/RocketTokenRETH.abi.json
+    include_events:
+    - Transfer
+    - Approval
+```
+
+### Key Reth Configuration Options
+
+- **enabled**: Enable/disable Reth integration
+- **logging**: Show Reth logs in stdout (useful for debugging)
+- **cli_args**: Array of Reth CLI arguments in "flag value" format
+
+:::warning
+The JWT secret for authenticated RPC is not included in the YAML for security reasons. You'll need to add it manually or via environment variables:
+```yaml
+cli_args:
+  - "--authrpc.jwtsecret /path/to/jwt.hex"
+```
+:::
+
+### Common Reth CLI Arguments
+
+| Argument | Description | Example |
+|----------|-------------|---------|
+| `--datadir` | Reth data directory | `--datadir /data/reth` |
+| `--authrpc.jwtsecret` | Path to JWT secret | `--authrpc.jwtsecret /secrets/jwt.hex` |
+| `--authrpc.addr` | Auth RPC address | `--authrpc.addr 127.0.0.1` |
+| `--authrpc.port` | Auth RPC port | `--authrpc.port 8551` |
+| `--full` | Run as full node (false for archive) | `--full false` |
+| `--chain` | Network to sync | `--chain mainnet` |
+| `--http` | Enable HTTP RPC | `--http` |
+| `--metrics` | Enable metrics | `--metrics 127.0.0.1:9001` |
+
+## 3. Environment Variables
+
+All Reth configuration can be overridden using environment variables:
+
+```bash
+# .env file
+RETH_DATA_DIR=/data/reth
+RETH_JWT_SECRET=/secrets/jwt.hex
+RETH_AUTH_PORT=8551
+```
+
+```yaml
+# rindexer.yaml using environment variables
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: ${FALLBACK_RPC_URL}
+    reth:
+      enabled: true
+      cli_args:
+        - "--datadir ${RETH_DATA_DIR}"
+        - "--authrpc.jwtsecret ${RETH_JWT_SECRET}"
+        - "--authrpc.port ${RETH_AUTH_PORT}"
+```
+
+## 4. Start the Project
+
+Starting a Reth mode project will:
+1. Start your Reth node, and connect to it
+2. Set up ExEx (Execution Extensions) for reorg-aware streaming
+3. Begin indexing with minimal latency
+
+:::info
+Ensure your Reth node is fully synced before starting the indexer.
+:::
+
+:::code-group
+
+```bash [all services]
+rindexer start all
+```
+
+```bash [indexer only]
+rindexer start indexer
+```
+
+```bash [graphql only]
+rindexer start graphql
+```
+
+:::
+
+## 5. Performance Benefits
+
+Reth mode provides several advantages over standard RPC-based indexing:
+
+### Native Reorg Handling
+- ExEx notifications include reorg information
+- Automatic rollback and reprocessing (coming soon)
+- No missed events during reorgs
+
+### Minimal Latency
+- Direct connection to Reth node
+- No network overhead
+- Access to pending transactions
+
+### Better Performance
+- Efficient state access
+- Reduced RPC calls
+
+## 6. Monitoring and Debugging
+
+### Enable Reth Logging
+
+Set `logging: true` in your Reth configuration to see detailed logs:
+
+```yaml
+reth:
+  enabled: true
+  logging: true  # Enable Reth logs
+```
+
+## 7. Troubleshooting
+
+### Common Issues
+
+**Cannot connect to Reth node**
+- Ensure Reth is running and fully synced
+- Verify JWT secret is correct
+- Try running reth node separately to see if it works. There might be a problem with the arguments.
+
+**Performance issues**
+- Monitor Reth resource usage
+- Ensure sufficient disk I/O
+
+### Getting Help
+
+For Reth-specific issues:
+- [Reth Documentation](https://reth.rs)
+- [Reth GitHub](https://github.com/paradigmxyz/reth)
+- [rindexer GitHub Issues](https://github.com/joshstevens19/rindexer/issues)
+
+## Next Steps
+
+- Learn about [Reth Execution Extensions](/docs/advanced/using-reth-exex)
+- Configure [advanced indexing options](/docs/start-building/yaml-config)

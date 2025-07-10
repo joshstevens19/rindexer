@@ -197,7 +197,7 @@ Advanced configuration options that allow fine-grained control of event fetching
 Specifies how events that require address filtering (one that use either address filter or factory filter) are fetched from the network.
 
 Can be one of:
-- with `max_address_per_get_logs_request` configuration _(default behaviour)_ - events are fetched with addresses filter, log fetching happens in batches that consist of addresses chunks up to the specified value. Useful when events are often happening, but there is no huge number of addresses that are being watched for. The default value is 5000 addresses, which fits most of the RPC provider limits.
+- with `max_address_per_get_logs_request` configuration _(default behaviour)_ - events are fetched with addresses filter, log fetching happens in batches that consist of addresses chunks up to the specified value. Useful when events are often happening, but there is no huge number of addresses that are being watched for. The default value is 1000 addresses, which fits most of the RPC provider limits.
 - `in-memory` - all matching events are fetched and then filtered in memory by addresses. Useful when events are not happening often, but there are a huge number of addresses that are being watched for.
 
 :::code-group
@@ -254,6 +254,51 @@ networks:
   rpc: https://mainnet.gateway.tenderly.co
   disable_logs_bloom_checks: true // [!code focus]
 ```
+
+### reth
+
+:::warning
+Reth mode requires running a Reth archive node and is intended for advanced users. For more information on setting up Reth, visit [reth's official documentation](https://reth.rs/run/ethereum).
+:::
+
+Configure rindexer to use a local reth node for indexing. This provides direct connection to Reth with minimal latency and native reorg handling.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co  # Fallback RPC
+  reth: // [!code focus]
+    enabled: true // [!code focus]
+    logging: true // [!code focus]  # Show Reth logs in stdout
+    cli_args: // [!code focus]
+      - "--datadir /data/reth" // [!code focus]
+      - "--http" // [!code focus]
+      - "--full false" // [!code focus]  # Archive mode
+      - "--authrpc.jwtsecret /path/to/jwt.hex" // [!code focus]
+```
+
+#### enabled
+
+Enable or disable the reth integration for this network.
+
+#### logging
+
+Show Reth logs in stdout (useful for debugging).
+
+#### cli_args
+
+Array of Reth CLI arguments in "flag value" format. Common arguments include:
+
+- `--datadir`: Path to the reth data directory
+- `--authrpc.jwtsecret`: Path to the JWT secret file for authenticated RPC
+- `--authrpc.port`: The port for the auth RPC server (default: 8551)
+- `--full`: Whether to run as a full node (use `false` for archive node)
+- `--http`: Enable HTTP RPC server
 
 ## Multiple Networks
 

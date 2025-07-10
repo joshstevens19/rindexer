@@ -3,7 +3,7 @@ use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
 use crate::helpers::{halved_block_number, is_relevant_block};
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
-    indexer::IndexingEventProgressStatus,
+    indexer::{reorg::handle_chain_notification, IndexingEventProgressStatus},
     is_running,
     provider::{JsonRpcCachedProvider, ProviderError},
 };
@@ -396,6 +396,20 @@ async fn live_indexing_stream(
     let mut last_no_new_block_log_time = Instant::now();
     let log_no_new_block_interval = Duration::from_secs(300);
     let target_iteration_duration = Duration::from_millis(200);
+
+    let chain_state_notification = cached_provider.get_chain_state_notification();
+
+    // Spawn a separate task to handle notifications
+    if let Some(notifications) = chain_state_notification {
+        let info_log_name = info_log_name.to_string();
+        let network = network.to_string();
+        tokio::spawn(async move {
+            let mut notifications_clone = notifications.subscribe();
+            while let Ok(notification) = notifications_clone.recv().await {
+                handle_chain_notification(notification, &info_log_name, &network);
+            }
+        });
+    }
 
     loop {
         let iteration_start = Instant::now();

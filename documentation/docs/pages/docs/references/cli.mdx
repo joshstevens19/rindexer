@@ -40,6 +40,30 @@ Options:
           Print help (see a summary with '-h')
 ```
 
+### Subcommand Options
+
+Both `no-code` and `rust` subcommands support:
+
+```bash
+Options:
+  -r, --reth
+          optional - Enable Reth support for high-performance indexing
+          
+  [-- <RETH_ARGS>...]
+          Additional arguments to pass to reth when --reth is enabled
+          These should be provided after -- e.g. -- --datadir /path --http true
+
+Examples:
+  # Standard project
+  rindexer new no-code
+  
+  # Reth-enabled project
+  rindexer new no-code --reth
+  
+  # Reth project with custom arguments
+  rindexer new rust --reth -- --datadir /custom/path --http true
+```
+
 ## start
 
 Start various services like indexers, GraphQL APIs or both together. This will start the services based on the rindexer.yaml file.
