@@ -1,6 +1,17 @@
 use std::path::Path;
 
+#[cfg(feature = "rabbitmq")]
 use lapin::ExchangeKind;
+
+#[cfg(not(feature = "rabbitmq"))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub enum ExchangeKind {
+    Direct,
+    Fanout,
+    Headers,
+    Topic,
+    Custom(String),
+}
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 use tokio::fs;
