@@ -85,10 +85,8 @@ async fn main() {
 
 #[allow(dead_code)]
 fn generate() {
-    let path = PathBuf::from_str(
-        "/Users/jackedgson/Development/avara/rindexer/rindexer_rust_playground/rindexer.yaml",
-    )
-    .expect("Invalid path");
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
+    let path = PathBuf::from(manifest_dir).join("rindexer.yaml");
     let manifest = read_manifest(&path).expect("Failed to read manifest");
     rindexer::generator::build::generate_rindexer_typings(&manifest, &path, true)
         .expect("Failed to generate typings");
@@ -96,10 +94,8 @@ fn generate() {
 
 #[allow(dead_code)]
 fn generate_code_test() {
-    let path = PathBuf::from_str(
-        "/Users/jackedgson/Development/avara/rindexer/rindexer_rust_playground/rindexer.yaml",
-    )
-    .expect("Invalid path");
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
+    let path = PathBuf::from(manifest_dir).join("rindexer.yaml");
     let manifest = read_manifest(&path).expect("Failed to read manifest");
 
     rindexer::generator::build::generate_rindexer_handlers(manifest, &path, true)
@@ -108,10 +104,8 @@ fn generate_code_test() {
 
 #[allow(dead_code)]
 fn generate_all() {
-    let path = PathBuf::from_str(
-        "/Users/jackedgson/Development/avara/rindexer/rindexer_rust_playground/rindexer.yaml",
-    )
-    .expect("Invalid path");
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
+    let path = PathBuf::from(manifest_dir).join("rindexer.yaml");
     rindexer::generator::build::generate_rindexer_typings_and_handlers(&path)
         .expect("Failed to generate typings and handlers");
 }
