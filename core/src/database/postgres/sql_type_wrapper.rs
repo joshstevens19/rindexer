@@ -1,5 +1,6 @@
 use std::str::FromStr;
 
+use crate::{abi::ABIInput, event::callback_registry::TxInformation, types::core::LogParam};
 #[allow(deprecated)]
 use alloy::{
     dyn_abi::DynSolValue,
@@ -11,8 +12,7 @@ use rust_decimal::Decimal;
 use serde_json::{json, Value};
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type as PgType};
 use tracing::error;
-
-use crate::{abi::ABIInput, event::callback_registry::TxInformation, types::core::LogParam};
+use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub enum EthereumSqlTypeWrapper {
@@ -111,6 +111,7 @@ pub enum EthereumSqlTypeWrapper {
     Bytes(Bytes),
     BytesNullable(Bytes),
     VecBytes(Vec<Bytes>),
+    Uuid(Uuid),
 
     DateTime(DateTime<Utc>),
     DateTimeNullable(Option<DateTime<Utc>>),
@@ -214,6 +215,7 @@ impl EthereumSqlTypeWrapper {
             EthereumSqlTypeWrapper::Bytes(_) => "Bytes",
             EthereumSqlTypeWrapper::BytesNullable(_) => "BytesNullable",
             EthereumSqlTypeWrapper::VecBytes(_) => "VecBytes",
+            EthereumSqlTypeWrapper::Uuid(_) => "Uuid",
 
             EthereumSqlTypeWrapper::DateTime(_) => "DateTime",
             EthereumSqlTypeWrapper::DateTimeNullable(_) => "DateTimeNullable",
@@ -327,6 +329,7 @@ impl EthereumSqlTypeWrapper {
                 PgType::BYTEA
             }
             EthereumSqlTypeWrapper::VecBytes(_) => PgType::BYTEA_ARRAY,
+            EthereumSqlTypeWrapper::Uuid(_) => PgType::UUID,
 
             // DateTime
             EthereumSqlTypeWrapper::DateTime(_) | EthereumSqlTypeWrapper::DateTimeNullable(_) => {
@@ -946,6 +949,7 @@ impl ToSql for EthereumSqlTypeWrapper {
                 }
             }
             EthereumSqlTypeWrapper::JSONB(value) => value.to_sql(ty, out),
+            EthereumSqlTypeWrapper::Uuid(value) => value.to_sql(ty, out),
         }
     }
 
@@ -1715,6 +1719,7 @@ pub fn map_ethereum_wrapper_to_json(
                         json!(date_time.map(|d| d.to_rfc3339()))
                     }
                     EthereumSqlTypeWrapper::JSONB(json) => json.clone(),
+                    EthereumSqlTypeWrapper::Uuid(uuid) => json!(uuid.to_string()),
                 };
                 result.insert(abi_input.name.clone(), value);
                 wrappers_index_processed.push(current_wrapper_index);
