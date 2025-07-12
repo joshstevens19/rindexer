@@ -130,6 +130,7 @@ jobs:
 
       - name: Extract version name
         id: extract_version
+        shell: bash
         run: echo "VERSION_NAME=${GITHUB_REF#refs/heads/release/}" >> $GITHUB_ENV
 
       - name: Install and setup NASM on Windows
