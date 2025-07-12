@@ -95,7 +95,7 @@ To use the Helm chart, follow the instructions in the [Helm Chart README](https:
 - Fast prototyping and MVP developments
 - Quick proof-of-concept projects
 - Enterprise standard indexing solutions for projects
-- Much more...
+- Much more... 
 
 ## Crate.io
 
