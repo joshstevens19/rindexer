@@ -118,7 +118,11 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y libssl-dev pkg-config
+          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
+            sudo apt-get install -y libssl-dev:arm64 pkg-config
+          else
+            sudo apt-get install -y libssl-dev pkg-config
+          fi
 
       - name: Setup cross-compilation for pkg-config
         if: matrix.target == 'aarch64-unknown-linux-gnu'
