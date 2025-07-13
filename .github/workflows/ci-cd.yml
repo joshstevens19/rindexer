@@ -118,10 +118,14 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
-            # Configure ARM64 repositories
+            # Add ARM64 architecture
             sudo dpkg --add-architecture arm64
 
-            # Add ARM64 repositories to sources.list
+            # Disable ARM64 for existing repositories to avoid conflicts
+            sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list
+            sudo sed -i 's/^deb-src /deb-src [arch=amd64] /' /etc/apt/sources.list
+
+            # Add ARM64-specific repositories
             echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/arm64.list
             echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
             echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
