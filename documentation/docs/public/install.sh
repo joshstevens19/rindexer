@@ -31,11 +31,13 @@ ARCH_TYPE=$(uname -m)
 if [[ "$OS_TYPE" == "Linux" ]]; then
     BIN_PATH="$RINDEXER_BIN_DIR/rindexer"
     PLATFORM="linux"
-    if [[ "$ARCH_TYPE" == "aarch64" ]]; then
-        ARCH_TYPE="arm64"
-    else
-        ARCH_TYPE="amd64"
-    fi
+    ARCH_TYPE="amd64"
+    # TODO: once we have arm64 building we can put this line back in
+#    if [[ "$ARCH_TYPE" == "aarch64" ]]; then
+#        ARCH_TYPE="arm64"
+#    else
+#        ARCH_TYPE="amd64"
+#    fi
     EXT="tar.gz"
     if ! command -v unzip &> /dev/null; then
         sudo apt-get update && sudo apt-get install -y unzip
