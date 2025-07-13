@@ -117,13 +117,19 @@ jobs:
       - name: Install OpenSSL development libraries
         if: matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
-          sudo apt-get update -y
           if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
-            # Add ARM64 architecture and repositories
+            # Configure ARM64 repositories
             sudo dpkg --add-architecture arm64
+
+            # Add ARM64 repositories to sources.list
+            echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/arm64.list
+            echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
+            echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
+
             sudo apt-get update -y
             sudo apt-get install -y libssl-dev:arm64 pkg-config
           else
+            sudo apt-get update -y
             sudo apt-get install -y libssl-dev pkg-config
           fi
 
