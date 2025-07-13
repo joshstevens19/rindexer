@@ -1,6 +1,25 @@
 #!/usr/bin/env bash
 set -eo pipefail
 
+VERSION="latest"
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --version)
+            VERSION="$2"
+            shift 2
+            ;;
+        --local|--uninstall)
+            COMMAND="$1"
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: $0 [--version VERSION] [--local|--uninstall]"
+            exit 1
+            ;;
+    esac
+done
+
 BASE_DIR="${XDG_CONFIG_HOME:-$HOME}"
 RINDEXER_DIR="${RINDEXER_DIR:-"$BASE_DIR/.rindexer"}"
 RINDEXER_BIN_DIR="$RINDEXER_DIR/bin"
@@ -12,7 +31,11 @@ ARCH_TYPE=$(uname -m)
 if [[ "$OS_TYPE" == "Linux" ]]; then
     BIN_PATH="$RINDEXER_BIN_DIR/rindexer"
     PLATFORM="linux"
-    ARCH_TYPE="amd64"
+    if [[ "$ARCH_TYPE" == "aarch64" ]]; then
+        ARCH_TYPE="arm64"
+    else
+        ARCH_TYPE="amd64"
+    fi
     EXT="tar.gz"
     if ! command -v unzip &> /dev/null; then
         sudo apt-get update && sudo apt-get install -y unzip
@@ -26,6 +49,7 @@ elif [[ "$OS_TYPE" == "Darwin" ]]; then
     fi
 elif [[ "$OS_TYPE" == "MINGW"* ]] || [[ "$OS_TYPE" == "MSYS"* ]] || [[ "$OS_TYPE" == "CYGWIN"* ]]; then
     PLATFORM="win32"
+    ARCH_TYPE="amd64"
     EXT="zip"
     BIN_PATH="$RINDEXER_BIN_DIR/rindexer.exe"
 else
@@ -33,8 +57,13 @@ else
     exit 1
 fi
 
-BIN_URL="https://rindexer.xyz/releases/${PLATFORM}-${ARCH_TYPE}/rindexer_${PLATFORM}-${ARCH_TYPE}.${EXT}"
-RESOURCES_URL="https://rindexer.xyz/releases/resources.zip"
+if [[ "$VERSION" == "latest" ]]; then
+    BIN_URL="https://rindexer.xyz/releases/${PLATFORM}-${ARCH_TYPE}/rindexer_${PLATFORM}-${ARCH_TYPE}.${EXT}"
+    RESOURCES_URL="https://rindexer.xyz/releases/resources.zip"
+else
+    BIN_URL="https://rindexer.xyz/releases/${PLATFORM}-${ARCH_TYPE}/${VERSION}/rindexer_${PLATFORM}-${ARCH_TYPE}.${EXT}"
+    RESOURCES_URL="https://rindexer.xyz/releases/resources.zip"
+fi
 
 log() {
    echo -e "\033[1;32m$1\033[0m"
@@ -61,7 +90,7 @@ spinner() {
 }
 
 # Install or uninstall based on the command line option
-case "$1" in
+case "$COMMAND" in
     --local)
         log "Using local binary from $LOCAL_BIN_PATH and resources from $LOCAL_RESOURCES_PATH..."
         cp "$LOCAL_BIN_PATH" "$BIN_PATH"
@@ -78,9 +107,20 @@ case "$1" in
         exit 0
         ;;
     *)
-        log "Preparing the installation..."
+        if [[ "$VERSION" == "latest" ]]; then
+            log "Preparing the installation (latest version)..."
+        else
+            log "Preparing the installation (version $VERSION)..."
+        fi
         mkdir -p "$RINDEXER_BIN_DIR"
         log "Downloading binary archive from $BIN_URL..."
+
+        if ! curl -sSf -L --head "$BIN_URL" > /dev/null 2>&1; then
+            error_log "Error: Version $VERSION not found or URL not accessible"
+            error_log "URL: $BIN_URL"
+            exit 1
+        fi
+
         curl -sSf -L "$BIN_URL" -o "$RINDEXER_DIR/rindexer.${EXT}"
         log "Downloaded binary archive to $RINDEXER_DIR/rindexer.${EXT}"
 
@@ -122,8 +162,8 @@ case $SHELL in
     */bash)
         PROFILE="$HOME/.bashrc"
         if [ -f "$HOME/.bash_profile" ]; then
-            grep -q 'source ~/.bashrc' "$HOME/.bash_profile" || { 
-                echo -e "# Source .bashrc if it exists\nif [ -f ~/.bashrc ]; then\n    source ~/.bashrc\nfi" >> "$HOME/.bash_profile"; 
+            grep -q 'source ~/.bashrc' "$HOME/.bash_profile" || {
+                echo -e "# Source .bashrc if it exists\nif [ -f ~/.bashrc ]; then\n    source ~/.bashrc\nfi" >> "$HOME/.bash_profile";
                 log "Updated .bash_profile to source .bashrc";
             }
         fi
@@ -198,7 +238,11 @@ EOF
 chmod +x "$RINDEXERDOWN_PATH"
 
 log ""
-log "rindexer has been installed successfully"
+if [[ "$VERSION" == "latest" ]]; then
+    log "rindexer has been installed successfully (latest version)"
+else
+    log "rindexer has been installed successfully (version $VERSION)"
+fi
 log ""
 log "To update rindexer run 'rindexerup'."
 log ""
