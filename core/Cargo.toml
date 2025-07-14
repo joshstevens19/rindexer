@@ -56,19 +56,20 @@ thiserror = "2.0.12"
 thread_local = "1.1"
 tokio = { version = "1", features = ["full"] }
 tokio-postgres = { version = "0.7", features = [
-  "with-uuid-1",
-  "with-chrono-0_4",
-  "with-serde_json-1",
+    "with-uuid-1",
+    "with-chrono-0_4",
+    "with-serde_json-1",
 ] }
 tokio-stream = "0.1.15"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = [
-  "env-filter",
-  "fmt",
-  "time",
+    "env-filter",
+    "fmt",
+    "time",
 ] }
 mini-moka = "0.10.3"
 url = "2.5.0"
+uuid = "1"
 eyre = { version = "0.6.10" }
 
 # build
@@ -111,13 +112,13 @@ alloy-signer = { version = "0.15.6", default-features = false }
 alloy-signer-local = { version = "0.15.6", default-features = false }
 
 alloy-primitives = { version = "1.0", default-features = false }
-alloy-sol-types  = { version = "1.0", features = ["json"] }
+alloy-sol-types = { version = "1.0", features = ["json"] }
 foundry-blob-explorers = "0.13"
 
 discv5 = "0.9"
 enr = "0.13"
 secp256k1 = { version = "0.30", default-features = false, features = [
- "global-context", "std", "recovery",
+    "global-context", "std", "recovery",
 ] }
 
 [target.'cfg(not(windows))'.dependencies]

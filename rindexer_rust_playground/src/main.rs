@@ -1,4 +1,4 @@
-use std::{env, path::PathBuf, str::FromStr};
+use std::{env, path::PathBuf};
 
 use rindexer::{
     GraphqlOverrideSettings, IndexingDetails, StartDetails,
