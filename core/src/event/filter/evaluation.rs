@@ -371,6 +371,10 @@ fn get_kind_from_json_value(value: &JsonValue) -> String {
                 }
             } else if Decimal::from_str(s).is_ok() && s.contains('.') {
                 "fixed".to_string()
+            } else if string_to_u256(s).is_ok() {
+                "number".to_string()
+            } else if string_to_i256(s).is_ok() {
+                "int256".to_string()
             } else {
                 "string".to_string()
             }
@@ -462,5 +466,39 @@ mod tests {
         let expr = parse("age > 5").unwrap(); // comparing string to number
         let result = evaluate(&expr, &data);
         assert!(matches!(result, Err(EvaluationError::TypeMismatch(_))));
+    }
+
+    #[test]
+    fn test_evaluate_large_unsigned_integer_string() {
+        let data = json!({"value": "1996225771303743351"});
+        let expr = parse("value > 1000000000000000000").unwrap();
+        assert!(evaluate(&expr, &data).unwrap());
+
+        let expr_fail = parse("value < 1000000000000000000").unwrap();
+        assert!(!evaluate(&expr_fail, &data).unwrap());
+    }
+
+    #[test]
+    fn test_evaluate_signed_integer_string() {
+        let data = json!({"value": "-50"});
+        let expr = parse("value < 0").unwrap();
+        assert!(evaluate(&expr, &data).unwrap());
+
+        let expr_fail = parse("value > 0").unwrap();
+        assert!(!evaluate(&expr_fail, &data).unwrap());
+    }
+
+    #[test]
+    fn test_evaluate_non_numeric_string_is_not_a_number() {
+        let data = json!({"value": "hello_world"});
+        let expr = parse("value == 'hello_world'").unwrap();
+        assert!(evaluate(&expr, &data).unwrap());
+
+        // This should fail because "hello_world" cannot be compared to a number
+        let expr_fail = parse("value > 100").unwrap();
+        assert!(matches!(
+            evaluate(&expr_fail, &data),
+            Err(EvaluationError::TypeMismatch(_))
+        ));
     }
 }

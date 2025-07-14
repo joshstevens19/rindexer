@@ -43,12 +43,16 @@ fn get_nested_value(data: &Value, path: &str) -> Option<Value> {
 }
 
 fn evaluate_condition(value: &Value, condition: &str) -> bool {
+    // If the condition is a simple string, do a direct comparison
     if !condition.contains(['&', '|', '>', '<', '=']) {
-        return value == &Value::String(condition.to_string());
+        return match value {
+            Value::String(s) => s == condition,
+            Value::Number(n) => n.to_string() == condition,
+            _ => false,
+        };
     }
 
-    // Replicate the old splitting logic,
-    // but use the new evaluation engine for each part.
+    // For complex expressions, use the new evaluation engine
     let parts: Vec<&str> = condition.split("||").collect();
     for part in parts {
         let subparts: Vec<&str> = part.split("&&").collect();
@@ -88,4 +92,155 @@ pub fn filter_event_data_by_conditions(
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_get_nested_value() {
+        let data = json!({
+            "a": {
+                "b": {
+                    "c": "hello"
+                }
+            },
+            "x": "world"
+        });
+
+        assert_eq!(get_nested_value(&data, "a.b.c"), Some(json!("hello")));
+        assert_eq!(get_nested_value(&data, "x"), Some(json!("world")));
+        assert_eq!(get_nested_value(&data, "a.b"), Some(json!({"c": "hello"})));
+        assert_eq!(get_nested_value(&data, "a.x"), None);
+        assert_eq!(get_nested_value(&data, "d"), None);
+    }
+
+    #[test]
+    fn test_evaluate_condition_simple_equality() {
+        assert!(evaluate_condition(&json!("hello"), "hello"));
+        assert!(!evaluate_condition(&json!("hello"), "world"));
+        assert!(evaluate_condition(&json!(123), "123"));
+        assert!(!evaluate_condition(&json!(123), "456"));
+    }
+
+    #[test]
+    fn test_evaluate_condition_complex_logical_expressions() {
+        // AND conditions
+        assert!(evaluate_condition(&json!(10), ">=10&&<=20"));
+        assert!(!evaluate_condition(&json!(5), ">=10&&<=20"));
+
+        // OR conditions
+        assert!(evaluate_condition(&json!(5), "<10||>20"));
+        assert!(evaluate_condition(&json!(25), "<10||>20"));
+        assert!(!evaluate_condition(&json!(15), "<10||>20"));
+
+        // Combined AND and OR
+        assert!(evaluate_condition(&json!(5), ">=0&&<=10||>=20&&<=30"));
+        assert!(evaluate_condition(&json!(25), ">=0&&<=10||>=20&&<=30"));
+        assert!(!evaluate_condition(&json!(15), ">=0&&<=10||>=20&&<=30"));
+    }
+
+    #[test]
+    fn test_filter_event_data_by_conditions_simple() {
+        let event_data = json!({
+            "name": "test",
+            "value": 100
+        });
+
+        let conditions = vec![json!({
+            "name": "test"
+        })
+        .as_object()
+        .unwrap()
+        .clone()];
+        assert!(filter_event_data_by_conditions(&event_data, &conditions));
+
+        let conditions = vec![json!({
+            "value": "100"
+        })
+        .as_object()
+        .unwrap()
+        .clone()];
+        assert!(filter_event_data_by_conditions(&event_data, &conditions));
+
+        let conditions = vec![json!({
+            "name": "wrong"
+        })
+        .as_object()
+        .unwrap()
+        .clone()];
+        assert!(!filter_event_data_by_conditions(&event_data, &conditions));
+    }
+
+    #[test]
+    fn test_filter_event_data_by_conditions_nested() {
+        let event_data = json!({
+            "a": {
+                "b": {
+                    "c": "hello"
+                }
+            }
+        });
+
+        let conditions = vec![json!({
+            "a.b.c": "hello"
+        })
+        .as_object()
+        .unwrap()
+        .clone()];
+        assert!(filter_event_data_by_conditions(&event_data, &conditions));
+
+        let conditions = vec![json!({
+            "a.b.c": "world"
+        })
+        .as_object()
+        .unwrap()
+        .clone()];
+        assert!(!filter_event_data_by_conditions(&event_data, &conditions));
+    }
+
+    #[test]
+    fn test_filter_event_data_by_conditions_multiple() {
+        let event_data = json!({
+            "name": "test",
+            "value": 100
+        });
+
+        let conditions = vec![
+            json!({"name": "test"}).as_object().unwrap().clone(),
+            json!({"value": "100"}).as_object().unwrap().clone(),
+        ];
+        assert!(filter_event_data_by_conditions(&event_data, &conditions));
+
+        let conditions = vec![
+            json!({"name": "test"}).as_object().unwrap().clone(),
+            json!({"value": "200"}).as_object().unwrap().clone(),
+        ];
+        assert!(!filter_event_data_by_conditions(&event_data, &conditions));
+    }
+
+    #[test]
+    fn test_filter_event_data_by_conditions_complex_expressions() {
+        let event_data = json!({
+            "value": 15
+        });
+
+        let conditions = vec![json!({
+            "value": ">=10&&<=20"
+        })
+        .as_object()
+        .unwrap()
+        .clone()];
+        assert!(filter_event_data_by_conditions(&event_data, &conditions));
+
+        let conditions = vec![json!({
+            "value": "<10||>20"
+        })
+        .as_object()
+        .unwrap()
+        .clone()];
+        assert!(!filter_event_data_by_conditions(&event_data, &conditions));
+    }
 }
