@@ -1,8 +1,8 @@
 use alloy::json_abi::Event;
 use alloy::primitives::{Address, B256, U64};
 use alloy::rpc::types::ValueOrArray;
-use std::{path::PathBuf, sync::Arc};
 use alloy_primitives::keccak256;
+use std::{path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
 
 use crate::event::contract_setup::{AddressDetails, IndexingContractSetup};
@@ -187,7 +187,7 @@ impl EventProcessingConfig {
         let combined = format!("{}{}{}", topic_id, contract_name, network);
         keccak256(combined.as_bytes())
     }
-    
+
     pub fn config(&self) -> &Config {
         match self {
             Self::ContractEventProcessing(config) => &config.config,

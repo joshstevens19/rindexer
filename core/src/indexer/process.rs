@@ -180,7 +180,8 @@ async fn process_contract_events_with_dependencies(
                 .iter()
                 .filter(|e| {
                     // TODO - this is a hacky way to check if it's a filter event
-                    (e.contract_name() == dependency.contract_name || e.contract_name().replace("Filter", "") == dependency.contract_name)
+                    (e.contract_name() == dependency.contract_name
+                        || e.contract_name().replace("Filter", "") == dependency.contract_name)
                         && e.event_name() == dependency.event_name
                 })
                 .cloned()
@@ -191,14 +192,16 @@ async fn process_contract_events_with_dependencies(
                     let live_indexing_events = Arc::clone(&live_indexing_events);
                     async move {
                         // forces live indexing off as it has to handle it a bit differently
-                        process_event_logs(Arc::clone(&event_processing_config), true, true).await?;
+                        process_event_logs(Arc::clone(&event_processing_config), true, true)
+                            .await?;
 
                         if event_processing_config.live_indexing() {
-                            let rindexer_event_filter = event_processing_config.to_event_filter()?;
-                            live_indexing_events
-                                .lock()
-                                .await
-                                .push((Arc::clone(&event_processing_config), rindexer_event_filter));
+                            let rindexer_event_filter =
+                                event_processing_config.to_event_filter()?;
+                            live_indexing_events.lock().await.push((
+                                Arc::clone(&event_processing_config),
+                                rindexer_event_filter,
+                            ));
                         }
 
                         Ok::<(), ProcessContractEventsWithDependenciesError>(())
