@@ -1,6 +1,6 @@
 //! Utility functions for evaluating expressions.
 
-use super::{ast::ComparisonOperator, evaluation::EvaluationError};
+use super::ast::ComparisonOperator;
 use alloy::primitives::{I256, U256};
 use std::str::FromStr;
 
@@ -57,18 +57,14 @@ pub fn string_to_i256(value_str: &str) -> Result<I256, String> {
 }
 
 /// Compares two values implementing the Ord trait using the specified comparison operator.
-pub fn compare_ordered_values<T: Ord>(
-    left: &T,
-    op: &ComparisonOperator,
-    right: &T,
-) -> Result<bool, EvaluationError> {
+pub fn compare_ordered_values<T: Ord>(left: &T, op: &ComparisonOperator, right: &T) -> bool {
     match op {
-        ComparisonOperator::Eq => Ok(left == right),
-        ComparisonOperator::Ne => Ok(left != right),
-        ComparisonOperator::Gt => Ok(left > right),
-        ComparisonOperator::Gte => Ok(left >= right),
-        ComparisonOperator::Lt => Ok(left < right),
-        ComparisonOperator::Lte => Ok(left <= right),
+        ComparisonOperator::Eq => left == right,
+        ComparisonOperator::Ne => left != right,
+        ComparisonOperator::Gt => left > right,
+        ComparisonOperator::Gte => left >= right,
+        ComparisonOperator::Lt => left < right,
+        ComparisonOperator::Lte => left <= right,
     }
 }
 
@@ -194,11 +190,11 @@ mod tests {
 
     #[test]
     fn test_compare_ordered_values_integers() {
-        assert!(compare_ordered_values(&5, &ComparisonOperator::Eq, &5).unwrap());
-        assert!(compare_ordered_values(&10, &ComparisonOperator::Gt, &5).unwrap());
-        assert!(compare_ordered_values(&5, &ComparisonOperator::Lt, &10).unwrap());
-        assert!(compare_ordered_values(&5, &ComparisonOperator::Gte, &5).unwrap());
-        assert!(compare_ordered_values(&5, &ComparisonOperator::Lte, &5).unwrap());
-        assert!(compare_ordered_values(&5, &ComparisonOperator::Ne, &10).unwrap());
+        assert!(compare_ordered_values(&5, &ComparisonOperator::Eq, &5));
+        assert!(compare_ordered_values(&10, &ComparisonOperator::Gt, &5));
+        assert!(compare_ordered_values(&5, &ComparisonOperator::Lt, &10));
+        assert!(compare_ordered_values(&5, &ComparisonOperator::Gte, &5));
+        assert!(compare_ordered_values(&5, &ComparisonOperator::Lte, &5));
+        assert!(compare_ordered_values(&5, &ComparisonOperator::Ne, &10));
     }
 }
