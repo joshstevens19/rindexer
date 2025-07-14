@@ -44,10 +44,9 @@ async fn main() {
             _ => {}
         }
     }
-
+    
     println!(
-        "Starting rindexer rust project - graphql {} indexer {}",
-        enable_graphql, enable_indexer
+        "Starting rindexer rust project - graphql {enable_graphql} indexer {enable_indexer}"
     );
 
     let path = env::current_dir();
@@ -74,12 +73,12 @@ async fn main() {
             match result {
                 Ok(_) => {}
                 Err(e) => {
-                    println!("Error starting rindexer: {:?}", e);
+                    println!("Error starting rindexer: {e:?}");
                 }
             }
         }
         Err(e) => {
-            println!("Error getting current directory: {:?}", e);
+            println!("Error getting current directory: {e:?}");
         }
     }
 }

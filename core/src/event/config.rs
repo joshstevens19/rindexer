@@ -1,7 +1,6 @@
 use alloy::json_abi::Event;
-use alloy::primitives::{Address, B256, U64};
+use alloy::primitives::{keccak256, Address, B256, U64};
 use alloy::rpc::types::ValueOrArray;
-use alloy_primitives::keccak256;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
 
