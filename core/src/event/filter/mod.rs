@@ -7,9 +7,15 @@ pub mod helpers;
 pub mod parsing;
 
 use self::evaluation::EvaluationError;
+use once_cell::sync::Lazy;
+use regex::Regex;
 use serde_json::{json, Map, Value};
 use thiserror::Error;
 use winnow::error::{ContextError, ParseError};
+
+/// This regex finds logical operators (&&, ||) possibly surrounded by whitespace.
+static LOGICAL_OPERATOR_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\s*(&&|\|\|)\s*").unwrap());
 
 /// Error type for the filter module, encapsulating parsing and evaluation errors.
 #[derive(Debug, Error)]
@@ -63,24 +69,25 @@ fn get_nested_value(data: &Value, path: &str) -> Option<Value> {
     }
     Some(current.clone())
 }
-
-/// This function is a compatibility layer to support the `conditions` format.
-/// It has known limitations, such as not supporting proper operator precedence for
-/// complex expressions (e.g., `(a > 1 && b < 2) || c == 3`).
+/// This function is a compatibility layer to support the legacy `conditions` format.
+/// It translates the legacy format into a modern filter expression to ensure
+/// correct operator precedence (e.g., for `> 5 && < 10 || == 0`).
 ///
-/// It is highly recommended to use the `filter_expression`
-/// field, which uses a proper parsing and evaluation engine
+/// While it now correctly handles complex expressions, it is still recommended
+/// to use the `filter_expression` field directly for new implementations, as it
+/// avoids this translation step and is more explicit.
 ///
 /// # Arguments
 /// * `value` - The value to evaluate against the condition.
-/// * `condition` - A string representing the condition to evaluate.
+/// * `condition` - A string representing the legacy condition to evaluate (e.g., `> 10 && != 20`).
+///
 /// # Returns
 /// * `bool` - Returns `true` if the value satisfies the condition, `false` otherwise.
 fn evaluate_condition(value: &Value, condition: &str) -> bool {
     tracing::debug!(?value, ?condition, "Evaluating legacy condition");
 
-    // If the condition is a simple string, do a direct comparison
-    if !condition.contains(['&', '|', '>', '<', '=']) {
+    // Fast path for simple equality checks where no complex operators are present.
+    if !condition.contains(['&', '|', '>', '<', '=', '!']) {
         return match value {
             Value::String(s) => s == condition,
             Value::Number(n) => n.to_string() == condition,
@@ -90,28 +97,26 @@ fn evaluate_condition(value: &Value, condition: &str) -> bool {
         };
     }
 
-    // For complex expressions, use the new evaluation engine
-    let parts: Vec<&str> = condition.split("||").collect();
-    for part in parts {
-        let subparts: Vec<&str> = part.split("&&").collect();
-        let mut and_result = true;
-        for subpart in subparts {
-            // Construct a valid expression for the new engine.
-            let expr_str = format!("_placeholder_{}", subpart.trim());
-            let context = json!({ "_placeholder_": value });
+    // For complex expressions, reconstruct the legacy format into a valid
+    // expression for the new evaluation engine.
+    //
+    // Legacy format: `> 5 && < 10`
+    // Target format: `_placeholder_ > 5 && _placeholder_ < 10`
+    //
+    // The regex finds `&&` or `||` and replaces it with ` [OPERATOR] _placeholder_ `,
+    // effectively inserting the subject of the expression for each subsequent clause.
+    let reconstructed_after_ops =
+        LOGICAL_OPERATOR_RE.replace_all(condition.trim(), " $1 _placeholder_ ");
 
-            // Evaluate the sub-expression
-            if !filter_by_expression(&expr_str, &context).unwrap_or(false) {
-                and_result = false;
-                break;
-            }
-        }
-        if and_result {
-            return true;
-        }
-    }
+    // Prepend the placeholder for the very first clause.
+    let final_expr = format!("_placeholder_ {}", reconstructed_after_ops);
+    let context = json!({ "_placeholder_": value });
 
-    false
+    tracing::debug!(expression = final_expr, ?context, "Evaluating reconstructed expression");
+
+    // Delegate to the proper engine.
+    // If evaluation fails, default to `false`.
+    filter_by_expression(&final_expr, &context).unwrap_or(false)
 }
 
 /// Filters event data based on a set of conditions.
@@ -195,6 +200,21 @@ mod tests {
         assert!(evaluate_condition(&json!(5), ">=0&&<=10||>=20&&<=30"));
         assert!(evaluate_condition(&json!(25), ">=0&&<=10||>=20&&<=30"));
         assert!(!evaluate_condition(&json!(15), ">=0&&<=10||>=20&&<=30"));
+    }
+
+    #[test]
+    fn test_evaluate_condition_correct_precedence() {
+        // Test with value = 2.
+        // `true || (false && false)` -> `true || false` -> `true`
+        assert!(evaluate_condition(&json!(2), "== 2 || >= 10 && <= 20"));
+
+        // Test with value = 15.
+        // `false || (true && true)` -> `false || true` -> `true`
+        assert!(evaluate_condition(&json!(15), "== 2 || >= 10 && <= 20"));
+
+        // Test with value = 30
+        // `false || (true && false)` -> `false || false` -> `false`
+        assert!(!evaluate_condition(&json!(30), "== 2 || >= 10 && <= 20"));
     }
 
     #[test]
