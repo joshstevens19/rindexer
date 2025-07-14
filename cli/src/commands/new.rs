@@ -18,12 +18,14 @@ use rindexer::{
         contract::{Contract, ContractDetails},
         core::{Manifest, ProjectType},
         native_transfer::NativeTransfers,
-        network::{Network, RethConfig},
+        network::Network,
         storage::{CsvDetails, PostgresDetails, Storage},
         yaml::{write_manifest, YAML_CONFIG_NAME},
     },
     write_file, StringOrArray, WriteFileError,
 };
+#[cfg(feature = "reth")]
+use rindexer::manifest::network::RethConfig;
 
 fn generate_rindexer_rust_project(project_path: &Path) {
     let generated = generate_rust_project(project_path);
@@ -65,7 +67,10 @@ fn write_gitignore(path: &Path) -> Result<(), WriteFileError> {
 pub fn handle_new_command(
     project_path: PathBuf,
     project_type: ProjectType,
+    #[cfg(feature = "reth")] 
     reth_config: Option<RethConfig>,
+    #[cfg(not(feature = "reth"))] 
+    reth_config: Option<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let init_message = if reth_config.is_some() {
         "Initializing new rindexer project with Reth support..."
@@ -107,6 +112,7 @@ pub fn handle_new_command(
     let csv_enabled = storage_choice == "csv" || storage_choice == "both";
 
     // Handle Reth configuration if enabled
+    #[cfg(feature = "reth")]
     let final_reth_config = if let Some(mut reth_cfg) = reth_config {
         let mut new_args = vec![];
         print_success_message("\nReth Configuration:");
@@ -154,6 +160,12 @@ pub fn handle_new_command(
         Some(reth_cfg)
     } else {
         None
+    };
+    
+    #[cfg(not(feature = "reth"))]
+    let final_reth_config = {
+        let _ = reth_config;
+        None::<()>
     };
 
     let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
@@ -203,6 +215,7 @@ pub fn handle_new_command(
             max_block_range: None,
             disable_logs_bloom_checks: None,
             get_logs_settings: None,
+            #[cfg(feature = "reth")]
             reth: final_reth_config,
         }],
         contracts: vec![Contract {

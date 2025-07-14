@@ -17,8 +17,10 @@ use std::{path::PathBuf, str::FromStr, sync::Once};
 use clap::Parser;
 use rindexer::{
     load_env_from_project_path,
-    manifest::{core::ProjectType, network::RethConfig},
+    manifest::core::ProjectType,
 };
+#[cfg(feature = "reth")]
+use rindexer::manifest::network::RethConfig;
 
 use crate::{
     cli_interface::{AddSubcommands, Commands, NewSubcommands, CLI},
@@ -89,6 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 NewSubcommands::Rust { reth } => (ProjectType::Rust, reth),
             };
 
+            #[cfg(feature = "reth")]
             let reth_config = if reth_args.reth {
                 match RethConfig::from_cli_args(reth_args.reth_args.clone()) {
                     Ok(config) => Some(config),
@@ -98,6 +101,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             } else {
+                None
+            };
+            
+            #[cfg(not(feature = "reth"))]
+            let reth_config = {
+                #[allow(unused_variables)]
+                let _ = reth_args;
                 None
             };
 

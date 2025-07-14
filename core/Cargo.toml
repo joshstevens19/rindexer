@@ -78,27 +78,27 @@ foundry-compilers = "0.18.0"
 alloy-chains = "0.2.2"
 
 # reth
-reth = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", features = ["full"] }
-reth-chainspec = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-ethereum-cli = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-discv5 = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-execution-errors = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-execution-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-exex = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", features = ["serde"] }
-reth-eth-wire = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-evm = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-network = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", features = ["test-utils"] }
-reth-network-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-network-peers = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-node-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-provider = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-revm = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-tracing = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-stages-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
+reth = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", optional = true }
+reth-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", features = ["full"], optional = true }
+reth-chainspec = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", optional = true }
+reth-ethereum-cli = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", optional = true }
+reth-discv5 = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", optional = true }
+reth-execution-errors = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", optional = true }
+reth-execution-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", optional = true }
+reth-exex = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", features = ["serde"], optional = true }
+reth-eth-wire = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", optional = true }
+reth-evm = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", optional = true }
+reth-network = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", features = ["test-utils"], optional = true }
+reth-network-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", optional = true }
+reth-network-peers = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", optional = true }
+reth-node-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", optional = true }
+reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", optional = true }
+reth-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", optional = true }
+reth-provider = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", optional = true }
+reth-revm = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", optional = true }
+reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", optional = true }
+reth-tracing = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", optional = true }
+reth-stages-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", optional = true }
 
 discv5 = "0.9"
 enr = "0.13"
@@ -119,3 +119,26 @@ incremental = false
 
 [features]
 jemalloc = ["dep:jemallocator", "dep:jemalloc-ctl"]
+reth = [
+    "dep:reth",
+    "dep:reth-ethereum",
+    "dep:reth-chainspec",
+    "dep:reth-ethereum-cli",
+    "dep:reth-discv5",
+    "dep:reth-execution-errors",
+    "dep:reth-execution-types",
+    "dep:reth-exex",
+    "dep:reth-eth-wire",
+    "dep:reth-evm",
+    "dep:reth-network",
+    "dep:reth-network-api",
+    "dep:reth-network-peers",
+    "dep:reth-node-api",
+    "dep:reth-node-ethereum",
+    "dep:reth-primitives",
+    "dep:reth-provider",
+    "dep:reth-revm",
+    "dep:reth-transaction-pool",
+    "dep:reth-tracing",
+    "dep:reth-stages-types",
+]

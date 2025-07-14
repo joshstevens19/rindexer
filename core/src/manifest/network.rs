@@ -1,15 +1,19 @@
 use std::fmt;
+#[cfg(feature = "reth")]
 use std::time::Duration;
 
 use alloy::primitives::U64;
 use serde::de::Visitor;
 use serde::{de, Deserialize, Deserializer, Serialize};
 use tokio::sync::broadcast::Sender;
+#[cfg(feature = "reth")]
 use tokio::time::sleep;
 
 use super::core::{deserialize_option_u64_from_string, serialize_option_u64_as_string};
+#[cfg(feature = "reth")]
 pub use super::reth::RethConfig;
 use crate::notifications::ChainStateNotification;
+#[cfg(feature = "reth")]
 use crate::reth::node::start_reth_node_with_exex;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -45,12 +49,14 @@ pub struct Network {
     pub disable_logs_bloom_checks: Option<bool>,
 
     /// Reth configuration for this network
+    #[cfg(feature = "reth")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reth: Option<RethConfig>,
 }
 
 impl Network {
     /// Get the IPC path for the Reth node
+    #[cfg(feature = "reth")]
     pub fn get_reth_ipc_path(&self) -> Option<String> {
         use reth::cli::Commands;
 
@@ -65,7 +71,14 @@ impl Network {
 
     /// Check if Reth is enabled for this network
     pub fn is_reth_enabled(&self) -> bool {
-        self.reth.is_some()
+        #[cfg(feature = "reth")]
+        {
+            self.reth.is_some()
+        }
+        #[cfg(not(feature = "reth"))]
+        {
+            false
+        }
     }
 
     /// Try to start the Reth node for this network
@@ -78,20 +91,27 @@ impl Network {
     pub async fn try_start_reth_node(
         &self,
     ) -> Result<Option<Sender<ChainStateNotification>>, eyre::Error> {
-        if !self.is_reth_enabled() {
-            return Ok(None);
+        #[cfg(feature = "reth")]
+        {
+            if !self.is_reth_enabled() {
+                return Ok(None);
+            }
+
+            let reth_cli = self.reth.as_ref().unwrap().to_cli().map_err(|e| eyre::eyre!(e))?;
+            let reth_tx = start_reth_node_with_exex(reth_cli)?;
+
+            // Wait for IPC path to be ready if specified
+            if let Some(ipc_path) = self.get_reth_ipc_path() {
+                wait_for_ipc_ready(&ipc_path).await?;
+            }
+            println!("started reth node");
+
+            Ok(Some(reth_tx))
         }
-
-        let reth_cli = self.reth.as_ref().unwrap().to_cli().map_err(|e| eyre::eyre!(e))?;
-        let reth_tx = start_reth_node_with_exex(reth_cli)?;
-
-        // Wait for IPC path to be ready if specified
-        if let Some(ipc_path) = self.get_reth_ipc_path() {
-            wait_for_ipc_ready(&ipc_path).await?;
+        #[cfg(not(feature = "reth"))]
+        {
+            Ok(None)
         }
-        println!("started reth node");
-
-        Ok(Some(reth_tx))
     }
 }
 
@@ -190,6 +210,7 @@ impl<'de> Deserialize<'de> for BlockPollFrequency {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "reth")]
     use reth::cli::Commands;
 
     use serde_yaml;
@@ -272,6 +293,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "reth")]
     #[test]
     fn test_network_with_reth_config() {
         let network: Network = serde_yaml::from_str(
@@ -287,6 +309,7 @@ mod tests {
         )
         .unwrap();
 
+        assert!(network.is_reth_enabled());
         assert!(network.reth.is_some());
         let reth = network.reth.as_ref().unwrap();
         assert!(reth.enabled);
@@ -297,6 +320,7 @@ mod tests {
         assert_eq!(ipc_path, Some("/custom/reth.ipc".to_string()));
     }
 
+    #[cfg(feature = "reth")]
     #[test]
     fn test_network_with_reth_config_no_ipc_path() {
         let network: Network = serde_yaml::from_str(
@@ -318,6 +342,7 @@ mod tests {
         )
         .unwrap();
 
+        assert!(network.is_reth_enabled());
         assert!(network.reth.is_some());
         let reth = network.reth.as_ref().unwrap();
         assert!(reth.enabled);
@@ -334,6 +359,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "reth")]
     #[test]
     fn test_network_reth_ipc_disabled() {
         let network: Network = serde_yaml::from_str(
@@ -350,6 +376,7 @@ mod tests {
         .unwrap();
 
         // Should return None when IPC is disabled
+        assert!(network.is_reth_enabled());
         let cli = network.reth.as_ref().unwrap().to_cli().unwrap();
         if let Commands::Node(node_cmd) = &cli.command {
             assert!(node_cmd.rpc.ipcdisable);
@@ -368,12 +395,18 @@ mod tests {
         )
         .unwrap();
 
-        assert!(network.reth.is_none());
-        assert_eq!(network.get_reth_ipc_path(), None);
+        #[cfg(feature = "reth")]
+        {
+            assert!(network.reth.is_none());
+            assert_eq!(network.get_reth_ipc_path(), None);
+        }
+        
+        assert!(!network.is_reth_enabled());
     }
 }
 
 /// Wait for IPC socket file to be ready
+#[cfg(feature = "reth")]
 pub async fn wait_for_ipc_ready(ipc_path: &str) -> Result<(), eyre::Error> {
     use alloy::providers::{IpcConnect, Provider, ProviderBuilder};
 

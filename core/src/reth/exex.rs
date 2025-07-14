@@ -1,3 +1,5 @@
+#![cfg(feature = "reth")]
+
 use crate::notifications::ChainStateNotification;
 use futures::StreamExt;
 use reth_exex::{ExExContext, ExExNotification};

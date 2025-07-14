@@ -2,6 +2,7 @@
 pub mod generator;
 pub mod indexer;
 pub mod manifest;
+#[cfg(feature = "reth")]
 pub mod reth;
 
 mod system_state;

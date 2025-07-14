@@ -43,7 +43,7 @@ impl NetworkContract {
     }
 
     pub fn chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
-        self.cached_provider.chain_state_notification.clone()
+        self.cached_provider.get_chain_state_notification()
     }
 }
 
@@ -118,7 +118,7 @@ impl NetworkTrace {
     }
 
     pub fn chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
-        self.cached_provider.chain_state_notification.clone()
+        self.cached_provider.get_chain_state_notification()
     }
 }
 

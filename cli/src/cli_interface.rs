@@ -23,6 +23,7 @@ pub struct NewDetails {
     database: Option<bool>,
 }
 
+#[cfg(feature = "reth")]
 #[derive(Args, Debug, Clone)]
 pub struct RethArgs {
     /// optional - Enable Reth support
@@ -35,6 +36,10 @@ pub struct RethArgs {
     #[clap(last = true)]
     pub reth_args: Vec<String>,
 }
+
+#[cfg(not(feature = "reth"))]
+#[derive(Args, Debug, Clone)]
+pub struct RethArgs {}
 
 #[derive(Parser, Debug)]
 #[clap(author = "Josh Stevens", version = "1.0", about = "Blazing fast EVM indexing tool built in rust", long_about = None)]

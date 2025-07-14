@@ -81,6 +81,7 @@ pub struct JsonRpcCachedProvider {
     block_poll_frequency: Option<BlockPollFrequency>,
     address_filtering: Option<AddressFiltering>,
     pub max_block_range: Option<U64>,
+    #[cfg(feature = "reth")]
     pub chain_state_notification: Option<Sender<ChainStateNotification>>,
 }
 
@@ -185,6 +186,7 @@ impl JsonRpcCachedProvider {
         block_poll_frequency: Option<BlockPollFrequency>,
         max_block_range: Option<U64>,
         address_filtering: Option<AddressFiltering>,
+        #[cfg(feature = "reth")]
         chain_state_notification: Option<Sender<ChainStateNotification>>,
     ) -> Self {
         let chain = Chain::from(chain_id);
@@ -212,6 +214,7 @@ impl JsonRpcCachedProvider {
             is_zk_chain,
             block_poll_frequency,
             address_filtering,
+            #[cfg(feature = "reth")]
             chain_state_notification,
         }
     }
@@ -607,7 +610,14 @@ impl JsonRpcCachedProvider {
     }
 
     pub fn get_chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
-        self.chain_state_notification.clone()
+        #[cfg(feature = "reth")]
+        {
+            self.chain_state_notification.clone()
+        }
+        #[cfg(not(feature = "reth"))]
+        {
+            None
+        }
     }
 }
 #[derive(Error, Debug)]
@@ -637,6 +647,7 @@ pub async fn create_client(
     block_poll_frequency: Option<BlockPollFrequency>,
     custom_headers: HeaderMap,
     address_filtering: Option<AddressFiltering>,
+    #[cfg(feature = "reth")]
     chain_state_notification: Option<Sender<ChainStateNotification>>,
 ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
     let (rpc_client, provider) = if rpc_url.ends_with(".ipc") {
@@ -685,6 +696,7 @@ pub async fn create_client(
             block_poll_frequency,
             max_block_range,
             address_filtering,
+            #[cfg(feature = "reth")]
             chain_state_notification,
         )
         .await,
@@ -720,7 +732,14 @@ impl CreateNetworkProvider {
             // if reth is enabled and started successfully, we can use the reth ipc path to create a provider.
             // else, we will use the rpc url provided in the manifest.
             let provider_url = if reth_tx.is_some() {
-                network.get_reth_ipc_path().unwrap()
+                #[cfg(feature = "reth")]
+                {
+                    network.get_reth_ipc_path().unwrap()
+                }
+                #[cfg(not(feature = "reth"))]
+                {
+                    network.rpc.clone()
+                }
             } else {
                 network.rpc.clone()
             };
@@ -734,6 +753,7 @@ impl CreateNetworkProvider {
                 network.block_poll_frequency,
                 manifest.get_custom_headers(),
                 network.get_logs_settings.clone().map(|settings| settings.address_filtering),
+                #[cfg(feature = "reth")]
                 reth_tx.clone(),
             )
             .await?;
@@ -750,7 +770,7 @@ impl CreateNetworkProvider {
 
     /// Get the chain state notification for this network
     pub fn chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
-        self.client.chain_state_notification.clone()
+        self.client.get_chain_state_notification()
     }
 }
 
@@ -770,7 +790,17 @@ mod tests {
     async fn test_create_retry_client() {
         let rpc_url = "http://localhost:8545";
         let result =
-            create_client(rpc_url, 1, Some(660), None, None, HeaderMap::new(), None, None).await;
+            create_client(
+                rpc_url, 
+                1, 
+                Some(660), 
+                None, 
+                None, 
+                HeaderMap::new(), 
+                None, 
+                #[cfg(feature = "reth")]
+                None
+            ).await;
         assert!(result.is_ok());
     }
 
@@ -778,7 +808,17 @@ mod tests {
     async fn test_create_retry_client_invalid_url() {
         let rpc_url = "invalid_url";
         let result =
-            create_client(rpc_url, 1, Some(660), None, None, HeaderMap::new(), None, None).await;
+            create_client(
+                rpc_url, 
+                1, 
+                Some(660), 
+                None, 
+                None, 
+                HeaderMap::new(), 
+                None, 
+                #[cfg(feature = "reth")]
+                None
+            ).await;
         assert!(result.is_err());
         if let Err(RetryClientError::HttpProviderCantBeCreated(url, _)) = result {
             assert_eq!(url, rpc_url);

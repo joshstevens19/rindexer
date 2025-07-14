@@ -1,3 +1,5 @@
+#![cfg(feature = "reth")]
+
 use std::thread::Builder;
 
 use futures::FutureExt;

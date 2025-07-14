@@ -1,3 +1,5 @@
+#![cfg(feature = "reth")]
+
 use reth::cli::Cli;
 use serde::{Deserialize, Serialize};
 

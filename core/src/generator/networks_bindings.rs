@@ -14,18 +14,30 @@ pub fn network_provider_fn_name(network: &Network) -> String {
 
 fn generate_reth_init_fn(network: &Network) -> Code {
     if network.is_reth_enabled() {
-        let reth_cli_args = network.reth.as_ref().unwrap().to_cli_args();
-        Code::new(format!(
-            r#"
-            let cli = reth::cli::Cli::try_parse_args_from({reth_cli_args:?}).unwrap();
-            let chain_state_notification = start_reth_node_with_exex(cli).await.unwrap();
-            let chain_state_notification = Some(chain_state_notification);
-            "#
-        ))
+        #[cfg(feature = "reth")]
+        {
+            let reth_cli_args = network.reth.as_ref().unwrap().to_cli_args();
+            Code::new(format!(
+                r#"
+                let cli = reth::cli::Cli::try_parse_args_from({reth_cli_args:?}).unwrap();
+                let chain_state_notification = start_reth_node_with_exex(cli).await.unwrap();
+                let chain_state_notification = Some(chain_state_notification);
+                "#
+            ))
+        }
+        #[cfg(not(feature = "reth"))]
+        {
+            Code::new(
+                r#"
+                let chain_state_notification: Option<Sender<ChainStateNotification>> = None;
+                "#
+                .to_string(),
+            )
+        }
     } else {
         Code::new(
             r#"
-            let chain_state_notification = None;
+            let chain_state_notification: Option<Sender<ChainStateNotification>> = None;
             "#
             .to_string(),
         )
@@ -38,7 +50,7 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
         {network_name}
             .get_or_init(|| async {{
                 {reth_init_fn}
-                {client_fn}(&public_read_env_value("{network_url}").unwrap_or("{network_url}".to_string()), {chain_id}, {compute_units_per_second}, {max_block_range}, {block_poll_frq} {placeholder_headers}, {get_logs_settings}, {chain_state_notification})
+                {client_fn}(&public_read_env_value("{network_url}").unwrap_or("{network_url}".to_string()), {chain_id}, {compute_units_per_second}, {max_block_range}, {block_poll_frq} {placeholder_headers}, {get_logs_settings}{chain_state_notification})
                 .await
                 .expect("Error creating provider")
             }})
@@ -47,9 +59,16 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
         "#,
         network_name = network_provider_name(network),
         network_url = if network.is_reth_enabled() {
-            if let Some(ipc_path) = network.get_reth_ipc_path() {
-                ipc_path
-            } else {
+            #[cfg(feature = "reth")]
+            {
+                if let Some(ipc_path) = network.get_reth_ipc_path() {
+                    ipc_path
+                } else {
+                    network.rpc.clone()
+                }
+            }
+            #[cfg(not(feature = "reth"))]
+            {
                 network.rpc.clone()
             }
         } else {
@@ -81,7 +100,11 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
             if network.rpc.contains("shadow") { "create_shadow_client" } else { "create_client" },
         placeholder_headers =
             if network.rpc.contains("shadow") { "" } else { ", HeaderMap::new()" },
-        chain_state_notification = "chain_state_notification",
+        chain_state_notification = if network.is_reth_enabled() {
+            ", #[cfg(feature = \"reth\")] chain_state_notification"
+        } else {
+            ", #[cfg(feature = \"reth\")] None"
+        },
         reth_init_fn = generate_reth_init_fn(network),
     ))
 }
@@ -144,9 +167,10 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
         manifest::network::{AddressFiltering, BlockPollFrequency},
         provider::{RindexerProvider, create_client, JsonRpcCachedProvider, RetryClientError},
         notifications::ChainStateNotification,
-        reth::node::start_reth_node_with_exex,
         public_read_env_value
     };
+    #[cfg(feature = "reth")]
+    use rindexer::reth::node::start_reth_node_with_exex;
     use std::sync::Arc;
     use tokio::sync::OnceCell;
     use tokio::sync::broadcast::Sender;
@@ -159,6 +183,7 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
         block_poll_frequency: Option<BlockPollFrequency>,
         max_block_range: Option<U64>,
         address_filtering: Option<AddressFiltering>,
+        #[cfg(feature = "reth")]
         chain_state_notification: Option<Sender<ChainStateNotification>>,
     ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
         let mut header = HeaderMap::new();
@@ -166,7 +191,17 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
             "X-SHADOW-API-KEY",
             public_read_env_value("RINDEXER_PHANTOM_API_KEY").unwrap().parse().unwrap(),
         );
-        create_client(rpc_url, chain_id, compute_units_per_second, max_block_range, block_poll_frequency, header, address_filtering, chain_state_notification).await
+        create_client(
+            rpc_url, 
+            chain_id, 
+            compute_units_per_second, 
+            max_block_range, 
+            block_poll_frequency, 
+            header, 
+            address_filtering, 
+            #[cfg(feature = "reth")]
+            chain_state_notification
+        ).await
     }
         "#
         .to_string(),

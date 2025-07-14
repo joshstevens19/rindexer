@@ -1,3 +1,5 @@
+#![cfg(feature = "reth")]
+
 use std::time::{Duration, Instant};
 
 use crate::provider::RetryClientError;
