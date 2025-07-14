@@ -147,8 +147,7 @@ pub async fn start_graphql_server(
     // Wait for the initial server startup
     let pid = rx.await.map_err(|e| {
         StartGraphqlServerError::GraphQLServerStartupError(format!(
-            "Failed to receive initial PID: {}",
-            e
+            "Failed to receive initial PID: {e}"
         ))
     })?;
 

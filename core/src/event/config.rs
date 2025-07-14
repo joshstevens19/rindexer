@@ -183,7 +183,7 @@ impl EventProcessingConfig {
         let contract_name = self.contract_name();
         let network = self.network_contract().network.to_string();
 
-        let combined = format!("{}{}{}", topic_id, contract_name, network);
+        let combined = format!("{topic_id}{contract_name}{network}");
         keccak256(combined.as_bytes())
     }
 

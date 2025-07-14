@@ -45,7 +45,7 @@ pub fn start_reth_node_with_exex(cli: Cli) -> eyre::Result<Sender<ChainStateNoti
             handle.wait_for_node_exit().await
         });
         if let Err(e) = result {
-            eprintln!("Node thread error: {:?}", e);
+            eprintln!("Node thread error: {e:?}");
         }
     });
 
