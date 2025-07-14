@@ -1,5 +1,4 @@
-use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
-
+use crate::blockclock::BlockClock;
 use crate::helpers::{halved_block_number, is_relevant_block};
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
@@ -11,8 +10,12 @@ use alloy::{
     primitives::{B256, U64},
     rpc::types::Log,
 };
+use lru::LruCache;
 use rand::{random_bool, random_ratio};
 use regex::Regex;
+use std::collections::VecDeque;
+use std::num::NonZeroUsize;
+use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
 use tokio::{sync::mpsc, time::Instant};
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, error, info, warn};
@@ -78,6 +81,7 @@ pub fn fetch_logs_stream(
             }
 
             let result = fetch_historic_logs_stream(
+                config.network_contract().block_clock.clone(),
                 &config.network_contract().cached_provider,
                 &tx,
                 &config.topic_id(),
@@ -128,6 +132,7 @@ pub fn fetch_logs_stream(
         // Live indexing mode
         if config.live_indexing() && !force_no_live_indexing {
             live_indexing_stream(
+                config.network_contract().block_clock.clone(),
                 &config.network_contract().cached_provider,
                 &tx,
                 snapshot_to_block,
@@ -153,6 +158,7 @@ struct ProcessHistoricLogsStreamResult {
 
 #[allow(clippy::too_many_arguments)]
 async fn fetch_historic_logs_stream(
+    block_clock: BlockClock,
     cached_provider: &Arc<JsonRpcCachedProvider>,
     tx: &mpsc::Sender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
     topic_id: &B256,
@@ -220,7 +226,6 @@ async fn fetch_historic_logs_stream(
             );
 
             let logs_empty = logs.is_empty();
-            // clone here over the full logs way less overhead
             let last_log = logs.last().cloned();
 
             if !logs_empty {
@@ -235,7 +240,20 @@ async fn fetch_historic_logs_stream(
                 );
             }
 
-            sender.send(Ok(FetchLogsResult { logs, from_block, to_block }));
+            if block_clock.enabled {
+                if let Ok(logs) = block_clock.attach_log_timestamps(logs).await {
+                    sender.send(Ok(FetchLogsResult { logs, from_block, to_block }));
+                } else {
+                    return Some(ProcessHistoricLogsStreamResult {
+                        next: current_filter
+                            .set_from_block(from_block)
+                            .set_to_block(halved_block_number(to_block, from_block)),
+                        max_block_range_limitation,
+                    });
+                }
+            } else {
+                sender.send(Ok(FetchLogsResult { logs, from_block, to_block }));
+            }
 
             if logs_empty {
                 let next_from_block = to_block + U64::from(1);
@@ -380,6 +398,7 @@ async fn fetch_historic_logs_stream(
 /// within a safe range, updating the filter, and sending the logs to the provided channel.
 #[allow(clippy::too_many_arguments)]
 async fn live_indexing_stream(
+    block_clock: BlockClock,
     cached_provider: &Arc<JsonRpcCachedProvider>,
     tx: &mpsc::Sender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
     last_seen_block_number: U64,
@@ -519,14 +538,49 @@ async fn live_indexing_stream(
                                         let logs_empty = logs.is_empty();
                                         let last_log = logs.last().cloned();
 
+                                        // Attach timestamp from current latest_block to the logs
+                                        // to prevent any further fetches.
+                                        let logs = logs
+                                            .into_iter()
+                                            .map(|mut log| {
+                                                if let Some(n) = log.block_number {
+                                                    if n == latest_block.header.number {
+                                                        log.block_timestamp =
+                                                            Some(latest_block.header.timestamp);
+                                                    } else {
+                                                        warn!("------------------------");
+                                                        warn!("TEMP WARNING. Missing block TS in Live.");
+                                                        warn!("------------------------");
+                                                    }
+                                                }
+                                                log
+                                            })
+                                            .collect::<Vec<_>>();
+
                                         if tx.capacity() == 0 {
                                             warn!(
-                                                "{}::{} - {} - Log channel full, live indexer will wait for events to be processed.",
+                                                "{}::{} - {} - Log channel full, live indexer will wait for events to be processed. Live indexer should process realtime.",
                                                 info_log_name,
                                                 network,
                                                 IndexingEventProgressStatus::Live.log(),
                                             );
                                         }
+
+                                        let logs = if block_clock.enabled {
+                                            if let Ok(logs_with_ts) =
+                                                block_clock.attach_log_timestamps(logs).await
+                                            {
+                                                logs_with_ts
+                                            } else {
+                                                error!(
+                                                    "Error getting blocktime, will try again in 1s"
+                                                );
+                                                tokio::time::sleep(Duration::from_secs(1)).await;
+                                                continue;
+                                            }
+                                        } else {
+                                            logs
+                                        };
 
                                         if let Err(e) = tx
                                             .send(Ok(FetchLogsResult {
