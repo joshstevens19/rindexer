@@ -28,7 +28,7 @@ pub enum FilterError<'a> {
 /// This is the main public entry point for the new conditions module. It orchestrates
 /// the parsing of the expression string and the evaluation of the resulting AST
 /// against the provided data.
-/// 
+///
 /// # Arguments
 /// * `expression_str` - A string representing the filter expression to be evaluated.
 /// * `data` - A JSON object (serde_json::Value) against which the expression will be evaluated.
@@ -45,7 +45,7 @@ pub fn filter_by_expression<'a>(
 
 /// Retrieves a nested value from a JSON object using a dot-separated path.
 /// If the path does not exist, it returns `None`.
-/// 
+///
 /// # Arguments
 /// * `data` - A JSON object (serde_json::Value) from which to retrieve the value.
 /// * `path` - A dot-separated string representing the path to the desired value.
@@ -70,13 +70,15 @@ fn get_nested_value(data: &Value, path: &str) -> Option<Value> {
 ///
 /// It is highly recommended to use the `filter_expression`
 /// field, which uses a proper parsing and evaluation engine
-/// 
+///
 /// # Arguments
 /// * `value` - The value to evaluate against the condition.
 /// * `condition` - A string representing the condition to evaluate.
 /// # Returns
 /// * `bool` - Returns `true` if the value satisfies the condition, `false` otherwise.
 fn evaluate_condition(value: &Value, condition: &str) -> bool {
+    tracing::debug!(?value, ?condition, "Evaluating legacy condition");
+
     // If the condition is a simple string, do a direct comparison
     if !condition.contains(['&', '|', '>', '<', '=']) {
         return match value {
@@ -114,7 +116,7 @@ fn evaluate_condition(value: &Value, condition: &str) -> bool {
 
 /// Filters event data based on a set of conditions.
 /// This function checks if the event data matches all conditions specified in the `conditions` vector.
-/// 
+///
 /// # Arguments
 /// * `event_data` - A JSON object (serde_json::Value) representing the event data to be filtered.
 /// * `conditions` - A vector of maps, where each map contains key-value pairs representing the conditions to be checked against the event data.
@@ -124,17 +126,26 @@ pub fn filter_event_data_by_conditions(
     event_data: &Value,
     conditions: &Vec<Map<String, Value>>,
 ) -> bool {
+    if conditions.is_empty() {
+        return true;
+    }
+
+    tracing::debug!(?event_data, ?conditions, "Filtering event data using legacy conditions");
+
     for condition in conditions {
         for (key, value) in condition {
             if let Some(event_value) = get_nested_value(event_data, key) {
                 if !evaluate_condition(&event_value, value.as_str().unwrap_or("")) {
+                    tracing::debug!(key, "Condition failed, returning false");
                     return false;
                 }
             } else {
+                tracing::debug!(key, "Key not found in event data, returning false");
                 return false;
             }
         }
     }
+    tracing::debug!("All conditions passed, returning true");
     true
 }
 
@@ -291,25 +302,19 @@ mod tests {
     #[test]
     fn test_filter_with_null_value() {
         let event_data = json!({ "key": null });
-        let conditions =
-            vec![json!({ "key": "null" }).as_object().unwrap().clone()];
+        let conditions = vec![json!({ "key": "null" }).as_object().unwrap().clone()];
         assert!(filter_event_data_by_conditions(&event_data, &conditions));
     }
 
     #[test]
     fn test_filter_with_boolean_value() {
         let event_data = json!({ "active": true });
-        let conditions =
-            vec![json!({ "active": "true" }).as_object().unwrap().clone()];
+        let conditions = vec![json!({ "active": "true" }).as_object().unwrap().clone()];
         assert!(filter_event_data_by_conditions(&event_data, &conditions));
 
         let event_data_false = json!({ "active": false });
-        let conditions_false =
-            vec![json!({ "active": "false" }).as_object().unwrap().clone()];
-        assert!(filter_event_data_by_conditions(
-            &event_data_false,
-            &conditions_false
-        ));
+        let conditions_false = vec![json!({ "active": "false" }).as_object().unwrap().clone()];
+        assert!(filter_event_data_by_conditions(&event_data_false, &conditions_false));
     }
 
     #[test]

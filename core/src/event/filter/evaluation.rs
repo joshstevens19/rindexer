@@ -62,6 +62,8 @@ pub fn evaluate<'a>(
     expression: &Expression<'a>,
     data: &JsonValue,
 ) -> Result<bool, EvaluationError> {
+    tracing::debug!(?expression, ?data, "Evaluating expression");
+
     match expression {
         Expression::Logical { left, operator, right } => {
             let left_val = evaluate(left, data)?;
@@ -91,6 +93,8 @@ fn evaluate_condition<'a>(
     condition: &Condition<'a>,
     data: &JsonValue,
 ) -> Result<bool, EvaluationError> {
+    tracing::debug!(?condition, ?data, "Evaluating condition");
+
     let resolved_value = resolve_path(&condition.left, data)?;
 
     let final_left_kind = get_kind_from_json_value(resolved_value);
@@ -115,6 +119,8 @@ fn resolve_path<'a>(
     path: &ConditionLeft<'a>,
     data: &'a JsonValue,
 ) -> Result<&'a JsonValue, EvaluationError> {
+    tracing::debug!(?path, ?data, "Resolving path");
+
     let base_name = path.base_name();
     let mut current = data
         .get(base_name)
@@ -145,6 +151,14 @@ fn compare_final_values(
     operator: &ComparisonOperator,
     rhs_literal: &LiteralValue<'_>,
 ) -> Result<bool, EvaluationError> {
+    tracing::debug!(
+        ?lhs_kind_str,
+        ?lhs_value_str,
+        ?operator,
+        ?rhs_literal,
+        "Comparing final values"
+    );
+
     let lhs_kind = lhs_kind_str.to_lowercase();
 
     if SIGNED_INTEGER_KINDS.contains(&lhs_kind.as_str()) {
@@ -174,6 +188,8 @@ fn compare_array(
     operator: &ComparisonOperator,
     rhs_literal: &LiteralValue<'_>,
 ) -> Result<bool, EvaluationError> {
+    tracing::debug!(?lhs_json_array_str, ?operator, ?rhs_literal, "Comparing array values");
+
     let rhs_target_str = match rhs_literal {
         LiteralValue::Str(s) => *s,
         _ => {
@@ -210,6 +226,8 @@ fn compare_u256(
     operator: &ComparisonOperator,
     right_literal: &LiteralValue<'_>,
 ) -> Result<bool, EvaluationError> {
+    tracing::debug!(?left_str, ?operator, ?right_literal, "Comparing U256 values");
+
     let left = string_to_u256(left_str).map_err(|e| {
         EvaluationError::ParseError(format!("Failed to parse LHS '{left_str}' as U256: {e}"))
     })?;
@@ -235,6 +253,8 @@ fn compare_i256(
     operator: &ComparisonOperator,
     right_literal: &LiteralValue<'_>,
 ) -> Result<bool, EvaluationError> {
+    tracing::debug!(?left_str, ?operator, ?right_literal, "Comparing I256 values");
+
     let left = string_to_i256(left_str).map_err(|e| {
         EvaluationError::ParseError(format!("Failed to parse LHS '{left_str}' as I256: {e}"))
     })?;
@@ -260,6 +280,8 @@ fn compare_address(
     operator: &ComparisonOperator,
     right_literal: &LiteralValue<'_>,
 ) -> Result<bool, EvaluationError> {
+    tracing::debug!(?left, ?operator, ?right_literal, "Comparing address values");
+
     let right = match right_literal {
         LiteralValue::Str(s) => *s,
         _ => {
@@ -283,6 +305,8 @@ fn compare_string(
     operator: &ComparisonOperator,
     rhs_literal: &LiteralValue<'_>,
 ) -> Result<bool, EvaluationError> {
+    tracing::debug!(?lhs_str, ?operator, ?rhs_literal, "Comparing string values");
+
     let left = lhs_str.to_lowercase();
     let right = match rhs_literal {
         LiteralValue::Str(s) => s.to_lowercase(),
@@ -307,6 +331,8 @@ fn compare_fixed_point(
     operator: &ComparisonOperator,
     rhs_literal: &LiteralValue<'_>,
 ) -> Result<bool, EvaluationError> {
+    tracing::debug!(?lhs_str, ?operator, ?rhs_literal, "Comparing fixed point values");
+
     let left_decimal = Decimal::from_str(lhs_str).map_err(|e| {
         EvaluationError::ParseError(format!("Failed to parse LHS '{lhs_str}' as Decimal: {e}"))
     })?;
@@ -332,6 +358,8 @@ fn compare_boolean(
     operator: &ComparisonOperator,
     rhs_literal: &LiteralValue<'_>,
 ) -> Result<bool, EvaluationError> {
+    tracing::debug!(?lhs_value_str, ?operator, ?rhs_literal, "Comparing boolean values");
+
     let lhs = lhs_value_str.parse::<bool>().map_err(|e| {
         EvaluationError::ParseError(format!("Failed to parse LHS '{lhs_value_str}' as bool: {e}"))
     })?;
@@ -354,6 +382,8 @@ fn compare_boolean(
 }
 
 fn get_kind_from_json_value(value: &JsonValue) -> String {
+    tracing::debug!(?value, "Determining kind from JSON value");
+
     match value {
         JsonValue::String(s) => {
             let s_lower = s.to_lowercase();
@@ -496,9 +526,150 @@ mod tests {
 
         // This should fail because "hello_world" cannot be compared to a number
         let expr_fail = parse("value > 100").unwrap();
+        assert!(matches!(evaluate(&expr_fail, &data), Err(EvaluationError::TypeMismatch(_))));
+    }
+
+    #[test]
+    fn test_get_kind_from_json_value_various_types() {
+        assert_eq!(
+            get_kind_from_json_value(&json!("0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B")),
+            "address"
+        );
+        assert_eq!(
+            get_kind_from_json_value(&json!(
+                "0x0000000000000000000000000000000000000000000000000000000000000001"
+            )),
+            "bytes32"
+        );
+        assert_eq!(get_kind_from_json_value(&json!("0x1234")), "bytes");
+        assert_eq!(get_kind_from_json_value(&json!("123.45")), "fixed");
+        assert_eq!(get_kind_from_json_value(&json!("12345678901234567890")), "number");
+        assert_eq!(get_kind_from_json_value(&json!("-123")), "int256");
+        assert_eq!(get_kind_from_json_value(&json!("hello world")), "string");
+        assert_eq!(get_kind_from_json_value(&json!(123)), "number");
+        assert_eq!(get_kind_from_json_value(&json!(-123)), "int64");
+        assert_eq!(get_kind_from_json_value(&json!(123.45)), "fixed");
+        assert_eq!(get_kind_from_json_value(&json!(true)), "bool");
+        assert_eq!(get_kind_from_json_value(&json!([1, 2])), "array");
+        assert_eq!(get_kind_from_json_value(&json!({"a": 1})), "map");
+        assert_eq!(get_kind_from_json_value(&json!(null)), "null");
+    }
+
+    #[test]
+    fn test_resolve_path_errors() {
+        let data = json!({ "user": { "tags": ["a", "b"] } });
+        // Index out of bounds
+        let expr_idx = parse("user.tags[2] == 'c'").unwrap();
+        assert!(matches!(evaluate(&expr_idx, &data), Err(EvaluationError::IndexOutOfBounds(_))));
+
+        // Key accessor on array
+        let expr_key = parse("user.tags.key == 'a'").unwrap();
+        assert!(matches!(evaluate(&expr_key, &data), Err(EvaluationError::TypeMismatch(_))));
+
+        // Index accessor on object
+        let expr_obj = parse("user[0] == 'a'").unwrap();
+        assert!(matches!(evaluate(&expr_obj, &data), Err(EvaluationError::TypeMismatch(_))));
+    }
+
+    #[test]
+    fn test_compare_address_case_insensitivity() {
+        let data = json!({ "owner": "0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B" });
+        let expr = parse("owner == '0xab5801a7d398351b8be11c439e05c5b3259aec9b'").unwrap();
+        assert!(evaluate(&expr, &data).unwrap());
+    }
+
+    #[test]
+    fn test_unsupported_operators() {
+        // For string
+        let data_str = json!({ "value": "hello" });
+        let expr_str = parse("value > 'world'").unwrap();
         assert!(matches!(
-            evaluate(&expr_fail, &data),
-            Err(EvaluationError::TypeMismatch(_))
+            evaluate(&expr_str, &data_str),
+            Err(EvaluationError::UnsupportedOperator(_))
         ));
+
+        // For boolean
+        let data_bool = json!({ "value": true });
+        let expr_bool = parse("value > false").unwrap();
+        assert!(matches!(
+            evaluate(&expr_bool, &data_bool),
+            Err(EvaluationError::UnsupportedOperator(_))
+        ));
+    }
+
+    #[test]
+    fn test_compare_array() {
+        let data = json!({ "values": [1, 2, 3] });
+        let expr_eq = parse("values == '[1, 2, 3]'").unwrap();
+        assert!(evaluate(&expr_eq, &data).unwrap());
+
+        let expr_ne = parse("values != '[1, 2, 4]'").unwrap();
+        assert!(evaluate(&expr_ne, &data).unwrap());
+
+        let expr_fail = parse("values == '[1, 2, 4]'").unwrap();
+        assert!(!evaluate(&expr_fail, &data).unwrap());
+    }
+
+    #[test]
+    fn test_compare_fixed_point() {
+        let data = json!({ "price": "123.45" });
+        let expr_gt = parse("price > 123.4").unwrap();
+        assert!(evaluate(&expr_gt, &data).unwrap());
+
+        let expr_lte = parse("price <= 123.45").unwrap();
+        assert!(evaluate(&expr_lte, &data).unwrap());
+
+        let expr_ne = parse("price != 123.456").unwrap();
+        assert!(evaluate(&expr_ne, &data).unwrap());
+    }
+
+    // --- Tests for Error Messages ---
+
+    #[test]
+    fn test_variable_not_found_error_message() {
+        let data = json!({});
+        let expr = parse("non_existent_var == 1").unwrap();
+        let err = evaluate(&expr, &data).unwrap_err();
+        assert_eq!(err.to_string(), "Variable not found: non_existent_var");
+    }
+
+    #[test]
+    fn test_index_out_of_bounds_error_message() {
+        let data = json!({ "arr": [0, 1] });
+        let expr = parse("arr[2] == 0").unwrap();
+        let err = evaluate(&expr, &data).unwrap_err();
+        assert_eq!(err.to_string(), "Index out of bounds: 2");
+    }
+
+    #[test]
+    fn test_type_mismatch_on_accessor_error_message() {
+        let data = json!({ "arr": [0, 1] });
+        let expr = parse("arr.key == 0").unwrap();
+        let err = evaluate(&expr, &data).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Type mismatch: Cannot apply accessor Key(\"key\") to value Array [Number(0), Number(1)]"
+        );
+    }
+
+    #[test]
+    fn test_unsupported_operator_error_message() {
+        let data = json!({ "value": "hello" });
+        let expr = parse("value > 'world'").unwrap();
+        let err = evaluate(&expr, &data).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Unsupported operator: Operator Gt not supported for type String"
+        );
+    }
+
+    #[test]
+    fn test_parse_error_message() {
+        let data = json!({ "value": 123 });
+        let expr = parse("value > 'not-a-number'").unwrap();
+        let err = evaluate(&expr, &data).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Parse error: Failed to parse RHS 'not-a-number' as U256"));
     }
 }
