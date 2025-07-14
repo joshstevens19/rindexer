@@ -479,6 +479,18 @@ pub fn generate_rust_project(project_path: &Path) -> Result<(), GenerateRustProj
 
     fs::create_dir_all(abi_path)?;
 
+    // Check if any network has reth enabled
+    let has_reth = manifest.networks.iter().any(|network| network.is_reth_enabled());
+
+    let features_section = if has_reth {
+        r#"
+[features]
+reth = ["rindexer/reth"]
+"#
+    } else {
+        ""
+    };
+
     let cargo = format!(
         r#"
 [package]
@@ -491,8 +503,9 @@ rindexer = {{ git = "https://github.com/joshstevens19/rindexer", branch = "maste
 tokio = {{ version = "1", features = ["full"] }}
 alloy = {{ version = "1.0.4", features = ["full"] }}
 serde = {{ version = "1.0", features = ["derive"] }}
-"#,
+{features_section}"#,
         project_name = manifest.name,
+        features_section = features_section,
     );
 
     let cargo_path = project_path.join("Cargo.toml");
