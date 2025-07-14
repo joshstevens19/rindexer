@@ -12,20 +12,26 @@ use serde_json::Value as JsonValue;
 use std::str::FromStr;
 use thiserror::Error;
 
+/// Represents errors that can occur during expression evaluation.
 #[derive(Debug, Error, PartialEq)]
 pub enum EvaluationError {
+    /// An error indicating a type mismatch during evaluation.
     #[error("Type mismatch: {0}")]
     TypeMismatch(String),
 
+    /// An error indicating that an unsupported operator was used.
     #[error("Unsupported operator: {0}")]
     UnsupportedOperator(String),
 
+    /// An error indicating that a parse operation failed.
     #[error("Parse error: {0}")]
     ParseError(String),
 
+    /// An error indicating that a variable was not found in the provided data.
     #[error("Variable not found: {0}")]
     VariableNotFound(String),
 
+    /// An error indicating that an index was out of bounds for an array.
     #[error("Index out of bounds: {0}")]
     IndexOutOfBounds(String),
 }
@@ -58,6 +64,13 @@ const ARRAY_KINDS: &[&str] = &[
 ];
 
 /// The main entry point for evaluation. Traverses the Expression AST and evaluates it against the given data.
+///
+/// # Arguments
+/// * `expression` - The parsed expression AST to evaluate.
+/// * `data` - The JSON data against which the expression is evaluated.
+/// # Returns
+/// * `Ok(bool)` - The result of the evaluation, true if the expression evaluates to true, false otherwise.
+/// * `Err(EvaluationError)` - An error if the evaluation fails due to type mismatches, unsupported operators, parsing errors, or missing variables.
 pub fn evaluate<'a>(
     expression: &Expression<'a>,
     data: &JsonValue,
@@ -89,6 +102,12 @@ pub fn evaluate<'a>(
 }
 
 /// Evaluates a single condition.
+/// # Arguments
+/// * `condition` - The condition to evaluate.
+/// * `data` - The JSON data against which the condition is evaluated.
+/// # Returns
+/// * `Ok(bool)` - The result of the condition evaluation, true if the condition is satisfied, false otherwise.
+/// * `Err(EvaluationError)` - An error if the evaluation fails due to type mismatches, unsupported operators, parsing errors, or missing variables.
 fn evaluate_condition<'a>(
     condition: &Condition<'a>,
     data: &JsonValue,
@@ -115,6 +134,12 @@ fn evaluate_condition<'a>(
 }
 
 /// Resolves a path from the AST against the JSON data.
+/// # Arguments
+/// * `path` - The path to resolve, which may include base names and accessors.
+/// * `data` - The JSON data against which the path is resolved.
+/// # Returns
+/// * `Ok(&JsonValue)` - The resolved value from the JSON data.
+/// * `Err(EvaluationError)` - An error if the path cannot be resolved due to missing variables, type mismatches, or index out of bounds errors.
 fn resolve_path<'a>(
     path: &ConditionLeft<'a>,
     data: &'a JsonValue,
@@ -145,6 +170,14 @@ fn resolve_path<'a>(
 }
 
 /// Routes the comparison to the correct type-specific function.
+/// # Arguments
+/// * `lhs_kind_str` - The kind of the left-hand side value as a string.
+/// * `lhs_value_str` - The string representation of the left-hand side value.
+/// * `operator` - The comparison operator to use.
+/// * `rhs_literal` - The right-hand side literal value to compare against.
+/// # Returns
+/// * `Ok(bool)` - The result of the comparison, true if the condition is satisfied, false otherwise.
+/// * `Err(EvaluationError)` - An error if the comparison fails due to type mismatches, unsupported operators, or parsing errors.
 fn compare_final_values(
     lhs_kind_str: &str,
     lhs_value_str: &str,
@@ -182,7 +215,14 @@ fn compare_final_values(
     }
 }
 
-// ... (The rest of the file remains the same: compare_array, compare_u256, etc.)
+/// Compares two JSON array values based on the specified operator.
+/// # Arguments
+/// * `lhs_json_array_str` - The string representation of the left-hand side JSON array.
+/// * `operator` - The comparison operator to use.
+/// * `rhs_literal` - The right-hand side literal value to compare against, expected to be a string representation of a JSON array.
+/// # Returns
+/// * `Ok(bool)` - The result of the comparison, true if the condition is satisfied, false otherwise.
+/// * `Err(EvaluationError)` - An error if the comparison fails due to type mismatches, unsupported operators, or parsing errors.
 fn compare_array(
     lhs_json_array_str: &str,
     operator: &ComparisonOperator,
@@ -221,6 +261,14 @@ fn compare_array(
     }
 }
 
+/// Compares two U256 values based on the specified operator.
+/// # Arguments
+/// * `left_str` - The string representation of the left-hand side U256 value.
+/// * `operator` - The comparison operator to use.
+/// * `right_literal` - The right-hand side literal value to compare against, expected to be a string or number literal.
+/// # Returns
+/// * `Ok(bool)` - The result of the comparison, true if the condition is satisfied, false otherwise.
+/// * `Err(EvaluationError)` - An error if the comparison fails due to type mismatches, or parsing errors.
 fn compare_u256(
     left_str: &str,
     operator: &ComparisonOperator,
@@ -245,9 +293,17 @@ fn compare_u256(
         EvaluationError::ParseError(format!("Failed to parse RHS '{right_str}' as U256: {e}"))
     })?;
 
-    compare_ordered_values(&left, operator, &right)
+    Ok(compare_ordered_values(&left, operator, &right))
 }
 
+/// Compares two I256 values based on the specified operator.
+/// # Arguments
+/// * `left_str` - The string representation of the left-hand side I256 value.
+/// * `operator` - The comparison operator to use.
+/// * `right_literal` - The right-hand side literal value to compare against, expected to be a string or number literal.
+/// # Returns
+/// * `Ok(bool)` - The result of the comparison, true if the condition is satisfied, false otherwise.
+/// * `Err(EvaluationError)` - An error if the comparison fails due to type mismatches, or parsing errors.
 fn compare_i256(
     left_str: &str,
     operator: &ComparisonOperator,
@@ -272,9 +328,17 @@ fn compare_i256(
         EvaluationError::ParseError(format!("Failed to parse RHS '{right_str}' as I256: {e}"))
     })?;
 
-    compare_ordered_values(&left, operator, &right)
+    Ok(compare_ordered_values(&left, operator, &right))
 }
 
+/// Compares two address values based on the specified operator.
+/// # Arguments
+/// * `left` - The string representation of the left-hand side address value.
+/// * `operator` - The comparison operator to use.
+/// * `right_literal` - The right-hand side literal value to compare against, expected to be a string literal.
+/// # Returns
+/// * `Ok(bool)` - The result of the comparison, true if the condition is satisfied, false otherwise.
+/// * `Err(EvaluationError)` - An error if the comparison fails due to type mismatches or unsupported operators
 fn compare_address(
     left: &str,
     operator: &ComparisonOperator,
@@ -300,6 +364,14 @@ fn compare_address(
     }
 }
 
+/// Compares two string values based on the specified operator.
+/// # Arguments
+/// * `lhs_str` - The string representation of the left-hand side value.
+/// * `operator` - The comparison operator to use.
+/// * `rhs_literal` - The right-hand side literal value to compare against, expected to be a string literal.
+/// # Returns
+/// * `Ok(bool)` - The result of the comparison, true if the condition is satisfied, false otherwise.
+/// * `Err(EvaluationError)` - An error if the comparison fails due to type mismatches or unsupported operators
 fn compare_string(
     lhs_str: &str,
     operator: &ComparisonOperator,
@@ -326,6 +398,14 @@ fn compare_string(
     }
 }
 
+/// Compares two fixed point values based on the specified operator.
+/// # Arguments
+/// * `lhs_str` - The string representation of the left-hand side fixed point value.
+/// * `operator` - The comparison operator to use.
+/// * `rhs_literal` - The right-hand side literal value to compare against, expected to be a string or number literal.
+/// # Returns
+/// * `Ok(bool)` - The result of the comparison, true if the condition is satisfied, false otherwise.
+/// * `Err(EvaluationError)` - An error if the comparison fails due to type mismatches, or parsing errors.
 fn compare_fixed_point(
     lhs_str: &str,
     operator: &ComparisonOperator,
@@ -350,9 +430,17 @@ fn compare_fixed_point(
         EvaluationError::ParseError(format!("Failed to parse RHS '{rhs_str}' as Decimal: {e}"))
     })?;
 
-    compare_ordered_values(&left_decimal, operator, &right_decimal)
+    Ok(compare_ordered_values(&left_decimal, operator, &right_decimal))
 }
 
+/// Compares two boolean values based on the specified operator.
+/// # Arguments
+/// * `lhs_value_str` - The string representation of the left-hand side boolean value.
+/// * `operator` - The comparison operator to use.
+/// * `rhs_literal` - The right-hand side literal value to compare against, expected to be a boolean literal.
+/// # Returns
+/// * `Ok(bool)` - The result of the comparison, true if the condition is satisfied, false otherwise.
+/// * `Err(EvaluationError)` - An error if the comparison fails due to type mismatches or parsing errors.
 fn compare_boolean(
     lhs_value_str: &str,
     operator: &ComparisonOperator,
@@ -381,6 +469,11 @@ fn compare_boolean(
     }
 }
 
+/// Determines the kind of a JSON value based on its content.
+/// # Arguments
+/// * `value` - The JSON value to analyze.
+/// # Returns
+/// * `String` - The kind of the value, such as "address", "bytes32", "fixed", "number", etc.
 fn get_kind_from_json_value(value: &JsonValue) -> String {
     tracing::debug!(?value, "Determining kind from JSON value");
 
