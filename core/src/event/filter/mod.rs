@@ -82,6 +82,8 @@ fn evaluate_condition(value: &Value, condition: &str) -> bool {
         return match value {
             Value::String(s) => s == condition,
             Value::Number(n) => n.to_string() == condition,
+            Value::Bool(b) => b.to_string() == condition,
+            Value::Null => "null" == condition,
             _ => false,
         };
     }
@@ -284,5 +286,44 @@ mod tests {
         .unwrap()
         .clone()];
         assert!(!filter_event_data_by_conditions(&event_data, &conditions));
+    }
+
+    #[test]
+    fn test_filter_with_null_value() {
+        let event_data = json!({ "key": null });
+        let conditions =
+            vec![json!({ "key": "null" }).as_object().unwrap().clone()];
+        assert!(filter_event_data_by_conditions(&event_data, &conditions));
+    }
+
+    #[test]
+    fn test_filter_with_boolean_value() {
+        let event_data = json!({ "active": true });
+        let conditions =
+            vec![json!({ "active": "true" }).as_object().unwrap().clone()];
+        assert!(filter_event_data_by_conditions(&event_data, &conditions));
+
+        let event_data_false = json!({ "active": false });
+        let conditions_false =
+            vec![json!({ "active": "false" }).as_object().unwrap().clone()];
+        assert!(filter_event_data_by_conditions(
+            &event_data_false,
+            &conditions_false
+        ));
+    }
+
+    #[test]
+    fn test_filter_with_missing_key() {
+        let event_data = json!({ "actual_key": "some_value" });
+        let conditions =
+            vec![json!({ "non_existent_key": "some_value" }).as_object().unwrap().clone()];
+        assert!(!filter_event_data_by_conditions(&event_data, &conditions));
+    }
+
+    #[test]
+    fn test_filter_with_empty_conditions() {
+        let event_data = json!({ "key": "value" });
+        let conditions: Vec<Map<String, Value>> = vec![];
+        assert!(filter_event_data_by_conditions(&event_data, &conditions));
     }
 }
