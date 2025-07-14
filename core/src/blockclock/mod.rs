@@ -1,4 +1,6 @@
-use crate::provider::{JsonRpcCachedProvider, ProviderError, RECOMMENDED_RPC_CHUNK_SIZE, RPC_CHUNK_SIZE};
+use crate::provider::{
+    JsonRpcCachedProvider, ProviderError, RECOMMENDED_RPC_CHUNK_SIZE, RPC_CHUNK_SIZE,
+};
 use alloy::primitives::U64;
 use alloy::rpc::types::Log;
 use alloy_chains::Chain;

@@ -5,6 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_yaml::Value;
 
 use crate::manifest::config::Config;
+use crate::manifest::timestamps::Timestamps;
 use crate::{
     indexer::Indexer,
     manifest::{
@@ -17,7 +18,6 @@ use crate::{
         storage::Storage,
     },
 };
-use crate::manifest::timestamps::Timestamps;
 
 fn deserialize_project_type<'de, D>(deserializer: D) -> Result<ProjectType, D::Error>
 where

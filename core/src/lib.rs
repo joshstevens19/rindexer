@@ -34,12 +34,12 @@ mod chat;
 pub mod event;
 pub mod notifications;
 pub use notifications::ChainStateNotification;
+pub mod blockclock;
 pub mod phantom;
 pub mod provider;
 mod start;
 mod streams;
 mod types;
-pub mod blockclock;
 
 // export 3rd party dependencies
 pub use async_trait::async_trait;
