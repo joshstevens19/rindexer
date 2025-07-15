@@ -70,6 +70,7 @@ tracing-subscriber = { version = "0.3", features = [
 mini-moka = "0.10.3"
 url = "2.5.0"
 eyre = { version = "0.6.10" }
+lru = "0.16.0"
 
 # build
 jemallocator = { version = "0.6.0", package = "tikv-jemallocator", optional = true }

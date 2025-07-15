@@ -10,8 +10,10 @@ use alloy::{
     primitives::{B256, U64},
     rpc::types::Log,
 };
+use lru::LruCache;
 use rand::{random_bool, random_ratio};
 use regex::Regex;
+use std::num::NonZeroUsize;
 use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
 use tokio::{sync::mpsc, time::Instant};
 use tokio_stream::wrappers::ReceiverStream;
@@ -427,6 +429,14 @@ async fn live_indexing_stream(
         });
     }
 
+    // This is a local cache of the last blocks we've crawled and their timestamps.
+    //
+    // It allows us to cheaply persist and fetch timestamps for blocks in any log range
+    // fetch for a recent period. It is about 16-bytes per entry.
+    //
+    // 500 should cover any block-lag we could reasonably encounter at near-zer memory cost.
+    let mut block_times: LruCache<u64, u64> = LruCache::new(NonZeroUsize::new(500).unwrap());
+
     loop {
         let iteration_start = Instant::now();
 
@@ -438,6 +448,8 @@ async fn live_indexing_stream(
         match latest_block {
             Ok(latest_block) => {
                 if let Some(latest_block) = latest_block {
+                    block_times.put(latest_block.header.number, latest_block.header.timestamp);
+
                     let to_block_number = log_response_to_large_to_block
                         .unwrap_or(U64::from(latest_block.header.number));
 
@@ -541,9 +553,8 @@ async fn live_indexing_stream(
                                             .into_iter()
                                             .map(|mut log| {
                                                 if let Some(n) = log.block_number {
-                                                    if n == latest_block.header.number {
-                                                        log.block_timestamp =
-                                                            Some(latest_block.header.timestamp);
+                                                    if let Some(time) = block_times.get(&n) {
+                                                        log.block_timestamp = Some(*time);
                                                     } else {
                                                         warn!("------------------------");
                                                         warn!("TEMP WARNING. Missing block {:?} TS in Live {:?}", log.block_number, latest_block.header.number);
