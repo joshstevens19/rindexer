@@ -278,7 +278,19 @@ jobs:
         shell: bash
         run: |
           CHANGELOG_FILE="documentation/docs/pages/docs/changelog.mdx"
-          DATE=$(date '+%d %B %Y')
+          DAY=$(date '+%d' | sed 's/^0*//')
+          MONTH=$(date '+%B')
+          YEAR=$(date '+%Y')
+          
+          # Add ordinal suffix
+          case $DAY in
+            1|21|31) SUFFIX="st";;
+            2|22) SUFFIX="nd";;
+            3|23) SUFFIX="rd";;
+            *) SUFFIX="th";;
+          esac
+          
+          DATE="$DAY$SUFFIX $MONTH $YEAR"
           
           echo "Updating changelog for version ${{ env.VERSION_NAME }}"
           
@@ -296,15 +308,16 @@ jobs:
           echo "$CHANGES_SECTION"
           echo "=== END EXTRACTED CHANGES SECTION ==="
           
-          # Extract just the bug fixes line directly
-          BUG_FIXES_SIMPLE=$(grep -A 10 "### Bug fixes" changelog_temp.mdx | grep "^- fix:" | head -5)
-          echo "=== BUG FIXES SIMPLE ==="
-          echo "$BUG_FIXES_SIMPLE"
-          echo "=== END BUG FIXES SIMPLE ==="
+          # Extract just the bug fixes line directly from Changes Not Deployed section
+          BUG_FIXES=$(sed -n '/^## Changes Not Deployed/,/^## Releases/p' changelog_temp.mdx | grep "^- fix:" | head -5)
+          
+          echo "=== EXTRACTED BUG FIXES ==="
+          echo "$BUG_FIXES"
+          echo "=== END BUG FIXES ==="
           
           # Use the simple extraction for now
           FEATURES=""
-          BUG_FIXES="$BUG_FIXES_SIMPLE"
+          BUG_FIXES="$BUG_FIXES"
           BREAKING_CHANGES=""
           
           # Debug: Print what we extracted
@@ -314,6 +327,34 @@ jobs:
           echo "'$BUG_FIXES'"
           echo "Extracted Breaking Changes:"
           echo "'$BREAKING_CHANGES'"
+          
+          # Save the extracted content for PR creation
+          {
+            echo "### Changes in this release:"
+            echo "-------------------------------------------------"
+            echo "### Features"
+            echo "-------------------------------------------------"
+            if [[ -n "$FEATURES" ]]; then
+              echo "$FEATURES"
+            fi
+            echo ""
+            echo "### Bug fixes"
+            echo "-------------------------------------------------"
+            if [[ -n "$BUG_FIXES" ]]; then
+              echo "$BUG_FIXES"
+            fi
+            echo ""
+            echo "### Breaking changes"
+            echo "-------------------------------------------------"
+            if [[ -n "$BREAKING_CHANGES" ]]; then
+              echo "$BREAKING_CHANGES"
+            fi
+          } > pr_body_content.txt
+          
+          # Save to environment variable
+          echo "PR_BODY_CONTENT<<EOF" >> $GITHUB_ENV
+          cat pr_body_content.txt >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
           
           # Create new release entry
           cat > new_release.txt << EOF
@@ -410,13 +451,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Get changelog content for PR body
-          CHANGELOG_CONTENT=$(awk '
-            /## Changes Not Deployed/,/## Releases/ {
-              if (!/## Changes Not Deployed/ && !/## Releases/) print
-            }
-          ' documentation/docs/pages/docs/changelog.mdx | head -30)
-
           gh pr create \
             --title "Release v${{ env.VERSION_NAME }}" \
             --body "## Release v${{ env.VERSION_NAME }}
@@ -428,8 +462,7 @@ jobs:
 
           **Merging this PR will automatically create a GitHub Release with binaries.**
 
-          ### Changes in this release:
-          $CHANGELOG_CONTENT" \
+          ${{ env.PR_BODY_CONTENT }}" \
             --base master \
             --head release/${{ env.VERSION_NAME }}
 
