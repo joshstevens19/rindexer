@@ -12,28 +12,17 @@ pub fn network_provider_fn_name(network: &Network) -> String {
     format!("get_{fn_name}", fn_name = network_provider_name(network).to_lowercase())
 }
 
+#[cfg(feature = "reth")]
 fn generate_reth_init_fn(network: &Network) -> Code {
     if network.is_reth_enabled() {
-        #[cfg(feature = "reth")]
-        {
-            let reth_cli_args = network.reth.as_ref().unwrap().to_cli_args();
-            Code::new(format!(
-                r#"
-                let cli = reth::cli::Cli::try_parse_args_from({reth_cli_args:?}).unwrap();
-                let chain_state_notification = start_reth_node_with_exex(cli).await.unwrap();
-                let chain_state_notification = Some(chain_state_notification);
-                "#
-            ))
-        }
-        #[cfg(not(feature = "reth"))]
-        {
-            Code::new(
-                r#"
-                let chain_state_notification: Option<Sender<ChainStateNotification>> = None;
-                "#
-                .to_string(),
-            )
-        }
+        let reth_cli_args = network.reth.as_ref().unwrap().to_cli_args();
+        Code::new(format!(
+            r#"
+            let cli = reth::cli::Cli::try_parse_args_from({reth_cli_args:?}).unwrap();
+            let chain_state_notification = start_reth_node_with_exex(cli).await.unwrap();
+            let chain_state_notification = Some(chain_state_notification);
+            "#
+        ))
     } else {
         Code::new(
             r#"
@@ -42,6 +31,34 @@ fn generate_reth_init_fn(network: &Network) -> Code {
             .to_string(),
         )
     }
+}
+
+#[cfg(not(feature = "reth"))]
+fn generate_reth_init_fn(_network: &Network) -> Code {
+    Code::new(
+        r#"
+        let chain_state_notification: Option<Sender<ChainStateNotification>> = None;
+        "#
+        .to_string(),
+    )
+}
+
+#[cfg(feature = "reth")]
+fn get_network_url(network: &Network) -> String {
+    if network.is_reth_enabled() {
+        if let Some(ipc_path) = network.get_reth_ipc_path() {
+            ipc_path
+        } else {
+            network.rpc.clone()
+        }
+    } else {
+        network.rpc.clone()
+    }
+}
+
+#[cfg(not(feature = "reth"))]
+fn get_network_url(network: &Network) -> String {
+    network.rpc.clone()
 }
 
 fn generate_network_lazy_provider_code(network: &Network) -> Code {
@@ -58,22 +75,7 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
             .clone()
         "#,
         network_name = network_provider_name(network),
-        network_url = if network.is_reth_enabled() {
-            #[cfg(feature = "reth")]
-            {
-                if let Some(ipc_path) = network.get_reth_ipc_path() {
-                    ipc_path
-                } else {
-                    network.rpc.clone()
-                }
-            }
-            #[cfg(not(feature = "reth"))]
-            {
-                network.rpc.clone()
-            }
-        } else {
-            network.rpc.clone()
-        },
+        network_url = get_network_url(network),
         chain_id = network.chain_id,
         compute_units_per_second =
             if let Some(compute_units_per_second) = network.compute_units_per_second {
@@ -100,11 +102,7 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
             if network.rpc.contains("shadow") { "create_shadow_client" } else { "create_client" },
         placeholder_headers =
             if network.rpc.contains("shadow") { "" } else { ", HeaderMap::new()" },
-        chain_state_notification = if network.is_reth_enabled() {
-            ", #[cfg(feature = \"reth\")] chain_state_notification"
-        } else {
-            ", #[cfg(feature = \"reth\")] None"
-        },
+        chain_state_notification = ", chain_state_notification",
         reth_init_fn = generate_reth_init_fn(network),
     ))
 }
@@ -183,7 +181,6 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
         block_poll_frequency: Option<BlockPollFrequency>,
         max_block_range: Option<U64>,
         address_filtering: Option<AddressFiltering>,
-        #[cfg(feature = "reth")]
         chain_state_notification: Option<Sender<ChainStateNotification>>,
     ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
         let mut header = HeaderMap::new();
@@ -199,7 +196,6 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
             block_poll_frequency, 
             header, 
             address_filtering, 
-            #[cfg(feature = "reth")]
             chain_state_notification
         ).await
     }

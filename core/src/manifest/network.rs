@@ -69,16 +69,22 @@ impl Network {
         }
     }
 
+    /// Get the IPC path for the Reth node - always returns None when reth feature is disabled
+    #[cfg(not(feature = "reth"))]
+    pub fn get_reth_ipc_path(&self) -> Option<String> {
+        None
+    }
+
     /// Check if Reth is enabled for this network
+    #[cfg(feature = "reth")]
     pub fn is_reth_enabled(&self) -> bool {
-        #[cfg(feature = "reth")]
-        {
-            self.reth.is_some()
-        }
-        #[cfg(not(feature = "reth"))]
-        {
-            false
-        }
+        self.reth.is_some()
+    }
+
+    /// Check if Reth is enabled for this network - always returns false when reth feature is disabled
+    #[cfg(not(feature = "reth"))]
+    pub fn is_reth_enabled(&self) -> bool {
+        false
     }
 
     /// Try to start the Reth node for this network
@@ -88,30 +94,32 @@ impl Network {
     /// If Reth is not enabled, the function will return None.
     ///
     /// If the Reth node fails to start, the function will return an error.
+    #[cfg(feature = "reth")]
     pub async fn try_start_reth_node(
         &self,
     ) -> Result<Option<Sender<ChainStateNotification>>, eyre::Error> {
-        #[cfg(feature = "reth")]
-        {
-            if !self.is_reth_enabled() {
-                return Ok(None);
-            }
-
-            let reth_cli = self.reth.as_ref().unwrap().to_cli().map_err(|e| eyre::eyre!(e))?;
-            let reth_tx = start_reth_node_with_exex(reth_cli)?;
-
-            // Wait for IPC path to be ready if specified
-            if let Some(ipc_path) = self.get_reth_ipc_path() {
-                wait_for_ipc_ready(&ipc_path).await?;
-            }
-            println!("started reth node");
-
-            Ok(Some(reth_tx))
+        if !self.is_reth_enabled() {
+            return Ok(None);
         }
-        #[cfg(not(feature = "reth"))]
-        {
-            Ok(None)
+
+        let reth_cli = self.reth.as_ref().unwrap().to_cli().map_err(|e| eyre::eyre!(e))?;
+        let reth_tx = start_reth_node_with_exex(reth_cli)?;
+
+        // Wait for IPC path to be ready if specified
+        if let Some(ipc_path) = self.get_reth_ipc_path() {
+            wait_for_ipc_ready(&ipc_path).await?;
         }
+        println!("started reth node");
+
+        Ok(Some(reth_tx))
+    }
+    
+    /// Try to start the Reth node - always returns None when reth feature is disabled
+    #[cfg(not(feature = "reth"))]
+    pub async fn try_start_reth_node(
+        &self,
+    ) -> Result<Option<Sender<ChainStateNotification>>, eyre::Error> {
+        Ok(None)
     }
 }
 

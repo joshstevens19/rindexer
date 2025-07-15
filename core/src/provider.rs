@@ -81,7 +81,6 @@ pub struct JsonRpcCachedProvider {
     block_poll_frequency: Option<BlockPollFrequency>,
     address_filtering: Option<AddressFiltering>,
     pub max_block_range: Option<U64>,
-    #[cfg(feature = "reth")]
     pub chain_state_notification: Option<Sender<ChainStateNotification>>,
 }
 
@@ -186,7 +185,6 @@ impl JsonRpcCachedProvider {
         block_poll_frequency: Option<BlockPollFrequency>,
         max_block_range: Option<U64>,
         address_filtering: Option<AddressFiltering>,
-        #[cfg(feature = "reth")]
         chain_state_notification: Option<Sender<ChainStateNotification>>,
     ) -> Self {
         let chain = Chain::from(chain_id);
@@ -214,7 +212,6 @@ impl JsonRpcCachedProvider {
             is_zk_chain,
             block_poll_frequency,
             address_filtering,
-            #[cfg(feature = "reth")]
             chain_state_notification,
         }
     }
@@ -609,15 +606,14 @@ impl JsonRpcCachedProvider {
         Arc::clone(&self.provider)
     }
 
+    #[cfg(feature = "reth")]
     pub fn get_chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
-        #[cfg(feature = "reth")]
-        {
-            self.chain_state_notification.clone()
-        }
-        #[cfg(not(feature = "reth"))]
-        {
-            None
-        }
+        self.chain_state_notification.clone()
+    }
+    
+    #[cfg(not(feature = "reth"))]
+    pub fn get_chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
+        None
     }
 }
 #[derive(Error, Debug)]
@@ -647,7 +643,6 @@ pub async fn create_client(
     block_poll_frequency: Option<BlockPollFrequency>,
     custom_headers: HeaderMap,
     address_filtering: Option<AddressFiltering>,
-    #[cfg(feature = "reth")]
     chain_state_notification: Option<Sender<ChainStateNotification>>,
 ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
     let (rpc_client, provider) = if rpc_url.ends_with(".ipc") {
@@ -696,7 +691,6 @@ pub async fn create_client(
             block_poll_frequency,
             max_block_range,
             address_filtering,
-            #[cfg(feature = "reth")]
             chain_state_notification,
         )
         .await,
@@ -731,15 +725,8 @@ impl CreateNetworkProvider {
 
             // if reth is enabled and started successfully, we can use the reth ipc path to create a provider.
             // else, we will use the rpc url provided in the manifest.
-            let provider_url = if reth_tx.is_some() {
-                #[cfg(feature = "reth")]
-                {
-                    network.get_reth_ipc_path().unwrap()
-                }
-                #[cfg(not(feature = "reth"))]
-                {
-                    network.rpc.clone()
-                }
+            let provider_url = if reth_tx.is_some() && network.get_reth_ipc_path().is_some() {
+                network.get_reth_ipc_path().unwrap()
             } else {
                 network.rpc.clone()
             };
@@ -753,7 +740,6 @@ impl CreateNetworkProvider {
                 network.block_poll_frequency,
                 manifest.get_custom_headers(),
                 network.get_logs_settings.clone().map(|settings| settings.address_filtering),
-                #[cfg(feature = "reth")]
                 reth_tx.clone(),
             )
             .await?;
