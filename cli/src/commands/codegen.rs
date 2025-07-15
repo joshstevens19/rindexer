@@ -56,7 +56,9 @@ pub async fn handle_codegen_command(
         }
         CodegenSubcommands::Indexer => {
             generate_rindexer_handlers(manifest, &rindexer_yaml_path, true).map_err(|e| {
-                print_error_message(&format!("Failed to generate rindexer indexer handlers: {e}"));
+                print_error_message(&format!(
+                    "Failed to generate rindexer indexer handlers: {e}"
+                ));
                 e
             })?;
             format_all_files_for_project(project_path);
