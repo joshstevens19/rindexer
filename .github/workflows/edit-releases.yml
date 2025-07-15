@@ -88,22 +88,27 @@ jobs:
 
               TAG="v$VERSION"
 
-              # The heredoc content starts here.
-              # Note: The 'EOF_BODY_CONTENT' line MUST NOT have any leading spaces.
-              # Bash's 'read -r -d '' VAR << EOF' reads until 'EOF' is on a line by itself.
-              read -r -d '' RELEASE_BODY << EOF_BODY_CONTENT
-        # Install
-          \`\`\`bash
-          curl -L https://rindexer.xyz/install.sh | bash -s -- --version $VERSION
-          \`\`\`
-          EOF_BODY_CONTENT
+              # --- START OF FIX: Constructing RELEASE_BODY with an array ---
+              # Define each line of the release body in an array
+              # Note: No leading spaces on these lines, the formatting is part of the string
+              RELEASE_BODY_LINES=(
+                "# Install"
+                "\`\`\`bash"
+                "curl -L https://rindexer.xyz/install.sh | bash -s -- --version $VERSION"
+                "\`\`\`"
+              )
           
-          echo "Attempting to edit release $TAG..."
-          gh release edit "$TAG" \
-          --repo ${{ github.repository }} \
-          --prerelease=false \
-          --notes "$RELEASE_BODY" \
-          --target master
-          
-          echo "Successfully edited release $TAG."
+              # Join the array elements with newlines to form the final string
+              # This ensures no YAML-related indentation issues
+              RELEASE_BODY=$(printf "%s\n" "${RELEASE_BODY_LINES[@]}")
+              # --- END OF FIX ---
+
+              echo "Attempting to edit release "$TAG"..."
+              gh release edit "$TAG" \
+                  --repo ${{ github.repository }} \
+                  --prerelease=false \
+                  --notes "$RELEASE_BODY" \
+                  --target master 
+
+              echo "Successfully edited release "$TAG"."
           done
