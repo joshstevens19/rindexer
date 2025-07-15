@@ -482,13 +482,15 @@ jobs:
       BUILD_TYPE: release
 
     steps:
-      - uses: actions/checkout@v4
-
       - name: Extract version from merge commit
         shell: bash
         run: |
           VERSION=$(echo "${{ github.event.head_commit.message }}" | grep -o 'release/[0-9]*\.[0-9]*\.[0-9]*' | cut -d'/' -f2)
           echo "VERSION_NAME=$VERSION" >> $GITHUB_ENV
+
+      - uses: actions/checkout@v4
+        with:
+          ref: release/${{ env.VERSION_NAME }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -617,14 +619,16 @@ jobs:
       contains(github.event.head_commit.message, 'Merge pull request') &&
       contains(github.event.head_commit.message, 'release/')
     steps:
-      - uses: actions/checkout@v4
-
       - name: Extract version from merge commit
         shell: bash
         run: |
           VERSION=$(echo "${{ github.event.head_commit.message }}" | grep -o 'release/[0-9]*\.[0-9]*\.[0-9]*' | cut -d'/' -f2)
           echo "VERSION_NAME=$VERSION" >> $GITHUB_ENV
           echo "Extracted version: $VERSION"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: release/${{ env.VERSION_NAME }}
 
       - name: Download release artifacts
         uses: actions/download-artifact@v4
