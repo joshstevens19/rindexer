@@ -17,12 +17,12 @@ RUN GH_CLI_VERSION=$(curl -s "https://api.github.com/repos/cli/cli/releases/late
 ARG RELEASE_VERSION
 
 # Download the specific Linux binary from your GitHub Release
-# The --repo flag is explicit, and --skip-verify is used for self-signed certs (remove if not needed)
+# Removed: --skip-verify
 RUN gh release download "v${RELEASE_VERSION}" \
     --repo joshstevens19/rindexer \
     --pattern "rindexer_linux-amd64.tar.gz" \
-    --dir . \
-    --skip-verify
+    --dir .
+
 
 # Extract the binary from the downloaded tar.gz
 RUN tar -xzvf rindexer_linux-amd64.tar.gz
