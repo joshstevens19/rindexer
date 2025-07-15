@@ -38,7 +38,7 @@ jobs:
 
   build:
     if: |
-      (github.event_name == 'push' || github.event_name == 'pull_request') &&
+      false && (github.event_name == 'push' || github.event_name == 'pull_request') &&
       github.actor != 'github-actions[bot]' &&
       (
         !(github.event_name == 'pull_request' &&
@@ -254,7 +254,7 @@ jobs:
   create_pr:
     name: Create Release PR
     runs-on: ubuntu-22.04
-    needs: build
+    # needs: build
     if: |
       github.actor != 'github-actions[bot]' && 
       startsWith(github.ref, 'refs/heads/release/')
@@ -299,36 +299,13 @@ jobs:
           # Create a temporary file to work with
           cp "$CHANGELOG_FILE" changelog_temp.mdx
           
-          # Debug: Show the exact content we're working with
-          echo "=== CHANGELOG CONTENT AROUND CHANGES NOT DEPLOYED ==="
-          grep -A 20 "## Changes Not Deployed" changelog_temp.mdx || echo "Pattern not found"
-          echo "=== END CHANGELOG CONTENT ==="
-          
-          # Try a simpler approach - extract everything between the two main sections
-          CHANGES_SECTION=$(awk '/^## Changes Not Deployed/,/^## Releases/' changelog_temp.mdx)
-          echo "=== EXTRACTED CHANGES SECTION ==="
-          echo "$CHANGES_SECTION"
-          echo "=== END EXTRACTED CHANGES SECTION ==="
-          
           # Extract just the bug fixes line directly from Changes Not Deployed section
           BUG_FIXES=$(sed -n '/^## Changes Not Deployed/,/^## Releases/p' changelog_temp.mdx | grep "^- fix:" | head -5)
-          
-          echo "=== EXTRACTED BUG FIXES ==="
-          echo "$BUG_FIXES"
-          echo "=== END BUG FIXES ==="
           
           # Use the simple extraction for now
           FEATURES=""
           BUG_FIXES="$BUG_FIXES"
           BREAKING_CHANGES=""
-          
-          # Debug: Print what we extracted
-          echo "Extracted Features:"
-          echo "'$FEATURES'"
-          echo "Extracted Bug Fixes:"
-          echo "'$BUG_FIXES'"
-          echo "Extracted Breaking Changes:"
-          echo "'$BREAKING_CHANGES'"
           
           # Save the extracted content for PR creation
           {
@@ -501,47 +478,35 @@ jobs:
             platform: win32
             arch: amd64
 
-    env:
-      BUILD_TYPE: release
-
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Check if this is a release branch merge and extract version
+      - name: Check if this is a release commit and extract version
         id: check_release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          echo "=== DEBUG: Checking recent merge commits ==="
-          git log --oneline --merges -5 --pretty=format:"%H %s"
+          echo "=== DEBUG: Checking recent commits ==="
+          git log --oneline -10 --pretty=format:"%H %s"
           echo ""
-          echo "=== DEBUG: Checking for release branch pattern ==="
+          echo "=== DEBUG: Checking for release pattern ==="
           
-          # Get the merged branch name from git history
-          MERGED_BRANCH=$(git log --oneline --merges -1 --pretty=format:"%s" | grep -o 'release/[0-9]*\.[0-9]*\.[0-9]*' || echo "")
-          echo "MERGED_BRANCH found: '$MERGED_BRANCH'"
+          # Check the most recent commit (HEAD) for release pattern
+          RECENT_COMMIT_MSG=$(git log --oneline -1 --pretty=format:"%s")
+          echo "Most recent commit: '$RECENT_COMMIT_MSG'"
           
-          # Also try alternative patterns
-          MERGE_COMMIT_MSG=$(git log --oneline --merges -1 --pretty=format:"%s")
-          echo "Full merge commit message: '$MERGE_COMMIT_MSG'"
-          
-          # Try to extract version from Release v pattern
-          VERSION_FROM_RELEASE=$(echo "$MERGE_COMMIT_MSG" | grep -o 'Release v[0-9]*\.[0-9]*\.[0-9]*' | sed 's/Release v//' || echo "")
+          # Try to extract version from Release v pattern (including PR number)
+          VERSION_FROM_RELEASE=$(echo "$RECENT_COMMIT_MSG" | grep -o 'Release v[0-9]*\.[0-9]*\.[0-9]*' | sed 's/Release v//' || echo "")
           echo "VERSION_FROM_RELEASE: '$VERSION_FROM_RELEASE'"
           
-          if [[ -n "$MERGED_BRANCH" ]]; then
-            VERSION=$(echo "$MERGED_BRANCH" | cut -d'/' -f2)
-            echo "VERSION_NAME=$VERSION" >> $GITHUB_ENV
-            echo "is_release=true" >> $GITHUB_OUTPUT
-            echo "Found release merge: $MERGED_BRANCH, version: $VERSION"
+          # Also try to extract from release/ pattern in case it's there
+          VERSION_FROM_BRANCH=$(echo "$RECENT_COMMIT_MSG" | grep -o 'release/[0-9]*\.[0-9]*\.[0-9]*' | cut -d'/' -f2 || echo "")
+          echo "VERSION_FROM_BRANCH: '$VERSION_FROM_BRANCH'"
           
-            # Check if release already exists
-            if gh release view "v$VERSION" &>/dev/null; then
-              echo "Release v$VERSION already exists, skipping"
-              echo "is_release=false" >> $GITHUB_OUTPUT
-            fi
-          elif [[ -n "$VERSION_FROM_RELEASE" ]]; then
+          if [[ -n "$VERSION_FROM_RELEASE" ]]; then
             echo "VERSION_NAME=$VERSION_FROM_RELEASE" >> $GITHUB_ENV
             echo "is_release=true" >> $GITHUB_OUTPUT
             echo "Found release from commit title: Release v$VERSION_FROM_RELEASE"
@@ -551,23 +516,116 @@ jobs:
               echo "Release v$VERSION_FROM_RELEASE already exists, skipping"
               echo "is_release=false" >> $GITHUB_OUTPUT
             fi
+          elif [[ -n "$VERSION_FROM_BRANCH" ]]; then
+            echo "VERSION_NAME=$VERSION_FROM_BRANCH" >> $GITHUB_ENV
+            echo "is_release=true" >> $GITHUB_OUTPUT
+            echo "Found release from branch pattern: $VERSION_FROM_BRANCH"
+          
+            # Check if release already exists
+            if gh release view "v$VERSION_FROM_BRANCH" &>/dev/null; then
+              echo "Release v$VERSION_FROM_BRANCH already exists, skipping"
+              echo "is_release=false" >> $GITHUB_OUTPUT
+            fi
           else
-            echo "Not a release branch merge"
+            echo "Not a release commit"
             echo "is_release=false" >> $GITHUB_OUTPUT
           fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Skip if not a release
         if: steps.check_release.outputs.is_release != 'true'
         run: |
-          echo "Skipping release build - not a release branch merge or release already exists"
+          echo "Skipping release creation - not a release commit or release already exists"
+          exit 0
+
+      - name: Download release artifacts
+        if: steps.check_release.outputs.is_release == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          path: ./release-artifacts
+
+      - name: Display structure of downloaded files
+        if: steps.check_release.outputs.is_release == 'true'
+        run: ls -la ./release-artifacts/
+
+      - name: Create GitHub Release
+        if: steps.check_release.outputs.is_release == 'true'
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ env.VERSION_NAME }}
+          release_name: Release v${{ env.VERSION_NAME }}
+          draft: false
+          prerelease: false
+          body: |
+            Release v${{ env.VERSION_NAME }}
+            
+            ## Installation
+            ```bash
+            # Latest version
+            curl -L https://rindexer.xyz/install.sh | bash
+            
+            # Specific version  
+            curl -L https://rindexer.xyz/install.sh | bash -s -- --version ${{ env.VERSION_NAME }}
+            ```
+
+      - name: Upload Release Assets
+        if: steps.check_release.outputs.is_release == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for platform_dir in ./release-artifacts/*/; do
+            for file in "$platform_dir"*; do
+              if [[ -f "$file" ]]; then
+                filename=$(basename "$file")
+                echo "Uploading $filename"
+                gh release upload v${{ env.VERSION_NAME }} "$file" --clobber
+              fi
+            done
+          done" | grep -o 'Release v[0-9]*\.[0-9]*\.[0-9]*' | sed 's/Release v//' || echo "")
+          echo "VERSION_FROM_RELEASE: '$VERSION_FROM_RELEASE'"
+          
+          # Also try to extract from release/ pattern in case it's there
+          VERSION_FROM_BRANCH=$(echo "$RECENT_COMMIT_MSG" | grep -o 'release/[0-9]*\.[0-9]*\.[0-9]*' | cut -d'/' -f2 || echo "")
+          echo "VERSION_FROM_BRANCH: '$VERSION_FROM_BRANCH'"
+          
+          if [[ -n "$VERSION_FROM_RELEASE" ]]; then
+            echo "VERSION_NAME=$VERSION_FROM_RELEASE" >> $GITHUB_ENV
+            echo "is_release=true" >> $GITHUB_OUTPUT
+            echo "Found release from commit title: Release v$VERSION_FROM_RELEASE"
+          
+            # Check if release already exists
+            if gh release view "v$VERSION_FROM_RELEASE" &>/dev/null; then
+              echo "Release v$VERSION_FROM_RELEASE already exists, skipping"
+              echo "is_release=false" >> $GITHUB_OUTPUT
+            fi
+          elif [[ -n "$VERSION_FROM_BRANCH" ]]; then
+            echo "VERSION_NAME=$VERSION_FROM_BRANCH" >> $GITHUB_ENV
+            echo "is_release=true" >> $GITHUB_OUTPUT
+            echo "Found release from branch pattern: $VERSION_FROM_BRANCH"
+          
+            # Check if release already exists
+            if gh release view "v$VERSION_FROM_BRANCH" &>/dev/null; then
+              echo "Release v$VERSION_FROM_BRANCH already exists, skipping"
+              echo "is_release=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "Not a release commit"
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Skip if not a release
+        if: steps.check_release.outputs.is_release != 'true'
+        run: |
+          echo "Skipping release build - not a release commit or release already exists"
           exit 0
 
       - uses: dtolnay/rust-toolchain@stable
         if: steps.check_release.outputs.is_release == 'true'
         with:
           targets: ${{ matrix.target }}
+
       - uses: Swatinem/rust-cache@v2
         if: steps.check_release.outputs.is_release == 'true'
         with:
@@ -699,105 +757,20 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check if this is a release branch merge and extract version
+      - name: Check if this is a release commit and extract version
         id: check_release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          echo "=== DEBUG: Checking recent merge commits ==="
-          git log --oneline --merges -5 --pretty=format:"%H %s"
+          echo "=== DEBUG: Checking recent commits ==="
+          git log --oneline -10 --pretty=format:"%H %s"
           echo ""
-          echo "=== DEBUG: Checking for release branch pattern ==="
+          echo "=== DEBUG: Checking for release pattern ==="
           
-          # Get the merged branch name from git history
-          MERGED_BRANCH=$(git log --oneline --merges -1 --pretty=format:"%s" | grep -o 'release/[0-9]*\.[0-9]*\.[0-9]*' || echo "")
-          echo "MERGED_BRANCH found: '$MERGED_BRANCH'"
+          # Check the most recent commit (HEAD) for release pattern
+          RECENT_COMMIT_MSG=$(git log --oneline -1 --pretty=format:"%s")
+          echo "Most recent commit: '$RECENT_COMMIT_MSG'"
           
-          # Also try alternative patterns
-          MERGE_COMMIT_MSG=$(git log --oneline --merges -1 --pretty=format:"%s")
-          echo "Full merge commit message: '$MERGE_COMMIT_MSG'"
-          
-          # Try to extract version from Release v pattern
-          VERSION_FROM_RELEASE=$(echo "$MERGE_COMMIT_MSG" | grep -o 'Release v[0-9]*\.[0-9]*\.[0-9]*' | sed 's/Release v//' || echo "")
-          echo "VERSION_FROM_RELEASE: '$VERSION_FROM_RELEASE'"
-          
-          if [[ -n "$MERGED_BRANCH" ]]; then
-            VERSION=$(echo "$MERGED_BRANCH" | cut -d'/' -f2)
-            echo "VERSION_NAME=$VERSION" >> $GITHUB_ENV
-            echo "is_release=true" >> $GITHUB_OUTPUT
-            echo "Found release merge: $MERGED_BRANCH, version: $VERSION"
-          
-            # Check if release already exists
-            if gh release view "v$VERSION" &>/dev/null; then
-              echo "Release v$VERSION already exists, skipping"
-              echo "is_release=false" >> $GITHUB_OUTPUT
-            fi
-          elif [[ -n "$VERSION_FROM_RELEASE" ]]; then
-            echo "VERSION_NAME=$VERSION_FROM_RELEASE" >> $GITHUB_ENV
-            echo "is_release=true" >> $GITHUB_OUTPUT
-            echo "Found release from commit title: Release v$VERSION_FROM_RELEASE"
-          
-            # Check if release already exists
-            if gh release view "v$VERSION_FROM_RELEASE" &>/dev/null; then
-              echo "Release v$VERSION_FROM_RELEASE already exists, skipping"
-              echo "is_release=false" >> $GITHUB_OUTPUT
-            fi
-          else
-            echo "Not a release branch merge"
-            echo "is_release=false" >> $GITHUB_OUTPUT
-          fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Skip if not a release
-        if: steps.check_release.outputs.is_release != 'true'
-        run: |
-          echo "Skipping release creation - not a release branch merge or release already exists"
-          exit 0
-
-      - name: Download release artifacts
-        if: steps.check_release.outputs.is_release == 'true'
-        uses: actions/download-artifact@v4
-        with:
-          path: ./release-artifacts
-
-      - name: Display structure of downloaded files
-        if: steps.check_release.outputs.is_release == 'true'
-        run: ls -la ./release-artifacts/
-
-      - name: Create GitHub Release
-        if: steps.check_release.outputs.is_release == 'true'
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: v${{ env.VERSION_NAME }}
-          release_name: Release v${{ env.VERSION_NAME }}
-          draft: false
-          prerelease: false
-          body: |
-            Release v${{ env.VERSION_NAME }}
-            
-            ## Installation
-            ```bash
-            # Latest version
-            curl -L https://rindexer.xyz/install.sh | bash
-            
-            # Specific version  
-            curl -L https://rindexer.xyz/install.sh | bash -s -- --version ${{ env.VERSION_NAME }}
-            ```
-
-      - name: Upload Release Assets
-        if: steps.check_release.outputs.is_release == 'true'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          for platform_dir in ./release-artifacts/*/; do
-            for file in "$platform_dir"*; do
-              if [[ -f "$file" ]]; then
-                filename=$(basename "$file")
-                echo "Uploading $filename"
-                gh release upload v${{ env.VERSION_NAME }} "$file" --clobber
-              fi
-            done
-          done
+          # Try to extract version from Release v pattern (including PR number)
+          VERSION_FROM_RELEASE=$(echo "$RECENT_COMMIT_MSG
