@@ -52,66 +52,62 @@ jobs:
           const changelogPath = path.join(process.env.GITHUB_WORKSPACE, 'documentation', 'docs', 'pages', 'docs', 'changelog.mdx');
           const rawVersion = process.argv[2]; // Version string passed (e.g., "0.1.0", "0.21.0")
 
-          // Determine the exact header format from your changelog
-          // Your changelog uses "# 0.x.x-beta" for most entries.
-          // For 0.1.0, it's just "# 0.1.0"
           let headerToMatch = '';
           if (rawVersion === '0.1.0') {
-            headerToMatch = `# ${rawVersion}`; // Matches exactly for 0.1.0
+            headerToMatch = `# ${rawVersion}`;
           } else {
-            headerToMatch = `# ${rawVersion}-beta`; // Matches most other beta versions
+            headerToMatch = `# ${rawVersion}-beta`;
           }
 
           console.log(`Attempting to parse changelog for header: "${headerToMatch}"`);
+
+          let releaseNotes = "No specific features/bug fixes mentioned in changelog.";
 
           try {
             const changelogContent = fs.readFileSync(changelogPath, 'utf8');
             const releasesSection = changelogContent.split(/^## Releases/m)[1];
             if (!releasesSection) {
               console.error("Could not find '## Releases' section in changelog.");
-              process.exit(1);
+              // This error means the file structure is wrong, but we should still
+              // output something to the workflow command file to avoid script breakage.
+              // We'll proceed with default notes if this happens.
+            } else {
+              const releasePattern = new RegExp(`^${headerToMatch}\\s*-\\s*\\d+(?:st|nd|rd|th) \\w+ \\d{4}([\\s\\S]*?)(?:\\n# \\d+\\.\\d+\\.\\d+|$|^## |$)`, 'm');
+              const match = releasesSection.match(releasePattern);
+
+              if (match && match[1]) {
+                  releaseNotes = match[1].trim();
+                  releaseNotes = releaseNotes
+                    .replace(/^(github branch - https:\/\/github\.com\/joshstevens19\/rindexer\/tree\/release\/.*)$/gm, '')
+                    .replace(/^- (linux|mac|windows) binary - https:\/\/(github|rindexer\.xyz).*$/gm, '')
+                    .replace(/^### Features\n-------------------------------------------------$/gm, '### Features')
+                    .replace(/^### Bug fixes\n-------------------------------------------------$/gm, '### Bug fixes')
+                    .replace(/^### Breaking changes\n-------------------------------------------------$/gm, '### Breaking changes')
+                    .replace(/^-+\s*$/gm, '')
+                    .replace(/^\s*[\r\n]+/gm, '')
+                    .trim();
+
+                   if (releaseNotes === '') {
+                     releaseNotes = "No specific features/bug fixes mentioned in changelog.";
+                   }
+              }
             }
-
-            // Regex to find the section for the specific version
-            // It matches the header and captures everything until the next similar header or end of string
-            const releasePattern = new RegExp(`^${headerToMatch}\\s*-\\s*\\d+(?:st|nd|rd|th) \\w+ \\d{4}([\\s\\S]*?)(?:\\n# \\d+\\.\\d+\\.\\d+|$|^## |$)`, 'm');
-            const match = releasesSection.match(releasePattern);
-
-            let releaseNotes = "No specific features/bug fixes mentioned in changelog.";
-            if (match && match[1]) {
-                releaseNotes = match[1].trim();
-                // Clean up specific lines that are just headers or blank lines from your template
-                releaseNotes = releaseNotes
-                  .replace(/^(github branch - https:\/\/github\.com\/joshstevens19\/rindexer\/tree\/release\/.*)$/gm, '')
-                  .replace(/^- (linux|mac|windows) binary - https:\/\/(github|rindexer\.xyz).*$/gm, '')
-                  .replace(/^### Features\n-------------------------------------------------$/gm, '### Features')
-                  .replace(/^### Bug fixes\n-------------------------------------------------$/gm, '### Bug fixes')
-                  .replace(/^### Breaking changes\n-------------------------------------------------$/gm, '### Breaking changes')
-                  .replace(/^-+\s*$/gm, '') // Remove horizontal rules
-                  .replace(/^\s*[\r\n]+/gm, '') // Remove empty lines
-                  .trim();
-
-                 if (releaseNotes === '') {
-                   releaseNotes = "No specific features/bug fixes mentioned in changelog.";
-                 }
-            }
-
-            // Encode the output to handle multi-line strings correctly in GitHub Actions
-            const encodedNotes = releaseNotes.replace(/%/g, '%25').replace(/\n/g, '%0A').replace(/\r/g, '%0D');
-            console.log(`::set-output name=release_body::${encodedNotes}`);
-
           } catch (error) {
             console.error(`Error reading or parsing changelog: ${error.message}`);
-            process.exit(1);
+            // Still proceed with default notes if file cannot be read
           }
+
+          // Write the output to GITHUB_OUTPUT environment file
+          // This is the correct way to set multiline outputs from scripts
+          // without them appearing in stdout capture.
+          fs.writeFileSync(process.env.GITHUB_OUTPUT, `release_body<<EOF_DELIMITER\n${releaseNotes}\nEOF_DELIMITER\n`, { flag: 'a' });
+
           EOF
           chmod +x parse_changelog.js
 
       - name: Get all existing release tags
         id: get_tags
         run: |
-          # Get all tags that start with 'v' and look like versions, then sort them.
-          # This ensures we only process valid version tags that GitHub created.
           ALL_TAGS=$(gh api --paginate "/repos/${{ github.repository }}/tags" --jq '.[].name' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -V | paste -sd ' ' -)
           echo "Found tags: $ALL_TAGS"
           echo "all_versions=$ALL_TAGS" >> $GITHUB_OUTPUT
@@ -131,7 +127,6 @@ jobs:
           # Filter versions based on optional inputs
           FILTERED_VERSIONS=""
 
-          # Function for version comparison using sort -V (semantic versioning)
           version_ge() {
             local v1="$1"
             local v2="$2"
@@ -146,13 +141,13 @@ jobs:
           for ver in $ALL_VERSIONS; do
             if [[ -n "$START_VERSION" ]]; then
               if ! version_ge "$ver" "$START_VERSION"; then
-                continue # Skip if less than start_version
+                continue
               fi
             fi
 
             if [[ -n "$END_VERSION" ]]; then
               if ! version_le "$ver" "$END_VERSION"; then
-                continue # Skip if greater than end_version
+                continue
               fi
             fi
 
@@ -171,31 +166,30 @@ jobs:
 
               TAG="v$VERSION"
 
-              # Construct the base installation instructions as a multi-line string within the script
-              INSTALL_INSTRUCTIONS="## Installation
-            \`\`\`bash
-            # Latest version
+              # Corrected INSTALL_INSTRUCTIONS block
+              INSTALL_INSTRUCTIONS="# Latest version
             curl -L https://rindexer.xyz/install.sh | bash
-            
             # Specific version  
-            curl -L https://rindexer.xyz/install.sh | bash -s -- --version $VERSION
-            \`\`\`"
+            curl -L https://rindexer.xyz/install.sh | bash -s -- --version $VERSION"
             
             # Call Node.js script to get release body.
-            RAW_CHANGELOG_BODY=$(node parse_changelog.js "$VERSION")
+            # Capture its stdout, but the actual output is now written to GITHUB_OUTPUT
+            node parse_changelog.js "$VERSION"
             
-            # Decode the URL-encoded string from the Node.js script
-            CLEANED_CHANGELOG_BODY=$(echo -e "${RAW_CHANGELOG_BODY//%/\\x}" | sed 's/%0A/\n/g; s/%0D/\r/g')
+            # Read the output from the GITHUB_OUTPUT file
+            # This uses 'sed' to extract the content between the delimiters
+            CLEANED_CHANGELOG_BODY=$(sed -n '/^release_body<<EOF_DELIMITER$/,/^EOF_DELIMITER$/{/^release_body<<EOF_DELIMITER$/! {/^EOF_DELIMITER$/! p}}' "$GITHUB_OUTPUT" | head -n 1) # Capture only the content
           
           # Combine all parts for the full release body
+          # Format the final body using markdown code blocks
           FULL_RELEASE_BODY="${INSTALL_INSTRUCTIONS}\n\n${CLEANED_CHANGELOG_BODY}\n\nSee full changelog for details: https://github.com/joshstevens19/rindexer/blob/master/documentation/docs/pages/docs/changelog.mdx"
+            
             
             echo "Attempting to edit release $TAG..."
             gh release edit "$TAG" \
             --prerelease=false \
             --notes "$FULL_RELEASE_BODY" \
-            --target master # Assuming your release tags point to master/main
-            # --draft=false # Uncomment this if you accidentally created drafts and want to publish them
+            --target master
             
             echo "Successfully edited release $TAG."
             done
