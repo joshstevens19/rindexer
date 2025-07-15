@@ -40,7 +40,7 @@ use std::{
 use thiserror::Error;
 use tokio::sync::{broadcast::Sender, Mutex};
 use tokio::task::JoinError;
-use tracing::{debug, debug_span, error, info_span, Instrument};
+use tracing::{debug, debug_span, error, Instrument};
 use url::Url;
 
 use crate::blockclock::BlockClock;
@@ -424,9 +424,7 @@ impl JsonRpcCachedProvider {
                         request_futures.push(call)
                     }
 
-                    if let Err(e) =
-                        batch.send().instrument(info_span!("block_by_number_chunk")).await
-                    {
+                    if let Err(e) = batch.send().await {
                         error!(
                             "Failed to send {} batch 'eth_getBlockByNumber' request for {}: {:?}",
                             request_futures.len(),

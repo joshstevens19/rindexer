@@ -1,5 +1,3 @@
-mod deltas;
-
 use crate::provider::{
     JsonRpcCachedProvider, ProviderError, RECOMMENDED_RPC_CHUNK_SIZE, RPC_CHUNK_SIZE,
 };
@@ -169,20 +167,11 @@ impl BlockClock {
         Ok(dates)
     }
 
-    /// Get actual-timestamp from a delta run length encoded process.
-    pub fn get_delta_run_encoded_timestamps(
-        &self,
-        blocks: &[u64],
-    ) -> Result<BTreeMap<u64, u64>, BlockClockError> {
-        todo!()
-    }
-
     /// Intelligently attaches timestamps to any logs.
     ///
     /// - Will not make fetches if the log already has a timestamp
     /// - Will sample block ranges where doing so will minimize networking time
     /// - Will use local-first compressed "delta run-encoded" block timestamps where possible
-    #[tracing::instrument(skip_all)]
     pub async fn attach_log_timestamps(&self, logs: Vec<Log>) -> Result<Vec<Log>, BlockClockError> {
         let blocks_without_ts = logs
             .iter()

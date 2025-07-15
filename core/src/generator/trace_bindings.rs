@@ -455,7 +455,6 @@ fn generate_trace_bindings_code(
             {csv_import}
             generate_random_id,
             FutureExt,
-            blockclock::BlockClock,
             event::{{
                 callback_registry::{{
                     TraceCallbackRegistry, TraceCallbackRegistryInformation, TraceCallbackResult,
