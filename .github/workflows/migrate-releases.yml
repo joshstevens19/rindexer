@@ -1,0 +1,264 @@
+name: Migrate Historical Releases to GitHub Releases
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_version:
+        description: 'Start migration from this version (e.g., 0.1.0)'
+        required: false
+        default: '0.1.0'
+      end_version:
+        description: 'End migration at this version (e.g., 0.21.0). Leave empty for all versions from start_version.'
+        required: false
+        default: ''
+
+jobs:
+  migrate_releases:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Ensure this secret is available
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Checkout the specific commit where these old releases were located
+          # If your main branch still has these files, you can use `master` or `main`
+          ref: 96ead5ee413f83fc58796f1661791122cf1a7f60 # The commit hash you provided
+          fetch-depth: 0 # Get full history if needed for changelog parsing
+
+      - name: Install GitHub CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gh
+
+      - name: Set up Node.js for Changelog Parsing (Optional, but recommended for better parsing)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Create release body parser script
+        id: create_parser
+        run: |
+          cat << 'EOF' > parse_changelog.js
+          const fs = require('fs');
+          const path = require('path');
+
+          const changelogPath = path.join(process.env.GITHUB_WORKSPACE, 'documentation', 'docs', 'pages', 'docs', 'changelog.mdx');
+          const version = process.argv[2]; // Version to extract (e.g., "0.1.0-beta")
+
+          console.log(`Attempting to parse changelog for version: ${version}`);
+
+          try {
+            const changelogContent = fs.readFileSync(changelogPath, 'utf8');
+            const releasesSection = changelogContent.split(/^## Releases/m)[1];
+            if (!releasesSection) {
+              console.error("Could not find '## Releases' section in changelog.");
+              process.exit(1);
+            }
+
+            const releasePattern = new RegExp(`^# ${version}(.*?)(\\n# |^## |$)`, 'ms');
+            const match = releasesSection.match(releasePattern);
+
+            let releaseNotes = "No release notes found in changelog.";
+            if (match && match[1]) {
+                releaseNotes = match[1].trim();
+                // Clean up specific lines that are just headers or blank lines from your template
+                releaseNotes = releaseNotes
+                  .replace(/^(github branch - https:\/\/github\.com\/joshstevens19\/rindexer\/tree\/release\/.*)$/gm, '')
+                  .replace(/^- (linux|mac|windows) binary - https:\/\/(github|rindexer\.xyz).*$/gm, '')
+                  .replace(/^### Features\n-------------------------------------------------$/gm, '### Features')
+                  .replace(/^### Bug fixes\n-------------------------------------------------$/gm, '### Bug fixes')
+                  .replace(/^### Breaking changes\n-------------------------------------------------$/gm, '### Breaking changes')
+                  .replace(/^-+\s*$/gm, '') // Remove horizontal rules
+                  .replace(/^\s*[\r\n]+/gm, '') // Remove empty lines
+                  .trim();
+
+                 if (releaseNotes === '') {
+                   releaseNotes = "No specific features/bug fixes mentioned in changelog.";
+                 }
+            }
+
+            console.log(`::set-output name=release_body::${releaseNotes}`);
+
+          } catch (error) {
+            console.error(`Error reading or parsing changelog: ${error.message}`);
+            process.exit(1);
+          }
+          EOF
+          chmod +x parse_changelog.js
+
+      - name: Find all versions and platforms
+        id: find_versions
+        run: |
+          RELEASE_BASE_PATH="documentation/docs/public/releases"
+          declare -A versions_map # Associative array to store versions and their assets
+
+          # Loop through each platform directory (e.g., darwin-amd64, linux-amd64)
+          for platform_dir in ${RELEASE_BASE_PATH}/*/; do
+            PLATFORM=$(basename "$platform_dir")
+            # Loop through each version directory within the platform
+            for version_dir in "$platform_dir"*/; do
+              VERSION=$(basename "$version_dir")
+              # Collect all files in this version directory
+              for file_path in "$version_dir"*; do
+                FILE_NAME=$(basename "$file_path")
+                # Append file path to the list for this version
+                versions_map["$VERSION"]+="$file_path;"
+              done
+            done
+          done
+
+          # Output sorted unique versions
+          UNIQUE_VERSIONS=$(printf "%s\n" "${!versions_map[@]}" | sort -V)
+          echo "Found versions: $UNIQUE_VERSIONS"
+          echo "versions_to_migrate=${UNIQUE_VERSIONS}" >> $GITHUB_OUTPUT
+
+          # Prepare assets map for subsequent steps
+          # This creates a JSON string where keys are versions and values are semicolon-separated file paths
+          JSON_ASSETS="{"
+          for version in $UNIQUE_VERSIONS; do
+            ASSETS_LIST="${versions_map[$version]%??}" # Remove trailing semicolon
+            JSON_ASSETS+="\"$version\":\"$ASSETS_LIST\","
+          done
+          JSON_ASSETS="${JSON_ASSETS%,}" # Remove trailing comma
+          JSON_ASSETS+="}"
+          echo "assets_map=${JSON_ASSETS}" >> $GITHUB_OUTPUT
+
+      - name: Migrate Releases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ASSETS_MAP: ${{ steps.find_versions.outputs.assets_map }}
+          START_VERSION: ${{ github.event.inputs.start_version }}
+          END_VERSION: ${{ github.event.inputs.end_version }}
+        run: |
+          #!/bin/bash
+          set -e
+
+          # Parse JSON assets map
+          # Using Python for robust JSON parsing
+          ASSETS_DICT=$(python3 -c 'import json; import os; print(json.loads(os.environ["ASSETS_MAP"]))')
+
+          # Use `eval` with caution, but for simple dict from trusted source, it's ok.
+          # More robust: parse with jq or python directly for each loop.
+          # For simplicity here, let's process the string output from python.
+
+          # Convert the Python dict string to a bash associative array
+          declare -A assets_map_bash
+          # Example Python output: {'0.1.0': 'path1;path2', '0.2.0': 'path3'}
+          # We need to parse this into a bash associative array.
+          # A safer way is to use `jq` if available, or simpler string manipulation.
+          # Let's simplify the python step to produce an array of versions and then loop.
+
+          # Re-evaluate ASSETS_MAP for direct use
+          # `jq` is excellent for this.
+          # `sudo apt-get install -y jq` if not already installed on runner.
+          # Let's assume the previous step outputs a simple space-separated list of versions
+          # and then we iterate over that.
+
+          ALL_VERSIONS="${{ steps.find_versions.outputs.versions_to_migrate }}"
+          
+          # Filter versions based on optional inputs
+          FILTERED_VERSIONS=""
+          version_compare_start=$(printf '%s\n' "$START_VERSION" | sed 's/\.//g') # Remove dots for numeric comparison
+          
+          # Iterate over versions and apply filters
+          for ver in $ALL_VERSIONS; do
+            current_version_numeric=$(printf '%s\n' "$ver" | sed 's/\.//g')
+          
+            # Start version filter
+            if [[ -n "$START_VERSION" ]]; then
+              if (( $(echo "$current_version_numeric >= $version_compare_start" | bc -l) )); then
+                # Version is greater than or equal to start_version
+                : # Do nothing, proceed
+              else
+                continue # Skip this version
+              fi
+            fi
+
+            # End version filter
+            if [[ -n "$END_VERSION" ]]; then
+              version_compare_end=$(printf '%s\n' "$END_VERSION" | sed 's/\.//g')
+              if (( $(echo "$current_version_numeric <= $version_compare_end" | bc -l) )); then
+                : # Do nothing, proceed
+              else
+                continue # Skip this version
+              fi
+            fi
+          
+            FILTERED_VERSIONS+=" $ver"
+          done
+          
+          if [ -z "$FILTERED_VERSIONS" ]; then
+            echo "No versions to migrate after applying filters. Exiting."
+            exit 0
+          fi
+          
+          echo "Migrating versions: $FILTERED_VERSIONS"
+
+          for VERSION in $FILTERED_VERSIONS; do
+              echo "--- Processing version: $VERSION ---"
+
+              TAG="v$VERSION"
+              RELEASE_NAME="Release $TAG"
+          
+              # Extract release notes from changelog.mdx using the Node.js script
+              RELEASE_BODY=$(node parse_changelog.js "$VERSION-beta") # Assuming beta suffix for older releases
+              if [ -z "$RELEASE_BODY" ]; then
+                RELEASE_BODY="No specific release notes found for $VERSION in changelog."
+              fi
+
+              echo "Release Body for $TAG: $RELEASE_BODY"
+
+              # Check if release already exists
+              if gh release view "$TAG" &> /dev/null; then
+                  echo "Release $TAG already exists. Skipping creation."
+              else
+                  echo "Creating release $TAG..."
+                  gh release create "$TAG" \
+                      --title "$RELEASE_NAME" \
+                      --notes "$RELEASE_BODY" \
+                      --prerelease # Assuming all these old releases were beta/prerelease
+              fi
+
+              # Get the assets list for this version from the ASSETS_MAP (needs proper JSON parsing or iteration)
+              # A simpler way given the previous step's output is to reconstruct the path
+          
+              # Construct paths for this version for each platform
+              PLATFORMS=("darwin-amd64" "darwin-arm64" "linux-amd64" "win32-amd64")
+              ASSETS_TO_UPLOAD=()
+
+              for PLATFORM_ARCH in "${PLATFORMS[@]}"; do
+                FILE_EXT="tar.gz"
+                if [[ "$PLATFORM_ARCH" == "win32-amd64" ]]; then
+                  FILE_EXT="zip"
+                fi
+          
+                # Check for rindexer_cli (newer) or rindexer (older)
+                FILE_BASE_NAME="rindexer_${PLATFORM_ARCH}.${FILE_EXT}"
+                FILE_CLI_NAME="rindexer_cli_${PLATFORM_ARCH}.${FILE_EXT}" # If cli was used
+          
+                # Full path in the checked out repository
+                CURRENT_FILE_PATH="documentation/docs/public/releases/${PLATFORM_ARCH}/${VERSION}/${FILE_BASE_NAME}"
+                CURRENT_CLI_FILE_PATH="documentation/docs/public/releases/${PLATFORM_ARCH}/${VERSION}/${FILE_CLI_NAME}"
+
+                if [ -f "$CURRENT_FILE_PATH" ]; then
+                    ASSETS_TO_UPLOAD+=("$CURRENT_FILE_PATH")
+                elif [ -f "$CURRENT_CLI_FILE_PATH" ]; then # Check for cli version if base not found
+                    ASSETS_TO_UPLOAD+=("$CURRENT_CLI_FILE_PATH")
+                else
+                    echo "Warning: Binary not found for $VERSION, platform $PLATFORM_ARCH at $CURRENT_FILE_PATH or $CURRENT_CLI_FILE_PATH"
+                fi
+              done
+
+              if [ ${#ASSETS_TO_UPLOAD[@]} -eq 0 ]; then
+                  echo "No assets found for version $VERSION. Skipping asset upload for this release."
+              else
+                  echo "Uploading assets for $TAG: ${ASSETS_TO_UPLOAD[*]}"
+                  # Loop and upload each asset
+                  for ASSET_PATH in "${ASSETS_TO_UPLOAD[@]}"; do
+                      gh release upload "$TAG" "$ASSET_PATH" --clobber # --clobber allows re-uploading if existing asset has same name
+                  done
+              fi
+          done
