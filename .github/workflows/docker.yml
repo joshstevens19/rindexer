@@ -7,7 +7,7 @@ on:
       - closed
     branches:
       - master
-  release:
+  release: # This 'release' key must be at the same indentation level as 'workflow_dispatch' and 'pull_request'
     types: [published]
 
 env:
@@ -19,21 +19,21 @@ jobs:
     permissions:
       contents: read
       packages: write
-      # Add 'releases: read' if your release assets are not publicly downloadable
-      # or if you use gh CLI for download with GITHUB_TOKEN
-      releases: read
+      releases: read # Ensure this permission is here if you're downloading release assets
     strategy:
       matrix:
         include:
-          - dockerfile: Dockerfile
-            image: ghcr.io/${{ github.repository }}
-          - dockerfile: bundled.Dockerfile
-            image: ghcr.io/${{ github.repository }}-bundled
+          - dockerfile: Dockerfile # Your main Dockerfile
+            image: ghcr.io/${{ github.repository }} # Main image name
+          - dockerfile: bundled.Dockerfile # Your bundled Dockerfile
+            image: ghcr.io/${{ github.repository }}-bundled # Bundled image name
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Login against a Docker registry
+      # https://github.com/docker/login-action
       - name: Log into registry ${{ env.REGISTRY }}
         uses: docker/login-action@v3
         with:
@@ -41,6 +41,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Extract metadata (tags, labels) for Docker
+      # https://github.com/docker/metadata-action
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -49,7 +51,9 @@ jobs:
           tags: |
             type=sha
             type=sha,format=long
+            # set latest tag for default branch (e.g., master)
             type=raw,value=latest,enable={{is_default_branch}}
+            # Tag with the release version (e.g., v1.0.0) when a release is published
             type=ref,event=tag
 
       - name: Set Release Version ARG for Dockerfile
