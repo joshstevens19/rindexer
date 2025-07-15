@@ -38,6 +38,7 @@ jobs:
 
   build:
     if: |
+      false &&
       (github.event_name == 'push' || github.event_name == 'pull_request') &&
       github.actor != 'github-actions[bot]' &&
       (
@@ -250,7 +251,8 @@ jobs:
   create_pr:
     name: Create Release PR
     runs-on: ubuntu-22.04
-    needs: build
+    # Remove the build dependency since we're skipping builds
+    # needs: build
     if: |
       github.actor != 'github-actions[bot]' && 
       startsWith(github.ref, 'refs/heads/release/')
@@ -470,8 +472,7 @@ jobs:
     if: |
       github.actor != 'github-actions[bot]' && 
       github.ref == 'refs/heads/master' && 
-      contains(github.event.head_commit.message, 'Merge pull request') &&
-      contains(github.event.head_commit.message, 'release/')
+      github.event_name == 'push'
     timeout-minutes: 240
     strategy:
       fail-fast: false
@@ -502,42 +503,69 @@ jobs:
       BUILD_TYPE: release
 
     steps:
-      - name: Extract version from merge commit
-        shell: bash
-        run: |
-          VERSION=$(echo "${{ github.event.head_commit.message }}" | grep -o 'release/[0-9]*\.[0-9]*\.[0-9]*' | cut -d'/' -f2)
-          echo "VERSION_NAME=$VERSION" >> $GITHUB_ENV
-
       - uses: actions/checkout@v4
         with:
-          ref: release/${{ env.VERSION_NAME }}
+          fetch-depth: 0
+
+      - name: Check if this is a release branch merge and extract version
+        id: check_release
+        shell: bash
+        run: |
+          # Get the merged branch name from git history
+          MERGED_BRANCH=$(git log --oneline --merges -1 --pretty=format:"%s" | grep -o 'release/[0-9]*\.[0-9]*\.[0-9]*' || echo "")
+          
+          if [[ -n "$MERGED_BRANCH" ]]; then
+            VERSION=$(echo "$MERGED_BRANCH" | cut -d'/' -f2)
+            echo "VERSION_NAME=$VERSION" >> $GITHUB_ENV
+            echo "is_release=true" >> $GITHUB_OUTPUT
+            echo "Found release merge: $MERGED_BRANCH, version: $VERSION"
+          
+            # Check if release already exists
+            if gh release view "v$VERSION" &>/dev/null; then
+              echo "Release v$VERSION already exists, skipping"
+              echo "is_release=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "Not a release branch merge"
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Skip if not a release
+        if: steps.check_release.outputs.is_release != 'true'
+        run: |
+          echo "Skipping release build - not a release branch merge or release already exists"
+          exit 0
 
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.check_release.outputs.is_release == 'true'
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+        if: steps.check_release.outputs.is_release == 'true'
         with:
           key: ${{ matrix.target }}
           cache-on-failure: true
 
       - name: Apple M1 setup
-        if: matrix.target == 'aarch64-apple-darwin'
+        if: steps.check_release.outputs.is_release == 'true' && matrix.target == 'aarch64-apple-darwin'
         run: |
           echo "SDKROOT=$(xcrun -sdk macosx --show-sdk-path)" >> $GITHUB_ENV
           echo "MACOSX_DEPLOYMENT_TARGET=$(xcrun -sdk macosx --show-sdk-platform-version)" >> $GITHUB_ENV
 
       - name: Install MSVC target
-        if: matrix.target == 'x86_64-pc-windows-msvc'
+        if: steps.check_release.outputs.is_release == 'true' && matrix.target == 'x86_64-pc-windows-msvc'
         run: rustup target add x86_64-pc-windows-msvc
 
       - name: Install OpenSSL development libraries
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        if: steps.check_release.outputs.is_release == 'true' && matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           sudo apt-get update -y
           sudo apt-get install -y libssl-dev pkg-config
 
       - name: Install and setup NASM on Windows
-        if: matrix.target == 'x86_64-pc-windows-msvc'
+        if: steps.check_release.outputs.is_release == 'true' && matrix.target == 'x86_64-pc-windows-msvc'
         shell: pwsh
         run: |
           choco install nasm
@@ -549,7 +577,7 @@ jobs:
           nasm -v
 
       - name: Install vcpkg on Windows
-        if: matrix.target == 'x86_64-pc-windows-msvc'
+        if: steps.check_release.outputs.is_release == 'true' && matrix.target == 'x86_64-pc-windows-msvc'
         shell: pwsh
         run: |
           git clone https://github.com/Microsoft/vcpkg.git C:\vcpkg
@@ -559,7 +587,7 @@ jobs:
           echo "C:\vcpkg" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install CMake on Windows
-        if: matrix.target == 'x86_64-pc-windows-msvc'
+        if: steps.check_release.outputs.is_release == 'true' && matrix.target == 'x86_64-pc-windows-msvc'
         shell: pwsh
         run: |
           choco install cmake --version=3.20.0 --installargs 'ADD_CMAKE_TO_PATH=System'
@@ -568,12 +596,13 @@ jobs:
           echo "CMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Install dependencies with vcpkg on Windows
-        if: matrix.target == 'x86_64-pc-windows-msvc'
+        if: steps.check_release.outputs.is_release == 'true' && matrix.target == 'x86_64-pc-windows-msvc'
         shell: pwsh
         run: |
           C:\vcpkg\vcpkg install openssl:x64-windows-static-md zlib:x64-windows-static-md
 
       - name: Build binaries
+        if: steps.check_release.outputs.is_release == 'true'
         working-directory: cli
         env:
           SVM_TARGET_PLATFORM: ${{ matrix.svm_target_platform }}
@@ -600,6 +629,7 @@ jobs:
           RUST_BACKTRACE=1 CMAKE_TOOLCHAIN_FILE="$CMAKE_TOOLCHAIN_FILE" cargo build --release --target "$target" "${flags[@]}" -vv
 
       - name: Archive binaries
+        if: steps.check_release.outputs.is_release == 'true'
         id: artifacts
         env:
           PLATFORM_NAME: ${{ matrix.platform }}
@@ -624,6 +654,7 @@ jobs:
           echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
 
       - name: Upload artifact
+        if: steps.check_release.outputs.is_release == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.platform }}-${{ matrix.arch }}
@@ -636,29 +667,55 @@ jobs:
     if: |
       github.actor != 'github-actions[bot]' && 
       github.ref == 'refs/heads/master' && 
-      contains(github.event.head_commit.message, 'Merge pull request') &&
-      contains(github.event.head_commit.message, 'release/')
+      github.event_name == 'push'
     steps:
-      - name: Extract version from merge commit
-        shell: bash
-        run: |
-          VERSION=$(echo "${{ github.event.head_commit.message }}" | grep -o 'release/[0-9]*\.[0-9]*\.[0-9]*' | cut -d'/' -f2)
-          echo "VERSION_NAME=$VERSION" >> $GITHUB_ENV
-          echo "Extracted version: $VERSION"
-
       - uses: actions/checkout@v4
         with:
-          ref: release/${{ env.VERSION_NAME }}
+          fetch-depth: 0
+
+      - name: Check if this is a release branch merge and extract version
+        id: check_release
+        shell: bash
+        run: |
+          # Get the merged branch name from git history
+          MERGED_BRANCH=$(git log --oneline --merges -1 --pretty=format:"%s" | grep -o 'release/[0-9]*\.[0-9]*\.[0-9]*' || echo "")
+          
+          if [[ -n "$MERGED_BRANCH" ]]; then
+            VERSION=$(echo "$MERGED_BRANCH" | cut -d'/' -f2)
+            echo "VERSION_NAME=$VERSION" >> $GITHUB_ENV
+            echo "is_release=true" >> $GITHUB_OUTPUT
+            echo "Found release merge: $MERGED_BRANCH, version: $VERSION"
+          
+            # Check if release already exists
+            if gh release view "v$VERSION" &>/dev/null; then
+              echo "Release v$VERSION already exists, skipping"
+              echo "is_release=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "Not a release branch merge"
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Skip if not a release
+        if: steps.check_release.outputs.is_release != 'true'
+        run: |
+          echo "Skipping release creation - not a release branch merge or release already exists"
+          exit 0
 
       - name: Download release artifacts
+        if: steps.check_release.outputs.is_release == 'true'
         uses: actions/download-artifact@v4
         with:
           path: ./release-artifacts
 
       - name: Display structure of downloaded files
+        if: steps.check_release.outputs.is_release == 'true'
         run: ls -la ./release-artifacts/
 
       - name: Create GitHub Release
+        if: steps.check_release.outputs.is_release == 'true'
         id: create_release
         uses: actions/create-release@v1
         env:
@@ -681,6 +738,7 @@ jobs:
             ```
 
       - name: Upload Release Assets
+        if: steps.check_release.outputs.is_release == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
