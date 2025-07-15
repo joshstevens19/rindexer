@@ -22,7 +22,7 @@ pub async fn handle_codegen_command(
     if let CodegenSubcommands::GraphQL { endpoint } = subcommand {
         let url = endpoint.as_deref().unwrap_or("http://localhost:3001");
         generate_graphql_queries(url, &project_path).await.map_err(|e| {
-            print_error_message(&format!("Failed to generate graphql queries: {}", e));
+            print_error_message(&format!("Failed to generate graphql queries: {e}"));
             e
         })?;
 
@@ -36,7 +36,7 @@ pub async fn handle_codegen_command(
     let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
 
     let manifest = read_manifest(&rindexer_yaml_path).map_err(|e| {
-        print_error_message(&format!("Could not read the rindexer.yaml file: {}", e));
+        print_error_message(&format!("Could not read the rindexer.yaml file: {e}"));
         e
     })?;
     if manifest.project_type == ProjectType::NoCode {
@@ -48,7 +48,7 @@ pub async fn handle_codegen_command(
     match subcommand {
         CodegenSubcommands::Typings => {
             generate_rindexer_typings(&manifest, &rindexer_yaml_path, true).map_err(|e| {
-                print_error_message(&format!("Failed to generate rindexer typings: {}", e));
+                print_error_message(&format!("Failed to generate rindexer typings: {e}"));
                 e
             })?;
             format_all_files_for_project(project_path);
@@ -56,10 +56,7 @@ pub async fn handle_codegen_command(
         }
         CodegenSubcommands::Indexer => {
             generate_rindexer_handlers(manifest, &rindexer_yaml_path, true).map_err(|e| {
-                print_error_message(&format!(
-                    "Failed to generate rindexer indexer handlers: {}",
-                    e
-                ));
+                print_error_message(&format!("Failed to generate rindexer indexer handlers: {e}"));
                 e
             })?;
             format_all_files_for_project(project_path);

@@ -32,7 +32,7 @@ impl RethConfig {
 
         // This will error if args are invalid
         let _cli = Cli::try_parse_args_from(&full_args)
-            .map_err(|e| format!("Failed to parse reth CLI args: {}", e))?;
+            .map_err(|e| format!("Failed to parse reth CLI args: {e}"))?;
 
         // Store args in space-separated format for clean YAML
         let cli_args = Self::combine_args_with_values(&args);
@@ -70,7 +70,7 @@ impl RethConfig {
     /// Convert to reth CLI, parsing the stored args
     pub fn to_cli(&self) -> Result<reth::cli::Cli, String> {
         let args = self.to_cli_args();
-        Cli::try_parse_args_from(&args).map_err(|e| format!("Failed to parse reth CLI args: {}", e))
+        Cli::try_parse_args_from(&args).map_err(|e| format!("Failed to parse reth CLI args: {e}"))
     }
 
     /// Convert to reth CLI args

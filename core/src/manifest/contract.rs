@@ -279,8 +279,7 @@ impl Contract {
                         }
                     } else {
                         return Err(ParseAbiError::InvalidAbiFormat(format!(
-                            "Expected an array but got a single value: {}",
-                            abi_value
+                            "Expected an array but got a single value: {abi_value}"
                         )));
                     }
                 }

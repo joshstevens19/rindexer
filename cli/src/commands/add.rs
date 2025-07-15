@@ -27,13 +27,13 @@ pub async fn handle_add_contract_command(
     let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
 
     let mut manifest = read_manifest_raw(&rindexer_yaml_path).inspect_err(|e| {
-        print_error_message(&format!("Could not read the rindexer.yaml file: {}", e))
+        print_error_message(&format!("Could not read the rindexer.yaml file: {e}"))
     })?;
 
     let rindexer_abis_folder = project_path.join("abis");
 
     if let Err(err) = fs::create_dir_all(&rindexer_abis_folder) {
-        print_error_message(&format!("Failed to create directory: {}", err));
+        print_error_message(&format!("Failed to create directory: {err}"));
         return Err(err.into());
     }
 
@@ -61,7 +61,7 @@ pub async fn handle_add_contract_command(
 
     let chain_network = Chain::from(chain_id);
     let contract_address =
-        prompt_for_input(&format!("Enter {} Contract Address", network), None, None, None);
+        prompt_for_input(&format!("Enter {network} Contract Address"), None, None, None);
 
     let etherscan_api_key =
         manifest.global.as_ref().and_then(|global| global.etherscan_api_key.as_ref()).map_or_else(
@@ -73,18 +73,18 @@ pub async fn handle_add_contract_command(
         .with_api_key(etherscan_api_key)
         .chain(chain_network)
         .map_err(|e| {
-            print_error_message(&format!("Invalid chain id {}", e));
+            print_error_message(&format!("Invalid chain id {e}"));
             e
         })?
         .build()
         .map_err(|e| {
-            print_error_message(&format!("Failed to create etherscan client: {}", e));
+            print_error_message(&format!("Failed to create etherscan client: {e}"));
             e
         })?;
 
     let address = contract_address
         .parse::<Address>()
-        .inspect_err(|e| print_error_message(&format!("Invalid contract address: {}", e)))?;
+        .inspect_err(|e| print_error_message(&format!("Invalid contract address: {e}")))?;
 
     let mut abi_lookup_address: Address = address;
     let mut timeout = 1000;
@@ -102,8 +102,7 @@ pub async fn handle_add_contract_command(
             Err(e) => {
                 if retry_attempts >= max_retries {
                     print_error_message(&format!(
-                        "Failed to fetch contract metadata: {}, retries: {}",
-                        e, retry_attempts
+                        "Failed to fetch contract metadata: {e}, retries: {retry_attempts}"
                     ));
                     return Err(Box::new(e));
                 }
@@ -120,8 +119,7 @@ pub async fn handle_add_contract_command(
 
         if metadata.items.is_empty() {
             print_error_message(&format!(
-                "No contract found on network {} with address {}.",
-                network, contract_address
+                "No contract found on network {network} with address {contract_address}."
             ));
             break;
         }
@@ -130,8 +128,7 @@ pub async fn handle_add_contract_command(
         if item.proxy == 1 && item.implementation.is_some() {
             abi_lookup_address = item.implementation.unwrap().to_string().parse().unwrap();
             println!(
-                "This contract is a proxy contract. Loading the implementation contract {}",
-                abi_lookup_address
+                "This contract is a proxy contract. Loading the implementation contract {abi_lookup_address}"
             );
             tokio::time::sleep(Duration::from_millis(1000)).await;
             continue;
@@ -149,15 +146,15 @@ pub async fn handle_add_contract_command(
             Cow::Borrowed(&item.contract_name)
         };
 
-        let abi_file_name = format!("{}.abi.json", contract_name);
+        let abi_file_name = format!("{contract_name}.abi.json");
 
         let abi_path = rindexer_abis_folder.join(&abi_file_name);
         write_file(&abi_path, &item.abi).map_err(|e| {
-            print_error_message(&format!("Failed to write ABI file: {}", e));
+            print_error_message(&format!("Failed to write ABI file: {e}"));
             e
         })?;
 
-        let abi_path_relative = format!("./abis/{}", abi_file_name);
+        let abi_path_relative = format!("./abis/{abi_file_name}");
 
         print_success_message(&format!(
             "Downloaded ABI for: {} in {}",
@@ -165,8 +162,7 @@ pub async fn handle_add_contract_command(
         ));
 
         let success_message = format!(
-            "Updated rindexer.yaml with contract: {} and ABI path: {}",
-            contract_name, abi_path_relative
+            "Updated rindexer.yaml with contract: {contract_name} and ABI path: {abi_path_relative}"
         );
 
         manifest.contracts.push(Contract {
@@ -189,7 +185,7 @@ pub async fn handle_add_contract_command(
         });
 
         write_manifest(&manifest, &rindexer_yaml_path).map_err(|e| {
-            print_error_message(&format!("Failed to write rindexer.yaml file: {}", e));
+            print_error_message(&format!("Failed to write rindexer.yaml file: {e}"));
             e
         })?;
 
