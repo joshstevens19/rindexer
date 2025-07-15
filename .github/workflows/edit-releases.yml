@@ -88,19 +88,19 @@ jobs:
 
               TAG="v$VERSION"
 
-              # Define the exact release body as per your last request
-              # No changelog parsing or dynamic content here, just the install instructions.
-              RELEASE_BODY="
+              read -r -d '' RELEASE_BODY << EOF_BODY_CONTENT
           # Install
-               \`\`\`bash
-               curl -L https://rindexer.xyz/install.sh | bash -s -- --version $VERSION
-               \`\`\`"
-          
-          echo "Attempting to edit release $TAG..."
-          gh release edit "$TAG" \
-          --prerelease=false \
-          --notes "$RELEASE_BODY" \
-          --target master
-          
-          echo "Successfully edited release $TAG."
-          done
+            \`\`\`bash
+            curl -L https://rindexer.xyz/install.sh | bash -s -- --version $VERSION
+            \`\`\`
+            EOF_BODY_CONTENT
+            
+            echo "Attempting to edit release $TAG..."
+            gh release edit "$TAG" \
+            --repo ${{ github.repository }} \ # Explicitly specify the repository
+            --prerelease=false \
+            --notes "$RELEASE_BODY" \
+            --target master # Assuming your release tags point to master/main
+            
+            echo "Successfully edited release $TAG."
+            done
