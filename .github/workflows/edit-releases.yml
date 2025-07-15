@@ -91,10 +91,10 @@ jobs:
               # Define the exact release body as per your last request
               # No changelog parsing or dynamic content here, just the install instructions.
               RELEASE_BODY="
-        # Install
-          \`\`\`bash
-          curl -L https://rindexer.xyz/install.sh | bash -s -- --version $VERSION
-          \`\`\`"
+          # Install
+               \`\`\`bash
+               curl -L https://rindexer.xyz/install.sh | bash -s -- --version $VERSION
+               \`\`\`"
           
           echo "Attempting to edit release $TAG..."
           gh release edit "$TAG" \
