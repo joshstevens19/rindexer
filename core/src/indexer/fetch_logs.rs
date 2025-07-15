@@ -10,7 +10,6 @@ use alloy::{
     primitives::{B256, U64},
     rpc::types::Log,
 };
-use lru::LruCache;
 use rand::{random_bool, random_ratio};
 use regex::Regex;
 use std::collections::VecDeque;

@@ -24,6 +24,7 @@ use rindexer::{
     },
     write_file, StringOrArray, WriteFileError,
 };
+use rindexer::manifest::timestamps::Timestamps;
 
 fn generate_rindexer_rust_project(project_path: &Path) {
     let generated = generate_rust_project(project_path);
@@ -194,6 +195,10 @@ pub fn handle_new_command(
         repository,
         project_type,
         config: Config { buffer: None, callback_concurrency: None },
+        timestamps: Timestamps {
+            enabled: false,
+            sample_rate: None,
+        },
         networks: vec![Network {
             name: "ethereum".to_string(),
             chain_id: 1,

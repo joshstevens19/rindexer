@@ -13,4 +13,4 @@ You can get to the full rindexer [documentation](https://rindexer.xyz/).
 
 rust crate is [here](https://crates.io/crates/rindexer) but you can also install via github.
 
-all rust documentation can be found [here](https://rindexer.xyz/docs/start-building/rust-project-deep-dive)
+all rust documentation can be found [here](https://rindexer.xyz/docs/start-building/rust-project-deep-dive)[Cargo.toml](Cargo.toml)
