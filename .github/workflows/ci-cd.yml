@@ -474,10 +474,9 @@ jobs:
             arch: amd64
 
     steps:
-      - uses: actions/checkout@v4
-        if: steps.check_release.outputs.is_release == 'true'
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
-          ref: release/${{ env.VERSION_NAME }}
           fetch-depth: 0
 
       - name: Check if this is a release commit and extract version
@@ -499,115 +498,10 @@ jobs:
           VERSION_FROM_RELEASE=$(echo "$RECENT_COMMIT_MSG" | grep -o 'Release v[0-9]*\.[0-9]*\.[0-9]*' | sed 's/Release v//' || echo "")
           echo "VERSION_FROM_RELEASE: '$VERSION_FROM_RELEASE'"
           
-          # Also try to extract from release/ pattern in case it's there
-          VERSION_FROM_BRANCH=$(echo "$RECENT_COMMIT_MSG" | grep -o 'release/[0-9]*\.[0-9]*\.[0-9]*' | cut -d'/' -f2 || echo "")
-          echo "VERSION_FROM_BRANCH: '$VERSION_FROM_BRANCH'"
-          
           if [[ -n "$VERSION_FROM_RELEASE" ]]; then
             echo "VERSION_NAME=$VERSION_FROM_RELEASE" >> $GITHUB_ENV
             echo "is_release=true" >> $GITHUB_OUTPUT
             echo "Found release from commit title: Release v$VERSION_FROM_RELEASE"
-          elif [[ -n "$VERSION_FROM_BRANCH" ]]; then
-            echo "VERSION_NAME=$VERSION_FROM_BRANCH" >> $GITHUB_ENV
-            echo "is_release=true" >> $GITHUB_OUTPUT
-            echo "Found release from branch pattern: $VERSION_FROM_BRANCH"
-          else
-            echo "Not a release commit"
-            echo "is_release=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Skip if not a release
-        if: steps.check_release.outputs.is_release != 'true'
-        run: |
-          echo "Skipping release creation - not a release commit or release already exists"
-          exit 0
-
-      - name: Download release artifacts
-        if: steps.check_release.outputs.is_release == 'true'
-        uses: actions/download-artifact@v4
-        with:
-          path: ./release-artifacts
-        continue-on-error: true
-
-      - name: Check if artifacts exist
-        if: steps.check_release.outputs.is_release == 'true'
-        id: check_artifacts
-        run: |
-          if [ -d "./release-artifacts" ] && [ "$(ls -A ./release-artifacts)" ]; then
-            echo "artifacts_exist=true" >> $GITHUB_OUTPUT
-            echo "Artifacts found, proceeding with release"
-          else
-            echo "artifacts_exist=false" >> $GITHUB_OUTPUT
-            echo "No artifacts found, skipping release creation"
-          fi
-
-      - name: Display structure of downloaded files
-        if: steps.check_release.outputs.is_release == 'true' && steps.check_artifacts.outputs.artifacts_exist == 'true'
-        run: ls -la ./release-artifacts/
-
-      - name: Create GitHub Release
-        if: steps.check_release.outputs.is_release == 'true' && steps.check_artifacts.outputs.artifacts_exist == 'true'
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: v${{ env.VERSION_NAME }}
-          release_name: Release v${{ env.VERSION_NAME }}
-          draft: false
-          prerelease: false
-          body: |
-            Release v${{ env.VERSION_NAME }}
-            
-            ## Installation
-            ```bash
-            # Latest version
-            curl -L https://rindexer.xyz/install.sh | bash
-            
-            # Specific version  
-            curl -L https://rindexer.xyz/install.sh | bash -s -- --version ${{ env.VERSION_NAME }}
-            ```
-
-      - name: Upload Release Assets
-        if: steps.check_release.outputs.is_release == 'true' && steps.check_artifacts.outputs.artifacts_exist == 'true'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          for platform_dir in ./release-artifacts/*/; do
-            for file in "$platform_dir"*; do
-              if [[ -f "$file" ]]; then
-                filename=$(basename "$file")
-                echo "Uploading $filename"
-                gh release upload v${{ env.VERSION_NAME }} "$file" --clobber
-              fi
-            done
-          done" | grep -o 'Release v[0-9]*\.[0-9]*\.[0-9]*' | sed 's/Release v//' || echo "")
-          echo "VERSION_FROM_RELEASE: '$VERSION_FROM_RELEASE'"
-          
-          # Also try to extract from release/ pattern in case it's there
-          VERSION_FROM_BRANCH=$(echo "$RECENT_COMMIT_MSG" | grep -o 'release/[0-9]*\.[0-9]*\.[0-9]*' | cut -d'/' -f2 || echo "")
-          echo "VERSION_FROM_BRANCH: '$VERSION_FROM_BRANCH'"
-          
-          if [[ -n "$VERSION_FROM_RELEASE" ]]; then
-            echo "VERSION_NAME=$VERSION_FROM_RELEASE" >> $GITHUB_ENV
-            echo "is_release=true" >> $GITHUB_OUTPUT
-            echo "Found release from commit title: Release v$VERSION_FROM_RELEASE"
-          
-            # Check if release already exists
-            if gh release view "v$VERSION_FROM_RELEASE" &>/dev/null; then
-              echo "Release v$VERSION_FROM_RELEASE already exists, skipping"
-              echo "is_release=false" >> $GITHUB_OUTPUT
-            fi
-          elif [[ -n "$VERSION_FROM_BRANCH" ]]; then
-            echo "VERSION_NAME=$VERSION_FROM_BRANCH" >> $GITHUB_ENV
-            echo "is_release=true" >> $GITHUB_OUTPUT
-            echo "Found release from branch pattern: $VERSION_FROM_BRANCH"
-          
-            # Check if release already exists
-            if gh release view "v$VERSION_FROM_BRANCH" &>/dev/null; then
-              echo "Release v$VERSION_FROM_BRANCH already exists, skipping"
-              echo "is_release=false" >> $GITHUB_OUTPUT
-            fi
           else
             echo "Not a release commit"
             echo "is_release=false" >> $GITHUB_OUTPUT
@@ -758,7 +652,8 @@ jobs:
       github.ref == 'refs/heads/master' && 
       github.event_name == 'push'
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -778,4 +673,69 @@ jobs:
           echo "Most recent commit: '$RECENT_COMMIT_MSG'"
           
           # Try to extract version from Release v pattern (including PR number)
-          VERSION_FROM_RELEASE=$(echo "$RECENT_COMMIT_MSG
+          VERSION_FROM_RELEASE=$(echo "$RECENT_COMMIT_MSG" | grep -o 'Release v[0-9]*\.[0-9]*\.[0-9]*' | sed 's/Release v//' || echo "")
+          echo "VERSION_FROM_RELEASE: '$VERSION_FROM_RELEASE'"
+          
+          if [[ -n "$VERSION_FROM_RELEASE" ]]; then
+            echo "VERSION_NAME=$VERSION_FROM_RELEASE" >> $GITHUB_ENV
+            echo "is_release=true" >> $GITHUB_OUTPUT
+            echo "Found release from commit title: Release v$VERSION_FROM_RELEASE"
+          else
+            echo "Not a release commit"
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Skip if not a release
+        if: steps.check_release.outputs.is_release != 'true'
+        run: |
+          echo "Skipping release creation - not a release commit"
+          exit 0
+
+      - name: Download release artifacts
+        if: steps.check_release.outputs.is_release == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          path: ./release-artifacts
+
+      - name: Display structure of downloaded files
+        if: steps.check_release.outputs.is_release == 'true'
+        run: ls -la ./release-artifacts/
+
+      - name: Create GitHub Release
+        if: steps.check_release.outputs.is_release == 'true'
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ env.VERSION_NAME }}
+          release_name: Release v${{ env.VERSION_NAME }}
+          draft: false
+          prerelease: false
+          body: |
+            Release v${{ env.VERSION_NAME }}
+            
+            ## Installation
+            ```bash
+            # Latest version
+            curl -L https://rindexer.xyz/install.sh | bash
+            
+            # Specific version  
+            curl -L https://rindexer.xyz/install.sh | bash -s -- --version ${{ env.VERSION_NAME }}
+            ```
+        continue-on-error: true
+
+      - name: Upload Release Assets
+        if: steps.check_release.outputs.is_release == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for platform_dir in ./release-artifacts/*/; do
+            for file in "$platform_dir"*; do
+              if [[ -f "$file" ]]; then
+                filename=$(basename "$file")
+                echo "Uploading $filename"
+                gh release upload v${{ env.VERSION_NAME }} "$file" --clobber
+              fi
+            done
+          done
