@@ -318,7 +318,7 @@ mod tests {
 
         let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
 
-        assert_eq!(manifest.timestamps.enabled, true);
+        assert!(manifest.timestamps.enabled);
         assert_eq!(manifest.timestamps.sample_rate, None);
     }
 }

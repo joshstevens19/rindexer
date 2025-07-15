@@ -43,10 +43,8 @@ use tokio::task::JoinError;
 use tracing::{debug, debug_span, error, Instrument};
 use url::Url;
 
-use crate::blockclock::BlockClock;
 use crate::helpers::chunk_hashset;
 use crate::manifest::network::{AddressFiltering, BlockPollFrequency};
-use crate::manifest::timestamps::Timestamps;
 use crate::{event::RindexerEventFilter, manifest::core::Manifest};
 
 /// An alias type for a complex alloy Provider

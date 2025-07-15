@@ -188,6 +188,56 @@ impl<'de> Deserialize<'de> for BlockPollFrequency {
     }
 }
 
+/// Wait for IPC socket file to be ready
+pub async fn wait_for_ipc_ready(ipc_path: &str) -> Result<(), eyre::Error> {
+    use alloy::providers::{IpcConnect, Provider, ProviderBuilder};
+
+    let max_retries = 60; // 60 seconds max wait
+    let mut last_error = None;
+
+    for i in 0..max_retries {
+        // Try to connect to the IPC socket
+        let ipc = IpcConnect::new(ipc_path.to_string());
+        match ProviderBuilder::new().connect_ipc(ipc).await {
+            Ok(provider) => {
+                // Try a simple call to ensure it's really ready
+                match provider.get_chain_id().await {
+                    Ok(_) => {
+                        tracing::info!("IPC socket at {} is ready", ipc_path);
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        last_error = Some(format!("Connected but get_chain_id failed: {}", e));
+                    }
+                }
+            }
+            Err(e) => {
+                last_error = Some(format!("Connection failed: {}", e));
+            }
+        }
+
+        if i == 0 {
+            tracing::info!("Waiting for IPC socket at {} to be ready...", ipc_path);
+        } else if i % 5 == 0 {
+            tracing::info!(
+                "Still waiting for IPC socket at {} to be ready... ({}/{})",
+                ipc_path,
+                i,
+                max_retries
+            );
+        }
+
+        sleep(Duration::from_secs(1)).await;
+    }
+
+    Err(eyre::eyre!(
+        "IPC socket at {} did not become ready after {} seconds. Last error: {:?}",
+        ipc_path,
+        max_retries,
+        last_error
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use reth::cli::Commands;
@@ -371,54 +421,4 @@ mod tests {
         assert!(network.reth.is_none());
         assert_eq!(network.get_reth_ipc_path(), None);
     }
-}
-
-/// Wait for IPC socket file to be ready
-pub async fn wait_for_ipc_ready(ipc_path: &str) -> Result<(), eyre::Error> {
-    use alloy::providers::{IpcConnect, Provider, ProviderBuilder};
-
-    let max_retries = 60; // 60 seconds max wait
-    let mut last_error = None;
-
-    for i in 0..max_retries {
-        // Try to connect to the IPC socket
-        let ipc = IpcConnect::new(ipc_path.to_string());
-        match ProviderBuilder::new().connect_ipc(ipc).await {
-            Ok(provider) => {
-                // Try a simple call to ensure it's really ready
-                match provider.get_chain_id().await {
-                    Ok(_) => {
-                        tracing::info!("IPC socket at {} is ready", ipc_path);
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        last_error = Some(format!("Connected but get_chain_id failed: {}", e));
-                    }
-                }
-            }
-            Err(e) => {
-                last_error = Some(format!("Connection failed: {}", e));
-            }
-        }
-
-        if i == 0 {
-            tracing::info!("Waiting for IPC socket at {} to be ready...", ipc_path);
-        } else if i % 5 == 0 {
-            tracing::info!(
-                "Still waiting for IPC socket at {} to be ready... ({}/{})",
-                ipc_path,
-                i,
-                max_retries
-            );
-        }
-
-        sleep(Duration::from_secs(1)).await;
-    }
-
-    Err(eyre::eyre!(
-        "IPC socket at {} did not become ready after {} seconds. Last error: {:?}",
-        ipc_path,
-        max_retries,
-        last_error
-    ))
 }

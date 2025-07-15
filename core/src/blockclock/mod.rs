@@ -30,7 +30,7 @@ impl BlockClock {
         sample_rate: Option<f32>,
         provider: Arc<JsonRpcCachedProvider>,
     ) -> Self {
-        let bounded_sampling = sample_rate.unwrap_or(1.0).max(0.001).min(1.0);
+        let bounded_sampling = sample_rate.unwrap_or(1.0).clamp(0.001, 1.0);
         Self { enabled, provider, sample_rate: bounded_sampling }
     }
 

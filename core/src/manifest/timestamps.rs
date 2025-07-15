@@ -5,9 +5,9 @@ pub struct Timestamps {
     /// Include block timestamps on every event.
     ///
     /// - If set to `true`, always include block timestamps in the log and make any required RPC
-    /// calls to ensure this.
+    ///   calls to ensure this.
     /// - If set to `false` (default), never make additional RPC calls to include timestamps. But if they are
-    /// included by default in the log it will be kept.
+    ///   included by default in the log it will be kept.
     #[serde(default)]
     pub enabled: bool,
 
@@ -41,7 +41,7 @@ mod tests {
         let yaml = r#""#;
         let transfer: Timestamps = serde_yaml::from_str(yaml).unwrap();
 
-        assert_eq!(transfer.enabled, false);
+        assert!(!transfer.enabled);
         assert_eq!(transfer.sample_rate, None);
     }
 
@@ -54,7 +54,7 @@ mod tests {
 
         let transfer: Timestamps = serde_yaml::from_str(yaml).unwrap();
 
-        assert_eq!(transfer.enabled, true);
+        assert!(transfer.enabled);
         assert_eq!(transfer.sample_rate, Some(1.0));
     }
 
@@ -66,7 +66,7 @@ mod tests {
 
         let transfer: Timestamps = serde_yaml::from_str(yaml).unwrap();
 
-        assert_eq!(transfer.enabled, true);
+        assert!(transfer.enabled);
         assert_eq!(transfer.sample_rate, Some(0.1));
 
         let yaml = r#"
@@ -75,7 +75,7 @@ mod tests {
 
         let transfer: Timestamps = serde_yaml::from_str(yaml).unwrap();
 
-        assert_eq!(transfer.enabled, true);
+        assert!(transfer.enabled);
         assert_eq!(transfer.sample_rate, None);
 
         let yaml = r#"
@@ -84,7 +84,7 @@ mod tests {
 
         let transfer: Timestamps = serde_yaml::from_str(yaml).unwrap();
 
-        assert_eq!(transfer.enabled, false);
+        assert!(!transfer.enabled);
         assert_eq!(transfer.sample_rate, None);
     }
 }
