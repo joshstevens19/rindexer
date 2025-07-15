@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 clux/muslrust:1.87.0-stable-2025-05-18 as builder
+FROM --platform=linux/amd64 clux/muslrust:1.88.0-stable-2025-07-07 as builder
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 
 WORKDIR /app
