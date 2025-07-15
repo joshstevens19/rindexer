@@ -38,7 +38,7 @@ jobs:
 
   build:
     if: |
-      (github.event_name == 'push' || github.event_name == 'pull_request') &&
+      false && (github.event_name == 'push' || github.event_name == 'pull_request') &&
       github.actor != 'github-actions[bot]' &&
       (
         !(github.event_name == 'pull_request' &&
@@ -254,7 +254,7 @@ jobs:
   create_pr:
     name: Create Release PR
     runs-on: ubuntu-22.04
-    needs: build
+    # needs: build
     if: |
       github.actor != 'github-actions[bot]' && 
       startsWith(github.ref, 'refs/heads/release/')
@@ -703,8 +703,22 @@ jobs:
         id: check_release
         shell: bash
         run: |
+          echo "=== DEBUG: Checking recent merge commits ==="
+          git log --oneline --merges -5 --pretty=format:"%H %s"
+          echo ""
+          echo "=== DEBUG: Checking for release branch pattern ==="
+          
           # Get the merged branch name from git history
           MERGED_BRANCH=$(git log --oneline --merges -1 --pretty=format:"%s" | grep -o 'release/[0-9]*\.[0-9]*\.[0-9]*' || echo "")
+          echo "MERGED_BRANCH found: '$MERGED_BRANCH'"
+          
+          # Also try alternative patterns
+          MERGE_COMMIT_MSG=$(git log --oneline --merges -1 --pretty=format:"%s")
+          echo "Full merge commit message: '$MERGE_COMMIT_MSG'"
+          
+          # Try to extract version from Release v pattern
+          VERSION_FROM_RELEASE=$(echo "$MERGE_COMMIT_MSG" | grep -o 'Release v[0-9]*\.[0-9]*\.[0-9]*' | sed 's/Release v//' || echo "")
+          echo "VERSION_FROM_RELEASE: '$VERSION_FROM_RELEASE'"
           
           if [[ -n "$MERGED_BRANCH" ]]; then
             VERSION=$(echo "$MERGED_BRANCH" | cut -d'/' -f2)
@@ -715,6 +729,16 @@ jobs:
             # Check if release already exists
             if gh release view "v$VERSION" &>/dev/null; then
               echo "Release v$VERSION already exists, skipping"
+              echo "is_release=false" >> $GITHUB_OUTPUT
+            fi
+          elif [[ -n "$VERSION_FROM_RELEASE" ]]; then
+            echo "VERSION_NAME=$VERSION_FROM_RELEASE" >> $GITHUB_ENV
+            echo "is_release=true" >> $GITHUB_OUTPUT
+            echo "Found release from commit title: Release v$VERSION_FROM_RELEASE"
+          
+            # Check if release already exists
+            if gh release view "v$VERSION_FROM_RELEASE" &>/dev/null; then
+              echo "Release v$VERSION_FROM_RELEASE already exists, skipping"
               echo "is_release=false" >> $GITHUB_OUTPUT
             fi
           else
