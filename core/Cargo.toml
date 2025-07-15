@@ -17,7 +17,7 @@ mockito = "1.7.0"
 
 [dependencies]
 # TODO: Trim down alloy features needed later, for now opt in to all.
-alloy = { version = "1.0.9", features = ["full"] }
+alloy = { version = "1.0.22", features = ["full"] }
 async-std = "1.12.0"
 async-trait = "0.1.77"
 aws-config = "1.5.0"
@@ -74,8 +74,9 @@ eyre = { version = "0.6.10" }
 # build
 jemallocator = { version = "0.6.0", package = "tikv-jemallocator", optional = true }
 jemalloc-ctl = { version = "0.6.0", package = "tikv-jemalloc-ctl", optional = true }
-foundry-compilers = "0.17.0"
-alloy-chains = "0.2.2"
+foundry-compilers = "=0.18.0"
+foundry-compilers-artifacts-solc  = "=0.18.0"
+alloy-chains = "0.2.5"
 
 # reth
 reth = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.1"}
