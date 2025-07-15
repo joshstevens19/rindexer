@@ -122,7 +122,7 @@ impl StreamsClients {
                 client: Arc::new(
                     Kafka::new(config)
                         .await
-                        .unwrap_or_else(|e| panic!("Failed to create Kafka client: {:?}", e)),
+                        .unwrap_or_else(|e| panic!("Failed to create Kafka client: {e:?}")),
                 ),
             })
         } else {
@@ -135,7 +135,7 @@ impl StreamsClients {
                 client: Arc::new(
                     Redis::new(config)
                         .await
-                        .unwrap_or_else(|e| panic!("Failed to create Redis client: {:?}", e)),
+                        .unwrap_or_else(|e| panic!("Failed to create Redis client: {e:?}")),
                 ),
             })
         } else {

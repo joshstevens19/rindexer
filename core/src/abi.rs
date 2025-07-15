@@ -74,7 +74,7 @@ impl ABIInput {
                     .map(|component| component.format_param_type())
                     .collect::<Result<Vec<_>, ParamTypeError>>()?
                     .join(",");
-                Ok(format!("({})", formatted_components))
+                Ok(format!("({formatted_components})"))
             }
             _ => Ok(self.type_.to_string()),
         }
@@ -103,7 +103,7 @@ impl ABIInput {
                         GenerateAbiPropertiesType::PostgresWithDataTypes => {
                             let value = format!(
                                 "\"{}{}\" {}",
-                                prefix.map_or_else(|| "".to_string(), |p| format!("{}_", p)),
+                                prefix.map_or_else(|| "".to_string(), |p| format!("{p}_")),
                                 camel_to_snake(&input.name),
                                 solidity_type_to_db_type(&input.type_)
                             );
@@ -118,7 +118,7 @@ impl ABIInput {
                         | GenerateAbiPropertiesType::CsvHeaderNames => {
                             let value = format!(
                                 "{}{}",
-                                prefix.map_or_else(|| "".to_string(), |p| format!("{}_", p)),
+                                prefix.map_or_else(|| "".to_string(), |p| format!("{p}_")),
                                 camel_to_snake(&input.name),
                             );
 
@@ -131,7 +131,7 @@ impl ABIInput {
                         GenerateAbiPropertiesType::Object => {
                             let value = format!(
                                 "{}{}",
-                                prefix.map_or_else(|| "".to_string(), |p| format!("{}.", p)),
+                                prefix.map_or_else(|| "".to_string(), |p| format!("{p}.")),
                                 camel_to_snake(&input.name),
                             );
 
@@ -185,7 +185,7 @@ impl ABIItem {
             .collect::<Result<Vec<_>, _>>()?
             .join(",");
 
-        Ok(format!("{}({})", name, params))
+        Ok(format!("{name}({params})"))
     }
 
     fn format_param_type(input: &ABIInput) -> Result<String, ParamTypeError> {
@@ -202,12 +202,12 @@ impl ABIItem {
                     .map(Self::format_param_type)
                     .collect::<Result<Vec<_>, _>>()?
                     .join(",");
-                format!("({})", inner)
+                format!("({inner})")
             }
             _ => base_type.to_string(),
         };
 
-        Ok(format!("{}{}", type_str, array_suffix))
+        Ok(format!("{type_str}{array_suffix}"))
     }
 
     pub fn extract_event_names_and_signatures_from_abi(
@@ -409,22 +409,19 @@ pub fn get_abi_item_with_db_map(
                                         components
                                     } else {
                                         return Err(GetAbiItemWithDbMapError::ParameterNotFound(format!(
-                                            "Parameter {} is not a nested structure in event {} of contract",
-                                            param, event_name
+                                            "Parameter {param} is not a nested structure in event {event_name} of contract"
                                         )));
                                     }
                                 },
                                 _ => return Err(GetAbiItemWithDbMapError::ParameterNotFound(format!(
-                                    "Parameter {} is not a nested structure in event {} of contract",
-                                    param, event_name
+                                    "Parameter {param} is not a nested structure in event {event_name} of contract"
                                 ))),
                             };
                         }
                     }
                     None => {
                         return Err(GetAbiItemWithDbMapError::ParameterNotFound(format!(
-                            "Parameter {} not found in event {} of contract",
-                            param, event_name
+                            "Parameter {param} not found in event {event_name} of contract"
                         )));
                     }
                 }
@@ -437,8 +434,7 @@ pub fn get_abi_item_with_db_map(
             )))
         }
         None => Err(GetAbiItemWithDbMapError::ParameterNotFound(format!(
-            "Event {} not found in contract ABI",
-            event_name
+            "Event {event_name} not found in contract ABI"
         ))),
     }
 }

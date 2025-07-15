@@ -20,7 +20,7 @@ fn generate_contract_code(
     if let Some(address) = contract_details.address() {
         match address {
             ValueOrArray::Value(address) => {
-                let contract_address = format!("{:?}", address);
+                let contract_address = format!("{address:?}");
                 let code = format!(
                     r#"
                         sol!(

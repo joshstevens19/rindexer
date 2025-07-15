@@ -133,7 +133,7 @@ pub async fn update_known_factory_deployed_addresses(
 
         database
             .insert_bulk(
-                &format!("rindexer_internal.{}", table_name),
+                &format!("rindexer_internal.{table_name}"),
                 &[
                     "factory_address".to_string(),
                     "factory_deployed_address".to_string(),
@@ -242,8 +242,7 @@ pub async fn get_known_factory_deployed_addresses(
         };
         let table_name = generate_internal_factory_event_table_name(&table_params);
         let query = format!(
-            "SELECT factory_deployed_address FROM rindexer_internal.{} WHERE network = $1",
-            table_name
+            "SELECT factory_deployed_address FROM rindexer_internal.{table_name} WHERE network = $1"
         );
         let result = database
             .query(&query, &[&EthereumSqlTypeWrapper::String(params.network.clone())])

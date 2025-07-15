@@ -92,7 +92,7 @@ async fn deploy_contract(
     new_bytecode: &str,
     constructor_args_bytecode: &str,
 ) -> Result<DeployDyrpcContractResponse, CreateDyrpcError> {
-    let url = format!("https://node.dyrpc.network/eth/{}/overlay/put", api_key);
+    let url = format!("https://node.dyrpc.network/eth/{api_key}/overlay/put");
 
     let mut overlays = std::collections::HashMap::new();
     overlays.insert(

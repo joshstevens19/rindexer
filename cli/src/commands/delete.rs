@@ -22,7 +22,7 @@ pub async fn handle_delete_command(
         "This operation can not be reverted. Make sure you know what you are doing.",
     );
     let manifest = read_manifest(&project_path.join(YAML_CONFIG_NAME)).map_err(|e| {
-        print_error_message(&format!("Could read the rindexer.yaml please make sure you are running the command with rindexer.yaml in root: trace: {}", e));
+        print_error_message(&format!("Could read the rindexer.yaml please make sure you are running the command with rindexer.yaml in root: trace: {e}"));
         e
     })?;
 
@@ -43,13 +43,13 @@ pub async fn handle_delete_command(
 
         if postgres_delete == "yes" {
             let postgres_client = PostgresClient::new().await.map_err(|e| {
-                print_error_message(&format!("Could not connect to Postgres, make sure your connection string is mapping in the .env correctly: trace: {}", e));
+                print_error_message(&format!("Could not connect to Postgres, make sure your connection string is mapping in the .env correctly: trace: {e}"));
                 e
             })?;
             let sql = drop_tables_for_indexer_sql(&project_path, &manifest.to_indexer());
 
             postgres_client.batch_execute(sql.as_str()).await.map_err(|e| {
-                print_error_message(&format!("Could not delete tables from Postgres make sure your connection string is mapping in the .env correctly: trace: {}", e));
+                print_error_message(&format!("Could not delete tables from Postgres make sure your connection string is mapping in the .env correctly: trace: {e}"));
                 e
             })?;
 
@@ -72,7 +72,7 @@ pub async fn handle_delete_command(
                 // if no csv exist we will just look like it cleared it
                 if path.exists() {
                     remove_dir_all(&project_path.join(path)).await.map_err(|e| {
-                        print_error_message(&format!("Could not delete csv files: trace: {}", e));
+                        print_error_message(&format!("Could not delete csv files: trace: {e}"));
                         e
                     })?;
                 }

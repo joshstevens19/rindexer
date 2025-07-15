@@ -392,12 +392,12 @@ pub async fn wait_for_ipc_ready(ipc_path: &str) -> Result<(), eyre::Error> {
                         return Ok(());
                     }
                     Err(e) => {
-                        last_error = Some(format!("Connected but get_chain_id failed: {}", e));
+                        last_error = Some(format!("Connected but get_chain_id failed: {e}"));
                     }
                 }
             }
             Err(e) => {
-                last_error = Some(format!("Connection failed: {}", e));
+                last_error = Some(format!("Connection failed: {e}"));
             }
         }
 

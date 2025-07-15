@@ -149,8 +149,7 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
             generate_indexer_contract_schema_name(config.indexer_name, config.contract_name);
         let table_name = generate_internal_event_table_name(&schema, config.event_name);
         let query = format!(
-            "SELECT last_synced_block FROM rindexer_internal.{} WHERE network = $1",
-            table_name
+            "SELECT last_synced_block FROM rindexer_internal.{table_name} WHERE network = $1"
         );
 
         match database.query_one(&query, &[&config.network]).await {
@@ -200,7 +199,7 @@ async fn update_last_synced_block_number_for_file(
         if let Some(last_block_value) = last_block { to_block > last_block_value } else { true };
 
     if last_block.is_none() || to_block_higher_then_last_block {
-        let temp_file_path = format!("{}.tmp", file_path);
+        let temp_file_path = format!("{file_path}.tmp");
 
         let mut file = File::create(&temp_file_path).await?;
         file.write_all(to_block.to_string().as_bytes()).await?;
@@ -332,8 +331,7 @@ pub async fn evm_trace_update_progress_and_last_synced_task(
             generate_indexer_contract_schema_name(&config.indexer_name, &config.contract_name);
         let table_name = generate_internal_event_table_name(&schema, &config.event_name);
         let query = format!(
-                "UPDATE rindexer_internal.{} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block",
-                table_name
+                "UPDATE rindexer_internal.{table_name} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block"
             );
         let result = database
             .execute(&query, &[&EthereumSqlTypeWrapper::U64(to_block), &config.network])

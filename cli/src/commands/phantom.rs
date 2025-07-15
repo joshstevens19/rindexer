@@ -101,7 +101,7 @@ async fn handle_phantom_init(project_path: &Path) -> Result<(), Box<dyn Error>> 
     let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
 
     let mut manifest = read_manifest_raw(&rindexer_yaml_path).inspect_err(|e| {
-        print_error_message(&format!("Could not read the rindexer.yaml file: {}", e))
+        print_error_message(&format!("Could not read the rindexer.yaml file: {e}"))
     })?;
 
     if manifest.phantom.is_some() {
@@ -136,14 +136,13 @@ async fn handle_phantom_init(project_path: &Path) -> Result<(), Box<dyn Error>> 
             if api_key_value == "new" {
                 api_key_value = create_dyrpc_api_key().await?;
                 println!(
-                    "Your API has been created and key is {} - it has also been written to your .env file.",
-                    api_key_value
+                    "Your API has been created and key is {api_key_value} - it has also been written to your .env file."
                 );
             }
 
             manifest.phantom = Some(Phantom {
                 dyrpc: Some(PhantomDyrpc {
-                    api_key: format!("${{{}}}", RINDEXER_PHANTOM_API_ENV_KEY),
+                    api_key: format!("${{{RINDEXER_PHANTOM_API_ENV_KEY}}}"),
                 }),
                 shadow: None,
             });
@@ -155,7 +154,7 @@ async fn handle_phantom_init(project_path: &Path) -> Result<(), Box<dyn Error>> 
 
             manifest.phantom = Some(Phantom {
                 shadow: Some(PhantomShadow {
-                    api_key: format!("${{{}}}", RINDEXER_PHANTOM_API_ENV_KEY),
+                    api_key: format!("${{{RINDEXER_PHANTOM_API_ENV_KEY}}}"),
                     fork_id,
                 }),
                 dyrpc: None,
@@ -163,7 +162,7 @@ async fn handle_phantom_init(project_path: &Path) -> Result<(), Box<dyn Error>> 
 
             write_manifest(&manifest, &rindexer_yaml_path)?;
         }
-        value => panic!("Unknown phantom provider: {}", value),
+        value => panic!("Unknown phantom provider: {value}"),
     }
 
     let env_content = fs::read_to_string(&env_file).unwrap_or_default();
@@ -173,22 +172,22 @@ async fn handle_phantom_init(project_path: &Path) -> Result<(), Box<dyn Error>> 
     let mut lines: Vec<String> = env_content.lines().map(|line| line.to_string()).collect();
     let mut key_found = false;
     for line in &mut lines {
-        if line.starts_with(&format!("{}=", RINDEXER_PHANTOM_API_ENV_KEY)) {
-            *line = format!("{}={}", RINDEXER_PHANTOM_API_ENV_KEY, value);
+        if line.starts_with(&format!("{RINDEXER_PHANTOM_API_ENV_KEY}=")) {
+            *line = format!("{RINDEXER_PHANTOM_API_ENV_KEY}={value}");
             key_found = true;
             break;
         }
     }
 
     if !key_found {
-        lines.push(format!("{}={}", RINDEXER_PHANTOM_API_ENV_KEY, value));
+        lines.push(format!("{RINDEXER_PHANTOM_API_ENV_KEY}={value}"));
     }
 
     let new_env_content = lines.join("\n");
 
     let mut file = OpenOptions::new().write(true).truncate(true).create(true).open(&env_file)?;
 
-    writeln!(file, "{}", new_env_content)?;
+    writeln!(file, "{new_env_content}")?;
 
     print_success_message("rindexer Phantom events are now setup.\nYou can now use `rindexer phantom clone --contract-name <contract> --network <network>` to start adding your own custom events.");
 
@@ -209,7 +208,7 @@ fn forge_clone_contract(
     let output = Command::new("forge")
         .arg("clone")
         .arg("--no-commit")
-        .arg(format!("{:?}", address))
+        .arg(format!("{address:?}"))
         //.arg(format!("--chain {}", network.chain_id))
         .arg("--etherscan-api-key")
         .arg(etherscan_api_key)
@@ -221,8 +220,7 @@ fn forge_clone_contract(
         Ok(())
     } else {
         print_error_message(&format!(
-            "Failed to clone contract: {} at address: {:?}",
-            contract_name, address
+            "Failed to clone contract: {contract_name} at address: {address:?}"
         ));
         print_error_message(&format!("Error: {}", String::from_utf8_lossy(&output.stderr)));
         Err("Failed to clone contract".into())
@@ -233,7 +231,7 @@ fn handle_phantom_clone(project_path: &Path, args: &PhantomBaseArgs) -> Result<(
     let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
 
     let manifest = read_manifest(&rindexer_yaml_path).inspect_err(|e| {
-        print_error_message(&format!("Could not read the rindexer.yaml file: {}", e))
+        print_error_message(&format!("Could not read the rindexer.yaml file: {e}"))
     })?;
 
     if manifest.phantom.is_none() {
@@ -304,7 +302,7 @@ fn handle_phantom_clone(project_path: &Path, args: &PhantomBaseArgs) -> Result<(
                         contract.name.as_str(),
                         &etherscan_api_key,
                     )
-                    .map_err(|e| format!("Failed to clone contract: {}", e))?;
+                    .map_err(|e| format!("Failed to clone contract: {e}"))?;
 
                     print_success_message(format!("\ncloned {} in {} you can start adding your custom events.\nYou can now use `rindexer phantom compile -contract-name {} --network {}` to compile the phantom contract anytime.", contract.name.as_str(), clone_in.display(), contract.name.as_str(), args.network).as_str());
 
@@ -369,7 +367,7 @@ fn handle_phantom_compile(
     let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
 
     let manifest = read_manifest(&rindexer_yaml_path).inspect_err(|e| {
-        print_error_message(&format!("Could not read the rindexer.yaml file: {}", e))
+        print_error_message(&format!("Could not read the rindexer.yaml file: {e}"))
     })?;
 
     if manifest.phantom.is_none() {
@@ -422,7 +420,7 @@ fn handle_phantom_compile(
                 contract.details.iter().find(|c| c.network == args.network || c.network == name);
             if contract_network.is_some() {
                 forge_compile_contract(&compile_in, network.unwrap(), &args.contract_name)
-                    .map_err(|e| format!("Failed to compile contract: {}", e))?;
+                    .map_err(|e| format!("Failed to compile contract: {e}"))?;
 
                 print_success_message(format!("\ncompiled contract {} for network {} successful.\nYou can use `rindexer phantom deploy --contract-name {} --network {}` to deploy the phantom contract and start indexing your custom events.", args.contract_name, args.network, args.contract_name, args.network).as_str());
                 Ok(())
@@ -451,7 +449,7 @@ async fn handle_phantom_deploy(
     let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
 
     let mut manifest = read_manifest_raw(&rindexer_yaml_path).inspect_err(|e| {
-        print_error_message(&format!("Could not read the rindexer.yaml file: {}", e))
+        print_error_message(&format!("Could not read the rindexer.yaml file: {e}"))
     })?;
 
     if manifest.phantom.is_none() {
@@ -511,7 +509,7 @@ async fn handle_phantom_deploy(
                 let rpc_url = if phantom.dyrpc_enabled() {
                     // only compile here as shadow has to do its own compiling to deploy
                     forge_compile_contract(&deploy_in, network.unwrap(), &args.contract_name)
-                        .map_err(|e| format!("Failed to compile contract: {}", e))?;
+                        .map_err(|e| format!("Failed to compile contract: {e}"))?;
 
                     deploy_dyrpc_contract(
                         &env::var(RINDEXER_PHANTOM_API_ENV_KEY)
@@ -520,7 +518,7 @@ async fn handle_phantom_deploy(
                         &read_compiled_contract(&deploy_in, &clone_meta)?,
                     )
                     .await
-                    .map_err(|e| format!("Failed to deploy contract: {}", e))?
+                    .map_err(|e| format!("Failed to deploy contract: {e}"))?
                 } else {
                     println!("deploying shadow contracts, this may take a while....");
                     deploy_shadow_contract(
@@ -531,7 +529,7 @@ async fn handle_phantom_deploy(
                         phantom.shadow.as_ref().expect("Failed to get phantom shadow"),
                     )
                     .await
-                    .map_err(|e| format!("Failed to deploy contract: {}", e))?
+                    .map_err(|e| format!("Failed to deploy contract: {e}"))?
                 };
 
                 let network_index = manifest.networks.iter().position(|net| net.name == name);
@@ -558,13 +556,13 @@ async fn handle_phantom_deploy(
                 }
 
                 let compiled_contract = read_compiled_contract(&deploy_in, &clone_meta)?;
-                let abi_path = project_path.join("abis").join(format!("{}.abi.json", name));
+                let abi_path = project_path.join("abis").join(format!("{name}.abi.json"));
                 write_file(
                     &abi_path,
                     serde_json::to_string_pretty(&compiled_contract.abi).unwrap().as_str(),
                 )?;
 
-                contract.abi = StringOrArray::Single(format!("./abis/{}.abi.json", name));
+                contract.abi = StringOrArray::Single(format!("./abis/{name}.abi.json"));
                 contract_network.network = name;
 
                 write_manifest(&manifest, &rindexer_yaml_path)?;

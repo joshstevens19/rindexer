@@ -152,7 +152,7 @@ pub fn get_full_path(project_path: &Path, file_path: &str) -> Result<PathBuf, st
 pub fn kill_process_on_port(port: u16) -> Result<(), String> {
     // Use lsof to find the process using the port
     let output = Command::new("lsof")
-        .arg(format!("-i:{}", port))
+        .arg(format!("-i:{port}"))
         .arg("-t")
         .output()
         .map_err(|e| e.to_string())?;

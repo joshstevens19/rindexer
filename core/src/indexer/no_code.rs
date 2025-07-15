@@ -378,9 +378,9 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                         csv_data.push(param);
                     }
 
-                    csv_data.push(format!("{:?}", transaction_hash));
-                    csv_data.push(format!("{:?}", block_number));
-                    csv_data.push(format!("{:?}", block_hash));
+                    csv_data.push(format!("{transaction_hash:?}"));
+                    csv_data.push(format!("{block_number:?}"));
+                    csv_data.push(format!("{block_hash:?}"));
                     csv_data.push(network);
 
                     csv_bulk_data.push(csv_data);
