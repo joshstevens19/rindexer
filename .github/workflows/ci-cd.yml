@@ -285,39 +285,27 @@ jobs:
           # Create a temporary file to work with
           cp "$CHANGELOG_FILE" changelog_temp.mdx
           
-          # Extract content from "Changes Not Deployed" sections
-          FEATURES=$(awk '
-            BEGIN { in_changes = 0; in_features = 0; }
-            /^## Changes Not Deployed/ { in_changes = 1; next }
-            /^## Releases/ { in_changes = 0; in_features = 0; }
-            /^### Features/ && in_changes { in_features = 1; next }
-            /^### Bug fixes/ && in_changes { in_features = 0; }
-            /^### Breaking changes/ && in_changes { in_features = 0; }
-            /^-+$/ { next }
-            in_features && in_changes && NF > 0 { print $0 }
-          ' changelog_temp.mdx)
+          # Debug: Show the exact content we're working with
+          echo "=== CHANGELOG CONTENT AROUND CHANGES NOT DEPLOYED ==="
+          grep -A 20 "## Changes Not Deployed" changelog_temp.mdx || echo "Pattern not found"
+          echo "=== END CHANGELOG CONTENT ==="
           
-          BUG_FIXES=$(awk '
-            BEGIN { in_changes = 0; in_bugs = 0; }
-            /^## Changes Not Deployed/ { in_changes = 1; next }
-            /^## Releases/ { in_changes = 0; in_bugs = 0; }
-            /^### Features/ && in_changes { in_bugs = 0; }
-            /^### Bug fixes/ && in_changes { in_bugs = 1; next }
-            /^### Breaking changes/ && in_changes { in_bugs = 0; }
-            /^-+$/ { next }
-            in_bugs && in_changes && NF > 0 { print $0 }
-          ' changelog_temp.mdx)
+          # Try a simpler approach - extract everything between the two main sections
+          CHANGES_SECTION=$(awk '/^## Changes Not Deployed/,/^## Releases/' changelog_temp.mdx)
+          echo "=== EXTRACTED CHANGES SECTION ==="
+          echo "$CHANGES_SECTION"
+          echo "=== END EXTRACTED CHANGES SECTION ==="
           
-          BREAKING_CHANGES=$(awk '
-            BEGIN { in_changes = 0; in_breaking = 0; }
-            /^## Changes Not Deployed/ { in_changes = 1; next }
-            /^## Releases/ { in_changes = 0; in_breaking = 0; }
-            /^### Features/ && in_changes { in_breaking = 0; }
-            /^### Bug fixes/ && in_changes { in_breaking = 0; }
-            /^### Breaking changes/ && in_changes { in_breaking = 1; next }
-            /^-+$/ { next }
-            in_breaking && in_changes && NF > 0 { print $0 }
-          ' changelog_temp.mdx)
+          # Extract just the bug fixes line directly
+          BUG_FIXES_SIMPLE=$(grep -A 10 "### Bug fixes" changelog_temp.mdx | grep "^- fix:" | head -5)
+          echo "=== BUG FIXES SIMPLE ==="
+          echo "$BUG_FIXES_SIMPLE"
+          echo "=== END BUG FIXES SIMPLE ==="
+          
+          # Use the simple extraction for now
+          FEATURES=""
+          BUG_FIXES="$BUG_FIXES_SIMPLE"
+          BREAKING_CHANGES=""
           
           # Debug: Print what we extracted
           echo "Extracted Features:"
