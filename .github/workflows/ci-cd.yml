@@ -391,7 +391,7 @@ jobs:
           EOF
           
           # Clean up temporary files
-          rm -f changelog_temp.mdx new_release.txt
+          rm -f changelog_temp.mdx new_release.txt pr_body_content.txt
           
           echo "Changelog updated successfully"
 
