@@ -10755,6 +10755,7 @@ dependencies = [
  "native-tls",
  "once_cell",
  "postgres-native-tls",
+ "proptest",
  "rand 0.9.1",
  "rdkafka",
  "redis",

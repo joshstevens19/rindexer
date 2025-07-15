@@ -10,11 +10,8 @@ use alloy::{
     primitives::{B256, U64},
     rpc::types::Log,
 };
-use lru::LruCache;
 use rand::{random_bool, random_ratio};
 use regex::Regex;
-use std::collections::VecDeque;
-use std::num::NonZeroUsize;
 use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
 use tokio::{sync::mpsc, time::Instant};
 use tokio_stream::wrappers::ReceiverStream;

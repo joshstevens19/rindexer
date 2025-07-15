@@ -19,12 +19,15 @@ cli/.env
 examples/*
 !examples/rindexer_demo_cli
 !examples/rindexer_native_transfers
+!examples/rindexer_rust_playground
+!examples/streams_playground
+examples/rindexer_rust_playground/generated_csv/*/*.csv
 documentation/node_modules
 documentation/dist
 documentation/docs/dist
 documentation/vocs.config.ts.*
 graphql/node_modules
-rindexer_rust_playground/generated_csv/*/*.csv
+
 .env
 !.env.example
 node_modules
