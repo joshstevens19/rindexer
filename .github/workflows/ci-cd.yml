@@ -277,7 +277,7 @@ jobs:
       - name: Update Changelog
         shell: bash
         run: |
-          CHANGELOG_FILE="documentation/docs/pages/docs/changelog.mdx"
+          CHANGELOG_FILE="documentation/docs/pages/changelog.mdx"
           DATE=$(date '+%d %B %Y')
           
           echo "Updating changelog for version ${{ env.VERSION_NAME }}"
@@ -429,7 +429,7 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add cli/Cargo.toml core/Cargo.toml documentation/docs/pages/docs/changelog.mdx
+          git add cli/Cargo.toml core/Cargo.toml documentation/docs/pages/changelog.mdx
           git commit -m "chore: bump version to ${{ env.VERSION_NAME }} and update changelog"
           git push origin release/${{ env.VERSION_NAME }}
 
@@ -457,7 +457,7 @@ jobs:
             /## Changes Not Deployed/,/## Releases/ {
               if (!/## Changes Not Deployed/ && !/## Releases/) print
             }
-          ' documentation/docs/pages/docs/changelog.mdx | head -30)
+          ' documentation/docs/pages/changelog.mdx | head -30)
 
           gh pr create \
             --title "Release v${{ env.VERSION_NAME }}" \
