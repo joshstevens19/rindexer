@@ -88,19 +88,22 @@ jobs:
 
               TAG="v$VERSION"
 
+              # The heredoc content starts here.
+              # Note: The 'EOF_BODY_CONTENT' line MUST NOT have any leading spaces.
+              # Bash's 'read -r -d '' VAR << EOF' reads until 'EOF' is on a line by itself.
               read -r -d '' RELEASE_BODY << EOF_BODY_CONTENT
-          # Install
-            \`\`\`bash
-            curl -L https://rindexer.xyz/install.sh | bash -s -- --version $VERSION
-            \`\`\`
-            EOF_BODY_CONTENT
-            
-            echo "Attempting to edit release $TAG..."
-            gh release edit "$TAG" \
-            --repo ${{ github.repository }} \ # Explicitly specify the repository
-            --prerelease=false \
-            --notes "$RELEASE_BODY" \
-            --target master # Assuming your release tags point to master/main
-            
-            echo "Successfully edited release $TAG."
-            done
+        # Install
+          \`\`\`bash
+          curl -L https://rindexer.xyz/install.sh | bash -s -- --version $VERSION
+          \`\`\`
+          EOF_BODY_CONTENT
+          
+          echo "Attempting to edit release $TAG..."
+          gh release edit "$TAG" \
+          --repo ${{ github.repository }} \
+          --prerelease=false \
+          --notes "$RELEASE_BODY" \
+          --target master
+          
+          echo "Successfully edited release $TAG."
+          done
