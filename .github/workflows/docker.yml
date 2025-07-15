@@ -7,8 +7,6 @@ on:
       - closed
     branches:
       - master
-  release:
-    types: [published] # Trigger when a GitHub Release is published
 
 env:
   REGISTRY: ghcr.io
@@ -17,15 +15,15 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read # Required for actions/checkout and downloading public release assets
-      packages: write # Required for pushing to GitHub Packages (GHCR)
+      contents: read
+      packages: write
     strategy:
       matrix:
         include:
-          - dockerfile: Dockerfile # Your main Dockerfile
-            image: ghcr.io/${{ github.repository }} # Main image name
-          - dockerfile: bundled.Dockerfile # Your bundled Dockerfile
-            image: ghcr.io/${{ github.repository }}-bundled # Bundled image name
+          - dockerfile: Dockerfile
+            image: ghcr.io/${{ github.repository }}
+          - dockerfile: bundled.Dockerfile
+            image: ghcr.io/${{ github.repository }}-bundled
 
     steps:
       - name: Checkout repository
@@ -50,34 +48,11 @@ jobs:
           tags: |
             type=sha
             type=sha,format=long
-            # set latest tag for default branch (e.g., master)
+            # set latest tag for default branch
             type=raw,value=latest,enable={{is_default_branch}}
-            # Tag with the release version (e.g., v1.0.0) when a release is published
-            type=ref,event=tag
 
-      - name: Set Docker Build Arguments
-        id: set_build_args
-        run: |
-          BUILD_RELEASE_VERSION="" # Will store "0.21.0" for release events
-          IS_RELEASE_BUILD="false" # Flag: "true" if building from a published release tag
-
-          if [[ "${{ github.event_name }}" == "release" ]]; then
-            BUILD_RELEASE_VERSION="${{ github.event.release.tag_name }}"
-            BUILD_RELEASE_VERSION="${BUILD_RELEASE_VERSION#v}" # Remove 'v' prefix (e.g., 0.21.0)
-            IS_RELEASE_BUILD="true"
-            echo "Detected release event. RELEASE_VERSION=$BUILD_RELEASE_VERSION, IS_RELEASE_BUILD=$IS_RELEASE_BUILD"
-          elif [[ "${{ github.ref }}" == "refs/heads/master" ]]; then
-            # For master branch pushes, we compile from source.
-            # No specific release version to download, IS_RELEASE_BUILD remains false.
-            echo "Detected master branch push. Will compile from source."
-          else
-            # For other PRs, etc., also compile from source.
-            echo "Detected non-release/non-master build. Will compile from source."
-          fi
-
-          echo "build_release_version=$BUILD_RELEASE_VERSION" >> $GITHUB_OUTPUT
-          echo "is_release_build=$IS_RELEASE_BUILD" >> $GITHUB_OUTPUT
-
+      # Build and push Docker image with Buildx
+      # https://github.com/docker/build-push-action
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
@@ -86,6 +61,3 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            RELEASE_VERSION=${{ steps.set_build_args.outputs.build_release_version }}
-            IS_RELEASE_BUILD=${{ steps.set_build_args.outputs.is_release_build }}
