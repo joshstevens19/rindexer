@@ -93,7 +93,7 @@ jobs:
         run: |
           RELEASE_BASE_PATH="documentation/docs/public/releases"
           declare -A versions_map # Associative array to store versions and their assets
-
+          
           # Loop through each platform directory (e.g., darwin-amd64, linux-amd64)
           for platform_dir in ${RELEASE_BASE_PATH}/*/; do
             PLATFORM=$(basename "$platform_dir")
@@ -108,22 +108,28 @@ jobs:
               done
             done
           done
-
-          # Output sorted unique versions
-          UNIQUE_VERSIONS=$(printf "%s\n" "${!versions_map[@]}" | sort -V)
-          echo "Found versions: $UNIQUE_VERSIONS"
-          echo "versions_to_migrate=${UNIQUE_VERSIONS}" >> $GITHUB_OUTPUT
-
-          # Prepare assets map for subsequent steps
-          # This creates a JSON string where keys are versions and values are semicolon-separated file paths
+          
+          # Output sorted unique versions as a single-line, space-separated string
+          # This is the primary output for versions_to_migrate
+          UNIQUE_VERSIONS_SINGLE_LINE=$(printf "%s " "${!versions_map[@]}" | sort -V | tr '\n' ' ')
+          echo "Found versions (single line): $UNIQUE_VERSIONS_SINGLE_LINE"
+          echo "versions_to_migrate=$UNIQUE_VERSIONS_SINGLE_LINE" >> $GITHUB_OUTPUT
+          
+          # Prepare assets map for subsequent steps as a multi-line string with a delimiter
+          # This should be a robust JSON string
           JSON_ASSETS="{"
-          for version in $UNIQUE_VERSIONS; do
+          for version in $(printf "%s\n" "${!versions_map[@]}" | sort -V); do # Use sorted versions here too
             ASSETS_LIST="${versions_map[$version]%??}" # Remove trailing semicolon
             JSON_ASSETS+="\"$version\":\"$ASSETS_LIST\","
           done
           JSON_ASSETS="${JSON_ASSETS%,}" # Remove trailing comma
           JSON_ASSETS+="}"
-          echo "assets_map=${JSON_ASSETS}" >> $GITHUB_OUTPUT
+          
+          # Use multi-line output for JSON_ASSETS
+          # Define a custom delimiter, e.g., EOF_JSON_ASSETS
+          echo "assets_map<<EOF_JSON_ASSETS" >> $GITHUB_OUTPUT
+          echo "$JSON_ASSETS" >> $GITHUB_OUTPUT
+          echo "EOF_JSON_ASSETS" >> $GITHUB_OUTPUT
 
       - name: Migrate Releases
         shell: bash
