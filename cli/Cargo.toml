@@ -34,3 +34,4 @@ incremental = false
 
 [features]
 jemalloc = ["dep:jemallocator", "dep:jemalloc-ctl"]
+reth = ["rindexer/reth"]

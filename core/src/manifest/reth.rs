@@ -1,3 +1,4 @@
+#![cfg(feature = "reth")]
 use reth::cli::Cli;
 use serde::{Deserialize, Serialize};
 
@@ -24,8 +25,6 @@ pub struct RethConfig {
 impl RethConfig {
     /// Create RethConfig from CLI arguments, validating them through reth's CLI parser
     pub fn from_cli_args(args: Vec<String>) -> Result<Self, String> {
-        use reth::cli::Cli;
-
         // Validate args by parsing through reth's CLI
         let mut full_args = vec!["reth".to_string(), "node".to_string()];
         full_args.extend(args.clone());

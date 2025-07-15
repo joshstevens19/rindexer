@@ -18,12 +18,18 @@ use rindexer::{
         contract::{Contract, ContractDetails},
         core::{Manifest, ProjectType},
         native_transfer::NativeTransfers,
-        network::{Network, RethConfig},
+        network::Network,
         storage::{CsvDetails, PostgresDetails, Storage},
         yaml::{write_manifest, YAML_CONFIG_NAME},
     },
     write_file, StringOrArray, WriteFileError,
 };
+
+#[cfg(feature = "reth")]
+use rindexer::manifest::reth::RethConfig;
+
+#[cfg(not(feature = "reth"))]
+type RethConfig = ();
 
 fn generate_rindexer_rust_project(project_path: &Path) {
     let generated = generate_rust_project(project_path);
@@ -107,6 +113,7 @@ pub fn handle_new_command(
     let csv_enabled = storage_choice == "csv" || storage_choice == "both";
 
     // Handle Reth configuration if enabled
+    #[cfg(feature = "reth")]
     let final_reth_config = if let Some(mut reth_cfg) = reth_config {
         let mut new_args = vec![];
         print_success_message("\nReth Configuration:");
@@ -156,6 +163,9 @@ pub fn handle_new_command(
         None
     };
 
+    #[cfg(not(feature = "reth"))]
+    let final_reth_config = None;
+
     let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
     let rindexer_abis_folder = project_path.join("abis");
 
@@ -177,7 +187,11 @@ pub fn handle_new_command(
     })?;
 
     // for later to avoid cloning
+    #[cfg(feature = "reth")]
     let reth_mode_text = if final_reth_config.is_some() { " with Reth support" } else { "" };
+
+    #[cfg(not(feature = "reth"))]
+    let reth_mode_text = "";
 
     let success_message = if project_type == ProjectType::Rust {
         format!("rindexer rust project created{} with a rETH transfer events YAML template.\n cd ./{} \n- use rindexer codegen commands to regenerate the code\n- run `rindexer start all` to start rindexer\n- run `rindexer add contract` to add new contracts to your project", reth_mode_text, &project_name)

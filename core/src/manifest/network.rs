@@ -4,13 +4,24 @@ use std::time::Duration;
 use alloy::primitives::U64;
 use serde::de::Visitor;
 use serde::{de, Deserialize, Deserializer, Serialize};
+
+#[cfg(feature = "reth")]
 use tokio::sync::broadcast::Sender;
+
 use tokio::time::sleep;
 
 use super::core::{deserialize_option_u64_from_string, serialize_option_u64_as_string};
-pub use super::reth::RethConfig;
+#[cfg(feature = "reth")]
+use super::reth::RethConfig;
+
+#[cfg(feature = "reth")]
 use crate::notifications::ChainStateNotification;
+
+#[cfg(feature = "reth")]
 use crate::reth::node::start_reth_node_with_exex;
+
+#[cfg(feature = "reth")]
+use reth::cli::Commands;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Network {
@@ -46,14 +57,17 @@ pub struct Network {
 
     /// Reth configuration for this network
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg(feature = "reth")]
     pub reth: Option<RethConfig>,
+
+    #[cfg(not(feature = "reth"))]
+    pub reth: Option<()>,
 }
 
 impl Network {
     /// Get the IPC path for the Reth node
+    #[cfg(feature = "reth")]
     pub fn get_reth_ipc_path(&self) -> Option<String> {
-        use reth::cli::Commands;
-
         let reth = self.reth.as_ref()?;
         let cli = reth.to_cli().ok()?;
 
@@ -62,8 +76,8 @@ impl Network {
             _ => None,
         }
     }
-
     /// Check if Reth is enabled for this network
+    #[cfg(feature = "reth")]
     pub fn is_reth_enabled(&self) -> bool {
         self.reth.is_some()
     }
@@ -75,6 +89,7 @@ impl Network {
     /// If Reth is not enabled, the function will return None.
     ///
     /// If the Reth node fails to start, the function will return an error.
+    #[cfg(feature = "reth")]
     pub async fn try_start_reth_node(
         &self,
     ) -> Result<Option<Sender<ChainStateNotification>>, eyre::Error> {
@@ -190,6 +205,7 @@ impl<'de> Deserialize<'de> for BlockPollFrequency {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "reth")]
     use reth::cli::Commands;
 
     use serde_yaml;
@@ -272,6 +288,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "reth")]
     #[test]
     fn test_network_with_reth_config() {
         let network: Network = serde_yaml::from_str(
@@ -297,6 +314,7 @@ mod tests {
         assert_eq!(ipc_path, Some("/custom/reth.ipc".to_string()));
     }
 
+    #[cfg(feature = "reth")]
     #[test]
     fn test_network_with_reth_config_no_ipc_path() {
         let network: Network = serde_yaml::from_str(
@@ -334,6 +352,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "reth")]
     #[test]
     fn test_network_reth_ipc_disabled() {
         let network: Network = serde_yaml::from_str(
@@ -357,6 +376,7 @@ mod tests {
         // Note: get_reth_ipc_path might still return a default path even with ipcdisable
     }
 
+    #[cfg(feature = "reth")]
     #[test]
     fn test_network_no_reth_config() {
         let network: Network = serde_yaml::from_str(
