@@ -164,12 +164,9 @@ or spin up a new no-code project using the make commands.
 
 ## Release
 
-To release a new rindexer you have to do a few things:
+To release a new rindexer:
 
-1) Checkout release/x.x.x branch depending on the next version number
-2) Update the changelog in documentation/docs/pages/docs/introduction/changelog.mdx
-3) Open up the cli folder and go to the Cargo.toml and update the version number
-4) Push the branch up to GitHub which will queue a build on the CI
-5) Once the build is successful you can open a PR merging the release branch into master
-6) Merge will auto deploy the release
-
+1. Checkout `release/x.x.x` branch depending on the next version number
+2. Push the branch to GitHub which will queue a build on the CI
+3. Once build is successful, a PR will be automatically created with updated changelog and version
+4. Review and merge the auto-generated PR - this will auto-deploy the release with binaries built from the release branch
