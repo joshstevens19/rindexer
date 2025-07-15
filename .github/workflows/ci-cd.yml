@@ -38,7 +38,6 @@ jobs:
 
   build:
     if: |
-      false &&
       (github.event_name == 'push' || github.event_name == 'pull_request') &&
       github.actor != 'github-actions[bot]' &&
       (
@@ -251,8 +250,7 @@ jobs:
   create_pr:
     name: Create Release PR
     runs-on: ubuntu-22.04
-    # Remove the build dependency since we're skipping builds
-    # needs: build
+    needs: build
     if: |
       github.actor != 'github-actions[bot]' && 
       startsWith(github.ref, 'refs/heads/release/')
