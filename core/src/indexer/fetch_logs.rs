@@ -546,7 +546,7 @@ async fn live_indexing_stream(
                                                             Some(latest_block.header.timestamp);
                                                     } else {
                                                         warn!("------------------------");
-                                                        warn!("TEMP WARNING. Missing block {} TS in Live {}", log.block_number, latest_block.header.number);
+                                                        warn!("TEMP WARNING. Missing block {:?} TS in Live {:?}", log.block_number, latest_block.header.number);
                                                         warn!("------------------------");
                                                     }
                                                 }
