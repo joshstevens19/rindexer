@@ -44,10 +44,8 @@ async fn main() {
             _ => {}
         }
     }
-    
-    println!(
-        "Starting rindexer rust project - graphql {enable_graphql} indexer {enable_indexer}"
-    );
+
+    println!("Starting rindexer rust project - graphql {enable_graphql} indexer {enable_indexer}");
 
     let path = env::current_dir();
     match path {
