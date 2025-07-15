@@ -7,7 +7,7 @@ on:
       - closed
     branches:
       - master
-  release: # This 'release' key must be at the same indentation level as 'workflow_dispatch' and 'pull_request'
+  release:
     types: [published]
 
 env:
@@ -16,17 +16,16 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
+    permissions: # This 'permissions' key should be indented 4 spaces (aligned with runs-on, strategy)
       contents: read
       packages: write
-      releases: read # Ensure this permission is here if you're downloading release assets
     strategy:
       matrix:
         include:
-          - dockerfile: Dockerfile # Your main Dockerfile
-            image: ghcr.io/${{ github.repository }} # Main image name
-          - dockerfile: bundled.Dockerfile # Your bundled Dockerfile
-            image: ghcr.io/${{ github.repository }}-bundled # Bundled image name
+          - dockerfile: Dockerfile
+            image: ghcr.io/${{ github.repository }}
+          - dockerfile: bundled.Dockerfile
+            image: ghcr.io/${{ github.repository }}-bundled
 
     steps:
       - name: Checkout repository
