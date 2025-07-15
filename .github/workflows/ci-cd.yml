@@ -64,11 +64,6 @@ jobs:
             svm_target_platform: linux-amd64
             platform: linux
             arch: amd64
-          #          - runner: ubuntu-22.04
-          #            target: aarch64-unknown-linux-gnu
-          #            svm_target_platform: linux-aarch64
-          #            platform: linux
-          #            arch: arm64
           - runner: macos-13
             target: x86_64-apple-darwin
             svm_target_platform: macosx-amd64
@@ -480,7 +475,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        if: steps.check_release.outputs.is_release == 'true'
         with:
+          ref: release/${{ env.VERSION_NAME }}
           fetch-depth: 0
 
       - name: Check if this is a release commit and extract version
@@ -510,22 +507,10 @@ jobs:
             echo "VERSION_NAME=$VERSION_FROM_RELEASE" >> $GITHUB_ENV
             echo "is_release=true" >> $GITHUB_OUTPUT
             echo "Found release from commit title: Release v$VERSION_FROM_RELEASE"
-          
-            # Check if release already exists
-            if gh release view "v$VERSION_FROM_RELEASE" &>/dev/null; then
-              echo "Release v$VERSION_FROM_RELEASE already exists, skipping"
-              echo "is_release=false" >> $GITHUB_OUTPUT
-            fi
           elif [[ -n "$VERSION_FROM_BRANCH" ]]; then
             echo "VERSION_NAME=$VERSION_FROM_BRANCH" >> $GITHUB_ENV
             echo "is_release=true" >> $GITHUB_OUTPUT
             echo "Found release from branch pattern: $VERSION_FROM_BRANCH"
-          
-            # Check if release already exists
-            if gh release view "v$VERSION_FROM_BRANCH" &>/dev/null; then
-              echo "Release v$VERSION_FROM_BRANCH already exists, skipping"
-              echo "is_release=false" >> $GITHUB_OUTPUT
-            fi
           else
             echo "Not a release commit"
             echo "is_release=false" >> $GITHUB_OUTPUT
@@ -542,13 +527,26 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: ./release-artifacts
+        continue-on-error: true
+
+      - name: Check if artifacts exist
+        if: steps.check_release.outputs.is_release == 'true'
+        id: check_artifacts
+        run: |
+          if [ -d "./release-artifacts" ] && [ "$(ls -A ./release-artifacts)" ]; then
+            echo "artifacts_exist=true" >> $GITHUB_OUTPUT
+            echo "Artifacts found, proceeding with release"
+          else
+            echo "artifacts_exist=false" >> $GITHUB_OUTPUT
+            echo "No artifacts found, skipping release creation"
+          fi
 
       - name: Display structure of downloaded files
-        if: steps.check_release.outputs.is_release == 'true'
+        if: steps.check_release.outputs.is_release == 'true' && steps.check_artifacts.outputs.artifacts_exist == 'true'
         run: ls -la ./release-artifacts/
 
       - name: Create GitHub Release
-        if: steps.check_release.outputs.is_release == 'true'
+        if: steps.check_release.outputs.is_release == 'true' && steps.check_artifacts.outputs.artifacts_exist == 'true'
         id: create_release
         uses: actions/create-release@v1
         env:
@@ -571,7 +569,7 @@ jobs:
             ```
 
       - name: Upload Release Assets
-        if: steps.check_release.outputs.is_release == 'true'
+        if: steps.check_release.outputs.is_release == 'true' && steps.check_artifacts.outputs.artifacts_exist == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -618,8 +616,15 @@ jobs:
       - name: Skip if not a release
         if: steps.check_release.outputs.is_release != 'true'
         run: |
-          echo "Skipping release build - not a release commit or release already exists"
+          echo "Skipping release build - not a release commit"
           exit 0
+
+      - name: Checkout release branch
+        if: steps.check_release.outputs.is_release == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: release/${{ env.VERSION_NAME }}
+          fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@stable
         if: steps.check_release.outputs.is_release == 'true'
