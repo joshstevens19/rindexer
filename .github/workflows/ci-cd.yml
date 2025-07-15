@@ -38,7 +38,8 @@ jobs:
 
   build:
     if: |
-      false && (github.event_name == 'push' || github.event_name == 'pull_request') &&
+      false &&
+      (github.event_name == 'push' || github.event_name == 'pull_request') &&
       github.actor != 'github-actions[bot]' &&
       (
         !(github.event_name == 'pull_request' &&
@@ -250,7 +251,8 @@ jobs:
   create_pr:
     name: Create Release PR
     runs-on: ubuntu-22.04
-    #needs: build
+    # Remove the build dependency since we're skipping builds
+    # needs: build
     if: |
       github.actor != 'github-actions[bot]' && 
       startsWith(github.ref, 'refs/heads/release/')
@@ -286,39 +288,74 @@ jobs:
           # Extract content from "Changes Not Deployed" sections
           FEATURES=$(awk '
             /### Features/ && in_changes { 
-              getline
-              getline
-              while (getline && !/^### /) {
-                if ($0 !~ /^-*$/ && $0 !~ /^$/) print $0
-              }
+              in_features = 1
+              next
             }
-            /## Changes Not Deployed/ { in_changes = 1 }
-            /## Releases/ { in_changes = 0 }
+            /### Bug fixes/ && in_changes { 
+              in_features = 0
+            }
+            /### Breaking changes/ && in_changes { 
+              in_features = 0
+            }
+            /## Releases/ { 
+              in_changes = 0
+              in_features = 0
+            }
+            /## Changes Not Deployed/ { 
+              in_changes = 1
+              next
+            }
+            in_features && in_changes && !/^-*$/ && !/^$/ && !/^### / {
+              print $0
+            }
           ' changelog_temp.mdx)
           
           BUG_FIXES=$(awk '
             /### Bug fixes/ && in_changes { 
-              getline
-              getline
-              while (getline && !/^### /) {
-                if ($0 !~ /^-*$/ && $0 !~ /^$/) print $0
-              }
+              in_bugs = 1
+              next
             }
-            /## Changes Not Deployed/ { in_changes = 1 }
-            /## Releases/ { in_changes = 0 }
+            /### Breaking changes/ && in_changes { 
+              in_bugs = 0
+            }
+            /## Releases/ { 
+              in_changes = 0
+              in_bugs = 0
+            }
+            /## Changes Not Deployed/ { 
+              in_changes = 1
+              next
+            }
+            in_bugs && in_changes && !/^-*$/ && !/^$/ && !/^### / {
+              print $0
+            }
           ' changelog_temp.mdx)
           
           BREAKING_CHANGES=$(awk '
             /### Breaking changes/ && in_changes { 
-              getline
-              getline
-              while (getline && !/^### / && !/^## /) {
-                if ($0 !~ /^-*$/ && $0 !~ /^$/) print $0
-              }
+              in_breaking = 1
+              next
             }
-            /## Changes Not Deployed/ { in_changes = 1 }
-            /## Releases/ { in_changes = 0 }
+            /## Releases/ { 
+              in_changes = 0
+              in_breaking = 0
+            }
+            /## Changes Not Deployed/ { 
+              in_changes = 1
+              next
+            }
+            in_breaking && in_changes && !/^-*$/ && !/^$/ && !/^### / {
+              print $0
+            }
           ' changelog_temp.mdx)
+          
+          # Debug: Print what we extracted
+          echo "Extracted Features:"
+          echo "$FEATURES"
+          echo "Extracted Bug Fixes:"
+          echo "$BUG_FIXES"
+          echo "Extracted Breaking Changes:"
+          echo "$BREAKING_CHANGES"
           
           # Create new release entry
           cat > new_release.txt << EOF
@@ -333,35 +370,29 @@ jobs:
           EOF
           
           # Add sections if they have content
-          if [[ -n "$FEATURES" && "$FEATURES" != "" ]]; then
-            cat >> new_release.txt << EOF
-          
-          ### Features
-          -------------------------------------------------
-          $FEATURES
-          EOF
+          if [[ -n "$FEATURES" && "$FEATURES" =~ [^[:space:]] ]]; then
+            echo "" >> new_release.txt
+            echo "### Features" >> new_release.txt
+            echo "-------------------------------------------------" >> new_release.txt
+            echo "$FEATURES" >> new_release.txt
           fi
           
-          if [[ -n "$BUG_FIXES" && "$BUG_FIXES" != "" ]]; then
-            cat >> new_release.txt << EOF
-          
-          ### Bug fixes
-          -------------------------------------------------
-          $BUG_FIXES
-          EOF
+          if [[ -n "$BUG_FIXES" && "$BUG_FIXES" =~ [^[:space:]] ]]; then
+            echo "" >> new_release.txt
+            echo "### Bug fixes" >> new_release.txt
+            echo "-------------------------------------------------" >> new_release.txt
+            echo "$BUG_FIXES" >> new_release.txt
           fi
           
-          if [[ -n "$BREAKING_CHANGES" && "$BREAKING_CHANGES" != "" ]]; then
-            cat >> new_release.txt << EOF
-          
-          ### Breaking changes
-          -------------------------------------------------
-          $BREAKING_CHANGES
-          EOF
+          if [[ -n "$BREAKING_CHANGES" && "$BREAKING_CHANGES" =~ [^[:space:]] ]]; then
+            echo "" >> new_release.txt
+            echo "### Breaking changes" >> new_release.txt
+            echo "-------------------------------------------------" >> new_release.txt
+            echo "$BREAKING_CHANGES" >> new_release.txt
           fi
           
           # Get existing releases (everything after "## Releases")
-          EXISTING_RELEASES=$(awk '/^## Releases/,0' changelog_temp.mdx | tail -n +4)
+          EXISTING_RELEASES=$(awk '/^## Releases/,0' changelog_temp.mdx | tail -n +5)
           
           # Create new changelog
           cat > "$CHANGELOG_FILE" << EOF
