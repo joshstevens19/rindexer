@@ -57,8 +57,8 @@ fn generate_structs(
     for item in abi_json.as_array().ok_or(GenerateStructsError::InvalidAbiJsonFormat)?.iter() {
         if item["type"] == "event" {
             let event_name = item["name"].as_str().unwrap_or_default();
-            let struct_result = format!("{}Result", event_name);
-            let struct_data = format!("{}Data", event_name);
+            let struct_result = format!("{event_name}Result");
+            let struct_data = format!("{event_name}Data");
 
             structs.push_str(&Code::new(format!(
                 r#"
@@ -97,7 +97,7 @@ fn generate_event_enums_code(event_info: &[EventInfo]) -> Code {
 }
 
 fn generate_event_type_name(name: &str) -> String {
-    format!("{}EventType", name)
+    format!("{name}EventType")
 }
 
 fn generate_topic_ids_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> Code {
@@ -201,9 +201,9 @@ fn generate_csv_instance(
     let csv_path =
         event_info.create_csv_file_for_event(project_path, &contract.name, csv_path_str)?;
     let headers: Vec<String> =
-        event_info.csv_headers_for_event().iter().map(|h| format!("\"{}\"", h)).collect();
+        event_info.csv_headers_for_event().iter().map(|h| format!("\"{h}\"")).collect();
 
-    let headers_with_into: Vec<String> = headers.iter().map(|h| format!("{}.into()", h)).collect();
+    let headers_with_into: Vec<String> = headers.iter().map(|h| format!("{h}.into()")).collect();
 
     Ok(Code::new(format!(
         r#"
@@ -367,8 +367,7 @@ fn generate_event_callback_structs_code(
 fn decoder_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &str) -> Code {
     let mut function = String::new();
     function.push_str(&format!(
-        r#"pub async fn decoder_contract(network: &str) -> {abi_gen_name}Instance<Arc<RindexerProvider>, AnyNetwork> {{"#,
-        abi_gen_name = abi_gen_name
+        r#"pub async fn decoder_contract(network: &str) -> {abi_gen_name}Instance<Arc<RindexerProvider>, AnyNetwork> {{"#
     ));
 
     let networks: Vec<&String> = contracts_details.iter().map(|c| &c.network).collect();
@@ -386,9 +385,7 @@ fn decoder_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &
                     Address::ZERO,
                     get_provider_cache_for_network(network).await.get_inner_provider(),
                  )
-            }}"#,
-            network = network,
-            abi_gen_name = abi_gen_name
+            }}"#
         ));
     }
 
@@ -424,8 +421,7 @@ fn build_pub_contract_fn(
                     get_provider_cache_for_network(network).await.get_inner_provider(),
                  )
                }}
-            "#,
-            abi_gen_name = abi_gen_name
+            "#
         ))
     } else {
         let contract = contracts_details
@@ -438,7 +434,7 @@ fn build_pub_contract_fn(
             }
             Some(value) => match value {
                 ValueOrArray::Value(address) => {
-                    let address = format!("{:?}", address);
+                    let address = format!("{address:?}");
                     Code::new(format!(
                         r#"pub async fn {contract_name}_contract(network: &str) -> {abi_gen_name}Instance<Arc<RindexerProvider>, AnyNetwork> {{
                                 let address: Address = "{address}".parse().expect("Invalid address");
@@ -448,9 +444,6 @@ fn build_pub_contract_fn(
                                  )
                                }}
                             "#,
-                        abi_gen_name = abi_gen_name,
-                        contract_name = contract_name,
-                        address = address,
                     ))
                 }
                 ValueOrArray::Array(_) => {
@@ -784,7 +777,7 @@ pub fn generate_event_handlers(
             for item in &abi_name_properties {
                 if item.abi_type == "address" {
                     let key = format!("result.event_data.{}", item.abi_name);
-                    csv_data.push_str(&format!(r#"{}.to_string(),"#, key));
+                    csv_data.push_str(&format!(r#"{key}.to_string(),"#));
                 } else if item.abi_type.contains("bytes") {
                     csv_data.push_str(&format!(
                         r#"result.event_data.{}.iter().map(|byte| format!("{{:02x}}", byte)).collect::<Vec<_>>().join(""),"#,
@@ -808,7 +801,7 @@ pub fn generate_event_handlers(
             csv_data.push_str(r#"result.tx_information.transaction_index.to_string(),"#);
             csv_data.push_str(r#"result.tx_information.log_index.to_string()"#);
 
-            csv_write = format!(r#"csv_bulk_data.push(vec![{csv_data}]);"#, csv_data = csv_data,);
+            csv_write = format!(r#"csv_bulk_data.push(vec![{csv_data}]);"#,);
 
             if storage.postgres_disable_create_tables() {
                 csv_write = format!(
@@ -953,7 +946,7 @@ pub fn generate_event_handlers(
                 event_type_name = event_type_name,
                 columns_names = generate_column_names_only_with_base_properties(&event.inputs)
                     .iter()
-                    .map(|item| format!("\"{}\".to_string()", item))
+                    .map(|item| format!("\"{item}\".to_string()"))
                     .collect::<Vec<String>>()
                     .join(", "),
                 data = data,

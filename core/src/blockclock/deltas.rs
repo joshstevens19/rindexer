@@ -39,21 +39,6 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    pub async fn client() -> Arc<JsonRpcCachedProvider> {
-        create_client(
-            "https://base.llamarpc.com",
-            8453,
-            None,
-            None,
-            None,
-            Default::default(),
-            None,
-            None,
-        )
-        .await
-        .unwrap()
-    }
-
     async fn check_block_times<F>(network: i32, rpc: &str, get_time_fn: F)
     where
         F: Fn(u64) -> Option<i64> + Sync,
@@ -66,7 +51,9 @@ mod tests {
         }
 
         let blocks_req = blocks.iter().map(|&n| U64::from(n)).collect::<Vec<_>>();
-        let block_time = client()
+        let block_time = create_client(rpc, 8453, None, None, None, Default::default(), None, None)
+            .await
+            .unwrap()
             .await
             .get_block_by_number_batch(&blocks_req, false)
             .await

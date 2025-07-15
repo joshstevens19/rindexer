@@ -690,12 +690,12 @@ impl ToSql for EthereumSqlTypeWrapper {
                 }
             }
             EthereumSqlTypeWrapper::B128(value) => {
-                let hex = format!("{:?}", value);
+                let hex = format!("{value:?}");
                 out.extend_from_slice(hex.as_bytes());
                 Ok(IsNull::No)
             }
             EthereumSqlTypeWrapper::VecB128(values) => {
-                let hexes: Vec<String> = values.iter().map(|s| format!("{:?}", s)).collect();
+                let hexes: Vec<String> = values.iter().map(|s| format!("{s:?}")).collect();
                 if hexes.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
@@ -704,13 +704,13 @@ impl ToSql for EthereumSqlTypeWrapper {
             }
             #[allow(deprecated)]
             EthereumSqlTypeWrapper::H160(value) => {
-                let hex = format!("{:?}", value);
+                let hex = format!("{value:?}");
                 out.extend_from_slice(hex.as_bytes());
                 Ok(IsNull::No)
             }
             #[allow(deprecated)]
             EthereumSqlTypeWrapper::VecH160(values) => {
-                let hexes: Vec<String> = values.iter().map(|s| format!("{:?}", s)).collect();
+                let hexes: Vec<String> = values.iter().map(|s| format!("{s:?}")).collect();
                 if hexes.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
@@ -718,7 +718,7 @@ impl ToSql for EthereumSqlTypeWrapper {
                 }
             }
             EthereumSqlTypeWrapper::B256(value) => {
-                let hex = format!("{:?}", value);
+                let hex = format!("{value:?}");
                 out.extend_from_slice(hex.as_bytes());
                 Ok(IsNull::No)
             }
@@ -728,7 +728,7 @@ impl ToSql for EthereumSqlTypeWrapper {
                 Ok(IsNull::No)
             }
             EthereumSqlTypeWrapper::VecB256(values) => {
-                let hexes: Vec<String> = values.iter().map(|s| format!("{:?}", s)).collect();
+                let hexes: Vec<String> = values.iter().map(|s| format!("{s:?}")).collect();
                 if hexes.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
@@ -747,12 +747,12 @@ impl ToSql for EthereumSqlTypeWrapper {
                 }
             }
             EthereumSqlTypeWrapper::B512(value) => {
-                let hex = format!("{:?}", value);
+                let hex = format!("{value:?}");
                 out.extend_from_slice(hex.as_bytes());
                 Ok(IsNull::No)
             }
             EthereumSqlTypeWrapper::VecB512(values) => {
-                let hexes: Vec<String> = values.iter().map(|s| format!("{:?}", s)).collect();
+                let hexes: Vec<String> = values.iter().map(|s| format!("{s:?}")).collect();
                 if hexes.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
@@ -760,7 +760,7 @@ impl ToSql for EthereumSqlTypeWrapper {
                 }
             }
             EthereumSqlTypeWrapper::Address(value) => {
-                let hex = format!("{:?}", value);
+                let hex = format!("{value:?}");
                 String::to_sql(&hex, ty, out)
             }
             EthereumSqlTypeWrapper::AddressNullable(value) => {
@@ -768,7 +768,7 @@ impl ToSql for EthereumSqlTypeWrapper {
                     return Ok(IsNull::Yes);
                 }
 
-                let hex = format!("{:?}", value);
+                let hex = format!("{value:?}");
                 String::to_sql(&hex, ty, out)
             }
             EthereumSqlTypeWrapper::AddressBytes(value) => {
@@ -786,7 +786,7 @@ impl ToSql for EthereumSqlTypeWrapper {
                 Ok(IsNull::No)
             }
             EthereumSqlTypeWrapper::VecAddress(values) => {
-                let addresses: Vec<String> = values.iter().map(|s| format!("{:?}", s)).collect();
+                let addresses: Vec<String> = values.iter().map(|s| format!("{s:?}")).collect();
                 if addresses.is_empty() {
                     Ok(IsNull::Yes)
                 } else {
@@ -1115,7 +1115,7 @@ pub fn map_log_params_to_ethereum_wrapper(
                 }
             }
         } else {
-            panic!("No ABI input found for log param at index: {}", index)
+            panic!("No ABI input found for log param at index: {index}")
         }
     }
 
@@ -1142,7 +1142,7 @@ fn process_tuple(abi_inputs: &[ABIInput], tokens: &[DynSolValue]) -> Vec<Ethereu
                 }
             }
         } else {
-            panic!("No ABI input found for log param at index: {}", index)
+            panic!("No ABI input found for log param at index: {index}")
         }
     }
 
@@ -1211,7 +1211,7 @@ fn convert_int(value: &I256, target_type: &EthereumSqlTypeWrapper) -> EthereumSq
             EthereumSqlTypeWrapper::I8(value.low_u32() as i8)
         }
         _ => {
-            let error_message = format!("Unsupported target type - {:?}", target_type);
+            let error_message = format!("Unsupported target type - {target_type:?}");
             error!("{}", error_message);
             panic!("{}", error_message)
         }
@@ -1257,7 +1257,7 @@ fn convert_uint(value: &U256, target_type: &EthereumSqlTypeWrapper) -> EthereumS
             EthereumSqlTypeWrapper::I8(low_u32(value) as i8)
         }
         _ => {
-            let error_message = format!("Unsupported target type - {:?}", target_type);
+            let error_message = format!("Unsupported target type - {target_type:?}");
             error!("{}", error_message);
             panic!("{}", error_message)
         }
@@ -1272,7 +1272,7 @@ fn map_dynamic_int_to_ethereum_sql_type_wrapper(
     if let Some(target_type) = sql_type_wrapper {
         convert_int(value, &target_type)
     } else {
-        let error_message = format!("Unknown int type for abi input: {:?}", abi_input);
+        let error_message = format!("Unknown int type for abi input: {abi_input:?}");
         error!("{}", error_message);
         panic!("{}", error_message);
     }
@@ -1286,7 +1286,7 @@ fn map_dynamic_uint_to_ethereum_sql_type_wrapper(
     if let Some(target_type) = sql_type_wrapper {
         convert_uint(value, &target_type)
     } else {
-        let error_message = format!("Unknown int type for abi input: {:?}", abi_input);
+        let error_message = format!("Unknown int type for abi input: {abi_input:?}");
         error!("{}", error_message);
         panic!("{}", error_message);
     }
@@ -1349,7 +1349,7 @@ fn map_log_token_to_ethereum_wrapper(
                             let sql_type_wrapper =
                                 solidity_type_to_ethereum_sql_type_wrapper(&abi_input.type_)
                                     .unwrap_or_else(|| {
-                                        panic!("Unknown int type for abi input: {:?}", abi_input)
+                                        panic!("Unknown int type for abi input: {abi_input:?}")
                                     });
 
                             let vec_wrapper = tokens
@@ -1364,8 +1364,7 @@ fn map_log_token_to_ethereum_wrapper(
                                     }
 
                                     panic!(
-                                        "Expected uint or int token in array for abi input: {:?}",
-                                        abi_input
+                                        "Expected uint or int token in array for abi input: {abi_input:?}"
                                     );
                                 })
                                 .collect::<Vec<_>>();
@@ -1515,7 +1514,7 @@ fn map_log_token_to_ethereum_wrapper(
                                             .collect(),
                                     )
                                 }
-                                _ => panic!("Unknown int type for abi input: {:?}", abi_input),
+                                _ => panic!("Unknown int type for abi input: {abi_input:?}"),
                             }
                         }
                         DynSolValue::Bool(_) => {
@@ -1722,8 +1721,7 @@ pub fn map_ethereum_wrapper_to_json(
             }
         } else {
             panic!(
-                "No wrapper found for ABI input {:?} and wrapper index {} - wrappers {:?}",
-                abi_input, current_wrapper_index, wrappers
+                "No wrapper found for ABI input {abi_input:?} and wrapper index {current_wrapper_index} - wrappers {wrappers:?}"
             );
         }
     }

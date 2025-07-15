@@ -78,8 +78,7 @@ pub fn prompt_for_input_list(
         } else {
             println!(
                 "{}",
-                format!("Invalid option. Please choose one of the following: {}", options_str)
-                    .red()
+                format!("Invalid option. Please choose one of the following: {options_str}").red()
             );
         }
     }

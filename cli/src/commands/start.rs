@@ -19,7 +19,7 @@ fn check_postgres_connection(conn_str: &str, max_retries: u32) -> Result<(), Str
 
     while retries < max_retries {
         let status = Command::new("pg_isready").args(["-d", conn_str]).output().map_err(|e| {
-            let error = format!("Failed to check Postgres status: {}", e);
+            let error = format!("Failed to check Postgres status: {e}");
             rindexer_error!(error);
             error
         })?;
@@ -48,7 +48,7 @@ fn check_docker_compose_status(project_path: &PathBuf, max_retries: u32) -> Resu
             .current_dir(project_path)
             .output()
             .map_err(|e| {
-                let error = format!("Failed to check docker compose status: {}", e);
+                let error = format!("Failed to check docker compose status: {e}");
                 print_error_message(&error);
                 error
             })?;
@@ -60,7 +60,7 @@ fn check_docker_compose_status(project_path: &PathBuf, max_retries: u32) -> Resu
 
                 return if let Ok(conn_str) = env::var("DATABASE_URL") {
                     check_postgres_connection(&conn_str, max_retries).map_err(|e| {
-                        let error = format!("Failed to connect to PostgresSQL: {}", e);
+                        let error = format!("Failed to connect to PostgresSQL: {e}");
                         rindexer_error!(error);
                         error
                     })
@@ -85,7 +85,7 @@ fn check_docker_compose_status(project_path: &PathBuf, max_retries: u32) -> Resu
 
 fn start_docker_compose(project_path: &PathBuf) -> Result<(), String> {
     if !project_path.exists() {
-        return Err(format!("Project path does not exist: {:?}", project_path));
+        return Err(format!("Project path does not exist: {project_path:?}"));
     }
 
     let status = Command::new("docker")
@@ -95,7 +95,7 @@ fn start_docker_compose(project_path: &PathBuf) -> Result<(), String> {
         .stderr(std::process::Stdio::null())
         .status()
         .map_err(|e| {
-            let error = format!("Docker command could not be executed make sure docker is running on the machine: {}", e);
+            let error = format!("Docker command could not be executed make sure docker is running on the machine: {e}");
             print_error_message(&error);
             error
         })?;
@@ -120,7 +120,7 @@ pub async fn start(
     validate_rindexer_yaml_exist(&project_path);
 
     let manifest = read_manifest(&project_path.join(YAML_CONFIG_NAME)).map_err(|e| {
-        print_error_message(&format!("Could not read the rindexer.yaml file: {}", e));
+        print_error_message(&format!("Could not read the rindexer.yaml file: {e}"));
         e
     })?;
 
@@ -158,11 +158,11 @@ pub async fn start(
                 .arg(match command {
                     StartSubcommands::Indexer => "-- --indexer".to_string(),
                     StartSubcommands::Graphql { port } => match port {
-                        Some(port) => format!("-- --graphql --port={}", port),
+                        Some(port) => format!("-- --graphql --port={port}"),
                         None => "-- --graphql".to_string(),
                     },
                     StartSubcommands::All { port } => match port {
-                        Some(port) => format!("-- --port={}", port),
+                        Some(port) => format!("-- --port={port}"),
                         None => "".to_string(),
                     },
                 })
@@ -170,7 +170,7 @@ pub async fn start(
                 .expect("Failed to execute cargo run.");
 
             if !status.success() {
-                panic!("cargo run failed with status: {:?}", status);
+                panic!("cargo run failed with status: {status:?}");
             }
         }
         ProjectType::NoCode => match command {
@@ -185,7 +185,7 @@ pub async fn start(
                 };
 
                 start_rindexer_no_code(details).await.map_err(|e| {
-                    print_error_message(&format!("Error starting the server: {}", e));
+                    print_error_message(&format!("Error starting the server: {e}"));
                     e
                 })?;
             }
@@ -200,7 +200,7 @@ pub async fn start(
                 };
 
                 start_rindexer_no_code(details).await.map_err(|e| {
-                    print_error_message(&format!("Error starting the indexer: {}", e));
+                    print_error_message(&format!("Error starting the indexer: {e}"));
                     e
                 })?;
             }
@@ -215,7 +215,7 @@ pub async fn start(
                 };
 
                 let _ = start_rindexer_no_code(details).await.map_err(|e| {
-                    print_error_message(&format!("Error starting the server: {}", e));
+                    print_error_message(&format!("Error starting the server: {e}"));
                 });
             }
         },

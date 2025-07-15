@@ -14,7 +14,7 @@ pub fn format_all_files_for_project<P: AsRef<Path>>(project_path: P) {
         .expect("Failed to execute cargo fmt.");
 
     if !status.success() {
-        panic!("cargo fmt failed with status: {:?}", status);
+        panic!("cargo fmt failed with status: {status:?}");
     }
 }
 
@@ -109,9 +109,9 @@ pub fn create_mod_file(
 
         for item in mods.iter().chain(dirs.iter()) {
             if item.contains("_abi_gen") {
-                writeln!(mod_file, "mod {};", item).map_err(CreateModFileError::WriteExtraLines)?;
+                writeln!(mod_file, "mod {item};").map_err(CreateModFileError::WriteExtraLines)?;
             } else {
-                writeln!(mod_file, "pub mod {};", item)
+                writeln!(mod_file, "pub mod {item};")
                     .map_err(CreateModFileError::WriteExtraLines)?;
             }
         }

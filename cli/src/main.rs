@@ -48,13 +48,13 @@ fn set_panic_hook() {
             }
 
             if let Some(s) = info.payload().downcast_ref::<&str>() {
-                eprintln!("Panic message: {}", s);
+                eprintln!("Panic message: {s}");
             } else {
                 eprintln!("Panic occurred but can't get the panic message...");
             }
 
             let backtrace = Backtrace::capture();
-            eprintln!("{:?}", backtrace);
+            eprintln!("{backtrace:?}");
             eprintln!("=== End Of Custom rindexer unhandled panic hook - please supply this information on the github issue if it happens ===");
         }));
     });
@@ -93,7 +93,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match RethConfig::from_cli_args(reth_args.reth_args.clone()) {
                     Ok(config) => Some(config),
                     Err(e) => {
-                        print_error_message(&format!("Invalid reth arguments: {}", e));
+                        print_error_message(&format!("Invalid reth arguments: {e}"));
                         return Err(e.into());
                     }
                 }

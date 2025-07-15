@@ -18,14 +18,14 @@ fn compact_table_name_if_needed(table_name: String) -> String {
     // sql table names cant be as long as 63
     if table_name.len() > 63 {
         let hash_bytes = keccak256(table_name.as_bytes());
-        let hash = hash_bytes.iter().map(|byte| format!("{:02x}", byte)).collect::<String>();
+        let hash = hash_bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
         let hash_prefix = &hash[0..10];
 
         // Preserve the beginning of the original name, but leave room for the hash
         let preserved_length = 63 - 11; // 10 for hash plus 1 for underscore
         let prefix = &table_name[0..preserved_length];
 
-        return format!("{}_{}", prefix, hash_prefix);
+        return format!("{prefix}_{hash_prefix}");
     }
 
     table_name
@@ -78,18 +78,17 @@ fn generate_event_table_sql_with_comments(
             };
 
             let create_table_sql = format!(
-                "CREATE TABLE IF NOT EXISTS {} (\
+                "CREATE TABLE IF NOT EXISTS {table_name} (\
                 rindexer_id SERIAL PRIMARY KEY NOT NULL, \
                 contract_address CHAR(66) NOT NULL, \
-                {} \
+                {event_columns} \
                 tx_hash CHAR(66) NOT NULL, \
                 block_number NUMERIC NOT NULL, \
                 block_hash CHAR(66) NOT NULL, \
                 network VARCHAR(50) NOT NULL, \
                 tx_index NUMERIC NOT NULL, \
                 log_index VARCHAR(78) NOT NULL\
-            );",
-                table_name, event_columns
+            );"
             );
 
             if !apply_full_name_comment_for_events.contains(&event_info.name) {
@@ -102,7 +101,7 @@ fn generate_event_table_sql_with_comments(
                 table_name, contract_name, event_info.name
             );
 
-            format!("{}\n{}", create_table_sql, table_comment)
+            format!("{create_table_sql}\n{table_comment}")
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -122,8 +121,7 @@ fn generate_internal_factory_event_table_sql(
         let table_name = generate_internal_factory_event_table_name(&params);
 
         let create_table_query = format!(
-            r#"CREATE TABLE IF NOT EXISTS rindexer_internal.{} ("factory_address" CHAR(42), "factory_deployed_address" CHAR(42), "network" TEXT, PRIMARY KEY ("factory_address", "factory_deployed_address", "network"));"#,
-            table_name
+            r#"CREATE TABLE IF NOT EXISTS rindexer_internal.{table_name} ("factory_address" CHAR(42), "factory_deployed_address" CHAR(42), "network" TEXT, PRIMARY KEY ("factory_address", "factory_deployed_address", "network"));"#
         );
 
         create_table_query
@@ -139,15 +137,12 @@ fn generate_internal_event_table_sql(
         let table_name = generate_internal_event_table_name(schema_name, &event_info.name);
 
         let create_table_query = format!(
-            r#"CREATE TABLE IF NOT EXISTS rindexer_internal.{} ("network" TEXT PRIMARY KEY, "last_synced_block" NUMERIC);"#,
-            table_name
+            r#"CREATE TABLE IF NOT EXISTS rindexer_internal.{table_name} ("network" TEXT PRIMARY KEY, "last_synced_block" NUMERIC);"#
         );
 
         let insert_queries = networks.iter().map(|network| {
             format!(
-                r#"INSERT INTO rindexer_internal.{} ("network", "last_synced_block") VALUES ('{}', 0) ON CONFLICT ("network") DO NOTHING;"#,
-                table_name,
-                network,
+                r#"INSERT INTO rindexer_internal.{table_name} ("network", "last_synced_block") VALUES ('{network}', 0) ON CONFLICT ("network") DO NOTHING;"#,
             )
         }).collect::<Vec<_>>().join("\n");
 
@@ -155,12 +150,11 @@ fn generate_internal_event_table_sql(
 
         let latest_block_insert_queries = networks.iter().map(|network| {
             format!(
-                r#"INSERT INTO rindexer_internal.latest_block ("network", "block") VALUES ('{}', 0) ON CONFLICT ("network") DO NOTHING;"#,
-                network
+                r#"INSERT INTO rindexer_internal.latest_block ("network", "block") VALUES ('{network}', 0) ON CONFLICT ("network") DO NOTHING;"#
             )
         }).collect::<Vec<_>>().join("\n");
 
-        format!("{}\n{}\n{}\n{}", create_table_query, insert_queries, create_latest_block_query, latest_block_insert_queries)
+        format!("{create_table_query}\n{insert_queries}\n{create_latest_block_query}\n{latest_block_insert_queries}")
     }).collect::<Vec<_>>().join("\n")
 }
 
@@ -220,7 +214,7 @@ pub fn generate_tables_for_indexer_sql(
         let factories = contract.details.iter().flat_map(|d| d.factory.clone()).collect::<Vec<_>>();
 
         if !disable_event_tables {
-            sql.push_str(format!("CREATE SCHEMA IF NOT EXISTS {};", schema_name).as_str());
+            sql.push_str(format!("CREATE SCHEMA IF NOT EXISTS {schema_name};").as_str());
             info!("Creating schema if not exists: {}", schema_name);
 
             let event_matching_name_on_other = find_clashing_event_names(
@@ -256,7 +250,7 @@ pub fn generate_tables_for_indexer_sql(
         let networks: Vec<&str> = networks.iter().map(|d| d.network.as_str()).collect();
 
         if !disable_event_tables {
-            sql.push_str(format!("CREATE SCHEMA IF NOT EXISTS {};", schema_name).as_str());
+            sql.push_str(format!("CREATE SCHEMA IF NOT EXISTS {schema_name};").as_str());
             info!("Creating schema if not exists: {}", schema_name);
 
             let event_matching_name_on_other = find_clashing_event_names(
@@ -309,7 +303,7 @@ pub fn generate_event_table_full_name(
 }
 
 pub fn generate_event_table_columns_names_sql(column_names: &[String]) -> String {
-    column_names.iter().map(|name| format!("\"{}\"", name)).collect::<Vec<String>>().join(", ")
+    column_names.iter().map(|name| format!("\"{name}\"")).collect::<Vec<String>>().join(", ")
 }
 
 pub fn generate_indexer_contract_schema_name(indexer_name: &str, contract_name: &str) -> String {
@@ -354,7 +348,7 @@ pub fn drop_tables_for_indexer_sql(project_path: &Path, indexer: &Indexer) -> Co
     for contract in &indexer.contracts {
         let contract_name = contract.before_modify_name_if_filter_readonly();
         let schema_name = generate_indexer_contract_schema_name(&indexer.name, &contract_name);
-        sql.push_str(format!("DROP SCHEMA IF EXISTS {} CASCADE;", schema_name).as_str());
+        sql.push_str(format!("DROP SCHEMA IF EXISTS {schema_name} CASCADE;").as_str());
 
         // drop last synced blocks for contracts
         let abi_items = ABIItem::read_abi_items(project_path, contract);
@@ -362,7 +356,7 @@ pub fn drop_tables_for_indexer_sql(project_path: &Path, indexer: &Indexer) -> Co
             for abi_item in abi_items.iter() {
                 let table_name = generate_internal_event_table_name(&schema_name, &abi_item.name);
                 sql.push_str(
-                    format!("DROP TABLE IF EXISTS rindexer_internal.{} CASCADE;", table_name)
+                    format!("DROP TABLE IF EXISTS rindexer_internal.{table_name} CASCADE;")
                         .as_str(),
                 );
             }
@@ -383,7 +377,7 @@ pub fn drop_tables_for_indexer_sql(project_path: &Path, indexer: &Indexer) -> Co
             };
             let table_name = generate_internal_factory_event_table_name(&params);
             sql.push_str(
-                format!("DROP TABLE IF EXISTS rindexer_internal.{} CASCADE;", table_name).as_str(),
+                format!("DROP TABLE IF EXISTS rindexer_internal.{table_name} CASCADE;").as_str(),
             )
         }
     }
@@ -415,10 +409,10 @@ pub fn solidity_type_to_db_type(abi_type: &str) -> String {
                 40 | 48 | 56 | 64 | 72 | 80 | 88 | 96 | 104 | 112 | 120 | 128 => "NUMERIC",
                 136 | 144 | 152 | 160 | 168 | 176 | 184 | 192 | 200 | 208 | 216 | 224 | 232
                 | 240 | 248 | 256 => "VARCHAR(78)",
-                _ => panic!("Unsupported {}N size: {}", prefix, size),
+                _ => panic!("Unsupported {prefix}N size: {size}"),
             }
         }
-        _ => panic!("Unsupported type: {}", base_type),
+        _ => panic!("Unsupported type: {base_type}"),
     };
 
     // Return the SQL type, appending array brackets if necessary
@@ -429,7 +423,7 @@ pub fn solidity_type_to_db_type(abi_type: &str) -> String {
         if base_type == "address" {
             return "TEXT[]".to_string();
         }
-        format!("{}[]", sql_type)
+        format!("{sql_type}[]")
     } else {
         sql_type.to_string()
     }

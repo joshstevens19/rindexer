@@ -28,7 +28,7 @@ where
         Value::String(s) => match s.as_str() {
             "rust" => Ok(ProjectType::Rust),
             "no-code" => Ok(ProjectType::NoCode),
-            _ => Err(serde::de::Error::custom(format!("Unknown project type: {}", s))),
+            _ => Err(serde::de::Error::custom(format!("Unknown project type: {s}"))),
         },
         _ => Err(serde::de::Error::custom("Invalid project type format")),
     }

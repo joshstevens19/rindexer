@@ -49,7 +49,7 @@ impl SNS {
             }
             Err(error) => {
                 error!("Error connecting to SNS: {}", error);
-                panic!("Error connecting to SNS: {}", error);
+                panic!("Error connecting to SNS: {error}");
             }
         }
 

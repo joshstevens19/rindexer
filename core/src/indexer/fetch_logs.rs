@@ -39,7 +39,7 @@ pub fn fetch_logs_stream(
     // This is per network contract-event, so it should be relatively small.
     let channel_size = config.config().buffer.unwrap_or(4);
 
-    info!(
+    debug!(
         "{}::{} Configured with {} event buffer",
         config.info_log_name(),
         config.network_contract().network,

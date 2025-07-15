@@ -640,7 +640,7 @@ pub async fn create_client(
             ProviderBuilder::new().network::<AnyNetwork>().connect_ipc(ipc).await.map_err(|e| {
                 RetryClientError::HttpProviderCantBeCreated(
                     rpc_url.to_string(),
-                    format!("IPC connection failed: {}", e),
+                    format!("IPC connection failed: {e}"),
                 )
             })?;
 
