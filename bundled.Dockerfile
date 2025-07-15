@@ -1,6 +1,6 @@
 # Stage 1: Get the pre-built binary from GitHub Release
 # We don't need clux/muslrust here anymore, just a base image with curl/wget/gh CLI
-FROM --platform=linux/amd64 alpine/git:latest as downloader # Use alpine/git for curl and git tools
+FROM --platform=linux/amd64 alpine/git:latest as downloader
 # You might need a specific curl/gh cli image if alpine/git doesn't have what's needed.
 # Or just a basic alpine and install curl/gh. Let's try alpine/git first.
 
@@ -61,6 +61,6 @@ COPY --from=node-builder /app/core/resources/rindexer-graphql-linux /app/resourc
 
 # Copy the pre-built rindexer binary from the downloader stage
 COPY --from=downloader /usr/local/bin/rindexer /app/rindexer
-COPY --from=downloader /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ # If `downloader` stage has them, copy.
+COPY --from=downloader /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 ENTRYPOINT ["/app/rindexer"]
