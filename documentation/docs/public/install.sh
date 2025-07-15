@@ -59,11 +59,19 @@ else
     exit 1
 fi
 
+# GitHub releases URLs
+GITHUB_REPO="joshstevens19/rindexer"
 if [[ "$VERSION" == "latest" ]]; then
-    BIN_URL="https://rindexer.xyz/releases/${PLATFORM}-${ARCH_TYPE}/rindexer_${PLATFORM}-${ARCH_TYPE}.${EXT}"
+    # Get the latest release version from GitHub API
+    LATEST_VERSION=$(curl -s https://api.github.com/repos/${GITHUB_REPO}/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    if [[ -z "$LATEST_VERSION" ]]; then
+        echo "Error: Could not fetch latest version from GitHub"
+        exit 1
+    fi
+    BIN_URL="https://github.com/${GITHUB_REPO}/releases/download/${LATEST_VERSION}/rindexer_${PLATFORM}-${ARCH_TYPE}.${EXT}"
     RESOURCES_URL="https://rindexer.xyz/releases/resources.zip"
 else
-    BIN_URL="https://rindexer.xyz/releases/${PLATFORM}-${ARCH_TYPE}/${VERSION}/rindexer_${PLATFORM}-${ARCH_TYPE}.${EXT}"
+    BIN_URL="https://github.com/${GITHUB_REPO}/releases/download/v${VERSION}/rindexer_${PLATFORM}-${ARCH_TYPE}.${EXT}"
     RESOURCES_URL="https://rindexer.xyz/releases/resources.zip"
 fi
 
@@ -110,7 +118,7 @@ case "$COMMAND" in
         ;;
     *)
         if [[ "$VERSION" == "latest" ]]; then
-            log "Preparing the installation (latest version)..."
+            log "Preparing the installation (latest version: $LATEST_VERSION)..."
         else
             log "Preparing the installation (version $VERSION)..."
         fi
@@ -199,8 +207,15 @@ if [ "\$1" == "--local" ]; then
     cp "$LOCAL_BIN_PATH" "$BIN_PATH"
     unzip -o "$LOCAL_RESOURCES_PATH" -d "$RINDEXER_DIR/resources" > /dev/null
 else
-    echo "Downloading the latest binary from $BIN_URL..."
-    curl -sSf -L "$BIN_URL" -o "$RINDEXER_DIR/rindexer.${EXT}"
+    echo "Fetching latest version from GitHub..."
+    LATEST_VERSION=\$(curl -s https://api.github.com/repos/${GITHUB_REPO}/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    if [[ -z "\$LATEST_VERSION" ]]; then
+        echo "Error: Could not fetch latest version from GitHub"
+        exit 1
+    fi
+    BIN_URL="https://github.com/${GITHUB_REPO}/releases/download/\${LATEST_VERSION}/rindexer_${PLATFORM}-${ARCH_TYPE}.${EXT}"
+    echo "Downloading the latest binary (\$LATEST_VERSION) from \$BIN_URL..."
+    curl -sSf -L "\$BIN_URL" -o "$RINDEXER_DIR/rindexer.${EXT}"
     if [[ "$EXT" == "tar.gz" ]]; then
         tar -xzvf "$RINDEXER_DIR/rindexer.${EXT}" -C "$RINDEXER_BIN_DIR"
         mv "$RINDEXER_BIN_DIR/rindexer_cli" "$BIN_PATH" || mv "$RINDEXER_BIN_DIR/rindexer" "$BIN_PATH"
@@ -241,7 +256,7 @@ chmod +x "$RINDEXERDOWN_PATH"
 
 log ""
 if [[ "$VERSION" == "latest" ]]; then
-    log "rindexer has been installed successfully (latest version)"
+    log "rindexer has been installed successfully (latest version: $LATEST_VERSION)"
 else
     log "rindexer has been installed successfully (version $VERSION)"
 fi
