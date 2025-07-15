@@ -97,8 +97,6 @@ jobs:
             }
 
             // Encode the output to handle multi-line strings correctly in GitHub Actions
-            // The `gh` CLI for `--notes` generally handles newlines correctly, but encoding can prevent issues
-            // if the content itself has unexpected characters.
             const encodedNotes = releaseNotes.replace(/%/g, '%25').replace(/\n/g, '%0A').replace(/\r/g, '%0D');
             console.log(`::set-output name=release_body::${encodedNotes}`);
 
@@ -129,10 +127,10 @@ jobs:
           set -e
 
           ALL_VERSIONS="${{ steps.get_tags.outputs.all_versions }}"
-          
+
           # Filter versions based on optional inputs
           FILTERED_VERSIONS=""
-          
+
           # Function for version comparison using sort -V (semantic versioning)
           version_ge() {
             local v1="$1"
@@ -157,51 +155,47 @@ jobs:
                 continue # Skip if greater than end_version
               fi
             fi
-          
+
             FILTERED_VERSIONS+=" $ver"
           done
-          
+
           if [ -z "$FILTERED_VERSIONS" ]; then
             echo "No versions to edit after applying filters. Exiting."
             exit 0
           fi
-          
+
           echo "Editing versions: $FILTERED_VERSIONS"
 
           for VERSION in $FILTERED_VERSIONS; do
               echo "--- Processing version: $VERSION ---"
 
               TAG="v$VERSION"
-          
+
               # Construct the base installation instructions as a multi-line string within the script
-              # Ensure proper indentation within this heredoc
               INSTALL_INSTRUCTIONS="## Installation
-              \`\`\`bash
-              # Latest version
-              curl -L https://rindexer.xyz/install.sh | bash
-              
-              # Specific version  
-              curl -L https://rindexer.xyz/install.sh | bash -s -- --version $VERSION
-              \`\`\`"
-              
-              # Call Node.js script to get release body.
-              # This will now pass the 'raw' version (e.g., "0.1.0" or "0.21.0") to the JS script
-              RAW_CHANGELOG_BODY=$(node parse_changelog.js "$VERSION")
-              
-              # Decode the URL-encoded string from the Node.js script
-              CLEANED_CHANGELOG_BODY=$(echo -e "${RAW_CHANGELOG_BODY//%/\\x}" | sed 's/%0A/\n/g; s/%0D/\r/g')
+            \`\`\`bash
+            # Latest version
+            curl -L https://rindexer.xyz/install.sh | bash
             
-            # Combine all parts for the full release body
-            # Assign this variable within the 'run:' block, correctly indented
-            FULL_RELEASE_BODY="${INSTALL_INSTRUCTIONS}\n\n${CLEANED_CHANGELOG_BODY}\n\nSee full changelog for details: https://github.com/joshstevens19/rindexer/blob/master/documentation/docs/pages/docs/changelog.mdx"
-              
-              echo "Attempting to edit release $TAG..."
-              gh release edit "$TAG" \
-              --prerelease=false \
-              --notes "$FULL_RELEASE_BODY" \
-              --discussion-category "Announcements" \
-              --target master # Assuming your release tags point to master/main
-              # --draft=false # If you accidentally created drafts, uncomment this to make them public
-              
-              echo "Successfully edited release $TAG."
-          done
+            # Specific version  
+            curl -L https://rindexer.xyz/install.sh | bash -s -- --version $VERSION
+            \`\`\`"
+            
+            # Call Node.js script to get release body.
+            RAW_CHANGELOG_BODY=$(node parse_changelog.js "$VERSION")
+            
+            # Decode the URL-encoded string from the Node.js script
+            CLEANED_CHANGELOG_BODY=$(echo -e "${RAW_CHANGELOG_BODY//%/\\x}" | sed 's/%0A/\n/g; s/%0D/\r/g')
+          
+          # Combine all parts for the full release body
+          FULL_RELEASE_BODY="${INSTALL_INSTRUCTIONS}\n\n${CLEANED_CHANGELOG_BODY}\n\nSee full changelog for details: https://github.com/joshstevens19/rindexer/blob/master/documentation/docs/pages/docs/changelog.mdx"
+            
+            echo "Attempting to edit release $TAG..."
+            gh release edit "$TAG" \
+            --prerelease=false \
+            --notes "$FULL_RELEASE_BODY" \
+            --target master # Assuming your release tags point to master/main
+            # --draft=false # Uncomment this if you accidentally created drafts and want to publish them
+            
+            echo "Successfully edited release $TAG."
+            done
