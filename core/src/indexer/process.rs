@@ -563,15 +563,16 @@ async fn trigger_event(
         return;
     }
 
-    let should_update_progress =
-        if fn_data.is_empty() {
-            #[allow(clippy::needless_bool)]
-            if !is_running() {
-                false
-            } else {
-                true
-            }
-        } else { config.trigger_event(fn_data.clone()).await.is_ok() };
+    let should_update_progress = if fn_data.is_empty() {
+        #[allow(clippy::needless_bool)]
+        if !is_running() {
+            false
+        } else {
+            true
+        }
+    } else {
+        config.trigger_event(fn_data.clone()).await.is_ok()
+    };
 
     if should_update_progress {
         // TODO: There is a double-index race condition here. If we get a crash or failure between
