@@ -14,8 +14,7 @@ use thiserror::Error;
 use winnow::error::{ContextError, ParseError};
 
 /// This regex finds logical operators (&&, ||) possibly surrounded by whitespace.
-static LOGICAL_OPERATOR_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\s*(&&|\|\|)\s*").unwrap());
+static LOGICAL_OPERATOR_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s*(&&|\|\|)\s*").unwrap());
 
 /// Error type for the filter module, encapsulating parsing and evaluation errors.
 #[derive(Debug, Error)]
