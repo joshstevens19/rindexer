@@ -165,7 +165,7 @@ jobs:
 
               # Build the release body with install instructions and changelog
               INSTALL_SECTION="# Install
-  
+
           \`\`\`bash
           curl -L https://rindexer.xyz/install.sh | bash -s -- --version $VERSION
           \`\`\`"
