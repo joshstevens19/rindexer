@@ -176,7 +176,7 @@ jobs:
           
           $CHANGELOG_CONTENT"
           else
-        echo "Warning: No changelog content found for version $VERSION"
+          echo "Warning: No changelog content found for version $VERSION"
           RELEASE_BODY="$INSTALL_SECTION"
           fi
           
