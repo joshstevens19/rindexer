@@ -12,13 +12,26 @@ pub fn network_provider_fn_name(network: &Network) -> String {
     format!("get_{fn_name}", fn_name = network_provider_name(network).to_lowercase())
 }
 
+#[cfg(not(feature = "reth"))]
+fn generate_reth_init_fn(_network: &Network) -> Code {
+    Code::new(
+        r#"
+            let chain_state_notification = None;
+            "#
+        .to_string(),
+    )
+}
+
+#[cfg(feature = "reth")]
 fn generate_reth_init_fn(network: &Network) -> Code {
     if network.is_reth_enabled() {
         let reth_cli_args = network.reth.as_ref().unwrap().to_cli_args();
         Code::new(format!(
             r#"
-            let cli = reth::cli::Cli::try_parse_args_from({reth_cli_args:?}).unwrap();
-            let chain_state_notification = start_reth_node_with_exex(cli).await.unwrap();
+            use rindexer::reth::node::start_reth_node_with_exex;
+            use rindexer::reth::Cli;
+            let cli = Cli::try_parse_args_from({reth_cli_args:?}).unwrap();
+            let chain_state_notification = start_reth_node_with_exex(cli).unwrap();
             let chain_state_notification = Some(chain_state_notification);
             "#
         ))
@@ -30,6 +43,17 @@ fn generate_reth_init_fn(network: &Network) -> Code {
             .to_string(),
         )
     }
+}
+
+fn get_network_url(network: &Network) -> String {
+    #[cfg(feature = "reth")]
+    if network.is_reth_enabled() {
+        network.get_reth_ipc_path().unwrap()
+    } else {
+        network.rpc.clone()
+    }
+    #[cfg(not(feature = "reth"))]
+    network.rpc.clone()
 }
 
 fn generate_network_lazy_provider_code(network: &Network) -> Code {
@@ -46,15 +70,7 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
             .clone()
         "#,
         network_name = network_provider_name(network),
-        network_url = if network.is_reth_enabled() {
-            if let Some(ipc_path) = network.get_reth_ipc_path() {
-                ipc_path
-            } else {
-                network.rpc.clone()
-            }
-        } else {
-            network.rpc.clone()
-        },
+        network_url = get_network_url(network),
         chain_id = network.chain_id,
         compute_units_per_second =
             if let Some(compute_units_per_second) = network.compute_units_per_second {
@@ -144,7 +160,6 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
         manifest::network::{AddressFiltering, BlockPollFrequency},
         provider::{RindexerProvider, create_client, JsonRpcCachedProvider, RetryClientError},
         notifications::ChainStateNotification,
-        reth::node::start_reth_node_with_exex,
         public_read_env_value
     };
     use std::sync::Arc;

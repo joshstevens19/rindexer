@@ -711,6 +711,13 @@ impl CreateNetworkProvider {
         manifest: &Manifest,
     ) -> Result<Vec<CreateNetworkProvider>, RetryClientError> {
         let provider_futures = manifest.networks.iter().map(|network| async move {
+            #[cfg(not(feature = "reth"))]
+            let provider_url = network.rpc.clone();
+
+            #[cfg(not(feature = "reth"))]
+            let reth_tx: Option<Sender<ChainStateNotification>> = None;
+
+            #[cfg(feature = "reth")]
             // if reth is enabled for this network, we need to start the reth node.
             // once reth is started, we can use the reth ipc path to create a provider.
             let reth_tx = network.try_start_reth_node().await.map_err(|e| {
@@ -719,6 +726,7 @@ impl CreateNetworkProvider {
 
             // if reth is enabled and started successfully, we can use the reth ipc path to create a provider.
             // else, we will use the rpc url provided in the manifest.
+            #[cfg(feature = "reth")]
             let provider_url = if reth_tx.is_some() {
                 network.get_reth_ipc_path().unwrap()
             } else {
