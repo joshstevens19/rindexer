@@ -19,6 +19,9 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Install GitHub CLI
         run: |
           sudo apt-get update
@@ -44,6 +47,13 @@ jobs:
           set -e
 
           ALL_VERSIONS="${{ steps.get_tags.outputs.all_versions }}"
+          CHANGELOG_FILE="documentation/docs/pages/docs/changelog.mdx"
+
+          # Check if changelog file exists
+          if [[ ! -f "$CHANGELOG_FILE" ]]; then
+            echo "Changelog file not found: $CHANGELOG_FILE"
+            exit 1
+          fi
 
           # Filter versions based on optional inputs
           FILTERED_VERSIONS=""
@@ -58,6 +68,36 @@ jobs:
             local v1="$1"
             local v2="$2"
             [[ "$v1" = "$v2" ]] || [[ "$(printf '%s\n' "$v1" "$v2" | sort -V | tail -n1)" = "$v2" ]]
+          }
+
+          # Function to extract changelog content for a specific version
+          extract_changelog() {
+            local version="$1"
+            local changelog_content=""
+          
+            # Find the section for this version and extract until the next version
+            # Look for pattern like "# 0.21.0-beta - 15th July 2025" or "## 0.21.0-beta - 15th July 2025"
+            changelog_content=$(awk -v version="$version" '
+              BEGIN { found=0; in_section=0 }
+              /^#+ [0-9]+\.[0-9]+\.[0-9]+-beta/ {
+                if (found && in_section) {
+                  exit
+                }
+                if ($0 ~ version"-beta") {
+                  found=1
+                  in_section=1
+                  next
+                }
+              }
+              found && in_section && !/^#+ [0-9]+\.[0-9]+\.[0-9]+-beta/ {
+                # Skip the github branch line and binary download lines
+                if ($0 !~ /^github branch -/ && $0 !~ /^- (linux|mac|windows) binary -/) {
+                  print $0
+                }
+              }
+            ' "$CHANGELOG_FILE")
+          
+            echo "$changelog_content"
           }
 
           for ver in $ALL_VERSIONS; do
@@ -88,27 +128,41 @@ jobs:
 
               TAG="v$VERSION"
 
-              # --- START OF FIX: Constructing RELEASE_BODY with an array ---
-              # Define each line of the release body in an array
-              # Note: No leading spaces on these lines, the formatting is part of the string
-              RELEASE_BODY_LINES=(
-                "# Install"
-                "\`\`\`bash"
-                "curl -L https://rindexer.xyz/install.sh | bash -s -- --version $VERSION"
-                "\`\`\`"
-              )
+              # Extract changelog content for this version
+              CHANGELOG_CONTENT=$(extract_changelog "$VERSION")
           
-              # Join the array elements with newlines to form the final string
-              # This ensures no YAML-related indentation issues
-              RELEASE_BODY=$(printf "%s\n" "${RELEASE_BODY_LINES[@]}")
-              # --- END OF FIX ---
+              # Clean up the changelog content - remove empty lines at start and end
+              CHANGELOG_CONTENT=$(echo "$CHANGELOG_CONTENT" | sed '/^$/d' | sed '/^-\+$/d')
 
-              echo "Attempting to edit release "$TAG"..."
-              gh release edit "$TAG" \
-                  --repo ${{ github.repository }} \
-                  --prerelease=false \
-                  --notes "$RELEASE_BODY" \
-                  --target master 
-
-              echo "Successfully edited release "$TAG"."
+              # Build the release body with install instructions and changelog
+              INSTALL_SECTION="# Install
+  
+          \`\`\`bash
+          curl -L https://rindexer.xyz/install.sh | bash -s -- --version $VERSION
+          \`\`\`"
+          
+          if [[ -n "$CHANGELOG_CONTENT" ]]; then
+          RELEASE_BODY="$INSTALL_SECTION
+          
+          # Changelog
+          
+          $CHANGELOG_CONTENT"
+          else
+        echo "Warning: No changelog content found for version $VERSION"
+          RELEASE_BODY="$INSTALL_SECTION"
+          fi
+          
+          echo "Attempting to edit release $TAG..."
+          echo "Release body preview:"
+          echo "========================"
+          echo "$RELEASE_BODY"
+          echo "========================"
+          
+          gh release edit "$TAG" \
+          --repo ${{ github.repository }} \
+          --prerelease=false \
+          --notes "$RELEASE_BODY" \
+          --target master
+          
+          echo "Successfully edited release $TAG."
           done
