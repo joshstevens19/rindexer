@@ -1,6 +1,6 @@
 [package]
 name = "rindexer"
-version = "0.21.0"
+version = "0.21.1"
 edition = "2021"
 description = "A no-code or framework to build blazing fast EVM indexers - built in rust."
 license = "MIT"
@@ -81,11 +81,11 @@ foundry-compilers-artifacts-solc  = "=0.18.0"
 alloy-chains = "0.2.5"
 
 # reth
-reth = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.1"}
-reth-exex = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.1", features = ["serde"]}
-reth-node-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.1" }
-reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.1"}
-reth-tracing = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.1"}
+reth = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", optional = true}
+reth-exex = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", features = ["serde"], optional = true}
+reth-node-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", optional = true}
+reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", optional = true}
+reth-tracing = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", optional = true}
 
 [target.'cfg(not(windows))'.dependencies]
 rdkafka = { version = "0.37.0", features = ["tokio"] }
@@ -100,3 +100,10 @@ incremental = false
 
 [features]
 jemalloc = ["dep:jemallocator", "dep:jemalloc-ctl"]
+reth = [
+  "dep:reth",
+  "dep:reth-exex",
+  "dep:reth-node-api",
+  "dep:reth-node-ethereum",
+  "dep:reth-tracing",
+]

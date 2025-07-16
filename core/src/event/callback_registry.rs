@@ -166,7 +166,7 @@ impl EventCallbackRegistry {
         self.events.push(event);
     }
 
-    pub async fn trigger_event(&self, id: &String, data: Vec<EventResult>) {
+    pub async fn trigger_event(&self, id: &String, data: Vec<EventResult>) -> Result<(), String> {
         if let Some(event_information) = self.find_event(id) {
             trigger_event(
                 id,
@@ -175,13 +175,15 @@ impl EventCallbackRegistry {
                 || event_information.info_log_name(),
                 &event_information.topic_id.to_string(),
             )
-            .await;
+            .await
         } else {
-            error!(
+            let message = format!(
                 "EventCallbackRegistry: No event found for id: {}. Data: {:?}",
                 id,
                 data.first()
             );
+            error!(message);
+            Err(message)
         }
     }
 
@@ -338,7 +340,7 @@ impl TraceCallbackRegistry {
         self.events.push(event);
     }
 
-    pub async fn trigger_event(&self, id: &String, data: Vec<TraceResult>) {
+    pub async fn trigger_event(&self, id: &String, data: Vec<TraceResult>) -> Result<(), String> {
         if let Some(event_information) = self.find_event(id) {
             trigger_event(
                 id,
@@ -347,9 +349,11 @@ impl TraceCallbackRegistry {
                 || event_information.info_log_name(),
                 &event_information.event_name,
             )
-            .await;
+            .await
         } else {
+            let message = format!("TraceCallbackRegistry: No event found for id: {id}");
             error!("TraceCallbackRegistry: No event found for id: {}", id);
+            Err(message)
         }
     }
 
@@ -364,7 +368,8 @@ async fn trigger_event<T>(
     callback: impl Fn(Vec<T>) -> BoxFuture<'static, EventCallbackResult<()>>,
     info_log_name: impl Fn() -> String,
     event_identifier: &str,
-) where
+) -> Result<(), String>
+where
     T: Clone,
 {
     let mut attempts = 0;
@@ -376,21 +381,18 @@ async fn trigger_event<T>(
     loop {
         if !is_running() {
             info!("Detected shutdown, stopping event trigger");
-            break;
+            return Err("Detected shutdown, stopping event trigger".to_string());
         }
 
         match callback(data.clone()).await {
             Ok(_) => {
-                debug!(
-                    "Event processing succeeded for id: {} - topic_id: {}",
-                    id, event_identifier
-                );
-                break;
+                info!("Event processing succeeded for id: {} - topic_id: {}", id, event_identifier);
+                return Ok(());
             }
             Err(e) => {
                 if !is_running() {
                     info!("Detected shutdown, stopping event trigger");
-                    break;
+                    return Err(e);
                 }
                 attempts += 1;
                 error!(

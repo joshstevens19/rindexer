@@ -19,15 +19,21 @@ use rindexer::{
         contract::{Contract, ContractDetails},
         core::{Manifest, ProjectType},
         native_transfer::NativeTransfers,
-        network::{Network, RethConfig},
+        network::Network,
         storage::{CsvDetails, PostgresDetails, Storage},
         yaml::{write_manifest, YAML_CONFIG_NAME},
     },
     write_file, StringOrArray, WriteFileError,
 };
 
-fn generate_rindexer_rust_project(project_path: &Path) {
-    let generated = generate_rust_project(project_path);
+#[cfg(feature = "reth")]
+use rindexer::manifest::reth::RethConfig;
+
+#[cfg(not(feature = "reth"))]
+type RethConfig = ();
+
+fn generate_rindexer_rust_project(project_path: &Path, is_reth_project: bool) {
+    let generated = generate_rust_project(project_path, is_reth_project);
     match generated {
         Ok(_) => {
             print_success_message("Successfully generated rindexer rust project.");
@@ -61,6 +67,63 @@ fn write_gitignore(path: &Path) -> Result<(), WriteFileError> {
     generated_csv/**/*.txt
     "#,
     )
+}
+
+#[cfg(not(feature = "reth"))]
+fn get_reth_config(_reth_config: Option<RethConfig>) -> Option<RethConfig> {
+    None
+}
+
+#[cfg(feature = "reth")]
+fn get_reth_config(reth_config: Option<RethConfig>) -> Option<RethConfig> {
+    if let Some(mut reth_cfg) = reth_config {
+        let mut new_args = vec![];
+        print_success_message("\nReth Configuration:");
+
+        // prompt for datadir only if reth_cfg does not have a datadir
+        let datadir: Option<String> =
+            if !reth_cfg.cli_args.iter().any(|arg| arg.starts_with("--datadir")) {
+                prompt_for_optional_input("Data Directory (e.g. ~/.reth/)", None)
+            } else {
+                None
+            };
+
+        // prompt for chain only if reth_cfg does not have a chain
+        let chain: Option<String> =
+            if !reth_cfg.cli_args.iter().any(|arg| arg.starts_with("--chain")) {
+                prompt_for_optional_input("Chain (e.g. mainnet, sepolia, holesky)", None)
+            } else {
+                None
+            };
+
+        // prompt for enable_http only if reth_cfg does not have a http
+        let enable_http: Option<String> =
+            if !reth_cfg.cli_args.iter().any(|arg| arg.starts_with("--http")) {
+                prompt_for_optional_input("Enable HTTP RPC?", None)
+            } else {
+                None
+            };
+
+        if datadir.is_some() {
+            new_args.push(format!("--datadir {}", datadir.unwrap()));
+        }
+
+        if chain.is_some() {
+            new_args.push(format!("--chain {}", chain.unwrap()));
+        }
+
+        if enable_http.is_some() && enable_http.unwrap() == "yes" {
+            new_args.push("--http".to_string());
+        }
+
+        new_args.extend(reth_cfg.cli_args);
+
+        reth_cfg.cli_args = new_args;
+
+        Some(reth_cfg)
+    } else {
+        None
+    }
 }
 
 pub fn handle_new_command(
@@ -108,54 +171,7 @@ pub fn handle_new_command(
     let csv_enabled = storage_choice == "csv" || storage_choice == "both";
 
     // Handle Reth configuration if enabled
-    let final_reth_config = if let Some(mut reth_cfg) = reth_config {
-        let mut new_args = vec![];
-        print_success_message("\nReth Configuration:");
-
-        // prompt for datadir only if reth_cfg does not have a datadir
-        let datadir: Option<String> =
-            if !reth_cfg.cli_args.iter().any(|arg| arg.starts_with("--datadir")) {
-                prompt_for_optional_input("Data Directory (e.g. ~/.reth/)", None)
-            } else {
-                None
-            };
-
-        // prompt for chain only if reth_cfg does not have a chain
-        let chain: Option<String> =
-            if !reth_cfg.cli_args.iter().any(|arg| arg.starts_with("--chain")) {
-                prompt_for_optional_input("Chain (e.g. mainnet, sepolia, holesky)", None)
-            } else {
-                None
-            };
-
-        // prompt for enable_http only if reth_cfg does not have a http
-        let enable_http: Option<String> =
-            if !reth_cfg.cli_args.iter().any(|arg| arg.starts_with("--http")) {
-                prompt_for_optional_input("Enable HTTP RPC?", None)
-            } else {
-                None
-            };
-
-        if datadir.is_some() {
-            new_args.push(format!("--datadir {}", datadir.unwrap()));
-        }
-
-        if chain.is_some() {
-            new_args.push(format!("--chain {}", chain.unwrap()));
-        }
-
-        if enable_http.is_some() && enable_http.unwrap() == "yes" {
-            new_args.push("--http".to_string());
-        }
-
-        new_args.extend(reth_cfg.cli_args);
-
-        reth_cfg.cli_args = new_args;
-
-        Some(reth_cfg)
-    } else {
-        None
-    };
+    let final_reth_config = get_reth_config(reth_config);
 
     let rindexer_yaml_path = project_path.join(YAML_CONFIG_NAME);
     let rindexer_abis_folder = project_path.join("abis");
@@ -188,6 +204,7 @@ pub fn handle_new_command(
 
     // for later to avoid cloning
     let is_rust_project = project_type == ProjectType::Rust;
+    let is_reth_project = final_reth_config.is_some();
 
     let manifest = Manifest {
         name: project_name,
@@ -286,7 +303,7 @@ POSTGRES_PASSWORD=rindexer"#;
     }
 
     if is_rust_project {
-        generate_rindexer_rust_project(&project_path);
+        generate_rindexer_rust_project(&project_path, is_reth_project);
     }
 
     write_gitignore(&project_path)?;
