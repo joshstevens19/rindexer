@@ -42,6 +42,7 @@ pub enum CallbackResult {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TxInformation {
+    pub chain_id: u64,
     pub network: String,
     pub address: Address,
     pub block_hash: BlockHash,
@@ -85,6 +86,7 @@ impl EventResult {
             log: log.clone(),
             decoded_data: network_contract.decode_log(log.inner),
             tx_information: TxInformation {
+                chain_id: network_contract.cached_provider.chain.id(),
                 network: network_contract.network.to_string(),
                 address: log_address,
                 block_hash: log.block_hash.expect("log should contain block_hash"),
@@ -234,6 +236,7 @@ impl TraceResult {
         action: &CallAction,
         trace: &LocalizedTransactionTrace,
         network: &str,
+        chain_id: u64,
         start_block: U64,
         end_block: U64,
     ) -> Self {
@@ -249,6 +252,7 @@ impl TraceResult {
             to: action.to,
             value: action.value,
             tx_information: TxInformation {
+                chain_id,
                 network: network.to_string(),
                 address: Address::ZERO,
                 // TODO: Unclear in what situation this would be `None`.
@@ -269,6 +273,7 @@ impl TraceResult {
         ts: u64,
         to: Address,
         network: &str,
+        chain_id: u64,
         start_block: U64,
         end_block: U64,
     ) -> Self {
@@ -277,6 +282,7 @@ impl TraceResult {
             from: tx.from(),
             value: tx.value(),
             tx_information: TxInformation {
+                chain_id,
                 network: network.to_string(),
                 address: Address::ZERO,
                 block_number: tx

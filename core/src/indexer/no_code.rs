@@ -237,6 +237,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                         let block_number = result.tx_information.block_number;
                         let block_hash = result.tx_information.block_hash;
                         let network = result.tx_information.network.to_string();
+                        let chain_id = result.tx_information.chain_id;
                         let transaction_index = result.tx_information.transaction_index;
                         let log_index = result.tx_information.log_index;
 
@@ -265,6 +266,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                             block_number,
                             block_hash,
                             network,
+                            chain_id,
                             contract_address,
                             event_parameters,
                             end_global_parameters,
@@ -288,6 +290,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                         let block_number = result.tx_information.block_number;
                         let block_hash = result.tx_information.block_hash;
                         let network = result.tx_information.network.to_string();
+                        let chain_id = result.tx_information.chain_id;
                         let transaction_index = result.tx_information.transaction_index;
                         let log_index = result.tx_information.log_index;
 
@@ -316,6 +319,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                             block_number,
                             block_hash,
                             network,
+                            chain_id,
                             contract_address,
                             event_parameters,
                             end_global_parameters,
@@ -333,6 +337,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                 block_number,
                 block_hash,
                 network,
+                chain_id,
                 contract_address,
                 event_parameters,
                 end_global_parameters,
@@ -344,6 +349,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                         &event_parameters,
                         &TxInformation {
                             network: network.clone(),
+                            chain_id,
                             address,
                             block_hash,
                             block_number,
