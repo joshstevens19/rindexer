@@ -40,7 +40,7 @@ use crate::{
 
 fn generate_file_location(output: &Path, location: &str) -> PathBuf {
     let mut path = PathBuf::from(output);
-    path.push(format!("{}.rs", location));
+    path.push(format!("{location}.rs"));
     path
 }
 
@@ -181,7 +181,7 @@ fn write_indexer_events(
         write_file(&generate_file_location(output, &event_path), events_code.as_str())?;
 
         let abi_string = NATIVE_TRANSFER_ABI;
-        let abigen_contract_name = format!("Rindexer{}Gen", NATIVE_TRANSFER_CONTRACT_NAME);
+        let abigen_contract_name = format!("Rindexer{NATIVE_TRANSFER_CONTRACT_NAME}Gen");
 
         let code = format!(
             r##"
@@ -190,12 +190,10 @@ fn write_indexer_events(
             sol!(
                 #[derive(Debug)]
                 #[sol(rpc, all_derives)]
-                {contract_name},
-                r#"{contract_path}"#
+                {abigen_contract_name},
+                r#"{abi_string}"#
             );
             "##,
-            contract_name = abigen_contract_name,
-            contract_path = abi_string,
         );
         let code = Code::new(code);
 
@@ -346,7 +344,7 @@ pub fn generate_rindexer_handlers(
 
                 let indexer_name = camel_to_snake(&manifest.name);
                 let contract_name = camel_to_snake(&contract.name);
-                let handler_fn_name = format!("{}_handlers", contract_name);
+                let handler_fn_name = format!("{contract_name}_handlers");
 
                 handlers.insert_str(
                     0,
@@ -357,7 +355,7 @@ pub fn generate_rindexer_handlers(
                     r#"{handler_fn_name}(manifest_path, &mut registry).await;"#
                 ));
 
-                let handler_path = format!("indexers/{}/{}", indexer_name, contract_name);
+                let handler_path = format!("indexers/{indexer_name}/{contract_name}");
 
                 write_file(
                     &generate_file_location(&output, &handler_path),
@@ -377,7 +375,7 @@ pub fn generate_rindexer_handlers(
 
                 let indexer_name = camel_to_snake(&manifest.name);
                 let contract_name = camel_to_snake(NATIVE_TRANSFER_CONTRACT_NAME);
-                let handler_fn_name = format!("{}_handlers", contract_name);
+                let handler_fn_name = format!("{contract_name}_handlers");
 
                 handlers.insert_str(
                     0,
@@ -388,7 +386,7 @@ pub fn generate_rindexer_handlers(
                     r#"{handler_fn_name}(manifest_path, &mut registry).await;"#
                 ));
 
-                let handler_path = format!("indexers/{}/{}", indexer_name, contract_name);
+                let handler_path = format!("indexers/{indexer_name}/{contract_name}");
 
                 write_file(
                     &generate_file_location(&output, &handler_path),

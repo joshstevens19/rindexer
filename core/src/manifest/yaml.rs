@@ -31,7 +31,7 @@ fn substitute_env_variables(contents: &str) -> Result<String, regex::Error> {
             Ok(val) => val,
             Err(_) => {
                 error!("Environment variable {} not found", var_name);
-                panic!("Environment variable {} not found", var_name)
+                panic!("Environment variable {var_name} not found")
             }
         }
     });
@@ -223,8 +223,7 @@ fn validate_manifest(
                     StringOrArray::Multiple(value) => {
                         return Err(ValidateManifestError::GlobalAbiCanOnlyBeASingleString(
                             format!(
-                                "Global ABI can only be a single string but found multiple: {:?}",
-                                value
+                                "Global ABI can only be a single string but found multiple: {value:?}"
                             ),
                         ));
                     }

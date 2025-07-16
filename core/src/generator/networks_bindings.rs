@@ -58,17 +58,17 @@ fn generate_network_lazy_provider_code(network: &Network) -> Code {
         chain_id = network.chain_id,
         compute_units_per_second =
             if let Some(compute_units_per_second) = network.compute_units_per_second {
-                format!("Some({})", compute_units_per_second)
+                format!("Some({compute_units_per_second})")
             } else {
                 "None".to_string()
             },
         max_block_range = if let Some(max_block_range) = network.max_block_range {
-            format!("Some(U64::from({}))", max_block_range)
+            format!("Some(U64::from({max_block_range}))")
         } else {
             "None".to_string()
         },
         block_poll_frq = if let Some(block_frq) = network.block_poll_frequency {
-            format!("Some(BlockPollFrequency::{:?})", block_frq)
+            format!("Some(BlockPollFrequency::{block_frq:?})")
         } else {
             "None".to_string()
         },
