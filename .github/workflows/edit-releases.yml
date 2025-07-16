@@ -90,15 +90,16 @@ jobs:
             echo "Debug: Found version $version-beta in changelog" >&2
           
             # Find the section for this version and extract until the next version
+            # Look for both # and ## patterns to handle different header levels
             changelog_content=$(awk -v version="$version" '
               BEGIN { found=0; in_section=0; debug=0 }
-              /^# [0-9]+\.[0-9]+\.[0-9]+-beta/ {
+              /^##? [0-9]+\.[0-9]+\.[0-9]+-beta/ {
                 if (debug) print "Found version header: " $0 > "/dev/stderr"
                 if (found && in_section) {
                   if (debug) print "Exiting - found next version" > "/dev/stderr"
                   exit
                 }
-                if ($0 ~ "^# " version "-beta") {
+                if ($0 ~ version "-beta") {
                   if (debug) print "Found our version: " version > "/dev/stderr"
                   found=1
                   in_section=1
