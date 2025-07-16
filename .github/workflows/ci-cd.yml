@@ -403,7 +403,7 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add cli/Cargo.toml core/Cargo.toml documentation/docs/pages/docs/changelog.mdx
-          git commit -m "chore: bump version to ${{ env.VERSION_NAME }} and update changelog"
+          git commit -m "Release v${{ env.VERSION_NAME }}"
           git push origin release/${{ env.VERSION_NAME }}
 
       - name: Check if PR already exists
