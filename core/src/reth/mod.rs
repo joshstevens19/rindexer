@@ -6,3 +6,6 @@ pub mod node;
 
 #[cfg(feature = "reth")]
 pub mod utils;
+
+#[cfg(feature = "reth")]
+pub use reth::cli::Cli;

@@ -4,7 +4,7 @@
 /// Any manual changes to this file will be overwritten.
 
 #[cfg(feature = "reth")]
-use reth::node::start_reth_node_with_exex;
+use rindexer::reth::node::start_reth_node_with_exex;
 
 use alloy::{primitives::U64, transports::http::reqwest::header::HeaderMap};
 use rindexer::{

@@ -78,11 +78,11 @@ foundry-compilers = "0.18.0"
 alloy-chains = "0.2.5"
 
 # reth
-reth = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.1", optional = true}
-reth-exex = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.1", features = ["serde"], optional = true}
-reth-node-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.1", optional = true}
-reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.1", optional = true}
-reth-tracing = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.1", optional = true}
+reth = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", optional = true}
+reth-exex = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", features = ["serde"], optional = true}
+reth-node-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", optional = true}
+reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", optional = true}
+reth-tracing = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", optional = true}
 
 [target.'cfg(not(windows))'.dependencies]
 rdkafka = { version = "0.37.0", features = ["tokio"] }
