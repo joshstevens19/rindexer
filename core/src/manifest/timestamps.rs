@@ -66,7 +66,7 @@ mod tests {
 
         let transfer: Timestamps = serde_yaml::from_str(yaml).unwrap();
 
-        assert!(transfer.enabled);
+        assert_eq!(transfer.enabled, false);
         assert_eq!(transfer.sample_rate, Some(0.1));
 
         let yaml = r#"

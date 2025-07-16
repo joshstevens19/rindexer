@@ -555,10 +555,6 @@ async fn live_indexing_stream(
                                                 if let Some(n) = log.block_number {
                                                     if let Some(time) = block_times.get(&n) {
                                                         log.block_timestamp = Some(*time);
-                                                    } else {
-                                                        warn!("------------------------");
-                                                        warn!("TEMP WARNING. Missing block {:?} TS in Live {:?}", log.block_number, latest_block.header.number);
-                                                        warn!("------------------------");
                                                     }
                                                 }
                                                 log

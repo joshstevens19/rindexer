@@ -1,3 +1,43 @@
+//! # Return validated block timestamps
+//!
+//! We can return block-timestamps more intelligently than calling RPCs in two ways:
+//!   1. Returned in logs
+//!   2. Delta run-length encoded
+//!   3. Fixed spaced block-timestamps (an extreme variant on case 1)
+//!
+//! ## Returned in logs
+//!
+//! This is the best way to get a timestamp. It requires no additional work. We simply receive the
+//! timestamp from the log itself and can skip additional calculations or lookups.
+//!
+//! Most Haha
+//!
+//! ## Delta run-length encoded
+//!
+//! Delta run-length encoding is an effective way to support block-timestamps that are not
+//! necessarily sequential but generally follow a pattern.
+//!
+//! Most chains will have a roughly "fixed" block-time, and this can be used to encode the
+//! block-timestamps more efficiently via "runs" of the delta between times.
+//!
+//! This process requires more upfront-work and more storage/memory, but can be a great way to save
+//! on network requests and IO time.
+//!
+//! ## Fixed spaced block-timestamps
+//!
+//! These are the simplest of the networks, it is the most extreme delta-run-length encoding
+//! and can therefore be optimized even more.
+//!
+//! Rather than storing "runs", we consider the whole chain to be a single "run" and can simply
+//! calculate any timestamp for a block.
+//!
+//! Due to the lack of any strong guarantee, we can only do this up to a "known" block number where
+//! the fixed-timestamp consistency has been validated. If at any time a chain breaks this pattern
+//! we must drop back to delta run length encoding.
+
+mod fixed;
+
+use crate::blockclock::fixed::SpacedNetwork;
 use crate::provider::{
     JsonRpcCachedProvider, ProviderError, RECOMMENDED_RPC_CHUNK_SIZE, RPC_CHUNK_SIZE,
 };
@@ -136,6 +176,20 @@ impl BlockClock {
 
         blocks.sort_unstable();
         blocks.dedup();
+
+        // Attempt to first use the spaced timing if available.
+        if let Ok(spaced) = SpacedNetwork::try_from(&self.provider.chain) {
+            let (ts, missing_ts): (Vec<_>, Vec<_>) = blocks
+                .iter()
+                .map(|b| (*b, spaced.get_block_time(*b)))
+                .partition(|(_, ts)| ts.is_some());
+
+            if missing_ts.is_empty() {
+                let with_timestamps = ts.into_iter().map(|(b, ts)| (b, ts.unwrap() as u64));
+                let timestamps = BTreeMap::from_iter(with_timestamps);
+                return Ok(timestamps);
+            }
+        };
 
         let first = blocks[0];
         let last = blocks[blocks.len() - 1];
