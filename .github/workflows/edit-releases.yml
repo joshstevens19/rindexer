@@ -54,6 +54,10 @@ jobs:
             echo "Changelog file not found: $CHANGELOG_FILE"
             exit 1
           fi
+          
+          echo "Debug: Changelog file found. First 20 lines:"
+          head -20 "$CHANGELOG_FILE"
+          echo "Debug: ===================="
 
           # Filter versions based on optional inputs
           FILTERED_VERSIONS=""
@@ -75,28 +79,44 @@ jobs:
             local version="$1"
             local changelog_content=""
           
+            echo "Debug: Looking for version $version in changelog" >&2
+          
+            # First, let's see if we can find the version at all
+            if ! grep -q "$version-beta" "$CHANGELOG_FILE"; then
+              echo "Debug: Version $version-beta not found in changelog" >&2
+              return
+            fi
+          
+            echo "Debug: Found version $version-beta in changelog" >&2
+          
             # Find the section for this version and extract until the next version
-            # Look for pattern like "# 0.21.0-beta - 15th July 2025" or "## 0.21.0-beta - 15th July 2025"
             changelog_content=$(awk -v version="$version" '
-              BEGIN { found=0; in_section=0 }
-              /^#+ [0-9]+\.[0-9]+\.[0-9]+-beta/ {
+              BEGIN { found=0; in_section=0; debug=0 }
+              /^# [0-9]+\.[0-9]+\.[0-9]+-beta/ {
+                if (debug) print "Found version header: " $0 > "/dev/stderr"
                 if (found && in_section) {
+                  if (debug) print "Exiting - found next version" > "/dev/stderr"
                   exit
                 }
-                if ($0 ~ version"-beta") {
+                if ($0 ~ "^# " version "-beta") {
+                  if (debug) print "Found our version: " version > "/dev/stderr"
                   found=1
                   in_section=1
                   next
                 }
               }
-              found && in_section && !/^#+ [0-9]+\.[0-9]+\.[0-9]+-beta/ {
-                # Skip the github branch line and binary download lines
-                if ($0 !~ /^github branch -/ && $0 !~ /^- (linux|mac|windows) binary -/) {
+              found && in_section {
+                # Skip certain lines but keep most content
+                if ($0 !~ /^github branch -/ && 
+                    $0 !~ /^- (linux|mac|windows) binary -/ &&
+                    $0 !~ /^all release branches are deployed/ &&
+                    $0 != "") {
                   print $0
                 }
               }
             ' "$CHANGELOG_FILE")
           
+            echo "Debug: Extracted content length: ${#changelog_content}" >&2
             echo "$changelog_content"
           }
 
@@ -129,10 +149,18 @@ jobs:
               TAG="v$VERSION"
 
               # Extract changelog content for this version
+              echo "Extracting changelog for version: $VERSION"
               CHANGELOG_CONTENT=$(extract_changelog "$VERSION")
+          
+              echo "Debug: Raw changelog content:"
+              echo "[$CHANGELOG_CONTENT]"
+              echo "Debug: Content length: ${#CHANGELOG_CONTENT}"
           
               # Clean up the changelog content - remove empty lines at start and end
               CHANGELOG_CONTENT=$(echo "$CHANGELOG_CONTENT" | sed '/^$/d' | sed '/^-\+$/d')
+          
+              echo "Debug: Cleaned changelog content:"
+              echo "[$CHANGELOG_CONTENT]"
 
               # Build the release body with install instructions and changelog
               INSTALL_SECTION="# Install
