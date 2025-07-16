@@ -21,10 +21,10 @@ impl Template {
         for placeholder in placeholders {
             if placeholder.contains('(') {
                 if let Some(value) = self.evaluate_function(&placeholder, event_data) {
-                    template = template.replace(&format!("{{{{{}}}}}", placeholder), &value);
+                    template = template.replace(&format!("{{{{{placeholder}}}}}"), &value);
                 }
             } else if let Some(value) = self.get_nested_value(event_data, &placeholder) {
-                template = template.replace(&format!("{{{{{}}}}}", placeholder), &value);
+                template = template.replace(&format!("{{{{{placeholder}}}}}"), &value);
             }
         }
         template
@@ -84,7 +84,7 @@ impl Template {
                 if fractional_part.is_zero() {
                     return integer_part.to_string();
                 }
-                format!("{}.{}", integer_part, fractional_part)
+                format!("{integer_part}.{fractional_part}")
             }
             Err(_) => value.to_string(),
         }

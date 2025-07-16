@@ -18,16 +18,15 @@ pub enum GenerateOperationsError {
 fn generate_query(name: &str, fields: &[String]) -> String {
     let base_name = name.trim_start_matches("all");
     let condition_type = format!("{}Condition", &base_name[..base_name.len() - 1]);
-    let order_by_type = format!("{}OrderBy", base_name);
+    let order_by_type = format!("{base_name}OrderBy");
 
     // yes it is meant to be formatted like the below to make the graphql query readable
     let args = if name.starts_with("all") {
         format!(
             r#"$after: Cursor,
     $first: Int = 50,
-    $condition: {} = {{}},
-    $orderBy: [{}!] = BLOCK_NUMBER_DESC"#,
-            condition_type, order_by_type
+    $condition: {condition_type} = {{}},
+    $orderBy: [{order_by_type}!] = BLOCK_NUMBER_DESC"#
         )
     } else {
         "$nodeId: ID!".to_string()
@@ -127,7 +126,7 @@ pub fn generate_operations(
 
                         let query = generate_query(field_name, &node_fields);
 
-                        let file_path = queries_path.join(format!("{}.graphql", field_name));
+                        let file_path = queries_path.join(format!("{field_name}.graphql"));
 
                         let mut file = File::create(file_path)?;
                         file.write_all(query.as_bytes())?;

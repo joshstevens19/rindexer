@@ -32,7 +32,7 @@ fn generate_rindexer_rust_project(project_path: &Path) {
             print_success_message("Successfully generated rindexer rust project.");
         }
         Err(err) => {
-            print_error_message(&format!("Failed to generate rindexer rust project: {}", err));
+            print_error_message(&format!("Failed to generate rindexer rust project: {err}"));
         }
     }
 }
@@ -161,18 +161,18 @@ pub fn handle_new_command(
 
     // Create the project directory
     if let Err(err) = fs::create_dir_all(&project_path) {
-        print_error_message(&format!("Failed to create directory: {}", err));
+        print_error_message(&format!("Failed to create directory: {err}"));
         return Err(err.into());
     }
 
     // Create the ABIs directory
     if let Err(err) = fs::create_dir_all(&rindexer_abis_folder) {
-        print_error_message(&format!("Failed to create directory: {}", err));
+        print_error_message(&format!("Failed to create directory: {err}"));
         return Err(err.into());
     }
 
     let abi_example_path = write_example_abi(&rindexer_abis_folder).map_err(|e| {
-        print_error_message(&format!("Failed to write example ABI file: {}", e));
+        print_error_message(&format!("Failed to write example ABI file: {e}"));
         e
     })?;
 
@@ -265,19 +265,19 @@ pub fn handle_new_command(
 POSTGRES_PASSWORD=rindexer"#;
 
             write_file(&project_path.join(".env"), env).map_err(|e| {
-                print_error_message(&format!("Failed to write .env file: {}", e));
+                print_error_message(&format!("Failed to write .env file: {e}"));
                 e
             })?;
 
             write_docker_compose(&project_path).map_err(|e| {
-                print_error_message(&format!("Failed to write docker compose file: {}", e));
+                print_error_message(&format!("Failed to write docker compose file: {e}"));
                 e
             })?;
         } else {
             let env = r#"DATABASE_URL=postgresql://[user[:password]@][host][:port][/dbname]"#;
 
             write_file(&project_path.join(".env"), env).map_err(|e| {
-                print_error_message(&format!("Failed to write .env file: {}", e));
+                print_error_message(&format!("Failed to write .env file: {e}"));
                 e
             })?;
         }

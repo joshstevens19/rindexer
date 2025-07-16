@@ -1,0 +1,114 @@
+name: Edit Existing GitHub Releases (One-Time)
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_version:
+        description: 'Start editing from this version (e.g., 0.1.0)'
+        required: false
+        default: '0.1.0' # Adjust this to the earliest version you want to edit
+      end_version:
+        description: 'End editing at this version (e.g., 0.21.0). Leave empty for all versions from start_version.'
+        required: false
+        default: '' # Leave empty to process all versions from start_version onwards
+
+jobs:
+  edit_releases:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Install GitHub CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gh
+
+      - name: Get all existing release tags
+        id: get_tags
+        run: |
+          # Get all tags that start with 'v' and look like versions, then sort them.
+          # This ensures we only process valid version tags that GitHub created.
+          ALL_TAGS=$(gh api --paginate "/repos/${{ github.repository }}/tags" --jq '.[].name' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -V | paste -sd ' ' -)
+          echo "Found tags: $ALL_TAGS"
+          echo "all_versions=$ALL_TAGS" >> $GITHUB_OUTPUT
+
+      - name: Edit Releases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          START_VERSION: ${{ github.event.inputs.start_version }}
+          END_VERSION: ${{ github.event.inputs.end_version }}
+        run: |
+          #!/bin/bash
+          set -e
+
+          ALL_VERSIONS="${{ steps.get_tags.outputs.all_versions }}"
+
+          # Filter versions based on optional inputs
+          FILTERED_VERSIONS=""
+
+          # Function for version comparison using sort -V (semantic versioning)
+          version_ge() {
+            local v1="$1"
+            local v2="$2"
+            [[ "$v1" = "$v2" ]] || [[ "$(printf '%s\n' "$v1" "$v2" | sort -V | head -n1)" = "$v2" ]]
+          }
+          version_le() {
+            local v1="$1"
+            local v2="$2"
+            [[ "$v1" = "$v2" ]] || [[ "$(printf '%s\n' "$v1" "$v2" | sort -V | tail -n1)" = "$v2" ]]
+          }
+
+          for ver in $ALL_VERSIONS; do
+            if [[ -n "$START_VERSION" ]]; then
+              if ! version_ge "$ver" "$START_VERSION"; then
+                continue # Skip if less than start_version
+              fi
+            fi
+
+            if [[ -n "$END_VERSION" ]]; then
+              if ! version_le "$ver" "$END_VERSION"; then
+                continue # Skip if greater than end_version
+              fi
+            fi
+
+            FILTERED_VERSIONS+=" $ver"
+          done
+
+          if [ -z "$FILTERED_VERSIONS" ]; then
+            echo "No versions to edit after applying filters. Exiting."
+            exit 0
+          fi
+
+          echo "Editing versions: $FILTERED_VERSIONS"
+
+          for VERSION in $FILTERED_VERSIONS; do
+              echo "--- Processing version: $VERSION ---"
+
+              TAG="v$VERSION"
+
+              # --- START OF FIX: Constructing RELEASE_BODY with an array ---
+              # Define each line of the release body in an array
+              # Note: No leading spaces on these lines, the formatting is part of the string
+              RELEASE_BODY_LINES=(
+                "# Install"
+                "\`\`\`bash"
+                "curl -L https://rindexer.xyz/install.sh | bash -s -- --version $VERSION"
+                "\`\`\`"
+              )
+          
+              # Join the array elements with newlines to form the final string
+              # This ensures no YAML-related indentation issues
+              RELEASE_BODY=$(printf "%s\n" "${RELEASE_BODY_LINES[@]}")
+              # --- END OF FIX ---
+
+              echo "Attempting to edit release "$TAG"..."
+              gh release edit "$TAG" \
+                  --repo ${{ github.repository }} \
+                  --prerelease=false \
+                  --notes "$RELEASE_BODY" \
+                  --target master 
+
+              echo "Successfully edited release "$TAG"."
+          done

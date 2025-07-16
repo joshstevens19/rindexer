@@ -2,11 +2,8 @@ name: Build & publish docker image
 
 on:
   workflow_dispatch:
-  pull_request:
-    types:
-      - closed
-    branches:
-      - master
+  release:
+    types: [ published ]
 
 env:
   REGISTRY: ghcr.io
