@@ -612,7 +612,7 @@ jobs:
           flags=()
 
           if [[ "$target" != *msvc* ]]; then
-            flags+=(--features jemalloc)
+            flags+=(--features jemalloc,reth)
           fi
 
           if [[ "$target" == *windows* ]]; then
