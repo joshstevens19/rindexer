@@ -38,9 +38,7 @@
 mod fixed;
 
 use crate::blockclock::fixed::SpacedNetwork;
-use crate::provider::{
-    JsonRpcCachedProvider, ProviderError, RECOMMENDED_RPC_CHUNK_SIZE, RPC_CHUNK_SIZE,
-};
+use crate::provider::{JsonRpcCachedProvider, ProviderError, RECOMMENDED_RPC_CHUNK_SIZE};
 use alloy::primitives::U64;
 use alloy::rpc::types::Log;
 use alloy_chains::Chain;
@@ -77,38 +75,43 @@ impl BlockClock {
     /// Given the defined confidence score and a starting block, get the maximum set of block
     /// timestamps available to us in a single provider request.
     fn block_range_samples(&self, from: u64, to: u64) -> Vec<u64> {
-        let range = to - from;
-        let batch = (RPC_CHUNK_SIZE / 2) as u64;
-
-        // Smaller batches can be executed without sampling
-        if range <= RECOMMENDED_RPC_CHUNK_SIZE as u64 {
-            return (from..=to).collect::<Vec<u64>>();
+        if from > to {
+            return vec![];
         }
 
-        // Because this method is also called on smaller ranges, we cannot always rely on the sample
-        // rate to inform size effectively. We enforce a minimum sample range to help.
-        let min_interval = 50;
-        let min_sample_count = (range / min_interval).max(1);
-        let sample_rate = self.sample_rate;
+        if from == to {
+            return vec![to];
+        }
 
-        let ideal_sample_count = (batch as f32 / sample_rate).ceil() as u64;
-        let sample_count = ideal_sample_count.max(min_sample_count).min(batch);
-        let step = (range / sample_count).max(1);
-        let mut samples = Vec::with_capacity(sample_count as usize);
+        let range = to - from;
+        let total_blocks = range + 1;
+        let desired_sample_count =
+            ((total_blocks as f64) * self.sample_rate as f64).ceil() as usize;
+        let sample_count = desired_sample_count.clamp(2, total_blocks as usize);
 
+        // Small ranges can just be executed directly as there will be minimal overhead
+        // and sampling doesn't add value in these cases necessary.
+        if range <= (RECOMMENDED_RPC_CHUNK_SIZE as u64 / 2) {
+            return (from..=to).collect();
+        }
+
+        if sample_count >= total_blocks as usize {
+            return (from..=to).collect();
+        }
+
+        let step = total_blocks as f64 / (sample_count - 1) as f64;
+        let mut samples = Vec::with_capacity(sample_count);
         samples.push(from);
-
-        for i in 1..(sample_count - 1) {
-            let block = from + i * step;
-            if block >= to {
+        for i in 0..sample_count {
+            let block = from + (i as f64 * step).round() as u64;
+            if block > to {
                 break;
             }
             samples.push(block);
         }
-
         samples.push(to);
-        samples.dedup();
 
+        samples.dedup();
         samples
     }
 
@@ -254,5 +257,111 @@ impl BlockClock {
         };
 
         Ok(logs_with_ts)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::provider::create_client;
+    use crate::HeaderMap;
+
+    async fn client() -> Arc<JsonRpcCachedProvider> {
+        let rpc_url = "http://localhost:8545";
+        let client = create_client(rpc_url, 1, Some(660), None, None, HeaderMap::new(), None, None)
+            .await
+            .unwrap();
+        client
+    }
+
+    #[tokio::test]
+    async fn test_simple_interpolation() {
+        let clock = BlockClock::new(true, None, client().await);
+
+        // Lets assume perfect times, 1 block = 1 second.
+        let mut anchors = vec![(1, 1), (10, 10), (20, 20), (30, 30), (10_000, 10_000)];
+        let interpolated_blocks = clock.interpolate(&mut anchors);
+        for (block, timestamp) in interpolated_blocks {
+            assert_eq!(block, timestamp)
+        }
+
+        // Lets assume perfect times, 1 block = 5 second.
+        let mut anchors = vec![(1, 5), (10_001, 50_005)];
+        let interpolated_blocks = clock.interpolate(&mut anchors);
+        for (block, timestamp) in interpolated_blocks {
+            assert_eq!(block * 5, timestamp)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_ratio_sampling_min() {
+        let clock = BlockClock::new(true, Some(1.0), client().await);
+        let samples = clock.block_range_samples(1000, 1234);
+        let actual_sampling_ratio = samples.len() as f32 / (1234 - 1000) as f32;
+
+        assert!(actual_sampling_ratio >= 1.0);
+
+        let clock = BlockClock::new(true, Some(0.1), client().await);
+        let samples = clock.block_range_samples(1000, 1019);
+        let actual_sampling_ratio = samples.len() as f32 / (1019 - 1000) as f32;
+
+        assert!(actual_sampling_ratio >= 0.1);
+
+        let clock = BlockClock::new(true, Some(0.1), client().await);
+        let samples = clock.block_range_samples(1000, 1600);
+        let actual_sampling_ratio = samples.len() as f32 / (1600 - 1000) as f32;
+
+        assert!(actual_sampling_ratio >= 0.1);
+        assert!(actual_sampling_ratio <= 0.15); // Ensure we don't oversample here either
+
+        let clock = BlockClock::new(true, Some(0.5), client().await);
+        let samples = clock.block_range_samples(1000, 1300);
+        let actual_sampling_ratio = samples.len() as f32 / (1300 - 1000) as f32;
+
+        assert!(actual_sampling_ratio >= 0.5);
+        assert!(actual_sampling_ratio <= 0.6); // Ensure we don't oversample here either
+    }
+
+    #[tokio::test]
+    async fn test_sampling() {
+        let clock = BlockClock::new(true, Some(0.1), client().await);
+
+        assert_eq!(clock.block_range_samples(10, 10), vec![10]);
+        assert_eq!(clock.block_range_samples(10, 11), vec![10, 11]);
+        assert_eq!(clock.block_range_samples(100, 105), vec![100, 101, 102, 103, 104, 105]);
+
+        // Handles bad input data without panic
+        assert!(clock.block_range_samples(11, 10).is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_sampling_unique() {
+        let clock = BlockClock::new(true, Some(0.1), client().await);
+        let samples = clock.block_range_samples(1000, 1600);
+        let unique_samples = samples.iter().cloned().collect::<std::collections::HashSet<_>>();
+
+        assert_eq!(unique_samples.len(), samples.len());
+        assert!(samples.contains(&1000));
+        assert!(samples.contains(&1600));
+
+        let wide_samples = clock.block_range_samples(0, 20_000);
+        assert!(wide_samples.contains(&0));
+        assert!(wide_samples.contains(&20_000));
+    }
+
+    #[tokio::test]
+    async fn test_sampling_window_sequence() {
+        let clock = BlockClock::new(true, Some(0.1), client().await);
+        let samples = clock.block_range_samples(1000, 1600);
+
+        assert!(samples.windows(2).all(|w| w[0] < w[1]));
+
+        // Small range, sampling would result in too few blocks, min interval forces more
+        // min_interval = 50 → expect at least one mid-sample
+        let tight_samples = clock.block_range_samples(5000, 5050);
+        let mid_steps: Vec<_> = tight_samples.windows(2).map(|w| w[1] - w[0]).collect();
+
+        assert!(tight_samples.len() > 2);
+        assert!(mid_steps.iter().any(|&step| step < 50));
     }
 }
