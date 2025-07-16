@@ -1,7 +1,7 @@
 prod_build:
 	RUSTFLAGS='-C target-cpu=native' cargo build --release --features jemalloc
 reth_build:
-	RUSTFLAGS='-C target-cpu=native' cargo build --release --features jemalloc --features reth
+	RUSTFLAGS='-C target-cpu=native' cargo build --release --features jemalloc,reth
 new_no_code:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- new --path $(CURDIR)/../examples no-code
 new_rust:

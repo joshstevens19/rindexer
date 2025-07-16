@@ -181,7 +181,7 @@ jobs:
           flags=()
 
           if [[ "$target" != *msvc* && "$target" != "aarch64-unknown-linux-gnu" ]]; then
-            flags+=(--features jemalloc)
+            flags+=(--features jemalloc,reth)
           fi
 
           [[ "$target" == *windows* ]] && exe=".exe"
@@ -237,6 +237,21 @@ jobs:
             flags+=(--features jemalloc)
           fi
           
+          cargo test --exclude rindexer_rust_playground --workspace --release --target "$target" "${flags[@]}"
+
+      - name: Run tests (reth feature)
+        shell: bash
+        run: |
+          set -eo pipefail
+          target="${{ matrix.target }}"
+          flags=()
+          
+          if [[ "$target" != *msvc* && "$target" != "aarch64-unknown-linux-gnu" ]]; then
+            flags+=(--features jemalloc,reth)
+          else
+            flags+=(--features reth)
+          fi
+
           cargo test --exclude rindexer_rust_playground --workspace --release --target "$target" "${flags[@]}"
 
       - name: Upload artifact

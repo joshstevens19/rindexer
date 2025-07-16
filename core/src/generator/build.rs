@@ -471,13 +471,18 @@ pub enum GenerateRustProjectError {
     GenerateError(#[from] GenerateError),
 }
 
-pub fn generate_rust_project(project_path: &Path) -> Result<(), GenerateRustProjectError> {
+pub fn generate_rust_project(
+    project_path: &Path,
+    is_reth_project: bool,
+) -> Result<(), GenerateRustProjectError> {
     let manifest_location = project_path.join(YAML_CONFIG_NAME);
     let manifest = read_manifest(&project_path.join(&manifest_location))?;
 
     let abi_path = project_path.join("abis");
 
     fs::create_dir_all(abi_path)?;
+
+    let reth_dep = if is_reth_project { ", features = [\"reth\"]" } else { "" };
 
     let cargo = format!(
         r#"
@@ -487,12 +492,13 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-rindexer = {{ git = "https://github.com/joshstevens19/rindexer", branch = "master" }}
+rindexer = {{ git = "https://github.com/joshstevens19/rindexer", branch = "master" {reth_dep}}}
 tokio = {{ version = "1", features = ["full"] }}
 alloy = {{ version = "1.0.4", features = ["full"] }}
 serde = {{ version = "1.0", features = ["derive"] }}
 "#,
         project_name = manifest.name,
+        reth_dep = reth_dep,
     );
 
     let cargo_path = project_path.join("Cargo.toml");

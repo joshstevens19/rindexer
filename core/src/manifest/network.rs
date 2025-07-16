@@ -64,9 +64,9 @@ pub struct Network {
     pub reth: Option<()>,
 }
 
+#[cfg(feature = "reth")]
 impl Network {
     /// Get the IPC path for the Reth node
-    #[cfg(feature = "reth")]
     pub fn get_reth_ipc_path(&self) -> Option<String> {
         let reth = self.reth.as_ref()?;
         let cli = reth.to_cli().ok()?;
@@ -77,7 +77,6 @@ impl Network {
         }
     }
     /// Check if Reth is enabled for this network
-    #[cfg(feature = "reth")]
     pub fn is_reth_enabled(&self) -> bool {
         self.reth.is_some()
     }
@@ -89,7 +88,6 @@ impl Network {
     /// If Reth is not enabled, the function will return None.
     ///
     /// If the Reth node fails to start, the function will return an error.
-    #[cfg(feature = "reth")]
     pub async fn try_start_reth_node(
         &self,
     ) -> Result<Option<Sender<ChainStateNotification>>, eyre::Error> {
