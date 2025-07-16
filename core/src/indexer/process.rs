@@ -64,10 +64,11 @@ async fn process_event_logs(
     // best for the application.
     //
     // We default to `2`, but the user will ideally override this based on the logic in the handler.
+    // TODO: this feature is not safe need to review it
     let callback_concurrency = if config.index_event_in_order() {
         1usize
     } else {
-        config.config().callback_concurrency.unwrap_or(2)
+        config.config().callback_concurrency.unwrap_or(1)
     };
 
     let callback_permits = Arc::new(Semaphore::new(callback_concurrency));
@@ -550,22 +551,35 @@ async fn trigger_event(
     fn_data: Vec<EventResult>,
     to_block: U64,
 ) {
+    indexing_event_processing();
+
     if config.is_factory_event() {
-        indexing_event_processing();
+        // Factory events don't update progress yet due to typing limitations
         if !fn_data.is_empty() {
-            config.trigger_event(fn_data).await;
+            // TODO: when we fix the devex for factory event to gen typings when using it we should call update_progress_and_last_synced_task then
+            let _ = config.trigger_event(fn_data).await;
         }
         indexing_event_processed();
         return;
     }
 
-    indexing_event_processing();
-    if !fn_data.is_empty() {
-        config.trigger_event(fn_data).await;
+    let should_update_progress =
+        if fn_data.is_empty() {
+            #[allow(clippy::needless_bool)]
+            if !is_running() {
+                false
+            } else {
+                true
+            }
+        } else { config.trigger_event(fn_data.clone()).await.is_ok() };
+
+    if should_update_progress {
+        // TODO: There is a double-index race condition here. If we get a crash or failure between
+        //       triggering the event and syncing the last updated block, we may double index.
+        update_progress_and_last_synced_task(config, to_block, indexing_event_processed).await;
+    } else {
+        indexing_event_processed();
     }
-    // TODO: There is a double-index race condition here. If we get a crash or failure between
-    //       triggering the event and syncing the last updated block, we may double index.
-    update_progress_and_last_synced_task(config, to_block, indexing_event_processed).await;
 }
 
 async fn handle_logs_result(
