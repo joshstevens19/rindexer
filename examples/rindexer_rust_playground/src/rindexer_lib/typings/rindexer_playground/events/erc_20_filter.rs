@@ -146,9 +146,9 @@ where
         Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
     {
         let csv = AsyncCsvAppender::new(
-            r"/Users/jackedgson/Development/avara/rindexer/rindexer_rust_playground/generated_csv/ERC20Filter/erc20filter-approval.csv",
+            r"/Users/jackedgson/Development/avara/rindexer/examples/rindexer_rust_playground/generated_csv/ERC20Filter/erc20filter-approval.csv",
         );
-        if !Path::new(r"/Users/jackedgson/Development/avara/rindexer/rindexer_rust_playground/generated_csv/ERC20Filter/erc20filter-approval.csv").exists() {
+        if !Path::new(r"/Users/jackedgson/Development/avara/rindexer/examples/rindexer_rust_playground/generated_csv/ERC20Filter/erc20filter-approval.csv").exists() {
             csv.append_header(vec!["contract_address".into(), "owner".into(), "spender".into(), "value".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()].into())
                 .await
                 .expect("Failed to write CSV header");
@@ -243,9 +243,9 @@ where
         Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
     {
         let csv = AsyncCsvAppender::new(
-            r"/Users/jackedgson/Development/avara/rindexer/rindexer_rust_playground/generated_csv/ERC20Filter/erc20filter-transfer.csv",
+            r"/Users/jackedgson/Development/avara/rindexer/examples/rindexer_rust_playground/generated_csv/ERC20Filter/erc20filter-transfer.csv",
         );
-        if !Path::new(r"/Users/jackedgson/Development/avara/rindexer/rindexer_rust_playground/generated_csv/ERC20Filter/erc20filter-transfer.csv").exists() {
+        if !Path::new(r"/Users/jackedgson/Development/avara/rindexer/examples/rindexer_rust_playground/generated_csv/ERC20Filter/erc20filter-transfer.csv").exists() {
             csv.append_header(vec!["contract_address".into(), "from".into(), "to".into(), "value".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()].into())
                 .await
                 .expect("Failed to write CSV header");
@@ -415,7 +415,8 @@ where
                 .details
                 .iter()
                 .map(|c| {
-                    let provider = providers.get(&c.network).expect("must have a provider");
+                    let provider = providers.get(&c.network).expect("must have a provider").clone();
+
                     NetworkContract {
                         id: generate_random_id(10),
                         network: c.network.clone(),

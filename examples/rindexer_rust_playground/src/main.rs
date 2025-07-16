@@ -1,4 +1,4 @@
-use std::{env, path::PathBuf, str::FromStr};
+use std::env;
 
 use rindexer::{
     GraphqlOverrideSettings, IndexingDetails, StartDetails,
@@ -83,10 +83,8 @@ async fn main() {
 
 #[allow(dead_code)]
 fn generate() {
-    let path = PathBuf::from_str(
-        "/Users/jackedgson/Development/avara/rindexer/rindexer_rust_playground/rindexer.yaml",
-    )
-    .expect("Invalid path");
+    let cwd = env::current_dir().expect("Failed to get current working directory");
+    let path = cwd.join("rindexer.yaml");
     let manifest = read_manifest(&path).expect("Failed to read manifest");
     rindexer::generator::build::generate_rindexer_typings(&manifest, &path, true)
         .expect("Failed to generate typings");
@@ -94,10 +92,8 @@ fn generate() {
 
 #[allow(dead_code)]
 fn generate_code_test() {
-    let path = PathBuf::from_str(
-        "/Users/jackedgson/Development/avara/rindexer/rindexer_rust_playground/rindexer.yaml",
-    )
-    .expect("Invalid path");
+    let cwd = env::current_dir().expect("Failed to get current working directory");
+    let path = cwd.join("rindexer.yaml");
     let manifest = read_manifest(&path).expect("Failed to read manifest");
 
     rindexer::generator::build::generate_rindexer_handlers(manifest, &path, true)
@@ -106,11 +102,11 @@ fn generate_code_test() {
 
 #[allow(dead_code)]
 fn generate_all() {
-    let path = PathBuf::from_str(
-        "/Users/jackedgson/Development/avara/rindexer/rindexer_rust_playground/rindexer.yaml",
-    )
-    .expect("Invalid path");
-    rindexer::generator::build::generate_rindexer_typings_and_handlers(&path)
+    let cwd = env::current_dir().expect("Failed to get current working directory");
+    let path = cwd.join("rindexer.yaml");
+    let abs_path = path.canonicalize().expect("Failed to canonicalize path");
+
+    rindexer::generator::build::generate_rindexer_typings_and_handlers(&abs_path)
         .expect("Failed to generate typings and handlers");
 }
 
