@@ -230,7 +230,7 @@ impl DependencyStatus {
 impl ContractEventDependencies {
     pub fn parse(manifest: &Manifest) -> Vec<ContractEventDependencies> {
         let mut dependencies: Vec<ContractEventDependencies> = vec![];
-        for contract in &manifest.contracts {
+        for contract in &manifest.all_contracts() {
             if let Some(dependency) = contract.dependency_events.clone() {
                 let dependency_event_tree = contract.convert_dependency_event_tree_yaml(dependency);
                 let dependency_tree =

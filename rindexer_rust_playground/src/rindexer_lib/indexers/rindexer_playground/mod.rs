@@ -4,4 +4,3 @@ pub mod playground_types_filter;
 pub mod rocket_pool_eth;
 pub mod uniswap_v3_factory;
 pub mod uniswap_v3_pool;
-pub mod uniswap_v3_pool_filter;

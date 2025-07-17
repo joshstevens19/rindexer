@@ -83,7 +83,7 @@ fn validate_manifest(
 ) -> Result<(), ValidateManifestError> {
     let mut seen = HashSet::new();
     let duplicates_contract_names: Vec<String> = manifest
-        .contracts
+        .all_contracts()
         .iter()
         .filter_map(|c| if seen.insert(&c.name) { None } else { Some(c.name.clone()) })
         .collect();
@@ -94,7 +94,7 @@ fn validate_manifest(
         ));
     }
 
-    for contract in &manifest.contracts {
+    for contract in &manifest.all_contracts() {
         if contract.name.to_lowercase().contains("filter") {
             return Err(ValidateManifestError::ContractNameCanNotIncludeFilter(
                 contract.name.clone(),
@@ -196,14 +196,14 @@ fn validate_manifest(
     if let Some(postgres) = &manifest.storage.postgres {
         if let Some(relationships) = &postgres.relationships {
             for relationship in relationships {
-                if !manifest.contracts.iter().any(|c| c.name == relationship.contract_name) {
+                if !manifest.all_contracts().iter().any(|c| c.name == relationship.contract_name) {
                     return Err(ValidateManifestError::RelationshipContractNotFound(
                         relationship.contract_name.clone(),
                     ));
                 }
 
                 for foreign_key in &relationship.foreign_keys {
-                    if !manifest.contracts.iter().any(|c| c.name == foreign_key.contract_name) {
+                    if !manifest.all_contracts().iter().any(|c| c.name == foreign_key.contract_name) {
                         return Err(ValidateManifestError::RelationshipForeignKeyContractNotFound(
                             foreign_key.contract_name.clone(),
                         ));

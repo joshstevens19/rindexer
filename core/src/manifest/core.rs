@@ -180,7 +180,7 @@ impl Manifest {
     }
 
     pub fn has_any_contracts_live_indexing(&self) -> bool {
-        self.contracts.iter().filter(|c| c.details.iter().any(|p| p.end_block.is_none())).count()
+        self.all_contracts().iter().filter(|c| c.details.iter().any(|p| p.end_block.is_none())).count()
             > 0
     }
 
@@ -227,7 +227,7 @@ impl Manifest {
 
     pub fn contract_csv_enabled(&self, contract_name: &str) -> bool {
         let contract_csv_enabled = self
-            .contracts
+            .all_contracts()
             .iter()
             .find(|c| c.name == contract_name)
             .is_some_and(|c| c.generate_csv.unwrap_or(true));

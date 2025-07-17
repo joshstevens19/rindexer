@@ -10,8 +10,8 @@ pub async fn register_all_handlers(manifest_path: &PathBuf) -> EventCallbackRegi
     let mut registry = EventCallbackRegistry::new();
     rocket_pool_eth_handlers(manifest_path, &mut registry).await;
     erc_20_filter_handlers(manifest_path, &mut registry).await;
+    uniswap_v3_factory_handlers(manifest_path, &mut registry).await;
     uniswap_v3_pool_handlers(manifest_path, &mut registry).await;
     playground_types_filter_handlers(manifest_path, &mut registry).await;
-    uniswap_v3_factory_handlers(manifest_path, &mut registry).await;
     registry
 }
