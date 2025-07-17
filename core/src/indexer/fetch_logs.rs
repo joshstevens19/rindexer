@@ -440,7 +440,7 @@ async fn live_indexing_stream(
     // fetch for a recent period. It is about 16-bytes per entry.
     //
     // 500 should cover any block-lag we could reasonably encounter at near-zer memory cost.
-    let mut block_times: LruCache<u64, u64> = LruCache::new(NonZeroUsize::new(500).unwrap());
+    let mut block_times: LruCache<u64, u64> = LruCache::new(NonZeroUsize::new(50).unwrap());
 
     loop {
         let iteration_start = Instant::now();

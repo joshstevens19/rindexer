@@ -386,7 +386,7 @@ where
 
         match callback(data.clone()).await {
             Ok(_) => {
-                info!("Event processing succeeded for id: {} - topic_id: {}", id, event_identifier);
+                debug!("Event processing succeeded for id: {} - topic_id: {}", id, event_identifier);
                 return Ok(());
             }
             Err(e) => {
