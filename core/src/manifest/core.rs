@@ -17,7 +17,8 @@ use crate::{
         storage::Storage,
     },
 };
-use crate::manifest::contract::{ContractDetails};
+use crate::event::contract_setup::ContractEventMapping;
+use crate::manifest::contract::{ContractDetails, DependencyEventTreeYaml, SimpleEventOrContractEvent};
 
 fn deserialize_project_type<'de, D>(deserializer: D) -> Result<ProjectType, D::Error>
 where
@@ -97,43 +98,77 @@ pub struct Manifest {
 impl Manifest {
     /// Includes both user-defined contracts and factory filter contracts
     pub fn all_contracts(&self) -> Vec<Contract> {
-        let factory_contracts = self.contracts.iter().filter_map(|c| {
-            let factory_filter_details = c.details.iter()
+        self.contracts.clone().into_iter().flat_map(|contract| {
+            let factory_filter_details = contract.details.iter()
                 .filter_map(|detail| {
-                    Some((detail.factory.clone()?, detail.network.clone(), detail.start_block.clone(), detail.end_block.clone()))
+                    detail.factory.as_ref().map(|factory| (
+                        factory.clone(),
+                        detail.network.clone(),
+                        detail.start_block.clone(),
+                        detail.end_block.clone()
+                    ))
                 }).collect::<Vec<_>>();
 
-            let (first, ..) = factory_filter_details.first().cloned()?;
+            let first_factory = factory_filter_details.first().cloned();
 
-            let has_factory_mismatch = factory_filter_details.iter().any(|(detail, ..)| detail.name != first.name || detail.abi != first.abi || detail.event_name != first.event_name || detail.name != first.name);
+            match first_factory {
+                Some((first, ..)) => {
+                    let has_factory_mismatch = factory_filter_details.iter().any(|(detail, ..)| detail.name != first.name || detail.abi != first.abi || detail.event_name != first.event_name || detail.name != first.name);
 
-            if has_factory_mismatch {
-                panic!("Factory filter contract must be the same across all contracts. Please raise an issue if you need this feature");
+                    if has_factory_mismatch {
+                        panic!("Contract using factory filter must use same factory across all networks. Please raise issue in github if you need different factories across networks");
+                    }
+
+                    let factory_contract = Contract {
+                        name: first.name.clone(),
+                        details: factory_filter_details.into_iter().map(|(factory, network, start_block, end_block)| ContractDetails {
+                            network,
+                            start_block,
+                            end_block,
+                            factory: Some(factory.clone()),
+                            address: None,
+                            filter: None,
+                            indexed_filters: None
+                        }).collect::<Vec<_>>(),
+                        abi: first.abi.clone().into(),
+                        dependency_events: None,
+                        include_events: Some(vec![first.event_name.clone()]),
+                        index_event_in_order: None,
+                        reorg_safe_distance: None,
+                        generate_csv: None,
+                        streams: None,
+                        chat: None,
+                    };
+
+                    let dependency_contract = Contract {
+                        dependency_events: Some(DependencyEventTreeYaml {
+                            events: vec![SimpleEventOrContractEvent::ContractEvent( ContractEventMapping{
+                                contract_name: factory_contract.name.clone(),
+                                event_name: first.event_name,
+                            })],
+                            then: contract.dependency_events.or_else(|| {
+                                let events = contract
+                                    .include_events
+                                    .clone()
+                                    .expect("Contract using factory filter must specify `include_events`.");
+
+                                Some(DependencyEventTreeYaml {
+                                    events: events
+                                        .into_iter()
+                                        .map(|event| SimpleEventOrContractEvent::SimpleEvent(event))
+                                        .collect(),
+                                    then: None,
+                                })
+                            }).map(Box::new),
+                        }),
+                        ..contract
+                    };
+
+                    vec![factory_contract, dependency_contract]
+                },
+                None => vec![contract]
             }
-
-            Some(Contract {
-                name: first.name.clone(),
-                details: factory_filter_details.into_iter().map(|(factory, network, start_block, end_block)| ContractDetails {
-                    network,
-                    start_block,
-                    end_block,
-                    address: factory.address.clone().into(),
-                    factory: None,
-                    filter: None,
-                    indexed_filters: None
-                }).collect::<Vec<_>>(),
-                abi: first.abi.clone().into(),
-                dependency_events: None,
-                include_events: Some(vec![first.event_name]),
-                index_event_in_order: None,
-                reorg_safe_distance: None,
-                generate_csv: None,
-                streams: None,
-                chat: None,
-            })
-        }).collect::<Vec<_>>();
-
-        self.contracts.clone().into_iter().chain(factory_contracts).collect()
+        }).collect::<Vec<_>>()
     }
 
     pub fn to_indexer(&self) -> Indexer {

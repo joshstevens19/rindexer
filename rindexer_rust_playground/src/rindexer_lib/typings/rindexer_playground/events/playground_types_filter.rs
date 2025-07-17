@@ -272,7 +272,7 @@ where
         let event_name = self.event_name();
 
         let contract_details = rindexer_yaml
-            .contracts
+            .all_contracts()
             .iter()
             .find(|c| c.name == contract_name)
             .unwrap_or_else(|| {

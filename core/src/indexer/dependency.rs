@@ -231,83 +231,18 @@ impl ContractEventDependencies {
     pub fn parse(manifest: &Manifest) -> Vec<ContractEventDependencies> {
         let mut dependencies: Vec<ContractEventDependencies> = vec![];
         for contract in &manifest.contracts {
-            let contract_dependencies_tree = contract
-                .dependency_events
-                .clone()
-                .map(|dependency| contract.convert_dependency_event_tree_yaml(dependency));
+            if let Some(dependency) = contract.dependency_events.clone() {
+                let dependency_event_tree = contract.convert_dependency_event_tree_yaml(dependency);
+                let dependency_tree =
+                    EventsDependencyTree::from_dependency_event_tree(&dependency_event_tree);
 
-            let factories =
-                contract.details.iter().filter_map(|d| d.factory.clone()).collect::<Vec<_>>();
-            let factory_dependency = factories.first().cloned();
-
-            match factory_dependency {
-                // When factory filter is set we rewrite dependency settings to put factory event first
-                Some(factory) => {
-                    if !factories.iter().all(|f| {
-                        f.name == factory.name
-                            && f.event_name == factory.event_name
-                            && f.input_name == factory.input_name
-                    }) {
-                        panic!("Contract using factory filter must use same factory across all networks. Please raise issue in github if you need different factories across networks");
-                    }
-
-                    let dependency_event_tree = contract_dependencies_tree.unwrap_or_else(|| {
-                        let events = contract
-                            .include_events
-                            .as_ref()
-                            .expect("Contract using factory filter must specify `include_events`.");
-
-                        let dependency_event_tree = DependencyEventTree {
-                            contract_events: events
-                                .iter()
-                                .map(|event| ContractEventMapping {
-                                    contract_name: contract.name.clone(),
-                                    event_name: event.clone(),
-                                })
-                                .collect(),
-                            then: None,
-                        };
-
-                        dependency_event_tree
-                    });
-
-                    let factory_dependency_event_tree = DependencyEventTree {
-                        contract_events: vec![ContractEventMapping {
-                            contract_name: factory.name,
-                            event_name: factory.event_name,
-                        }],
-                        then: Some(Box::from(dependency_event_tree)),
-                    };
-
-                    let factory_dependency_tree = EventsDependencyTree::from_dependency_event_tree(
-                        &factory_dependency_event_tree,
-                    );
-
-                    dependencies.push(ContractEventDependencies {
-                        contract_name: contract.name.clone(),
-                        event_dependencies: EventDependencies {
-                            tree: Arc::new(factory_dependency_tree),
-                            dependency_events: factory_dependency_event_tree
-                                .collect_dependency_events(),
-                        },
-                    });
-                }
-                None => {
-                    if let Some(dependency_event_tree) = contract_dependencies_tree {
-                        let dependency_tree = EventsDependencyTree::from_dependency_event_tree(
-                            &dependency_event_tree,
-                        );
-
-                        dependencies.push(ContractEventDependencies {
-                            contract_name: contract.name.clone(),
-                            event_dependencies: EventDependencies {
-                                tree: Arc::new(dependency_tree),
-                                dependency_events: dependency_event_tree
-                                    .collect_dependency_events(),
-                            },
-                        });
-                    }
-                }
+                dependencies.push(ContractEventDependencies {
+                    contract_name: contract.name.clone(),
+                    event_dependencies: EventDependencies {
+                        tree: Arc::new(dependency_tree),
+                        dependency_events: dependency_event_tree.collect_dependency_events(),
+                    },
+                });
             }
         }
 

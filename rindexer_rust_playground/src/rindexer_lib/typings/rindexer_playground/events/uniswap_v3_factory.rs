@@ -106,216 +106,6 @@ pub fn no_extensions() -> NoExtensions {
     NoExtensions {}
 }
 
-pub fn feeamountenabled_handler<TExtensions, F, Fut>(
-    custom_logic: F,
-) -> FeeAmountEnabledEventCallbackType<TExtensions>
-where
-    FeeAmountEnabledResult: Clone + 'static,
-    F: for<'a> Fn(Vec<FeeAmountEnabledResult>, Arc<EventContext<TExtensions>>) -> Fut
-        + Send
-        + Sync
-        + 'static
-        + Clone,
-    Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
-    TExtensions: Send + Sync + 'static,
-{
-    Arc::new(move |results, context| {
-        let custom_logic = custom_logic.clone();
-        let results = results.clone();
-        let context = Arc::clone(&context);
-        async move { (custom_logic)(results, context).await }.boxed()
-    })
-}
-
-type FeeAmountEnabledEventCallbackType<TExtensions> = Arc<
-    dyn for<'a> Fn(
-            &'a Vec<FeeAmountEnabledResult>,
-            Arc<EventContext<TExtensions>>,
-        ) -> BoxFuture<'a, EventCallbackResult<()>>
-        + Send
-        + Sync,
->;
-
-pub struct FeeAmountEnabledEvent<TExtensions>
-where
-    TExtensions: Send + Sync + 'static,
-{
-    callback: FeeAmountEnabledEventCallbackType<TExtensions>,
-    context: Arc<EventContext<TExtensions>>,
-}
-
-impl<TExtensions> FeeAmountEnabledEvent<TExtensions>
-where
-    TExtensions: Send + Sync + 'static,
-{
-    pub async fn handler<F, Fut>(closure: F, extensions: TExtensions) -> Self
-    where
-        FeeAmountEnabledResult: Clone + 'static,
-        F: for<'a> Fn(Vec<FeeAmountEnabledResult>, Arc<EventContext<TExtensions>>) -> Fut
-            + Send
-            + Sync
-            + 'static
-            + Clone,
-        Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
-    {
-        let csv = AsyncCsvAppender::new(
-            r"/Users/pawellula/RustroverProjects/rindexer/cli/../rindexer_rust_playground/generated_csv/UniswapV3Factory/uniswapv3factory-feeamountenabled.csv",
-        );
-        if !Path::new(r"/Users/pawellula/RustroverProjects/rindexer/cli/../rindexer_rust_playground/generated_csv/UniswapV3Factory/uniswapv3factory-feeamountenabled.csv").exists() {
-            csv.append_header(vec!["contract_address".into(), "fee".into(), "tick_spacing".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()].into())
-                .await
-                .expect("Failed to write CSV header");
-        }
-
-        Self {
-            callback: feeamountenabled_handler(closure),
-            context: Arc::new(EventContext {
-                database: get_or_init_postgres_client().await,
-                csv: Arc::new(csv),
-                extensions: Arc::new(extensions),
-            }),
-        }
-    }
-}
-
-#[async_trait]
-impl<TExtensions> EventCallback for FeeAmountEnabledEvent<TExtensions>
-where
-    TExtensions: Send + Sync,
-{
-    async fn call(&self, events: Vec<EventResult>) -> EventCallbackResult<()> {
-        let events_len = events.len();
-
-        // note some can not downcast because it cant decode
-        // this happens on events which failed decoding due to
-        // not having the right abi for example
-        // transfer events with 2 indexed topics cant decode
-        // transfer events with 3 indexed topics
-        let result: Vec<FeeAmountEnabledResult> = events
-            .into_iter()
-            .filter_map(|item| {
-                item.decoded_data.downcast::<FeeAmountEnabledData>().ok().map(|arc| {
-                    FeeAmountEnabledResult {
-                        event_data: (*arc).clone(),
-                        tx_information: item.tx_information,
-                    }
-                })
-            })
-            .collect();
-
-        if result.len() == events_len {
-            (self.callback)(&result, Arc::clone(&self.context)).await
-        } else {
-            panic!("FeeAmountEnabledEvent: Unexpected data type - expected: FeeAmountEnabledData")
-        }
-    }
-}
-
-pub fn ownerchanged_handler<TExtensions, F, Fut>(
-    custom_logic: F,
-) -> OwnerChangedEventCallbackType<TExtensions>
-where
-    OwnerChangedResult: Clone + 'static,
-    F: for<'a> Fn(Vec<OwnerChangedResult>, Arc<EventContext<TExtensions>>) -> Fut
-        + Send
-        + Sync
-        + 'static
-        + Clone,
-    Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
-    TExtensions: Send + Sync + 'static,
-{
-    Arc::new(move |results, context| {
-        let custom_logic = custom_logic.clone();
-        let results = results.clone();
-        let context = Arc::clone(&context);
-        async move { (custom_logic)(results, context).await }.boxed()
-    })
-}
-
-type OwnerChangedEventCallbackType<TExtensions> = Arc<
-    dyn for<'a> Fn(
-            &'a Vec<OwnerChangedResult>,
-            Arc<EventContext<TExtensions>>,
-        ) -> BoxFuture<'a, EventCallbackResult<()>>
-        + Send
-        + Sync,
->;
-
-pub struct OwnerChangedEvent<TExtensions>
-where
-    TExtensions: Send + Sync + 'static,
-{
-    callback: OwnerChangedEventCallbackType<TExtensions>,
-    context: Arc<EventContext<TExtensions>>,
-}
-
-impl<TExtensions> OwnerChangedEvent<TExtensions>
-where
-    TExtensions: Send + Sync + 'static,
-{
-    pub async fn handler<F, Fut>(closure: F, extensions: TExtensions) -> Self
-    where
-        OwnerChangedResult: Clone + 'static,
-        F: for<'a> Fn(Vec<OwnerChangedResult>, Arc<EventContext<TExtensions>>) -> Fut
-            + Send
-            + Sync
-            + 'static
-            + Clone,
-        Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
-    {
-        let csv = AsyncCsvAppender::new(
-            r"/Users/pawellula/RustroverProjects/rindexer/cli/../rindexer_rust_playground/generated_csv/UniswapV3Factory/uniswapv3factory-ownerchanged.csv",
-        );
-        if !Path::new(r"/Users/pawellula/RustroverProjects/rindexer/cli/../rindexer_rust_playground/generated_csv/UniswapV3Factory/uniswapv3factory-ownerchanged.csv").exists() {
-            csv.append_header(vec!["contract_address".into(), "old_owner".into(), "new_owner".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()].into())
-                .await
-                .expect("Failed to write CSV header");
-        }
-
-        Self {
-            callback: ownerchanged_handler(closure),
-            context: Arc::new(EventContext {
-                database: get_or_init_postgres_client().await,
-                csv: Arc::new(csv),
-                extensions: Arc::new(extensions),
-            }),
-        }
-    }
-}
-
-#[async_trait]
-impl<TExtensions> EventCallback for OwnerChangedEvent<TExtensions>
-where
-    TExtensions: Send + Sync,
-{
-    async fn call(&self, events: Vec<EventResult>) -> EventCallbackResult<()> {
-        let events_len = events.len();
-
-        // note some can not downcast because it cant decode
-        // this happens on events which failed decoding due to
-        // not having the right abi for example
-        // transfer events with 2 indexed topics cant decode
-        // transfer events with 3 indexed topics
-        let result: Vec<OwnerChangedResult> = events
-            .into_iter()
-            .filter_map(|item| {
-                item.decoded_data.downcast::<OwnerChangedData>().ok().map(|arc| {
-                    OwnerChangedResult {
-                        event_data: (*arc).clone(),
-                        tx_information: item.tx_information,
-                    }
-                })
-            })
-            .collect();
-
-        if result.len() == events_len {
-            (self.callback)(&result, Arc::clone(&self.context)).await
-        } else {
-            panic!("OwnerChangedEvent: Unexpected data type - expected: OwnerChangedData")
-        }
-    }
-}
-
 pub fn poolcreated_handler<TExtensions, F, Fut>(
     custom_logic: F,
 ) -> PoolCreatedEventCallbackType<TExtensions>
@@ -423,16 +213,13 @@ pub enum UniswapV3FactoryEventType<TExtensions>
 where
     TExtensions: 'static + Send + Sync,
 {
-    FeeAmountEnabled(FeeAmountEnabledEvent<TExtensions>),
-    OwnerChanged(OwnerChangedEvent<TExtensions>),
     PoolCreated(PoolCreatedEvent<TExtensions>),
 }
 
 pub async fn uniswap_v3_factory_contract(
     network: &str,
+    address: Address,
 ) -> RindexerUniswapV3FactoryGenInstance<Arc<RindexerProvider>, AnyNetwork> {
-    let address: Address =
-        "0x33128a8fc17869897dce68ed026d694621f6fdfd".parse().expect("Invalid address");
     RindexerUniswapV3FactoryGen::new(
         address,
         get_provider_cache_for_network(network).await.get_inner_provider(),
@@ -459,12 +246,6 @@ where
 {
     pub fn topic_id(&self) -> &'static str {
         match self {
-            UniswapV3FactoryEventType::FeeAmountEnabled(_) => {
-                "0xc66a3fdf07232cdd185febcc6579d408c241b47ae2f9907d84be655141eeaecc"
-            }
-            UniswapV3FactoryEventType::OwnerChanged(_) => {
-                "0xb532073b38c83145e3e5135377a08bf9aab55bc0fd7c1179cd4fb995d2a5159c"
-            }
             UniswapV3FactoryEventType::PoolCreated(_) => {
                 "0x783cca1c0412dd0d695e784568c96da2e9c22ff989357a2e8b1d9b2b4e6b7118"
             }
@@ -473,8 +254,6 @@ where
 
     pub fn event_name(&self) -> &'static str {
         match self {
-            UniswapV3FactoryEventType::FeeAmountEnabled(_) => "FeeAmountEnabled",
-            UniswapV3FactoryEventType::OwnerChanged(_) => "OwnerChanged",
             UniswapV3FactoryEventType::PoolCreated(_) => "PoolCreated",
         }
     }
@@ -494,30 +273,6 @@ where
         let decoder_contract = decoder_contract(network);
 
         match self {
-            UniswapV3FactoryEventType::FeeAmountEnabled(_) => {
-                Arc::new(move |topics: Vec<B256>, data: Bytes| {
-                    match FeeAmountEnabledData::decode_raw_log(topics, &data[0..]) {
-                        Ok(event) => {
-                            let result: FeeAmountEnabledData = event;
-                            Arc::new(result) as Arc<dyn Any + Send + Sync>
-                        }
-                        Err(error) => Arc::new(error) as Arc<dyn Any + Send + Sync>,
-                    }
-                })
-            }
-
-            UniswapV3FactoryEventType::OwnerChanged(_) => {
-                Arc::new(move |topics: Vec<B256>, data: Bytes| {
-                    match OwnerChangedData::decode_raw_log(topics, &data[0..]) {
-                        Ok(event) => {
-                            let result: OwnerChangedData = event;
-                            Arc::new(result) as Arc<dyn Any + Send + Sync>
-                        }
-                        Err(error) => Arc::new(error) as Arc<dyn Any + Send + Sync>,
-                    }
-                })
-            }
-
             UniswapV3FactoryEventType::PoolCreated(_) => Arc::new(
                 move |topics: Vec<B256>, data: Bytes| match PoolCreatedData::decode_raw_log(
                     topics,
@@ -539,10 +294,8 @@ where
         let contract_name = self.contract_name();
         let event_name = self.event_name();
 
-        let indexer = rindexer_yaml.to_indexer();
-
-        let contract_details = indexer
-            .contracts
+        let contract_details = rindexer_yaml
+            .all_contracts()
             .iter()
             .find(|c| c.name == contract_name)
             .unwrap_or_else(|| {
@@ -596,22 +349,6 @@ where
         let callback: Arc<
             dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync,
         > = match self {
-            UniswapV3FactoryEventType::FeeAmountEnabled(event) => {
-                let event = Arc::new(event);
-                Arc::new(move |result| {
-                    let event = Arc::clone(&event);
-                    async move { event.call(result).await }.boxed()
-                })
-            }
-
-            UniswapV3FactoryEventType::OwnerChanged(event) => {
-                let event = Arc::new(event);
-                Arc::new(move |result| {
-                    let event = Arc::clone(&event);
-                    async move { event.call(result).await }.boxed()
-                })
-            }
-
             UniswapV3FactoryEventType::PoolCreated(event) => {
                 let event = Arc::new(event);
                 Arc::new(move |result| {
