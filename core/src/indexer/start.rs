@@ -278,6 +278,10 @@ pub async fn start_indexing_contract_events(
 
     let mut block_tasks = FuturesUnordered::new();
 
+    if let Some(true) = manifest.timestamps {
+        info!("Block timestamps enabled globally!");
+    }
+
     for event in registry.events.iter() {
         let stream_details = manifest
             .contracts
@@ -358,7 +362,11 @@ pub async fn start_indexing_contract_events(
             processed_up_to: end_block,
         });
 
-        let contract = manifest.contracts.iter().find(|c| c.name == event.contract.name).unwrap();
+        let contract = manifest
+            .contracts
+            .iter()
+            .find(|c| format!("{}Filter", c.name) == event.contract.name)
+            .unwrap();
 
         let timestamp_enabled_for_event = contract
             .include_events
