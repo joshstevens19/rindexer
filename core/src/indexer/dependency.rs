@@ -262,7 +262,7 @@ impl ContractEventDependencies {
                                 .iter()
                                 .map(|event| ContractEventMapping {
                                     contract_name: contract.name.clone(),
-                                    event_name: event.clone(),
+                                    event_name: event.name.clone(),
                                 })
                                 .collect(),
                             then: None,

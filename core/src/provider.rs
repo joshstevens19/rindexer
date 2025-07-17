@@ -65,7 +65,6 @@ const DEFAULT_RPC_SUPPORTED_ACCOUNT_FILTERS: usize = 1000;
 pub const RPC_CHUNK_SIZE: usize = 1000;
 
 /// Recommended chunk sizes for batch RPC requests.
-///
 /// See: https://www.alchemy.com/docs/best-practices-when-using-alchemy#2-avoid-high-batch-cardinality
 pub const RECOMMENDED_RPC_CHUNK_SIZE: usize = 50;
 
@@ -77,7 +76,7 @@ pub struct JsonRpcCachedProvider {
     is_zk_chain: bool,
     #[allow(unused)]
     chain_id: u64,
-    chain: Chain,
+    pub chain: Chain,
     block_poll_frequency: Option<BlockPollFrequency>,
     address_filtering: Option<AddressFiltering>,
     pub max_block_range: Option<U64>,
@@ -517,7 +516,7 @@ impl JsonRpcCachedProvider {
             .from_block(event_filter.from_block())
             .to_block(event_filter.to_block());
 
-        match addresses {
+        let logs = match addresses {
             // no addresses, which means nothing to get
             // different rpc providers implement an empty array differently,
             // therefore, we assume an empty addresses array means no events to fetch
@@ -546,18 +545,9 @@ impl JsonRpcCachedProvider {
                 }
             },
             None => Ok(self.provider.get_logs(&base_filter).await?),
-        }
+        };
 
-        // rindexer_info!("get_logs DEBUG [{:?}]", filter.raw_filter());
-        // LEAVING FOR NOW CONTEXT: TEMP FIX TO MAKE SURE FROM BLOCK IS ALWAYS SET
-        // let mut filter = filter.raw_filter().clone();
-        // if filter.get_from_block().is_none() {
-        //     filter = filter.from_block(BlockNumber::Earliest);
-        // }
-        // rindexer_info!("get_logs DEBUG AFTER [{:?}]", filter);
-        // let result = self.provider.raw_request("eth_getLogs".into(),
-        // [filter.raw_filter()]).await?; rindexer_info!("get_logs RESULT [{:?}]", result);
-        // Ok(result)
+        logs
     }
 
     /// Get logs by chunking addresses and fetching asynchronously in batches

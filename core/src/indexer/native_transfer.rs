@@ -311,6 +311,7 @@ pub async fn native_transfer_block_consumer(
                     ts,
                     to,
                     network_name,
+                    provider.chain.id(),
                     from_block,
                     to_block,
                 ))
@@ -402,6 +403,7 @@ pub async fn native_transfer_block_consumer_debug(
                     action,
                     &trace,
                     network_name,
+                    provider.chain.id(),
                     from_block,
                     to_block,
                 ))

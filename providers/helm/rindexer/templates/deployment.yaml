@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rindexer.fullname" . }}
+  labels:
+    {{- include "rindexer.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "rindexer.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "rindexer.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- if .Values.securityContext.enabled }}
+      securityContext:
+        runAsUser: {{ .Values.securityContext.runAsUser }}
+        runAsGroup: {{ .Values.securityContext.runAsGroup }}
+        fsGroup: {{ .Values.securityContext.fsGroup }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            {{- if and .Values.postgresql.enabled }}
+            - "/app/rindexer"
+            - "start"
+            - "-p"
+            - "{{ .Values.projectPath }}"
+            - "all"
+            {{- else }}
+            - "/app/rindexer"
+            - "start"
+            - "-p"
+            - "{{ .Values.projectPath }}"
+            - "indexer"
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          env:
+            - name: PROJECT_PATH
+              value: {{ .Values.projectPath }}
+            {{- if .Values.postgresql.enabled }}
+            - name: POSTGRES_PASSWORD
+              {{- if .Values.externalSecret }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.externalSecret }}
+                  key: POSTGRES_PASSWORD
+              {{- else }}
+              value: {{ .Values.postgresql.auth.password | quote }}
+              {{- end }}
+            - name: DATABASE_URL
+              {{- if .Values.externalSecret }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.externalSecret }}
+                  key: DATABASE_URL
+              {{- else }}
+              value: {{ printf "postgres://%s:%s@%s:%s/%s" .Values.postgresql.auth.username .Values.postgresql.auth.password .Values.postgresql.auth.host .Values.postgresql.auth.port .Values.postgresql.auth.database | quote }}
+              {{- end }}
+            {{- end }}
+          volumeMounts:
+            - name: rindexer-config
+              mountPath: {{ .Values.projectPath }}/rindexer.yaml
+              subPath: rindexer.yaml
+            - name: rindexer-abis
+              mountPath: {{ .Values.projectPath }}/abis
+              readOnly: true
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: rindexer-config
+          configMap:
+            name: {{ include "rindexer.fullname" . }}-config
+        - name: rindexer-abis
+          configMap:
+            name: {{ include "rindexer.fullname" . }}-abis
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

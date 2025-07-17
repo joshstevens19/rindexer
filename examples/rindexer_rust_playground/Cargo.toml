@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 # internal dependencies
-rindexer = { path = "../core" }
+rindexer = { path = "../../core" }
 
 # external dependencies
 tokio = { version = "1", features = ["full"] }

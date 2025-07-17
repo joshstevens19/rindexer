@@ -16,7 +16,7 @@ This means we ultimately run an indexing process per "network-event".
 This "network-event" is where concurrency is controlled.
 :::
 
-## Buffer
+## buffer
 
 _Default: `4`_
 
@@ -44,7 +44,7 @@ config:
   buffer: 1 // [!code focus]
 ```
 
-## Callback Concurrency
+## callback_concurrency
 
 _Default: `2`_
 
@@ -75,4 +75,23 @@ description: My native transfers rindexer project
 repository: https://github.com/joshstevens19/rindexer
 config:
   callback_concurrency: 2 // [!code focus]
+```
+
+## timestamp_sample_rate
+
+Optionally configure a sample rate to improve the efficiency of large-block-range requests by sampling those blocks.
+
+If you do not want to sample either ignore the option or set it to `1.0`.
+
+:::warn
+Sampling is tradeoff and cannot guarantee 100% accuracy of timestamps, but is far more efficient whilst retaining high-accuracy.
+Only enable sampling if you can accept small inaccuracies in timestamps.
+:::
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+config:
+  timestamp_sample_rate: 0.1 // [!code focus]
 ```
