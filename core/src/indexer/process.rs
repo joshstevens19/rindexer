@@ -550,15 +550,6 @@ async fn trigger_event(
     fn_data: Vec<EventResult>,
     to_block: U64,
 ) {
-    if config.is_factory_event() {
-        indexing_event_processing();
-        if !fn_data.is_empty() {
-            config.trigger_event(fn_data).await;
-        }
-        indexing_event_processed();
-        return;
-    }
-
     indexing_event_processing();
     if !fn_data.is_empty() {
         config.trigger_event(fn_data).await;

@@ -246,6 +246,7 @@ pub fn generate_rindexer_typings(
             let output = project_path.join("./src/rindexer_lib/typings");
 
             write_networks(&output, &manifest.networks)?;
+
             if let Some(global) = &manifest.global {
                 write_global(&output, global, &manifest.networks)?;
             }
@@ -339,7 +340,9 @@ pub fn generate_rindexer_handlers(
             "#,
             );
 
-            for mut contract in manifest.contracts {
+            let indexer = manifest.to_indexer();
+
+            for mut contract in indexer.contracts {
                 let is_filter = contract.identify_and_modify_filter();
 
                 let indexer_name = camel_to_snake(&manifest.name);
@@ -517,7 +520,7 @@ serde = {{ version = "1.0", features = ["derive"] }}
 
                 let mut enable_graphql = false;
                 let mut enable_indexer = false;
-                
+
                 let mut port: Option<u16> = None;
 
                 let args = args.iter();
@@ -566,7 +569,7 @@ serde = {{ version = "1.0", features = ["derive"] }}
                             }
                         })
                         .await;
-                        
+
                         match result {
                             Ok(_) => {}
                             Err(e) => {

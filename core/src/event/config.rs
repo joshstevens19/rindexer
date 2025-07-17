@@ -136,6 +136,8 @@ impl FactoryEventProcessingConfig {
     }
 
     pub async fn trigger_event(&self, events: Vec<EventResult>) {
+        self.registry.trigger_event(&self.id, fn_data).await;
+
         update_known_factory_deployed_addresses(self, &events)
             .await
             .expect("Failed to update known factory deployed addresses");

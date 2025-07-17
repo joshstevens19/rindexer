@@ -17,6 +17,7 @@ use crate::{
         storage::Storage,
     },
 };
+use crate::manifest::contract::{ContractDetails};
 
 fn deserialize_project_type<'de, D>(deserializer: D) -> Result<ProjectType, D::Error>
 where
@@ -94,10 +95,51 @@ pub struct Manifest {
 }
 
 impl Manifest {
+    /// Includes both user-defined contracts and factory filter contracts
+    pub fn all_contracts(&self) -> Vec<Contract> {
+        let factory_contracts = self.contracts.iter().filter_map(|c| {
+            let factory_filter_details = c.details.iter()
+                .filter_map(|detail| {
+                    Some((detail.factory.clone()?, detail.network.clone(), detail.start_block.clone(), detail.end_block.clone()))
+                }).collect::<Vec<_>>();
+
+            let (first, ..) = factory_filter_details.first().cloned()?;
+
+            let has_factory_mismatch = factory_filter_details.iter().any(|(detail, ..)| detail.name != first.name || detail.abi != first.abi || detail.event_name != first.event_name || detail.name != first.name);
+
+            if has_factory_mismatch {
+                panic!("Factory filter contract must be the same across all contracts. Please raise an issue if you need this feature");
+            }
+
+            Some(Contract {
+                name: first.name.clone(),
+                details: factory_filter_details.into_iter().map(|(factory, network, start_block, end_block)| ContractDetails {
+                    network,
+                    start_block,
+                    end_block,
+                    address: factory.address.clone().into(),
+                    factory: None,
+                    filter: None,
+                    indexed_filters: None
+                }).collect::<Vec<_>>(),
+                abi: first.abi.clone().into(),
+                dependency_events: None,
+                include_events: Some(vec![first.event_name]),
+                index_event_in_order: None,
+                reorg_safe_distance: None,
+                generate_csv: None,
+                streams: None,
+                chat: None,
+            })
+        }).collect::<Vec<_>>();
+
+        self.contracts.clone().into_iter().chain(factory_contracts).collect()
+    }
+
     pub fn to_indexer(&self) -> Indexer {
         Indexer {
             name: self.name.clone(),
-            contracts: self.contracts.clone(),
+            contracts: self.all_contracts().clone(),
             native_transfers: self.native_transfers.clone(),
         }
     }
