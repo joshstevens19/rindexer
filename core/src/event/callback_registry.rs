@@ -126,15 +126,13 @@ impl EventCallbackRegistryInformation {
     }
 
     pub fn is_factory_filter_event(&self) -> bool {
-        self.contract.details
-            .iter()
-            .all(|d| {
-                // it's a factory contract if the factory filter matches the contract name and event name
-                matches!(
-                    d.indexing_contract_setup.factory_details(),
-                    Some(f) if f.contract_name == self.contract.name && f.event.name == self.event_name
-                )
-            })
+        self.contract.details.iter().all(|d| {
+            // it's a factory contract if the factory filter matches the contract name and event name
+            matches!(
+                d.indexing_contract_setup.factory_details(),
+                Some(f) if f.contract_name == self.contract.name && f.event.name == self.event_name
+            )
+        })
     }
 }
 

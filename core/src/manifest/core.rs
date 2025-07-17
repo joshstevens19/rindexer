@@ -4,7 +4,11 @@ use alloy::{primitives::U64, transports::http::reqwest::header::HeaderMap};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_yaml::Value;
 
+use crate::event::contract_setup::ContractEventMapping;
 use crate::manifest::config::Config;
+use crate::manifest::contract::{
+    ContractDetails, DependencyEventTreeYaml, SimpleEventOrContractEvent,
+};
 use crate::{
     indexer::Indexer,
     manifest::{
@@ -17,8 +21,6 @@ use crate::{
         storage::Storage,
     },
 };
-use crate::event::contract_setup::ContractEventMapping;
-use crate::manifest::contract::{ContractDetails, DependencyEventTreeYaml, SimpleEventOrContractEvent};
 
 fn deserialize_project_type<'de, D>(deserializer: D) -> Result<ProjectType, D::Error>
 where
@@ -104,8 +106,8 @@ impl Manifest {
                     detail.factory.as_ref().map(|factory| (
                         factory.clone(),
                         detail.network.clone(),
-                        detail.start_block.clone(),
-                        detail.end_block.clone()
+                        detail.start_block,
+                        detail.end_block
                     ))
                 }).collect::<Vec<_>>();
 
@@ -113,7 +115,7 @@ impl Manifest {
 
             match first_factory {
                 Some((first, ..)) => {
-                    let has_factory_mismatch = factory_filter_details.iter().any(|(detail, ..)| detail.name != first.name || detail.abi != first.abi || detail.event_name != first.event_name || detail.name != first.name);
+                    let has_factory_mismatch = factory_filter_details.iter().any(|(detail, ..)| detail.name != first.name || detail.abi != first.abi || detail.event_name != first.event_name);
 
                     if has_factory_mismatch {
                         panic!("Contract using factory filter must use same factory across all networks. Please raise issue in github if you need different factories across networks");
@@ -155,7 +157,7 @@ impl Manifest {
                                 Some(DependencyEventTreeYaml {
                                     events: events
                                         .into_iter()
-                                        .map(|event| SimpleEventOrContractEvent::SimpleEvent(event))
+                                        .map(SimpleEventOrContractEvent::SimpleEvent)
                                         .collect(),
                                     then: None,
                                 })
@@ -180,7 +182,10 @@ impl Manifest {
     }
 
     pub fn has_any_contracts_live_indexing(&self) -> bool {
-        self.all_contracts().iter().filter(|c| c.details.iter().any(|p| p.end_block.is_none())).count()
+        self.all_contracts()
+            .iter()
+            .filter(|c| c.details.iter().any(|p| p.end_block.is_none()))
+            .count()
             > 0
     }
 

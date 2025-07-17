@@ -203,7 +203,8 @@ fn validate_manifest(
                 }
 
                 for foreign_key in &relationship.foreign_keys {
-                    if !manifest.all_contracts().iter().any(|c| c.name == foreign_key.contract_name) {
+                    if !manifest.all_contracts().iter().any(|c| c.name == foreign_key.contract_name)
+                    {
                         return Err(ValidateManifestError::RelationshipForeignKeyContractNotFound(
                             foreign_key.contract_name.clone(),
                         ));
