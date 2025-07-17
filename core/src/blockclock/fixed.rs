@@ -1,17 +1,3 @@
-//
-// base (8453)
-// blast (81457)
-// lens (232)
-// soneium (1868)
-// worldchain (480)
-//
-// ethereum (1)
-// optimism (10)
-// polygon (137)
-// arbitrum (42161)
-// zksync (324)
-// scroll (534352)
-// avalanche (43114)
 use alloy_chains::Chain;
 use alloy_chains::NamedChain;
 
@@ -24,7 +10,7 @@ pub enum SpacedNetwork {
 }
 impl SpacedNetwork {
     /// The genesis unix timestamp for the network (the zero block).
-    pub fn genesis_time(&self) -> i64 {
+    pub fn genesis_time(&self) -> u64 {
         match &self {
             SpacedNetwork::Base(_) => 1686789347,
             SpacedNetwork::Blast(_) => 1708809815,
@@ -44,8 +30,8 @@ impl SpacedNetwork {
     }
 
     /// Get the blocktime for a chain if present
-    pub fn block_spacing(&self) -> Option<i64> {
-        self.inner().average_blocktime_hint().map(|b| b.as_secs() as i64)
+    pub fn block_spacing(&self) -> Option<u64> {
+        self.inner().average_blocktime_hint().map(|b| b.as_secs())
     }
 
     /// The maximum block for which we are sure a consistent-spacing holds true.
@@ -62,10 +48,10 @@ impl SpacedNetwork {
     ///
     /// Will return [`None`] if the block time cannot be safely or accurately calculated, in which
     /// case it is up to the caller to find the timestamp with an alternate method.
-    pub fn get_block_time(&self, block: u64) -> Option<i64> {
+    pub fn get_block_time(&self, block: u64) -> Option<u64> {
         if let Some(spacing) = &self.block_spacing() {
             let start = &self.genesis_time();
-            let block_time = start + spacing * block as i64;
+            let block_time = start + spacing * block;
             if block <= self.max_safe_block() {
                 return Some(block_time);
             }
@@ -132,7 +118,7 @@ mod tests {
         .await
         .unwrap()
         .into_iter()
-        .map(|t| (t.header.number, t.header.timestamp as i64))
+        .map(|t| (t.header.number, t.header.timestamp))
         .collect::<HashMap<_, _>>();
 
         for (k, v) in block_time {

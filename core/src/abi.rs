@@ -232,7 +232,14 @@ impl ABIItem {
         let filtered_abi_items = match &contract.include_events {
             Some(events) => abi_items
                 .into_iter()
-                .filter(|item| item.type_ != "event" || events.contains(&item.name))
+                .filter(|item| {
+                    item.type_ != "event"
+                        || events
+                            .into_iter()
+                            .map(|a| a.name.clone())
+                            .collect::<Vec<_>>()
+                            .contains(&item.name)
+                })
                 .collect(),
             None => abi_items,
         };

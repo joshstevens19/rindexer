@@ -57,19 +57,14 @@ pub enum BlockClockError {
 
 #[derive(Debug, Clone)]
 pub struct BlockClock {
-    pub enabled: bool,
     sample_rate: f32,
     provider: Arc<JsonRpcCachedProvider>,
 }
 
 impl BlockClock {
-    pub fn new(
-        enabled: bool,
-        sample_rate: Option<f32>,
-        provider: Arc<JsonRpcCachedProvider>,
-    ) -> Self {
+    pub fn new(sample_rate: Option<f32>, provider: Arc<JsonRpcCachedProvider>) -> Self {
         let bounded_sampling = sample_rate.unwrap_or(1.0).clamp(0.001, 1.0);
-        Self { enabled, provider, sample_rate: bounded_sampling }
+        Self { provider, sample_rate: bounded_sampling }
     }
 
     /// Given the defined confidence score and a starting block, get the maximum set of block
@@ -188,7 +183,7 @@ impl BlockClock {
                 .partition(|(_, ts)| ts.is_some());
 
             if missing_ts.is_empty() {
-                let with_timestamps = ts.into_iter().map(|(b, ts)| (b, ts.unwrap() as u64));
+                let with_timestamps = ts.into_iter().map(|(b, ts)| (b, ts.unwrap()));
                 let timestamps = BTreeMap::from_iter(with_timestamps);
                 return Ok(timestamps);
             }
@@ -276,7 +271,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_simple_interpolation() {
-        let clock = BlockClock::new(true, None, client().await);
+        let clock = BlockClock::new(None, client().await);
 
         // Lets assume perfect times, 1 block = 1 second.
         let mut anchors = vec![(1, 1), (10, 10), (20, 20), (30, 30), (10_000, 10_000)];
@@ -295,26 +290,26 @@ mod tests {
 
     #[tokio::test]
     async fn test_ratio_sampling_min() {
-        let clock = BlockClock::new(true, Some(1.0), client().await);
+        let clock = BlockClock::new(Some(1.0), client().await);
         let samples = clock.block_range_samples(1000, 1234);
         let actual_sampling_ratio = samples.len() as f32 / (1234 - 1000) as f32;
 
         assert!(actual_sampling_ratio >= 1.0);
 
-        let clock = BlockClock::new(true, Some(0.1), client().await);
+        let clock = BlockClock::new(Some(0.1), client().await);
         let samples = clock.block_range_samples(1000, 1019);
         let actual_sampling_ratio = samples.len() as f32 / (1019 - 1000) as f32;
 
         assert!(actual_sampling_ratio >= 0.1);
 
-        let clock = BlockClock::new(true, Some(0.1), client().await);
+        let clock = BlockClock::new(Some(0.1), client().await);
         let samples = clock.block_range_samples(1000, 1600);
         let actual_sampling_ratio = samples.len() as f32 / (1600 - 1000) as f32;
 
         assert!(actual_sampling_ratio >= 0.1);
         assert!(actual_sampling_ratio <= 0.15); // Ensure we don't oversample here either
 
-        let clock = BlockClock::new(true, Some(0.5), client().await);
+        let clock = BlockClock::new(Some(0.5), client().await);
         let samples = clock.block_range_samples(1000, 1300);
         let actual_sampling_ratio = samples.len() as f32 / (1300 - 1000) as f32;
 
@@ -324,7 +319,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sampling() {
-        let clock = BlockClock::new(true, Some(0.1), client().await);
+        let clock = BlockClock::new(Some(0.1), client().await);
 
         assert_eq!(clock.block_range_samples(10, 10), vec![10]);
         assert_eq!(clock.block_range_samples(10, 11), vec![10, 11]);
@@ -336,7 +331,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sampling_unique() {
-        let clock = BlockClock::new(true, Some(0.1), client().await);
+        let clock = BlockClock::new(Some(0.1), client().await);
         let samples = clock.block_range_samples(1000, 1600);
         let unique_samples = samples.iter().cloned().collect::<std::collections::HashSet<_>>();
 
@@ -351,7 +346,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sampling_window_sequence() {
-        let clock = BlockClock::new(true, Some(0.1), client().await);
+        let clock = BlockClock::new(Some(0.1), client().await);
         let samples = clock.block_range_samples(1000, 1600);
 
         assert!(samples.windows(2).all(|w| w[0] < w[1]));

@@ -358,6 +358,22 @@ pub async fn start_indexing_contract_events(
             processed_up_to: end_block,
         });
 
+        let contract = manifest.contracts.iter().find(|c| c.name == event.contract.name).unwrap();
+
+        let timestamp_enabled_for_event = contract
+            .include_events
+            .iter()
+            .flat_map(|e| e)
+            .find(|a| a.name == event.event_name)
+            .unwrap()
+            .timestamps;
+
+        match timestamp_enabled_for_event {
+            Some(true) => info!("Timestamps enabled for event: {}", event.event_name),
+            Some(false) => info!("Timestamps disabled for event: {}", event.event_name),
+            None => {}
+        };
+
         let event_processing_config = ContractEventProcessingConfig {
             id: event.id.clone(),
             project_path: project_path.clone(),
@@ -374,6 +390,7 @@ pub async fn start_indexing_contract_events(
             database: database.clone(),
             csv_details: manifest_csv_details.clone(),
             config: manifest.config.clone(),
+            timestamps: timestamp_enabled_for_event.unwrap_or(manifest.timestamps.unwrap_or(false)),
             stream_last_synced_block_file_path: stream_details
                 .as_ref()
                 .map(|s| s.get_streams_last_synced_block_path()),
@@ -400,6 +417,8 @@ pub async fn start_indexing_contract_events(
                 progress: Arc::clone(&event_progress_state),
                 database: database.clone(),
                 config: manifest.config.clone(),
+                timestamps: timestamp_enabled_for_event
+                    .unwrap_or(manifest.timestamps.unwrap_or(false)),
                 csv_details: manifest_csv_details.clone(),
                 stream_last_synced_block_file_path: stream_details
                     .as_ref()

@@ -620,8 +620,7 @@ fn generate_event_bindings_code(
                                 network: c.network.clone(),
                                 cached_provider: provider.clone(),
                                 block_clock: BlockClock::new(
-                                    rindexer_yaml.timestamps.enabled,
-                                    rindexer_yaml.timestamps.sample_rate,
+                                    rindexer_yaml.config.timestamp_sample_rate,
                                     provider.clone(),
                                 ),
                                 decoder: self.decoder(&c.network),

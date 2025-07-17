@@ -5,7 +5,6 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_yaml::Value;
 
 use crate::manifest::config::Config;
-use crate::manifest::timestamps::Timestamps;
 use crate::{
     indexer::Indexer,
     manifest::{
@@ -74,7 +73,7 @@ pub struct Manifest {
     pub config: Config,
 
     #[serde(default)]
-    pub timestamps: Timestamps,
+    pub timestamps: Option<bool>,
 
     pub networks: Vec<Network>,
 
@@ -310,15 +309,12 @@ mod tests {
         let yaml = r#"
         name: test
         project_type: no-code
-        timestamps:
-          enabled: true
+        timestamps: true
         networks: []
         contracts: []
         "#;
 
         let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
-
-        assert!(manifest.timestamps.enabled);
-        assert_eq!(manifest.timestamps.sample_rate, None);
+        assert_eq!(manifest.timestamps, Some(true));
     }
 }

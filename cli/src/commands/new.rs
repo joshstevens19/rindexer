@@ -12,7 +12,9 @@ use alloy::{
     rpc::types::ValueOrArray,
 };
 use rindexer::manifest::config::Config;
-use rindexer::manifest::timestamps::Timestamps;
+use rindexer::manifest::contract::ContractEvent;
+#[cfg(feature = "reth")]
+use rindexer::manifest::reth::RethConfig;
 use rindexer::{
     generator::{build::generate_rust_project, generate_docker_file},
     manifest::{
@@ -25,9 +27,6 @@ use rindexer::{
     },
     write_file, StringOrArray, WriteFileError,
 };
-
-#[cfg(feature = "reth")]
-use rindexer::manifest::reth::RethConfig;
 
 #[cfg(not(feature = "reth"))]
 type RethConfig = ();
@@ -211,8 +210,8 @@ pub fn handle_new_command(
         description: project_description,
         repository,
         project_type,
-        config: Config { buffer: None, callback_concurrency: None },
-        timestamps: Timestamps { enabled: false, sample_rate: None },
+        config: Config { buffer: None, callback_concurrency: None, timestamp_sample_rate: None },
+        timestamps: None,
         networks: vec![Network {
             name: "ethereum".to_string(),
             chain_id: 1,
@@ -238,7 +237,10 @@ pub fn handle_new_command(
                 Some(U64::from(19000000)),
             )],
             abi: StringOrArray::Single(abi_example_path.display().to_string()),
-            include_events: Some(vec!["Transfer".to_string(), "Approval".to_string()]),
+            include_events: Some(vec![
+                ContractEvent { name: "Transfer".to_string(), timestamps: None },
+                ContractEvent { name: "Approval".to_string(), timestamps: None },
+            ]),
             index_event_in_order: None,
             dependency_events: None,
             reorg_safe_distance: None,

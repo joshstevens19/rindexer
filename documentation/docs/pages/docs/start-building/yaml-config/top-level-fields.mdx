@@ -92,23 +92,17 @@ config:
 
 ## timestamps
 
-Timestamps are `disabled` by default.
+Enable block timestamps for all events on all networks. Timestamps are `disabled` by default.
 
-Opt-in to including timestamps in all rindexer logs. Optionally configure a sample rate to improve
-the efficiency of large-block-range requests by sampling those blocks. If you do not want to sample either ignore the option
-or set it to `1.0`.
+Includes timestamps in all rindexer logs. Any logs with timestamps already included are ignored, and we
+try to be as efficient as possible when fetching timestamps by first using fixed ranges, then precalculated, and
+lastly fallback to RPC requests when required.
 
-Any logs with timestamps already included are ignored, and we try to be as efficient as possible when fetching timestamps.
-
-:::info
-Sampling is tradeoff and cannot guarantee 100% accuracy of timestamps, but is far more efficient, whilst retaining high-accuracy.
-:::
+Timestamps can also be opted into for specific events. [See more details](/docs/start-building/yaml-config/contracts).
 
 ```yaml [rindexer.yaml]
 name: rETHIndexer
 description: My first rindexer project
 repository: https://github.com/joshstevens19/rindexer
-timestamps:
-  enabled: true // [!code focus]
-  sample_rate: 0.25 // [!code focus]
+timestamps: true
 ```

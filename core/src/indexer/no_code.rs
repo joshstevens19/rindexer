@@ -647,7 +647,7 @@ async fn process_contract(
             contract,
             network_providers,
             noop_decoder(),
-            &manifest.timestamps,
+            &manifest,
         )?;
 
         let mut csv: Option<Arc<AsyncCsvAppender>> = None;

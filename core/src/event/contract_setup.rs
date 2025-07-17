@@ -1,6 +1,6 @@
 use crate::blockclock::BlockClock;
 use crate::helpers::get_full_path;
-use crate::manifest::timestamps::Timestamps;
+use crate::manifest::core::Manifest;
 use crate::notifications::ChainStateNotification;
 use crate::{
     event::callback_registry::Decoder,
@@ -70,7 +70,7 @@ impl ContractInformation {
         contract: &Contract,
         network_providers: &[CreateNetworkProvider],
         decoder: Decoder,
-        timestamps: &Timestamps,
+        manifest: &Manifest,
     ) -> Result<ContractInformation, CreateContractInformationError> {
         let mut details = vec![];
         for c in &contract.details {
@@ -88,11 +88,7 @@ impl ContractInformation {
                         id: generate_random_id(10),
                         network: c.network.clone(),
                         cached_provider: client.clone(),
-                        block_clock: BlockClock::new(
-                            timestamps.enabled,
-                            timestamps.sample_rate,
-                            client,
-                        ),
+                        block_clock: BlockClock::new(manifest.config.timestamp_sample_rate, client),
                         decoder: Arc::clone(&decoder),
                         indexing_contract_setup: c.indexing_contract_setup(project_path),
                         start_block: c.start_block,

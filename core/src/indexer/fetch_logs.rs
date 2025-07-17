@@ -74,12 +74,14 @@ pub fn fetch_logs_stream(
                 );
             }
         }
+
         while current_filter.from_block() <= snapshot_to_block {
             if !is_running() {
                 break;
             }
 
             let result = fetch_historic_logs_stream(
+                config.timestamps(),
                 config.network_contract().block_clock.clone(),
                 &config.network_contract().cached_provider,
                 &tx,
@@ -131,6 +133,7 @@ pub fn fetch_logs_stream(
         // Live indexing mode
         if config.live_indexing() && !force_no_live_indexing {
             live_indexing_stream(
+                config.timestamps(),
                 config.network_contract().block_clock.clone(),
                 &config.network_contract().cached_provider,
                 &tx,
@@ -157,6 +160,7 @@ struct ProcessHistoricLogsStreamResult {
 
 #[allow(clippy::too_many_arguments)]
 async fn fetch_historic_logs_stream(
+    timestamps: bool,
     block_clock: BlockClock,
     cached_provider: &Arc<JsonRpcCachedProvider>,
     tx: &mpsc::Sender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
@@ -239,7 +243,7 @@ async fn fetch_historic_logs_stream(
                 );
             }
 
-            if block_clock.enabled {
+            if timestamps {
                 if let Ok(logs) = block_clock.attach_log_timestamps(logs).await {
                     sender.send(Ok(FetchLogsResult { logs, from_block, to_block }));
                 } else {
@@ -397,6 +401,7 @@ async fn fetch_historic_logs_stream(
 /// within a safe range, updating the filter, and sending the logs to the provided channel.
 #[allow(clippy::too_many_arguments)]
 async fn live_indexing_stream(
+    timestamps: bool,
     block_clock: BlockClock,
     cached_provider: &Arc<JsonRpcCachedProvider>,
     tx: &mpsc::Sender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
@@ -570,7 +575,7 @@ async fn live_indexing_stream(
                                             );
                                         }
 
-                                        let logs = if block_clock.enabled {
+                                        let logs = if timestamps {
                                             if let Ok(logs_with_ts) =
                                                 block_clock.attach_log_timestamps(logs).await
                                             {
