@@ -235,7 +235,7 @@ impl ABIItem {
                 .filter(|item| {
                     item.type_ != "event"
                         || events
-                            .into_iter()
+                            .iter()
                             .map(|a| a.name.clone())
                             .collect::<Vec<_>>()
                             .contains(&item.name)

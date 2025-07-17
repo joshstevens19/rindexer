@@ -363,7 +363,7 @@ pub async fn start_indexing_contract_events(
         let timestamp_enabled_for_event = contract
             .include_events
             .iter()
-            .flat_map(|e| e)
+            .flatten()
             .find(|a| a.name == event.event_name)
             .unwrap()
             .timestamps;
