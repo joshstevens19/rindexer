@@ -44,6 +44,7 @@ use tracing::{debug, debug_span, error, Instrument};
 use url::Url;
 
 use crate::helpers::chunk_hashset;
+use crate::layer_extensions::RpcLoggingLayer;
 use crate::manifest::network::{AddressFiltering, BlockPollFrequency};
 use crate::{event::RindexerEventFilter, manifest::core::Manifest};
 
@@ -640,11 +641,13 @@ pub async fn create_client(
     chain_state_notification: Option<Sender<ChainStateNotification>>,
 ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
     let (rpc_client, provider) = if rpc_url.ends_with(".ipc") {
-        // IPC connection
         let ipc = IpcConnect::new(rpc_url.to_string());
         let retry_layer =
             RetryBackoffLayer::new(5000, 1000, compute_units_per_second.unwrap_or(660));
-        let rpc_client = RpcClient::builder().layer(retry_layer).ipc(ipc.clone()).await?;
+        let logging_layer = RpcLoggingLayer::new(chain_id, rpc_url.to_string());
+
+        let rpc_client =
+            RpcClient::builder().layer(retry_layer).layer(logging_layer).ipc(ipc.clone()).await?;
 
         let provider =
             ProviderBuilder::new().network::<AnyNetwork>().connect_ipc(ipc).await.map_err(|e| {
@@ -656,21 +659,20 @@ pub async fn create_client(
 
         (rpc_client, provider)
     } else {
-        // HTTP connection
         let rpc_url = Url::parse(rpc_url).map_err(|e| {
             RetryClientError::HttpProviderCantBeCreated(rpc_url.to_string(), e.to_string())
         })?;
 
-        // Most log responses return in this timeout, any others retry on failure with smaller range
         let client_with_auth = Client::builder()
             .default_headers(custom_headers)
             .timeout(Duration::from_secs(90))
             .build()?;
 
+        let logging_layer = RpcLoggingLayer::new(chain_id, rpc_url.to_string());
         let http = Http::with_client(client_with_auth, rpc_url);
         let retry_layer =
             RetryBackoffLayer::new(5000, 1000, compute_units_per_second.unwrap_or(660));
-        let rpc_client = RpcClient::builder().layer(retry_layer).transport(http, false);
+        let rpc_client = RpcClient::builder().layer(retry_layer).layer(logging_layer).transport(http, false);
         let provider =
             ProviderBuilder::new().network::<AnyNetwork>().connect_client(rpc_client.clone());
 
