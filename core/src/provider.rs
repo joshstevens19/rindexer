@@ -672,7 +672,8 @@ pub async fn create_client(
         let http = Http::with_client(client_with_auth, rpc_url);
         let retry_layer =
             RetryBackoffLayer::new(5000, 1000, compute_units_per_second.unwrap_or(660));
-        let rpc_client = RpcClient::builder().layer(retry_layer).layer(logging_layer).transport(http, false);
+        let rpc_client =
+            RpcClient::builder().layer(retry_layer).layer(logging_layer).transport(http, false);
         let provider =
             ProviderBuilder::new().network::<AnyNetwork>().connect_client(rpc_client.clone());
 
