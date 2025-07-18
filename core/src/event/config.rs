@@ -86,8 +86,8 @@ impl ContractEventProcessingConfig {
         }
     }
 
-    pub async fn trigger_event(&self, fn_data: Vec<EventResult>) {
-        self.registry.trigger_event(&self.id, fn_data).await;
+    pub async fn trigger_event(&self, fn_data: Vec<EventResult>) -> Result<(), String> {
+        self.registry.trigger_event(&self.id, fn_data).await
     }
 }
 
@@ -137,12 +137,10 @@ impl FactoryEventProcessingConfig {
         )
     }
 
-    pub async fn trigger_event(&self, events: Vec<EventResult>) {
+    pub async fn trigger_event(&self, events: Vec<EventResult>) -> Result<(), String> {
         self.registry.trigger_event(&self.id, events.clone()).await;
 
-        update_known_factory_deployed_addresses(self, &events)
-            .await
-            .expect("Failed to update known factory deployed addresses");
+        update_known_factory_deployed_addresses(self, &events).await.map_err(|e| e.to_string())
     }
 
     pub fn info_log_name(&self) -> String {
@@ -300,7 +298,7 @@ impl EventProcessingConfig {
         }
     }
 
-    pub async fn trigger_event(&self, fn_data: Vec<EventResult>) {
+    pub async fn trigger_event(&self, fn_data: Vec<EventResult>) -> Result<(), String> {
         match self {
             Self::ContractEventProcessing(config) => config.trigger_event(fn_data).await,
             Self::FactoryEventProcessing(config) => config.trigger_event(fn_data).await,
@@ -328,6 +326,6 @@ pub struct TraceProcessingConfig {
 
 impl TraceProcessingConfig {
     pub async fn trigger_event(&self, fn_data: Vec<TraceResult>) {
-        self.registry.trigger_event(&self.id, fn_data).await;
+        let _ = self.registry.trigger_event(&self.id, fn_data).await;
     }
 }

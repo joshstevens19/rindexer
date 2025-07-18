@@ -5,6 +5,7 @@
 
 ### Features
 -------------------------------------------------
+- fix: descope some logs
 
 ### Bug fixes
 -------------------------------------------------
@@ -16,6 +17,38 @@
 -------------------------------------------------
 
 all release branches are deployed through `release/VERSION_NUMBER` branches
+
+# 0.21.2-beta - 16th July 2025
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.21.2
+
+- linux binary - https://github.com/joshstevens19/rindexer/releases/download/v0.21.2/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://github.com/joshstevens19/rindexer/releases/download/v0.21.2/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://github.com/joshstevens19/rindexer/releases/download/v0.21.2/rindexer_darwin-amd64.tar.gz
+- windows binary - https://github.com/joshstevens19/rindexer/releases/download/v0.21.2/rindexer_win32-amd64.zip
+
+### Bug fixes
+-------------------------------------------------
+- fix: resolve build issues with reth dependencies, and feature gate reth dependencies to avoid bloating the binary size
+
+
+# 0.21.1-beta - 16th July 2025
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.21.1
+
+- linux binary - https://github.com/joshstevens19/rindexer/releases/download/v0.21.1/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://github.com/joshstevens19/rindexer/releases/download/v0.21.1/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://github.com/joshstevens19/rindexer/releases/download/v0.21.1/rindexer_darwin-amd64.tar.gz
+- windows binary - https://github.com/joshstevens19/rindexer/releases/download/v0.21.1/rindexer_win32-amd64.zip
+
+### Features
+-------------------------------------------------
+- feat: Add a `Nullable` Numeric256 SQL type, `Nullable` DateTime SQL type and Uuid SQL type
+
+### Bug fixes
+-------------------------------------------------
+- fix: resolve issues with updating last seen block even if the event failed
+
 
 # 0.21.0-beta - 15th July 2025
 
@@ -45,7 +78,6 @@ github branch - https://github.com/joshstevens19/rindexer/tree/release/0.20.0
 - feat: support reth natively in rindexer https://rindexer.xyz/docs/start-building/create-new-project/reth-mode + https://rindexer.xyz/docs/advanced/using-reth-exex
 
 - Indexing with `eth_getBlockByNumber` for more efficiency (but still retain all debug/trace logic for future options)
-- Add a `Nullable` Numeric256 SQL type, `Nullable` DateTime SQL type and Uuid SQL type
 - Add tx receipt endpoint as useful prep work for raw transaction indexing option
 - Add an ever-so-slightly backpressured queue per "network-event" for super fair scheduling, decreased write contention on the database, and improved memory utilisation, can use 1/4 of memory with no throughput drop in some cases.
 
