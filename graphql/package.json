@@ -3,8 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "build": "pkg index.js --output ../core/resources/rindexer-graphql --targets node16-linux-x64,node16-macos-x64,node16-win-x64",
-    "build-linux": "pkg --debug index.js --output ../core/resources/rindexer-graphql-linux --targets node18-linux-x64"
+    "build": "pkg . --output ../core/resources/rindexer-graphql"
   },
   "dependencies": {
     "@graphile-contrib/pg-simplify-inflector": "^6.1.0",
@@ -21,6 +20,6 @@
   "devDependencies": {
     "dotenv": "^16.4.5",
     "nodemon": "^3.1.4",
-    "pkg": "^5.3.1"
+    "pkg": "^5.8.1"
   }
 }
