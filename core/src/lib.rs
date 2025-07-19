@@ -34,6 +34,7 @@ mod chat;
 pub mod event;
 pub mod notifications;
 pub use notifications::ChainStateNotification;
+mod layer_extensions;
 pub mod phantom;
 pub mod provider;
 mod start;
