@@ -29,3 +29,4 @@ rindexer_rust_playground/generated_csv/*/*.csv
 !.env.example
 node_modules
 core/resources/rindexer-graphql-*
+*.blob
