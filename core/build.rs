@@ -1,9 +1,18 @@
 use std::{
-    env, fs,
+    env,
+    fs,
     path::{Path, PathBuf},
     process::Command,
     // time::SystemTime,
 };
+
+// A list of source files for the GraphQL server. Centralized for easy management.
+const GRAPHQL_SOURCE_FILES: &[&str] = &[
+    "../graphql/index.js",
+    "../graphql/package.json",
+    "../graphql/package-lock.json",
+    "../graphql/sea-config.json",
+];
 
 fn main() {
     // Check if Node.js is installed before doing anything else
@@ -88,10 +97,9 @@ fn main() {
     }
 
     // Tell Cargo when to rerun the build script
-    println!("cargo:rerun-if-changed=../graphql/index.js");
-    println!("cargo:rerun-if-changed=../graphql/package.json");
-    println!("cargo:rerun-if-changed=../graphql/package-lock.json");
-    println!("cargo:rerun-if-changed=../graphql/sea-config.json");
+    for path in GRAPHQL_SOURCE_FILES {
+        println!("cargo:rerun-if-changed={}", manifest_dir.join(path).display());
+    }
 }
 
 /// Executes a command and panics with detailed error information if it fails.
