@@ -29,14 +29,17 @@ pub struct GraphqlOverrideSettings {
 }
 
 fn get_graphql_exe() -> Result<PathBuf, ()> {
-    let postgraphile_filename = match env::consts::OS {
-        "windows" => "rindexer-graphql-win.exe",
-        "macos" => "rindexer-graphql-macos",
-        "linux" => "rindexer-graphql-linux",
-        _ => {
-            panic!("Unsupported OS: {}", env::consts::OS);
-        }
+    let os = env::consts::OS;
+    let arch = env::consts::ARCH;
+
+    let node_arch = match arch {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        _ => panic!("Unsupported architecture: {}", arch),
     };
+
+    let exe_suffix = if os == "windows" { ".exe" } else { "" };
+    let postgraphile_filename = format!("rindexer-graphql-{}-{}{}", os, node_arch, exe_suffix);
 
     let mut paths = vec![];
 
@@ -45,7 +48,7 @@ fn get_graphql_exe() -> Result<PathBuf, ()> {
         let mut path = executable_path.to_path_buf();
         path.pop(); // Remove the executable name
         path.push("resources");
-        path.push(postgraphile_filename);
+        path.push(&postgraphile_filename);
         paths.push(path);
 
         // Also consider when running from within the `rindexer` directory
@@ -53,7 +56,7 @@ fn get_graphql_exe() -> Result<PathBuf, ()> {
         path.pop(); // Remove the executable name
         path.pop(); // Remove the 'release' or 'debug' directory
         path.push("resources");
-        path.push(postgraphile_filename);
+        path.push(&postgraphile_filename);
         paths.push(path);
     }
 
@@ -62,7 +65,7 @@ fn get_graphql_exe() -> Result<PathBuf, ()> {
         let mut path = PathBuf::from(home_dir);
         path.push(".rindexer");
         path.push("resources");
-        path.push(postgraphile_filename);
+        path.push(&postgraphile_filename);
         paths.push(path);
     }
 
