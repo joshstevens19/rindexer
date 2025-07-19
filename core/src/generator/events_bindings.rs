@@ -586,7 +586,7 @@ fn generate_event_bindings_code(
                 let event_name = self.event_name();
 
                 let contract_details = rindexer_yaml
-                    .contracts
+                    .all_contracts()
                     .iter()
                     .find(|c| c.name == contract_name)
                     .unwrap_or_else(|| panic!("Contract {{}} not found please make sure its defined in the rindexer.yaml",

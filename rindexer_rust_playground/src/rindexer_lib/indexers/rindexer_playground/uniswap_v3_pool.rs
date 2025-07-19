@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
-use super::super::super::typings::rindexer_playground::events::uniswap_v3_pool_filter::{
-    SwapEvent, UniswapV3PoolFilterEventType, no_extensions,
+use super::super::super::typings::rindexer_playground::events::uniswap_v3_pool::{
+    SwapEvent, UniswapV3PoolEventType, no_extensions,
 };
 use alloy::primitives::{I256, U256};
 use rindexer::{
@@ -58,10 +58,7 @@ async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegis
             if !csv_bulk_data.is_empty() {
                 let csv_result = context.csv.append_bulk(csv_bulk_data).await;
                 if let Err(e) = csv_result {
-                    rindexer_error!(
-                        "UniswapV3PoolFilterEventType::Swap inserting csv data: {:?}",
-                        e
-                    );
+                    rindexer_error!("UniswapV3PoolEventType::Swap inserting csv data: {:?}", e);
                     return Err(e.to_string());
                 }
             }
@@ -91,7 +88,7 @@ async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegis
                 let result = context
                     .database
                     .bulk_insert_via_copy(
-                        "rindexer_playground_uniswap_v3_pool_filter.swap",
+                        "rindexer_playground_uniswap_v3_pool.swap",
                         &rows,
                         &postgres_bulk_data
                             .first()
@@ -105,7 +102,7 @@ async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegis
 
                 if let Err(e) = result {
                     rindexer_error!(
-                        "UniswapV3PoolFilterEventType::Swap inserting bulk data via COPY: {:?}",
+                        "UniswapV3PoolEventType::Swap inserting bulk data via COPY: {:?}",
                         e
                     );
                     return Err(e.to_string());
@@ -114,7 +111,7 @@ async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegis
                 let result = context
                     .database
                     .bulk_insert(
-                        "rindexer_playground_uniswap_v3_pool_filter.swap",
+                        "rindexer_playground_uniswap_v3_pool.swap",
                         &rows,
                         &postgres_bulk_data,
                     )
@@ -122,7 +119,7 @@ async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegis
 
                 if let Err(e) = result {
                     rindexer_error!(
-                        "UniswapV3PoolFilterEventType::Swap inserting bulk data via INSERT: {:?}",
+                        "UniswapV3PoolEventType::Swap inserting bulk data via INSERT: {:?}",
                         e
                     );
                     return Err(e.to_string());
@@ -130,7 +127,7 @@ async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegis
             }
 
             rindexer_info!(
-                "UniswapV3PoolFilter::Swap - {} - {} events",
+                "UniswapV3Pool::Swap - {} - {} events",
                 "INDEXED".green(),
                 results.len(),
             );
@@ -141,9 +138,9 @@ async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegis
     )
     .await;
 
-    UniswapV3PoolFilterEventType::Swap(handler).register(manifest_path, registry).await;
+    UniswapV3PoolEventType::Swap(handler).register(manifest_path, registry).await;
 }
-pub async fn uniswap_v3_pool_filter_handlers(
+pub async fn uniswap_v3_pool_handlers(
     manifest_path: &PathBuf,
     registry: &mut EventCallbackRegistry,
 ) {
