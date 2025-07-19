@@ -138,7 +138,7 @@ impl FactoryEventProcessingConfig {
     }
 
     pub async fn trigger_event(&self, events: Vec<EventResult>) -> Result<(), String> {
-        self.registry.trigger_event(&self.id, events.clone()).await;
+        self.registry.trigger_event(&self.id, events.clone()).await?;
 
         update_known_factory_deployed_addresses(self, &events).await.map_err(|e| e.to_string())
     }

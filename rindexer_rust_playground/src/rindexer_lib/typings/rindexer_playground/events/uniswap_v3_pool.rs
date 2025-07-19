@@ -318,6 +318,12 @@ pub async fn decoder_contract(
             Address::ZERO,
             get_provider_cache_for_network(network).await.get_inner_provider(),
         )
+    } else if network == "ethereum" {
+        RindexerUniswapV3PoolGen::new(
+            // do not care about address here its decoding makes it easier to handle ValueOrArray
+            Address::ZERO,
+            get_provider_cache_for_network(network).await.get_inner_provider(),
+        )
     } else {
         panic!("Network not supported");
     }

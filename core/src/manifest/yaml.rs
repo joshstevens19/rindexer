@@ -83,7 +83,7 @@ fn validate_manifest(
 ) -> Result<(), ValidateManifestError> {
     let mut seen = HashSet::new();
     let duplicates_contract_names: Vec<String> = manifest
-        .all_contracts()
+        .contracts
         .iter()
         .filter_map(|c| if seen.insert(&c.name) { None } else { Some(c.name.clone()) })
         .collect();

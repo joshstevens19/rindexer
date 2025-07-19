@@ -7,7 +7,7 @@ use serde_yaml::Value;
 use crate::event::contract_setup::ContractEventMapping;
 use crate::manifest::config::Config;
 use crate::manifest::contract::{
-    ContractDetails, DependencyEventTreeYaml, SimpleEventOrContractEvent,
+    ContractDetails, DependencyEventTreeYaml, FactoryDetailsYaml, SimpleEventOrContractEvent,
 };
 use crate::{
     indexer::Indexer,
@@ -114,30 +114,36 @@ impl Manifest {
             let first_factory = factory_filter_details.first().cloned();
 
             match first_factory {
-                Some((first, ..)) => {
-                    let has_factory_mismatch = factory_filter_details.iter().any(|(detail, ..)| detail.name != first.name || detail.abi != first.abi || detail.event_name != first.event_name);
+                Some((first_factory, ..)) => {
+                    let has_factory_mismatch = factory_filter_details.iter().any(|(detail, ..)| detail.name != first_factory.name || detail.abi != first_factory.abi || detail.event_name != first_factory.event_name);
 
                     if has_factory_mismatch {
                         panic!("Contract using factory filter must use same factory across all networks. Please raise issue in github if you need different factories across networks");
                     }
 
+                    // suffix with factory filter details to allow having the same contract name at the `contracts` level in yaml
+                    let overridden_factory_contract_name = format!("{}{}{}", first_factory.name, first_factory.event_name, first_factory.input_name);
+
                     let factory_contract = Contract {
-                        name: first.name.clone(),
+                        name: overridden_factory_contract_name.clone(),
                         details: factory_filter_details.into_iter().map(|(factory, network, start_block, end_block)| ContractDetails {
                             network,
                             start_block,
                             end_block,
-                            factory: Some(factory.clone()),
+                            factory: Some(FactoryDetailsYaml {
+                                name: overridden_factory_contract_name.clone(),
+                                ..factory
+                            }),
                             address: None,
                             filter: None,
                             indexed_filters: None
                         }).collect::<Vec<_>>(),
-                        abi: first.abi.clone().into(),
+                        abi: first_factory.abi.clone().into(),
                         dependency_events: None,
-                        include_events: Some(vec![first.event_name.clone()]),
-                        index_event_in_order: None,
-                        reorg_safe_distance: None,
-                        generate_csv: None,
+                        include_events: Some(vec![first_factory.event_name.clone()]),
+                        index_event_in_order: contract.index_event_in_order.clone(),
+                        reorg_safe_distance: contract.reorg_safe_distance,
+                        generate_csv: contract.generate_csv,
                         streams: None,
                         chat: None,
                     };
@@ -146,7 +152,7 @@ impl Manifest {
                         dependency_events: Some(DependencyEventTreeYaml {
                             events: vec![SimpleEventOrContractEvent::ContractEvent( ContractEventMapping{
                                 contract_name: factory_contract.name.clone(),
-                                event_name: first.event_name,
+                                event_name: first_factory.event_name,
                             })],
                             then: contract.dependency_events.or_else(|| {
                                 let events = contract
@@ -163,6 +169,13 @@ impl Manifest {
                                 })
                             }).map(Box::new),
                         }),
+                        details: contract.details.into_iter().map(|detail| ContractDetails {
+                            factory: Some(FactoryDetailsYaml {
+                                name: overridden_factory_contract_name.clone(),
+                                ..detail.factory.expect("Factory details must be present")
+                            }),
+                            ..detail
+                        }).collect(),
                         ..contract
                     };
 
@@ -170,7 +183,7 @@ impl Manifest {
                 },
                 None => vec![contract]
             }
-        }).collect::<Vec<_>>()
+        }).collect()
     }
 
     pub fn to_indexer(&self) -> Indexer {
