@@ -1,28 +1,38 @@
 use std::{
     env, fs,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command},
+    time::SystemTime,
 };
 
-fn main() {
-    // Check if Node.js is installed before doing anything else
-    if Command::new("node").arg("--version").output().is_err() {
-        panic!(
-            "Node.js is not installed or not in your PATH. \
-            Please install Node.js (LTS version is recommended) to build the GraphQL server."
-        );
-    }
+// A list of source files for the GraphQL server. If any of these change,
+// we need to trigger a rebuild of the SEA binary.
+const GRAPHQL_SOURCE_FILES: &[&str] = &[
+    "../graphql/index.js",
+    "../graphql/package.json",
+    "../graphql/package-lock.json",
+    "../graphql/sea-config.json",
+];
 
+fn main() {
+    // 1. --- Setup Paths and Environment ---
     let manifest_dir =
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"));
-
     let graphql_dir = manifest_dir.join("../graphql");
     let resource_dir = manifest_dir.join("resources");
 
-    // Create the resources directory if it doesn't exist
-    fs::create_dir_all(&resource_dir).expect("Failed to create resource directory");
+    // Tell Cargo to re-run this script if the source files change.
+    for path in GRAPHQL_SOURCE_FILES {
+        println!("cargo:rerun-if-changed={}", manifest_dir.join(path).display());
+    }
 
-    // Detect OS and architecture
+    // Find Node.js and npm executables
+    let node_path = which::which("node")
+        .expect("Node.js is not installed or not in your PATH. Please install it to build the GraphQL server.");
+    let npm_path = which::which("npm")
+        .expect("npm is not installed or not in your PATH. It should be installed with Node.js.");
+
+    // Determine target-specific executable name.
     let os = env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set");
     let arch = env::var("CARGO_CFG_TARGET_ARCH").expect("CARGO_CFG_TARGET_ARCH not set");
     let node_arch = match arch.as_str() {
@@ -30,85 +40,119 @@ fn main() {
         "aarch64" => "arm64",
         _ => panic!("Unsupported architecture: {}", arch),
     };
-
     let exe_suffix = if os == "windows" { ".exe" } else { "" };
     let final_exe_name = format!("rindexer-graphql-{}-{}{}", os, node_arch, exe_suffix);
     let final_exe_path = resource_dir.join(&final_exe_name);
 
-    let blob_path = graphql_dir.join("rindexer-graphql.blob");
-    if blob_path.exists() {
-        fs::remove_file(&blob_path).expect("Failed to remove leftover blob file");
-    }
+    // 2. --- Decide if a Rebuild is Necessary ---
+    if should_rebuild(&final_exe_path, &manifest_dir) {
+        println!("cargo:warning=GraphQL binary is missing or outdated. Building with SEA...");
 
-    // Only build if the binary doesn't already exist
-    if !final_exe_path.exists() {
-        println!("cargo:warning=GraphQL binary not found for host, building with SEA...");
+        // Create the resources directory if it doesn't exist.
+        fs::create_dir_all(&resource_dir).expect("Failed to create resource directory");
 
-        // 1. Ensure npm dependencies are installed
-        run_command("npm", &["install"], &graphql_dir, "'npm install' failed");
-
-        // 2. Generate the blob for SEA
+        // Clean up previous build artifact if it exists.
+        let blob_path = graphql_dir.join("rindexer-graphql.blob");
+        if blob_path.exists() {
+            fs::remove_file(&blob_path).expect("Failed to remove leftover blob file");
+        }
+        
+        // 3. --- Run the Build Steps ---
+        
+        // a. Install npm dependencies.
         run_command(
-            "node",
+            &npm_path,
+            &["install"],
+            &graphql_dir,
+            "'npm install' failed",
+        );
+
+        // b. Generate the SEA blob.
+        run_command(
+            &node_path,
             &["--experimental-sea-config", "sea-config.json"],
             &graphql_dir,
             "Failed to generate SEA blob",
         );
 
-        // 3. Determine the source Node.js executable to use
-        let node_path_str = String::from_utf8(
-            Command::new("which")
-                .arg("node")
-                .output()
-                .expect("Failed to find node executable")
-                .stdout,
-        )
-        .expect("Failed to parse 'which node' output");
-        let node_path = PathBuf::from(node_path_str.trim());
+        // c. Copy the base node executable.
+        fs::copy(&node_path, &final_exe_path).unwrap_or_else(|e| {
+            panic!(
+                "Failed to copy node executable from {:?} to {:?}: {}",
+                node_path, final_exe_path, e
+            )
+        });
 
-        // 4. Copy the node executable to the final destination
-        fs::copy(&node_path, &final_exe_path).expect("Failed to copy node executable");
+        // d. Inject the blob into the copied executable using postject.
+        run_command(
+            &npm_path,
+            &[
+                "run",
+                "postject",
+                "--",
+                final_exe_path.to_str().unwrap(),
+                "NODE_SEA_BLOB",
+                "rindexer-graphql.blob",
+                "--sentinel",
+                "NODE_SEA_SENTINEL",
+            ],
+            &graphql_dir,
+            "postject failed to inject blob",
+        );
+        
+        println!("cargo:warning=Successfully built GraphQL binary at: {}", final_exe_path.display());
+    } else {
+        println!("cargo:warning=GraphQL binary is up-to-date. Skipping build.");
+    }
+}
 
-        // 5. Inject the blob into the copied executable
-        // On non-Windows, we use `postject`
-        if os != "windows" {
-            run_command(
-                "npm",
-                &[
-                    "run",
-                    "postject",
-                    "--",
-                    final_exe_path.to_str().unwrap(),
-                    "NODE_SEA_BLOB",
-                    "rindexer-graphql.blob",
-                    "--sentinel",
-                    "NODE_SEA_SENTINEL",
-                ],
-                &graphql_dir,
-                "postject failed to inject blob",
-            );
-        } else {
-            // On Windows, `postject` is not needed, but this requires a more complex setup
-            // For now, we'll panic as it's not implemented.
-            panic!("Windows SEA build is not yet supported in this script.");
+/// Determines if the SEA binary needs to be rebuilt.
+///
+/// A rebuild is necessary if:
+/// 1. The final executable does not exist.
+/// 2. Any of the GraphQL source files are newer than the existing executable.
+fn should_rebuild(final_exe_path: &Path, manifest_dir: &Path) -> bool {
+    if !final_exe_path.exists() {
+        return true;
+    }
+
+    let exe_metadata = fs::metadata(final_exe_path).ok();
+    let exe_mtime = exe_metadata.and_then(|m| m.modified().ok()).unwrap_or(SystemTime::UNIX_EPOCH);
+
+    for &src_path_str in GRAPHQL_SOURCE_FILES {
+        let src_path = manifest_dir.join(src_path_str);
+        if let Ok(src_mtime) = fs::metadata(&src_path).and_then(|m| m.modified()) {
+            if src_mtime > exe_mtime {
+                println!(
+                    "cargo:warning=Source file {} is newer than the binary. Rebuilding...",
+                    src_path.display()
+                );
+                return true;
+            }
         }
     }
 
-    // Tell Cargo when to rerun the build script
-    println!("cargo:rerun-if-changed=../graphql/index.js");
-    println!("cargo:rerun-if-changed=../graphql/package.json");
-    println!("cargo:rerun-if-changed=../graphql/package-lock.json");
-    println!("cargo:rerun-if-changed=../graphql/sea-config.json");
+    false
 }
 
-fn run_command(command: &str, args: &[&str], cwd: &Path, error_msg: &str) {
-    let status = Command::new(command)
+/// Executes a command and panics with detailed error information if it fails.
+fn run_command(command: &Path, args: &[&str], cwd: &Path, error_msg: &str) {
+    let output = Command::new(command)
         .args(args)
         .current_dir(cwd)
-        .status()
-        .expect(&format!("Failed to execute '{}'", command));
+        .output()
+        .unwrap_or_else(|e| panic!("Failed to execute command '{:?}': {}", command, e));
 
-    if !status.success() {
-        panic!("{} (command: {} {:?})", error_msg, command, args);
+    if !output.status.success() {
+        panic!(
+            "{}\n--- Command ---\n{} {}\n--- CWD ---\n{}\n--- Status ---\n{}\n--- Stdout ---\n{}\n--- Stderr ---\n{}",
+            error_msg,
+            command.display(),
+            args.join(" "),
+            cwd.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
