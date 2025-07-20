@@ -9,23 +9,25 @@ fn main() {
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"));
 
     let graphql_dir = manifest_dir.join("../graphql");
-    let resource_dir = manifest_dir.join("resources");
 
-    // Verify GraphQL directory exists
+    // Verify GraphQL directory exists before proceeding
     if !graphql_dir.exists() {
         println!("cargo:warning=GraphQL directory not found, skipping GraphQL binary build");
         return;
     }
 
-    // Check Node.js availability
+    // Check for Node.js and npm before attempting to use them
     check_node_availability();
 
-    // Create the resources directory if it doesn't exist
-    fs::create_dir_all(&resource_dir)
-        .unwrap_or_else(|e| panic!("Failed to create resource directory: {}", e));
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR not set"));
+    let resources_dir = out_dir.join("resources");
+
+    // Ensure the resources directory exists
+    fs::create_dir_all(&resources_dir)
+        .unwrap_or_else(|e| panic!("Failed to create resources directory: {}", e));
 
     let target_info = get_target_info();
-    let final_exe_path = resource_dir.join(&target_info.exe_name);
+    let final_exe_path = resources_dir.join(&target_info.exe_name);
 
     // Clean up the old binary if it exists to ensure a fresh build
     if final_exe_path.exists() {
@@ -124,6 +126,7 @@ fn build_graphql_binary(graphql_dir: &Path, final_exe_path: &Path) {
     }
 
     println!("cargo:warning=Successfully built GraphQL binary: {}", final_exe_path.display());
+    println!("cargo:rustc-env=RINDEXER_GRAPHQL_EXE={}", final_exe_path.display());
 }
 
 fn register_build_dependencies(manifest_dir: &Path) {

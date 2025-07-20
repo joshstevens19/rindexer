@@ -29,62 +29,13 @@ pub struct GraphqlOverrideSettings {
 }
 
 fn get_graphql_exe() -> Result<PathBuf, ()> {
-    let os = env::consts::OS;
-    let arch = env::consts::ARCH;
-
-    let node_arch = match arch {
-        "x86_64" => "x64",
-        "aarch64" => "arm64",
-        _ => panic!("Unsupported architecture: {}", arch),
-    };
-
-    let exe_suffix = if os == "windows" { ".exe" } else { "" };
-    let postgraphile_filename = format!("rindexer-graphql-{}-{}{}", os, node_arch, exe_suffix);
-
-    let mut paths = vec![];
-
-    // Assume `resources` directory is in the same directory as the executable (installed)
-    if let Ok(executable_path) = env::current_exe() {
-        let mut path = executable_path.to_path_buf();
-        path.pop(); // Remove the executable name
-        path.push("resources");
-        path.push(&postgraphile_filename);
-        paths.push(path);
-
-        // Also consider when running from within the `rindexer` directory
-        let mut path = executable_path;
-        path.pop(); // Remove the executable name
-        path.pop(); // Remove the 'release' or 'debug' directory
-        path.push("resources");
-        path.push(&postgraphile_filename);
-        paths.push(path);
+    // This path is baked directly into the binary at compile time by build.rs
+    let exe_path = PathBuf::from(env!("RINDEXER_GRAPHQL_EXE"));
+    if exe_path.exists() {
+        Ok(exe_path)
+    } else {
+        Err(())
     }
-
-    // Check additional common paths
-    if let Ok(home_dir) = env::var("HOME") {
-        let mut path = PathBuf::from(home_dir);
-        path.push(".rindexer");
-        path.push("resources");
-        path.push(&postgraphile_filename);
-        paths.push(path);
-    }
-
-    // Return the first valid path
-    for path in &paths {
-        if path.exists() {
-            return Ok(path.to_path_buf());
-        }
-    }
-
-    // If none of the paths exist, return the first one with useful error message
-    let extra_looking =
-        paths.into_iter().next().expect("Failed to determine rindexer graphql path");
-
-    if !extra_looking.exists() {
-        return Err(());
-    }
-
-    Ok(extra_looking)
 }
 #[allow(dead_code)]
 pub struct GraphQLServer {
