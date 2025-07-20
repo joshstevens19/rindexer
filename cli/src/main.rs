@@ -15,10 +15,10 @@ mod rindexer_yaml;
 use std::{path::PathBuf, str::FromStr, sync::Once};
 
 use clap::Parser;
-use rindexer::{
-    load_env_from_project_path,
-    manifest::{core::ProjectType, network::RethConfig},
-};
+use rindexer::{load_env_from_project_path, manifest::core::ProjectType};
+
+#[cfg(feature = "reth")]
+use rindexer::manifest::reth::RethConfig;
 
 use crate::{
     cli_interface::{AddSubcommands, Commands, NewSubcommands, CLI},
@@ -84,11 +84,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;
             load_env_from_project_path(&resolved_path);
 
+            #[allow(unused_variables)]
             let (project_type, reth_args) = match subcommand {
                 NewSubcommands::NoCode { reth } => (ProjectType::NoCode, reth),
                 NewSubcommands::Rust { reth } => (ProjectType::Rust, reth),
             };
 
+            #[cfg(feature = "reth")]
             let reth_config = if reth_args.reth {
                 match RethConfig::from_cli_args(reth_args.reth_args.clone()) {
                     Ok(config) => Some(config),
@@ -100,6 +102,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 None
             };
+
+            #[cfg(not(feature = "reth"))]
+            let reth_config = None;
 
             handle_new_command(resolved_path, project_type, reth_config)
         }

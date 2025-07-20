@@ -1,6 +1,6 @@
 [package]
 name = "rindexer"
-version = "0.21.0"
+version = "0.21.2"
 edition = "2021"
 description = "A no-code or framework to build blazing fast EVM indexers - built in rust."
 license = "MIT"
@@ -17,7 +17,7 @@ mockito = "1.7.0"
 
 [dependencies]
 # TODO: Trim down alloy features needed later, for now opt in to all.
-alloy = { version = "1.0.9", features = ["full"] }
+alloy = { version = "1.0.9", features = ["full", "json-rpc"] }
 async-std = "1.12.0"
 async-trait = "0.1.77"
 aws-config = "1.5.0"
@@ -56,20 +56,22 @@ thiserror = "2.0.12"
 thread_local = "1.1"
 tokio = { version = "1", features = ["full"] }
 tokio-postgres = { version = "0.7", features = [
-  "with-uuid-1",
-  "with-chrono-0_4",
-  "with-serde_json-1",
+    "with-uuid-1",
+    "with-chrono-0_4",
+    "with-serde_json-1",
 ] }
 tokio-stream = "0.1.15"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = [
-  "env-filter",
-  "fmt",
-  "time",
+    "env-filter",
+    "fmt",
+    "time",
 ] }
 mini-moka = "0.10.3"
 url = "2.5.0"
+uuid = "1"
 eyre = { version = "0.6.10" }
+tower = "0.5.2"
 
 # build
 jemallocator = { version = "0.6.0", package = "tikv-jemallocator", optional = true }
@@ -79,33 +81,12 @@ alloy-chains = "0.2.2"
 winnow = "0.7.11"
 
 # reth
-reth = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", features = ["full"] }
-reth-chainspec = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-ethereum-cli = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-discv5 = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-execution-errors = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-execution-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-exex = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", features = ["serde"] }
-reth-eth-wire = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-evm = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-network = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1", features = ["test-utils"] }
-reth-network-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-network-peers = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-node-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-provider = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-revm = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-tracing = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
-reth-stages-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.4.1" }
+reth = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", optional = true}
+reth-exex = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", features = ["serde"], optional = true}
+reth-node-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", optional = true}
+reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", optional = true}
+reth-tracing = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", optional = true}
 
-discv5 = "0.9"
-enr = "0.13"
-secp256k1 = { version = "0.30", default-features = false, features = [
- "global-context", "std", "recovery",
-] }
 
 [target.'cfg(not(windows))'.dependencies]
 rdkafka = { version = "0.37.0", features = ["tokio"] }
@@ -120,3 +101,10 @@ incremental = false
 
 [features]
 jemalloc = ["dep:jemallocator", "dep:jemalloc-ctl"]
+reth = [
+  "dep:reth",
+  "dep:reth-exex",
+  "dep:reth-node-api",
+  "dep:reth-node-ethereum",
+  "dep:reth-tracing",
+]

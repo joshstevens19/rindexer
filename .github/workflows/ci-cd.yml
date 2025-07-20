@@ -181,7 +181,7 @@ jobs:
           flags=()
 
           if [[ "$target" != *msvc* && "$target" != "aarch64-unknown-linux-gnu" ]]; then
-            flags+=(--features jemalloc)
+            flags+=(--features jemalloc,reth)
           fi
 
           [[ "$target" == *windows* ]] && exe=".exe"
@@ -237,6 +237,21 @@ jobs:
             flags+=(--features jemalloc)
           fi
           
+          cargo test --exclude rindexer_rust_playground --workspace --release --target "$target" "${flags[@]}"
+
+      - name: Run tests (reth feature)
+        shell: bash
+        run: |
+          set -eo pipefail
+          target="${{ matrix.target }}"
+          flags=()
+          
+          if [[ "$target" != *msvc* && "$target" != "aarch64-unknown-linux-gnu" ]]; then
+            flags+=(--features jemalloc,reth)
+          else
+            flags+=(--features reth)
+          fi
+
           cargo test --exclude rindexer_rust_playground --workspace --release --target "$target" "${flags[@]}"
 
       - name: Upload artifact
@@ -403,7 +418,7 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add cli/Cargo.toml core/Cargo.toml documentation/docs/pages/docs/changelog.mdx
-          git commit -m "chore: bump version to ${{ env.VERSION_NAME }} and update changelog"
+          git commit -m "Release v${{ env.VERSION_NAME }}"
           git push origin release/${{ env.VERSION_NAME }}
 
       - name: Check if PR already exists
@@ -597,7 +612,7 @@ jobs:
           flags=()
 
           if [[ "$target" != *msvc* ]]; then
-            flags+=(--features jemalloc)
+            flags+=(--features jemalloc,reth)
           fi
 
           if [[ "$target" == *windows* ]]; then

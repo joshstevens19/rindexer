@@ -856,6 +856,8 @@ pub enum EthereumSqlTypeWrapper {
 
     // 64-bit integers
     U64(U64),
+    U64Nullable(U64),
+    U64BigInt(U64),
     I64(i64),
     VecU64(Vec<U64>),
     VecI64(Vec<i64>),
@@ -868,15 +870,19 @@ pub enum EthereumSqlTypeWrapper {
 
     // 256-bit integers
     U256(U256),
+    U256Numeric(U256),
+    U256NumericNullable(Option<U256>),
     U256Nullable(U256),
     U256Bytes(U256),
     U256BytesNullable(U256),
     I256(I256),
+    I256Numeric(I256),
     I256Nullable(I256),
     I256Bytes(I256),
     I256BytesNullable(I256),
     VecU256(Vec<U256>),
     VecU256Bytes(Vec<U256>),
+    VecU256Numeric(Vec<U256>),
     VecI256(Vec<I256>),
     VecI256Bytes(Vec<I256>),
 
@@ -886,7 +892,7 @@ pub enum EthereumSqlTypeWrapper {
 
     // Hashes
     B128(B128),
-    H160(H160),
+    H160(B160), // DEPRECATED - Use Address instead
     B256(B256),
     B256Bytes(B256),
     B512(B512),
@@ -896,7 +902,7 @@ pub enum EthereumSqlTypeWrapper {
     VecB512(Vec<B512>),
 
     // Deprecated Hash. Move to use Address
-    VecH160(Vec<H160>),
+    VecH160(Vec<B160>),
 
     // Address
     Address(Address),
@@ -920,7 +926,15 @@ pub enum EthereumSqlTypeWrapper {
     BytesNullable(Bytes),
     VecBytes(Vec<Bytes>),
 
+    // UUID
+    Uuid(Uuid),
+
+    // DateTime
     DateTime(DateTime<Utc>),
+    DateTimeNullable(Option<DateTime<Utc>>),
+
+    // JSON
+    JSONB(Value),
 }
 
 // to use it you just pass the value in the enum

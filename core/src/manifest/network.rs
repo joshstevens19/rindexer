@@ -4,13 +4,24 @@ use std::time::Duration;
 use alloy::primitives::U64;
 use serde::de::Visitor;
 use serde::{de, Deserialize, Deserializer, Serialize};
+
+#[cfg(feature = "reth")]
 use tokio::sync::broadcast::Sender;
+
 use tokio::time::sleep;
 
 use super::core::{deserialize_option_u64_from_string, serialize_option_u64_as_string};
-pub use super::reth::RethConfig;
+#[cfg(feature = "reth")]
+use super::reth::RethConfig;
+
+#[cfg(feature = "reth")]
 use crate::notifications::ChainStateNotification;
+
+#[cfg(feature = "reth")]
 use crate::reth::node::start_reth_node_with_exex;
+
+#[cfg(feature = "reth")]
+use reth::cli::Commands;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Network {
@@ -46,14 +57,17 @@ pub struct Network {
 
     /// Reth configuration for this network
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg(feature = "reth")]
     pub reth: Option<RethConfig>,
+
+    #[cfg(not(feature = "reth"))]
+    pub reth: Option<()>,
 }
 
+#[cfg(feature = "reth")]
 impl Network {
     /// Get the IPC path for the Reth node
     pub fn get_reth_ipc_path(&self) -> Option<String> {
-        use reth::cli::Commands;
-
         let reth = self.reth.as_ref()?;
         let cli = reth.to_cli().ok()?;
 
@@ -62,7 +76,6 @@ impl Network {
             _ => None,
         }
     }
-
     /// Check if Reth is enabled for this network
     pub fn is_reth_enabled(&self) -> bool {
         self.reth.is_some()
@@ -188,8 +201,59 @@ impl<'de> Deserialize<'de> for BlockPollFrequency {
     }
 }
 
+/// Wait for IPC socket file to be ready
+pub async fn wait_for_ipc_ready(ipc_path: &str) -> Result<(), eyre::Error> {
+    use alloy::providers::{IpcConnect, Provider, ProviderBuilder};
+
+    let max_retries = 60; // 60 seconds max wait
+    let mut last_error = None;
+
+    for i in 0..max_retries {
+        // Try to connect to the IPC socket
+        let ipc = IpcConnect::new(ipc_path.to_string());
+        match ProviderBuilder::new().connect_ipc(ipc).await {
+            Ok(provider) => {
+                // Try a simple call to ensure it's really ready
+                match provider.get_chain_id().await {
+                    Ok(_) => {
+                        tracing::info!("IPC socket at {} is ready", ipc_path);
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        last_error = Some(format!("Connected but get_chain_id failed: {e}"));
+                    }
+                }
+            }
+            Err(e) => {
+                last_error = Some(format!("Connection failed: {e}"));
+            }
+        }
+
+        if i == 0 {
+            tracing::info!("Waiting for IPC socket at {} to be ready...", ipc_path);
+        } else if i % 5 == 0 {
+            tracing::info!(
+                "Still waiting for IPC socket at {} to be ready... ({}/{})",
+                ipc_path,
+                i,
+                max_retries
+            );
+        }
+
+        sleep(Duration::from_secs(1)).await;
+    }
+
+    Err(eyre::eyre!(
+        "IPC socket at {} did not become ready after {} seconds. Last error: {:?}",
+        ipc_path,
+        max_retries,
+        last_error
+    ))
+}
+
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "reth")]
     use reth::cli::Commands;
 
     use serde_yaml;
@@ -272,6 +336,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "reth")]
     #[test]
     fn test_network_with_reth_config() {
         let network: Network = serde_yaml::from_str(
@@ -297,6 +362,7 @@ mod tests {
         assert_eq!(ipc_path, Some("/custom/reth.ipc".to_string()));
     }
 
+    #[cfg(feature = "reth")]
     #[test]
     fn test_network_with_reth_config_no_ipc_path() {
         let network: Network = serde_yaml::from_str(
@@ -334,6 +400,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "reth")]
     #[test]
     fn test_network_reth_ipc_disabled() {
         let network: Network = serde_yaml::from_str(
@@ -357,6 +424,7 @@ mod tests {
         // Note: get_reth_ipc_path might still return a default path even with ipcdisable
     }
 
+    #[cfg(feature = "reth")]
     #[test]
     fn test_network_no_reth_config() {
         let network: Network = serde_yaml::from_str(
@@ -371,54 +439,4 @@ mod tests {
         assert!(network.reth.is_none());
         assert_eq!(network.get_reth_ipc_path(), None);
     }
-}
-
-/// Wait for IPC socket file to be ready
-pub async fn wait_for_ipc_ready(ipc_path: &str) -> Result<(), eyre::Error> {
-    use alloy::providers::{IpcConnect, Provider, ProviderBuilder};
-
-    let max_retries = 60; // 60 seconds max wait
-    let mut last_error = None;
-
-    for i in 0..max_retries {
-        // Try to connect to the IPC socket
-        let ipc = IpcConnect::new(ipc_path.to_string());
-        match ProviderBuilder::new().connect_ipc(ipc).await {
-            Ok(provider) => {
-                // Try a simple call to ensure it's really ready
-                match provider.get_chain_id().await {
-                    Ok(_) => {
-                        tracing::info!("IPC socket at {} is ready", ipc_path);
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        last_error = Some(format!("Connected but get_chain_id failed: {e}"));
-                    }
-                }
-            }
-            Err(e) => {
-                last_error = Some(format!("Connection failed: {e}"));
-            }
-        }
-
-        if i == 0 {
-            tracing::info!("Waiting for IPC socket at {} to be ready...", ipc_path);
-        } else if i % 5 == 0 {
-            tracing::info!(
-                "Still waiting for IPC socket at {} to be ready... ({}/{})",
-                ipc_path,
-                i,
-                max_retries
-            );
-        }
-
-        sleep(Duration::from_secs(1)).await;
-    }
-
-    Err(eyre::eyre!(
-        "IPC socket at {} did not become ready after {} seconds. Last error: {:?}",
-        ipc_path,
-        max_retries,
-        last_error
-    ))
 }
