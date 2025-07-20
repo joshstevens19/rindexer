@@ -1,6 +1,5 @@
 use std::{
-    env,
-    fs,
+    env, fs,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -14,10 +13,9 @@ const GRAPHQL_SOURCE_FILES: &[&str] = &[
 ];
 
 fn main() {
-    let manifest_dir = PathBuf::from(
-        env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set")
-    );
-    
+    let manifest_dir =
+        PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"));
+
     let graphql_dir = manifest_dir.join("../graphql");
     let resource_dir = manifest_dir.join("resources");
 
@@ -40,15 +38,22 @@ fn main() {
     // Clean up any leftover blob files
     cleanup_blob_files(&graphql_dir);
 
-    // Only build if the binary doesn't already exist
-    if !final_exe_path.exists() {
-        println!("cargo:warning=Building GraphQL binary for {}-{}...", 
-                 target_info.os, target_info.arch);
-        
-        build_graphql_binary(&graphql_dir, &final_exe_path);
-    } else {
-        println!("cargo:warning=GraphQL binary already exists, skipping build");
+    // Clean up the old binary if it exists to ensure a fresh build
+    if final_exe_path.exists() {
+        if let Err(e) = fs::remove_file(&final_exe_path) {
+            println!(
+                "cargo:warning=Failed to remove existing binary: {}. Continuing with build.",
+                e
+            );
+        }
     }
+
+    println!(
+        "cargo:warning=Building GraphQL binary for {}-{}...",
+        target_info.os, target_info.arch
+    );
+
+    build_graphql_binary(&graphql_dir, &final_exe_path);
 
     // Register build dependencies
     register_build_dependencies(&manifest_dir);
@@ -63,7 +68,7 @@ struct TargetInfo {
 fn get_target_info() -> TargetInfo {
     let os = env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set");
     let arch = env::var("CARGO_CFG_TARGET_ARCH").expect("CARGO_CFG_TARGET_ARCH not set");
-    
+
     let node_arch = match arch.as_str() {
         "x86_64" => "x64",
         "aarch64" => "arm64",
@@ -73,17 +78,11 @@ fn get_target_info() -> TargetInfo {
     let exe_suffix = if os == "windows" { ".exe" } else { "" };
     let exe_name = format!("rindexer-graphql-{}-{}{}", os, node_arch, exe_suffix);
 
-    TargetInfo {
-        os: os.clone(),
-        arch: node_arch.to_string(),
-        exe_name,
-    }
+    TargetInfo { os: os.clone(), arch: node_arch.to_string(), exe_name }
 }
 
 fn check_node_availability() {
-    let node_check = Command::new("node")
-        .arg("--version")
-        .output();
+    let node_check = Command::new("node").arg("--version").output();
 
     match node_check {
         Ok(output) if output.status.success() => {
@@ -120,58 +119,31 @@ fn cleanup_blob_files(graphql_dir: &Path) {
 fn build_graphql_binary(graphql_dir: &Path, final_exe_path: &Path) {
     // 1. Install npm dependencies
     run_command(
-        "npm", 
-        &["ci"],
-        graphql_dir, 
-        "npm ci failed. Please ensure package-lock.json is present."
-    );
-
-    // 2. Generate the blob for SEA
-    run_command(
-        "node",
-        &["--experimental-sea-config", "sea-config.json"],
+        "npm",
+        &["install"],
         graphql_dir,
-        "Failed to generate SEA blob. Check sea-config.json and dependencies.",
+        "npm install failed. Please ensure package.json is valid.",
     );
 
-    // 3. Find Node.js executable
-    let node_path = which::which("node")
-        .expect("Node.js not found in PATH after successful version check");
-
-    // 4. Copy the node executable to the final destination
-    fs::copy(&node_path, final_exe_path)
-        .unwrap_or_else(|e| panic!("Failed to copy node executable: {}", e));
-
-    // 5. Set executable permissions on Unix-like systems
-    #[cfg(unix)]
-    set_executable_permissions(final_exe_path);
-
-    // 6. Inject the blob into the copied executable
+    // 2. Build the binary using pkg, passing the final output path
     run_command(
         "npm",
         &[
             "run",
-            "postject",
+            "build",
             "--",
-            final_exe_path.to_str().unwrap(),
-            "NODE_SEA_BLOB",
-            "rindexer-graphql.blob",
-            "--sentinel",
-            "NODE_SEA_SENTINEL",
+            "--output",
+            final_exe_path.to_str().expect("Invalid final_exe_path"),
         ],
         graphql_dir,
-        "postject failed to inject blob. Ensure postject is installed.",
+        "npm run build failed. Check the build script in package.json.",
     );
 
-    println!("cargo:warning=Successfully built GraphQL binary: {}", 
-             final_exe_path.display());
-}
+    if !final_exe_path.exists() {
+        panic!("Build did not produce the expected binary: {}", final_exe_path.display());
+    }
 
-#[cfg(unix)]
-fn set_executable_permissions(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755))
-        .unwrap_or_else(|e| panic!("Failed to set executable permissions: {}", e));
+    println!("cargo:warning=Successfully built GraphQL binary: {}", final_exe_path.display());
 }
 
 fn register_build_dependencies(manifest_dir: &Path) {
@@ -181,31 +153,27 @@ fn register_build_dependencies(manifest_dir: &Path) {
             println!("cargo:rerun-if-changed={}", full_path.display());
         }
     }
-    
+
     // Watch for changes to this build script itself
     println!("cargo:rerun-if-changed=build.rs");
 }
 
 /// Executes a command with enhanced error reporting and validation.
 fn run_command(command: &str, args: &[&str], cwd: &Path, error_msg: &str) {
-    let output = Command::new(command)
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .unwrap_or_else(|e| {
-            panic!(
-                "Failed to execute command '{}': {}\nCWD: {}\nError: {}", 
-                command, 
-                args.join(" "),
-                cwd.display(),
-                e
-            )
-        });
+    let output = Command::new(command).args(args).current_dir(cwd).output().unwrap_or_else(|e| {
+        panic!(
+            "Failed to execute command '{}': {}\nCWD: {}\nError: {}",
+            command,
+            args.join(" "),
+            cwd.display(),
+            e
+        )
+    });
 
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        
+
         panic!(
             "{}\n\
             ╭─ Command Failed ─────────────────────────────────────\n\

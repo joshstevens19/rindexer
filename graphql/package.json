@@ -4,8 +4,7 @@
   "main": "index.js",
   "bin": "index.js",
   "scripts": {
-    "build": "pkg . --output ../core/resources/rindexer-graphql",
-    "postject": "postject"
+    "build": "pkg ."
   },
   "dependencies": {
     "@graphile-contrib/pg-simplify-inflector": "^6.1.0",
@@ -22,6 +21,6 @@
   "devDependencies": {
     "dotenv": "^16.4.5",
     "nodemon": "^3.1.4",
-    "postject": "^1.0.0-alpha.6"
+    "@yao-pkg/pkg": "^6.6.0"
   }
 }
