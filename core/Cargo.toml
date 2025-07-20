@@ -15,9 +15,6 @@ include = ["src/**", "resources/**", "Cargo.toml", "build.rs"]
 tempfile = "3.3"
 mockito = "1.7.0"
 
-[build-dependencies]
-which = "8.0.0"
-
 [dependencies]
 # TODO: Trim down alloy features needed later, for now opt in to all.
 alloy = { version = "1.0.9", features = ["full"] }

@@ -29,25 +29,72 @@ fn main() {
     let target_info = get_target_info();
     let final_exe_path = resources_dir.join(&target_info.exe_name);
 
-    // Clean up the old binary if it exists to ensure a fresh build
-    if final_exe_path.exists() {
-        if let Err(e) = fs::remove_file(&final_exe_path) {
-            println!(
-                "cargo:warning=Failed to remove existing binary: {}. Continuing with build.",
-                e
-            );
+    // Check if we need to build
+    if should_rebuild(&final_exe_path, &graphql_dir) {
+        // Remove old binary if it exists
+        if final_exe_path.exists() {
+            if let Err(e) = fs::remove_file(&final_exe_path) {
+                println!(
+                    "cargo:warning=Failed to remove existing binary: {}. Continuing with build.",
+                    e
+                );
+            }
         }
+
+        println!(
+            "cargo:warning=Building GraphQL binary for {}-{}...",
+            target_info.os, target_info.arch
+        );
+
+        build_graphql_binary(&graphql_dir, &final_exe_path);
+    } else {
+        println!("cargo:warning=GraphQL binary is up to date, skipping build");
+        // Still set the environment variable for the existing binary
+        println!("cargo:rustc-env=RINDEXER_GRAPHQL_EXE={}", final_exe_path.display());
     }
-
-    println!(
-        "cargo:warning=Building GraphQL binary for {}-{}...",
-        target_info.os, target_info.arch
-    );
-
-    build_graphql_binary(&graphql_dir, &final_exe_path);
 
     // Register build dependencies
     register_build_dependencies(&manifest_dir);
+}
+
+fn should_rebuild(exe_path: &Path, graphql_dir: &Path) -> bool {
+    // If binary doesn't exist, rebuild
+    if !exe_path.exists() {
+        println!("cargo:warning=Binary doesn't exist, rebuilding");
+        return true;
+    }
+
+    // Check if package-lock.json is newer than the binary (dependencies changed)
+    let package_lock = graphql_dir.join("package-lock.json");
+    if package_lock.exists() {
+        if let (Ok(exe_time), Ok(lock_time)) = (
+            exe_path.metadata().and_then(|m| m.modified()),
+            package_lock.metadata().and_then(|m| m.modified())
+        ) {
+            if lock_time > exe_time {
+                println!("cargo:warning=package-lock.json is newer than binary, rebuilding");
+                return true;
+            }
+        }
+    }
+
+    // Check if any main source files are newer than the binary
+    let source_files = ["index.js", "package.json"];
+    if let Ok(exe_time) = exe_path.metadata().and_then(|m| m.modified()) {
+        for source_file in &source_files {
+            let source_path = graphql_dir.join(source_file);
+            if source_path.exists() {
+                if let Ok(source_time) = source_path.metadata().and_then(|m| m.modified()) {
+                    if source_time > exe_time {
+                        println!("cargo:warning=Source file {} is newer than binary, rebuilding", source_file);
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    false
 }
 
 struct TargetInfo {
