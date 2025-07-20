@@ -4,14 +4,6 @@ use std::{
     process::Command,
 };
 
-// A list of source files for the GraphQL server. Centralized for easy management.
-const GRAPHQL_SOURCE_FILES: &[&str] = &[
-    "../graphql/index.js",
-    "../graphql/package.json",
-    "../graphql/package-lock.json",
-    "../graphql/sea-config.json",
-];
-
 fn main() {
     let manifest_dir =
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"));
@@ -34,9 +26,6 @@ fn main() {
 
     let target_info = get_target_info();
     let final_exe_path = resource_dir.join(&target_info.exe_name);
-
-    // Clean up any leftover blob files
-    cleanup_blob_files(&graphql_dir);
 
     // Clean up the old binary if it exists to ensure a fresh build
     if final_exe_path.exists() {
@@ -107,15 +96,6 @@ fn check_node_availability() {
     }
 }
 
-fn cleanup_blob_files(graphql_dir: &Path) {
-    let blob_path = graphql_dir.join("rindexer-graphql.blob");
-    if blob_path.exists() {
-        if let Err(e) = fs::remove_file(&blob_path) {
-            println!("cargo:warning=Failed to remove leftover blob file: {}", e);
-        }
-    }
-}
-
 fn build_graphql_binary(graphql_dir: &Path, final_exe_path: &Path) {
     // 1. Install npm dependencies
     run_command(
@@ -147,11 +127,14 @@ fn build_graphql_binary(graphql_dir: &Path, final_exe_path: &Path) {
 }
 
 fn register_build_dependencies(manifest_dir: &Path) {
-    for path in GRAPHQL_SOURCE_FILES {
-        let full_path = manifest_dir.join(path);
-        if full_path.exists() {
-            println!("cargo:rerun-if-changed={}", full_path.display());
-        }
+    // Watch for changes in the graphql directory, which contains the node project.
+    let graphql_dir = manifest_dir.join("../graphql");
+    println!("cargo:rerun-if-changed={}", graphql_dir.display());
+
+    // Also explicitly watch the package-lock.json to ensure dependency changes trigger a rebuild.
+    let lock_file = graphql_dir.join("package-lock.json");
+    if lock_file.exists() {
+        println!("cargo:rerun-if-changed={}", lock_file.display());
     }
 
     // Watch for changes to this build script itself
