@@ -6,7 +6,7 @@ use rindexer::{
         use std::sync::Arc;
 use std::path::PathBuf;
         use alloy::primitives::{U256, I256};
-        use super::super::super::typings::rindexer_playground::events::uniswap_v3_factory_pool_createdpool::{no_extensions, UniswapV3FactoryPoolCreatedpoolEventType,PoolCreatedEvent};
+        use super::super::super::typings::rindexer_factory_contract::events::uniswap_v3_factory_pool_createdpool::{no_extensions, UniswapV3FactoryPoolCreatedpoolEventType,PoolCreatedEvent};
 
 async fn pool_created_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegistry) {
     let handler = PoolCreatedEvent::handler(|results, context| async move {
@@ -60,7 +60,7 @@ EthereumSqlTypeWrapper::U256(result.tx_information.log_index)
                         let result = context
                             .database
                             .bulk_insert_via_copy(
-                                "rindexer_playground_uniswap_v3_factory_pool_createdpool.pool_created",
+                                "rindexer_factory_contract_uniswap_v3_factory_pool_createdpool.pool_created",
                                 &rows,
                                 &postgres_bulk_data
                                     .first()
@@ -80,7 +80,7 @@ EthereumSqlTypeWrapper::U256(result.tx_information.log_index)
                             let result = context
                                 .database
                                 .bulk_insert(
-                                    "rindexer_playground_uniswap_v3_factory_pool_createdpool.pool_created",
+                                    "rindexer_factory_contract_uniswap_v3_factory_pool_createdpool.pool_created",
                                     &rows,
                                     &postgres_bulk_data,
                                 )

@@ -1,11 +1,11 @@
 #![allow(non_snake_case)]
-use super::super::super::typings::rindexer_playground::events::uniswap_v3_factory::{
-    OwnerChangedEvent, UniswapV3FactoryEventType, no_extensions,
+use super::super::super::typings::rindexer_factory_contract::events::uniswap_v3_factory::{
+    no_extensions, OwnerChangedEvent, UniswapV3FactoryEventType,
 };
 use alloy::primitives::{I256, U256};
 use rindexer::{
-    EthereumSqlTypeWrapper, PgType, RindexerColorize,
     event::callback_registry::EventCallbackRegistry, rindexer_error, rindexer_info,
+    EthereumSqlTypeWrapper, PgType, RindexerColorize,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -56,7 +56,7 @@ EthereumSqlTypeWrapper::U256(result.tx_information.log_index)
                         let result = context
                             .database
                             .bulk_insert_via_copy(
-                                "rindexer_playground_uniswap_v3_factory.owner_changed",
+                                "rindexer_factory_contract_uniswap_v3_factory.owner_changed",
                                 &rows,
                                 &postgres_bulk_data
                                     .first()
@@ -76,7 +76,7 @@ EthereumSqlTypeWrapper::U256(result.tx_information.log_index)
                             let result = context
                                 .database
                                 .bulk_insert(
-                                    "rindexer_playground_uniswap_v3_factory.owner_changed",
+                                    "rindexer_factory_contract_uniswap_v3_factory.owner_changed",
                                     &rows,
                                     &postgres_bulk_data,
                                 )

@@ -163,9 +163,9 @@ where
         Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
     {
         let csv = AsyncCsvAppender::new(
-            r"/Users/pawellula/RustroverProjects/rindexer/cli/../rindexer_rust_playground/generated_csv/UniswapV3FactoryPoolCreatedpool/uniswapv3factorypoolcreatedpool-poolcreated.csv",
+            r"/Users/pawellula/RustroverProjects/rindexer/cli/../examples/rindexer_factory_indexing/generated_csv/UniswapV3FactoryPoolCreatedpool/uniswapv3factorypoolcreatedpool-poolcreated.csv",
         );
-        if !Path::new(r"/Users/pawellula/RustroverProjects/rindexer/cli/../rindexer_rust_playground/generated_csv/UniswapV3FactoryPoolCreatedpool/uniswapv3factorypoolcreatedpool-poolcreated.csv").exists() {
+        if !Path::new(r"/Users/pawellula/RustroverProjects/rindexer/cli/../examples/rindexer_factory_indexing/generated_csv/UniswapV3FactoryPoolCreatedpool/uniswapv3factorypoolcreatedpool-poolcreated.csv").exists() {
             csv.append_header(vec!["contract_address".into(), "token_0".into(), "token_1".into(), "fee".into(), "tick_spacing".into(), "pool".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()].into())
                 .await
                 .expect("Failed to write CSV header");
@@ -370,7 +370,7 @@ where
 
         registry.register_event(EventCallbackRegistryInformation {
             id: generate_random_id(10),
-            indexer_name: "RindexerPlayground".to_string(),
+            indexer_name: "RindexerFactoryContract".to_string(),
             event_name: event_name.to_string(),
             index_event_in_order,
             topic_id: topic_id.parse::<B256>().unwrap(),

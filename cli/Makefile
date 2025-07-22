@@ -31,6 +31,15 @@ phantom_deploy:
 help:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- phantom --help
 
+
+################################################################################
+# FACTORY INDEXING EXAMPLE COMMANDS
+################################################################################
+factory_indexing_codegen_typings:
+	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path $(CURDIR)/../examples/rindexer_factory_indexing typings
+factory_indexing_codegen_indexer:
+	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path $(CURDIR)/../examples/rindexer_factory_indexing indexer
+
 ################################################################################
 # LOCAL NONE CHECKED IN PROJECT COMMANDS
 ################################################################################
