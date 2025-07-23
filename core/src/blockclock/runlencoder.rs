@@ -28,7 +28,6 @@
 //! For optimal use it is beneficial to regularly extend the compressed binary files with more recent
 //! blocks and so the encoding should be run and published semi-regularly.
 
-use crate::blockclock::fetcher::BlockFetcherError;
 use alloy::eips::BlockNumberOrTag;
 use alloy::network::AnyRpcBlock;
 use alloy::rpc::client::RpcClient;
@@ -37,7 +36,6 @@ use anyhow::Context;
 use bincode::{config, Decode, Encode};
 use cfg_if::cfg_if;
 use futures::future::try_join_all;
-use futures::TryFutureExt;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -139,7 +137,7 @@ impl DeltaEncoder {
         file_path: &PathBuf,
     ) -> anyhow::Result<Self> {
         let encoded_deltas = if file_path.exists() {
-            let file = File::open(&file_path)?;
+            let file = File::open(file_path)?;
             let reader = BufReader::new(file);
             let mut zstd_decoder = Decoder::new(reader)?;
             bincode::decode_from_std_read(&mut zstd_decoder, config::standard())?

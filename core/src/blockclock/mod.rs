@@ -61,6 +61,7 @@ pub enum BlockClockError {
 
 #[derive(Debug, Clone)]
 pub struct BlockClock {
+    #[allow(unused)]
     network_id: u64,
 
     /// The run-length encoder to use for calculating timestamps in memory.

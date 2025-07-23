@@ -1,6 +1,7 @@
 use alloy_chains::Chain;
 use alloy_chains::NamedChain;
 
+#[allow(unused)]
 #[derive(Debug)]
 pub enum SpacedNetwork {
     Base(Chain),
@@ -8,6 +9,8 @@ pub enum SpacedNetwork {
     Soneium(Chain),
     Worldchain(Chain),
 }
+
+#[allow(unused)]
 impl SpacedNetwork {
     /// The genesis unix timestamp for the network (the zero block).
     pub fn genesis_time(&self) -> u64 {

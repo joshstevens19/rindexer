@@ -1,11 +1,8 @@
 use anyhow::Context;
-use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use rindexer::blockclock::DeltaEncoder;
-use std::fmt::Debug;
 use std::path::PathBuf;
-use tracing_subscriber::filter::{FilterExt, LevelFilter};
-use tracing_subscriber::fmt::format::Format;
+use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, fmt};

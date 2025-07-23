@@ -1,4 +1,3 @@
-use crate::blockclock::fixed::SpacedNetwork;
 use crate::provider::{JsonRpcCachedProvider, ProviderError, RECOMMENDED_RPC_CHUNK_SIZE};
 use alloy::primitives::U64;
 use alloy::rpc::types::Log;
