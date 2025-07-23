@@ -17,7 +17,7 @@ mockito = "1.7.0"
 
 [dependencies]
 # TODO: Trim down alloy features needed later, for now opt in to all.
-alloy = { version = "1.0.22", features = ["full"] }
+alloy = { version = "1.0.22", features = ["full", "json-rpc"] }
 async-std = "1.12.0"
 async-trait = "0.1.77"
 aws-config = "1.5.0"
@@ -72,24 +72,25 @@ mini-moka = "0.10.3"
 url = "2.5.0"
 uuid = "1"
 eyre = { version = "0.6.10" }
+cfg-if = "1.0.1"
+zstd = "0.13.3"
+bincode = "2.0.1"
+anyhow = "1.0.98"
+tower = { version = "0.5.2" }
 
 # build
 jemallocator = { version = "0.6.0", package = "tikv-jemallocator", optional = true }
 jemalloc-ctl = { version = "0.6.0", package = "tikv-jemalloc-ctl", optional = true }
 foundry-compilers = "=0.18.0"
-foundry-compilers-artifacts-solc  = "=0.18.0"
+foundry-compilers-artifacts-solc = "=0.18.0"
 alloy-chains = "0.2.5"
 
 # reth
-reth = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", optional = true}
-reth-exex = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", features = ["serde"], optional = true}
-reth-node-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", optional = true}
-reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", optional = true}
-reth-tracing = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", optional = true}
-cfg-if = "1.0.1"
-zstd = "0.13.3"
-bincode = "2.0.1"
-anyhow = "1.0.98"
+reth = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", optional = true }
+reth-exex = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", features = ["serde"], optional = true }
+reth-node-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", optional = true }
+reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", optional = true }
+reth-tracing = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", optional = true }
 
 [target.'cfg(not(windows))'.dependencies]
 rdkafka = { version = "0.37.0", features = ["tokio"] }
@@ -106,9 +107,9 @@ incremental = false
 jemalloc = ["dep:jemallocator", "dep:jemalloc-ctl"]
 debug-json = []
 reth = [
-  "dep:reth",
-  "dep:reth-exex",
-  "dep:reth-node-api",
-  "dep:reth-node-ethereum",
-  "dep:reth-tracing",
+    "dep:reth",
+    "dep:reth-exex",
+    "dep:reth-node-api",
+    "dep:reth-node-ethereum",
+    "dep:reth-tracing",
 ]

@@ -1,6 +1,7 @@
 // public
 pub mod generator;
 pub mod indexer;
+pub mod layer_extensions;
 pub mod manifest;
 pub mod reth;
 
