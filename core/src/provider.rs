@@ -29,6 +29,7 @@ use alloy::{
 };
 use alloy_chains::{Chain, NamedChain};
 use futures::future::try_join_all;
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashSet;
@@ -38,7 +39,7 @@ use std::{
     time::{Duration, Instant},
 };
 use thiserror::Error;
-use tokio::sync::{broadcast::Sender, Mutex};
+use tokio::sync::{broadcast::Sender, Mutex, Semaphore};
 use tokio::task::JoinError;
 use tracing::{debug, debug_span, error, Instrument};
 use url::Url;
@@ -406,14 +407,18 @@ impl JsonRpcCachedProvider {
         let mut block_numbers = block_numbers.to_vec();
         block_numbers.dedup();
 
-        // Use less than the max chunk as recommended in most provider docs
+        // Max concurrency within an oversized batch request
+        let semaphore = Arc::new(Semaphore::new(2));
+
         let futures = block_numbers
-            .chunks(RPC_CHUNK_SIZE / 3)
+            .chunks(RECOMMENDED_RPC_CHUNK_SIZE)
             .map(|chunk| {
                 let client = self.client.clone();
                 let owned_chunk = chunk.to_vec();
+                let semaphore = semaphore.clone();
 
                 tokio::spawn(async move {
+                    let _permit = semaphore.acquire_owned().await.expect("Semaphore closed");
                     let mut batch = client.new_batch();
                     let mut request_futures = Vec::with_capacity(owned_chunk.len());
 
