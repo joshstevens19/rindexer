@@ -446,7 +446,7 @@ impl DeltaEncoder {
         );
 
         loop {
-            if self.encoded_deltas.max_block >= max_block_for_network {
+            if self.encoded_deltas.max_block + batch_size >= max_block_for_network {
                 tracing::info!("Exiting poll loop. Max block reached.");
                 break;
             }
