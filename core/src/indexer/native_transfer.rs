@@ -175,17 +175,11 @@ pub async fn native_transfer_block_processor(
     config: Arc<TraceProcessingConfig>,
     mut block_rx: mpsc::Receiver<U64>,
 ) -> Result<(), ProcessEventError> {
-    let is_rcp_batchable = config.method == TraceProcessingMethod::EthGetBlockByNumber;
-
     // Set the concurrency used to make requests based on the method.
     //
     // Currently, `eth_getBlockByNumber` is a single JSON-RPC batch, and others are individual
     // network calls so can be treated differently.
-    let (initial_concurrent_requests, limit_concurrent_requests) = if is_rcp_batchable {
-        (RECOMMENDED_RPC_CHUNK_SIZE / 2, RECOMMENDED_RPC_CHUNK_SIZE * 2)
-    } else {
-        (5, 100)
-    };
+    let (initial_concurrent_requests, limit_concurrent_requests) = (5, RECOMMENDED_RPC_CHUNK_SIZE);
 
     let mut concurrent_requests: usize = initial_concurrent_requests;
     let mut buffer: Vec<U64> = Vec::with_capacity(limit_concurrent_requests);
