@@ -101,6 +101,8 @@ where
                     } else if error_str.contains("connection") || error_str.contains("network") {
                         rindexer_error!("RPC CONNECTION ERROR (free public nodes do this a lot consider a using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, error: {}",
                                        chain_id, method_name, duration, rpc_url, err);
+                    } else if error_str.contains("this block range should work") {
+                        // Ignore this case as it's part of the normal flow of the node.
                     } else {
                         rindexer_error!("RPC ERROR (free public nodes do this a lot consider a using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, error: {}",
                                        chain_id, method_name, duration, rpc_url, err);

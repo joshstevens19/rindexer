@@ -36,15 +36,20 @@ use anyhow::Context;
 use bincode::{config, Decode, Encode};
 use cfg_if::cfg_if;
 use futures::future::try_join_all;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::select;
 use tokio::time::{sleep, Instant};
 use zstd::{Decoder, Encoder};
+
+static BLOCKCLOCK_CACHE: Lazy<RwLock<HashMap<u32, Arc<DeltaEncoder>>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
 
 /// The maximum size of an RPC call for the application
 const RPC_CHUNK_SIZE: usize = 1000;
@@ -52,7 +57,7 @@ const RPC_CHUNK_SIZE: usize = 1000;
 /// The magic number of "spacing" at which we create indexed checkpoints.
 ///
 /// The smaller the number, the faster the lookups at the cost of some "memory".
-const MAGIC_INDEX_INTERVAL: u64 = 500_000;
+const MAGIC_INDEX_INTERVAL: u64 = 100_000;
 
 /// A timestamp delta run length.
 #[derive(Debug, Deserialize, Serialize, Encode, Decode)]
@@ -130,8 +135,28 @@ impl DeltaEncoder {
         }
     }
 
-    /// Create or restore a [`DeltaEncoder`] for a network from the filesystem persistence.
+    /// Get a blockclock with the benefit of a global cache layer
     pub fn from_file(
+        network: u32,
+        rpc_url: Option<&str>,
+        file_path: &PathBuf,
+    ) -> anyhow::Result<Arc<Self>> {
+        {
+            let cache = BLOCKCLOCK_CACHE.read().unwrap();
+            if let Some(clock) = cache.get(&network) {
+                return Ok(clock.clone());
+            }
+        }
+
+        let encoder = DeltaEncoder::from_file_inner(network, rpc_url, file_path)?;
+        let encoder = Arc::new(encoder);
+
+        let mut cache = BLOCKCLOCK_CACHE.write().unwrap();
+        Ok(cache.entry(network).or_insert_with(|| encoder.clone()).clone())
+    }
+
+    /// Create or restore a [`DeltaEncoder`] for a network from the filesystem persistence.
+    pub fn from_file_inner(
         network: u32,
         rpc_url: Option<&str>,
         file_path: &PathBuf,
@@ -140,6 +165,8 @@ impl DeltaEncoder {
             let file = File::open(file_path)?;
             let reader = BufReader::new(file);
             let mut zstd_decoder = Decoder::new(reader)?;
+
+            tracing::info!("Preparing blockclock for network: {}", network);
             bincode::decode_from_std_read(&mut zstd_decoder, config::standard())?
         } else {
             return Ok(Self::new(network, rpc_url, file_path));
@@ -483,6 +510,67 @@ impl DeltaEncoder {
         None
     }
 
+    /// Returns a BTreeMap of block_number → timestamp for all block numbers
+    /// in the input slice that can be resolved.
+    pub fn get_block_timestamps(&self, block_numbers: &[u64]) -> BTreeMap<u64, u64> {
+        let genesis = match self.encoded_deltas.genesis_timestamp {
+            Some(ts) => ts,
+            None => return BTreeMap::new(),
+        };
+
+        let max_block = self.encoded_deltas.max_block;
+
+        // Sort and dedup the input for efficient lookup
+        let mut requested: Vec<u64> =
+            block_numbers.iter().copied().filter(|&b| b <= max_block).collect();
+
+        if requested.is_empty() {
+            return BTreeMap::new();
+        }
+
+        requested.sort_unstable();
+        requested.dedup();
+
+        // Prepare output
+        let mut output = BTreeMap::new();
+
+        // Use latest checkpoint <= max requested block
+        let start_block = *requested.last().unwrap();
+        let (mut bnum, mut agg_ts, run_idx) =
+            if let Some((&checkpoint, &(idx, ts))) = self.index.range(..=start_block).last() {
+                (checkpoint, ts, idx)
+            } else {
+                (0, genesis, 0)
+            };
+
+        // Walk runs and assign timestamps
+        let mut req_idx = 0;
+
+        for run in &self.encoded_deltas.runs[run_idx..] {
+            let end = bnum + run.len;
+
+            while req_idx < requested.len() {
+                let blk = requested[req_idx];
+                if blk < bnum {
+                    // Earlier than current run start — should not happen
+                    req_idx += 1;
+                    continue;
+                } else if blk < end {
+                    let offset = blk - bnum;
+                    output.insert(blk, agg_ts + run.delta * offset);
+                    req_idx += 1;
+                } else {
+                    break;
+                }
+            }
+
+            bnum = end;
+            agg_ts += run.delta * run.len;
+        }
+
+        output
+    }
+
     /// Attaches timestamps to any logs it can and returns the full set.
     ///
     /// This is a simple pass-through method and does not guarantee all logs in the batch
@@ -497,12 +585,13 @@ impl DeltaEncoder {
             return logs;
         };
 
+        let timestamps = self.get_block_timestamps(&blocks_without_ts);
         let (logs_with_ts, _) = logs
             .into_iter()
             .map(|mut log| {
                 if let Some(block_number) = log.block_number {
-                    if let Some(timestamp) = self.get_block_timestamp(&block_number) {
-                        log.block_timestamp = Some(timestamp);
+                    if let Some(timestamp) = timestamps.get(&block_number) {
+                        log.block_timestamp = Some(*timestamp);
                     }
                 }
                 log
@@ -604,7 +693,7 @@ mod tests {
         encoder.fetch_encode_persist(100).await?;
         drop(encoder);
 
-        let mut reloaded = DeltaEncoder::from_file(network_id, Some(&rpc_url), &file_path)?;
+        let mut reloaded = DeltaEncoder::from_file_inner(network_id, Some(&rpc_url), &file_path)?;
 
         reloaded.fetch_encode_persist(100).await?;
 

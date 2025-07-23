@@ -62,7 +62,7 @@ async fn main() -> anyhow::Result<()> {
 
             tracing::info!("Writing to directory: {}", path.to_str().context("path to string")?);
 
-            let mut encoder = DeltaEncoder::from_file(network, Some(&rpc_url), &path)?;
+            let mut encoder = DeltaEncoder::from_file_inner(network, Some(&rpc_url), &path)?;
             encoder.poll_encode_loop(batch_size.unwrap_or(100)).await?;
 
             Ok(())

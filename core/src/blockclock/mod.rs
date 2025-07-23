@@ -42,6 +42,7 @@ use crate::provider::JsonRpcCachedProvider;
 use alloy::rpc::types::Log;
 pub use fetcher::BlockFetcher;
 pub use runlencoder::DeltaEncoder;
+use std::env;
 use std::env::VarError;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -81,15 +82,11 @@ impl BlockClock {
     pub fn new(sample_rate: Option<f32>, provider: Arc<JsonRpcCachedProvider>) -> Self {
         let network_id = provider.chain.id();
         let fetcher = BlockFetcher::new(sample_rate, provider);
-        let runlencoder = std::env::var("CARGO_MANIFEST_DIR").ok().and_then(|base| {
-            let path = PathBuf::from(base)
-                .join("resources/blockclock")
-                .join(network_id.to_string())
-                .with_extension("blockclock");
-
+        let filepath = get_blockclock_filepath(network_id);
+        let runlencoder = filepath.and_then(|path| {
             path.is_file().then(|| {
                 let coder = DeltaEncoder::from_file(network_id as u32, None, &path).ok()?;
-                Some(Arc::new(coder))
+                Some(coder)
             })?
         });
 
@@ -118,4 +115,54 @@ impl BlockClock {
 
         Ok(logs)
     }
+}
+
+fn get_blockclock_filepath(network: u64) -> Option<PathBuf> {
+    let filename = &format!("{}.blockclock", network);
+    let mut paths = vec![];
+
+    // Assume `resources` directory is in the same directory as the executable (installed)
+    if let Ok(executable_path) = env::current_exe() {
+        let mut path = executable_path.to_path_buf();
+        path.pop(); // Remove the executable name
+        path.push("resources");
+        path.push("blockclock");
+        path.push(filename);
+        paths.push(path);
+
+        // Also consider when running from within the `rindexer` directory
+        let mut path = executable_path;
+        path.pop(); // Remove the executable name
+        path.pop(); // Remove the 'release' or 'debug' directory
+        path.push("resources");
+        path.push("blockclock");
+        path.push(filename);
+        paths.push(path);
+    }
+
+    // Check additional common paths
+    if let Ok(home_dir) = env::var("HOME") {
+        let mut path = PathBuf::from(home_dir);
+        path.push(".rindexer");
+        path.push("resources");
+        path.push("blockclock");
+        path.push(filename);
+        paths.push(path);
+    }
+
+    // Return the first valid path
+    for path in &paths {
+        if path.exists() {
+            return Some(path.to_path_buf());
+        }
+    }
+
+    let extra_looking =
+        paths.into_iter().next().expect("Failed to determine rindexer blockclock path");
+
+    if !extra_looking.exists() {
+        return None;
+    }
+
+    Some(extra_looking)
 }

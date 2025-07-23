@@ -68,3 +68,19 @@ the timestamps between those intervals. This can be a massive performance boost,
 inaccuracies in timestamps.
 
 This should be opted-into based on your workload and requirements.
+
+# Extending supported chains
+
+To begin encoding a new chain's block-timestamps, you can run the following command:
+
+```sh
+cargo xtask encode-block-clock \
+  --network 43114 \
+  --rpc-url "https://avax-mainnet.g.alchemy.com/v2/API_KEY" \
+  --batch-size 2000
+```
+
+This will encode and periodically flush data to the file `core/resources/blockclock/43113.blockclock` as per the above example.
+
+Simply replace the network if and RPC url and run the command until it is complete. This will potentially consume a lot of
+CU for your provider so be aware of this.
