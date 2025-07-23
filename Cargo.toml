@@ -3,5 +3,6 @@ resolver = "2"
 members = [
     "core",
     "cli",
+    "xtask",
     "examples/rindexer_rust_playground"
 ]

@@ -1,0 +1,20 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.5.4", features = ["derive", "env"] }
+anyhow = { version = "1.0.98" }
+chrono = { version = "0.4.41" }
+tokio = { version = "1.46.1", features = ["full"] }
+tracing = { version = "0.1.41" }
+tracing-subscriber = { version = "0.3.19", features = [
+    "env-filter",
+    "fmt"
+] }
+rindexer = { path = "../core" }
+
+[features]
+default = []
+debug-json = []
