@@ -38,6 +38,7 @@ mod fixed;
 mod runlencoder;
 
 use crate::blockclock::fetcher::BlockFetcherError;
+use crate::blockclock::fixed::SpacedNetwork;
 use crate::provider::JsonRpcCachedProvider;
 use alloy::rpc::types::Log;
 pub use fetcher::BlockFetcher;
@@ -102,15 +103,31 @@ impl BlockClock {
     /// 3. Use precomputed delta-encoded network timestamps
     /// 4. Fetch an optionally sampled-and-interpolated set of timestamps from RPC calls
     pub async fn attach_log_timestamps(&self, logs: Vec<Log>) -> Result<Vec<Log>, BlockClockError> {
+        // 1. Use timestamps present in logs and return early
         if logs.iter().all(|log| log.block_timestamp.is_some()) {
             return Ok(logs);
         }
 
+        // 2. Use fixed-interval chains to compute timestamps and return **(currently disabled)**
+        let logs = if let Ok(spaced) = SpacedNetwork::try_from(&self.fetcher.provider.chain) {
+            logs.into_iter()
+                .map(|mut log| {
+                    log.block_timestamp = spaced.get_block_time(log.block_number.unwrap());
+                    log
+                })
+                .collect()
+        } else {
+            logs
+        };
+
+        // 3. Use precomputed delta-encoded network timestamps
         let logs = if let Some(deltas) = &self.runlencoder {
             deltas.try_attach_log_timestamps(logs)
         } else {
             logs
         };
+
+        // 4. Fetch an optionally sampled-and-interpolated set of timestamps from RPC calls
         let logs = self.fetcher.attach_log_timestamps(logs).await?;
 
         Ok(logs)

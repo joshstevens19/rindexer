@@ -586,7 +586,7 @@ impl DeltaEncoder {
         };
 
         let timestamps = self.get_block_timestamps(&blocks_without_ts);
-        let (logs_with_ts, _) = logs
+        let logs_with_maybe_ts = logs
             .into_iter()
             .map(|mut log| {
                 if let Some(block_number) = log.block_number {
@@ -596,9 +596,9 @@ impl DeltaEncoder {
                 }
                 log
             })
-            .partition::<Vec<_>, _>(|x| x.block_timestamp.is_some());
+            .collect();
 
-        logs_with_ts
+        logs_with_maybe_ts
     }
 }
 

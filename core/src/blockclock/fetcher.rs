@@ -197,8 +197,10 @@ impl BlockFetcher {
             .partition::<Vec<_>, _>(|x| x.block_timestamp.is_some());
 
         if !logs_without_ts.is_empty() {
-            return Box::pin(self.attach_log_timestamps(logs_without_ts)).await;
-        };
+            let mut completed = Box::pin(self.attach_log_timestamps(logs_without_ts)).await?;
+            completed.extend(logs_with_ts);
+            return Ok(completed);
+        }
 
         Ok(logs_with_ts)
     }
