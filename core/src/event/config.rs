@@ -32,6 +32,7 @@ pub struct ContractEventProcessingConfig {
     pub event_name: String,
     pub config: Config,
     pub network_contract: Arc<NetworkContract>,
+    pub timestamps: bool,
     pub start_block: U64,
     pub end_block: U64,
     pub registry: Arc<EventCallbackRegistry>,
@@ -100,6 +101,7 @@ pub struct FactoryEventProcessingConfig {
     pub event: Event,
     pub config: Config,
     pub network_contract: Arc<NetworkContract>,
+    pub timestamps: bool,
     pub start_block: U64,
     pub end_block: U64,
     pub progress: Arc<Mutex<IndexingEventsProgressState>>,
@@ -189,6 +191,13 @@ impl EventProcessingConfig {
         match self {
             Self::ContractEventProcessing(config) => &config.config,
             Self::FactoryEventProcessing(config) => &config.config,
+        }
+    }
+
+    pub fn timestamps(&self) -> bool {
+        match self {
+            Self::ContractEventProcessing(config) => config.timestamps,
+            Self::FactoryEventProcessing(config) => config.timestamps,
         }
     }
 

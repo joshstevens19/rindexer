@@ -72,6 +72,9 @@ pub struct Manifest {
     #[serde(default)]
     pub config: Config,
 
+    #[serde(default)]
+    pub timestamps: Option<bool>,
+
     pub networks: Vec<Network>,
 
     #[serde(default = "default_storage")]
@@ -299,5 +302,19 @@ mod tests {
 
         assert_eq!(manifest.config.callback_concurrency, None);
         assert_eq!(manifest.config.buffer, None);
+    }
+
+    #[test]
+    fn test_timestamps_simple() {
+        let yaml = r#"
+        name: test
+        project_type: no-code
+        timestamps: true
+        networks: []
+        contracts: []
+        "#;
+
+        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(manifest.timestamps, Some(true));
     }
 }
