@@ -18,7 +18,6 @@ mockito = "1.7.0"
 [dependencies]
 # TODO: Trim down alloy features needed later, for now opt in to all.
 alloy = { version = "1.0.9", features = ["full", "json-rpc"] }
-async-std = "1.12.0"
 async-trait = "0.1.77"
 aws-config = "1.5.0"
 aws-sdk-sns = "1.37.0"
