@@ -76,7 +76,7 @@ tower = "0.5.2"
 jemallocator = { version = "0.6.0", package = "tikv-jemallocator", optional = true }
 jemalloc-ctl = { version = "0.6.0", package = "tikv-jemalloc-ctl", optional = true }
 foundry-compilers = "0.18.0"
-alloy-chains = "0.2.2"
+alloy-chains = "0.2.4"
 winnow = "0.7.11"
 
 # reth
