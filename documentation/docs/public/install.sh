@@ -47,6 +47,9 @@ elif [[ "$OS_TYPE" == "Darwin" ]]; then
     # From your output: Downloading binary archive from ...rindexer_darwin-arm64.tar.gz
     # So, if uname -m gives 'arm64', this is fine. If it gives 'x86_64' for Intel Macs, it will be 'amd64'.
     # This seems to be handled correctly in the original script.
+    if [[ "$ARCH_TYPE" == "x86_64" ]]; then
+        ARCH_TYPE="amd64"
+    fi
     EXT="tar.gz"
 elif [[ "$OS_TYPE" == "MINGW"* ]] || [[ "$OS_TYPE" == "MSYS"* ]] || [[ "$OS_TYPE" == "CYGWIN"* ]]; then
     PLATFORM="win32"
