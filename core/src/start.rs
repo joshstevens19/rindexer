@@ -170,7 +170,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     .create_relationships_and_indexes(
                         project_path,
                         &manifest.name,
-                        &manifest.contracts,
+                        &manifest.all_contracts(),
                     )
                     .await?;
 

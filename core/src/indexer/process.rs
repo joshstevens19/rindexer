@@ -563,16 +563,6 @@ async fn trigger_event(
 ) {
     indexing_event_processing();
 
-    if config.is_factory_event() {
-        // Factory events don't update progress yet due to typing limitations
-        if !fn_data.is_empty() {
-            // TODO: when we fix the devex for factory event to gen typings when using it we should call update_progress_and_last_synced_task then
-            let _ = config.trigger_event(fn_data).await;
-        }
-        indexing_event_processed();
-        return;
-    }
-
     let should_update_progress = if fn_data.is_empty() {
         #[allow(clippy::needless_bool)]
         if !is_running() {
