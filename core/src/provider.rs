@@ -29,7 +29,6 @@ use alloy::{
 };
 use alloy_chains::{Chain, NamedChain};
 use futures::future::try_join_all;
-use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashSet;

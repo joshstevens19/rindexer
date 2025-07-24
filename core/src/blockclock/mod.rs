@@ -99,7 +99,7 @@ impl BlockClock {
     /// The following strategies are tried in order:
     ///
     /// 1. Use timestamps present in logs and return early
-    /// 2. Use fixed-interval chains to compute timestamps and return **(currently disabled)**
+    /// 2. Use fixed-interval chains to compute timestamps and return
     /// 3. Use precomputed delta-encoded network timestamps
     /// 4. Fetch an optionally sampled-and-interpolated set of timestamps from RPC calls
     pub async fn attach_log_timestamps(&self, logs: Vec<Log>) -> Result<Vec<Log>, BlockClockError> {
@@ -108,7 +108,7 @@ impl BlockClock {
             return Ok(logs);
         }
 
-        // 2. Use fixed-interval chains to compute timestamps and return **(currently disabled)**
+        // 2. Use fixed-interval chains to compute timestamps and return
         let logs = if let Ok(spaced) = SpacedNetwork::try_from(&self.fetcher.provider.chain) {
             logs.into_iter()
                 .map(|mut log| {
