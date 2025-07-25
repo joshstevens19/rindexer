@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use alloy::rpc::types::ValueOrArray;
 use serde_json::Value;
 
+use crate::helpers::is_irregular_width_solidity_integer_type;
 use crate::{
     abi::{
         ABIInput, ABIItem, CreateCsvFileForEvent, EventInfo, GenerateAbiPropertiesType,
@@ -742,7 +743,7 @@ pub fn generate_event_handlers(
     imports.push_str("use std::sync::Arc;\n");
     imports.push_str(&format!(
         r#"use std::path::PathBuf;
-        use alloy::primitives::{{U256, I256}};
+        use alloy::primitives::{{U64, U256, I256}};
         use super::super::super::typings::{indexer_name_formatted}::events::{handler_registry_name}::{{no_extensions, {event_type_name}"#,
         indexer_name_formatted = camel_to_snake(indexer_name),
         handler_registry_name = camel_to_snake(&contract.name),
@@ -851,17 +852,19 @@ pub fn generate_event_handlers(
                             } else {
                                 ".clone()"
                             }
+                        } else if matches!(
+                            item.ethereum_sql_type_wrapper,
+                            Some(EthereumSqlTypeWrapper::I256(_) | EthereumSqlTypeWrapper::U256(_))
+                        ) {
+                            ")"
                         } else if item.abi_type.starts_with("int")
-                            || item.abi_type.starts_with("uint")
+                            && is_irregular_width_solidity_integer_type(&item.abi_type)
                         {
-                            match wrapper {
-                                EthereumSqlTypeWrapper::I32(_) if &item.abi_type == "int24" => {
-                                    ".as_i32()"
-                                }
-                                EthereumSqlTypeWrapper::I256(_)
-                                | EthereumSqlTypeWrapper::U256(_) => ")",
-                                _ => "",
-                            }
+                            ".unchecked_into()"
+                        } else if item.abi_type.starts_with("uint")
+                            && is_irregular_width_solidity_integer_type(&item.abi_type)
+                        {
+                            ".to()"
                         } else {
                             ""
                         }

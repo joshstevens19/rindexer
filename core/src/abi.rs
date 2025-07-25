@@ -47,7 +47,6 @@ pub enum GenerateAbiPropertiesType {
 pub struct GenerateAbiNamePropertiesResult {
     pub value: String,
     pub abi_type: String,
-    #[allow(dead_code)]
     pub abi_name: String,
     pub ethereum_sql_type_wrapper: Option<EthereumSqlTypeWrapper>,
 }

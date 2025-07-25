@@ -28,8 +28,8 @@ contracts:
   - name: ERC20
     details:
       - filter:
-            - event_name: Transfer
-            - event_name: Approval
+          - event_name: Transfer
+          - event_name: Approval
         network: ethereum
     abi: ./abis/erc20-abi.json
     generate_csv: true
@@ -46,14 +46,8 @@ contracts:
   - name: PlaygroundTypes
     details:
       - network: base
-        filter:
-          event_name: Swap
-        start_block: 19953475
-        end_block: 19956475
+        address: "0x1234567890abcdef1234567890abcdef12345678"
     abi: ./abis/playground-types-abi.json
-    include_events:
-      - Swap
-      - Two_Word
 global:
   contracts:
     - name: USDT

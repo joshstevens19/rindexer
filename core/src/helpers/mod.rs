@@ -5,11 +5,13 @@ pub use thread::set_thread_no_logging;
 mod array;
 mod evm_log;
 mod file;
+mod solidity;
+
 pub use array::chunk_hashset;
 pub use evm_log::{
     halved_block_number, is_relevant_block, map_log_params_to_raw_values, parse_log, parse_topic,
 };
-
+pub use solidity::{is_irregular_width_solidity_integer_type, parse_solidity_integer_type};
 use std::{
     env,
     env::VarError,

@@ -45,11 +45,11 @@ pub struct TxInformation {
     pub network: String,
     pub address: Address,
     pub block_hash: BlockHash,
-    pub block_number: U64,
+    pub block_number: u64,
     pub block_timestamp: Option<U256>,
     pub transaction_hash: TxHash,
     pub log_index: U256,
-    pub transaction_index: U64,
+    pub transaction_index: u64,
 }
 
 /// Define a trait over any entity that has attached transaction information. This is very useful
@@ -88,14 +88,14 @@ impl EventResult {
                 network: network_contract.network.to_string(),
                 address: log_address,
                 block_hash: log.block_hash.expect("log should contain block_hash"),
-                block_number: U64::from(log.block_number.expect("log should contain block_number")),
+                block_number: log.block_number.expect("log should contain block_number"),
                 block_timestamp: log.block_timestamp.map(U256::from),
                 transaction_hash: log
                     .transaction_hash
                     .expect("log should contain transaction_hash"),
-                transaction_index: U64::from(
-                    log.transaction_index.expect("log should contain transaction_index"),
-                ),
+                transaction_index: log
+                    .transaction_index
+                    .expect("log should contain transaction_index"),
                 log_index: U256::from(log.log_index.expect("log should contain log_index")),
             },
             found_in_request: LogFoundInRequest { from_block: start_block, to_block: end_block },
@@ -264,11 +264,11 @@ impl TraceResult {
                 network: network.to_string(),
                 address: Address::ZERO,
                 // TODO: Unclear in what situation this would be `None`.
-                block_number: trace.block_number.map(U64::from).unwrap_or_else(|| U64::ZERO),
+                block_number: trace.block_number.unwrap_or(0),
                 block_timestamp: None,
                 transaction_hash: trace.transaction_hash.unwrap_or(TxHash::ZERO),
                 block_hash: trace.block_hash.unwrap_or(BlockHash::ZERO),
-                transaction_index: U64::from(trace.transaction_position.unwrap_or(0)),
+                transaction_index: trace.transaction_position.unwrap_or(0),
                 log_index: U256::from(0),
             },
             found_in_request: LogFoundInRequest { from_block: start_block, to_block: end_block },
@@ -291,16 +291,13 @@ impl TraceResult {
             tx_information: TxInformation {
                 network: network.to_string(),
                 address: Address::ZERO,
-                block_number: tx
-                    .block_number
-                    .map(U64::from)
-                    .expect("block_number should be present"),
+                block_number: tx.block_number.expect("block_number should be present"),
                 block_timestamp: Some(U256::from(ts)),
                 transaction_hash: tx.tx_hash(),
                 block_hash: tx.block_hash.expect("block_hash should be present"),
-                transaction_index: U64::from(
-                    tx.transaction_index.expect("transaction_index should be present"),
-                ),
+                transaction_index: tx
+                    .transaction_index
+                    .expect("transaction_index should be present"),
                 log_index: U256::from(0),
             },
             found_in_request: LogFoundInRequest { from_block: start_block, to_block: end_block },
