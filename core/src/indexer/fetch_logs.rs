@@ -422,10 +422,10 @@ async fn live_indexing_stream(
         match latest_block {
             Ok(latest_block) => {
                 if let Some(latest_block) = latest_block {
-                    let to_block_number = log_response_to_large_to_block
+                    let latest_block_number = log_response_to_large_to_block
                         .unwrap_or(U64::from(latest_block.header.number));
 
-                    if last_seen_block_number == to_block_number {
+                    if last_seen_block_number == latest_block_number {
                         debug!(
                             "{} - {} - No new blocks to process...",
                             info_log_name,
@@ -442,24 +442,34 @@ async fn live_indexing_stream(
                             last_no_new_block_log_time = Instant::now();
                         }
                     } else {
-                        debug!(
+                        info!(
                             "{} - {} - New block seen {} - Last seen block {}",
                             info_log_name,
                             IndexingEventProgressStatus::Live.log(),
-                            to_block_number,
+                            latest_block_number,
                             last_seen_block_number
                         );
 
-                        let safe_block_number = to_block_number - reorg_safe_distance;
+                        let safe_block_number = latest_block_number - reorg_safe_distance;
                         let from_block = current_filter.from_block();
                         if from_block > safe_block_number {
-                            info!(
-                                "{} - {} - not in safe reorg block range yet block: {} > range: {}",
-                                info_log_name,
-                                IndexingEventProgressStatus::Live.log(),
-                                from_block,
-                                safe_block_number
-                            );
+                            if reorg_safe_distance.is_zero() {
+                                info!(
+                                    "{}::{} - RPC has gone back on latest block: rpc returned {}, last seen: {}",
+                                    info_log_name,
+                                    IndexingEventProgressStatus::Live.log(),
+                                    latest_block_number,
+                                    from_block
+                                );
+                            } else {
+                                info!(
+                                    "{} - {} - not in safe reorg block range yet block: {} > range: {}",
+                                    info_log_name,
+                                    IndexingEventProgressStatus::Live.log(),
+                                    from_block,
+                                    safe_block_number
+                                );
+                            }
                         } else {
                             let contract_address = current_filter.contract_addresses().await;
 

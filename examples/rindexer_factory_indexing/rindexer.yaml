@@ -1,0 +1,50 @@
+name: RindexerFactoryContract
+project_type: rust
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+  - name: base
+    chain_id: 8453
+    rpc: https://mainnet.base.org
+storage:
+  postgres:
+    enabled: true
+  csv:
+    enabled: true
+    path: ./generated_csv
+native_transfers:
+  enabled: false
+contracts:
+  - name: UniswapV3Factory
+    details:
+      - network: base
+        start_block: 33000000
+        address: 0x33128a8fC17869897dcE68Ed026d694621f6FDfD
+      - network: ethereum
+        start_block: 22000000
+        address: 0x1F98431c8aD98523631AE4a59f267346ea31F984
+    abi: ./abis/uniswap-v3-factory-abi.json
+    include_events:
+      - OwnerChanged
+  - name: UniswapV3Pool
+    details:
+      - network: base
+        start_block: 33000000
+        factory:
+          name: UniswapV3Factory
+          address: 0x33128a8fC17869897dcE68Ed026d694621f6FDfD
+          abi: ./abis/uniswap-v3-factory-abi.json
+          event_name: PoolCreated
+          input_name: "pool"
+      - network: ethereum
+        start_block: 22000000
+        factory:
+          name: UniswapV3Factory
+          address: 0x1F98431c8aD98523631AE4a59f267346ea31F984
+          abi: ./abis/uniswap-v3-factory-abi.json
+          event_name: PoolCreated
+          input_name: "pool"
+    abi: ./abis/uniswap-v3-pool-abi.json
+    include_events:
+      - Swap

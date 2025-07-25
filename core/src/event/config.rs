@@ -92,6 +92,7 @@ impl ContractEventProcessingConfig {
 }
 
 pub struct FactoryEventProcessingConfig {
+    pub id: String,
     pub project_path: PathBuf,
     pub indexer_name: String,
     pub contract_name: String,
@@ -102,6 +103,7 @@ pub struct FactoryEventProcessingConfig {
     pub network_contract: Arc<NetworkContract>,
     pub start_block: U64,
     pub end_block: U64,
+    pub registry: Arc<EventCallbackRegistry>,
     pub progress: Arc<Mutex<IndexingEventsProgressState>>,
     pub database: Option<Arc<PostgresClient>>,
     pub csv_details: Option<CsvDetails>,
@@ -136,6 +138,8 @@ impl FactoryEventProcessingConfig {
     }
 
     pub async fn trigger_event(&self, events: Vec<EventResult>) -> Result<(), String> {
+        self.registry.trigger_event(&self.id, events.clone()).await?;
+
         update_known_factory_deployed_addresses(self, &events).await.map_err(|e| e.to_string())
     }
 
