@@ -148,11 +148,8 @@ fn check_node_availability() {
     }
 
     // Check npm
-    let npm_command = if env::var("CARGO_CFG_TARGET_OS").unwrap() == "windows" {
-        "npm.cmd"
-    } else {
-        "npm"
-    };
+    let npm_command =
+        if env::var("CARGO_CFG_TARGET_OS").unwrap() == "windows" { "npm.cmd" } else { "npm" };
     if Command::new(npm_command).arg("--version").output().is_err() {
         panic!("npm is not available. Please ensure npm is installed with Node.js.");
     }
