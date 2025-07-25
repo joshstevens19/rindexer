@@ -96,6 +96,11 @@ jobs:
           key: ${{ matrix.target }}
           cache-on-failure: true
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Apple M1 setup
         if: matrix.target == 'aarch64-apple-darwin'
         run: |
@@ -545,6 +550,12 @@ jobs:
         with:
           key: ${{ matrix.target }}
           cache-on-failure: true
+
+      - name: Setup Node.js
+        if: steps.check_release.outputs.is_release == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
       - name: Apple M1 setup
         if: steps.check_release.outputs.is_release == 'true' && matrix.target == 'aarch64-apple-darwin'

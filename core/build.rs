@@ -46,7 +46,7 @@ fn main() {
             target_info.os, target_info.arch
         );
 
-        build_graphql_binary(&graphql_dir, &final_exe_path);
+        build_graphql_binary(&graphql_dir, &final_exe_path, &target_info);
     } else {
         println!("cargo:warning=GraphQL binary is up to date, skipping build");
         // Still set the environment variable for the existing binary
@@ -69,7 +69,7 @@ fn should_rebuild(exe_path: &Path, graphql_dir: &Path) -> bool {
     if package_lock.exists() {
         if let (Ok(exe_time), Ok(lock_time)) = (
             exe_path.metadata().and_then(|m| m.modified()),
-            package_lock.metadata().and_then(|m| m.modified())
+            package_lock.metadata().and_then(|m| m.modified()),
         ) {
             if lock_time > exe_time {
                 println!("cargo:warning=package-lock.json is newer than binary, rebuilding");
@@ -86,7 +86,10 @@ fn should_rebuild(exe_path: &Path, graphql_dir: &Path) -> bool {
             if source_path.exists() {
                 if let Ok(source_time) = source_path.metadata().and_then(|m| m.modified()) {
                     if source_time > exe_time {
-                        println!("cargo:warning=Source file {} is newer than binary, rebuilding", source_file);
+                        println!(
+                            "cargo:warning=Source file {} is newer than binary, rebuilding",
+                            source_file
+                        );
                         return true;
                     }
                 }
@@ -101,6 +104,7 @@ struct TargetInfo {
     os: String,
     arch: String,
     exe_name: String,
+    pkg_target: String,
 }
 
 fn get_target_info() -> TargetInfo {
@@ -113,10 +117,14 @@ fn get_target_info() -> TargetInfo {
         _ => panic!("Unsupported architecture: {}. Supported: x86_64, aarch64", arch),
     };
 
+    let pkg_os = if os == "windows" { "win".to_string() } else { os.clone() };
+    // Using Node.js v22 as it's the current LTS version.
+    let pkg_target = format!("node22-{}-{}", pkg_os, node_arch);
+
     let exe_suffix = if os == "windows" { ".exe" } else { "" };
     let exe_name = format!("rindexer-graphql-{}-{}{}", os, node_arch, exe_suffix);
 
-    TargetInfo { os: os.clone(), arch: node_arch.to_string(), exe_name }
+    TargetInfo { os: os.clone(), arch: node_arch.to_string(), exe_name, pkg_target }
 }
 
 fn check_node_availability() {
@@ -145,7 +153,7 @@ fn check_node_availability() {
     }
 }
 
-fn build_graphql_binary(graphql_dir: &Path, final_exe_path: &Path) {
+fn build_graphql_binary(graphql_dir: &Path, final_exe_path: &Path, target_info: &TargetInfo) {
     // 1. Install npm dependencies
     run_command(
         "npm",
@@ -161,6 +169,8 @@ fn build_graphql_binary(graphql_dir: &Path, final_exe_path: &Path) {
             "run",
             "build",
             "--",
+            "--targets",
+            &target_info.pkg_target,
             "--output",
             final_exe_path.to_str().expect("Invalid final_exe_path"),
         ],
@@ -208,7 +218,7 @@ fn run_command(command: &str, args: &[&str], cwd: &Path, error_msg: &str) {
         let stderr = String::from_utf8_lossy(&output.stderr);
 
         panic!(
-            "{}\n\
+            "{}\
             ╭─ Command Failed ─────────────────────────────────────\n\
             │ Command: {} {}\n\
             │ Working Directory: {}\n\
