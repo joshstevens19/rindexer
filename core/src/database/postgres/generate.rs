@@ -2,6 +2,7 @@ use alloy::primitives::keccak256;
 use std::path::Path;
 use tracing::{error, info};
 
+use crate::helpers::parse_solidity_integer_type;
 use crate::manifest::contract::FactoryDetailsYaml;
 use crate::{
     abi::{ABIInput, ABIItem, EventInfo, GenerateAbiPropertiesType, ParamTypeError, ReadAbiError},
@@ -397,11 +398,7 @@ pub fn solidity_type_to_db_type(abi_type: &str) -> String {
         t if t.starts_with("bytes") => "BYTEA",
         t if t.starts_with("int") || t.starts_with("uint") => {
             // Handling fixed-size integers (intN and uintN where N can be 8 to 256 in steps of 8)
-            let (prefix, size): (&str, usize) = if t.starts_with("int") {
-                ("int", t[3..].parse().expect("Invalid intN type"))
-            } else {
-                ("uint", t[4..].parse().expect("Invalid uintN type"))
-            };
+            let (prefix, size) = parse_solidity_integer_type(t);
 
             match size {
                 8 | 16 => "SMALLINT",
