@@ -346,15 +346,25 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                             let from_block = ordering_live_indexing_details.filter.from_block();
                             // check reorg distance and skip if not safe
                             if from_block > safe_block_number {
-                                info!(
-                                    "{}::{} - {} - not in safe reorg block range yet block: {} > range: {}",
+                                if reorg_safe_distance.is_zero() {
+                                    info!(
+                                    "{}::{} - RPC has gone back on latest block: rpc returned {}, last seen: {}",
                                     &config.info_log_name(),
-                                    &config.network_contract().network,
                                     IndexingEventProgressStatus::Live.log(),
-                                    from_block,
-                                    safe_block_number
+                                    latest_block_number,
+                                    from_block
                                 );
-                                continue;
+                                } else {
+                                    info!(
+                                        "{}::{} - {} - not in safe reorg block range yet block: {} > range: {}",
+                                        &config.info_log_name(),
+                                        &config.network_contract().network,
+                                        IndexingEventProgressStatus::Live.log(),
+                                        from_block,
+                                        safe_block_number
+                                    );
+                                    continue;
+                                }
                             }
 
                             let to_block = safe_block_number;
@@ -552,16 +562,6 @@ async fn trigger_event(
     to_block: U64,
 ) {
     indexing_event_processing();
-
-    if config.is_factory_event() {
-        // Factory events don't update progress yet due to typing limitations
-        if !fn_data.is_empty() {
-            // TODO: when we fix the devex for factory event to gen typings when using it we should call update_progress_and_last_synced_task then
-            let _ = config.trigger_event(fn_data).await;
-        }
-        indexing_event_processed();
-        return;
-    }
 
     let should_update_progress = if fn_data.is_empty() {
         #[allow(clippy::needless_bool)]

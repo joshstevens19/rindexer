@@ -10,9 +10,9 @@ start_all:
 	RUSTFLAGS='-C target-cpu=native' RUST_BACKTRACE='full' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/rindexer_demo_cli all
 start_graphql:
 	RUSTFLAGS='-C target-cpu=native' RUST_BACKTRACE='full' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/rindexer_demo_cli graphql
-codegen_typings:
+playground_codegen_typings:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path $(CURDIR)/../rindexer_rust_playground typings
-codegen_indexer:
+playground_codegen_indexer:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path $(CURDIR)/../rindexer_rust_playground indexer
 codegen_graphql:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path $(CURDIR)/../examples/rindexer_demo_cli graphql --endpoint  http://0.0.0.0:5005/graphql
@@ -30,6 +30,15 @@ phantom_deploy:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- phantom --path $(CURDIR)/../examples/rindexer_demo_cli deploy --contract-name RocketPoolETH --network ethereum
 help:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- phantom --help
+
+
+################################################################################
+# FACTORY INDEXING EXAMPLE COMMANDS
+################################################################################
+factory_indexing_codegen_typings:
+	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path $(CURDIR)/../examples/rindexer_factory_indexing typings
+factory_indexing_codegen_indexer:
+	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path $(CURDIR)/../examples/rindexer_factory_indexing indexer
 
 ################################################################################
 # LOCAL NONE CHECKED IN PROJECT COMMANDS
