@@ -3,7 +3,7 @@ use alloy::sol;
 sol!(
     #[derive(Debug)]
     #[sol(rpc, all_derives)]
-    RindexerUniswapV3FactoryPoolCreatedpoolGen,
+    RindexerUniswapV3FactoryPoolCreatedPoolGen,
     r#"[
   {
     "inputs": [],

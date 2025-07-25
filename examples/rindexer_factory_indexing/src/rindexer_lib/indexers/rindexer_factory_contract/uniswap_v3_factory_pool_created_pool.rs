@@ -1,5 +1,5 @@
 #![allow(non_snake_case)]
-use super::super::super::typings::rindexer_factory_contract::events::uniswap_v3_factory_pool_createdpool::{no_extensions, PoolCreatedEvent, UniswapV3FactoryPoolCreatedpoolEventType};
+use super::super::super::typings::rindexer_factory_contract::events::uniswap_v3_factory_pool_created_pool::{no_extensions, PoolCreatedEvent, UniswapV3FactoryPoolCreatedPoolEventType};
 use alloy::primitives::{I256, U256};
 use rindexer::{
     event::callback_registry::EventCallbackRegistry,
@@ -52,7 +52,7 @@ async fn pool_created_handler(manifest_path: &PathBuf, registry: &mut EventCallb
             if !csv_bulk_data.is_empty() {
                 let csv_result = context.csv.append_bulk(csv_bulk_data).await;
                 if let Err(e) = csv_result {
-                    rindexer_error!("UniswapV3FactoryPoolCreatedpoolEventType::PoolCreated inserting csv data: {:?}", e);
+                    rindexer_error!("UniswapV3FactoryPoolCreatedPoolEventType::PoolCreated inserting csv data: {:?}", e);
                     return Err(e.to_string());
                 }
             }
@@ -93,28 +93,28 @@ async fn pool_created_handler(manifest_path: &PathBuf, registry: &mut EventCallb
                     .await;
 
                 if let Err(e) = result {
-                    rindexer_error!("UniswapV3FactoryPoolCreatedpoolEventType::PoolCreated inserting bulk data via COPY: {:?}", e);
+                    rindexer_error!("UniswapV3FactoryPoolCreatedPoolEventType::PoolCreated inserting bulk data via COPY: {:?}", e);
                     return Err(e.to_string());
                 }
             } else {
                 let result = context
                     .database
                     .bulk_insert(
-                        "rindexer_factory_contract_uniswap_v3_factory_pool_createdpool.pool_created",
+                        "rindexer_factory_contract_uniswap_v3_factory_pool_created_pool.pool_created",
                         &rows,
                         &postgres_bulk_data,
                     )
                     .await;
 
                 if let Err(e) = result {
-                    rindexer_error!("UniswapV3FactoryPoolCreatedpoolEventType::PoolCreated inserting bulk data via INSERT: {:?}", e);
+                    rindexer_error!("UniswapV3FactoryPoolCreatedPoolEventType::PoolCreated inserting bulk data via INSERT: {:?}", e);
                     return Err(e.to_string());
                 }
             }
 
 
             rindexer_info!(
-                "UniswapV3FactoryPoolCreatedpool::PoolCreated - {} - {} events",
+                "UniswapV3FactoryPoolCreatedPool::PoolCreated - {} - {} events",
                 "INDEXED".green(),
                 results.len(),
             );
@@ -123,13 +123,13 @@ async fn pool_created_handler(manifest_path: &PathBuf, registry: &mut EventCallb
         },
         no_extensions(),
     )
-    .await;
+        .await;
 
-    UniswapV3FactoryPoolCreatedpoolEventType::PoolCreated(handler)
+    UniswapV3FactoryPoolCreatedPoolEventType::PoolCreated(handler)
         .register(manifest_path, registry)
         .await;
 }
-pub async fn uniswap_v3_factory_pool_createdpool_handlers(
+pub async fn uniswap_v3_factory_pool_created_pool_handlers(
     manifest_path: &PathBuf,
     registry: &mut EventCallbackRegistry,
 ) {
