@@ -1,13 +1,13 @@
 #![allow(non_snake_case)]
 use super::super::super::typings::rindexer_playground::events::playground_types::{
-    no_extensions, BasicTypesEvent, BytesTypesEvent, CAPITALIZEDEvent,
-    IrregularWidthSignedIntegersEvent, IrregularWidthUnsignedIntegersEvent, PlaygroundTypesEventType,
-    RegularWidthSignedIntegersEvent, RegularWidthUnsignedIntegersEvent, Under_ScoreEvent,
+    BasicTypesEvent, BytesTypesEvent, CAPITALIZEDEvent, IrregularWidthSignedIntegersEvent,
+    IrregularWidthUnsignedIntegersEvent, PlaygroundTypesEventType, RegularWidthSignedIntegersEvent,
+    RegularWidthUnsignedIntegersEvent, Under_ScoreEvent, no_extensions,
 };
-use alloy::primitives::{I256, U256, U64};
+use alloy::primitives::{I256, U64, U256};
 use rindexer::{
-    event::callback_registry::EventCallbackRegistry, rindexer_error, rindexer_info,
     EthereumSqlTypeWrapper, PgType, RindexerColorize,
+    event::callback_registry::EventCallbackRegistry, rindexer_error, rindexer_info,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
