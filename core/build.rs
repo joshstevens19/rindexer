@@ -148,15 +148,21 @@ fn check_node_availability() {
     }
 
     // Check npm
-    if Command::new("npm").arg("--version").output().is_err() {
+    let npm_command = if env::var("CARGO_CFG_TARGET_OS").unwrap() == "windows" {
+        "npm.cmd"
+    } else {
+        "npm"
+    };
+    if Command::new(npm_command).arg("--version").output().is_err() {
         panic!("npm is not available. Please ensure npm is installed with Node.js.");
     }
 }
 
 fn build_graphql_binary(graphql_dir: &Path, final_exe_path: &Path, target_info: &TargetInfo) {
+    let npm_command = if target_info.os == "windows" { "npm.cmd" } else { "npm" };
     // 1. Install npm dependencies
     run_command(
-        "npm",
+        npm_command,
         &["install"],
         graphql_dir,
         "npm install failed. Please ensure package.json is valid.",
@@ -164,7 +170,7 @@ fn build_graphql_binary(graphql_dir: &Path, final_exe_path: &Path, target_info: 
 
     // 2. Build the binary using pkg, passing the final output path
     run_command(
-        "npm",
+        npm_command,
         &[
             "run",
             "build",
