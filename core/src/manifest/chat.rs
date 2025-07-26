@@ -16,6 +16,9 @@ pub struct TelegramEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conditions: Option<Vec<Map<String, Value>>>,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter_expression: Option<String>,
+
     pub template_inline: String,
 }
 
@@ -34,6 +37,9 @@ pub struct DiscordEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conditions: Option<Vec<Map<String, Value>>>,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter_expression: Option<String>,
+
     pub template_inline: String,
 }
 
@@ -51,6 +57,9 @@ pub struct SlackEvent {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conditions: Option<Vec<Map<String, Value>>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter_expression: Option<String>,
 
     pub template_inline: String,
 }
