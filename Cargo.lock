@@ -10653,7 +10653,7 @@ dependencies = [
 
 [[package]]
 name = "rindexer"
-version = "0.22.0"
+version = "0.22.1"
 dependencies = [
  "alloy",
  "alloy-chains",
@@ -10714,7 +10714,7 @@ dependencies = [
 
 [[package]]
 name = "rindexer_cli"
-version = "0.22.0"
+version = "0.22.1"
 dependencies = [
  "alloy",
  "alloy-chains",

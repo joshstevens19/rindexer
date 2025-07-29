@@ -1,4 +1,4 @@
-use std::{backtrace::Backtrace, env, panic};
+use std::env;
 
 #[cfg(feature = "jemalloc")]
 use jemallocator::Jemalloc;
@@ -12,7 +12,7 @@ mod commands;
 mod console;
 mod rindexer_yaml;
 
-use std::{path::PathBuf, str::FromStr, sync::Once};
+use std::{path::PathBuf, str::FromStr};
 
 use clap::Parser;
 use rindexer::{load_env_from_project_path, manifest::core::ProjectType};
@@ -30,53 +30,18 @@ use crate::{
     console::print_error_message,
 };
 
-static INIT: Once = Once::new();
-
-fn set_panic_hook() {
-    INIT.call_once(|| {
-        panic::set_hook(Box::new(|info| {
-            eprintln!("=== Start Of Custom rindexer unhandled panic hook - please supply this information on the github issue if it happens ===");
-
-            if let Some(location) = info.location() {
-                eprintln!(
-                    "Panic occurred in file '{}' at line {}",
-                    location.file(),
-                    location.line()
-                );
-            } else {
-                eprintln!("Panic occurred but can't get location information...");
-            }
-
-            if let Some(s) = info.payload().downcast_ref::<&str>() {
-                eprintln!("Panic message: {s}");
-            } else {
-                eprintln!("Panic occurred but can't get the panic message...");
-            }
-
-            let backtrace = Backtrace::capture();
-            eprintln!("{backtrace:?}");
-            eprintln!("=== End Of Custom rindexer unhandled panic hook - please supply this information on the github issue if it happens ===");
-        }));
-    });
-}
-
 fn resolve_path(override_path: &Option<String>) -> Result<PathBuf, String> {
     match override_path {
         Some(path) => {
             let path = PathBuf::from_str(path).map_err(|_| "Invalid path provided.".to_string())?;
             Ok(path)
         }
-        None => {
-            Ok(std::env::current_dir()
-                .map_err(|_| "Failed to get current directory.".to_string())?)
-        }
+        None => Ok(env::current_dir().map_err(|_| "Failed to get current directory.".to_string())?),
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env::set_var("RUST_BACKTRACE", "full");
-    set_panic_hook();
     let cli = CLI::parse();
 
     match &cli.command {
