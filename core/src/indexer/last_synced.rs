@@ -263,9 +263,7 @@ pub async fn update_progress_and_last_synced_task(
         if let Err(e) = result {
             error!("Error updating db last synced block: {:?}", e);
         }
-    }
-
-    if let Some(csv_details) = &config.csv_details() {
+    } else if let Some(csv_details) = &config.csv_details() {
         if let Err(e) = update_last_synced_block_number_for_file(
             &config.contract_name(),
             &config.network_contract().network,
