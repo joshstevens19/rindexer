@@ -443,7 +443,7 @@ async fn live_indexing_stream(
                             last_no_new_block_log_time = Instant::now();
                         }
                     } else {
-                        info!(
+                        debug!(
                             "{} - {} - New block seen {} - Last seen block {}",
                             info_log_name,
                             IndexingEventProgressStatus::Live.log(),
