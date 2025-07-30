@@ -9,11 +9,13 @@
 ### Bug fixes
 -------------------------------------------------
 - fix: do not try to write streams file even when csv is off
-- fix: Fix codegen for events with irregular width solidity integer types
+- fix: fix codegen for events with irregular width solidity integer types
 
 ### Breaking changes
 -------------------------------------------------
-- `EthereumSqlTypeWrapper::U64` is now a rust `u64` type
+- `EthereumSqlTypeWrapper` `U64`, `U64Nullable` and `U64BigInt` are now a rust `u64` type
+- `EthereumSqlTypeWrapper::VecU64` is now a rust `Vec<u64>` type
+- `TxInformation` `block_number` and `transaction_index` are now a rust `u64` type
 
 ## Releases
 -------------------------------------------------
