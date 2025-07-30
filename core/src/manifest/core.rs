@@ -5,6 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_yaml::Value;
 
 use crate::event::contract_setup::ContractEventMapping;
+use crate::helpers::to_pascal_case;
 use crate::manifest::config::Config;
 use crate::manifest::contract::{
     ContractDetails, DependencyEventTreeYaml, FactoryDetailsYaml, SimpleEventOrContractEvent,
@@ -122,7 +123,7 @@ impl Manifest {
                     }
 
                     // suffix with factory filter details to allow having the same contract name at the `contracts` level in yaml
-                    let overridden_factory_contract_name = format!("{}{}{}", first_factory.name, first_factory.event_name, first_factory.input_name);
+                    let overridden_factory_contract_name = format!("{}{}{}", first_factory.name, to_pascal_case(&first_factory.event_name), to_pascal_case(&first_factory.input_name));
 
                     let factory_contract = Contract {
                         name: overridden_factory_contract_name.clone(),
@@ -136,7 +137,7 @@ impl Manifest {
                             }),
                             address: None,
                             filter: None,
-                            indexed_filters: None
+                            indexed_filters: None,
                         }).collect::<Vec<_>>(),
                         abi: first_factory.abi.clone().into(),
                         dependency_events: None,
@@ -150,7 +151,7 @@ impl Manifest {
 
                     let dependency_contract = Contract {
                         dependency_events: Some(DependencyEventTreeYaml {
-                            events: vec![SimpleEventOrContractEvent::ContractEvent( ContractEventMapping{
+                            events: vec![SimpleEventOrContractEvent::ContractEvent(ContractEventMapping {
                                 contract_name: factory_contract.name.clone(),
                                 event_name: first_factory.event_name,
                             })],
@@ -180,7 +181,7 @@ impl Manifest {
                     };
 
                     vec![factory_contract, dependency_contract]
-                },
+                }
                 None => vec![contract]
             }
         }).collect()
