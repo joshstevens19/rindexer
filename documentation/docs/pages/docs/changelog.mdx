@@ -8,10 +8,14 @@
 - feat: enhance filter conditions parsing and evaluation to handle complex expressions with logical operators
 
 ### Bug fixes
+- fix: fix codegen for events with irregular width solidity integer types
 - fix: logical operators precedence in filter conditions - https://github.com/joshstevens19/rindexer/issues/225
 
 ### Breaking changes
 -------------------------------------------------
+- `EthereumSqlTypeWrapper` `U64`, `U64Nullable` and `U64BigInt` are now a rust `u64` type
+- `EthereumSqlTypeWrapper::VecU64` is now a rust `Vec<u64>` type
+- `TxInformation` `block_number` and `transaction_index` are now a rust `u64` type
 
 ## Releases
 -------------------------------------------------

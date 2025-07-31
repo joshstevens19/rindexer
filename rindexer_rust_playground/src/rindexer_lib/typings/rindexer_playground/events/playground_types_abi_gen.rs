@@ -1,4 +1,10 @@
-[
+use alloy::sol;
+
+sol!(
+    #[derive(Debug)]
+    #[sol(rpc, all_derives)]
+    RindexerPlaygroundTypesGen,
+    r#"[
   {
     "anonymous": false,
     "name": "BasicTypes",
@@ -428,3 +434,5 @@
     "anonymous": false
   }
 ]
+"#
+);
