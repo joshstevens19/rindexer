@@ -18,7 +18,7 @@ use crate::{
         telegram::{TelegramBot, TelegramError},
         template::Template,
     },
-    event::{filter_event_data_by_conditions, EventMessage},
+    event::{filter_by_expression, filter_event_data_by_conditions, EventMessage},
     manifest::chat::{
         ChatConfig, DiscordConfig, DiscordEvent, SlackConfig, SlackEvent, TelegramConfig,
         TelegramEvent,
@@ -130,11 +130,24 @@ impl ChatClients {
         let tasks: Vec<_> = events_data
             .iter()
             .filter(|event_data| {
-                if let Some(conditions) = &event_for.conditions {
-                    filter_event_data_by_conditions(event_data, conditions)
-                } else {
-                    true
+                // Filter expression has priority over conditions
+                // If both are present, the filter expression will be used
+                // If neither is present, all events will be sent
+                if let Some(expression) = &event_for.filter_expression {
+                    let result = filter_by_expression(expression, event_data);
+
+                    return match result {
+                        Ok(res) => res,
+                        Err(e) => {
+                            tracing::error!("Error evaluating filter expression: {}", e);
+                            false
+                        }
+                    };
                 }
+                if let Some(conditions) = &event_for.conditions {
+                    return filter_event_data_by_conditions(event_data, conditions);
+                }
+                true
             })
             .map(|event_data| {
                 let client = Arc::clone(&instance.client);
@@ -159,11 +172,24 @@ impl ChatClients {
         let tasks: Vec<_> = events_data
             .iter()
             .filter(|event_data| {
-                if let Some(conditions) = &event_for.conditions {
-                    filter_event_data_by_conditions(event_data, conditions)
-                } else {
-                    true
+                // Filter expression has priority over conditions
+                // If both are present, the filter expression will be used
+                // If neither is present, all events will be sent
+                if let Some(expression) = &event_for.filter_expression {
+                    let result = filter_by_expression(expression, event_data);
+
+                    return match result {
+                        Ok(res) => res,
+                        Err(e) => {
+                            tracing::error!("Error evaluating filter expression: {}", e);
+                            false
+                        }
+                    };
                 }
+                if let Some(conditions) = &event_for.conditions {
+                    return filter_event_data_by_conditions(event_data, conditions);
+                }
+                true
             })
             .map(|event_data| {
                 let client = Arc::clone(&instance.client);
@@ -188,11 +214,24 @@ impl ChatClients {
         let tasks: Vec<_> = events_data
             .iter()
             .filter(|event_data| {
-                if let Some(conditions) = &event_for.conditions {
-                    filter_event_data_by_conditions(event_data, conditions)
-                } else {
-                    true
+                // Filter expression has priority over conditions
+                // If both are present, the filter expression will be used
+                // If neither is present, all events will be sent
+                if let Some(expression) = &event_for.filter_expression {
+                    let result = filter_by_expression(expression, event_data);
+
+                    return match result {
+                        Ok(res) => res,
+                        Err(e) => {
+                            tracing::error!("Error evaluating filter expression: {}", e);
+                            false
+                        }
+                    };
                 }
+                if let Some(conditions) = &event_for.conditions {
+                    return filter_event_data_by_conditions(event_data, conditions);
+                }
+                true
             })
             .map(|event_data| {
                 let client = Arc::clone(&instance.client);
