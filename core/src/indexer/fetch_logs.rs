@@ -6,6 +6,7 @@ use crate::{
     indexer::{reorg::handle_chain_notification, IndexingEventProgressStatus},
     is_running,
     provider::{JsonRpcCachedProvider, ProviderError},
+    rindexer_info,
 };
 use alloy::{
     primitives::{B256, U64},
@@ -442,7 +443,7 @@ async fn live_indexing_stream(
                             last_no_new_block_log_time = Instant::now();
                         }
                     } else {
-                        info!(
+                        debug!(
                             "{} - {} - New block seen {} - Last seen block {}",
                             info_log_name,
                             IndexingEventProgressStatus::Live.log(),
@@ -760,6 +761,14 @@ async fn retry_with_block_range(
             .map(|original| std::cmp::min(original, U64::from(3000)))
             .unwrap_or(U64::from(3000));
 
+        rindexer_info!(
+            "{}::{} - block range too wide suggesting better range {} - {}",
+            info_log_name,
+            network,
+            from_block,
+            suggested_range
+        );
+
         return Some(RetryWithBlockRangeResult {
             from: from_block,
             to: from_block + suggested_range,
@@ -795,6 +804,14 @@ async fn retry_with_block_range(
             .map(|original| std::cmp::min(original, U64::from(2000)))
             .unwrap_or(U64::from(2000));
 
+        rindexer_info!(
+            "{}::{} - block range too large suggesting better range {} - {}",
+            info_log_name,
+            network,
+            from_block,
+            suggested_range
+        );
+
         return Some(RetryWithBlockRangeResult {
             from: from_block,
             to: from_block + suggested_range,
@@ -807,6 +824,14 @@ async fn retry_with_block_range(
         || error_message.contains("error decoding response body")
     {
         let halved_to_block = halved_block_number(to_block, from_block);
+        rindexer_info!(
+            "{}::{} - Halving the to block as response to big {} - {}",
+            info_log_name,
+            network,
+            from_block,
+            halved_to_block
+        );
+
         return Some(RetryWithBlockRangeResult {
             from: from_block,
             to: halved_to_block,
@@ -816,6 +841,13 @@ async fn retry_with_block_range(
 
     // We can't keep up with our own sending rate. This is rare, but we must backoff throughput.
     if error_message.contains("error sending request") {
+        rindexer_info!(
+            "{}::{} - Backing off for 1 second for to block as error sending request {} - {}",
+            info_log_name,
+            network,
+            from_block,
+            to_block
+        );
         tokio::time::sleep(Duration::from_secs(1)).await;
         return Some(RetryWithBlockRangeResult {
             from: from_block,

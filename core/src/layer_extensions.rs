@@ -92,18 +92,23 @@ where
                     let duration = start_time.elapsed();
                     let error_str = err.to_string();
 
-                    if error_str.contains("timeout") || error_str.contains("timed out") {
-                        rindexer_error!("RPC TIMEOUT (free public nodes do this a lot consider a using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, error: {}",
-                                       chain_id, method_name, duration, rpc_url, err);
-                    } else if error_str.contains("429") || error_str.contains("rate limit") {
-                        rindexer_info!("RPC RATE LIMITED (free public nodes do this a lot consider a using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, error: {}",
-                                      chain_id, method_name, duration, rpc_url, err);
-                    } else if error_str.contains("connection") || error_str.contains("network") {
-                        rindexer_error!("RPC CONNECTION ERROR (free public nodes do this a lot consider a using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, error: {}",
-                                       chain_id, method_name, duration, rpc_url, err);
-                    } else {
-                        rindexer_error!("RPC ERROR (free public nodes do this a lot consider a using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, error: {}",
-                                       chain_id, method_name, duration, rpc_url, err);
+                    let is_known_error = is_known_retryable_error(&error_str);
+
+                    if !is_known_error {
+                        if error_str.contains("timeout") || error_str.contains("timed out") {
+                            rindexer_error!("RPC TIMEOUT (free public nodes do this a lot consider a using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, error: {}",
+                                           chain_id, method_name, duration, rpc_url, err);
+                        } else if error_str.contains("429") || error_str.contains("rate limit") {
+                            rindexer_info!("RPC RATE LIMITED (free public nodes do this a lot consider a using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, error: {}",
+                                          chain_id, method_name, duration, rpc_url, err);
+                        } else if error_str.contains("connection") || error_str.contains("network")
+                        {
+                            rindexer_error!("RPC CONNECTION ERROR (free public nodes do this a lot consider a using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, error: {}",
+                                           chain_id, method_name, duration, rpc_url, err);
+                        } else {
+                            rindexer_error!("RPC ERROR (free public nodes do this a lot consider a using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, error: {}",
+                                           chain_id, method_name, duration, rpc_url, err);
+                        }
                     }
 
                     Err(err)
@@ -111,4 +116,15 @@ where
             }
         })
     }
+}
+
+fn is_known_retryable_error(error_message: &str) -> bool {
+    // mirror handled logic which is in the `retry_with_block_range`
+    error_message.contains("this block range should work")
+        || error_message.contains("try with this block range")
+        || error_message.contains("block range is too wide")
+        || error_message.contains("limited to a")
+        || error_message.contains("block range too large")
+        || error_message.contains("response is too big")
+        || error_message.contains("error decoding response body")
 }

@@ -10653,7 +10653,7 @@ dependencies = [
 
 [[package]]
 name = "rindexer"
-version = "0.21.2"
+version = "0.22.3"
 dependencies = [
  "alloy",
  "alloy-chains",
@@ -10710,11 +10710,12 @@ dependencies = [
  "tracing-subscriber 0.3.19",
  "url",
  "uuid",
+ "winnow",
 ]
 
 [[package]]
 name = "rindexer_cli"
-version = "0.21.2"
+version = "0.22.3"
 dependencies = [
  "alloy",
  "alloy-chains",
@@ -14137,9 +14138,9 @@ checksum = "271414315aff87387382ec3d271b52d7ae78726f5d44ac98b4f4030c91880486"
 
 [[package]]
 name = "winnow"
-version = "0.7.12"
+version = "0.7.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3edebf492c8125044983378ecb5766203ad3b4c2f7a922bd7dd207f6d443e95"
+checksum = "74c7b26e3480b707944fc872477815d29a8e429d2f93a1ce000f5fa84a15cbcd"
 dependencies = [
  "memchr",
 ]

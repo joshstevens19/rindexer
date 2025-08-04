@@ -2,6 +2,7 @@ use alloy::primitives::keccak256;
 use std::path::Path;
 use tracing::{error, info};
 
+use crate::helpers::parse_solidity_integer_type;
 use crate::manifest::contract::FactoryDetailsYaml;
 use crate::{
     abi::{ABIInput, ABIItem, EventInfo, GenerateAbiPropertiesType, ParamTypeError, ReadAbiError},
@@ -345,6 +346,8 @@ pub fn drop_tables_for_indexer_sql(project_path: &Path, indexer: &Indexer) -> Co
     );
     sql.push_str(format!("DROP TABLE IF EXISTS rindexer_internal.{}_last_known_relationship_dropping_sql CASCADE;", camel_to_snake(&indexer.name)).as_str());
 
+    sql.push_str("DROP TABLE IF EXISTS rindexer_internal.latest_block;");
+
     for contract in &indexer.contracts {
         let contract_name = contract.before_modify_name_if_filter_readonly();
         let schema_name = generate_indexer_contract_schema_name(&indexer.name, &contract_name);
@@ -397,11 +400,7 @@ pub fn solidity_type_to_db_type(abi_type: &str) -> String {
         t if t.starts_with("bytes") => "BYTEA",
         t if t.starts_with("int") || t.starts_with("uint") => {
             // Handling fixed-size integers (intN and uintN where N can be 8 to 256 in steps of 8)
-            let (prefix, size): (&str, usize) = if t.starts_with("int") {
-                ("int", t[3..].parse().expect("Invalid intN type"))
-            } else {
-                ("uint", t[4..].parse().expect("Invalid uintN type"))
-            };
+            let (prefix, size) = parse_solidity_integer_type(t);
 
             match size {
                 8 | 16 => "SMALLINT",

@@ -1,10 +1,11 @@
 use std::str::FromStr;
 
+use crate::helpers::parse_solidity_integer_type;
 use crate::{abi::ABIInput, event::callback_registry::TxInformation, types::core::LogParam};
 #[allow(deprecated)]
 use alloy::{
     dyn_abi::DynSolValue,
-    primitives::{Address, Bytes, B128, B160, B256, B512, I256, U256, U512, U64},
+    primitives::{Address, Bytes, B128, B160, B256, B512, I256, U256, U512},
 };
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, Utc};
@@ -39,11 +40,11 @@ pub enum EthereumSqlTypeWrapper {
     VecI32(Vec<i32>),
 
     // 64-bit integers
-    U64(U64),
-    U64Nullable(U64),
-    U64BigInt(U64),
+    U64(u64),
+    U64Nullable(u64),
+    U64BigInt(u64),
     I64(i64),
-    VecU64(Vec<U64>),
+    VecU64(Vec<u64>),
     VecI64(Vec<i64>),
 
     // 128-bit integers
@@ -529,20 +530,17 @@ impl ToSql for EthereumSqlTypeWrapper {
         out: &mut BytesMut,
     ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
         match self {
-            EthereumSqlTypeWrapper::U64(value) => {
-                Decimal::to_sql(&Decimal::from(value.to::<u64>()), ty, out)
-            }
+            EthereumSqlTypeWrapper::U64(value) => Decimal::to_sql(&Decimal::from(*value), ty, out),
             EthereumSqlTypeWrapper::U64BigInt(value) => {
-                let parsed: u64 = value.to();
                 // Convert u64 directly to i64 for BIGINT
-                let pg_value = parsed as i64;
+                let pg_value = *value as i64;
                 pg_value.to_sql(ty, out)
             }
             EthereumSqlTypeWrapper::U64Nullable(value) => {
-                if value.is_zero() {
+                if *value == 0 {
                     return Ok(IsNull::Yes);
                 }
-                Decimal::to_sql(&Decimal::from(value.to::<u64>()), ty, out)
+                Decimal::to_sql(&Decimal::from(*value), ty, out)
             }
             EthereumSqlTypeWrapper::I64(value) => value.to_sql(ty, out),
             EthereumSqlTypeWrapper::VecU64(values) => Self::serialize_vec_decimal(values, ty, out),
@@ -989,12 +987,8 @@ pub fn solidity_type_to_ethereum_sql_type_wrapper(
             EthereumSqlTypeWrapper::Bytes(Bytes::new())
         }),
         t if t.starts_with("int") || t.starts_with("uint") => {
-            let size: usize = if t.starts_with("int") {
-                t[3..].parse().unwrap_or(256)
-            } else {
-                t[4..].parse().unwrap_or(256)
-            };
-            let is_signed = t.starts_with("int");
+            let (prefix, size) = parse_solidity_integer_type(t);
+            let is_signed = prefix.eq("int");
 
             Some(match (size, is_signed) {
                 (8, false) => {
@@ -1043,7 +1037,7 @@ pub fn solidity_type_to_ethereum_sql_type_wrapper(
                     if is_array {
                         EthereumSqlTypeWrapper::VecU64(Vec::new())
                     } else {
-                        EthereumSqlTypeWrapper::U64(U64::ZERO)
+                        EthereumSqlTypeWrapper::U64(0)
                     }
                 }
                 (40 | 48 | 56 | 64, true) => {
@@ -1191,7 +1185,7 @@ fn convert_int(value: &I256, target_type: &EthereumSqlTypeWrapper) -> EthereumSq
             EthereumSqlTypeWrapper::I128(low_u128_from_int(value) as i128)
         }
         EthereumSqlTypeWrapper::U64(_) | EthereumSqlTypeWrapper::VecU64(_) => {
-            EthereumSqlTypeWrapper::U64(U64::from(value.as_u64()))
+            EthereumSqlTypeWrapper::U64(value.as_u64())
         }
         EthereumSqlTypeWrapper::I64(_) | EthereumSqlTypeWrapper::VecI64(_) => {
             EthereumSqlTypeWrapper::I64(value.as_u64() as i64)
@@ -1237,7 +1231,7 @@ fn convert_uint(value: &U256, target_type: &EthereumSqlTypeWrapper) -> EthereumS
             EthereumSqlTypeWrapper::I128(low_u128(value) as i128)
         }
         EthereumSqlTypeWrapper::U64(_) | EthereumSqlTypeWrapper::VecU64(_) => {
-            EthereumSqlTypeWrapper::U64(U64::from(as_u64(value)))
+            EthereumSqlTypeWrapper::U64(as_u64(value))
         }
         EthereumSqlTypeWrapper::I64(_) | EthereumSqlTypeWrapper::VecI64(_) => {
             EthereumSqlTypeWrapper::I64(as_u64(value) as i64)
