@@ -26,10 +26,20 @@ github branch - https://github.com/joshstevens19/rindexer/tree/release/0.23.0
 - mac apple intel binary - https://github.com/joshstevens19/rindexer/releases/download/v0.23.0/rindexer_darwin-amd64.tar.gz
 - windows binary - https://github.com/joshstevens19/rindexer/releases/download/v0.23.0/rindexer_win32-amd64.zip
 
-### Bug fixes
+### Features
 -------------------------------------------------
+- feat: enhance filter conditions parsing and evaluation to handle complex expressions with logical operators
+- feat: extend `is_known_zk_evm_compatible_chain` to some new chains
+
+### Bug fixes
 - fix: fix codegen for events with irregular width solidity integer types
 - fix: logical operators precedence in filter conditions - https://github.com/joshstevens19/rindexer/issues/225
+
+### Breaking changes
+-------------------------------------------------
+- `EthereumSqlTypeWrapper` `U64`, `U64Nullable` and `U64BigInt` are now a rust `u64` type
+- `EthereumSqlTypeWrapper::VecU64` is now a rust `Vec<u64>` type
+- `TxInformation` `block_number` and `transaction_index` are now a rust `u64` type
 
 
 # 0.22.3-beta - 30th July 2025
