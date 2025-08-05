@@ -122,8 +122,22 @@ is the cli for rindexer, it contains all the logic for the cli and is how users 
 
 ### graphql
 
-This is the express project which leverages postgraphile rindexer GraphQL, we package it into a binary and run it within the rindexer
-to avoid having to have node/postgraphile installed on the machine running it.
+This is the express project which leverages postgraphile rindexer GraphQL, it is automatically built into a binary during the Rust build process using `pkg`.
+
+**Build Process:**
+- Automatically builds during `cargo build`
+- Detects target architecture (macOS, Linux, Windows) 
+- Smart rebuilding - only rebuilds when source files change
+- Requires Node.js and npm for development/building
+
+**Development:**
+```bash
+cd graphql
+npm install
+npm start
+```
+
+The binary is embedded into the Rust application and started automatically when GraphQL functionality is enabled.
 
 ### documentation
 
@@ -137,10 +151,21 @@ how a project is setup.
 
 ## Building
 
+### Requirements
+
+- Rust (latest stable)
+- Node.js and npm (for GraphQL server build)
+
 ### Locally 
 
-To build locally you can just run `cargo build` in the root of the project. This will build everything for you
-as this is a workspace.
+To build locally you can just run `cargo build` in the root of the project. This will build everything for you as this is a workspace, including the GraphQL server binary.
+
+**Note:** The first build may take longer as it needs to:
+1. Install npm dependencies for the GraphQL server
+2. Build the GraphQL binary for your target platform
+3. Compile all Rust code
+
+Subsequent builds use smart caching and will only rebuild components that have changed.
 
 ### Prod
 
