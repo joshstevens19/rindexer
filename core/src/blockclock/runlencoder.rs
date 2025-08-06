@@ -447,6 +447,10 @@ impl DeltaEncoder {
         loop {
             if self.encoded_deltas.max_block + batch_size >= max_block_for_network {
                 tracing::info!("Exiting poll loop. Max block reached.");
+                if let Err(e) = self.serialize_to_file() {
+                    tracing::error!("Error flushing to disk: {:?}", e);
+                }
+                tracing::info!("Finished flushing file to disk.");
                 break;
             }
 
