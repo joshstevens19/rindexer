@@ -143,35 +143,28 @@ else
 
     log "Downloaded binary archive to $RINDEXER_DIR/rindexer.${EXT}"
 
-    log "Extracting binary..."
+    log "Extracting archive..."
     if [[ "$EXT" == "tar.gz" ]]; then
-        tar -xzvf "$RINDEXER_DIR/rindexer.${EXT}" -C "$RINDEXER_BIN_DIR"
-        mv "$RINDEXER_BIN_DIR/rindexer_cli" "$BIN_PATH" || mv "$RINDEXER_BIN_DIR/rindexer" "$BIN_PATH"
+        tar -xzvf "$RINDEXER_DIR/rindexer.${EXT}" -C "$RINDEXER_DIR"
     else
-        unzip -o "$RINDEXER_DIR/rindexer.${EXT}" -d "$RINDEXER_BIN_DIR"
-        mv "$RINDEXER_BIN_DIR/rindexer_cli.exe" "$BIN_PATH" || mv "$RINDEXER_BIN_DIR/rindexer.exe" "$BIN_PATH"
+        unzip -o "$RINDEXER_DIR/rindexer.${EXT}" -d "$RINDEXER_DIR"
     fi
 
-    log "Extracted binary to $RINDEXER_BIN_DIR"
-
-    mkdir -p "$RINDEXER_DIR/resources"
-
-    log "Downloading resources..."
-    # Using the corrected RESOURCES_URL here
-    if ! curl -sSf -L "$RESOURCES_URL" -o "$RINDEXER_DIR/resources.zip"; then
-        error_log "Failed to download resources.zip from $RESOURCES_URL"
-        exit 1
+    # Move the main binary to the bin directory, creating it if necessary
+    mkdir -p "$RINDEXER_BIN_DIR"
+    if [[ -f "$RINDEXER_DIR/rindexer_cli" ]]; then
+        mv "$RINDEXER_DIR/rindexer_cli" "$BIN_PATH"
+    elif [[ -f "$RINDEXER_DIR/rindexer" ]]; then
+        mv "$RINDEXER_DIR/rindexer" "$BIN_PATH"
+    elif [[ -f "$RINDEXER_DIR/rindexer_cli.exe" ]]; then
+        mv "$RINDEXER_DIR/rindexer_cli.exe" "$BIN_PATH"
+    elif [[ -f "$RINDEXER_DIR/rindexer.exe" ]]; then
+        mv "$RINDEXER_DIR/rindexer.exe" "$BIN_PATH"
     fi
-    log "Resources downloaded to $RINDEXER_DIR/resources.zip"
 
-    log "Extracting resources..."
-    if ! unzip -o "$RINDEXER_DIR/resources.zip" -d "$RINDEXER_DIR/resources" > /dev/null; then
-        error_log "Failed to extract resources.zip. The file might be corrupted or not a valid zip."
-        exit 1
-    fi
-    log "Resources extracted to $RINDEXER_DIR/resources"
+    log "Extracted files to $RINDEXER_DIR"
 
-    rm "$RINDEXER_DIR/resources.zip"
+    rm "$RINDEXER_DIR/rindexer.${EXT}"
 fi
 
 # Ensure the binary exists before setting permissions
@@ -262,31 +255,25 @@ else
         exit 1
     fi
 
+    echo "Extracting archive..."
     if [[ "$EXT" == "tar.gz" ]]; then
-        tar -xzvf "$RINDEXER_DIR/rindexer.${EXT}" -C "$RINDEXER_BIN_DIR"
-        mv "$RINDEXER_BIN_DIR/rindexer_cli" "$BIN_PATH" || mv "$RINDEXER_BIN_DIR/rindexer" "$BIN_PATH"
+        tar -xzvf "$RINDEXER_DIR/rindexer.${EXT}" -C "$RINDEXER_DIR"
     else
-        unzip -o "$RINDEXER_DIR/rindexer.${EXT}" -d "$RINDEXER_BIN_DIR"
-        mv "$RINDEXER_BIN_DIR/rindexer_cli.exe" "$BIN_PATH" || mv "$RINDEXER_BIN_DIR/rindexer.exe" "$BIN_PATH"
+        unzip -o "$RINDEXER_DIR/rindexer.${EXT}" -d "$RINDEXER_DIR"
     fi
-    mkdir -p "$RINDEXER_DIR/resources"
 
-    echo "Downloading resources..."
-    # Using the corrected RESOURCES_URL here within rindexerup
-    if ! curl -sSf -L "$RESOURCES_URL" -o "$RINDEXER_DIR/resources.zip"; then
-        echo "Failed to download resources.zip from $RESOURCES_URL"
-        exit 1
+    # Move the main binary to the bin directory
+    if [[ -f "$RINDEXER_DIR/rindexer_cli" ]]; then
+        mv "$RINDEXER_DIR/rindexer_cli" "$BIN_PATH"
+    elif [[ -f "$RINDEXER_DIR/rindexer" ]]; then
+        mv "$RINDEXER_DIR/rindexer" "$BIN_PATH"
+    elif [[ -f "$RINDEXER_DIR/rindexer_cli.exe" ]]; then
+        mv "$RINDEXER_DIR/rindexer_cli.exe" "$BIN_PATH"
+    elif [[ -f "$RINDEXER_DIR/rindexer.exe" ]]; then
+        mv "$RINDEXER_DIR/rindexer.exe" "$BIN_PATH"
     fi
-    echo "Resources downloaded to $RINDEXER_DIR/resources.zip"
 
-    echo "Extracting resources..."
-    if ! unzip -o "$RINDEXER_DIR/resources.zip" -d "$RINDEXER_DIR/resources" > /dev/null; then
-        echo "Failed to extract resources.zip. The file might be corrupted or not a valid zip."
-        exit 1
-    fi
-    echo "Resources extracted to $RINDEXER_DIR/resources"
-
-    rm "$RINDEXER_DIR/resources.zip"
+    rm "$RINDEXER_DIR/rindexer.${EXT}"
 fi
 chmod +x "$BIN_PATH"
 echo "rindexer has been updated successfully."
