@@ -232,19 +232,56 @@ jobs:
           VERSION_NAME: ${{ env.VERSION_NAME }}
         shell: bash
         run: |
+          set -eo pipefail
           BUILD_DIR="${{ github.workspace }}/target/${TARGET}/${{ env.BUILD_TYPE }}"
-          BINARY_NAME="rindexer_cli"
-          [[ "$PLATFORM_NAME" == "win32" ]] && BINARY_NAME="rindexer_cli.exe"
+          CLI_BINARY_NAME="rindexer_cli"
+          [[ "$PLATFORM_NAME" == "win32" ]] && CLI_BINARY_NAME="rindexer_cli.exe"
+
+          # Determine GraphQL binary name based on target platform
+          if [[ "${{ matrix.platform }}" == "win32" ]]; then
+            GRAPHQL_OS="windows"
+            GRAPHQL_EXE_SUFFIX=".exe"
+          else
+            GRAPHQL_OS="${{ matrix.platform }}"
+            GRAPHQL_EXE_SUFFIX=""
+          fi
+
+          if [[ "${{ matrix.arch }}" == "amd64" ]]; then
+            GRAPHQL_ARCH="x64"
+          else
+            GRAPHQL_ARCH="arm64"
+          fi
+
+          GRAPHQL_BINARY_NAME="rindexer-graphql-${GRAPHQL_OS}-${GRAPHQL_ARCH}${GRAPHQL_EXE_SUFFIX}"
           
+          # Find the built GraphQL binary
+          GRAPHQL_BINARY_PATH=$(find "${{ github.workspace }}/target/${TARGET}" -type f -name "$GRAPHQL_BINARY_NAME")
+          if [ -z "$GRAPHQL_BINARY_PATH" ]; then
+            echo "Error: GraphQL binary '$GRAPHQL_BINARY_NAME' not found."
+            exit 1
+          fi
+          echo "Found GraphQL binary at: $GRAPHQL_BINARY_PATH"
+
+          # Create a temporary staging directory for creating the archive
+          STAGING_DIR="staging"
+          mkdir -p "$STAGING_DIR/resources"
+
+          # Copy binaries to the staging directory
+          echo "Copying $BUILD_DIR/$CLI_BINARY_NAME to $STAGING_DIR/"
+          cp "$BUILD_DIR/$CLI_BINARY_NAME" "$STAGING_DIR/"
+          echo "Copying $GRAPHQL_BINARY_PATH to $STAGING_DIR/resources/"
+          cp "$GRAPHQL_BINARY_PATH" "$STAGING_DIR/resources/"
+          
+          # Create the final archive
           if [ "$PLATFORM_NAME" == "linux" ] || [ "$PLATFORM_NAME" == "darwin" ]; then
             FILE_NAME="rindexer_${PLATFORM_NAME}-${ARCH}.tar.gz"
-            tar -czvf "$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
+            tar -czvf "$FILE_NAME" -C "$STAGING_DIR" .
           else
             FILE_NAME="rindexer_${PLATFORM_NAME}-${ARCH}.zip"
-            cd $BUILD_DIR
-            7z a -tzip "${{ github.workspace }}/$FILE_NAME" "$BINARY_NAME"
+            (cd "$STAGING_DIR" && 7z a -tzip "${{ github.workspace }}/$FILE_NAME" .)
           fi
           
+          echo "Created archive: $FILE_NAME"
           echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
 
       - name: Run tests
@@ -679,19 +716,56 @@ jobs:
           VERSION_NAME: ${{ env.VERSION_NAME }}
         shell: bash
         run: |
+          set -eo pipefail
           BUILD_DIR="${{ github.workspace }}/target/${TARGET}/release"
-          BINARY_NAME="rindexer_cli"
-          [[ "$PLATFORM_NAME" == "win32" ]] && BINARY_NAME="rindexer_cli.exe"
+          CLI_BINARY_NAME="rindexer_cli"
+          [[ "$PLATFORM_NAME" == "win32" ]] && CLI_BINARY_NAME="rindexer_cli.exe"
+
+          # Determine GraphQL binary name based on target platform
+          if [[ "${{ matrix.platform }}" == "win32" ]]; then
+            GRAPHQL_OS="windows"
+            GRAPHQL_EXE_SUFFIX=".exe"
+          else
+            GRAPHQL_OS="${{ matrix.platform }}"
+            GRAPHQL_EXE_SUFFIX=""
+          fi
+
+          if [[ "${{ matrix.arch }}" == "amd64" ]]; then
+            GRAPHQL_ARCH="x64"
+          else
+            GRAPHQL_ARCH="arm64"
+          fi
+
+          GRAPHQL_BINARY_NAME="rindexer-graphql-${GRAPHQL_OS}-${GRAPHQL_ARCH}${GRAPHQL_EXE_SUFFIX}"
           
+          # Find the built GraphQL binary
+          GRAPHQL_BINARY_PATH=$(find "${{ github.workspace }}/target/${TARGET}" -type f -name "$GRAPHQL_BINARY_NAME")
+          if [ -z "$GRAPHQL_BINARY_PATH" ]; then
+            echo "Error: GraphQL binary '$GRAPHQL_BINARY_NAME' not found."
+            exit 1
+          fi
+          echo "Found GraphQL binary at: $GRAPHQL_BINARY_PATH"
+
+          # Create a temporary staging directory for creating the archive
+          STAGING_DIR="staging"
+          mkdir -p "$STAGING_DIR/resources"
+
+          # Copy binaries to the staging directory
+          echo "Copying $BUILD_DIR/$CLI_BINARY_NAME to $STAGING_DIR/"
+          cp "$BUILD_DIR/$CLI_BINARY_NAME" "$STAGING_DIR/"
+          echo "Copying $GRAPHQL_BINARY_PATH to $STAGING_DIR/resources/"
+          cp "$GRAPHQL_BINARY_PATH" "$STAGING_DIR/resources/"
+          
+          # Create the final archive
           if [ "$PLATFORM_NAME" == "linux" ] || [ "$PLATFORM_NAME" == "darwin" ]; then
             FILE_NAME="rindexer_${PLATFORM_NAME}-${ARCH}.tar.gz"
-            tar -czvf "$FILE_NAME" -C "$BUILD_DIR" "$BINARY_NAME"
+            tar -czvf "$FILE_NAME" -C "$STAGING_DIR" .
           else
             FILE_NAME="rindexer_${PLATFORM_NAME}-${ARCH}.zip"
-            cd $BUILD_DIR
-            7z a -tzip "${{ github.workspace }}/$FILE_NAME" "$BINARY_NAME"
+            (cd "$STAGING_DIR" && 7z a -tzip "${{ github.workspace }}/$FILE_NAME" .)
           fi
           
+          echo "Created archive: $FILE_NAME"
           echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
 
       - name: Upload artifact
