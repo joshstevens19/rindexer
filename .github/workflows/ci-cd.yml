@@ -206,6 +206,22 @@ jobs:
             RUST_BACKTRACE=1 CMAKE_TOOLCHAIN_FILE="$CMAKE_TOOLCHAIN_FILE" cargo build --target "$target" "${flags[@]}" -vv
           fi
 
+      - name: Smoke Test
+        shell: bash
+        run: |
+          set -eo pipefail
+          target="${{ matrix.target }}"
+          build_type="${{ env.BUILD_TYPE }}"
+          binary_path="${{ github.workspace }}/target/$target/$build_type/rindexer_cli"
+          
+          if [[ "$target" == *windows* ]]; then
+            binary_path+=".exe"
+          fi
+          
+          echo "Running smoke test for $binary_path"
+          "$binary_path" --version
+          "$binary_path" help
+
       - name: Archive binaries
         id: artifacts
         if: startsWith(github.ref, 'refs/heads/release/')
@@ -636,6 +652,22 @@ jobs:
           fi
 
           RUST_BACKTRACE=1 CMAKE_TOOLCHAIN_FILE="$CMAKE_TOOLCHAIN_FILE" cargo build --release --target "$target" "${flags[@]}" -vv
+
+      - name: Smoke Test
+        if: steps.check_release.outputs.is_release == 'true'
+        shell: bash
+        run: |
+          set -eo pipefail
+          target="${{ matrix.target }}"
+          binary_path="${{ github.workspace }}/target/$target/release/rindexer_cli"
+          
+          if [[ "$target" == *windows* ]]; then
+            binary_path+=".exe"
+          fi
+          
+          echo "Running smoke test for $binary_path"
+          "$binary_path" --version
+          "$binary_path" help
 
       - name: Archive binaries
         if: steps.check_release.outputs.is_release == 'true'
