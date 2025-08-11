@@ -5427,7 +5427,7 @@ dependencies = [
 
 [[package]]
 name = "rindexer"
-version = "0.22.2"
+version = "0.23.0"
 dependencies = [
  "alloy",
  "alloy-chains",
@@ -5476,6 +5476,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "winnow",
 ]
 
 [[package]]

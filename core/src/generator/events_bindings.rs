@@ -19,6 +19,7 @@ use crate::{
         storage::{CsvDetails, Storage},
     },
     types::code::Code,
+    EthereumSqlTypeWrapper,
 };
 
 pub fn abigen_contract_name(contract: &Contract) -> String {
@@ -859,28 +860,38 @@ pub fn generate_event_handlers(
             let mut data = "vec![\nEthereumSqlTypeWrapper::Address(result.tx_information.address),"
                 .to_string();
 
-            let formatter = |path: &str, abi_type: &str| {
-                println!("Formatting path: {}, abi_type: {}", path, abi_type);
-                format!(
-                    "{}{}",
-                    path,
-                    if abi_type == "string" {
-                        ".clone()"
-                    } else if is_solidity_static_bytes_type(abi_type) {
-                        ".into()"
-                    } else if abi_type.starts_with("int")
-                        && is_irregular_width_solidity_integer_type(&abi_type)
-                    {
-                        ".unchecked_into()"
-                    } else if abi_type.starts_with("uint")
-                        && is_irregular_width_solidity_integer_type(&abi_type)
-                    {
-                        ".to()"
-                    } else {
-                        ""
-                    }
-                )
-            };
+            let formatter =
+                |path: &str, abi_type: &str, wrapper: &Option<EthereumSqlTypeWrapper>| {
+                    format!(
+                        "{}{}{}",
+                        match wrapper {
+                            Some(EthereumSqlTypeWrapper::U256(_)) => "U256::from(",
+                            Some(EthereumSqlTypeWrapper::I256(_)) => "I256::from(",
+                            _ => "",
+                        },
+                        path,
+                        if is_solidity_static_bytes_type(abi_type) {
+                            ".into()"
+                        } else if matches!(
+                            wrapper,
+                            Some(EthereumSqlTypeWrapper::I256(_) | EthereumSqlTypeWrapper::U256(_))
+                        ) {
+                            ")"
+                        } else if abi_type.starts_with("int")
+                            && is_irregular_width_solidity_integer_type(&abi_type)
+                        {
+                            ".unchecked_into()"
+                        } else if abi_type.starts_with("uint")
+                            && is_irregular_width_solidity_integer_type(&abi_type)
+                        {
+                            ".to()"
+                        } else if abi_type == "string" || abi_type == "bytes" {
+                            ".clone()"
+                        } else {
+                            ""
+                        }
+                    )
+                };
 
             for property in &abi_name_properties {
                 let (path, is_array) = generate_event_input_path(&property);
@@ -894,10 +905,10 @@ pub fn generate_event_handlers(
                     format!(
                         r#"{}.map(|item| {}).collect::<Vec<_>>()"#,
                         path,
-                        formatter("item", &property.abi_type)
+                        formatter("item", &property.abi_type, &property.ethereum_sql_type_wrapper)
                     )
                 } else {
-                    formatter(&path, &property.abi_type)
+                    formatter(&path, &property.abi_type, &property.ethereum_sql_type_wrapper)
                 };
 
                 data.push_str(&format!(
