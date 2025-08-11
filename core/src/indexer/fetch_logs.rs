@@ -5,7 +5,6 @@ use crate::{
     indexer::{reorg::handle_chain_notification, IndexingEventProgressStatus},
     is_running,
     provider::{JsonRpcCachedProvider, ProviderError},
-    rindexer_info,
 };
 use alloy::{
     primitives::{B256, U64},
