@@ -4,7 +4,13 @@ use alloy::{primitives::U64, transports::http::reqwest::header::HeaderMap};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_yaml::Value;
 
+use crate::event::contract_setup::ContractEventMapping;
+use crate::helpers::to_pascal_case;
 use crate::manifest::config::Config;
+use crate::manifest::contract::{
+    ContractDetails, ContractEvent, DependencyEventTreeYaml, FactoryDetailsYaml,
+    SimpleEventOrContractEvent,
+};
 use crate::{
     indexer::Indexer,
     manifest::{
@@ -97,16 +103,107 @@ pub struct Manifest {
 }
 
 impl Manifest {
+    /// Includes both user-defined contracts and factory filter contracts
+    pub fn all_contracts(&self) -> Vec<Contract> {
+        self.contracts.clone().into_iter().flat_map(|contract| {
+            let factory_filter_details = contract.details.iter()
+                .filter_map(|detail| {
+                    detail.factory.as_ref().map(|factory| (
+                        factory.clone(),
+                        detail.network.clone(),
+                        detail.start_block,
+                        detail.end_block
+                    ))
+                }).collect::<Vec<_>>();
+
+            let first_factory = factory_filter_details.first().cloned();
+
+            match first_factory {
+                Some((first_factory, ..)) => {
+                    let has_factory_mismatch = factory_filter_details.iter().any(|(detail, ..)| detail.name != first_factory.name || detail.abi != first_factory.abi || detail.event_name != first_factory.event_name);
+
+                    if has_factory_mismatch {
+                        panic!("Contract using factory filter must use same factory across all networks. Please raise issue in github if you need different factories across networks");
+                    }
+
+                    // suffix with factory filter details to allow having the same contract name at the `contracts` level in yaml
+                    let overridden_factory_contract_name = format!("{}{}{}", first_factory.name, to_pascal_case(&first_factory.event_name), to_pascal_case(&first_factory.input_name));
+
+                    let factory_contract = Contract {
+                        name: overridden_factory_contract_name.clone(),
+                        details: factory_filter_details.into_iter().map(|(factory, network, start_block, end_block)| ContractDetails {
+                            network,
+                            start_block,
+                            end_block,
+                            factory: Some(FactoryDetailsYaml {
+                                name: overridden_factory_contract_name.clone(),
+                                ..factory
+                            }),
+                            address: None,
+                            filter: None,
+                            indexed_filters: None,
+                        }).collect::<Vec<_>>(),
+                        abi: first_factory.abi.clone().into(),
+                        dependency_events: None,
+                        include_events: Some(vec![ContractEvent { name: first_factory.event_name.clone(), timestamps: None }]),
+                        index_event_in_order: contract.index_event_in_order.clone(),
+                        reorg_safe_distance: contract.reorg_safe_distance,
+                        generate_csv: contract.generate_csv,
+                        streams: None,
+                        chat: None,
+                    };
+
+                    let dependency_contract = Contract {
+                        dependency_events: Some(DependencyEventTreeYaml {
+                            events: vec![SimpleEventOrContractEvent::ContractEvent(ContractEventMapping {
+                                contract_name: factory_contract.name.clone(),
+                                event_name: first_factory.event_name,
+                            })],
+                            then: contract.dependency_events.or_else(|| {
+                                let events = contract
+                                    .include_events
+                                    .clone()
+                                    .expect("Contract using factory filter must specify `include_events`.");
+
+                                Some(DependencyEventTreeYaml {
+                                    events: events
+                                        .into_iter()
+                                        .map(|e|SimpleEventOrContractEvent::SimpleEvent(e.name))
+                                        .collect::<Vec<_>>(),
+                                    then: None,
+                                })
+                            }).map(Box::new),
+                        }),
+                        details: contract.details.into_iter().map(|detail| ContractDetails {
+                            factory: Some(FactoryDetailsYaml {
+                                name: overridden_factory_contract_name.clone(),
+                                ..detail.factory.expect("Factory details must be present")
+                            }),
+                            ..detail
+                        }).collect(),
+                        ..contract
+                    };
+
+                    vec![factory_contract, dependency_contract]
+                }
+                None => vec![contract]
+            }
+        }).collect()
+    }
+
     pub fn to_indexer(&self) -> Indexer {
         Indexer {
             name: self.name.clone(),
-            contracts: self.contracts.clone(),
+            contracts: self.all_contracts().clone(),
             native_transfers: self.native_transfers.clone(),
         }
     }
 
     pub fn has_any_contracts_live_indexing(&self) -> bool {
-        self.contracts.iter().filter(|c| c.details.iter().any(|p| p.end_block.is_none())).count()
+        self.all_contracts()
+            .iter()
+            .filter(|c| c.details.iter().any(|p| p.end_block.is_none()))
+            .count()
             > 0
     }
 
@@ -153,7 +250,7 @@ impl Manifest {
 
     pub fn contract_csv_enabled(&self, contract_name: &str) -> bool {
         let contract_csv_enabled = self
-            .contracts
+            .all_contracts()
             .iter()
             .find(|c| c.name == contract_name)
             .is_some_and(|c| c.generate_csv.unwrap_or(true));

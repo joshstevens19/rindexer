@@ -10758,7 +10758,7 @@ dependencies = [
 
 [[package]]
 name = "rindexer"
-version = "0.21.2"
+version = "0.23.0"
 dependencies = [
  "alloy",
  "alloy-chains",
@@ -10821,12 +10821,13 @@ dependencies = [
  "tracing-subscriber 0.3.19",
  "url",
  "uuid",
+ "winnow",
  "zstd",
 ]
 
 [[package]]
 name = "rindexer_cli"
-version = "0.21.2"
+version = "0.23.0"
 dependencies = [
  "alloy",
  "alloy-chains",

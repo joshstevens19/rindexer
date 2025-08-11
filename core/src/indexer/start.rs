@@ -13,6 +13,7 @@ use tracing::{error, info};
 
 use crate::event::config::{ContractEventProcessingConfig, FactoryEventProcessingConfig};
 use crate::indexer::native_transfer::native_transfer_block_processor;
+use crate::indexer::Indexer;
 use crate::{
     database::postgres::client::PostgresConnectionError,
     event::{
@@ -164,6 +165,7 @@ pub async fn start_indexing_traces(
     manifest: &Manifest,
     project_path: &Path,
     database: Option<Arc<PostgresClient>>,
+    indexer: &Indexer,
     trace_registry: Arc<TraceCallbackRegistry>,
 ) -> Result<Vec<JoinHandle<Result<(), ProcessEventError>>>, StartIndexingError> {
     if !manifest.native_transfers.enabled {
@@ -176,7 +178,7 @@ pub async fn start_indexing_traces(
         IndexingEventsProgressState::monitor_traces(&trace_registry.events).await;
 
     for event in trace_registry.events.iter() {
-        let stream_details = manifest
+        let stream_details = indexer
             .contracts
             .iter()
             .find(|c| c.name == event.contract_name)
@@ -257,6 +259,7 @@ pub async fn start_indexing_contract_events(
     manifest: &Manifest,
     project_path: &Path,
     database: Option<Arc<PostgresClient>>,
+    indexer: &Indexer,
     registry: Arc<EventCallbackRegistry>,
     dependencies: &[ContractEventDependencies],
     no_live_indexing_forced: bool,
@@ -283,7 +286,7 @@ pub async fn start_indexing_contract_events(
     }
 
     for event in registry.events.iter() {
-        let stream_details = manifest
+        let stream_details = indexer
             .contracts
             .iter()
             .find(|c| c.name == event.contract.name)
@@ -382,69 +385,79 @@ pub async fn start_indexing_contract_events(
             None => {}
         };
 
-        let event_processing_config = ContractEventProcessingConfig {
-            id: event.id.clone(),
-            project_path: project_path.clone(),
-            indexer_name: event.indexer_name.clone(),
-            contract_name: event.contract.name.clone(),
-            info_log_name: event.info_log_name(),
-            topic_id: event.topic_id,
-            event_name: event.event_name.clone(),
-            network_contract: Arc::new(network_contract.clone()),
-            start_block,
-            end_block,
-            registry: Arc::clone(&registry),
-            progress: Arc::clone(&event_progress_state),
-            database: database.clone(),
-            csv_details: manifest_csv_details.clone(),
-            config: manifest.config.clone(),
-            timestamps: timestamp_enabled_for_event.unwrap_or(manifest.timestamps.unwrap_or(false)),
-            stream_last_synced_block_file_path: stream_details
-                .as_ref()
-                .map(|s| s.get_streams_last_synced_block_path()),
-            live_indexing: if no_live_indexing_forced {
-                false
-            } else {
-                network_contract.is_live_indexing()
-            },
-            index_event_in_order: event.index_event_in_order,
-            indexing_distance_from_head,
-        };
+        let event_processing_config: EventProcessingConfig = match event.is_factory_filter_event() {
+            true => {
+                let factory_details = network_contract
+                    .indexing_contract_setup
+                    .factory_details()
+                    .expect("Factory event contract must have a factory details");
 
-        if let Some(factory_details) = network_contract.indexing_contract_setup.factory_details() {
-            let factory_event_processing_config = FactoryEventProcessingConfig {
-                address: factory_details.address.clone(),
-                input_name: factory_details.input_name.clone(),
-                contract_name: factory_details.contract_name.clone(),
+                FactoryEventProcessingConfig {
+                    id: event.id.clone(),
+                    address: factory_details.address.clone(),
+                    input_name: factory_details.input_name.clone(),
+                    contract_name: factory_details.contract_name.clone(),
+                    project_path: project_path.clone(),
+                    indexer_name: event.indexer_name.clone(),
+                    event: factory_details.event.clone(),
+                    network_contract: Arc::new(network_contract.clone()),
+                    start_block,
+                    end_block,
+                    registry: Arc::clone(&registry),
+                    progress: Arc::clone(&event_progress_state),
+                    database: database.clone(),
+                    config: manifest.config.clone(),
+                    csv_details: manifest_csv_details.clone(),
+                    timestamps: timestamp_enabled_for_event
+                        .unwrap_or(manifest.timestamps.unwrap_or(false)),
+                    stream_last_synced_block_file_path: stream_details
+                        .as_ref()
+                        .map(|s| s.get_streams_last_synced_block_path()),
+                    live_indexing: if no_live_indexing_forced {
+                        false
+                    } else {
+                        network_contract.is_live_indexing()
+                    },
+                    index_event_in_order: event.index_event_in_order,
+                    indexing_distance_from_head,
+                }
+                .into()
+            }
+            false => ContractEventProcessingConfig {
+                id: event.id.clone(),
                 project_path: project_path.clone(),
                 indexer_name: event.indexer_name.clone(),
-                event: factory_details.event.clone(),
+                contract_name: event.contract.name.clone(),
+                info_log_name: event.info_log_name(),
+                topic_id: event.topic_id,
+                event_name: event.event_name.clone(),
                 network_contract: Arc::new(network_contract.clone()),
                 start_block,
                 end_block,
+                registry: Arc::clone(&registry),
                 progress: Arc::clone(&event_progress_state),
                 database: database.clone(),
+                csv_details: manifest_csv_details.clone(),
                 config: manifest.config.clone(),
                 timestamps: timestamp_enabled_for_event
                     .unwrap_or(manifest.timestamps.unwrap_or(false)),
-                csv_details: manifest_csv_details.clone(),
                 stream_last_synced_block_file_path: stream_details
                     .as_ref()
                     .map(|s| s.get_streams_last_synced_block_path()),
-                live_indexing: event_processing_config.live_indexing,
+                live_indexing: if no_live_indexing_forced {
+                    false
+                } else {
+                    network_contract.is_live_indexing()
+                },
                 index_event_in_order: event.index_event_in_order,
                 indexing_distance_from_head,
-            };
-
-            apply_cross_contract_dependency_events_config_after_processing.push((
-                event.contract.name.clone(),
-                Arc::new(factory_event_processing_config.into()),
-            ));
-        }
+            }
+            .into(),
+        };
 
         let dependencies_status = ContractEventDependencies::dependencies_status(
-            &event_processing_config.contract_name,
-            &event_processing_config.event_name,
+            &event_processing_config.contract_name(),
+            &event_processing_config.event_name(),
             &dependencies,
         );
 
@@ -457,18 +470,18 @@ pub async fn start_indexing_contract_events(
                 dependencies_status.get_first_dependencies_in_other_contracts()
             {
                 apply_cross_contract_dependency_events_config_after_processing
-                    .push((dependency_in_other_contract, Arc::new(event_processing_config.into())));
+                    .push((dependency_in_other_contract, Arc::new(event_processing_config)));
 
                 continue;
             }
 
             ContractEventsDependenciesConfig::add_to_event_or_new_entry(
                 &mut dependency_event_processing_configs,
-                Arc::new(event_processing_config.into()),
+                Arc::new(event_processing_config),
                 &dependencies,
             );
         } else {
-            let process_event = tokio::spawn(process_event(event_processing_config.into(), false));
+            let process_event = tokio::spawn(process_event(event_processing_config, false));
             non_blocking_process_events.push(process_event);
         }
     }
@@ -495,13 +508,22 @@ pub async fn start_indexing(
     // any events which are non-blocking and can be fired in parallel
     let mut non_blocking_process_events = Vec::new();
 
+    let indexer = manifest.to_indexer();
+
     // Start the sub-indexers concurrently to ensure fast startup times
     let (trace_indexer_handles, contract_events_indexer) = join!(
-        start_indexing_traces(manifest, project_path, database.clone(), trace_registry.clone()),
+        start_indexing_traces(
+            manifest,
+            project_path,
+            database.clone(),
+            &indexer,
+            trace_registry.clone()
+        ),
         start_indexing_contract_events(
             manifest,
             project_path,
             database.clone(),
+            &indexer,
             registry.clone(),
             dependencies,
             no_live_indexing_forced,

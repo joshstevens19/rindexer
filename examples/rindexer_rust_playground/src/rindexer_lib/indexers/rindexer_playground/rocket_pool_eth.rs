@@ -2,7 +2,7 @@
 use super::super::super::typings::rindexer_playground::events::rocket_pool_eth::{
     ApprovalEvent, RocketPoolETHEventType, TransferEvent, no_extensions,
 };
-use alloy::primitives::{I256, U256};
+use alloy::primitives::{I256, U64, U256};
 use rindexer::{
     EthereumSqlTypeWrapper, PgType, RindexerColorize,
     event::callback_registry::EventCallbackRegistry, rindexer_error, rindexer_info,

@@ -263,9 +263,7 @@ pub async fn update_progress_and_last_synced_task(
         if let Err(e) = result {
             error!("Error updating db last synced block: {:?}", e);
         }
-    }
-
-    if let Some(csv_details) = &config.csv_details() {
+    } else if let Some(csv_details) = &config.csv_details() {
         if let Err(e) = update_last_synced_block_number_for_file(
             &config.contract_name(),
             &config.network_contract().network,
@@ -334,7 +332,7 @@ pub async fn evm_trace_update_progress_and_last_synced_task(
                 "UPDATE rindexer_internal.{table_name} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block"
             );
         let result = database
-            .execute(&query, &[&EthereumSqlTypeWrapper::U64(to_block), &config.network])
+            .execute(&query, &[&EthereumSqlTypeWrapper::U64(to_block.to()), &config.network])
             .await;
 
         if let Err(e) = result {

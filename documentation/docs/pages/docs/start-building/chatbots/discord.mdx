@@ -62,10 +62,8 @@ contracts:
           - ethereum // [!code focus]
         messages:
           - event_name: Transfer // [!code focus]
-            # conditions are optional // [!code focus]
-            conditions: // [!code focus]
-              - "from": "0x0338ce5020c447f7e668dc2ef778025ce3982662||0x0338ce5020c447f7e668dc2ef778025ce398266u" // [!code focus]
-              - "value": ">=10||<=2000000000000000000" // [!code focus]
+            # filter_expression is optional // [!code focus]
+            filter_expression: "from = '0x0338ce5020c447f7e668dc2ef778025ce3982662' || from = '0x0338ce5020c447f7e668dc2ef778025ce398266u' && value >= 10 && value <= 2000000000000000000" // [!code focus]
             template_inline: "*New RETH Transfer Event* // [!code focus]
 
                               from: {{from}} // [!code focus]
@@ -218,9 +216,57 @@ contracts:
           - event_name: Transfer // [!code focus]
 ```
 
+### filter_expression
+
+This accepts a filter expression to filter the events before sending a message to this discord channel
+
+:::info
+This is optional, if you do not provide any filter expression all the events will be sent to this discord channel.
+:::
+
+Filter expressions allow for condition checking of the event data and support logical operators to combine multiple conditions.
+
+#### Supported types and operations:
+| Type | Description | Operators | Notes |
+|------|-------------|-------------------|-------|
+| Numeric (uint/int variants) | Integer values (e.g., `42`, `-100`) or decimal values (e.g., `3.14`, `-0.5`) | `>`, `<`, `=`, `>=`, `<=` | Numeric comparisons | Numbers must have digits before and after a decimal point if one is present (e.g., `.5` or `5.` are not valid standalone numbers) |
+| Address | Ethereum addresses (e.g., `0x1234567890abcdef1234567890abcdef12345678`) | `=`, `!=` | Comparisons (e.g., `from == '0xABC...'`) are typically case-insensitive regarding the hex characters of the address value itself |
+| String | Text values. Can be single-quoted (e.g., `'hello'`) or, on the right-hand side of a comparison, unquoted (e.g., `active`) | `=`, `!=` | Quoted strings support `\'` to escape a single quote and `\\` to escape a backslash. All string comparison operations (e.g., `name == 'Alice'`, `description contains 'error'`) are performed case-insensitively during evaluation. |
+| Boolean | True or false values | `=`, `!=` | Represented as `true` or `false`. These keywords are parsed case-insensitively (e.g., `TRUE`, `False` are also valid in expressions). |
+| Hex String Literal | A string literal starting with `0x` or `0X` followed by hexadecimal characters (0-9, a-f, A-F). | `=`, `!=` | Treated as a string for comparison purposes (e.g., `input_data starts_with '0xa9059cbb'`). Comparison is case-sensitive for the hex characters after `0x`. |
+| Array | Ordered list of items | `==`, `!=`, `[index]` | See "Array Type Operations" below
+
+#### Logical Operators
+- `&&` - All conditions must be true
+- `||` - At least one condition must be true
+- `()` - Parentheses for grouping
+- `&&` has higher precedence than `||` (i.e., `&&` operations are evaluated before `||` operations if not grouped by parentheses)
+
+#### Array Type Operations
+For array types, you can use the following operations:
+- `array_param == '["raw_json_array_string"]'` string comparison of the array's entire JSON string representation against the provided string
+- `array_param != '["raw_json_array_string"]'` the negation of the above
+- `array_param[0]` indexed access. The index must be a non-negative integer.
+
+#### Whitespace
+Flexible whitespace is generally allowed around operators, parentheses, and keywords for readability. However, whitespace within quoted string literals is significant and preserved.
+
+#### Examples
+- `value > 1000` - Numeric comparison, checks if `value` is greater than 1000.
+- `from = '0x1234567890abcdef1234567890abcdef12345678'` - Address comparison, checks if `from` matches the specified address.
+- `name != 'Alice'` - String comparison, checks if `name` is not equal to 'Alice'.
+- `active = true` - Boolean comparison, checks if `active` is true.
+- `value >= 1000 && value <= 2000` - Numeric range check, checks if `value` is between 1000 and 2000 inclusive.
+- `from = '0x1234567890abcdef1234567890abcdef12345678' || from = '0xabcdefabcdefabcdefabcdefabcdefabcdef'` - Address comparison with logical OR, checks if `from` matches either of the two addresses.
+- `value > 1000 && (from = '0x1234567890abcdef1234567890abcdef12345678' || from = '0xabcdefabcdefabcdefabcdefabcdefabcdef')` - Combined numeric and address checks with logical AND and OR, checks if `value` is greater than 1000 and `from` matches either of the two addresses.
+
 ### conditions
 
 This accepts an array of conditions you want to apply to the event data before sending a message to this discord channel.
+
+:::warning
+Conditions are supported for backwards compatibility. It is recommended to use `filter_expression` instead of `conditions`.
+:::
 
 :::info
 This is optional, if you do not provide any conditions all the events will be sent to this discord channel.

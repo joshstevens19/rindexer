@@ -1,6 +1,6 @@
 [package]
 name = "rindexer"
-version = "0.21.2"
+version = "0.23.0"
 edition = "2021"
 description = "A no-code or framework to build blazing fast EVM indexers - built in rust."
 license = "MIT"
@@ -77,6 +77,7 @@ zstd = "0.13.3"
 bincode = "2.0.1"
 anyhow = "1.0.98"
 tower = { version = "0.5.2" }
+winnow = "0.7.11"
 
 # build
 jemallocator = { version = "0.6.0", package = "tikv-jemallocator", optional = true }

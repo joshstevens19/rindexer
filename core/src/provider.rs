@@ -167,7 +167,11 @@ fn is_known_zk_evm_compatible_chain(chain: Chain) -> Option<bool> {
             | NamedChain::BinanceSmartChain
             | NamedChain::Fantom
             | NamedChain::Cronos
-            | NamedChain::Gnosis => Some(false),
+            | NamedChain::Gnosis
+            | NamedChain::BaseSepolia
+            | NamedChain::Sonic
+            | NamedChain::Metis
+            | NamedChain::Celo => Some(false),
 
             // Fallback for unknown chains
             _ => None,

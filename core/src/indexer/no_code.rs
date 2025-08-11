@@ -592,7 +592,7 @@ pub async fn process_events(
 ) -> Result<Vec<EventCallbackRegistryInformation>, ProcessIndexersError> {
     let mut events: Vec<EventCallbackRegistryInformation> = vec![];
 
-    for mut contract in manifest.contracts.clone() {
+    for mut contract in manifest.all_contracts().clone() {
         let contract_events = process_contract(
             project_path,
             manifest,

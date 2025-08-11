@@ -1,0 +1,15 @@
+[package]
+name = "rindexer_factory_contract"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# internal dependencies
+rindexer = { path = "../../core" }
+
+# external dependencies
+tokio = { version = "1", features = ["full"] }
+alloy = { version = "1.0.4", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+
+[workspace]

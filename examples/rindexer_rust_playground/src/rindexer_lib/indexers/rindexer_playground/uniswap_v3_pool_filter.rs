@@ -2,7 +2,7 @@
 use super::super::super::typings::rindexer_playground::events::uniswap_v3_pool_filter::{
     SwapEvent, UniswapV3PoolFilterEventType, no_extensions,
 };
-use alloy::primitives::{I256, U256};
+use alloy::primitives::{I256, U64, U256};
 use rindexer::{
     EthereumSqlTypeWrapper, PgType, RindexerColorize,
     event::callback_registry::EventCallbackRegistry, rindexer_error, rindexer_info,
@@ -44,7 +44,7 @@ async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegis
                     EthereumSqlTypeWrapper::I256(I256::from(result.event_data.amount1)),
                     EthereumSqlTypeWrapper::U256(U256::from(result.event_data.sqrtPriceX96)),
                     EthereumSqlTypeWrapper::U128(result.event_data.liquidity),
-                    EthereumSqlTypeWrapper::I32(result.event_data.tick.as_i32()),
+                    EthereumSqlTypeWrapper::I32(result.event_data.tick.unchecked_into()),
                     EthereumSqlTypeWrapper::B256(result.tx_information.transaction_hash),
                     EthereumSqlTypeWrapper::U64(result.tx_information.block_number),
                     EthereumSqlTypeWrapper::B256(result.tx_information.block_hash),
