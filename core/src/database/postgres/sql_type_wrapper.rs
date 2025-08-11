@@ -1306,13 +1306,23 @@ fn map_log_token_to_ethereum_wrapper(
         DynSolValue::FixedArray(tokens) | DynSolValue::Array(tokens) => {
             match tokens.first() {
                 None => match &abi_input.components {
-                    Some(components) => {
-                        tuple_solidity_type_to_ethereum_sql_type_wrapper(components).unwrap_or_else(|| panic!("map_log_token_to_ethereum_wrapper:: Unknown type: {}",
-                                abi_input.type_))
-                    }
+                    Some(components) => tuple_solidity_type_to_ethereum_sql_type_wrapper(
+                        components,
+                    )
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "map_log_token_to_ethereum_wrapper:: Unknown type: {}",
+                            abi_input.type_
+                        )
+                    }),
                     None => {
-                        vec![solidity_type_to_ethereum_sql_type_wrapper(&abi_input.type_).unwrap_or_else(|| panic!("map_log_token_to_ethereum_wrapper:: Unknown type: {}",
-                                abi_input.type_))]
+                        vec![solidity_type_to_ethereum_sql_type_wrapper(&abi_input.type_)
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "map_log_token_to_ethereum_wrapper:: Unknown type: {}",
+                                    abi_input.type_
+                                )
+                            })]
                     }
                 },
                 Some(first_token) => {
