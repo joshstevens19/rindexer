@@ -1098,20 +1098,7 @@ pub fn map_log_params_to_ethereum_wrapper(
 
     for (index, param) in params.iter().enumerate() {
         if let Some(abi_input) = abi_inputs.get(index) {
-            match &param.value {
-                DynSolValue::Tuple(tuple) => {
-                    wrappers.extend(process_tuple(
-                        abi_input
-                            .components
-                            .as_ref()
-                            .expect("tuple should have a component ABI on"),
-                        tuple,
-                    ));
-                }
-                _ => {
-                    wrappers.push(map_log_token_to_ethereum_wrapper(abi_input, &param.value));
-                }
-            }
+            wrappers.extend(map_log_token_to_ethereum_wrapper(abi_input, &param.value))
         } else {
             panic!("No ABI input found for log param at index: {index}")
         }
@@ -1125,26 +1112,32 @@ fn process_tuple(abi_inputs: &[ABIInput], tokens: &[DynSolValue]) -> Vec<Ethereu
 
     for (index, token) in tokens.iter().enumerate() {
         if let Some(abi_input) = abi_inputs.get(index) {
-            match token {
-                DynSolValue::Tuple(tuple) => {
-                    wrappers.extend(process_tuple(
-                        abi_input
-                            .components
-                            .as_ref()
-                            .expect("tuple should have a component ABI on"),
-                        tuple,
-                    ));
-                }
-                _ => {
-                    wrappers.push(map_log_token_to_ethereum_wrapper(abi_input, token));
-                }
-            }
+            wrappers.extend(map_log_token_to_ethereum_wrapper(abi_input, token));
         } else {
             panic!("No ABI input found for log param at index: {index}")
         }
     }
 
     wrappers
+}
+
+fn tuple_solidity_type_to_ethereum_sql_type_wrapper(
+    abi_inputs: &[ABIInput],
+) -> Option<Vec<EthereumSqlTypeWrapper>> {
+    let mut wrappers = vec![];
+
+    for abi_input in abi_inputs {
+        match &abi_input.components {
+            Some(components) => {
+                wrappers.extend(tuple_solidity_type_to_ethereum_sql_type_wrapper(components)?)
+            }
+            None => {
+                wrappers.push(solidity_type_to_ethereum_sql_type_wrapper(&abi_input.type_)?);
+            }
+        }
+    }
+
+    Some(wrappers)
 }
 
 fn low_u128(value: &U256) -> u128 {
@@ -1293,32 +1286,45 @@ fn map_dynamic_uint_to_ethereum_sql_type_wrapper(
 fn map_log_token_to_ethereum_wrapper(
     abi_input: &ABIInput,
     token: &DynSolValue,
-) -> EthereumSqlTypeWrapper {
+) -> Vec<EthereumSqlTypeWrapper> {
     match &token {
-        DynSolValue::Address(address) => EthereumSqlTypeWrapper::Address(*address),
+        DynSolValue::Address(address) => vec![EthereumSqlTypeWrapper::Address(*address)],
         DynSolValue::Int(value, _) => {
-            map_dynamic_int_to_ethereum_sql_type_wrapper(abi_input, value)
+            vec![map_dynamic_int_to_ethereum_sql_type_wrapper(abi_input, value)]
         }
         DynSolValue::Uint(value, _) => {
-            map_dynamic_uint_to_ethereum_sql_type_wrapper(abi_input, value)
+            vec![map_dynamic_uint_to_ethereum_sql_type_wrapper(abi_input, value)]
         }
-        DynSolValue::Bool(b) => EthereumSqlTypeWrapper::Bool(*b),
-        DynSolValue::String(s) => EthereumSqlTypeWrapper::String(s.clone()),
-        DynSolValue::FixedBytes(bytes, _) => EthereumSqlTypeWrapper::Bytes(Bytes::from(*bytes)),
-        DynSolValue::Bytes(bytes) => EthereumSqlTypeWrapper::Bytes(Bytes::from(bytes.clone())),
+        DynSolValue::Bool(b) => vec![EthereumSqlTypeWrapper::Bool(*b)],
+        DynSolValue::String(s) => vec![EthereumSqlTypeWrapper::String(s.clone())],
+        DynSolValue::FixedBytes(bytes, _) => {
+            vec![EthereumSqlTypeWrapper::Bytes(Bytes::from(*bytes))]
+        }
+        DynSolValue::Bytes(bytes) => {
+            vec![EthereumSqlTypeWrapper::Bytes(Bytes::from(bytes.clone()))]
+        }
         DynSolValue::FixedArray(tokens) | DynSolValue::Array(tokens) => {
             match tokens.first() {
-                None =>
-                {
-                    #[allow(clippy::expect_fun_call)]
-                    solidity_type_to_ethereum_sql_type_wrapper(&abi_input.type_).expect(
-                        format!(
-                            "map_log_token_to_ethereum_wrapper:: Unknown type: {}",
-                            abi_input.type_
+                None => match &abi_input.components {
+                    Some(components) => {
+                        tuple_solidity_type_to_ethereum_sql_type_wrapper(components).expect(
+                            format!(
+                                "map_log_token_to_ethereum_wrapper:: Unknown type: {}",
+                                abi_input.type_
+                            )
+                            .as_str(),
                         )
-                        .as_str(),
-                    )
-                }
+                    }
+                    None => {
+                        vec![solidity_type_to_ethereum_sql_type_wrapper(&abi_input.type_).expect(
+                            format!(
+                                "map_log_token_to_ethereum_wrapper:: Unknown type: {}",
+                                abi_input.type_
+                            )
+                            .as_str(),
+                        )]
+                    }
+                },
                 Some(first_token) => {
                     // events arrays can only be one type so get it from the first one
                     let token_type = first_token;
@@ -1331,7 +1337,7 @@ fn map_log_token_to_ethereum_wrapper(
                                 }
                             }
 
-                            EthereumSqlTypeWrapper::VecAddress(vec)
+                            vec![EthereumSqlTypeWrapper::VecAddress(vec)]
                         }
                         DynSolValue::FixedBytes(_, _) | DynSolValue::Bytes(_) => {
                             let mut vec: Vec<Bytes> = vec![];
@@ -1341,7 +1347,7 @@ fn map_log_token_to_ethereum_wrapper(
                                 }
                             }
 
-                            EthereumSqlTypeWrapper::VecBytes(vec)
+                            vec![EthereumSqlTypeWrapper::VecBytes(vec)]
                         }
                         DynSolValue::Int(_, _) | DynSolValue::Uint(_, _) => {
                             let sql_type_wrapper =
@@ -1370,7 +1376,7 @@ fn map_log_token_to_ethereum_wrapper(
                             match sql_type_wrapper {
                                 EthereumSqlTypeWrapper::U256(_)
                                 | EthereumSqlTypeWrapper::VecU256(_) => {
-                                    EthereumSqlTypeWrapper::VecU256(
+                                    vec![EthereumSqlTypeWrapper::VecU256(
                                         vec_wrapper
                                             .into_iter()
                                             .map(|w| match w {
@@ -1378,11 +1384,11 @@ fn map_log_token_to_ethereum_wrapper(
                                                 _ => unreachable!(),
                                             })
                                             .collect(),
-                                    )
+                                    )]
                                 }
                                 EthereumSqlTypeWrapper::I256(_)
                                 | EthereumSqlTypeWrapper::VecI256(_) => {
-                                    EthereumSqlTypeWrapper::VecI256(
+                                    vec![EthereumSqlTypeWrapper::VecI256(
                                         vec_wrapper
                                             .into_iter()
                                             .map(|w| match w {
@@ -1390,11 +1396,11 @@ fn map_log_token_to_ethereum_wrapper(
                                                 _ => unreachable!(),
                                             })
                                             .collect(),
-                                    )
+                                    )]
                                 }
                                 EthereumSqlTypeWrapper::U128(_)
                                 | EthereumSqlTypeWrapper::VecU128(_) => {
-                                    EthereumSqlTypeWrapper::VecU128(
+                                    vec![EthereumSqlTypeWrapper::VecU128(
                                         vec_wrapper
                                             .into_iter()
                                             .map(|w| match w {
@@ -1402,11 +1408,11 @@ fn map_log_token_to_ethereum_wrapper(
                                                 _ => unreachable!(),
                                             })
                                             .collect(),
-                                    )
+                                    )]
                                 }
                                 EthereumSqlTypeWrapper::I128(_)
                                 | EthereumSqlTypeWrapper::VecI128(_) => {
-                                    EthereumSqlTypeWrapper::VecI128(
+                                    vec![EthereumSqlTypeWrapper::VecI128(
                                         vec_wrapper
                                             .into_iter()
                                             .map(|w| match w {
@@ -1414,11 +1420,11 @@ fn map_log_token_to_ethereum_wrapper(
                                                 _ => unreachable!(),
                                             })
                                             .collect(),
-                                    )
+                                    )]
                                 }
                                 EthereumSqlTypeWrapper::U64(_)
                                 | EthereumSqlTypeWrapper::VecU64(_) => {
-                                    EthereumSqlTypeWrapper::VecU64(
+                                    vec![EthereumSqlTypeWrapper::VecU64(
                                         vec_wrapper
                                             .into_iter()
                                             .map(|w| match w {
@@ -1426,11 +1432,11 @@ fn map_log_token_to_ethereum_wrapper(
                                                 _ => unreachable!(),
                                             })
                                             .collect(),
-                                    )
+                                    )]
                                 }
                                 EthereumSqlTypeWrapper::I64(_)
                                 | EthereumSqlTypeWrapper::VecI64(_) => {
-                                    EthereumSqlTypeWrapper::VecI64(
+                                    vec![EthereumSqlTypeWrapper::VecI64(
                                         vec_wrapper
                                             .into_iter()
                                             .map(|w| match w {
@@ -1438,11 +1444,11 @@ fn map_log_token_to_ethereum_wrapper(
                                                 _ => unreachable!(),
                                             })
                                             .collect(),
-                                    )
+                                    )]
                                 }
                                 EthereumSqlTypeWrapper::U32(_)
                                 | EthereumSqlTypeWrapper::VecU32(_) => {
-                                    EthereumSqlTypeWrapper::VecU32(
+                                    vec![EthereumSqlTypeWrapper::VecU32(
                                         vec_wrapper
                                             .into_iter()
                                             .map(|w| match w {
@@ -1450,11 +1456,11 @@ fn map_log_token_to_ethereum_wrapper(
                                                 _ => unreachable!(),
                                             })
                                             .collect(),
-                                    )
+                                    )]
                                 }
                                 EthereumSqlTypeWrapper::I32(_)
                                 | EthereumSqlTypeWrapper::VecI32(_) => {
-                                    EthereumSqlTypeWrapper::VecI32(
+                                    vec![EthereumSqlTypeWrapper::VecI32(
                                         vec_wrapper
                                             .into_iter()
                                             .map(|w| match w {
@@ -1462,11 +1468,11 @@ fn map_log_token_to_ethereum_wrapper(
                                                 _ => unreachable!(),
                                             })
                                             .collect(),
-                                    )
+                                    )]
                                 }
                                 EthereumSqlTypeWrapper::U16(_)
                                 | EthereumSqlTypeWrapper::VecU16(_) => {
-                                    EthereumSqlTypeWrapper::VecU16(
+                                    vec![EthereumSqlTypeWrapper::VecU16(
                                         vec_wrapper
                                             .into_iter()
                                             .map(|w| match w {
@@ -1474,11 +1480,11 @@ fn map_log_token_to_ethereum_wrapper(
                                                 _ => unreachable!(),
                                             })
                                             .collect(),
-                                    )
+                                    )]
                                 }
                                 EthereumSqlTypeWrapper::I16(_)
                                 | EthereumSqlTypeWrapper::VecI16(_) => {
-                                    EthereumSqlTypeWrapper::VecI16(
+                                    vec![EthereumSqlTypeWrapper::VecI16(
                                         vec_wrapper
                                             .into_iter()
                                             .map(|w| match w {
@@ -1486,11 +1492,11 @@ fn map_log_token_to_ethereum_wrapper(
                                                 _ => unreachable!(),
                                             })
                                             .collect(),
-                                    )
+                                    )]
                                 }
                                 EthereumSqlTypeWrapper::U8(_)
                                 | EthereumSqlTypeWrapper::VecU8(_) => {
-                                    EthereumSqlTypeWrapper::VecU8(
+                                    vec![EthereumSqlTypeWrapper::VecU8(
                                         vec_wrapper
                                             .into_iter()
                                             .map(|w| match w {
@@ -1498,11 +1504,11 @@ fn map_log_token_to_ethereum_wrapper(
                                                 _ => unreachable!(),
                                             })
                                             .collect(),
-                                    )
+                                    )]
                                 }
                                 EthereumSqlTypeWrapper::I8(_)
                                 | EthereumSqlTypeWrapper::VecI8(_) => {
-                                    EthereumSqlTypeWrapper::VecI8(
+                                    vec![EthereumSqlTypeWrapper::VecI8(
                                         vec_wrapper
                                             .into_iter()
                                             .map(|w| match w {
@@ -1510,7 +1516,7 @@ fn map_log_token_to_ethereum_wrapper(
                                                 _ => unreachable!(),
                                             })
                                             .collect(),
-                                    )
+                                    )]
                                 }
                                 _ => panic!("Unknown int type for abi input: {abi_input:?}"),
                             }
@@ -1523,7 +1529,7 @@ fn map_log_token_to_ethereum_wrapper(
                                 }
                             }
 
-                            EthereumSqlTypeWrapper::VecBool(vec)
+                            vec![EthereumSqlTypeWrapper::VecBool(vec)]
                         }
                         DynSolValue::String(_) => {
                             let mut vec: Vec<String> = vec![];
@@ -1533,15 +1539,18 @@ fn map_log_token_to_ethereum_wrapper(
                                 }
                             }
 
-                            EthereumSqlTypeWrapper::VecString(vec)
+                            vec![EthereumSqlTypeWrapper::VecString(vec)]
                         }
                         DynSolValue::FixedArray(_) | DynSolValue::Array(_) => {
                             unreachable!("Nested arrays are not supported by the EVM")
                         }
-                        DynSolValue::Tuple(_) => {
-                            // TODO - this is not supported yet
-                            panic!("Array tuple not supported yet - please raise issue in github with ABI to recreate and we will fix")
-                        }
+                        DynSolValue::Tuple(tuple) => process_tuple(
+                            abi_input
+                                .components
+                                .as_ref()
+                                .expect("Tuple should have a component ABI on"),
+                            tuple,
+                        ),
                         _ => {
                             unimplemented!("CustomStruct and Function are not supported yet - please raise issue in github with ABI to recreate")
                         }
@@ -1549,9 +1558,10 @@ fn map_log_token_to_ethereum_wrapper(
                 }
             }
         }
-        DynSolValue::Tuple(_tuple) => {
-            panic!("You should not be calling a tuple type in this function!")
-        }
+        DynSolValue::Tuple(tuple) => process_tuple(
+            abi_input.components.as_ref().expect("Tuple should have a component ABI on"),
+            tuple,
+        ),
         _ => {
             unimplemented!("CustomStruct and Function are not supported yet - please raise issue in github with ABI to recreate")
         }

@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use alloy::rpc::types::ValueOrArray;
 use serde_json::Value;
 
-use crate::helpers::is_irregular_width_solidity_integer_type;
+use crate::abi::AbiProperty;
+use crate::helpers::{is_irregular_width_solidity_integer_type, is_solidity_static_bytes_type};
 use crate::{
     abi::{
         ABIInput, ABIItem, CreateCsvFileForEvent, EventInfo, GenerateAbiPropertiesType,
@@ -18,7 +19,6 @@ use crate::{
         storage::{CsvDetails, Storage},
     },
     types::code::Code,
-    EthereumSqlTypeWrapper,
 };
 
 pub fn abigen_contract_name(contract: &Contract) -> String {
@@ -712,6 +712,36 @@ pub fn generate_event_bindings(
         .map_err(GenerateEventBindingsError::GenerateEventBindingCode)
 }
 
+pub fn generate_event_input_path(property: &AbiProperty) -> (String, bool) {
+    let mut path = "result.event_data".to_string();
+    let mut is_array = false;
+    for cur in property.path.clone().unwrap_or_default() {
+        path = match (cur.abi_type.ends_with("[]"), is_array) {
+            (false, false) => format!("{}.{}", path, cur.abi_name),
+            (true, false) => {
+                is_array = true;
+                format!("{}.{}.iter().cloned()", path, cur.abi_name)
+            }
+            (false, true) => format!("{}.map(|v| v.{})", path, cur.abi_name),
+            (true, true) => format!("{}.flat_map(|v| v.{})", path, cur.abi_name),
+        }
+    }
+
+    let full_path = match (property.abi_type.ends_with("[]"), is_array) {
+        (_, false) => {
+            format!("{}.{}", path, property.abi_name)
+        }
+        (false, true) => {
+            format!("{}.map(|v| v.{})", path, property.abi_name)
+        }
+        (true, true) => {
+            format!("{}.flat_map(|v| v.{})", path, property.abi_name)
+        }
+    };
+
+    (full_path, is_array)
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum GenerateEventHandlersError {
     #[error("{0}")]
@@ -766,7 +796,7 @@ pub fn generate_event_handlers(
         let abi_name_properties = ABIInput::generate_abi_name_properties(
             &event.inputs,
             &GenerateAbiPropertiesType::Object,
-            None,
+            &None,
         );
 
         let mut csv_write = String::new();
@@ -775,23 +805,18 @@ pub fn generate_event_handlers(
             let mut csv_data = String::new();
             csv_data.push_str(r#"result.tx_information.address.to_string(),"#);
 
-            for item in &abi_name_properties {
-                if item.abi_type == "address" {
-                    let key = format!("result.event_data.{}", item.abi_name);
-                    csv_data.push_str(&format!(r#"{key}.to_string(),"#));
-                } else if item.abi_type.contains("bytes") {
-                    csv_data.push_str(&format!(
-                        r#"result.event_data.{}.iter().map(|byte| format!("{{:02x}}", byte)).collect::<Vec<_>>().join(""),"#,
-                        item.abi_name
-                    ));
-                } else if item.abi_type.contains("[]") {
-                    csv_data.push_str(&format!(
-                        r#"result.event_data.{}.iter().map(ToString::to_string).collect::<Vec<_>>().join(","),"#,
-                        item.abi_name
-                    ));
-                } else {
-                    csv_data.push_str(&format!("result.event_data.{}.to_string(),", item.abi_name));
-                }
+            for property in &abi_name_properties {
+                let (path, is_array) = generate_event_input_path(&property);
+
+                let formatted_path = match is_array {
+                    true => {
+                        format!(r#"{}.map(|v| v.to_string()).collect::<Vec<_>>().join(",")"#, path)
+                    }
+                    false => format!("{}.to_string()", path),
+                };
+
+                csv_data.push_str(&format!(r#"{}, "#, formatted_path));
+
                 csv_data.push('\n')
             }
 
@@ -834,45 +859,52 @@ pub fn generate_event_handlers(
             let mut data = "vec![\nEthereumSqlTypeWrapper::Address(result.tx_information.address),"
                 .to_string();
 
-            for item in &abi_name_properties {
-                if let Some(wrapper) = &item.ethereum_sql_type_wrapper {
-                    data.push_str(&format!(
-                        "\nEthereumSqlTypeWrapper::{}({}result.event_data.{}{}),",
-                        wrapper.raw_name(),
-                        match wrapper {
-                            EthereumSqlTypeWrapper::U256(_) => "U256::from(",
-                            EthereumSqlTypeWrapper::I256(_) => "I256::from(",
-                            _ => "",
-                        },
-                        item.abi_name,
-                        if item.abi_type.contains("bytes") {
-                            let static_bytes = item.abi_type.replace("bytes", "").replace("[]", "");
-                            if !static_bytes.is_empty() {
-                                ".into()"
-                            } else {
-                                ".clone()"
-                            }
-                        } else if matches!(
-                            item.ethereum_sql_type_wrapper,
-                            Some(EthereumSqlTypeWrapper::I256(_) | EthereumSqlTypeWrapper::U256(_))
-                        ) {
-                            ")"
-                        } else if item.abi_type.starts_with("int")
-                            && is_irregular_width_solidity_integer_type(&item.abi_type)
-                        {
-                            ".unchecked_into()"
-                        } else if item.abi_type.starts_with("uint")
-                            && is_irregular_width_solidity_integer_type(&item.abi_type)
-                        {
-                            ".to()"
-                        } else {
-                            ""
-                        }
-                    ));
+            let formatter = |path: &str, abi_type: &str| {
+                println!("Formatting path: {}, abi_type: {}", path, abi_type);
+                format!(
+                    "{}{}",
+                    path,
+                    if abi_type == "string" {
+                        ".clone()"
+                    } else if is_solidity_static_bytes_type(abi_type) {
+                        ".into()"
+                    } else if abi_type.starts_with("int")
+                        && is_irregular_width_solidity_integer_type(&abi_type)
+                    {
+                        ".unchecked_into()"
+                    } else if abi_type.starts_with("uint")
+                        && is_irregular_width_solidity_integer_type(&abi_type)
+                    {
+                        ".to()"
+                    } else {
+                        ""
+                    }
+                )
+            };
+
+            for property in &abi_name_properties {
+                let (path, is_array) = generate_event_input_path(&property);
+
+                let wrapper = property.ethereum_sql_type_wrapper.as_ref().expect(&format!(
+                    "No EthereumSqlTypeWrapper found for: {:?}",
+                    property.abi_type
+                ));
+
+                let formatted_path = if is_array {
+                    format!(
+                        r#"{}.map(|item| {}).collect::<Vec<_>>()"#,
+                        path,
+                        formatter("item", &property.abi_type)
+                    )
                 } else {
-                    // data.push_str(&format!("result.event_data.{},", item.value));
-                    panic!("No EthereumSqlTypeWrapper found for: {:?}", item.abi_type);
-                }
+                    formatter(&path, &property.abi_type)
+                };
+
+                data.push_str(&format!(
+                    "\nEthereumSqlTypeWrapper::{}({}),",
+                    wrapper.raw_name(),
+                    formatted_path
+                ));
             }
 
             data.push_str(
