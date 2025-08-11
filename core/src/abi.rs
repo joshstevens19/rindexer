@@ -73,9 +73,9 @@ impl AbiProperty {
         path: &Option<Vec<AbiNamePropertiesPath>>,
     ) -> Self {
         let has_array_in_path =
-            path.as_ref().map_or(false, |p| p.iter().any(|pp| pp.abi_type.ends_with("[]")));
+            path.as_ref().is_some_and(|p| p.iter().any(|pp| pp.abi_type.ends_with("[]")));
         let adjusted_abi_type =
-            if has_array_in_path { format!("{}[]", abi_type) } else { abi_type.to_string() };
+            if has_array_in_path { format!("{abi_type}[]") } else { abi_type.to_string() };
 
         Self {
             value,
@@ -145,7 +145,7 @@ impl ABIInput {
                                 solidity_type_to_db_type(&input.type_)
                             );
 
-                            vec![AbiProperty::new(value, &input.name, &input.type_, &path)]
+                            vec![AbiProperty::new(value, &input.name, &input.type_, path)]
                         }
                         GenerateAbiPropertiesType::PostgresColumnsNamesOnly
                         | GenerateAbiPropertiesType::CsvHeaderNames => {
@@ -155,7 +155,7 @@ impl ABIInput {
                                 camel_to_snake(&input.name),
                             );
 
-                            vec![AbiProperty::new(value, &input.name, &input.type_, &path)]
+                            vec![AbiProperty::new(value, &input.name, &input.type_, path)]
                         }
                         GenerateAbiPropertiesType::Object => {
                             let value = format!(
@@ -164,7 +164,7 @@ impl ABIInput {
                                 camel_to_snake(&input.name),
                             );
 
-                            vec![AbiProperty::new(value, &input.name, &input.type_, &path)]
+                            vec![AbiProperty::new(value, &input.name, &input.type_, path)]
                         }
                     }
                 }

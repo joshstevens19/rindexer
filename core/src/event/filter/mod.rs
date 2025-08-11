@@ -108,7 +108,7 @@ fn evaluate_condition(value: &Value, condition: &str) -> bool {
         LOGICAL_OPERATOR_RE.replace_all(condition.trim(), " $1 _placeholder_ ");
 
     // Prepend the placeholder for the very first clause.
-    let final_expr = format!("_placeholder_ {}", reconstructed_after_ops);
+    let final_expr = format!("_placeholder_ {reconstructed_after_ops}");
     let context = json!({ "_placeholder_": value });
 
     tracing::debug!(expression = final_expr, ?context, "Evaluating reconstructed expression");

@@ -807,16 +807,16 @@ pub fn generate_event_handlers(
             csv_data.push_str(r#"result.tx_information.address.to_string(),"#);
 
             for property in &abi_name_properties {
-                let (path, is_array) = generate_event_input_path(&property);
+                let (path, is_array) = generate_event_input_path(property);
 
                 let formatted_path = match is_array {
                     true => {
-                        format!(r#"{}.map(|v| v.to_string()).collect::<Vec<_>>().join(",")"#, path)
+                        format!(r#"{path}.map(|v| v.to_string()).collect::<Vec<_>>().join(",")"#)
                     }
-                    false => format!("{}.to_string()", path),
+                    false => format!("{path}.to_string()"),
                 };
 
-                csv_data.push_str(&format!(r#"{}, "#, formatted_path));
+                csv_data.push_str(&format!(r#"{formatted_path}, "#));
 
                 csv_data.push('\n')
             }
@@ -878,11 +878,11 @@ pub fn generate_event_handlers(
                         ) {
                             ")"
                         } else if abi_type.starts_with("int")
-                            && is_irregular_width_solidity_integer_type(&abi_type)
+                            && is_irregular_width_solidity_integer_type(abi_type)
                         {
                             ".unchecked_into()"
                         } else if abi_type.starts_with("uint")
-                            && is_irregular_width_solidity_integer_type(&abi_type)
+                            && is_irregular_width_solidity_integer_type(abi_type)
                         {
                             ".to()"
                         } else if abi_type == "string" || abi_type == "bytes" {
@@ -894,12 +894,10 @@ pub fn generate_event_handlers(
                 };
 
             for property in &abi_name_properties {
-                let (path, is_array) = generate_event_input_path(&property);
+                let (path, is_array) = generate_event_input_path(property);
 
-                let wrapper = property.ethereum_sql_type_wrapper.as_ref().expect(&format!(
-                    "No EthereumSqlTypeWrapper found for: {:?}",
-                    property.abi_type
-                ));
+                let wrapper = property.ethereum_sql_type_wrapper.as_ref().unwrap_or_else(|| panic!("No EthereumSqlTypeWrapper found for: {:?}",
+                    property.abi_type));
 
                 let formatted_path = if is_array {
                     format!(
