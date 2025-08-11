@@ -19,9 +19,8 @@ use alloy::network::AnyNetwork;
 use alloy::primitives::{Address, Bytes, B256};
 use alloy::sol_types::{SolEvent, SolEventInterface, SolType};
 use rindexer::{
-    AsyncCsvAppender, FutureExt, PostgresClient, async_trait,
-    blockclock::BlockClock,
     async_trait,
+    blockclock::BlockClock,
     event::{
         callback_registry::{
             EventCallbackRegistry, EventCallbackRegistryInformation, EventCallbackResult,
@@ -35,6 +34,7 @@ use rindexer::{
         yaml::read_manifest,
     },
     provider::{JsonRpcCachedProvider, RindexerProvider},
+    AsyncCsvAppender, FutureExt, PostgresClient,
 };
 use std::collections::HashMap;
 use std::error::Error;
@@ -85,7 +85,7 @@ impl HasTxInformation for PoolCreatedResult {
     }
 }
 
-type BoxFuture<'a, T> = Pin<Box<dyn Future<Output=T> + Send + 'a>>;
+type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 #[async_trait]
 trait EventCallback {
@@ -114,11 +114,11 @@ pub fn ownerchanged_handler<TExtensions, F, Fut>(
 where
     OwnerChangedResult: Clone + 'static,
     F: for<'a> Fn(Vec<OwnerChangedResult>, Arc<EventContext<TExtensions>>) -> Fut
-    + Send
-    + Sync
-    + 'static
-    + Clone,
-    Fut: Future<Output=EventCallbackResult<()>> + Send + 'static,
+        + Send
+        + Sync
+        + 'static
+        + Clone,
+    Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
     TExtensions: Send + Sync + 'static,
 {
     Arc::new(move |results, context| {
@@ -131,11 +131,11 @@ where
 
 type OwnerChangedEventCallbackType<TExtensions> = Arc<
     dyn for<'a> Fn(
-        &'a Vec<OwnerChangedResult>,
-        Arc<EventContext<TExtensions>>,
-    ) -> BoxFuture<'a, EventCallbackResult<()>>
-    + Send
-    + Sync,
+            &'a Vec<OwnerChangedResult>,
+            Arc<EventContext<TExtensions>>,
+        ) -> BoxFuture<'a, EventCallbackResult<()>>
+        + Send
+        + Sync,
 >;
 
 pub struct OwnerChangedEvent<TExtensions>
@@ -154,239 +154,232 @@ where
     where
         OwnerChangedResult: Clone + 'static,
         F: for<'a> Fn(Vec<OwnerChangedResult>, Arc<EventContext<TExtensions>>) -> Fut
-        + Send
-        + Sync
-        + 'static
-        + Clone,
-        Fut: Future<Output=EventCallbackResult<()>> + Send + 'static,
+            + Send
+            + Sync
+            + 'static
+            + Clone,
+        Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
     {
         let csv = AsyncCsvAppender::new(
-            < < < < < < < < HEAD: examples / rindexer_rust_playground / src / rindexer_lib / typings / rindexer_playground / events / playground_types_filter.rs
-            r"/Users/jackedgson/Development/avara/rindexer/examples/rindexer_rust_playground/generated_csv/PlaygroundTypesFilter/playgroundtypesfilter-swap.csv",
+            r"/Users/jackedgson/Development/avara/rindexer/examples/rindexer_factory_indexing/generated_csv/UniswapV3Factory/uniswapv3factory-ownerchanged.csv",
         );
-        if !Path::new(r"/Users/jackedgson/Development/avara/rindexer/examples/rindexer_rust_playground/generated_csv/PlaygroundTypesFilter/playgroundtypesfilter-swap.csv").exists() {
-            csv.append_header(vec!["contract_address".into(), "sender".into(), "recipient".into(), "amount_0".into(), "amount_1".into(), "sqrt_price_x96".into(), "liquidity".into(), "tick".into(), "tick_2".into(), "tick_3".into(), "tick_4".into(), "tick_5".into(), "tick_6".into(), "tick_7".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()].into())
-                == == == ==
-                r"/Users/pawellula/RustroverProjects/rindexer/cli/../examples/rindexer_factory_indexing/generated_csv/UniswapV3Factory/uniswapv3factory-ownerchanged.csv",
-            );
-            if !Path::new(r"/Users/pawellula/RustroverProjects/rindexer/cli/../examples/rindexer_factory_indexing/generated_csv/UniswapV3Factory/uniswapv3factory-ownerchanged.csv").exists() {
-                csv.append_header(vec!["contract_address".into(), "old_owner".into(), "new_owner".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()].into())
-                    >> >> >> >> 3ec32593e99ae16322dc0c847b6d94beb2df5296: examples / rindexer_factory_indexing / src / rindexer_lib / typings / rindexer_factory_contract / events / uniswap_v3_factory.rs
-                    .await
-                    .expect("Failed to write CSV header");
-            }
+        if !Path::new(r"/Users/jackedgson/Development/avara/rindexer/examples/rindexer_factory_indexing/generated_csv/UniswapV3Factory/uniswapv3factory-ownerchanged.csv").exists() {
+            csv.append_header(vec!["contract_address".into(), "old_owner".into(), "new_owner".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()].into())
+                .await
+                .expect("Failed to write CSV header");
+        }
 
-            Self {
-                callback: ownerchanged_handler(closure),
-                context: Arc::new(EventContext {
-                    database: get_or_init_postgres_client().await,
-                    csv: Arc::new(csv),
-                    extensions: Arc::new(extensions),
-                }),
-            }
+        Self {
+            callback: ownerchanged_handler(closure),
+            context: Arc::new(EventContext {
+                database: get_or_init_postgres_client().await,
+                csv: Arc::new(csv),
+                extensions: Arc::new(extensions),
+            }),
         }
     }
+}
 
-    #[async_trait]
-    impl<TExtensions> EventCallback for OwnerChangedEvent<TExtensions>
-    where
-        TExtensions: Send + Sync,
-    {
-        async fn call(&self, events: Vec<EventResult>) -> EventCallbackResult<()> {
-            let events_len = events.len();
+#[async_trait]
+impl<TExtensions> EventCallback for OwnerChangedEvent<TExtensions>
+where
+    TExtensions: Send + Sync,
+{
+    async fn call(&self, events: Vec<EventResult>) -> EventCallbackResult<()> {
+        let events_len = events.len();
 
-            // note some can not downcast because it cant decode
-            // this happens on events which failed decoding due to
-            // not having the right abi for example
-            // transfer events with 2 indexed topics cant decode
-            // transfer events with 3 indexed topics
-            let result: Vec<OwnerChangedResult> = events
-                .into_iter()
-                .filter_map(|item| {
-                    item.decoded_data.downcast::<OwnerChangedData>().ok().map(|arc| {
-                        OwnerChangedResult {
-                            event_data: (*arc).clone(),
-                            tx_information: item.tx_information,
-                        }
-                    })
+        // note some can not downcast because it cant decode
+        // this happens on events which failed decoding due to
+        // not having the right abi for example
+        // transfer events with 2 indexed topics cant decode
+        // transfer events with 3 indexed topics
+        let result: Vec<OwnerChangedResult> = events
+            .into_iter()
+            .filter_map(|item| {
+                item.decoded_data.downcast::<OwnerChangedData>().ok().map(|arc| {
+                    OwnerChangedResult {
+                        event_data: (*arc).clone(),
+                        tx_information: item.tx_information,
+                    }
                 })
-                .collect();
+            })
+            .collect();
 
-            if result.len() == events_len {
-                (self.callback)(&result, Arc::clone(&self.context)).await
-            } else {
-                panic!("OwnerChangedEvent: Unexpected data type - expected: OwnerChangedData")
-            }
+        if result.len() == events_len {
+            (self.callback)(&result, Arc::clone(&self.context)).await
+        } else {
+            panic!("OwnerChangedEvent: Unexpected data type - expected: OwnerChangedData")
         }
     }
+}
 
-    pub enum UniswapV3FactoryEventType<TExtensions>
-    where
-        TExtensions: 'static + Send + Sync,
-    {
-        OwnerChanged(OwnerChangedEvent<TExtensions>),
-    }
+pub enum UniswapV3FactoryEventType<TExtensions>
+where
+    TExtensions: 'static + Send + Sync,
+{
+    OwnerChanged(OwnerChangedEvent<TExtensions>),
+}
 
-    pub async fn uniswap_v3_factory_contract(
-        network: &str,
-        address: Address,
-    ) -> RindexerUniswapV3FactoryGenInstance<Arc<RindexerProvider>, AnyNetwork> {
+pub async fn uniswap_v3_factory_contract(
+    network: &str,
+    address: Address,
+) -> RindexerUniswapV3FactoryGenInstance<Arc<RindexerProvider>, AnyNetwork> {
+    RindexerUniswapV3FactoryGen::new(
+        address,
+        get_provider_cache_for_network(network).await.get_inner_provider(),
+    )
+}
+
+pub async fn decoder_contract(
+    network: &str,
+) -> RindexerUniswapV3FactoryGenInstance<Arc<RindexerProvider>, AnyNetwork> {
+    if network == "base" {
         RindexerUniswapV3FactoryGen::new(
-            address,
+            // do not care about address here its decoding makes it easier to handle ValueOrArray
+            Address::ZERO,
             get_provider_cache_for_network(network).await.get_inner_provider(),
         )
+    } else if network == "ethereum" {
+        RindexerUniswapV3FactoryGen::new(
+            // do not care about address here its decoding makes it easier to handle ValueOrArray
+            Address::ZERO,
+            get_provider_cache_for_network(network).await.get_inner_provider(),
+        )
+    } else {
+        panic!("Network not supported");
+    }
+}
+
+impl<TExtensions> UniswapV3FactoryEventType<TExtensions>
+where
+    TExtensions: 'static + Send + Sync,
+{
+    pub fn topic_id(&self) -> &'static str {
+        match self {
+            UniswapV3FactoryEventType::OwnerChanged(_) => {
+                "0xb532073b38c83145e3e5135377a08bf9aab55bc0fd7c1179cd4fb995d2a5159c"
+            }
+        }
     }
 
-    pub async fn decoder_contract(
+    pub fn event_name(&self) -> &'static str {
+        match self {
+            UniswapV3FactoryEventType::OwnerChanged(_) => "OwnerChanged",
+        }
+    }
+
+    pub fn contract_name(&self) -> String {
+        "UniswapV3Factory".to_string()
+    }
+
+    async fn get_provider(&self, network: &str) -> Arc<JsonRpcCachedProvider> {
+        get_provider_cache_for_network(network).await
+    }
+
+    fn decoder(
+        &self,
         network: &str,
-    ) -> RindexerUniswapV3FactoryGenInstance<Arc<RindexerProvider>, AnyNetwork> {
-        if network == "base" {
-            RindexerUniswapV3FactoryGen::new(
-                // do not care about address here its decoding makes it easier to handle ValueOrArray
-                Address::ZERO,
-                get_provider_cache_for_network(network).await.get_inner_provider(),
-            )
-        } else if network == "ethereum" {
-            RindexerUniswapV3FactoryGen::new(
-                // do not care about address here its decoding makes it easier to handle ValueOrArray
-                Address::ZERO,
-                get_provider_cache_for_network(network).await.get_inner_provider(),
-            )
-        } else {
-            panic!("Network not supported");
-        }
-    }
+    ) -> Arc<dyn Fn(Vec<B256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync> {
+        let decoder_contract = decoder_contract(network);
 
-    impl<TExtensions> UniswapV3FactoryEventType<TExtensions>
-    where
-        TExtensions: 'static + Send + Sync,
-    {
-        pub fn topic_id(&self) -> &'static str {
-            match self {
-                UniswapV3FactoryEventType::OwnerChanged(_) => {
-                    "0xb532073b38c83145e3e5135377a08bf9aab55bc0fd7c1179cd4fb995d2a5159c"
-                }
-            }
-        }
-
-        pub fn event_name(&self) -> &'static str {
-            match self {
-                UniswapV3FactoryEventType::OwnerChanged(_) => "OwnerChanged",
-            }
-        }
-
-        pub fn contract_name(&self) -> String {
-            "UniswapV3Factory".to_string()
-        }
-
-        async fn get_provider(&self, network: &str) -> Arc<JsonRpcCachedProvider> {
-            get_provider_cache_for_network(network).await
-        }
-
-        fn decoder(
-            &self,
-            network: &str,
-        ) -> Arc<dyn Fn(Vec<B256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync> {
-            let decoder_contract = decoder_contract(network);
-
-            match self {
-                UniswapV3FactoryEventType::OwnerChanged(_) => {
-                    Arc::new(move |topics: Vec<B256>, data: Bytes| {
-                        match OwnerChangedData::decode_raw_log(topics, &data[0..]) {
-                            Ok(event) => {
-                                let result: OwnerChangedData = event;
-                                Arc::new(result) as Arc<dyn Any + Send + Sync>
-                            }
-                            Err(error) => Arc::new(error) as Arc<dyn Any + Send + Sync>,
+        match self {
+            UniswapV3FactoryEventType::OwnerChanged(_) => {
+                Arc::new(move |topics: Vec<B256>, data: Bytes| {
+                    match OwnerChangedData::decode_raw_log(topics, &data[0..]) {
+                        Ok(event) => {
+                            let result: OwnerChangedData = event;
+                            Arc::new(result) as Arc<dyn Any + Send + Sync>
                         }
-                    })
-                }
-            }
-        }
-
-        pub async fn register(self, manifest_path: &PathBuf, registry: &mut EventCallbackRegistry) {
-            let rindexer_yaml = read_manifest(manifest_path).expect("Failed to read rindexer.yaml");
-            let topic_id = self.topic_id();
-            let contract_name = self.contract_name();
-            let event_name = self.event_name();
-
-            let contract_details = rindexer_yaml
-                .all_contracts()
-                .iter()
-                .find(|c| c.name == contract_name)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Contract {} not found please make sure its defined in the rindexer.yaml",
-                        contract_name
-                    )
+                        Err(error) => Arc::new(error) as Arc<dyn Any + Send + Sync>,
+                    }
                 })
-                .clone();
-
-            let index_event_in_order = contract_details
-                .index_event_in_order
-                .as_ref()
-                .map_or(false, |vec| vec.contains(&event_name.to_string()));
-
-            // Expect providers to have been initialized, but it's an async init so this should
-            // be fast but for correctness we must await each future.
-            let mut providers = HashMap::new();
-            for n in contract_details.details.iter() {
-                let provider = self.get_provider(&n.network).await;
-                providers.insert(n.network.clone(), provider);
             }
-
-            let contract = ContractInformation {
-                name: contract_details.before_modify_name_if_filter_readonly().into_owned(),
-                details: contract_details
-                    .details
-                    .iter()
-                    .map(|c| {
-                        let provider = providers.get(&c.network).expect("must have a provider").clone();
-
-                        NetworkContract {
-                            id: generate_random_id(10),
-                            network: c.network.clone(),
-                            cached_provider: provider.clone(),
-                            block_clock: BlockClock::new(
-                                rindexer_yaml.config.timestamp_sample_rate,
-                                provider.clone(),
-                            ),
-                            decoder: self.decoder(&c.network),
-                            indexing_contract_setup: c.indexing_contract_setup(manifest_path),
-                            start_block: c.start_block,
-                            end_block: c.end_block,
-                            disable_logs_bloom_checks: rindexer_yaml
-                                .networks
-                                .iter()
-                                .find(|n| n.name == c.network)
-                                .map_or(false, |n| n.disable_logs_bloom_checks.unwrap_or_default()),
-                        }
-                    })
-                    .collect(),
-                abi: contract_details.abi,
-                reorg_safe_distance: contract_details.reorg_safe_distance.unwrap_or_default(),
-            };
-
-            let callback: Arc<
-                dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync,
-            > = match self {
-                UniswapV3FactoryEventType::OwnerChanged(event) => {
-                    let event = Arc::new(event);
-                    Arc::new(move |result| {
-                        let event = Arc::clone(&event);
-                        async move { event.call(result).await }.boxed()
-                    })
-                }
-            };
-
-            registry.register_event(EventCallbackRegistryInformation {
-                id: generate_random_id(10),
-                indexer_name: "RindexerFactoryContract".to_string(),
-                event_name: event_name.to_string(),
-                index_event_in_order,
-                topic_id: topic_id.parse::<B256>().unwrap(),
-                contract,
-                callback,
-            });
         }
     }
+
+    pub async fn register(self, manifest_path: &PathBuf, registry: &mut EventCallbackRegistry) {
+        let rindexer_yaml = read_manifest(manifest_path).expect("Failed to read rindexer.yaml");
+        let topic_id = self.topic_id();
+        let contract_name = self.contract_name();
+        let event_name = self.event_name();
+
+        let contract_details = rindexer_yaml
+            .all_contracts()
+            .iter()
+            .find(|c| c.name == contract_name)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Contract {} not found please make sure its defined in the rindexer.yaml",
+                    contract_name
+                )
+            })
+            .clone();
+
+        let index_event_in_order = contract_details
+            .index_event_in_order
+            .as_ref()
+            .map_or(false, |vec| vec.contains(&event_name.to_string()));
+
+        // Expect providers to have been initialized, but it's an async init so this should
+        // be fast but for correctness we must await each future.
+        let mut providers = HashMap::new();
+        for n in contract_details.details.iter() {
+            let provider = self.get_provider(&n.network).await;
+            providers.insert(n.network.clone(), provider);
+        }
+
+        let contract = ContractInformation {
+            name: contract_details.before_modify_name_if_filter_readonly().into_owned(),
+            details: contract_details
+                .details
+                .iter()
+                .map(|c| {
+                    let provider = providers.get(&c.network).expect("must have a provider").clone();
+
+                    NetworkContract {
+                        id: generate_random_id(10),
+                        network: c.network.clone(),
+                        cached_provider: provider.clone(),
+                        block_clock: BlockClock::new(
+                            rindexer_yaml.config.timestamp_sample_rate,
+                            provider.clone(),
+                        ),
+                        decoder: self.decoder(&c.network),
+                        indexing_contract_setup: c.indexing_contract_setup(manifest_path),
+                        start_block: c.start_block,
+                        end_block: c.end_block,
+                        disable_logs_bloom_checks: rindexer_yaml
+                            .networks
+                            .iter()
+                            .find(|n| n.name == c.network)
+                            .map_or(false, |n| n.disable_logs_bloom_checks.unwrap_or_default()),
+                    }
+                })
+                .collect(),
+            abi: contract_details.abi,
+            reorg_safe_distance: contract_details.reorg_safe_distance.unwrap_or_default(),
+        };
+
+        let callback: Arc<
+            dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync,
+        > = match self {
+            UniswapV3FactoryEventType::OwnerChanged(event) => {
+                let event = Arc::new(event);
+                Arc::new(move |result| {
+                    let event = Arc::clone(&event);
+                    async move { event.call(result).await }.boxed()
+                })
+            }
+        };
+
+        registry.register_event(EventCallbackRegistryInformation {
+            id: generate_random_id(10),
+            indexer_name: "RindexerFactoryContract".to_string(),
+            event_name: event_name.to_string(),
+            index_event_in_order,
+            topic_id: topic_id.parse::<B256>().unwrap(),
+            contract,
+            callback,
+        });
+    }
+}
