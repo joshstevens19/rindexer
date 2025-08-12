@@ -100,6 +100,7 @@ pub fn mark_shutdown_started() {
 }
 
 // Optional guard for temporary logger suppression
+#[allow(dead_code)]
 pub struct LoggerGuard;
 
 impl Drop for LoggerGuard {
