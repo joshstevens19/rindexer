@@ -716,15 +716,16 @@ pub fn generate_event_bindings(
 pub fn generate_event_input_path(property: &AbiProperty) -> (String, bool) {
     let mut path = "result.event_data".to_string();
     let mut is_array = false;
-    for cur in property.path.clone().unwrap_or_default() {
-        path = match (cur.abi_type.ends_with("[]"), is_array) {
-            (false, false) => format!("{}.{}", path, cur.abi_name),
+
+    for current_path in property.path.clone().unwrap_or_default() {
+        path = match (current_path.abi_type.ends_with("[]"), is_array) {
+            (false, false) => format!("{}.{}", path, current_path.abi_name),
             (true, false) => {
                 is_array = true;
-                format!("{}.{}.iter().cloned()", path, cur.abi_name)
+                format!("{}.{}.iter().cloned()", path, current_path.abi_name)
             }
-            (false, true) => format!("{}.map(|v| v.{})", path, cur.abi_name),
-            (true, true) => format!("{}.flat_map(|v| v.{})", path, cur.abi_name),
+            (false, true) => format!("{}.map(|v| v.{})", path, current_path.abi_name),
+            (true, true) => format!("{}.flat_map(|v| v.{})", path, current_path.abi_name),
         }
     }
 
@@ -1073,4 +1074,74 @@ pub fn generate_event_handlers(
     code.push_str(&registry_fn);
 
     Ok(Code::new(code))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::generate_event_input_path;
+    use crate::abi::{AbiNamePropertiesPath, AbiProperty};
+
+    #[test]
+    fn test_top_level_property() {
+        let property = AbiProperty::new("test".to_string(), "key", "uint256", &None);
+        let (path, is_array) = generate_event_input_path(&property);
+        assert_eq!(path, "result.event_data.key");
+        assert!(!is_array);
+    }
+
+    #[test]
+    fn test_one_level_deep() {
+        let property = AbiProperty::new(
+            "test".to_string(),
+            "value",
+            "string",
+            &Some(vec![AbiNamePropertiesPath::new("values", "tuple[]")]),
+        );
+
+        let (path, is_array) = generate_event_input_path(&property);
+        assert_eq!(path, "result.event_data.values.iter().cloned().map(|v| v.value)");
+        assert!(is_array);
+    }
+
+    #[test]
+    fn test_nested_arrays() {
+        let property = AbiProperty::new(
+            "test".to_string(),
+            "value",
+            "string",
+            &Some(vec![
+                AbiNamePropertiesPath::new("result", "tuple[]"),
+                AbiNamePropertiesPath::new("values", "tuple[]"),
+            ]),
+        );
+
+        let (path, is_array) = generate_event_input_path(&property);
+        assert_eq!(
+            path,
+            "result.event_data.result.iter().cloned().flat_map(|v| v.values).map(|v| v.value)"
+        );
+        assert!(is_array);
+    }
+
+    #[test]
+    fn test_complex_path() {
+        let property = AbiProperty::new(
+            "test".to_string(),
+            "name",
+            "string",
+            &Some(vec![
+                AbiNamePropertiesPath::new("result", "tuple"),
+                AbiNamePropertiesPath::new("data", "tuple[]"),
+                AbiNamePropertiesPath::new("values", "tuple[]"),
+                AbiNamePropertiesPath::new("value", "tuple"),
+            ]),
+        );
+
+        let (path, is_array) = generate_event_input_path(&property);
+        assert_eq!(
+            path,
+            "result.event_data.result.data.iter().cloned().flat_map(|v| v.values).map(|v| v.value).map(|v| v.name)"
+        );
+        assert!(is_array);
+    }
 }
