@@ -1083,7 +1083,7 @@ mod tests {
 
     #[test]
     fn test_top_level_property() {
-        let property = AbiProperty::new("test".to_string(), "key", "uint256", &None);
+        let property = AbiProperty::new("test".to_string(), "key", "uint256", None);
         let (path, is_array) = generate_event_input_path(&property);
         assert_eq!(path, "result.event_data.key");
         assert!(!is_array);
@@ -1095,7 +1095,7 @@ mod tests {
             "test".to_string(),
             "value",
             "string",
-            &Some(vec![AbiNamePropertiesPath::new("values", "tuple[]")]),
+            Some(vec![AbiNamePropertiesPath::new("values", "tuple[]")]),
         );
 
         let (path, is_array) = generate_event_input_path(&property);
@@ -1109,7 +1109,7 @@ mod tests {
             "test".to_string(),
             "value",
             "string",
-            &Some(vec![
+            Some(vec![
                 AbiNamePropertiesPath::new("result", "tuple[]"),
                 AbiNamePropertiesPath::new("values", "tuple[]"),
             ]),
@@ -1129,7 +1129,7 @@ mod tests {
             "test".to_string(),
             "name",
             "string",
-            &Some(vec![
+            Some(vec![
                 AbiNamePropertiesPath::new("result", "tuple"),
                 AbiNamePropertiesPath::new("data", "tuple[]"),
                 AbiNamePropertiesPath::new("values", "tuple[]"),
