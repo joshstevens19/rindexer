@@ -798,7 +798,7 @@ pub fn generate_event_handlers(
         let abi_name_properties = ABIInput::generate_abi_name_properties(
             &event.inputs,
             &GenerateAbiPropertiesType::Object,
-            &None,
+            None,
         );
 
         let mut csv_write = String::new();

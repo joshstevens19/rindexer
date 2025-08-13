@@ -33,7 +33,7 @@ fn compact_table_name_if_needed(table_name: String) -> String {
 }
 
 fn generate_columns(inputs: &[ABIInput], property_type: &GenerateAbiPropertiesType) -> Vec<String> {
-    ABIInput::generate_abi_name_properties(inputs, property_type, &None)
+    ABIInput::generate_abi_name_properties(inputs, property_type, None)
         .into_iter()
         .map(|m| m.value)
         .collect()

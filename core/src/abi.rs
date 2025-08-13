@@ -70,7 +70,7 @@ impl AbiProperty {
         value: String,
         name: &str,
         abi_type: &str,
-        path: &Option<Vec<AbiNamePropertiesPath>>,
+        path: Option<Vec<AbiNamePropertiesPath>>,
     ) -> Self {
         let has_array_in_path =
             path.as_ref().is_some_and(|p| p.iter().any(|pp| pp.abi_type.ends_with("[]")));
@@ -84,7 +84,7 @@ impl AbiProperty {
             ),
             abi_type: abi_type.to_string(),
             abi_name: name.to_string(),
-            path: path.clone(),
+            path,
         }
     }
 }
@@ -109,7 +109,7 @@ impl ABIInput {
     pub fn generate_abi_name_properties(
         inputs: &[ABIInput],
         properties_type: &GenerateAbiPropertiesType,
-        path: &Option<Vec<AbiNamePropertiesPath>>,
+        path: Option<Vec<AbiNamePropertiesPath>>,
     ) -> Vec<AbiProperty> {
         inputs
             .iter()
@@ -126,7 +126,7 @@ impl ABIInput {
                     ABIInput::generate_abi_name_properties(
                         components,
                         properties_type,
-                        &Some(new_path),
+                        Some(new_path),
                     )
                 } else {
                     let prefix = path.as_ref().map(|p| {
@@ -145,7 +145,7 @@ impl ABIInput {
                                 solidity_type_to_db_type(&input.type_)
                             );
 
-                            vec![AbiProperty::new(value, &input.name, &input.type_, path)]
+                            vec![AbiProperty::new(value, &input.name, &input.type_, path.clone())]
                         }
                         GenerateAbiPropertiesType::PostgresColumnsNamesOnly
                         | GenerateAbiPropertiesType::CsvHeaderNames => {
@@ -155,7 +155,7 @@ impl ABIInput {
                                 camel_to_snake(&input.name),
                             );
 
-                            vec![AbiProperty::new(value, &input.name, &input.type_, path)]
+                            vec![AbiProperty::new(value, &input.name, &input.type_, path.clone())]
                         }
                         GenerateAbiPropertiesType::Object => {
                             let value = format!(
@@ -164,7 +164,7 @@ impl ABIInput {
                                 camel_to_snake(&input.name),
                             );
 
-                            vec![AbiProperty::new(value, &input.name, &input.type_, path)]
+                            vec![AbiProperty::new(value, &input.name, &input.type_, path.clone())]
                         }
                     }
                 }
@@ -347,7 +347,7 @@ impl EventInfo {
         let mut headers: Vec<String> = ABIInput::generate_abi_name_properties(
             &self.inputs,
             &GenerateAbiPropertiesType::CsvHeaderNames,
-            &None,
+            None,
         )
         .into_iter()
         .map(|m| m.value)
