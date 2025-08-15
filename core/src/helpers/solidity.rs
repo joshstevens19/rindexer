@@ -4,7 +4,7 @@ pub fn parse_solidity_integer_type(solidity_type: &str) -> (&str, usize) {
     match solidity_type {
         t if t.starts_with("int") => ("int", t[3..].parse().expect("Invalid intN type")),
         t if t.starts_with("uint") => ("uint", t[4..].parse().expect("Invalid uintN type")),
-        _ => panic!("Invalid Solidity type: {}", solidity_type),
+        _ => panic!("Invalid Solidity type: {solidity_type}"),
     }
 }
 

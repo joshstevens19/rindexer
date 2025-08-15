@@ -24,7 +24,7 @@ fn main() {
 
     // Ensure the resources directory exists
     fs::create_dir_all(&resources_dir)
-        .unwrap_or_else(|e| panic!("Failed to create resources directory: {}", e));
+        .unwrap_or_else(|e| panic!("Failed to create resources directory: {e}"));
 
     let target_info = get_target_info();
     let final_exe_path = resources_dir.join(&target_info.exe_name);
@@ -35,8 +35,7 @@ fn main() {
         if final_exe_path.exists() {
             if let Err(e) = fs::remove_file(&final_exe_path) {
                 println!(
-                    "cargo:warning=Failed to remove existing binary: {}. Continuing with build.",
-                    e
+                    "cargo:warning=Failed to remove existing binary: {e}. Continuing with build."
                 );
             }
         }
@@ -87,8 +86,7 @@ fn should_rebuild(exe_path: &Path, graphql_dir: &Path) -> bool {
                 if let Ok(source_time) = source_path.metadata().and_then(|m| m.modified()) {
                     if source_time > exe_time {
                         println!(
-                            "cargo:warning=Source file {} is newer than binary, rebuilding",
-                            source_file
+                            "cargo:warning=Source file {source_file} is newer than binary, rebuilding"
                         );
                         return true;
                     }
@@ -114,15 +112,15 @@ fn get_target_info() -> TargetInfo {
     let node_arch = match arch.as_str() {
         "x86_64" => "x64",
         "aarch64" => "arm64",
-        _ => panic!("Unsupported architecture: {}. Supported: x86_64, aarch64", arch),
+        _ => panic!("Unsupported architecture: {arch}. Supported: x86_64, aarch64"),
     };
 
     let pkg_os = if os == "windows" { "win".to_string() } else { os.clone() };
     // Using Node.js v22 as it's the current LTS version.
-    let pkg_target = format!("node22-{}-{}", pkg_os, node_arch);
+    let pkg_target = format!("node22-{pkg_os}-{node_arch}");
 
     let exe_suffix = if os == "windows" { ".exe" } else { "" };
-    let exe_name = format!("rindexer-graphql-{}-{}{}", os, node_arch, exe_suffix);
+    let exe_name = format!("rindexer-graphql-{os}-{node_arch}{exe_suffix}");
 
     TargetInfo { os: os.clone(), arch: node_arch.to_string(), exe_name, pkg_target }
 }
