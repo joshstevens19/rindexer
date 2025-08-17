@@ -1,6 +1,8 @@
 use super::rindexer_factory_contract::uniswap_v3_factory::uniswap_v3_factory_handlers;
 use super::rindexer_factory_contract::uniswap_v3_factory_pool_created_pool::uniswap_v3_factory_pool_created_pool_handlers;
+use super::rindexer_factory_contract::uniswap_v3_factory_pool_created_token_0_token_1::uniswap_v3_factory_pool_created_token_0_token_1_handlers;
 use super::rindexer_factory_contract::uniswap_v3_pool::uniswap_v3_pool_handlers;
+use super::rindexer_factory_contract::uniswap_v3_pool_token::uniswap_v3_pool_token_handlers;
 use rindexer::event::callback_registry::EventCallbackRegistry;
 use std::path::PathBuf;
 
@@ -9,5 +11,7 @@ pub async fn register_all_handlers(manifest_path: &PathBuf) -> EventCallbackRegi
     uniswap_v3_factory_handlers(manifest_path, &mut registry).await;
     uniswap_v3_factory_pool_created_pool_handlers(manifest_path, &mut registry).await;
     uniswap_v3_pool_handlers(manifest_path, &mut registry).await;
+    uniswap_v3_factory_pool_created_token_0_token_1_handlers(manifest_path, &mut registry).await;
+    uniswap_v3_pool_token_handlers(manifest_path, &mut registry).await;
     registry
 }

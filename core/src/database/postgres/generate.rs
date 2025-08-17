@@ -117,7 +117,7 @@ fn generate_internal_factory_event_table_sql(
             indexer_name: indexer_name.to_string(),
             contract_name: factory.name.to_string(),
             event_name: factory.event_name.to_string(),
-            input_name: factory.input_name.to_string(),
+            input_names: factory.input_names(),
         };
         let table_name = generate_internal_factory_event_table_name(&params);
 
@@ -321,7 +321,7 @@ pub struct GenerateInternalFactoryEventTableNameParams {
     pub indexer_name: String,
     pub contract_name: String,
     pub event_name: String,
-    pub input_name: String,
+    pub input_names: Vec<String>,
 }
 
 pub fn generate_internal_factory_event_table_name(
@@ -333,7 +333,7 @@ pub fn generate_internal_factory_event_table_name(
         "{}_{}_{}",
         schema_name,
         camel_to_snake(&params.event_name),
-        camel_to_snake(&params.input_name)
+        &params.input_names.iter().map(|v| camel_to_snake(v)).collect::<Vec<String>>().join("-")
     );
 
     compact_table_name_if_needed(table_name)
@@ -376,7 +376,7 @@ pub fn drop_tables_for_indexer_sql(project_path: &Path, indexer: &Indexer) -> Co
                 indexer_name: indexer.name.clone(),
                 contract_name: factory.name.clone(),
                 event_name: factory.event_name.clone(),
-                input_name: factory.input_name.clone(),
+                input_names: factory.input_names(),
             };
             let table_name = generate_internal_factory_event_table_name(&params);
             sql.push_str(

@@ -197,7 +197,7 @@ pub enum FactoryDetailsFromAbiError {
 pub struct FactoryDetails {
     pub contract_name: String,
     pub address: ValueOrArray<Address>,
-    pub input_name: String,
+    pub input_name: ValueOrArray<String>,
     pub event: Event,
     pub indexed_filters: Option<Vec<EventInputIndexedFilters>>,
 }
@@ -209,7 +209,7 @@ impl FactoryDetails {
         contract_name: String,
         address: ValueOrArray<Address>,
         event_name: String,
-        input_name: String,
+        input_name: ValueOrArray<String>,
         indexed_filters: Option<Vec<EventInputIndexedFilters>>,
     ) -> Result<FactoryDetails, FactoryDetailsFromAbiError> {
         let full_path = get_full_path(project_path, &abi)?;

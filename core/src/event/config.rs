@@ -97,7 +97,7 @@ pub struct FactoryEventProcessingConfig {
     pub indexer_name: String,
     pub contract_name: String,
     pub address: ValueOrArray<Address>,
-    pub input_name: String,
+    pub input_name: ValueOrArray<String>,
     pub event: Event,
     pub config: Config,
     pub network_contract: Arc<NetworkContract>,
@@ -114,6 +114,13 @@ pub struct FactoryEventProcessingConfig {
 }
 
 impl FactoryEventProcessingConfig {
+    pub fn input_names(&self) -> Vec<String> {
+        match &self.input_name {
+            ValueOrArray::Value(name) => vec![name.clone()],
+            ValueOrArray::Array(names) => names.clone(),
+        }
+    }
+
     pub fn to_event_filter(&self) -> Result<RindexerEventFilter, BuildRindexerFilterError> {
         let event_name = self.event.name.clone();
         let event_selector = self.event.selector();
