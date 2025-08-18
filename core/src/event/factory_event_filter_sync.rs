@@ -38,12 +38,12 @@ pub enum UpdateKnownFactoryDeployedAddressesError {
     LogsParse,
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(PartialEq, Eq, Hash)]
 struct KnownFactoryDeployedAddressesCacheKey {
     contract_name: String,
     network: String,
     event_name: String,
-    input_name: String,
+    input_names: Vec<String>,
 }
 
 type FactoryDeployedAddressesCache = Cache<KnownFactoryDeployedAddressesCacheKey, HashSet<Address>>;
@@ -59,14 +59,14 @@ fn build_known_factory_address_file(
     contract_name: &str,
     network: &str,
     event_name: &str,
-    input_name: &str,
+    input_names: &[String],
 ) -> String {
     let path = full_path.join(contract_name).join("known-factory-addresses").join(format!(
         "{}-{}-{}-{}.csv",
         contract_name.to_lowercase(),
         network.to_lowercase(),
         event_name.to_lowercase(),
-        input_name.to_lowercase()
+        input_names.iter().map(|v| v.to_lowercase()).collect::<Vec<String>>().join("-")
     ));
 
     path.to_string_lossy().into_owned()
@@ -102,23 +102,37 @@ pub async fn update_known_factory_deployed_addresses(
     let addresses: HashSet<KnownFactoryDeployedAddress> = events
         .iter()
         .map(|event| {
-            parse_log(&config.event, &event.log)
-                .and_then(|log| log.get_param_value(&config.input_name))
-                .and_then(|value| value.as_address())
-                .map(|address| KnownFactoryDeployedAddress {
-                    factory_address: event.tx_information.address,
-                    address,
-                })
+            parse_log(&config.event, &event.log).and_then(|log| {
+                config
+                    .input_names()
+                    .iter()
+                    .map(|name| {
+                        log.get_param_value(name).and_then(|value| value.as_address()).map(
+                            |address| KnownFactoryDeployedAddress {
+                                factory_address: event.tx_information.address,
+                                address,
+                            },
+                        )
+                    })
+                    .collect::<Option<Vec<_>>>()
+            })
         })
-        .collect::<Option<HashSet<_>>>()
+        .try_fold(HashSet::new(), |mut acc, items| match items {
+            Some(items) => {
+                acc.extend(items);
+
+                Some(acc)
+            }
+            None => None,
+        })
         .ok_or(UpdateKnownFactoryDeployedAddressesError::LogsParse)?;
 
-    // update in memory cache of factory addresses
+    // invalidate in memory cache of factory addresses
     let key = KnownFactoryDeployedAddressesCacheKey {
         contract_name: config.contract_name.clone(),
         network: config.network_contract.network.clone(),
         event_name: config.event.name.clone(),
-        input_name: config.input_name.clone(),
+        input_names: config.input_names(),
     };
     invalidate_known_factory_deployed_addresses_cache(&key);
 
@@ -127,7 +141,7 @@ pub async fn update_known_factory_deployed_addresses(
             indexer_name: config.indexer_name.clone(),
             contract_name: config.contract_name.clone(),
             event_name: config.event.name.clone(),
-            input_name: config.input_name.clone(),
+            input_names: config.input_names().clone(),
         };
         let table_name = generate_internal_factory_event_table_name(&params);
 
@@ -165,7 +179,7 @@ pub async fn update_known_factory_deployed_addresses(
             &config.contract_name,
             &config.network_contract.network,
             &config.event.name,
-            &config.input_name,
+            &config.input_names(),
         );
         let csv_appender = AsyncCsvAppender::new(&csv_path);
 
@@ -211,7 +225,7 @@ pub struct GetKnownFactoryDeployedAddressesParams {
     pub indexer_name: String,
     pub contract_name: String,
     pub event_name: String,
-    pub input_name: String,
+    pub input_names: Vec<String>,
     pub network: String,
 
     pub database: Option<Arc<PostgresClient>>,
@@ -226,7 +240,7 @@ pub async fn get_known_factory_deployed_addresses(
         contract_name: params.contract_name.clone(),
         network: params.network.clone(),
         event_name: params.event_name.clone(),
-        input_name: params.input_name.clone(),
+        input_names: params.input_names.clone(),
     };
 
     if let Some(cache) = get_known_factory_deployed_addresses_cache(&key) {
@@ -238,7 +252,7 @@ pub async fn get_known_factory_deployed_addresses(
             indexer_name: params.indexer_name.clone(),
             contract_name: params.contract_name.clone(),
             event_name: params.event_name.clone(),
-            input_name: params.input_name.clone(),
+            input_names: params.input_names.clone(),
         };
         let table_name = generate_internal_factory_event_table_name(&table_params);
         let query = format!(
@@ -269,7 +283,7 @@ pub async fn get_known_factory_deployed_addresses(
             &params.contract_name,
             &params.network,
             &params.event_name,
-            &params.input_name,
+            &params.input_names,
         );
 
         if !Path::new(&csv_path).exists() {

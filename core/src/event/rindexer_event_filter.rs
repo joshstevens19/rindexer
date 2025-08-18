@@ -56,7 +56,7 @@ pub struct FactoryFilter {
     pub factory_address: ValueOrArray<Address>,
     pub factory_contract_name: String,
     pub factory_event_name: String,
-    pub factory_input_name: String,
+    pub factory_input_name: ValueOrArray<String>,
     pub network: String,
 
     pub topic_id: B256,
@@ -77,7 +77,7 @@ impl std::fmt::Debug for FactoryFilter {
             .field("factory_address", &self.factory_address)
             .field("factory_contract_name", &self.factory_contract_name)
             .field("factory_event_name", &self.factory_event_name)
-            .field("factory_input_name", &self.factory_input_name)
+            .field("factory_input_names", &self.factory_input_name)
             .field("network", &self.network)
             .field("topic_id", &self.topic_id)
             .field("current_block", &self.current_block)
@@ -100,12 +100,17 @@ impl FactoryFilter {
     }
 
     async fn contract_address(&self) -> Option<HashSet<Address>> {
+        let input_names = match &self.factory_input_name {
+            ValueOrArray::Value(name) => vec![name.clone()],
+            ValueOrArray::Array(names) => names.clone(),
+        };
+
         get_known_factory_deployed_addresses(&GetKnownFactoryDeployedAddressesParams {
             project_path: self.project_path.clone(),
             indexer_name: self.indexer_name.clone(),
             contract_name: self.factory_contract_name.clone(),
             event_name: self.factory_event_name.clone(),
-            input_name: self.factory_input_name.clone(),
+            input_names,
             network: self.network.clone(),
             database: self.database.clone(),
             csv_details: self.csv_details.clone(),
