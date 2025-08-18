@@ -198,7 +198,7 @@ The event name to filter on, it must match the ABI event name.
 
 #### input_name
 
-The path to the factory-deployed contract address in the event inputs. If a factory deploys more than one contract in a single event, you can provide an array of inputs. Supports deep property access in case of complex event types: `pool.address`.
+The path to the factory-deployed contract address in the event inputs. Supports deep property access in case of complex event types: `pool.address`.
 
 ```yaml [rindexer.yaml]
 name: rETHIndexer
@@ -222,6 +222,34 @@ contracts: // [!code focus]
           abi: ./abis/UniswapV3Factory.abi.json // [!code focus]
           event_name: PoolCreated // [!code focus]
           input_name: "pool" // [!code focus]
+```
+
+If a factory deploys more than one contract in a single event, an array of inputs can be provided to track multiple factory-deployed addresses.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+contracts: // [!code focus]
+  - name: UniswapV3Pool
+    details:
+      - network: ethereum
+        factory: // [!code focus]
+          name: UniswapV3Factory // [!code focus]
+          address: 0x1F98431c8aD98523631AE4a59f267346ea31F984 // [!code focus]
+          abi: ./abis/UniswapV3Factory.abi.json // [!code focus]
+          event_name: PoolCreated // [!code focus]
+          input_name: // [!code focus]
+            - "token0" // [!code focus]
+            - "token1" // [!code focus]
 ```
 
 :::info
