@@ -26,18 +26,3 @@ rindexer out the box also gives you a GraphQL API to query the data you have ind
 
 rindexer supports any EVM chain out of the box. If you have a custom chain, you can easily add support for it by
 adding the chain's RPC URL to the YAML configuration file and defining the chain ID. No code changes are required.
-
-# Future vision for rindexer
-
-rindexer is a framework which abstracts away the complexity of indexing and allows you to focus on building your application logic,
-it has building database, indexes, exposing GraphQL APIs and many more cool features baked into it. rindexer is more then just getting the data from the
-chain that is only a small part of the vision. If we can build a framework which then has many features which can be sliced
-and diced to fit your needs, then rindexer is just a tool to help you build any application you want.
-
-rindexer currently supports indexing via `JSONRPC` calling `eth_getLogs` but it sees a vision of reading directly from a EVM
-node which a [R&D project](https://github.com/joshstevens19/reth-indexer) has already proved works well.
-This will allow you to index data directly from a node if you are running it or via `JSONRPC` if you prefer that approach.
-rindexer wants to be a framework which powers many ways of indexing and not just one way.
-
-rindexer also wants to not be opinionated about where the data is stored and wants to be able to support many different
-databases and storage solutions. It currently supports Postgres but can be extended to support others.

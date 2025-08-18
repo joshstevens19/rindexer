@@ -1,21 +1,21 @@
-# graphql
+# GraphQL Server
 
-This is the graphql package which uses postgraphile plugin for support rindexer GraphQL, we package it into a binary and run it within the rindexer.
+GraphQL server for rindexer using PostGraphile. This gets automatically built into a binary during the Rust build process.
 
-## Package up and release
+## Development
 
-To package up the graphql package you can run the following command:
-
-```bash
-npm run build
-```
-
-once done then run
+To run the GraphQL server locally for development:
 
 ```bash
-chmod +x ./bundle-resource.sh # only need this the first time
-./bundle-resource.sh
+npm install
+npm start
 ```
 
-This will replace the resource.zip in the releases folder with this new build.
-To deploy you then should follow the instructions about doing a release [here](https://github.com/joshstevens19/rindexer/blob/master/README.md#release).
+## Build
+
+The GraphQL binary is automatically built when you compile the main Rust project. No manual steps required.
+
+## Requirements
+
+- Node.js (LTS version recommended)
+- npm
