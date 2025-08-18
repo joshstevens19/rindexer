@@ -19,3 +19,10 @@ pub fn is_irregular_width_solidity_integer_type(solidity_type: &str) -> bool {
 
     !is_power_of_two(size)
 }
+
+/// Checks if a Solidity type is a static bytes type (e.g., `bytes32`, `bytes64`, etc.).
+pub fn is_solidity_static_bytes_type(solidity_type: &str) -> bool {
+    solidity_type.starts_with("bytes")
+        && solidity_type.len() > 5
+        && solidity_type[5..].chars().all(char::is_numeric)
+}

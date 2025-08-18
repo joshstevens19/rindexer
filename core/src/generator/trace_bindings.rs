@@ -735,22 +735,9 @@ pub fn generate_trace_handlers(
             csv_data.push_str(r#"format!("{:?}", result.tx_information.address),"#);
 
             for item in &abi_name_properties {
-                if item.abi_type == "address" {
-                    let key = format!("result.event_data.{},", item.value);
-                    csv_data.push_str(&format!(r#"format!("{{:?}}", {key}),"#));
-                } else if item.abi_type.contains("bytes") {
-                    csv_data.push_str(&format!(
-                        r#"result.event_data.{}.iter().map(|byte| format!("{{:02x}}", byte)).collect::<Vec<_>>().join(""),"#,
-                        item.value
-                    ));
-                } else if item.abi_type.contains("[]") {
-                    csv_data.push_str(&format!(
-                        r#"result.event_data.{}.iter().map(ToString::to_string).collect::<Vec<_>>().join(","),"#,
-                        item.value
-                    ));
-                } else {
-                    csv_data.push_str(&format!("result.event_data.{}.to_string(),", item.value));
-                }
+                // note: tracing uses a custom NativeTransfer event
+                // so only address and uint256 are used
+                csv_data.push_str(&format!("result.event_data.{}.to_string(),", item.value));
             }
 
             csv_data.push_str(r#"format!("{:?}", result.tx_information.transaction_hash),"#);
@@ -795,19 +782,9 @@ pub fn generate_trace_handlers(
             for item in &abi_name_properties {
                 if let Some(wrapper) = &item.ethereum_sql_type_wrapper {
                     data.push_str(&format!(
-                        "EthereumSqlTypeWrapper::{}(result.event_data.{}{}),",
+                        "EthereumSqlTypeWrapper::{}(result.event_data.{}),",
                         wrapper.raw_name(),
                         item.value,
-                        if item.abi_type.contains("bytes") {
-                            let static_bytes = item.abi_type.replace("bytes", "").replace("[]", "");
-                            if !static_bytes.is_empty() {
-                                ".into()"
-                            } else {
-                                ".clone()"
-                            }
-                        } else {
-                            ""
-                        }
                     ));
                 } else {
                     // data.push_str(&format!("result.event_data.{},", item.value));
