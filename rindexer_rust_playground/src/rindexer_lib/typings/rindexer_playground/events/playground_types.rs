@@ -55,6 +55,20 @@ impl HasTxInformation for BasicTypesResult {
     }
 }
 
+pub type TupleTypesData = RindexerPlaygroundTypesGen::TupleTypes;
+
+#[derive(Debug, Clone)]
+pub struct TupleTypesResult {
+    pub event_data: TupleTypesData,
+    pub tx_information: TxInformation,
+}
+
+impl HasTxInformation for TupleTypesResult {
+    fn tx_information(&self) -> &TxInformation {
+        &self.tx_information
+    }
+}
+
 pub type BytesTypesData = RindexerPlaygroundTypesGen::BytesTypes;
 
 #[derive(Debug, Clone)]
@@ -235,7 +249,7 @@ where
             r"/Users/pawellula/RustroverProjects/rindexer/cli/../rindexer_rust_playground/generated_csv/PlaygroundTypes/playgroundtypes-basictypes.csv",
         );
         if !Path::new(r"/Users/pawellula/RustroverProjects/rindexer/cli/../rindexer_rust_playground/generated_csv/PlaygroundTypes/playgroundtypes-basictypes.csv").exists() {
-            csv.append_header(vec!["contract_address".into(), "a_bool".into(), "simple_address".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()].into())
+            csv.append_header(vec!["contract_address".into(), "a_bool".into(), "simple_address".into(), "simple_string".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()].into())
                 .await
                 .expect("Failed to write CSV header");
         }
@@ -278,6 +292,109 @@ where
             (self.callback)(&result, Arc::clone(&self.context)).await
         } else {
             panic!("BasicTypesEvent: Unexpected data type - expected: BasicTypesData")
+        }
+    }
+}
+
+pub fn tupletypes_handler<TExtensions, F, Fut>(
+    custom_logic: F,
+) -> TupleTypesEventCallbackType<TExtensions>
+where
+    TupleTypesResult: Clone + 'static,
+    F: for<'a> Fn(Vec<TupleTypesResult>, Arc<EventContext<TExtensions>>) -> Fut
+        + Send
+        + Sync
+        + 'static
+        + Clone,
+    Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
+    TExtensions: Send + Sync + 'static,
+{
+    Arc::new(move |results, context| {
+        let custom_logic = custom_logic.clone();
+        let results = results.clone();
+        let context = Arc::clone(&context);
+        async move { (custom_logic)(results, context).await }.boxed()
+    })
+}
+
+type TupleTypesEventCallbackType<TExtensions> = Arc<
+    dyn for<'a> Fn(
+            &'a Vec<TupleTypesResult>,
+            Arc<EventContext<TExtensions>>,
+        ) -> BoxFuture<'a, EventCallbackResult<()>>
+        + Send
+        + Sync,
+>;
+
+pub struct TupleTypesEvent<TExtensions>
+where
+    TExtensions: Send + Sync + 'static,
+{
+    callback: TupleTypesEventCallbackType<TExtensions>,
+    context: Arc<EventContext<TExtensions>>,
+}
+
+impl<TExtensions> TupleTypesEvent<TExtensions>
+where
+    TExtensions: Send + Sync + 'static,
+{
+    pub async fn handler<F, Fut>(closure: F, extensions: TExtensions) -> Self
+    where
+        TupleTypesResult: Clone + 'static,
+        F: for<'a> Fn(Vec<TupleTypesResult>, Arc<EventContext<TExtensions>>) -> Fut
+            + Send
+            + Sync
+            + 'static
+            + Clone,
+        Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
+    {
+        let csv = AsyncCsvAppender::new(
+            r"/Users/pawellula/RustroverProjects/rindexer/cli/../rindexer_rust_playground/generated_csv/PlaygroundTypes/playgroundtypes-tupletypes.csv",
+        );
+        if !Path::new(r"/Users/pawellula/RustroverProjects/rindexer/cli/../rindexer_rust_playground/generated_csv/PlaygroundTypes/playgroundtypes-tupletypes.csv").exists() {
+            csv.append_header(vec!["contract_address".into(), "array_address".into(), "array_string".into(), "array_fixed_bytes".into(), "array_dynamic_bytes".into(), "nested_array_rule_param_key".into(), "nested_array_rule_param_value_key".into(), "nested_array_rule_param_value_value".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()].into())
+                .await
+                .expect("Failed to write CSV header");
+        }
+
+        Self {
+            callback: tupletypes_handler(closure),
+            context: Arc::new(EventContext {
+                database: get_or_init_postgres_client().await,
+                csv: Arc::new(csv),
+                extensions: Arc::new(extensions),
+            }),
+        }
+    }
+}
+
+#[async_trait]
+impl<TExtensions> EventCallback for TupleTypesEvent<TExtensions>
+where
+    TExtensions: Send + Sync,
+{
+    async fn call(&self, events: Vec<EventResult>) -> EventCallbackResult<()> {
+        let events_len = events.len();
+
+        // note some can not downcast because it cant decode
+        // this happens on events which failed decoding due to
+        // not having the right abi for example
+        // transfer events with 2 indexed topics cant decode
+        // transfer events with 3 indexed topics
+        let result: Vec<TupleTypesResult> = events
+            .into_iter()
+            .filter_map(|item| {
+                item.decoded_data.downcast::<TupleTypesData>().ok().map(|arc| TupleTypesResult {
+                    event_data: (*arc).clone(),
+                    tx_information: item.tx_information,
+                })
+            })
+            .collect();
+
+        if result.len() == events_len {
+            (self.callback)(&result, Arc::clone(&self.context)).await
+        } else {
+            panic!("TupleTypesEvent: Unexpected data type - expected: TupleTypesData")
         }
     }
 }
@@ -1033,6 +1150,7 @@ where
     TExtensions: 'static + Send + Sync,
 {
     BasicTypes(BasicTypesEvent<TExtensions>),
+    TupleTypes(TupleTypesEvent<TExtensions>),
     BytesTypes(BytesTypesEvent<TExtensions>),
     RegularWidthSignedIntegers(RegularWidthSignedIntegersEvent<TExtensions>),
     RegularWidthUnsignedIntegers(RegularWidthUnsignedIntegersEvent<TExtensions>),
@@ -1074,7 +1192,10 @@ where
     pub fn topic_id(&self) -> &'static str {
         match self {
             PlaygroundTypesEventType::BasicTypes(_) => {
-                "0x949005f12d34a124abc414bb13fdf869260066a1704bb8f7e32f8ffe169e7aa0"
+                "0x74ec3fac75ef8dca47fe5da064da829f6bb27972a651760049e9d3e13f5dbc69"
+            }
+            PlaygroundTypesEventType::TupleTypes(_) => {
+                "0xcccae035b7db9b5b69b4f11fa3255bcf11a597d59bbec6c7febdbae4091269ef"
             }
             PlaygroundTypesEventType::BytesTypes(_) => {
                 "0x740ea88bdfda41383d772ab56024934e34bf043c79a814b874b6b4045f9e826e"
@@ -1103,6 +1224,7 @@ where
     pub fn event_name(&self) -> &'static str {
         match self {
             PlaygroundTypesEventType::BasicTypes(_) => "BasicTypes",
+            PlaygroundTypesEventType::TupleTypes(_) => "TupleTypes",
             PlaygroundTypesEventType::BytesTypes(_) => "BytesTypes",
             PlaygroundTypesEventType::RegularWidthSignedIntegers(_) => "RegularWidthSignedIntegers",
             PlaygroundTypesEventType::RegularWidthUnsignedIntegers(_) => {
@@ -1141,6 +1263,19 @@ where
                 ) {
                     Ok(event) => {
                         let result: BasicTypesData = event;
+                        Arc::new(result) as Arc<dyn Any + Send + Sync>
+                    }
+                    Err(error) => Arc::new(error) as Arc<dyn Any + Send + Sync>,
+                },
+            ),
+
+            PlaygroundTypesEventType::TupleTypes(_) => Arc::new(
+                move |topics: Vec<B256>, data: Bytes| match TupleTypesData::decode_raw_log(
+                    topics,
+                    &data[0..],
+                ) {
+                    Ok(event) => {
+                        let result: TupleTypesData = event;
                         Arc::new(result) as Arc<dyn Any + Send + Sync>
                     }
                     Err(error) => Arc::new(error) as Arc<dyn Any + Send + Sync>,
@@ -1298,6 +1433,14 @@ where
             dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync,
         > = match self {
             PlaygroundTypesEventType::BasicTypes(event) => {
+                let event = Arc::new(event);
+                Arc::new(move |result| {
+                    let event = Arc::clone(&event);
+                    async move { event.call(result).await }.boxed()
+                })
+            }
+
+            PlaygroundTypesEventType::TupleTypes(event) => {
                 let event = Arc::new(event);
                 Arc::new(move |result| {
                     let event = Arc::clone(&event);

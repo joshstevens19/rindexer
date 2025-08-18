@@ -43,21 +43,48 @@ pub enum GenerateAbiPropertiesType {
     Object,
 }
 
+#[derive(Debug, Clone)]
+pub struct AbiNamePropertiesPath {
+    pub abi_type: String,
+    pub abi_name: String,
+}
+
+impl AbiNamePropertiesPath {
+    pub fn new(abi_name: &str, abi_type: &str) -> Self {
+        Self { abi_type: abi_type.to_string(), abi_name: abi_name.to_string() }
+    }
+}
+
 #[derive(Debug)]
-pub struct GenerateAbiNamePropertiesResult {
+pub struct AbiProperty {
     pub value: String,
     pub abi_type: String,
     pub abi_name: String,
+    /// The path to the property, none if the property is at the root level.
+    pub path: Option<Vec<AbiNamePropertiesPath>>,
     pub ethereum_sql_type_wrapper: Option<EthereumSqlTypeWrapper>,
 }
 
-impl GenerateAbiNamePropertiesResult {
-    pub fn new(value: String, name: &str, abi_type: &str) -> Self {
+impl AbiProperty {
+    pub fn new(
+        value: String,
+        name: &str,
+        abi_type: &str,
+        path: Option<Vec<AbiNamePropertiesPath>>,
+    ) -> Self {
+        let has_array_in_path =
+            path.as_ref().is_some_and(|p| p.iter().any(|pp| pp.abi_type.ends_with("[]")));
+        let adjusted_abi_type =
+            if has_array_in_path { format!("{abi_type}[]") } else { abi_type.to_string() };
+
         Self {
             value,
-            ethereum_sql_type_wrapper: solidity_type_to_ethereum_sql_type_wrapper(abi_type),
+            ethereum_sql_type_wrapper: solidity_type_to_ethereum_sql_type_wrapper(
+                &adjusted_abi_type,
+            ),
             abi_type: abi_type.to_string(),
             abi_name: name.to_string(),
+            path,
         }
     }
 }
@@ -82,22 +109,33 @@ impl ABIInput {
     pub fn generate_abi_name_properties(
         inputs: &[ABIInput],
         properties_type: &GenerateAbiPropertiesType,
-        prefix: Option<&str>,
-    ) -> Vec<GenerateAbiNamePropertiesResult> {
+        path: Option<Vec<AbiNamePropertiesPath>>,
+    ) -> Vec<AbiProperty> {
         inputs
             .iter()
             .flat_map(|input| {
                 if let Some(components) = &input.components {
-                    let new_prefix = match prefix {
-                        Some(p) => format!("{}_{}", p, camel_to_snake(&input.name)),
-                        None => camel_to_snake(&input.name),
-                    };
+                    let new_path = path.clone().map_or_else(
+                        || vec![AbiNamePropertiesPath::new(&input.name, &input.type_)],
+                        |mut p| {
+                            p.push(AbiNamePropertiesPath::new(&input.name, &input.type_));
+                            p
+                        },
+                    );
+
                     ABIInput::generate_abi_name_properties(
                         components,
                         properties_type,
-                        Some(&new_prefix),
+                        Some(new_path),
                     )
                 } else {
+                    let prefix = path.as_ref().map(|p| {
+                        p.iter()
+                            .map(|pp| camel_to_snake(&pp.abi_name))
+                            .collect::<Vec<_>>()
+                            .join("_")
+                    });
+
                     match properties_type {
                         GenerateAbiPropertiesType::PostgresWithDataTypes => {
                             let value = format!(
@@ -107,11 +145,7 @@ impl ABIInput {
                                 solidity_type_to_db_type(&input.type_)
                             );
 
-                            vec![GenerateAbiNamePropertiesResult::new(
-                                value,
-                                &input.name,
-                                &input.type_,
-                            )]
+                            vec![AbiProperty::new(value, &input.name, &input.type_, path.clone())]
                         }
                         GenerateAbiPropertiesType::PostgresColumnsNamesOnly
                         | GenerateAbiPropertiesType::CsvHeaderNames => {
@@ -121,11 +155,7 @@ impl ABIInput {
                                 camel_to_snake(&input.name),
                             );
 
-                            vec![GenerateAbiNamePropertiesResult::new(
-                                value,
-                                &input.name,
-                                &input.type_,
-                            )]
+                            vec![AbiProperty::new(value, &input.name, &input.type_, path.clone())]
                         }
                         GenerateAbiPropertiesType::Object => {
                             let value = format!(
@@ -134,11 +164,7 @@ impl ABIInput {
                                 camel_to_snake(&input.name),
                             );
 
-                            vec![GenerateAbiNamePropertiesResult::new(
-                                value,
-                                &input.name,
-                                &input.type_,
-                            )]
+                            vec![AbiProperty::new(value, &input.name, &input.type_, path.clone())]
                         }
                     }
                 }
