@@ -76,10 +76,6 @@ else
     BIN_URL="https://github.com/joshstevens19/rindexer/releases/download/v${VERSION}/rindexer_${PLATFORM}-${ARCH_TYPE}.${EXT}"
 fi
 
-# --- THE CRUCIAL CHANGE FOR LFS FILES ---
-RESOURCES_URL="https://media.githubusercontent.com/media/joshstevens19/rindexer/master/documentation/docs/public/releases/resources.zip"
-# --- END OF CRUCIAL CHANGE ---
-
 log() {
    echo -e "\033[1;32m$1\033[0m"
 }
@@ -108,13 +104,11 @@ spinner() {
 
 # Install or uninstall based on the command line option
 if [[ "$LOCAL_INSTALL" == true ]]; then
-    log "Using local binary from $LOCAL_BIN_PATH and resources from $LOCAL_RESOURCES_PATH..."
+    log "Using local binary from $LOCAL_BIN_PATH..."
     cp "$LOCAL_BIN_PATH" "$BIN_PATH"
-    unzip -o "$LOCAL_RESOURCES_PATH" -d "$RINDEXER_DIR/resources"
 elif [[ "$UNINSTALL" == true ]]; then
     log "Uninstalling rindexer..."
     rm -f "$BIN_PATH" "$RINDEXERUP_PATH"
-    rm -rf "$RINDEXER_DIR/resources"
     rmdir "$RINDEXER_BIN_DIR" "$RINDEXER_DIR" 2> /dev/null
     if [[ "$OS_TYPE" == "Darwin" ]]; then
         sed -i '' '/rindexerup/d' "$PROFILE"
@@ -229,7 +223,6 @@ echo "Updating rindexer..."
 if [[ "\$LOCAL_UPDATE" == true ]]; then
     echo "Using local binary for update..."
     cp "$LOCAL_BIN_PATH" "$BIN_PATH"
-    unzip -o "$LOCAL_RESOURCES_PATH" -d "$RINDEXER_DIR/resources" > /dev/null
 else
     # Function to get the latest version from GitHub API
     get_latest_version() {
@@ -288,7 +281,6 @@ set -eo pipefail
 
 echo "Uninstalling rindexer..."
 rm -f "$BIN_PATH" "$RINDEXERUP_PATH"
-rm -rf "$RINDEXER_DIR/resources"
 rmdir "$RINDEXER_BIN_DIR" "$RINDEXER_DIR" 2> /dev/null
 if [[ "$(uname)" == "Darwin" ]]; then
     sed -i '' '/rindexerup/d' "$PROFILE"
