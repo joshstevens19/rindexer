@@ -235,9 +235,6 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                 // }
             }
 
-            // Await the GraphQL server task if it was started
-            info!("Waiting on GraphQL handle...");
-
             if let Some(handle) = graphql_server_handle {
                 handle.await.unwrap_or_else(|e| {
                     error!("GraphQL server task failed: {:?}", e);

@@ -71,6 +71,7 @@ url = "2.5.0"
 uuid = "1"
 eyre = { version = "0.6.10" }
 tower = "0.5.2"
+port-killer = "0.1.0"
 
 # build
 jemallocator = { version = "0.6.0", package = "tikv-jemallocator", optional = true }
