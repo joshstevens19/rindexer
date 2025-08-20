@@ -709,7 +709,7 @@ jobs:
             tar -czvf "$FILE_NAME" -C "$STAGING_DIR" .
           else
             FILE_NAME="rindexer_${PLATFORM_NAME}-${ARCH}.zip"
-            (cd "$STAGING_DIR" && 7z a -tzip "${{ github.workspace }}/$FILE_NAME" .")
+            (cd "$STAGING_DIR" && 7z a -tzip "${{ github.workspace }}/$FILE_NAME" .)
           fi
           
           echo "Created archive: $FILE_NAME"
@@ -761,7 +761,7 @@ jobs:
             echo "Found release from commit title: Release v$VERSION_FROM_RELEASE"
           else
             echo "Not a release commit"
-            echo "is_release=false" >> $GITHUB_OUTPUT
+            echo "is_release=true" >> $GITHUB_OUTPUT
           fi
 
       - name: Skip if not a release
