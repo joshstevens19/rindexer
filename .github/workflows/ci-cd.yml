@@ -343,12 +343,9 @@ jobs:
           cp "$CHANGELOG_FILE" changelog_temp.mdx
           
           # Extract just the bug fixes line directly from Changes Not Deployed section
-          BUG_FIXES=$(sed -n '/^## Changes Not Deployed/,/^## Releases/p' changelog_temp.mdx | grep "^- fix:" | head -5)
-          
-          # Use the simple extraction for now
-          FEATURES=""
-          BUG_FIXES="$BUG_FIXES"
-          BREAKING_CHANGES=""
+          FEATURES=$(sed -n '/^## Changes Not Deployed/,/^## Releases/p' changelog_temp.mdx | sed -n '/^### Features/,/^### /p' | grep "^- " | grep -v "^### " | head -10)
+          BUG_FIXES=$(sed -n '/^## Changes Not Deployed/,/^## Releases/p' changelog_temp.mdx | sed -n '/^### Bug fixes/,/^### /p' | grep "^- " | grep -v "^### " | head -10)
+          BREAKING_CHANGES=$(sed -n '/^## Changes Not Deployed/,/^## Releases/p' changelog_temp.mdx | sed -n '/^### Breaking changes/,/^### /p' | grep "^- " | grep -v "^### " | head -10)
           
           # Save the extracted content for PR creation
           {
