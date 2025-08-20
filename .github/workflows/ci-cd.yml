@@ -761,7 +761,7 @@ jobs:
             echo "Found release from commit title: Release v$VERSION_FROM_RELEASE"
           else
             echo "Not a release commit"
-            echo "is_release=true" >> $GITHUB_OUTPUT
+            echo "is_release=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Skip if not a release
