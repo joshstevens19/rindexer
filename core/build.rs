@@ -165,7 +165,12 @@ fn check_node_availability() {
     }
 }
 
-fn build_graphql_binary(graphql_dir: &Path, final_exe_path: &Path, target_info: &TargetInfo, out_dir: &Path) {
+fn build_graphql_binary(
+    graphql_dir: &Path,
+    final_exe_path: &Path,
+    target_info: &TargetInfo,
+    out_dir: &Path,
+) {
     let npm_command = if target_info.os == "windows" { "npm.cmd" } else { "npm" };
 
     // 1. Install npm dependencies

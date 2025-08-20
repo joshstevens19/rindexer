@@ -1,7 +1,13 @@
-use std::{env, fs, path::{Path, PathBuf}, process::{Child, Command, Stdio}, sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
-}, time::Duration};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
+};
 
 use reqwest::{Client, Error};
 use serde_json::{json, Value};
