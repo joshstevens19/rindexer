@@ -45,15 +45,27 @@ fn main() {
             target_info.os, target_info.arch
         );
 
-        build_graphql_binary(&graphql_dir, &final_exe_path, &target_info);
+        build_graphql_binary(&graphql_dir, &final_exe_path, &target_info, &out_dir);
     } else {
         println!("cargo:warning=GraphQL binary is up to date, skipping build");
-        // Still set the environment variable for the existing binary
-        println!("cargo:rustc-env=RINDEXER_GRAPHQL_EXE={}", final_exe_path.display());
+        // Still create the embedded binary file for include_bytes!
+        create_embedded_binary(&final_exe_path, &out_dir);
     }
 
     // Register build dependencies
     register_build_dependencies(&manifest_dir);
+}
+
+fn create_embedded_binary(exe_path: &Path, out_dir: &Path) {
+    // Copy the binary to a predictable location for include_bytes!
+    let embed_path = out_dir.join("graphql_binary");
+    if let Err(e) = fs::copy(exe_path, &embed_path) {
+        panic!("Failed to copy binary for embedding: {e}");
+    }
+
+    // Set environment variables for runtime
+    println!("cargo:rustc-env=RINDEXER_GRAPHQL_EXE={}", exe_path.display());
+    println!("cargo:rustc-env=RINDEXER_GRAPHQL_EMBED={}", embed_path.display());
 }
 
 fn should_rebuild(exe_path: &Path, graphql_dir: &Path) -> bool {
@@ -153,8 +165,9 @@ fn check_node_availability() {
     }
 }
 
-fn build_graphql_binary(graphql_dir: &Path, final_exe_path: &Path, target_info: &TargetInfo) {
+fn build_graphql_binary(graphql_dir: &Path, final_exe_path: &Path, target_info: &TargetInfo, out_dir: &Path) {
     let npm_command = if target_info.os == "windows" { "npm.cmd" } else { "npm" };
+
     // 1. Install npm dependencies
     run_command(
         npm_command,
@@ -184,7 +197,9 @@ fn build_graphql_binary(graphql_dir: &Path, final_exe_path: &Path, target_info: 
     }
 
     println!("cargo:warning=Successfully built GraphQL binary: {}", final_exe_path.display());
-    println!("cargo:rustc-env=RINDEXER_GRAPHQL_EXE={}", final_exe_path.display());
+
+    // Create the embedded version
+    create_embedded_binary(final_exe_path, out_dir);
 }
 
 fn register_build_dependencies(manifest_dir: &Path) {

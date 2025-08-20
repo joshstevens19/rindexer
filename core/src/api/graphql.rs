@@ -1,13 +1,7 @@
-use std::{
-    env,
-    path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
-    time::Duration,
-};
+use std::{env, fs, path::{Path, PathBuf}, process::{Child, Command, Stdio}, sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+}, time::Duration};
 
 use reqwest::{Client, Error};
 use serde_json::{json, Value};
@@ -28,15 +22,37 @@ pub struct GraphqlOverrideSettings {
     pub override_port: Option<u16>,
 }
 
-fn get_graphql_exe() -> Result<PathBuf, ()> {
-    // This path is baked directly into the binary at compile time by build.rs
-    let exe_path = PathBuf::from(env!("RINDEXER_GRAPHQL_EXE"));
-    if exe_path.exists() {
-        Ok(exe_path)
-    } else {
-        Err(())
+fn get_graphql_exe() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    // Try the build-time path first (for development)
+    let build_path = PathBuf::from(env!("RINDEXER_GRAPHQL_EXE"));
+    if build_path.exists() {
+        return Ok(build_path);
     }
+
+    // Fall back to embedded binary (for deployed/installed versions)
+    const GRAPHQL_BINARY: &[u8] = include_bytes!(env!("RINDEXER_GRAPHQL_EMBED"));
+
+    let temp_dir = std::env::temp_dir();
+    let exe_name = if cfg!(windows) {
+        format!("rindexer-graphql-{}.exe", std::process::id())
+    } else {
+        format!("rindexer-graphql-{}", std::process::id())
+    };
+    let temp_path = temp_dir.join(exe_name);
+
+    fs::write(&temp_path, GRAPHQL_BINARY)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&temp_path)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&temp_path, perms)?;
+    }
+
+    Ok(temp_path)
 }
+
 #[allow(dead_code)]
 pub struct GraphQLServer {
     pid: u32,
