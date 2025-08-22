@@ -103,7 +103,27 @@ impl BlockClock {
     /// 3. Use precomputed delta-encoded network timestamps
     /// 4. Fetch an optionally sampled-and-interpolated set of timestamps from RPC calls
     pub async fn attach_log_timestamps(&self, logs: Vec<Log>) -> Result<Vec<Log>, BlockClockError> {
-        // 1. Use timestamps present in logs and return early
+        if logs.is_empty() {
+            return Ok(logs);
+        }
+
+        // Heuristic to transform if it's too large, it's probably in milliseconds
+        //
+        // The timestamps can be either in milliseconds or seconds, it's unpredictable so we
+        // need to check and convert to seconds of we detect milliseconds.
+        let logs: Vec<Log> = logs
+            .into_iter()
+            .map(|mut l| {
+                if let Some(ts) = l.block_timestamp {
+                    if ts > 1_000_000_000_000 {
+                        l.block_timestamp = Some(ts / 1000);
+                    }
+                }
+                l
+            })
+            .collect();
+
+        // 1. Use timestamps present in logs and return early.
         if logs.iter().all(|log| log.block_timestamp.is_some()) {
             return Ok(logs);
         }

@@ -718,18 +718,22 @@ mod tests {
     ///
     /// Spotcheck the files on each run to ensure we don't contain errors.
     #[tokio::test]
-    #[ignore]
+    // #[ignore]
     async fn spotcheck_file() -> anyhow::Result<()> {
-        let rpc_url = "https://eth-mainnet.g.alchemy.com/v2/XXXXX";
-        let network_id = 1;
+        let rpc_url = "https://arb-mainnet.g.alchemy.com/v2/LfCdXVQaAS7hctR3N78Sj";
+        let network_id = 42161;
 
         let sample_count = 100;
         let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
-            .join(".blockclock")
+            .join("core")
+            .join("resources")
+            .join("blockclock")
             .join(network_id.to_string())
             .with_extension("blockclock");
+
+        println!("Base path: {:?}", base_path);
 
         if rpc_url.is_empty() {
             return Ok(());
@@ -741,6 +745,8 @@ mod tests {
         for _ in 1..=sample_count {
             samples.push(random_range(1..=reloaded.encoded_deltas.max_block));
         }
+
+        samples.push(231191);
 
         let blocks = reloaded.get_block_by_number_batch(&samples, false).await?;
 
