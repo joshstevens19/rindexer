@@ -99,6 +99,8 @@ where
                             rindexer_error!("RPC TIMEOUT (free public nodes do this a lot consider a using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, error: {}",
                                            chain_id, method_name, duration, rpc_url, err);
                         } else if error_str.contains("429") || error_str.contains("rate limit") {
+                            // TODO: Sampling this would be nice since this is actually an expected
+                            //       part of the flow for many high-throughput applications.
                             rindexer_info!("RPC RATE LIMITED (free public nodes do this a lot consider a using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, error: {}",
                                           chain_id, method_name, duration, rpc_url, err);
                         } else if error_str.contains("connection") || error_str.contains("network")

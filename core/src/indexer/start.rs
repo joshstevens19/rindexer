@@ -281,6 +281,10 @@ pub async fn start_indexing_contract_events(
 
     let mut block_tasks = FuturesUnordered::new();
 
+    if let Some(true) = manifest.timestamps {
+        info!("Block timestamps enabled globally!");
+    }
+
     for event in registry.events.iter() {
         let stream_details = indexer
             .contracts
@@ -361,6 +365,26 @@ pub async fn start_indexing_contract_events(
             processed_up_to: end_block,
         });
 
+        let contract = manifest
+            .contracts
+            .iter()
+            .find(|c| format!("{}Filter", c.name) == event.contract.name)
+            .unwrap();
+
+        let timestamp_enabled_for_event = contract
+            .include_events
+            .iter()
+            .flatten()
+            .find(|a| a.name == event.event_name)
+            .unwrap()
+            .timestamps;
+
+        match timestamp_enabled_for_event {
+            Some(true) => info!("Timestamps enabled for event: {}", event.event_name),
+            Some(false) => info!("Timestamps disabled for event: {}", event.event_name),
+            None => {}
+        };
+
         let event_processing_config: EventProcessingConfig = match event.is_factory_filter_event() {
             true => {
                 let factory_details = network_contract
@@ -384,6 +408,8 @@ pub async fn start_indexing_contract_events(
                     database: database.clone(),
                     config: manifest.config.clone(),
                     csv_details: manifest_csv_details.clone(),
+                    timestamps: timestamp_enabled_for_event
+                        .unwrap_or(manifest.timestamps.unwrap_or(false)),
                     stream_last_synced_block_file_path: stream_details
                         .as_ref()
                         .map(|s| s.get_streams_last_synced_block_path()),
@@ -413,6 +439,8 @@ pub async fn start_indexing_contract_events(
                 database: database.clone(),
                 csv_details: manifest_csv_details.clone(),
                 config: manifest.config.clone(),
+                timestamps: timestamp_enabled_for_event
+                    .unwrap_or(manifest.timestamps.unwrap_or(false)),
                 stream_last_synced_block_file_path: stream_details
                     .as_ref()
                     .map(|s| s.get_streams_last_synced_block_path()),

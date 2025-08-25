@@ -20,6 +20,7 @@ use alloy::primitives::{Address, Bytes, B256};
 use alloy::sol_types::{SolEvent, SolEventInterface, SolType};
 use rindexer::{
     async_trait,
+    blockclock::BlockClock,
     event::{
         callback_registry::{
             EventCallbackRegistry, EventCallbackRegistryInformation, EventCallbackResult,
@@ -243,9 +244,9 @@ where
         Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
     {
         let csv = AsyncCsvAppender::new(
-            r"/Users/pawellula/RustroverProjects/rindexer/cli/../examples/rindexer_factory_indexing/generated_csv/UniswapV3Pool/uniswapv3pool-swap.csv",
+            r"/Users/jackedgson/Development/avara/rindexer/examples/rindexer_factory_indexing/generated_csv/UniswapV3Pool/uniswapv3pool-swap.csv",
         );
-        if !Path::new(r"/Users/pawellula/RustroverProjects/rindexer/cli/../examples/rindexer_factory_indexing/generated_csv/UniswapV3Pool/uniswapv3pool-swap.csv").exists() {
+        if !Path::new(r"/Users/jackedgson/Development/avara/rindexer/examples/rindexer_factory_indexing/generated_csv/UniswapV3Pool/uniswapv3pool-swap.csv").exists() {
             csv.append_header(vec!["contract_address".into(), "sender".into(), "recipient".into(), "amount_0".into(), "amount_1".into(), "sqrt_price_x96".into(), "liquidity".into(), "tick".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()].into())
                 .await
                 .expect("Failed to write CSV header");
@@ -411,22 +412,27 @@ where
             details: contract_details
                 .details
                 .iter()
-                .map(|c| NetworkContract {
-                    id: generate_random_id(10),
-                    network: c.network.clone(),
-                    cached_provider: providers
-                        .get(&c.network)
-                        .expect("must have a provider")
-                        .clone(),
-                    decoder: self.decoder(&c.network),
-                    indexing_contract_setup: c.indexing_contract_setup(manifest_path),
-                    start_block: c.start_block,
-                    end_block: c.end_block,
-                    disable_logs_bloom_checks: rindexer_yaml
-                        .networks
-                        .iter()
-                        .find(|n| n.name == c.network)
-                        .map_or(false, |n| n.disable_logs_bloom_checks.unwrap_or_default()),
+                .map(|c| {
+                    let provider = providers.get(&c.network).expect("must have a provider").clone();
+
+                    NetworkContract {
+                        id: generate_random_id(10),
+                        network: c.network.clone(),
+                        cached_provider: provider.clone(),
+                        block_clock: BlockClock::new(
+                            rindexer_yaml.config.timestamp_sample_rate,
+                            provider.clone(),
+                        ),
+                        decoder: self.decoder(&c.network),
+                        indexing_contract_setup: c.indexing_contract_setup(manifest_path),
+                        start_block: c.start_block,
+                        end_block: c.end_block,
+                        disable_logs_bloom_checks: rindexer_yaml
+                            .networks
+                            .iter()
+                            .find(|n| n.name == c.network)
+                            .map_or(false, |n| n.disable_logs_bloom_checks.unwrap_or_default()),
+                    }
                 })
                 .collect(),
             abi: contract_details.abi,

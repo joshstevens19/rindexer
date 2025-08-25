@@ -5,6 +5,57 @@ use std::{
 };
 
 fn main() {
+    build_graphql_if_needed();
+    build_blockclock_if_needed();
+}
+
+/// Copies the BlockClock binary files to the resources directory.
+fn build_blockclock_if_needed() {
+    let blockclock_dir_og = PathBuf::from("resources/blockclock");
+
+    // Verify BlockClock source directory exists before proceeding
+    if !blockclock_dir_og.exists() {
+        println!("cargo:warning=BlockClock directory not found, skipping BlockClock binary build");
+        return;
+    }
+
+    let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
+    let target_dir = PathBuf::from(&out_dir)
+        .join("../../../..") // Navigate up to the top-level target directory
+        .join("resources");
+
+    if target_dir.exists() {
+        fs::remove_dir_all(&target_dir).expect("Failed to remove old resources directory");
+    }
+
+    fs::create_dir_all(&target_dir).expect("Failed to create resources directory");
+
+    let blockclock_dir = target_dir.join("blockclock");
+
+    if blockclock_dir.exists() {
+        fs::remove_dir_all(&blockclock_dir).expect("Failed to remove old blockclock directory");
+    }
+
+    fs::create_dir_all(&blockclock_dir).expect("Failed to recreate blockclock directory");
+
+    for entry in fs::read_dir(blockclock_dir_og).expect("Failed to read blockclock directory") {
+        let entry = entry.expect("Failed to read directory entry");
+        let path = entry.path();
+        if path.is_file() {
+            fs::copy(
+                &path,
+                blockclock_dir.join(path.file_name().expect("Failed to get file name")),
+            )
+            .expect("Failed to copy file");
+        }
+    }
+
+    println!("cargo:rerun-if-changed=resources");
+    println!("cargo:rustc-env=BLOCKCLOCK_RESOURCES={}", out_dir);
+}
+
+/// Builds the GraphQL binary if needed.
+fn build_graphql_if_needed() {
     let manifest_dir =
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"));
 

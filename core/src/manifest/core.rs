@@ -8,7 +8,8 @@ use crate::event::contract_setup::ContractEventMapping;
 use crate::helpers::to_pascal_case;
 use crate::manifest::config::Config;
 use crate::manifest::contract::{
-    ContractDetails, DependencyEventTreeYaml, FactoryDetailsYaml, SimpleEventOrContractEvent,
+    ContractDetails, ContractEvent, DependencyEventTreeYaml, FactoryDetailsYaml,
+    SimpleEventOrContractEvent,
 };
 use crate::{
     indexer::Indexer,
@@ -77,6 +78,9 @@ pub struct Manifest {
     #[serde(default)]
     pub config: Config,
 
+    #[serde(default)]
+    pub timestamps: Option<bool>,
+
     pub networks: Vec<Network>,
 
     #[serde(default = "default_storage")]
@@ -141,7 +145,7 @@ impl Manifest {
                         }).collect::<Vec<_>>(),
                         abi: first_factory.abi.clone().into(),
                         dependency_events: None,
-                        include_events: Some(vec![first_factory.event_name.clone()]),
+                        include_events: Some(vec![ContractEvent { name: first_factory.event_name.clone(), timestamps: None }]),
                         index_event_in_order: contract.index_event_in_order.clone(),
                         reorg_safe_distance: contract.reorg_safe_distance,
                         generate_csv: contract.generate_csv,
@@ -164,8 +168,8 @@ impl Manifest {
                                 Some(DependencyEventTreeYaml {
                                     events: events
                                         .into_iter()
-                                        .map(SimpleEventOrContractEvent::SimpleEvent)
-                                        .collect(),
+                                        .map(|e|SimpleEventOrContractEvent::SimpleEvent(e.name))
+                                        .collect::<Vec<_>>(),
                                     then: None,
                                 })
                             }).map(Box::new),
@@ -395,5 +399,19 @@ mod tests {
 
         assert_eq!(manifest.config.callback_concurrency, None);
         assert_eq!(manifest.config.buffer, None);
+    }
+
+    #[test]
+    fn test_timestamps_simple() {
+        let yaml = r#"
+        name: test
+        project_type: no-code
+        timestamps: true
+        networks: []
+        contracts: []
+        "#;
+
+        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(manifest.timestamps, Some(true));
     }
 }

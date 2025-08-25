@@ -89,3 +89,20 @@ config:
   buffer: 2 // [!code focus]
   callback_concurrency: 4 // [!code focus]
 ```
+
+## timestamps
+
+Enable block timestamps for all events on all networks. Timestamps are `disabled` by default.
+
+Includes timestamps in all rindexer logs. Any logs with timestamps already included are ignored, and we
+try to be as efficient as possible when fetching timestamps by first using fixed ranges, then precalculated, and
+lastly fallback to RPC requests when required.
+
+Timestamps can also be opted into for specific events. [See more details](/docs/start-building/yaml-config/contracts).
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+timestamps: true
+```

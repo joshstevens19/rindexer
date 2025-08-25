@@ -309,6 +309,7 @@ The `tx_information` will be the transaction related information for the event
 ```rs
 #[derive(Debug, Clone)]
 pub struct TxInformation {
+    pub chain_id: u64,
     pub network: String,
     pub address: Address,
     pub block_hash: BlockHash,

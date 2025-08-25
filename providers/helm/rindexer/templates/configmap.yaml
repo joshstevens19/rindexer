@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rindexer.fullname" . }}-config
+  labels:
+    {{- include "rindexer.labels" . | nindent 4 }}
+data:
+  rindexer.yaml: |
+    name: franky
+    project_type: no-code
+    networks:
+    - name: ethereum
+      chain_id: 1
+      rpc: https://mainnet.gateway.tenderly.co
+    storage:
+      postgres:
+        enabled: {{ .Values.postgresql.enabled }}
+    contracts:
+    - name: RocketPoolETH
+      details:
+      - network: ethereum
+        address: 0xae78736cd615f374d3085123a210448e74fc6393
+        start_block: '18900000'
+        end_block: '19000000'
+      abi: ./abis/RocketTokenRETH.abi.json
+      include_events:
+      - Transfer
+      - Approval

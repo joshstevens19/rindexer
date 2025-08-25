@@ -213,6 +213,38 @@ impl DependencyEventTree {
     }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ContractEventDeserializer {
+    String(String),
+    Struct(ContractEvent),
+}
+
+fn deserialize_events<'de, D>(deserializer: D) -> Result<Option<Vec<ContractEvent>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let defs = Vec::<ContractEventDeserializer>::deserialize(deserializer)?;
+    Ok(Some(
+        defs.into_iter()
+            .map(|def| match def {
+                ContractEventDeserializer::String(s) => ContractEvent { name: s, timestamps: None },
+                ContractEventDeserializer::Struct(ev) => ev,
+            })
+            .collect(),
+    ))
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ContractEvent {
+    /// The name of the event.
+    pub name: String,
+    /// Enable or disable timestamps for the event. This will override the global timestamp
+    /// setting with either the true or false state if set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamps: Option<bool>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Contract {
     pub name: String,
@@ -221,8 +253,12 @@ pub struct Contract {
 
     pub abi: StringOrArray,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub include_events: Option<Vec<String>>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_events",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub include_events: Option<Vec<ContractEvent>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index_event_in_order: Option<Vec<String>>,
@@ -358,5 +394,68 @@ impl Contract {
         } else {
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_yaml;
+
+    use super::*;
+
+    #[test]
+    fn test_contract_include_events_simple() {
+        let yaml = r#"
+            name: ERC20
+            abi: ./abis/ERC20.abi.json
+            details:
+              - network: ethereum
+                start_block: 20090000
+                filter:
+                  - event_name: Transfer
+                  - event_name: Approval
+            include_events:
+              - Transfer
+              - Approval
+        "#;
+
+        let contract: Contract = serde_yaml::from_str(yaml).unwrap();
+
+        assert_eq!(
+            contract.include_events,
+            Some(vec![
+                ContractEvent { name: "Transfer".to_string(), timestamps: None },
+                ContractEvent { name: "Approval".to_string(), timestamps: None }
+            ])
+        );
+    }
+
+    #[test]
+    fn test_contract_include_events_complex() {
+        let yaml = r#"
+            name: ERC20
+            abi: ./abis/ERC20.abi.json
+            details:
+              - network: ethereum
+                start_block: 20090000
+                filter:
+                  - event_name: Transfer
+                  - event_name: Approval
+            include_events:
+              - name: Transfer
+                timestamps: true
+              - name: Approval
+                timestamps: false
+        "#;
+
+        let contract: Contract = serde_yaml::from_str(yaml).unwrap();
+
+        assert_eq!(
+            contract.include_events,
+            Some(vec![
+                ContractEvent { name: "Transfer".to_string(), timestamps: Some(true) },
+                ContractEvent { name: "Approval".to_string(), timestamps: Some(false) }
+            ])
+        );
     }
 }
