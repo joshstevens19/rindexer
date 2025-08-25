@@ -234,12 +234,17 @@ impl EventCallbackRegistry {
 // --------------------------------
 
 #[derive(Debug, Clone)]
-pub struct TraceResult {
-    pub from: Address,
-    pub to: Address,
-    pub value: U256,
-    pub tx_information: TxInformation,
-    pub found_in_request: LogFoundInRequest,
+pub enum TraceResult {
+    NativeTransfer {
+        from: Address,
+        to: Address,
+        value: U256,
+        tx_information: TxInformation,
+        found_in_request: LogFoundInRequest,
+    },
+    Block {
+        block: alloy::network::AnyRpcBlock,
+    },
 }
 
 impl TraceResult {
@@ -259,7 +264,7 @@ impl TraceResult {
             );
         }
 
-        Self {
+        Self::NativeTransfer {
             from: action.from,
             to: action.to,
             value: action.value,
@@ -289,7 +294,7 @@ impl TraceResult {
         start_block: U64,
         end_block: U64,
     ) -> Self {
-        Self {
+        Self::NativeTransfer {
             to,
             from: tx.from(),
             value: tx.value(),
@@ -308,6 +313,21 @@ impl TraceResult {
             },
             found_in_request: LogFoundInRequest { from_block: start_block, to_block: end_block },
         }
+    }
+
+    /// Create a "Block" TraceResult for block events.
+    pub fn new_block(
+        block: alloy::network::AnyRpcBlock,
+        network: &str,
+        chain_id: u64,
+        start_block: U64,
+        end_block: U64,
+    ) -> Self {
+        let num = block.header.number;
+        let ts = block.header.timestamp;
+        let hash = block.header.hash;
+
+        Self::Block { block }
     }
 }
 

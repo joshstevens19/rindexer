@@ -321,6 +321,7 @@ pub async fn native_transfer_block_consumer(
     if !native_transfers.is_empty() {
         config.trigger_event(native_transfers).await;
     }
+
     evm_trace_update_progress_and_last_synced_task(
         config.clone(),
         to_block,

@@ -14,7 +14,6 @@ use tokio_postgres::types::Type as PgType;
 use tracing::{debug, error, info, warn};
 
 use super::native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME};
-use crate::helpers::{map_log_params_to_raw_values, parse_log};
 use crate::manifest::contract::Contract;
 use crate::{
     abi::{ABIItem, CreateCsvFileForEvent, EventInfo, ParamTypeError, ReadAbiError},
@@ -50,6 +49,10 @@ use crate::{
     streams::StreamsClients,
     types::core::LogParam,
     AsyncCsvAppender, FutureExt, IndexingDetails, StartDetails, StartNoCodeDetails,
+};
+use crate::{
+    event::callback_registry::TraceResult,
+    helpers::{map_log_params_to_raw_values, parse_log},
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -203,10 +206,20 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                     event.first().unwrap().found_in_request.from_block,
                     event.first().unwrap().found_in_request.to_block,
                 ),
-                CallbackResult::Trace(event) => (
-                    event.first().unwrap().found_in_request.from_block,
-                    event.first().unwrap().found_in_request.to_block,
-                ),
+                CallbackResult::Trace(event) => {
+                    // Filter to only NativeTransfer events and get the first one
+                    let native_transfer = event
+                        .iter()
+                        .filter_map(|result| match result {
+                            TraceResult::NativeTransfer { found_in_request, .. } => {
+                                Some(found_in_request)
+                            }
+                            TraceResult::Block { .. } => None,
+                        })
+                        .next()
+                        .unwrap();
+                    (native_transfer.from_block, native_transfer.to_block)
+                }
             };
 
             let network = match &results {
@@ -214,7 +227,18 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                     event.first().unwrap().tx_information.network.clone()
                 }
                 CallbackResult::Trace(event) => {
-                    event.first().unwrap().tx_information.network.clone()
+                    // Filter to only NativeTransfer events and get the first one
+                    event
+                        .iter()
+                        .filter_map(|result| match result {
+                            TraceResult::NativeTransfer { tx_information, .. } => {
+                                Some(&tx_information.network)
+                            }
+                            TraceResult::Block { .. } => None,
+                        })
+                        .next()
+                        .unwrap()
+                        .clone()
                 }
             };
 
@@ -275,55 +299,62 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                     .collect::<Vec<_>>(),
                 CallbackResult::Trace(events) => events
                     .iter()
-                    .map(|result| {
-                        let log_params = vec![
-                            LogParam::new("from".to_string(), DynSolValue::Address(result.from)),
-                            LogParam::new("to".to_string(), DynSolValue::Address(result.to)),
-                            LogParam::new(
-                                "value".to_string(),
-                                DynSolValue::Uint(result.value, 256),
-                            ),
-                        ];
+                    .filter_map(|result| {
+                        match result {
+                            TraceResult::NativeTransfer {
+                                from, to, value, tx_information, ..
+                            } => {
+                                let log_params = vec![
+                                    LogParam::new("from".to_string(), DynSolValue::Address(*from)),
+                                    LogParam::new("to".to_string(), DynSolValue::Address(*to)),
+                                    LogParam::new(
+                                        "value".to_string(),
+                                        DynSolValue::Uint(*value, 256),
+                                    ),
+                                ];
 
-                        let address = result.tx_information.address;
-                        let transaction_hash = result.tx_information.transaction_hash;
-                        let block_number = result.tx_information.block_number;
-                        let block_hash = result.tx_information.block_hash;
-                        let network = result.tx_information.network.to_string();
-                        let chain_id = result.tx_information.chain_id;
-                        let transaction_index = result.tx_information.transaction_index;
-                        let log_index = result.tx_information.log_index;
+                                let address = tx_information.address;
+                                let transaction_hash = tx_information.transaction_hash;
+                                let block_number = tx_information.block_number;
+                                let block_hash = tx_information.block_hash;
+                                let network = tx_information.network.to_string();
+                                let chain_id = tx_information.chain_id;
+                                let transaction_index = tx_information.transaction_index;
+                                let log_index = tx_information.log_index;
 
-                        let event_parameters: Vec<EthereumSqlTypeWrapper> =
-                            map_log_params_to_ethereum_wrapper(
-                                &params.event_info.inputs,
-                                &log_params,
-                            );
+                                let event_parameters: Vec<EthereumSqlTypeWrapper> =
+                                    map_log_params_to_ethereum_wrapper(
+                                        &params.event_info.inputs,
+                                        &log_params,
+                                    );
 
-                        let contract_address = EthereumSqlTypeWrapper::Address(address);
-                        let end_global_parameters = vec![
-                            EthereumSqlTypeWrapper::B256(transaction_hash),
-                            EthereumSqlTypeWrapper::U64(block_number),
-                            EthereumSqlTypeWrapper::B256(block_hash),
-                            EthereumSqlTypeWrapper::String(network.to_string()),
-                            EthereumSqlTypeWrapper::U64(transaction_index),
-                            EthereumSqlTypeWrapper::U256(log_index),
-                        ];
+                                let contract_address = EthereumSqlTypeWrapper::Address(address);
+                                let end_global_parameters = vec![
+                                    EthereumSqlTypeWrapper::B256(transaction_hash),
+                                    EthereumSqlTypeWrapper::U64(block_number),
+                                    EthereumSqlTypeWrapper::B256(block_hash),
+                                    EthereumSqlTypeWrapper::String(network.to_string()),
+                                    EthereumSqlTypeWrapper::U64(transaction_index),
+                                    EthereumSqlTypeWrapper::U256(log_index),
+                                ];
 
-                        (
-                            log_params,
-                            address,
-                            transaction_hash,
-                            log_index,
-                            transaction_index,
-                            block_number,
-                            block_hash,
-                            network,
-                            chain_id,
-                            contract_address,
-                            event_parameters,
-                            end_global_parameters,
-                        )
+                                Some((
+                                    log_params,
+                                    address,
+                                    transaction_hash,
+                                    log_index,
+                                    transaction_index,
+                                    block_number,
+                                    block_hash,
+                                    network,
+                                    chain_id,
+                                    contract_address,
+                                    event_parameters,
+                                    end_global_parameters,
+                                ))
+                            }
+                            TraceResult::Block { .. } => None, // Skip block events in no-code mode
+                        }
                     })
                     .collect::<Vec<_>>(),
             };
