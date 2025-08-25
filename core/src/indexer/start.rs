@@ -23,7 +23,7 @@ use crate::{
     indexer::{
         dependency::ContractEventsDependenciesConfig,
         last_synced::{get_last_synced_block_number, SyncConfig},
-        native_transfer::{native_transfer_block_fetch, EVENT_NAME, NATIVE_TRANSFER_CONTRACT_NAME},
+        native_transfer::{native_transfer_block_fetch, NATIVE_TRANSFER_CONTRACT_NAME},
         process::{
             process_contracts_events_with_dependencies, process_event,
             ProcessContractsEventsWithDependenciesError, ProcessEventError,
@@ -236,7 +236,7 @@ pub async fn start_indexing_traces(
         });
 
         let config = Arc::new(TraceProcessingConfig {
-            id: format!("trace-{}", network_name),
+            id: first_event.id.clone(), // Use the first event's ID for progress tracking
             project_path: project_path.to_path_buf(),
             start_block,
             end_block,

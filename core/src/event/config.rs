@@ -342,6 +342,9 @@ pub struct TraceProcessingConfig {
 
 impl TraceProcessingConfig {
     pub async fn trigger_event(&self, fn_data: Vec<TraceResult>) {
-        let _ = self.registry.trigger_event(&self.id, fn_data).await;
+        // Trigger events for all registered events in this network's registry
+        for event in &self.registry.events {
+            let _ = self.registry.trigger_event(&event.id, fn_data.clone()).await;
+        }
     }
 }

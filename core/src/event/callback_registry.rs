@@ -328,12 +328,14 @@ impl TraceResult {
         Self::Block {
             tx_information: TxInformation {
                 chain_id,
-                network: network.to_string(),
-                address: Address::ZERO,
-                block_number: block.header.number.clone(),
                 block_timestamp: Some(U256::from(block.header.timestamp.clone())),
-                transaction_hash: TxHash::ZERO,
+                network: network.to_string(),
+                block_number: block.header.number.clone(),
                 block_hash: block.header.hash.clone(),
+
+                // Invalid fields for a block event.
+                address: Address::ZERO,
+                transaction_hash: TxHash::ZERO,
                 transaction_index: 0,
                 log_index: U256::from(0),
             },

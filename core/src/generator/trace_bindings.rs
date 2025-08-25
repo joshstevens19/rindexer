@@ -82,7 +82,18 @@ fn trace_generate_structs(contract_name: &str) -> Result<Code, GenerateStructsEr
     structs.push_str(&Code::new(
         r#"
         pub type BlockData = alloy::network::AnyRpcBlock;
-        pub type BlockResult = BlockData;
+        
+        #[derive(Debug, Clone)]
+        pub struct BlockResult {
+            pub block: BlockData,
+            pub tx_information: TxInformation
+        }
+
+        impl HasTxInformation for BlockResult {
+            fn tx_information(&self) -> &TxInformation {
+                &self.tx_information
+            }
+        }
         "#
         .to_string(),
     ));
@@ -444,8 +455,8 @@ fn generate_trace_callback_structs_code(
                     .into_iter()
                     .filter_map(|item| {{
                         match item {{
-                            TraceResult::Block {{ block, .. }} => {{
-                                Some(block)
+                            TraceResult::Block {{ block, tx_information, .. }} => {{
+                                Some(BlockResult {{ block, tx_information }})
                             }}
                             _ => None,
                         }}
