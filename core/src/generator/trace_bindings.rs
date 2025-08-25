@@ -1095,11 +1095,7 @@ pub fn generate_trace_handlers(
 
     handlers.push_str(&block_handler);
 
-    registry_fn.push_str(&format!(
-        r#"
-            block_handler(manifest_path, registry).await;
-        "#
-    ));
+    registry_fn.push_str("block_handler(manifest_path, registry).await;");
 
     registry_fn.push('}');
 

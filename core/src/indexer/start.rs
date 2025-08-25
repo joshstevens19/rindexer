@@ -185,7 +185,7 @@ pub async fn start_indexing_traces(
 
     for event in trace_registry.events.iter() {
         for network in event.trace_information.details.iter() {
-            network_events.entry(network.network.clone()).or_insert_with(Vec::new).push(event);
+            network_events.entry(network.network.clone()).or_default().push(event);
         }
     }
 

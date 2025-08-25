@@ -243,7 +243,7 @@ pub enum TraceResult {
         found_in_request: LogFoundInRequest,
     },
     Block {
-        block: alloy::network::AnyRpcBlock,
+        block: Box<alloy::network::AnyRpcBlock>,
         tx_information: TxInformation,
         found_in_request: LogFoundInRequest,
     },
@@ -328,10 +328,10 @@ impl TraceResult {
         Self::Block {
             tx_information: TxInformation {
                 chain_id,
-                block_timestamp: Some(U256::from(block.header.timestamp.clone())),
+                block_timestamp: Some(U256::from(block.header.timestamp)),
                 network: network.to_string(),
-                block_number: block.header.number.clone(),
-                block_hash: block.header.hash.clone(),
+                block_number: block.header.number,
+                block_hash: block.header.hash,
 
                 // Invalid fields for a block event.
                 address: Address::ZERO,
@@ -339,7 +339,7 @@ impl TraceResult {
                 transaction_index: 0,
                 log_index: U256::from(0),
             },
-            block,
+            block: Box::new(block),
             found_in_request: LogFoundInRequest { from_block: start_block, to_block: end_block },
         }
     }
