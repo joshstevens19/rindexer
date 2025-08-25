@@ -13,6 +13,76 @@
         "name": "simpleAddress",
         "type": "address",
         "indexed": false
+      },
+      {
+        "name": "simpleString",
+        "type": "string",
+        "indexed": false
+      }
+    ]
+  },
+  {
+    "anonymous": false,
+    "name": "TupleTypes",
+    "type": "event",
+    "inputs": [
+      {
+        "name": "array",
+        "type": "tuple[]",
+        "internalType": "struct SimpleStruct[]",
+        "indexed": false,
+        "components": [
+          {
+            "name": "address",
+            "type": "address"
+          },
+          {
+            "name": "string",
+            "type": "string"
+          },
+          {
+            "name": "fixedBytes",
+            "type": "bytes32"
+          },
+          {
+            "name": "dynamicBytes",
+            "type": "bytes"
+          }
+        ]
+      },
+      {
+        "name": "nestedArray",
+        "type": "tuple[]",
+        "internalType": "struct ComplexStruct[]",
+        "indexed": false,
+        "components": [
+          {
+            "name": "ruleParam",
+            "type": "tuple",
+            "internalType": "struct KeyValueArray",
+            "components": [
+              {
+                "name": "key",
+                "type": "bytes32"
+              },
+              {
+                "name": "value",
+                "type": "tuple[]",
+                "internalType": "struct KeyValue[]",
+                "components": [
+                  {
+                    "name": "key",
+                    "type": "bytes32"
+                  },
+                  {
+                    "name": "value",
+                    "type": "bytes"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
       }
     ]
   },

@@ -98,3 +98,13 @@ pub fn setup_info_logger() {
 pub fn mark_shutdown_started() {
     SHUTDOWN_IN_PROGRESS.store(true, Ordering::Relaxed);
 }
+
+// Optional guard for temporary logger suppression
+#[allow(dead_code)]
+pub struct LoggerGuard;
+
+impl Drop for LoggerGuard {
+    fn drop(&mut self) {
+        SHUTDOWN_IN_PROGRESS.store(false, Ordering::Relaxed);
+    }
+}

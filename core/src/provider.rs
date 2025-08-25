@@ -403,6 +403,7 @@ impl JsonRpcCachedProvider {
         include_txs: bool,
     ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
         let chain = self.chain_id;
+
         if block_numbers.is_empty() {
             return Ok(Vec::new());
         }

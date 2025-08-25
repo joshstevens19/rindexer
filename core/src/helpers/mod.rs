@@ -11,12 +11,14 @@ pub use array::chunk_hashset;
 pub use evm_log::{
     halved_block_number, is_relevant_block, map_log_params_to_raw_values, parse_log, parse_topic,
 };
-pub use solidity::{is_irregular_width_solidity_integer_type, parse_solidity_integer_type};
+pub use solidity::{
+    is_irregular_width_solidity_integer_type, is_solidity_static_bytes_type,
+    parse_solidity_integer_type,
+};
 use std::{
     env,
     env::VarError,
     path::{Path, PathBuf},
-    process::Command,
     str,
 };
 
@@ -152,22 +154,7 @@ pub fn get_full_path(project_path: &Path, file_path: &str) -> Result<PathBuf, st
 }
 
 pub fn kill_process_on_port(port: u16) -> Result<(), String> {
-    // Use lsof to find the process using the port
-    let output = Command::new("lsof")
-        .arg(format!("-i:{port}"))
-        .arg("-t")
-        .output()
-        .map_err(|e| e.to_string())?;
-
-    let pids =
-        str::from_utf8(&output.stdout).map_err(|e| e.to_string())?.lines().collect::<Vec<&str>>();
-
-    for pid in pids {
-        // Kill each process using the port
-        Command::new("kill").arg("-9").arg(pid).output().map_err(|e| e.to_string())?;
-    }
-
-    Ok(())
+    port_killer::kill(port).map(|_| ()).map_err(|e| e.to_string())
 }
 
 pub fn public_read_env_value(var_name: &str) -> Result<String, VarError> {

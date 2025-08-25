@@ -127,7 +127,7 @@ impl Manifest {
                     }
 
                     // suffix with factory filter details to allow having the same contract name at the `contracts` level in yaml
-                    let overridden_factory_contract_name = format!("{}{}{}", first_factory.name, to_pascal_case(&first_factory.event_name), to_pascal_case(&first_factory.input_name));
+                    let overridden_factory_contract_name = format!("{}{}{}", first_factory.name, to_pascal_case(&first_factory.event_name), first_factory.input_names().iter().map(|v| to_pascal_case(v)).collect::<Vec<_>>().join(""));
 
                     let factory_contract = Contract {
                         name: overridden_factory_contract_name.clone(),

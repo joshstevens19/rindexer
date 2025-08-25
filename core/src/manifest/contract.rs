@@ -65,9 +65,18 @@ pub struct FactoryDetailsYaml {
 
     pub event_name: String,
 
-    pub input_name: String,
+    pub input_name: ValueOrArray<String>,
 
     pub abi: String,
+}
+
+impl FactoryDetailsYaml {
+    pub fn input_names(&self) -> Vec<String> {
+        match &self.input_name {
+            ValueOrArray::Value(name) => vec![name.clone()],
+            ValueOrArray::Array(names) => names.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

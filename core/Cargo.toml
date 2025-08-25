@@ -1,6 +1,6 @@
 [package]
 name = "rindexer"
-version = "0.23.0"
+version = "0.24.1"
 edition = "2021"
 description = "A no-code or framework to build blazing fast EVM indexers - built in rust."
 license = "MIT"
@@ -17,8 +17,7 @@ mockito = "1.7.0"
 
 [dependencies]
 # TODO: Trim down alloy features needed later, for now opt in to all.
-alloy = { version = "1.0.22", features = ["full", "json-rpc"] }
-async-std = "1.12.0"
+alloy = { version = "1.0.9", features = ["full", "json-rpc"] }
 async-trait = "0.1.77"
 aws-config = "1.5.0"
 aws-sdk-sns = "1.37.0"
@@ -76,8 +75,9 @@ cfg-if = "1.0.1"
 zstd = "0.13.3"
 bincode = "2.0.1"
 anyhow = "1.0.98"
-tower = { version = "0.5.2" }
 winnow = "0.7.11"
+tower = "0.5.2"
+port-killer = "0.1.0"
 
 # build
 jemallocator = { version = "0.6.0", package = "tikv-jemallocator", optional = true }

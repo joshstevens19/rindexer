@@ -381,14 +381,13 @@ mod tests {
         let mut mutable_input = input;
         match parser.parse_next(&mut mutable_input) {
             Ok(output) => {
-                assert_eq!(output, expected_output, "Output mismatch for input: '{}'", input);
+                assert_eq!(output, expected_output, "Output mismatch for input: '{input}'");
                 assert_eq!(
                     mutable_input, expected_remaining,
-                    "Remaining input mismatch for input: '{}'",
-                    input
+                    "Remaining input mismatch for input: '{input}'"
                 );
             }
-            Err(e) => panic!("Parser failed for input '{}': {:?}", input, e),
+            Err(e) => panic!("Parser failed for input '{input}': {e:?}"),
         }
     }
 
@@ -400,8 +399,7 @@ mod tests {
         let mut mutable_input = input;
         assert!(
             parser.parse_next(&mut mutable_input).is_err(),
-            "Parser should have failed for input: '{}'",
-            input
+            "Parser should have failed for input: '{input}'"
         );
     }
 

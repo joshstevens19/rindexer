@@ -1,5 +1,5 @@
 use std::{
-    env,
+    env, fs,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
@@ -28,61 +28,37 @@ pub struct GraphqlOverrideSettings {
     pub override_port: Option<u16>,
 }
 
-fn get_graphql_exe() -> Result<PathBuf, ()> {
-    let postgraphile_filename = match env::consts::OS {
-        "windows" => "rindexer-graphql-win.exe",
-        "macos" => "rindexer-graphql-macos",
-        "linux" => "rindexer-graphql-linux",
-        _ => {
-            panic!("Unsupported OS: {}", env::consts::OS);
-        }
+fn get_graphql_exe() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    // Try the build-time path first (for development)
+    let build_path = PathBuf::from(env!("RINDEXER_GRAPHQL_EXE"));
+    if build_path.exists() {
+        return Ok(build_path);
+    }
+
+    // Fall back to embedded binary (for deployed/installed versions)
+    const GRAPHQL_BINARY: &[u8] = include_bytes!(env!("RINDEXER_GRAPHQL_EMBED"));
+
+    let temp_dir = std::env::temp_dir();
+    let exe_name = if cfg!(windows) {
+        format!("rindexer-graphql-{}.exe", std::process::id())
+    } else {
+        format!("rindexer-graphql-{}", std::process::id())
     };
+    let temp_path = temp_dir.join(exe_name);
 
-    let mut paths = vec![];
+    fs::write(&temp_path, GRAPHQL_BINARY)?;
 
-    // Assume `resources` directory is in the same directory as the executable (installed)
-    if let Ok(executable_path) = env::current_exe() {
-        let mut path = executable_path.to_path_buf();
-        path.pop(); // Remove the executable name
-        path.push("resources");
-        path.push(postgraphile_filename);
-        paths.push(path);
-
-        // Also consider when running from within the `rindexer` directory
-        let mut path = executable_path;
-        path.pop(); // Remove the executable name
-        path.pop(); // Remove the 'release' or 'debug' directory
-        path.push("resources");
-        path.push(postgraphile_filename);
-        paths.push(path);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&temp_path)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&temp_path, perms)?;
     }
 
-    // Check additional common paths
-    if let Ok(home_dir) = env::var("HOME") {
-        let mut path = PathBuf::from(home_dir);
-        path.push(".rindexer");
-        path.push("resources");
-        path.push(postgraphile_filename);
-        paths.push(path);
-    }
-
-    // Return the first valid path
-    for path in &paths {
-        if path.exists() {
-            return Ok(path.to_path_buf());
-        }
-    }
-
-    // If none of the paths exist, return the first one with useful error message
-    let extra_looking =
-        paths.into_iter().next().expect("Failed to determine rindexer graphql path");
-
-    if !extra_looking.exists() {
-        return Err(());
-    }
-
-    Ok(extra_looking)
+    Ok(temp_path)
 }
+
 #[allow(dead_code)]
 pub struct GraphQLServer {
     pid: u32,

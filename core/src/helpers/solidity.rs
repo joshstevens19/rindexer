@@ -4,7 +4,7 @@ pub fn parse_solidity_integer_type(solidity_type: &str) -> (&str, usize) {
     match solidity_type {
         t if t.starts_with("int") => ("int", t[3..].parse().expect("Invalid intN type")),
         t if t.starts_with("uint") => ("uint", t[4..].parse().expect("Invalid uintN type")),
-        _ => panic!("Invalid Solidity type: {}", solidity_type),
+        _ => panic!("Invalid Solidity type: {solidity_type}"),
     }
 }
 
@@ -18,4 +18,11 @@ pub fn is_irregular_width_solidity_integer_type(solidity_type: &str) -> bool {
     let (_, size) = parse_solidity_integer_type(solidity_type);
 
     !is_power_of_two(size)
+}
+
+/// Checks if a Solidity type is a static bytes type (e.g., `bytes32`, `bytes64`, etc.).
+pub fn is_solidity_static_bytes_type(solidity_type: &str) -> bool {
+    solidity_type.starts_with("bytes")
+        && solidity_type.len() > 5
+        && solidity_type[5..].chars().all(char::is_numeric)
 }
