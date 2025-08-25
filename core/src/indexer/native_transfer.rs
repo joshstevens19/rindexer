@@ -289,6 +289,7 @@ pub async fn native_transfer_block_consumer(
         .fold((U64::MAX, U64::ZERO), |(min, max), &num| (cmp::min(min, num), cmp::max(max, num)));
 
     let native_transfers = blocks
+        .clone()
         .into_iter()
         .flat_map(|b| {
             b.transactions.clone().into_transactions().map(move |tx| (b.header.timestamp, tx))
@@ -318,6 +319,10 @@ pub async fn native_transfer_block_consumer(
     // Important that we call this for every event even if there are no logs.
     // This is because we need to sync the last seen block number still.
     indexing_event_processing();
+
+    let blocks = blocks.into_iter().map(|b| TraceResult::new_block(b)).collect::<Vec<_>>();
+    config.trigger_event(blocks).await;
+
     if !native_transfers.is_empty() {
         config.trigger_event(native_transfers).await;
     }

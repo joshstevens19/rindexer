@@ -316,17 +316,7 @@ impl TraceResult {
     }
 
     /// Create a "Block" TraceResult for block events.
-    pub fn new_block(
-        block: alloy::network::AnyRpcBlock,
-        network: &str,
-        chain_id: u64,
-        start_block: U64,
-        end_block: U64,
-    ) -> Self {
-        let num = block.header.number;
-        let ts = block.header.timestamp;
-        let hash = block.header.hash;
-
+    pub fn new_block(block: alloy::network::AnyRpcBlock) -> Self {
         Self::Block { block }
     }
 }
