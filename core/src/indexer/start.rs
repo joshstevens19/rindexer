@@ -177,79 +177,99 @@ pub async fn start_indexing_traces(
     let trace_progress_state =
         IndexingEventsProgressState::monitor_traces(&trace_registry.events).await;
 
+    // Group events by network to create one pipeline per network
+    let mut network_events: std::collections::HashMap<
+        String,
+        Vec<&crate::event::callback_registry::TraceCallbackRegistryInformation>,
+    > = std::collections::HashMap::new();
+
     for event in trace_registry.events.iter() {
+        for network in event.trace_information.details.iter() {
+            network_events.entry(network.network.clone()).or_insert_with(Vec::new).push(event);
+        }
+    }
+
+    // Create one pipeline per network
+    for (network_name, events) in network_events {
+        // Get the first event's network details (they should all be the same for a given network)
+        let first_event = events.first().unwrap();
+        let network_details = first_event
+            .trace_information
+            .details
+            .iter()
+            .find(|n| n.network == network_name)
+            .unwrap();
+
         let stream_details = indexer
             .contracts
             .iter()
-            .find(|c| c.name == event.contract_name)
+            .find(|c| c.name == first_event.contract_name)
             .and_then(|c| c.streams.as_ref());
 
-        for network in event.trace_information.details.iter() {
-            let sync_config = SyncConfig {
-                project_path,
-                database: &database,
-                csv_details: &manifest.storage.csv,
-                contract_csv_enabled: manifest.contract_csv_enabled(&event.contract_name),
-                stream_details: &stream_details,
-                indexer_name: &event.indexer_name,
-                contract_name: &event.contract_name,
-                event_name: &event.event_name,
-                network: &network.network,
-            };
+        let sync_config = SyncConfig {
+            project_path,
+            database: &database,
+            csv_details: &manifest.storage.csv,
+            contract_csv_enabled: manifest.contract_csv_enabled(&first_event.contract_name),
+            stream_details: &stream_details,
+            indexer_name: &first_event.indexer_name,
+            contract_name: &first_event.contract_name,
+            event_name: &first_event.event_name,
+            network: &network_name,
+        };
 
-            let (block_tx, block_rx) = tokio::sync::mpsc::channel(4096);
-            let network_name = network.network.clone();
-            let (start_block, end_block, indexing_distance_from_head) = get_start_end_block(
-                network.cached_provider.clone(),
-                network.start_block,
-                network.end_block,
-                sync_config,
-                &event.info_log_name(),
-                &network.network,
-                event.trace_information.reorg_safe_distance,
-            )
-            .await?;
+        let (block_tx, block_rx) = tokio::sync::mpsc::channel(4096);
+        let (start_block, end_block, indexing_distance_from_head) = get_start_end_block(
+            network_details.cached_provider.clone(),
+            network_details.start_block,
+            network_details.end_block,
+            sync_config,
+            &format!("TraceEvents[{}]", network_name),
+            &network_name,
+            first_event.trace_information.reorg_safe_distance,
+        )
+        .await?;
 
-            let config = Arc::new(TraceProcessingConfig {
-                id: event.id.to_string(),
-                project_path: project_path.to_path_buf(),
-                start_block,
-                end_block,
-                indexer_name: event.indexer_name.clone(),
-                contract_name: NATIVE_TRANSFER_CONTRACT_NAME.to_string(),
-                event_name: EVENT_NAME.to_string(),
-                network: network_name.to_string(),
-                progress: trace_progress_state.clone(),
-                database: database.clone(),
-                csv_details: None,
-                registry: trace_registry.clone(),
-                method: network.method,
-                stream_last_synced_block_file_path: None,
-            });
+        // Create a shared registry for this network's events
+        let network_registry = Arc::new(TraceCallbackRegistry {
+            events: events.iter().map(|e| (*e).clone()).collect(),
+        });
 
-            let native_transfer_handle = tokio::spawn(native_transfer_block_fetch(
-                network.cached_provider.clone(),
-                block_tx,
-                start_block,
-                network.end_block,
-                indexing_distance_from_head,
-                network_name.clone(),
-            ));
+        let config = Arc::new(TraceProcessingConfig {
+            id: format!("trace-{}", network_name),
+            project_path: project_path.to_path_buf(),
+            start_block,
+            end_block,
+            indexer_name: first_event.indexer_name.clone(),
+            contract_name: NATIVE_TRANSFER_CONTRACT_NAME.to_string(),
+            event_name: "TraceEvents".to_string(),
+            network: network_name.clone(),
+            progress: trace_progress_state.clone(),
+            database: database.clone(),
+            csv_details: None,
+            registry: network_registry,
+            method: network_details.method,
+            stream_last_synced_block_file_path: None,
+        });
 
-            non_blocking_process_events.push(native_transfer_handle);
+        let block_fetch_handle = tokio::spawn(native_transfer_block_fetch(
+            network_details.cached_provider.clone(),
+            block_tx,
+            start_block,
+            network_details.end_block,
+            indexing_distance_from_head,
+            network_name.clone(),
+        ));
 
-            let provider = network.cached_provider.clone();
-            let config = config.clone();
+        non_blocking_process_events.push(block_fetch_handle);
 
-            let native_transfer_consumer_handle = tokio::spawn(native_transfer_block_processor(
-                network_name,
-                provider,
-                config,
-                block_rx,
-            ));
+        let provider = network_details.cached_provider.clone();
+        let config = config.clone();
 
-            non_blocking_process_events.push(native_transfer_consumer_handle);
-        }
+        let block_processor_handle =
+            tokio::spawn(native_transfer_block_processor(network_name, provider, config, block_rx));
+
+        non_blocking_process_events.push(block_processor_handle);
     }
 
     Ok(non_blocking_process_events)

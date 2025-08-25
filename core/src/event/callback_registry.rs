@@ -244,6 +244,8 @@ pub enum TraceResult {
     },
     Block {
         block: alloy::network::AnyRpcBlock,
+        tx_information: TxInformation,
+        found_in_request: LogFoundInRequest,
     },
 }
 
@@ -316,8 +318,28 @@ impl TraceResult {
     }
 
     /// Create a "Block" TraceResult for block events.
-    pub fn new_block(block: alloy::network::AnyRpcBlock) -> Self {
-        Self::Block { block }
+    pub fn new_block(
+        block: alloy::network::AnyRpcBlock,
+        network: &str,
+        chain_id: u64,
+        start_block: U64,
+        end_block: U64,
+    ) -> Self {
+        Self::Block {
+            tx_information: TxInformation {
+                chain_id,
+                network: network.to_string(),
+                address: Address::ZERO,
+                block_number: block.header.number.clone(),
+                block_timestamp: Some(U256::from(block.header.timestamp.clone())),
+                transaction_hash: TxHash::ZERO,
+                block_hash: block.header.hash.clone(),
+                transaction_index: 0,
+                log_index: U256::from(0),
+            },
+            block,
+            found_in_request: LogFoundInRequest { from_block: start_block, to_block: end_block },
+        }
     }
 }
 

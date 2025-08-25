@@ -320,7 +320,10 @@ pub async fn native_transfer_block_consumer(
     // This is because we need to sync the last seen block number still.
     indexing_event_processing();
 
-    let blocks = blocks.into_iter().map(|b| TraceResult::new_block(b)).collect::<Vec<_>>();
+    let blocks = blocks
+        .into_iter()
+        .map(|b| TraceResult::new_block(b, network_name, provider.chain.id(), from_block, to_block))
+        .collect::<Vec<_>>();
     config.trigger_event(blocks).await;
 
     if !native_transfers.is_empty() {
