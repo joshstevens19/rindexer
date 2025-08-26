@@ -259,6 +259,10 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                         let address = result.tx_information.address;
                         let transaction_hash = result.tx_information.transaction_hash;
                         let block_number = result.tx_information.block_number;
+                        let block_timestamp = result
+                            .tx_information
+                            .block_timestamp
+                            .and_then(|ts| chrono::DateTime::from_timestamp(ts.to(), 0));
                         let block_hash = result.tx_information.block_hash;
                         let network = result.tx_information.network.to_string();
                         let chain_id = result.tx_information.chain_id;
@@ -275,6 +279,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                         let end_global_parameters = vec![
                             EthereumSqlTypeWrapper::B256(transaction_hash),
                             EthereumSqlTypeWrapper::U64(block_number),
+                            EthereumSqlTypeWrapper::DateTimeNullable(block_timestamp),
                             EthereumSqlTypeWrapper::B256(block_hash),
                             EthereumSqlTypeWrapper::String(network.to_string()),
                             EthereumSqlTypeWrapper::U64(transaction_index),
@@ -288,6 +293,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                             log_index,
                             transaction_index,
                             block_number,
+                            result.tx_information.block_timestamp,
                             block_hash,
                             network,
                             chain_id,
@@ -316,6 +322,9 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                                 let address = tx_information.address;
                                 let transaction_hash = tx_information.transaction_hash;
                                 let block_number = tx_information.block_number;
+                                let block_timestamp = tx_information
+                                    .block_timestamp
+                                    .and_then(|ts| chrono::DateTime::from_timestamp(ts.to(), 0));
                                 let block_hash = tx_information.block_hash;
                                 let network = tx_information.network.to_string();
                                 let chain_id = tx_information.chain_id;
@@ -332,6 +341,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                                 let end_global_parameters = vec![
                                     EthereumSqlTypeWrapper::B256(transaction_hash),
                                     EthereumSqlTypeWrapper::U64(block_number),
+                                    EthereumSqlTypeWrapper::DateTimeNullable(block_timestamp),
                                     EthereumSqlTypeWrapper::B256(block_hash),
                                     EthereumSqlTypeWrapper::String(network.to_string()),
                                     EthereumSqlTypeWrapper::U64(transaction_index),
@@ -345,6 +355,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                                     log_index,
                                     transaction_index,
                                     block_number,
+                                    tx_information.block_timestamp,
                                     block_hash,
                                     network,
                                     chain_id,
@@ -366,6 +377,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                 log_index,
                 transaction_index,
                 block_number,
+                block_timestamp,
                 block_hash,
                 network,
                 chain_id,
@@ -385,7 +397,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                             block_hash,
                             block_number,
                             transaction_hash,
-                            block_timestamp: None,
+                            block_timestamp,
                             log_index,
                             transaction_index,
                         },

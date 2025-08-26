@@ -2,6 +2,7 @@ name: RocketPoolETHIndexer
 description: My first rindexer project
 repository: https://github.com/joshstevens19/rindexer
 project_type: no-code
+timestamps: true
 networks:
 - name: ethereum
   chain_id: 1

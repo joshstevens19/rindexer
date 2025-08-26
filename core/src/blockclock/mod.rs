@@ -57,7 +57,7 @@ pub enum BlockClockError {
     #[error("Failed to get encoded filepath: {0}")]
     DeltaFilepathError(#[from] VarError),
 
-    #[error("Failed to get decode encoded `.blokclock` file: {0}")]
+    #[error("Failed to get decode encoded `.blockclock` file: {0}")]
     DeltaFileDecoderError(#[from] anyhow::Error),
 }
 
@@ -80,9 +80,20 @@ pub struct BlockClock {
 }
 
 impl BlockClock {
-    pub fn new(sample_rate: Option<f32>, provider: Arc<JsonRpcCachedProvider>) -> Self {
+    pub fn new(
+        enabled: Option<bool>,
+        sample_rate: Option<f32>,
+        provider: Arc<JsonRpcCachedProvider>,
+    ) -> Self {
         let network_id = provider.chain.id();
         let fetcher = BlockFetcher::new(sample_rate, provider);
+
+        // Filepath based blockclock increases startup time so only proceed to enable if
+        // log timestamps are explicitly enabled.
+        if !enabled.unwrap_or(false) {
+            return Self { network_id, fetcher, runlencoder: None };
+        }
+
         let filepath = get_blockclock_filepath(network_id);
         let runlencoder = filepath.and_then(|path| {
             path.is_file().then(|| {

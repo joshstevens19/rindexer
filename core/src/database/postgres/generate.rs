@@ -2,6 +2,7 @@ use alloy::primitives::keccak256;
 use std::path::Path;
 use tracing::{error, info};
 
+use crate::database::postgres::client::PostgresError;
 use crate::helpers::parse_solidity_integer_type;
 use crate::manifest::contract::FactoryDetailsYaml;
 use crate::{
@@ -53,6 +54,7 @@ pub fn generate_column_names_only_with_base_properties(inputs: &[ABIInput]) -> V
     column_names.extend(vec![
         "tx_hash".to_string(),
         "block_number".to_string(),
+        "block_timestamp".to_string(),
         "block_hash".to_string(),
         "network".to_string(),
         "tx_index".to_string(),
@@ -85,6 +87,7 @@ fn generate_event_table_sql_with_comments(
                 {event_columns} \
                 tx_hash CHAR(66) NOT NULL, \
                 block_number NUMERIC NOT NULL, \
+                block_timestamp TIMESTAMPTZ, \
                 block_hash CHAR(66) NOT NULL, \
                 network VARCHAR(50) NOT NULL, \
                 tx_index NUMERIC NOT NULL, \
@@ -166,11 +169,14 @@ pub enum GenerateTablesForIndexerSqlError {
 
     #[error("{0}")]
     ParamTypeError(#[from] ParamTypeError),
+
+    #[error("failed to execute {0}")]
+    Postgres(#[from] PostgresError),
 }
 
 /// If any event names match the whole table name should be exposed differently on graphql
 /// to avoid clashing of graphql namings
-fn find_clashing_event_names(
+pub fn find_clashing_event_names(
     project_path: &Path,
     current_contract_name: &str,
     other_contracts: &[Contract],
@@ -286,6 +292,16 @@ pub fn generate_tables_for_indexer_sql(
         CREATE TABLE IF NOT EXISTS rindexer_internal.{indexer_name}_last_known_indexes_dropping_sql (
             key INT PRIMARY KEY,
             value TEXT NOT NULL
+        );
+    "#,
+        indexer_name = camel_to_snake(&indexer.name)
+    ));
+
+    sql.push_str(&format!(
+        r#"
+        CREATE TABLE IF NOT EXISTS rindexer_internal.{indexer_name}_last_run_migrations_sql (
+            version INT PRIMARY KEY,
+            migration_applied BOOL NOT NULL
         );
     "#,
         indexer_name = camel_to_snake(&indexer.name)

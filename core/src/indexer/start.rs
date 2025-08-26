@@ -388,7 +388,9 @@ pub async fn start_indexing_contract_events(
         let contract = manifest
             .contracts
             .iter()
-            .find(|c| format!("{}Filter", c.name) == event.contract.name)
+            .find(|c| {
+                format!("{}Filter", c.name) == event.contract.name || c.name == event.contract.name
+            })
             .unwrap();
 
         let timestamp_enabled_for_event = contract

@@ -88,7 +88,11 @@ impl ContractInformation {
                         id: generate_random_id(10),
                         network: c.network.clone(),
                         cached_provider: client.clone(),
-                        block_clock: BlockClock::new(manifest.config.timestamp_sample_rate, client),
+                        block_clock: BlockClock::new(
+                            manifest.timestamps,
+                            manifest.config.timestamp_sample_rate,
+                            client,
+                        ),
                         decoder: Arc::clone(&decoder),
                         indexing_contract_setup: c.indexing_contract_setup(project_path),
                         start_block: c.start_block,
