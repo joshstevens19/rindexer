@@ -85,7 +85,7 @@ fn trace_generate_structs(contract_name: &str) -> Result<Code, GenerateStructsEr
         
         #[derive(Debug, Clone)]
         pub struct BlockResult {
-            pub block: BlockData,
+            pub block: Box<BlockData>,
             pub tx_information: TxInformation
         }
 
