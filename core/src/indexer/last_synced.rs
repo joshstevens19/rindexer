@@ -325,9 +325,10 @@ pub async fn evm_trace_update_progress_and_last_synced_task(
     }
 
     if let Some(database) = &config.database {
+        // Use the native_transfer table for all trace events since they share the same pipeline
         let schema =
             generate_indexer_contract_schema_name(&config.indexer_name, &config.contract_name);
-        let table_name = generate_internal_event_table_name(&schema, &config.event_name);
+        let table_name = generate_internal_event_table_name(&schema, "native_transfer");
         let query = format!(
                 "UPDATE rindexer_internal.{table_name} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block"
             );

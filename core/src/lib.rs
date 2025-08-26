@@ -1,6 +1,7 @@
 // public
 pub mod generator;
 pub mod indexer;
+pub mod layer_extensions;
 pub mod manifest;
 pub mod reth;
 
@@ -34,7 +35,7 @@ mod chat;
 pub mod event;
 pub mod notifications;
 pub use notifications::ChainStateNotification;
-mod layer_extensions;
+pub mod blockclock;
 pub mod phantom;
 pub mod provider;
 mod start;

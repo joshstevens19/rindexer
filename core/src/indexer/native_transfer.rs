@@ -175,17 +175,11 @@ pub async fn native_transfer_block_processor(
     config: Arc<TraceProcessingConfig>,
     mut block_rx: mpsc::Receiver<U64>,
 ) -> Result<(), ProcessEventError> {
-    let is_rcp_batchable = config.method == TraceProcessingMethod::EthGetBlockByNumber;
-
     // Set the concurrency used to make requests based on the method.
     //
     // Currently, `eth_getBlockByNumber` is a single JSON-RPC batch, and others are individual
     // network calls so can be treated differently.
-    let (initial_concurrent_requests, limit_concurrent_requests) = if is_rcp_batchable {
-        (RECOMMENDED_RPC_CHUNK_SIZE / 2, RECOMMENDED_RPC_CHUNK_SIZE * 2)
-    } else {
-        (5, 100)
-    };
+    let (initial_concurrent_requests, limit_concurrent_requests) = (5, RECOMMENDED_RPC_CHUNK_SIZE);
 
     let mut concurrent_requests: usize = initial_concurrent_requests;
     let mut buffer: Vec<U64> = Vec::with_capacity(limit_concurrent_requests);
@@ -295,6 +289,7 @@ pub async fn native_transfer_block_consumer(
         .fold((U64::MAX, U64::ZERO), |(min, max), &num| (cmp::min(min, num), cmp::max(max, num)));
 
     let native_transfers = blocks
+        .clone()
         .into_iter()
         .flat_map(|b| {
             b.transactions.clone().into_transactions().map(move |tx| (b.header.timestamp, tx))
@@ -311,6 +306,7 @@ pub async fn native_transfer_block_consumer(
                     ts,
                     to,
                     network_name,
+                    provider.chain.id(),
                     from_block,
                     to_block,
                 ))
@@ -323,9 +319,17 @@ pub async fn native_transfer_block_consumer(
     // Important that we call this for every event even if there are no logs.
     // This is because we need to sync the last seen block number still.
     indexing_event_processing();
+
+    let blocks = blocks
+        .into_iter()
+        .map(|b| TraceResult::new_block(b, network_name, provider.chain.id(), from_block, to_block))
+        .collect::<Vec<_>>();
+    config.trigger_event(blocks).await;
+
     if !native_transfers.is_empty() {
         config.trigger_event(native_transfers).await;
     }
+
     evm_trace_update_progress_and_last_synced_task(
         config.clone(),
         to_block,
@@ -402,6 +406,7 @@ pub async fn native_transfer_block_consumer_debug(
                     action,
                     &trace,
                     network_name,
+                    provider.chain.id(),
                     from_block,
                     to_block,
                 ))

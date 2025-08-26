@@ -1,0 +1,52 @@
+replicaCount: 1
+image:
+  repository: ghcr.io/joshstevens19/rindexer
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 3001
+
+ingress:
+  enabled: false
+  annotations: {}
+  hosts:
+    - host: chart-example.local
+      paths: []
+  tls: []
+
+resources:
+  limits:
+    cpu: 100m
+    memory: 128Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+postgresql:
+  enabled: false  # Enable or disable PostgreSQL integration
+  auth:           # Optional: Define PostgreSQL credentials directly in values.yaml
+    username: "rindexer"
+    password: "yourpassword"
+    database: "rindexerdb"
+    host: "rindexerhost"
+    port: "5432"
+
+externalSecret: ""  # Specify the external secret for environment variables
+
+securityContext:
+  enabled: true
+  runAsUser: 1000
+  runAsGroup: 3000
+  fsGroup: 2000
+  allowPrivilegeEscalation: false
+  runAsNonRoot: true
+  dropCapabilities:
+    - ALL
+
+projectPath: "/app/project"  # Define the base path for project files
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

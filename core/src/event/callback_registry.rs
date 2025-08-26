@@ -42,6 +42,7 @@ pub enum CallbackResult {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TxInformation {
+    pub chain_id: u64,
     pub network: String,
     pub address: Address,
     pub block_hash: BlockHash,
@@ -85,6 +86,7 @@ impl EventResult {
             log: log.clone(),
             decoded_data: network_contract.decode_log(log.inner),
             tx_information: TxInformation {
+                chain_id: network_contract.cached_provider.chain.id(),
                 network: network_contract.network.to_string(),
                 address: log_address,
                 block_hash: log.block_hash.expect("log should contain block_hash"),
@@ -232,12 +234,19 @@ impl EventCallbackRegistry {
 // --------------------------------
 
 #[derive(Debug, Clone)]
-pub struct TraceResult {
-    pub from: Address,
-    pub to: Address,
-    pub value: U256,
-    pub tx_information: TxInformation,
-    pub found_in_request: LogFoundInRequest,
+pub enum TraceResult {
+    NativeTransfer {
+        from: Address,
+        to: Address,
+        value: U256,
+        tx_information: TxInformation,
+        found_in_request: LogFoundInRequest,
+    },
+    Block {
+        block: Box<alloy::network::AnyRpcBlock>,
+        tx_information: TxInformation,
+        found_in_request: LogFoundInRequest,
+    },
 }
 
 impl TraceResult {
@@ -246,6 +255,7 @@ impl TraceResult {
         action: &CallAction,
         trace: &LocalizedTransactionTrace,
         network: &str,
+        chain_id: u64,
         start_block: U64,
         end_block: U64,
     ) -> Self {
@@ -256,11 +266,12 @@ impl TraceResult {
             );
         }
 
-        Self {
+        Self::NativeTransfer {
             from: action.from,
             to: action.to,
             value: action.value,
             tx_information: TxInformation {
+                chain_id,
                 network: network.to_string(),
                 address: Address::ZERO,
                 // TODO: Unclear in what situation this would be `None`.
@@ -281,14 +292,16 @@ impl TraceResult {
         ts: u64,
         to: Address,
         network: &str,
+        chain_id: u64,
         start_block: U64,
         end_block: U64,
     ) -> Self {
-        Self {
+        Self::NativeTransfer {
             to,
             from: tx.from(),
             value: tx.value(),
             tx_information: TxInformation {
+                chain_id,
                 network: network.to_string(),
                 address: Address::ZERO,
                 block_number: tx.block_number.expect("block_number should be present"),
@@ -300,6 +313,33 @@ impl TraceResult {
                     .expect("transaction_index should be present"),
                 log_index: U256::from(0),
             },
+            found_in_request: LogFoundInRequest { from_block: start_block, to_block: end_block },
+        }
+    }
+
+    /// Create a "Block" TraceResult for block events.
+    pub fn new_block(
+        block: alloy::network::AnyRpcBlock,
+        network: &str,
+        chain_id: u64,
+        start_block: U64,
+        end_block: U64,
+    ) -> Self {
+        Self::Block {
+            tx_information: TxInformation {
+                chain_id,
+                block_timestamp: Some(U256::from(block.header.timestamp)),
+                network: network.to_string(),
+                block_number: block.header.number,
+                block_hash: block.header.hash,
+
+                // Invalid fields for a block event.
+                address: Address::ZERO,
+                transaction_hash: TxHash::ZERO,
+                transaction_index: 0,
+                log_index: U256::from(0),
+            },
+            block: Box::new(block),
             found_in_request: LogFoundInRequest { from_block: start_block, to_block: end_block },
         }
     }

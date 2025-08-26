@@ -14,6 +14,24 @@ pub struct Config {
     /// If `index_event_in_order` is used, this option will always be set as `1` (sequential).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub callback_concurrency: Option<usize>,
+
+    /// Optionally configure a worst case sample rate.
+    ///
+    /// In cases where a batch of logs includes thousands of blocks we will not call every block for
+    /// a timestamp, but will instead sample blocks and interpolate the remaining timestamps.
+    ///
+    /// In other cases where we are requesting a small handful of blocks in a single batch rpc this
+    /// sample rate will not be applied. The sample rate should be considered a "worst case"
+    /// acceptable rate.
+    ///
+    /// For many applications this will be `1.0` or no error tolerance. Where only loose-time ordering
+    /// is required this can provide considerable speedup and RPC CU reduction at minimal accuracy loss.
+    ///
+    /// The default is `1.0`, which represents no sampling. A high sample rate would be `0.1` and a
+    /// reasonable one would be `0.01` or below. Modern chains are suprisingly consistent in their
+    /// block times so often no accuracy loss occurs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp_sample_rate: Option<f32>,
 }
 
 #[cfg(test)]

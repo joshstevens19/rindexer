@@ -1,4 +1,6 @@
+use crate::blockclock::BlockClock;
 use crate::helpers::get_full_path;
+use crate::manifest::core::Manifest;
 use crate::notifications::ChainStateNotification;
 use crate::{
     event::callback_registry::Decoder,
@@ -27,6 +29,7 @@ pub struct NetworkContract {
     pub network: String,
     pub indexing_contract_setup: IndexingContractSetup,
     pub cached_provider: Arc<JsonRpcCachedProvider>,
+    pub block_clock: BlockClock,
     pub decoder: Decoder,
     pub start_block: Option<U64>,
     pub end_block: Option<U64>,
@@ -67,6 +70,7 @@ impl ContractInformation {
         contract: &Contract,
         network_providers: &[CreateNetworkProvider],
         decoder: Decoder,
+        manifest: &Manifest,
     ) -> Result<ContractInformation, CreateContractInformationError> {
         let mut details = vec![];
         for c in &contract.details {
@@ -79,10 +83,16 @@ impl ContractInformation {
                     ));
                 }
                 Some(provider) => {
+                    let client = Arc::clone(&provider.client);
                     details.push(NetworkContract {
                         id: generate_random_id(10),
                         network: c.network.clone(),
-                        cached_provider: Arc::clone(&provider.client),
+                        cached_provider: client.clone(),
+                        block_clock: BlockClock::new(
+                            manifest.timestamps,
+                            manifest.config.timestamp_sample_rate,
+                            client,
+                        ),
                         decoder: Arc::clone(&decoder),
                         indexing_contract_setup: c.indexing_contract_setup(project_path),
                         start_block: c.start_block,

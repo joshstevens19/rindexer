@@ -20,6 +20,7 @@ examples/*
 !examples/rindexer_demo_cli
 !examples/rindexer_native_transfers
 !examples/rindexer_factory_indexing
+!examples/rindexer_rust_playground
 documentation/node_modules
 documentation/dist
 documentation/docs/dist

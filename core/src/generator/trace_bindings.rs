@@ -11,7 +11,7 @@ use crate::{
         generate_column_names_only_with_base_properties, generate_event_table_full_name,
     },
     helpers::camel_to_snake,
-    indexer::native_transfer::{EVENT_NAME, NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME},
+    indexer::native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME},
     manifest::{
         contract::ParseAbiError,
         native_transfer::{NativeTransferDetails, NativeTransfers},
@@ -78,17 +78,39 @@ fn trace_generate_structs(contract_name: &str) -> Result<Code, GenerateStructsEr
         }
     }
 
+    // Add Block event support
+    structs.push_str(&Code::new(
+        r#"
+        pub type BlockData = alloy::network::AnyRpcBlock;
+        
+        #[derive(Debug, Clone)]
+        pub struct BlockResult {
+            pub block: Box<BlockData>,
+            pub tx_information: TxInformation
+        }
+
+        impl HasTxInformation for BlockResult {
+            fn tx_information(&self) -> &TxInformation {
+                &self.tx_information
+            }
+        }
+        "#
+        .to_string(),
+    ));
+
     Ok(structs)
 }
 
 fn generate_event_enums_code(event_info: &[EventInfo]) -> Code {
-    Code::new(
-        event_info
-            .iter()
-            .map(|info| format!("{}({}Event<TExtensions>),", info.name, info.name))
-            .collect::<Vec<_>>()
-            .join("\n"),
-    )
+    let mut events = event_info
+        .iter()
+        .map(|info| format!("{}({}Event<TExtensions>),", info.name, info.name))
+        .collect::<Vec<_>>();
+
+    // Add Block event to the enum
+    events.push("Block(BlockEvent<TExtensions>),".to_string());
+
+    Code::new(events.join("\n"))
 }
 
 fn generate_event_type_name(name: &str) -> String {
@@ -96,64 +118,91 @@ fn generate_event_type_name(name: &str) -> String {
 }
 
 fn generate_event_names_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> Code {
-    Code::new(
-        event_info
-            .iter()
-            .map(|info| format!("{}::{}(_) => \"{}\",", event_type_name, info.name, info.name))
-            .collect::<Vec<_>>()
-            .join("\n"),
-    )
+    let mut arms = event_info
+        .iter()
+        .map(|info| format!("{}::{}(_) => \"{}\",", event_type_name, info.name, info.name))
+        .collect::<Vec<_>>();
+
+    // Add Block event match arm
+    arms.push(format!("{}::Block(_) => \"Block\",", event_type_name));
+
+    Code::new(arms.join("\n"))
 }
 
 fn generate_register_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> Code {
-    Code::new(
-        event_info
-            .iter()
-            .map(|info| {
-                format!(
-                    r#"
-                    {}::{}(event) => {{
-                        let event = Arc::new(event);
-                        Arc::new(move |result| {{
-                            let event = Arc::clone(&event);
-                            async move {{ event.call(result).await }}.boxed()
-                        }})
-                    }},
-                "#,
-                    event_type_name, info.name
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-    )
+    let mut arms = event_info
+        .iter()
+        .map(|info| {
+            format!(
+                r#"
+                {}::{}(event) => {{
+                    let event = Arc::new(event);
+                    Arc::new(move |result| {{
+                        let event = Arc::clone(&event);
+                        async move {{ event.call(result).await }}.boxed()
+                    }})
+                }},
+            "#,
+                event_type_name, info.name
+            )
+        })
+        .collect::<Vec<_>>();
+
+    // Add Block event register match arm
+    arms.push(format!(
+        r#"
+        {}::Block(event) => {{
+            let event = Arc::new(event);
+            Arc::new(move |result| {{
+                let event = Arc::clone(&event);
+                async move {{ event.call(result).await }}.boxed()
+            }})
+        }},
+    "#,
+        event_type_name
+    ));
+
+    Code::new(arms.join("\n"))
 }
 
 fn generate_decoder_match_arms_code(event_type_name: &str, event_info: &[EventInfo]) -> Code {
-    Code::new(
-        event_info
-            .iter()
-            .map(|info| {
-                format!(
-                    r#"
-                    {event_type_name}::{event_info_name}(_) => {{
-                        Arc::new(move |topics: Vec<B256>, data: Bytes| {{
-                            match {event_info_name}Data::decode_raw_log(topics, &data[0..]) {{
-                                Ok(event) => {{
-                                    let result: {event_info_name}Data = event;
-                                    Arc::new(result) as Arc<dyn Any + Send + Sync>
-                                }}
-                                Err(error) => Arc::new(error) as Arc<dyn Any + Send + Sync>,
+    let mut arms = event_info
+        .iter()
+        .map(|info| {
+            format!(
+                r#"
+                {event_type_name}::{event_info_name}(_) => {{
+                    Arc::new(move |topics: Vec<B256>, data: Bytes| {{
+                        match {event_info_name}Data::decode_raw_log(topics, &data[0..]) {{
+                            Ok(event) => {{
+                                let result: {event_info_name}Data = event;
+                                Arc::new(result) as Arc<dyn Any + Send + Sync>
                             }}
-                        }})
-                    }}
-                "#,
-                    event_type_name = event_type_name,
-                    event_info_name = info.name
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-    )
+                            Err(error) => Arc::new(error) as Arc<dyn Any + Send + Sync>,
+                        }}
+                    }})
+                }}
+            "#,
+                event_type_name = event_type_name,
+                event_info_name = info.name
+            )
+        })
+        .collect::<Vec<_>>();
+
+    // Add Block event decoder match arm
+    arms.push(format!(
+        r#"
+        {event_type_name}::Block(_) => {{
+            Arc::new(move |_topics: Vec<B256>, _data: Bytes| {{
+                // Block events don't need decoding, they're passed as-is
+                Arc::new(()) as Arc<dyn Any + Send + Sync>
+            }})
+        }}
+    "#,
+        event_type_name = event_type_name
+    ));
+
+    Code::new(arms.join("\n"))
 }
 
 fn generate_csv_instance(
@@ -296,14 +345,19 @@ fn generate_trace_callback_structs_code(
                     // transfer events with 3 indexed topics
                     let result: Vec<{name}Result> = events
                         .into_iter()
-                        .map(|item| {{
-                            {name}Result {{
-                                event_data: {name}Data {{
-                                    from: item.from,
-                                    to: item.to,
-                                    value: item.value,
-                                }},
-                                tx_information: item.tx_information,
+                        .filter_map(|item| {{
+                            match item {{
+                                TraceResult::NativeTransfer {{ from, to, value, tx_information, .. }} => {{
+                                    Some({name}Result {{
+                                        event_data: {name}Data {{
+                                            from,
+                                            to,
+                                            value,
+                                        }},
+                                        tx_information,
+                                    }})
+                                }}
+                                _ => None,
                             }}
                         }})
                         .collect();
@@ -323,19 +377,12 @@ fn generate_trace_callback_structs_code(
             csv = if csv_enabled { r#"csv: Arc::new(csv),"# } else { "" },
             csv_generator = csv_generator,
             event_callback_events_len =
-                if !is_filter { "let events_len = events.len();" } else { "" },
+                if !is_filter { "let _events_len = events.len();" } else { "" },
             event_callback_return = if !is_filter {
-                format!(
-                    r#"
-                    if result.len() == events_len {{
+                r#"
                         (self.callback)(&result, Arc::clone(&self.context)).await
-                    }} else {{
-                        panic!("{name}Event: Unexpected data type - expected: {struct_data}")
-                    }}
-                    "#,
-                    name = info.name,
-                    struct_data = info.struct_data()
-                )
+                    "#
+                .to_string()
             } else {
                 "(self.callback)(&result, Arc::clone(&self.context)).await".to_string()
             }
@@ -343,6 +390,92 @@ fn generate_trace_callback_structs_code(
 
         parts.push(part);
     }
+
+    // Add Block event callback struct
+    let block_part = format!(
+        r#"
+        pub fn block_handler<TExtensions, F, Fut>(
+            custom_logic: F,
+        ) -> BlockTraceCallbackType<TExtensions>
+        where
+            BlockResult: Clone + 'static,
+            F: for<'a> Fn(Vec<BlockResult>, Arc<TraceContext<TExtensions>>) -> Fut
+                + Send
+                + Sync
+                + 'static
+                + Clone,
+            Fut: Future<Output = TraceCallbackResult<()>> + Send + 'static,
+            TExtensions: Send + Sync + 'static,
+        {{
+            Arc::new(move |results, context| {{
+                let custom_logic = custom_logic.clone();
+                let results = results.clone();
+                let context = Arc::clone(&context);
+                async move {{ (custom_logic)(results, context).await }}.boxed()
+            }})
+        }}
+
+        type BlockTraceCallbackType<TExtensions> = Arc<
+            dyn for<'a> Fn(&'a Vec<BlockResult>, Arc<TraceContext<TExtensions>>) -> BoxFuture<'a, TraceCallbackResult<()>>
+                + Send
+                + Sync,
+            >;
+
+        pub struct BlockEvent<TExtensions> where TExtensions: Send + Sync + 'static {{
+            callback: BlockTraceCallbackType<TExtensions>,
+            context: Arc<TraceContext<TExtensions>>,
+        }}
+
+        impl<TExtensions> BlockEvent<TExtensions> where TExtensions: Send + Sync + 'static {{
+            pub async fn handler<F, Fut>(closure: F, extensions: TExtensions) -> Self
+            where
+                BlockResult: Clone + 'static,
+                F: for<'a> Fn(Vec<BlockResult>, Arc<TraceContext<TExtensions>>) -> Fut
+                    + Send
+                    + Sync
+                    + 'static
+                    + Clone,
+                Fut: Future<Output = TraceCallbackResult<()>> + Send + 'static,
+            {{
+                Self {{
+                    callback: block_handler(closure),
+                    context: Arc::new(TraceContext {{
+                        {database}
+                        extensions: Arc::new(extensions),
+                    }}),
+                }}
+            }}
+        }}
+
+        #[async_trait]
+        impl<TExtensions> TraceCallback for BlockEvent<TExtensions> where TExtensions: Send + Sync {{
+            async fn call(&self, events: Vec<TraceResult>) -> TraceCallbackResult<()> {{
+                // Block events are passed as-is, no decoding needed
+                let result: Vec<BlockResult> = events
+                    .into_iter()
+                    .filter_map(|item| {{
+                        match item {{
+                            TraceResult::Block {{ block, tx_information, .. }} => {{
+                                Some(BlockResult {{ block, tx_information }})
+                            }}
+                            _ => None,
+                        }}
+                    }})
+                    .collect();
+
+                if !result.is_empty() {{
+                    (self.callback)(&result, Arc::clone(&self.context)).await
+                }} else {{
+                    Ok(())
+                }}
+            }}
+        }}
+        "#,
+        database =
+            if databases_enabled { "database: get_or_init_postgres_client().await," } else { "" },
+    );
+
+    parts.push(block_part);
 
     Ok(Code::new(parts.join("\n")))
 }
@@ -540,7 +673,7 @@ fn generate_trace_bindings_code(
                 }}
 
                 let trace_information = TraceInformation {{
-                    name: "{EVENT_NAME}".to_string(),
+                    name: event_name.to_string(),
                     details: contract_details
                         .iter()
                         .map(|c| NetworkTrace {{
@@ -933,7 +1066,36 @@ pub fn generate_trace_handlers(
         ));
     }
 
-    imports.push_str("};\n");
+    // Add Block event handler
+    imports.push_str(",BlockEvent};\n");
+
+    let block_handler = format!(
+        r#"
+        async fn block_handler(manifest_path: &PathBuf, registry: &mut TraceCallbackRegistry) {{
+            BlockEvent::handler(|results, context| async move {{
+                if results.is_empty() {{
+                    return Ok(());
+                }}
+
+                rindexer_info!(
+                    "{contract_name}::Block - {{}} - {{}} blocks",
+                    "INDEXED".green(),
+                    results.len(),
+                );
+
+                Ok(())
+            }},
+            no_extensions(),
+          )
+          .await,
+        }}
+        "#,
+        contract_name = contract_name,
+    );
+
+    handlers.push_str(&block_handler);
+
+    registry_fn.push_str("block_handler(manifest_path, registry).await;");
 
     registry_fn.push('}');
 

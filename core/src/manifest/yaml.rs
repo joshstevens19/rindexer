@@ -173,9 +173,9 @@ fn validate_manifest(
 
         if let Some(include_events) = &contract.include_events {
             for event in include_events {
-                if !events.iter().any(|e| e.name == *event && e.type_ == "event") {
+                if !events.iter().any(|e| e.name == *event.name && e.type_ == "event") {
                     return Err(ValidateManifestError::EventIncludedNotFoundInABI(
-                        event.clone(),
+                        event.name.clone(),
                         contract.name.clone(),
                     ));
                 }

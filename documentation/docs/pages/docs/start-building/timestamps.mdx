@@ -1,0 +1,86 @@
+# Log block-timestamps
+
+## What is the problem
+
+A log result in the JSON-RPC spec does not always expose the block timestamp, which means it can require
+another block lookup per each log to get the block timestamp. This is not efficient and can cause a big bottleneck in indexing.
+
+:::info
+But we want the best DX and so until all node implementation catch up, we have the following solutions.
+:::
+
+# How we handle it
+
+## RPC Support for Log Timestamps
+
+We want to be able to solve this effectively and have worked with node implementations like GETH and RETH to
+include block timestamps in logs.
+
+Providers and L2s will slowly begin rolling this out in their nodes over the coming months and years and soon this
+problem will no longer exist.
+
+## Delta run-length encoded
+
+Delta run-length encoding is an effective way to support block-timestamps that are not necessarily sequential but
+generally follow a pattern.
+
+Most chains will have a roughly "fixed" block-time, and this can be used to encode the block-timestamps more efficiently
+via "runs" of the delta between times.
+
+This process requires more upfront-work and more storage/memory, but can be a great way to save on network requests and IO time.
+
+We precompute chains and store the [highly compressed kB to MB scale binary files for hydration](https://github.com/joshstevens19/rindexer/tree/master/core/resources).
+
+This is a manual process and is designed to optimize backfill operations but won't help for head-of-line indexing which
+will still require a manual rpc call.
+
+## Fixed timestamps chains
+
+These are the simplest of the networks, it is the most extreme delta-run-length encoding and can therefore be
+optimized even more.
+
+Rather than storing "runs", we consider the whole chain to be a single "run" and can simply
+calculate any timestamp for a block.
+
+Due to the lack of any strong guarantee, we can only do this up to a "known" block number where
+the fixed-timestamp consistency has been validated. If at any time a chain breaks this pattern
+we must drop back to delta run length encoding.
+
+## Sampled & Batched Lookups
+
+if we don't have a precomputed or fixed-chain mapping here we will fall back to an optimised sampled
+and batch RPC call per network.
+
+We aim to minimize network round-trip time with optimal batch-sizes and concurrent requests for large block-ranges.
+
+We also perform the lookup as soon as the logs are returned such that if there is any bottle-necking in the handler or
+database write or stream processing, we will take advantage of that dead time.
+
+**Loose time-ordering**
+
+We also optionally allow users to configure a sample rate, this can additionally speed up worst-case scenario
+network latency times by significantly reducing the data over the wire and RPC processing time. For example an RPC call
+for 2 blocks is fast, but if we have a sparse event over 5,000 blocks in a single log response, we may have to make tens
+or hundreds of concurrent and/or sequential calls to fetch them all.
+
+Sampling helps minimize this by fetching 50 blocks at spaced intervals in a single batched RPC request and interpolating
+the timestamps between those intervals. This can be a massive performance boost, at the cost of occasionally slight
+inaccuracies in timestamps.
+
+This should be opted-into based on your workload and requirements.
+
+# Extending supported chains
+
+To begin encoding a new chain's block-timestamps, you can run the following command:
+
+```sh
+cargo xtask encode-block-clock \
+  --network 43114 \
+  --rpc-url "https://avax-mainnet.g.alchemy.com/v2/API_KEY" \
+  --batch-size 2000
+```
+
+This will encode and periodically flush data to the file `core/resources/blockclock/43113.blockclock` as per the above example.
+
+Simply replace the network if and RPC url and run the command until it is complete. This will potentially consume a lot of
+CU for your provider so be aware of this.

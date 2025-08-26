@@ -2,6 +2,7 @@ use std::path::Path;
 
 use tracing::{debug, info};
 
+use crate::database::postgres::migrations::execute_migrations_for_indexer_sql;
 use crate::{
     database::postgres::{
         client::{PostgresClient, PostgresConnectionError, PostgresError},
@@ -28,8 +29,8 @@ pub async fn setup_postgres(
     manifest: &Manifest,
 ) -> Result<PostgresClient, SetupPostgresError> {
     info!("Setting up postgres");
-    let client = PostgresClient::new().await?;
 
+    let client = PostgresClient::new().await?;
     let disable_event_tables = manifest.storage.postgres_disable_create_tables();
 
     if manifest.storage.postgres_drop_each_run() {
@@ -42,22 +43,37 @@ pub async fn setup_postgres(
         info!("Dropped all data for {}", manifest.name);
     }
 
-    if !disable_event_tables {
-        info!("Creating tables for {}", manifest.name);
-    } else {
+    if disable_event_tables {
         info!("Creating internal rindexer tables for {}", manifest.name);
+    } else {
+        info!("Creating tables for {}", manifest.name);
     }
+
     let sql = generate_tables_for_indexer_sql(
         project_path,
         &manifest.to_indexer(),
         disable_event_tables,
     )?;
+
     debug!("{}", sql);
     client.batch_execute(sql.as_str()).await?;
-    if !disable_event_tables {
+
+    if disable_event_tables {
         info!("Created tables for {}", manifest.name);
     } else {
         info!("Created internal rindexer tables for {}", manifest.name);
+    }
+
+    let version_applied = execute_migrations_for_indexer_sql(
+        &client,
+        project_path,
+        &manifest.to_indexer(),
+        disable_event_tables,
+    )
+    .await?;
+
+    for version in version_applied {
+        info!("Applied migration V{} for {}", version.as_u32(), manifest.name);
     }
 
     Ok(client)
