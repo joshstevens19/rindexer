@@ -1,7 +1,9 @@
 use crate::database::clickhouse::client::{
     ClickhouseClient, ClickhouseConnectionError, ClickhouseError,
 };
-use crate::database::clickhouse::generate::generate_tables_for_indexer_clickhouse;
+use crate::database::clickhouse::generate::{
+    drop_tables_for_indexer_clickhouse, generate_tables_for_indexer_clickhouse,
+};
 use crate::database::generate::GenerateTablesForIndexerSqlError;
 use crate::manifest::core::Manifest;
 use std::path::Path;
@@ -26,13 +28,34 @@ pub async fn setup_clickhouse(
 
     let client =
         ClickhouseClient::new().await.map_err(SetupClickhouseError::ClickhouseConnectionError)?;
+    let disable_event_tables = manifest.storage.clickhouse_disable_create_tables();
+
+    if manifest.storage.clickhouse_drop_each_run() {
+        info!(
+            "`drop_each_run` enabled so dropping all data for {} before starting",
+            &manifest.name
+        );
+        let sql = drop_tables_for_indexer_clickhouse(project_path, &manifest.to_indexer());
+        client.execute_batch(sql.as_str()).await?;
+        info!("Dropped all data for {}", manifest.name);
+    }
+
+    if disable_event_tables {
+        info!("Creating internal rindexer tables for {}", manifest.name);
+    } else {
+        info!("Creating tables for {}", manifest.name);
+    }
 
     let sql = generate_tables_for_indexer_clickhouse(project_path, &manifest.to_indexer(), false)
         .map_err(SetupClickhouseError::ClickhouseTableGenerationError)?;
 
     client.execute_batch(sql.as_str()).await?;
 
-    info!("Created tables for {}", manifest.name);
+    if disable_event_tables {
+        info!("Created tables for {}", manifest.name);
+    } else {
+        info!("Created internal rindexer tables for {}", manifest.name);
+    }
 
     Ok(client)
 }

@@ -192,7 +192,7 @@ impl Storage {
             return false;
         }
 
-        self.postgres.as_ref().is_some_and(|details| details.drop_each_run.unwrap_or_default())
+        self.clickhouse.as_ref().is_some_and(|details| details.drop_each_run.unwrap_or_default())
     }
 
     pub fn csv_enabled(&self) -> bool {

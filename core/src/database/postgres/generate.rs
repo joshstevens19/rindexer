@@ -1,16 +1,8 @@
-use std::path::Path;
-use tracing::error;
-
-use crate::database::generate::{
-    compact_table_name_if_needed, generate_indexer_contract_schema_name,
-    generate_internal_factory_event_table_name,
-};
+use crate::database::generate::compact_table_name_if_needed;
 use crate::helpers::parse_solidity_integer_type;
 use crate::{
-    abi::{ABIInput, ABIItem, GenerateAbiPropertiesType},
+    abi::{ABIInput, GenerateAbiPropertiesType},
     helpers::camel_to_snake,
-    indexer::Indexer,
-    types::code::Code,
 };
 
 fn generate_columns(inputs: &[ABIInput], property_type: &GenerateAbiPropertiesType) -> Vec<String> {
@@ -54,55 +46,6 @@ pub struct GenerateInternalFactoryEventTableNameParams {
     pub contract_name: String,
     pub event_name: String,
     pub input_names: Vec<String>,
-}
-
-pub fn drop_tables_for_indexer_sql(project_path: &Path, indexer: &Indexer) -> Code {
-    let mut sql = format!(
-        "DROP TABLE IF EXISTS rindexer_internal.{}_last_known_indexes_dropping_sql CASCADE;",
-        camel_to_snake(&indexer.name)
-    );
-    sql.push_str(format!("DROP TABLE IF EXISTS rindexer_internal.{}_last_known_relationship_dropping_sql CASCADE;", camel_to_snake(&indexer.name)).as_str());
-
-    sql.push_str("DROP TABLE IF EXISTS rindexer_internal.latest_block;");
-
-    for contract in &indexer.contracts {
-        let contract_name = contract.before_modify_name_if_filter_readonly();
-        let schema_name = generate_indexer_contract_schema_name(&indexer.name, &contract_name);
-        sql.push_str(format!("DROP SCHEMA IF EXISTS {schema_name} CASCADE;").as_str());
-
-        // drop last synced blocks for contracts
-        let abi_items = ABIItem::read_abi_items(project_path, contract);
-        if let Ok(abi_items) = abi_items {
-            for abi_item in abi_items.iter() {
-                let table_name = generate_internal_event_table_name(&schema_name, &abi_item.name);
-                sql.push_str(
-                    format!("DROP TABLE IF EXISTS rindexer_internal.{table_name} CASCADE;")
-                        .as_str(),
-                );
-            }
-        } else {
-            error!(
-                "Could not read ABI items for contract moving on clearing the other data up: {}",
-                contract.name
-            );
-        }
-
-        // drop factory indexing tables
-        for factory in contract.details.iter().flat_map(|d| d.factory.as_ref()) {
-            let params = GenerateInternalFactoryEventTableNameParams {
-                indexer_name: indexer.name.clone(),
-                contract_name: factory.name.clone(),
-                event_name: factory.event_name.clone(),
-                input_names: factory.input_names(),
-            };
-            let table_name = generate_internal_factory_event_table_name(&params);
-            sql.push_str(
-                format!("DROP TABLE IF EXISTS rindexer_internal.{table_name} CASCADE;").as_str(),
-            )
-        }
-    }
-
-    Code::new(sql)
 }
 
 #[allow(clippy::manual_strip)]

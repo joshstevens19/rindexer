@@ -3,12 +3,11 @@ use std::path::Path;
 use tracing::{debug, info};
 
 use crate::database::generate::{
-    generate_tables_for_indexer_sql, GenerateTablesForIndexerSqlError,
+    drop_tables_for_indexer_sql, generate_tables_for_indexer_sql, GenerateTablesForIndexerSqlError,
 };
 use crate::database::postgres::migrations::execute_migrations_for_indexer_sql;
 use crate::{
     database::postgres::client::{PostgresClient, PostgresConnectionError, PostgresError},
-    drop_tables_for_indexer_sql,
     manifest::core::Manifest,
 };
 

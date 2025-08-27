@@ -1,5 +1,5 @@
 use std::path::Path;
-use tracing::info;
+use tracing::{error, info};
 
 use crate::{
     abi::{ABIInput, ABIItem, EventInfo, GenerateAbiPropertiesType},
@@ -10,7 +10,11 @@ use crate::{
 };
 
 use crate::database::generate::{
-    generate_indexer_contract_schema_name, GenerateTablesForIndexerSqlError,
+    generate_indexer_contract_schema_name, generate_internal_factory_event_table_name,
+    GenerateTablesForIndexerSqlError,
+};
+use crate::database::postgres::generate::{
+    generate_internal_event_table_name, GenerateInternalFactoryEventTableNameParams,
 };
 
 pub fn generate_tables_for_indexer_clickhouse(
@@ -193,6 +197,49 @@ fn generate_columns(inputs: &[ABIInput], property_type: &GenerateAbiPropertiesTy
 pub fn generate_columns_with_data_types(inputs: &[ABIInput]) -> Vec<String> {
     generate_columns(inputs, &GenerateAbiPropertiesType::ClickhouseWithDataTypes)
 }
+
+pub fn drop_tables_for_indexer_clickhouse(project_path: &Path, indexer: &Indexer) -> Code {
+    let mut sql = String::new();
+
+    sql.push_str("DROP TABLE IF EXISTS rindexer_internal.latest_block;");
+
+    for contract in &indexer.contracts {
+        let contract_name = contract.before_modify_name_if_filter_readonly();
+        let schema_name = generate_indexer_contract_schema_name(&indexer.name, &contract_name);
+        sql.push_str(format!("DROP DATABASE IF EXISTS {schema_name};").as_str());
+
+        // drop last synced blocks for contracts
+        let abi_items = ABIItem::read_abi_items(project_path, contract);
+        if let Ok(abi_items) = abi_items {
+            for abi_item in abi_items.iter() {
+                let table_name = generate_internal_event_table_name(&schema_name, &abi_item.name);
+                sql.push_str(
+                    format!("DROP TABLE IF EXISTS rindexer_internal.{table_name};").as_str(),
+                );
+            }
+        } else {
+            error!(
+                "Could not read ABI items for contract moving on clearing the other data up: {}",
+                contract.name
+            );
+        }
+
+        // drop factory indexing tables
+        for factory in contract.details.iter().flat_map(|d| d.factory.as_ref()) {
+            let params = GenerateInternalFactoryEventTableNameParams {
+                indexer_name: indexer.name.clone(),
+                contract_name: factory.name.clone(),
+                event_name: factory.event_name.clone(),
+                input_names: factory.input_names(),
+            };
+            let table_name = generate_internal_factory_event_table_name(&params);
+            sql.push_str(format!("DROP TABLE IF EXISTS rindexer_internal.{table_name};").as_str())
+        }
+    }
+
+    Code::new(sql)
+}
+
 #[allow(clippy::manual_strip)]
 pub fn solidity_type_to_clickhouse_type(abi_type: &str) -> String {
     let is_array = abi_type.ends_with("[]");

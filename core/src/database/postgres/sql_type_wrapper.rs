@@ -461,13 +461,25 @@ impl EthereumSqlTypeWrapper {
             ),
 
             // DateTime
-            EthereumSqlTypeWrapper::DateTime(value) => format!("'{}'", value.to_rfc3339()),
+            EthereumSqlTypeWrapper::DateTime(value) => {
+                let timestamp = value.to_rfc3339();
+                let (datetime, _) =
+                    timestamp.split_once('+').expect("DateTime should have a timezone");
+                format!("'{datetime}'",)
+            }
             EthereumSqlTypeWrapper::DateTimeNullable(value) => {
-                if let Some(value) = value {
-                    format!("'{}'", value.to_rfc3339())
+                let val = if let Some(value) = value {
+                    let timestamp = value.to_rfc3339();
+                    let (datetime, _) =
+                        timestamp.split_once('+').expect("DateTime should have a timezone");
+
+                    format!("'{datetime}'")
                 } else {
                     "NULL".to_string()
-                }
+                };
+
+                println!("DateTimeNullable: {}", val);
+                val
             }
 
             // EthereumSqlTypeWrapper::U64Nullable(_) => {}
