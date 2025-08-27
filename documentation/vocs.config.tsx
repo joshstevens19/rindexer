@@ -212,15 +212,6 @@ export default defineConfig({
         { text: "Using Reth ExExes", link: "/docs/advanced/using-reth-exex" },
       ],
     },
-    {
-      text: "Coming soon",
-      items: [
-        {
-          text: "log block timestamps",
-          link: "/docs/coming-soon/log-block-timestamps",
-        },
-      ],
-    },
     { text: "Changelog", link: "/docs/changelog" },
     { text: "Shoutout", link: "/docs/shoutout" },
   ],
