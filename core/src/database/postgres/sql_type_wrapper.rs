@@ -474,9 +474,52 @@ impl EthereumSqlTypeWrapper {
 
             // DateTime
             EthereumSqlTypeWrapper::DateTime(value) => format!("'{}'", value.to_rfc3339()),
+            EthereumSqlTypeWrapper::DateTimeNullable(value) => {
+                if let Some(value) = value {
+                    format!("'{}'", value.to_rfc3339())
+                } else {
+                    "NULL".to_string()
+                }
+            }
+
+            // EthereumSqlTypeWrapper::U64Nullable(_) => {}
+            // EthereumSqlTypeWrapper::U64BigInt(_) => {}
+            // EthereumSqlTypeWrapper::U256Numeric(_) => {}
+            // EthereumSqlTypeWrapper::U256NumericNullable(_) => {}
+            // EthereumSqlTypeWrapper::U256Nullable(_) => {}
+            // EthereumSqlTypeWrapper::U256Bytes(_) => {}
+            // EthereumSqlTypeWrapper::U256BytesNullable(_) => {}
+            // EthereumSqlTypeWrapper::I256Numeric(_) => {}
+            // EthereumSqlTypeWrapper::I256Nullable(_) => {}
+            // EthereumSqlTypeWrapper::I256Bytes(_) => {}
+            // EthereumSqlTypeWrapper::I256BytesNullable(_) => {}
+            // EthereumSqlTypeWrapper::VecU256Bytes(_) => {}
+            // EthereumSqlTypeWrapper::VecU256Numeric(_) => {}
+            // EthereumSqlTypeWrapper::VecI256Bytes(_) => {}
+            // EthereumSqlTypeWrapper::H160(_) => {}
+            // EthereumSqlTypeWrapper::B256Bytes(_) => {}
+            // EthereumSqlTypeWrapper::VecH160(_) => {}
+            // EthereumSqlTypeWrapper::VecB256Bytes(_) => {}
+            // EthereumSqlTypeWrapper::AddressNullable(_) => {}
+            // EthereumSqlTypeWrapper::AddressBytes(_) => {}
+            // EthereumSqlTypeWrapper::AddressBytesNullable(_) => {}
+            // EthereumSqlTypeWrapper::VecAddressBytes(_) => {}
+            // EthereumSqlTypeWrapper::StringVarchar(_) => {}
+            // EthereumSqlTypeWrapper::StringChar(_) => {}
+            // EthereumSqlTypeWrapper::StringNullable(_) => {}
+            // EthereumSqlTypeWrapper::StringVarcharNullable(_) => {}
+            // EthereumSqlTypeWrapper::StringCharNullable(_) => {}
+            // EthereumSqlTypeWrapper::VecStringVarchar(_) => {}
+            // EthereumSqlTypeWrapper::VecStringChar(_) => {}
+            // EthereumSqlTypeWrapper::BytesNullable(_) => {}
+            // EthereumSqlTypeWrapper::Uuid(_) => {}
+            // EthereumSqlTypeWrapper::JSONB(_) => {}
 
             // Default case to catch unsupported variants
-            _ => panic!("Unsupported EthereumSqlTypeWrapper variant for ClickHouse serialization"),
+            _ => panic!(
+                "Unsupported '{}' EthereumSqlTypeWrapper variant for ClickHouse serialization",
+                self.raw_name()
+            ),
         }
     }
 

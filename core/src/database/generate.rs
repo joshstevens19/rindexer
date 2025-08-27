@@ -34,7 +34,7 @@ fn generate_event_table_sql_with_comments(
             let create_table_sql = format!(
                 "CREATE TABLE IF NOT EXISTS {table_name} (\
                 rindexer_id SERIAL PRIMARY KEY NOT NULL, \
-                contract_address CHAR(66) NOT NULL, \
+                contract_address CHAR(42) NOT NULL, \
                 {event_columns} \
                 tx_hash CHAR(66) NOT NULL, \
                 block_number NUMERIC NOT NULL, \
@@ -105,7 +105,7 @@ fn generate_internal_event_table_sql(
 
         let latest_block_insert_queries = networks.iter().map(|network| {
             format!(
-                r#"INSERT INTO rindexer_internal.latest_block ("network", "block") VALUES ('{network}', 0) ON CONFLICT ("network") DO NOTHING;"#
+                r#"INSERT INTO rindexer_internal.latest_block ("network", "block") VALUES ("{network}", 0) ON CONFLICT ("network") DO NOTHING;"#
             )
         }).collect::<Vec<_>>().join("\n");
 

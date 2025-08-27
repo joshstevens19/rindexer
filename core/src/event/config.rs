@@ -4,6 +4,7 @@ use alloy::rpc::types::ValueOrArray;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
 
+use crate::database::clickhouse::client::ClickhouseClient;
 use crate::event::contract_setup::{AddressDetails, IndexingContractSetup};
 use crate::event::factory_event_filter_sync::update_known_factory_deployed_addresses;
 use crate::event::rindexer_event_filter::FactoryFilter;
@@ -38,6 +39,7 @@ pub struct ContractEventProcessingConfig {
     pub registry: Arc<EventCallbackRegistry>,
     pub progress: Arc<Mutex<IndexingEventsProgressState>>,
     pub database: Option<Arc<PostgresClient>>,
+    pub clickhouse: Option<Arc<ClickhouseClient>>,
     pub csv_details: Option<CsvDetails>,
     pub stream_last_synced_block_file_path: Option<String>,
     pub index_event_in_order: bool,
@@ -108,6 +110,7 @@ pub struct FactoryEventProcessingConfig {
     pub registry: Arc<EventCallbackRegistry>,
     pub progress: Arc<Mutex<IndexingEventsProgressState>>,
     pub database: Option<Arc<PostgresClient>>,
+    pub clickhouse: Option<Arc<ClickhouseClient>>,
     pub csv_details: Option<CsvDetails>,
     pub stream_last_synced_block_file_path: Option<String>,
     pub index_event_in_order: bool,
@@ -279,6 +282,13 @@ impl EventProcessingConfig {
         match self {
             Self::ContractEventProcessing(config) => config.database.clone(),
             Self::FactoryEventProcessing(config) => config.database.clone(),
+        }
+    }
+
+    pub fn clickhouse(&self) -> Option<Arc<ClickhouseClient>> {
+        match self {
+            Self::ContractEventProcessing(config) => config.clickhouse.clone(),
+            Self::FactoryEventProcessing(config) => config.clickhouse.clone(),
         }
     }
 

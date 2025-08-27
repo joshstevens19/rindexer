@@ -14,14 +14,6 @@ use crate::database::generate::{
     generate_indexer_contract_schema_name, GenerateTablesForIndexerSqlError,
 };
 
-#[derive(thiserror::Error, Debug)]
-pub enum GenerateTablesForIndexerClickhouseError {
-    #[error("{0}")]
-    ReadAbiError(#[from] ReadAbiError),
-
-    #[error("{0}")]
-    ParamTypeError(#[from] ParamTypeError),
-}
 pub fn generate_tables_for_indexer_clickhouse(
     project_path: &Path,
     indexer: &Indexer,
@@ -38,7 +30,8 @@ pub fn generate_tables_for_indexer_clickhouse(
 
         if !disable_event_tables {
             sql.push_str(format!("CREATE DATABASE IF NOT EXISTS {};", schema_name).as_str());
-            info!("Creating schema if not exists: {}", schema_name);
+
+            info!("Creating database if not exists: {}", schema_name);
 
             let event_matching_name_on_other = find_clashing_event_names(
                 project_path,
@@ -61,32 +54,6 @@ pub fn generate_tables_for_indexer_clickhouse(
             networks,
         ));
     }
-
-    sql.push_str(&format!(
-        r#"
-            CREATE TABLE IF NOT EXISTS rindexer_internal.{indexer_name}_last_known_indexes_dropping_sql
-            (
-                key Int32,
-                value String
-            )
-            ENGINE = MergeTree
-            ORDER BY key;
-    "#,
-        indexer_name = camel_to_snake(&indexer.name)
-    ));
-
-    sql.push_str(&format!(
-        r#"
-        CREATE TABLE IF NOT EXISTS rindexer_internal.{indexer_name}_last_known_indexes_dropping_sql
-         (
-            key Int32,
-            value String
-         )
-        ENGINE = MergeTree
-        ORDER BY key;
-    "#,
-        indexer_name = camel_to_snake(&indexer.name)
-    ));
 
     Ok(Code::new(sql))
 }
@@ -137,20 +104,26 @@ fn generate_event_table_clickhouse(
                 generate_columns_with_data_types(&event_info.inputs).join(", ") + ","
             };
 
+            //  TODO: Nullable isn't recommended in OLAP
             let create_table_sql = format!(
-                "CREATE TABLE IF NOT EXISTS {} (\
-                rindexer_id UInt64 NOT NULL, \
-                contract_address FixedString(66) NOT NULL, \
-                {} \
-                tx_hash FixedString(66) NOT NULL, \
-                block_number Float64 NOT NULL, \
-                block_hash FixedString(66) NOT NULL, \
-                network String NOT NULL, \
-                tx_index Float64 NOT NULL, \
-                log_index String NOT NULL\
-                )\
-                ENGINE = MergeTree
-                ORDER BY rindexer_id;",
+                r#"CREATE TABLE IF NOT EXISTS {} (
+                    contract_address FixedString(42),
+                    {}
+                    tx_hash FixedString(66),
+                    block_number UInt64,
+                    block_timestamp Nullable(DateTime('UTC')),
+                    block_hash FixedString(66),
+                    network String,
+                    tx_index UInt64,
+                    log_index UInt64,
+
+                    index idx_block_num (block_number) type minmax granularity 1,
+                    index idx_timestamp (block_timestamp) type minmax granularity 1,
+                    index idx_network (network) type bloom_filter granularity 1,
+                    index idx_tx_hash (tx_hash) type bloom_filter granularity 1
+                )
+                ENGINE = ReplacingMergeTree
+                ORDER BY (network, block_number, tx_hash, log_index);"#,
                 table_name, event_columns
             );
 
@@ -173,12 +146,17 @@ fn generate_internal_event_table_clickhouse(
         );
 
         let create_table_query = format!(
-            r#"CREATE TABLE IF NOT EXISTS {} ("network" String NOT NULL, "last_synced_block" Float64 NOT NULL) ENGINE = MergeTree ORDER BY network;;"#,
+            r#"
+                CREATE TABLE IF NOT EXISTS {} (
+                    "network" String,
+                    "last_synced_block" UInt64
+                )
+                    ENGINE = ReplacingMergeTree(last_synced_block)
+                    ORDER BY network;"#,
             table_name
         );
 
         let insert_queries = networks.iter().map(|network| {
-
             format!(
                 r#"INSERT INTO {} ("network", "last_synced_block") VALUES ('{}', 0);"#,
                 table_name,
@@ -186,7 +164,23 @@ fn generate_internal_event_table_clickhouse(
             )
         }).collect::<Vec<_>>().join("\n");
 
-        format!("{}", create_table_query)
+        let create_latest_block_query = r#"
+            CREATE TABLE IF NOT EXISTS rindexer_internal.latest_block (
+                "network" String,
+                "block" UInt256
+              )
+              ENGINE = ReplacingMergeTree(block)
+                ORDER BY network;
+        "#.to_string();
+
+        let latest_block_insert_queries = networks.iter().map(|network| {
+            format!(
+                r#"INSERT INTO rindexer_internal.latest_block ("network", "block") VALUES ('{network}', 0);"#
+            )
+        }).collect::<Vec<_>>().join("\n");
+
+
+        format!("{} {} {} {}", create_table_query, insert_queries, create_latest_block_query, latest_block_insert_queries)
     }).collect::<Vec<_>>().join("\n")
 }
 
@@ -207,7 +201,7 @@ pub fn solidity_type_to_clickhouse_type(abi_type: &str) -> String {
 
     let sql_type = match base_type {
         "address" => "FixedString(42)", // Use FixedString for fixed-size strings
-        "bool" => "UInt8",              // Use UInt8 to represent booleans (0 or 1)
+        "bool" => "Bool",               // Use UInt8 to represent booleans (0 or 1)
         "string" => "String",           // Use String for variable-length text
         t if t.starts_with("bytes") => "String", // Use String for binary data
         t if t.starts_with("int") || t.starts_with("uint") => {
@@ -218,13 +212,23 @@ pub fn solidity_type_to_clickhouse_type(abi_type: &str) -> String {
                 ("uint", t[4..].parse().expect("Invalid uintN type"))
             };
 
-            match size {
+            let int = match size {
                 8 => "Int8",
                 16 => "Int16",
                 32 => "Int32",
                 64 => "Int64",
-                128 | 256 => "String", // Use String for very large integers as ClickHouse doesn't support 128/256-bit integers
+                128 => "Int128",
+                256 => "Int256",
+                // Use String for very large integers as ClickHouse
+                // doesn't support greater than UInt256.
+                512 => "String",
                 _ => panic!("Unsupported {}N size: {}", prefix, size),
+            };
+
+            if prefix == "uint" {
+                &format!("U{}", int)
+            } else {
+                int
             }
         }
         _ => panic!("Unsupported type: {}", base_type),

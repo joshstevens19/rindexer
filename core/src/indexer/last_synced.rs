@@ -1,5 +1,7 @@
 use alloy::primitives::U64;
+use clickhouse::Row;
 use rust_decimal::Decimal;
+use serde::Deserialize;
 use std::time::Duration;
 use std::{path::Path, str::FromStr, sync::Arc};
 use tokio::{
@@ -9,6 +11,7 @@ use tokio::{
 };
 use tracing::{debug, error};
 
+use crate::database::clickhouse::client::ClickhouseClient;
 use crate::{
     database::{
         generate::generate_indexer_contract_schema_name,
@@ -72,6 +75,7 @@ fn build_last_synced_block_number_file(
 pub struct SyncConfig<'a> {
     pub project_path: &'a Path,
     pub database: &'a Option<Arc<PostgresClient>>,
+    pub clickhouse: &'a Option<Arc<ClickhouseClient>>,
     pub csv_details: &'a Option<CsvDetails>,
     pub stream_details: &'a Option<&'a StreamsConfig>,
     pub contract_csv_enabled: bool,
@@ -153,7 +157,7 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
             "SELECT last_synced_block FROM rindexer_internal.{table_name} WHERE network = $1"
         );
 
-        match database.query_one(&query, &[&config.network]).await {
+        return match database.query_one(&query, &[&config.network]).await {
             Ok(row) => {
                 let result: Decimal = row.get("last_synced_block");
                 let parsed =
@@ -168,10 +172,46 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
                 error!("Error fetching last synced block: {:?}", e);
                 None
             }
-        }
-    } else {
-        None
+        };
     }
+
+    // Query database for last synced block
+    if let Some(clickhouse) = config.clickhouse {
+        #[derive(Row, Deserialize)]
+        struct LastBlock {
+            last_synced_block: u64,
+        }
+
+        let schema =
+            generate_indexer_contract_schema_name(config.indexer_name, config.contract_name);
+        let table_name = generate_internal_event_table_name(&schema, config.event_name);
+        let query = format!(
+            "SELECT last_synced_block FROM rindexer_internal.{table_name} FINAL WHERE network = '{}'",
+            config.network
+        );
+
+        let row = clickhouse.query_one::<LastBlock>(&query).await;
+
+        return match row {
+            Ok(row) => {
+                let result = row.last_synced_block.to_string();
+                let parsed =
+                    U64::from_str(&result.to_string()).expect("Failed to parse last_synced_block");
+
+                if parsed.is_zero() {
+                    None
+                } else {
+                    Some(parsed)
+                }
+            }
+            Err(e) => {
+                error!("Error fetching last synced block: {:?}", e);
+                None
+            }
+        };
+    }
+
+    None
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -263,6 +303,23 @@ pub async fn update_progress_and_last_synced_task(
 
         if let Err(e) = result {
             error!("Error updating db last synced block: {:?}", e);
+        }
+    } else if let Some(clickhouse) = &config.clickhouse() {
+        let schema =
+            generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
+        let table_name = generate_internal_event_table_name(&schema, &config.event_name());
+        let network = &config.network_contract().network;
+        let query = format!(
+            r#"
+            INSERT INTO rindexer_internal.{table_name} (network, last_synced_block) VALUES ('{network}', {to_block});
+            INSERT INTO rindexer_internal.latest_block (network, block) VALUES ('{network}', {latest});
+            "#
+        );
+
+        let result = clickhouse.execute_batch(&query).await;
+
+        if let Err(e) = result {
+            error!("Error updating clickhouse last synced block: {:?}", e);
         }
     } else if let Some(csv_details) = &config.csv_details() {
         if let Err(e) = update_last_synced_block_number_for_file(

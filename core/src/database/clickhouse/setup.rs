@@ -30,6 +30,7 @@ pub async fn setup_clickhouse(
         .map_err(SetupClickhouseError::ClickhouseTableGenerationError)?;
 
     client.execute_batch(sql.as_str()).await?;
+
     info!("Created tables for {}", manifest.name);
 
     Ok(client)

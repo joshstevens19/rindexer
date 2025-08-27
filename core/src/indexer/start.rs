@@ -11,6 +11,9 @@ use tokio::{
 };
 use tracing::{error, info};
 
+use crate::database::clickhouse::client::{
+    ClickhouseClient, ClickhouseConnection, ClickhouseConnectionError,
+};
 use crate::event::config::{ContractEventProcessingConfig, FactoryEventProcessingConfig};
 use crate::indexer::native_transfer::native_transfer_block_processor;
 use crate::indexer::Indexer;
@@ -57,6 +60,9 @@ pub enum StartIndexingError {
 
     #[error("{0}")]
     PostgresConnectionError(#[from] PostgresConnectionError),
+
+    #[error("{0}")]
+    ClickhouseConnectionError(#[from] ClickhouseConnectionError),
 
     #[error("Could not get block number from provider: {0}")]
     GetBlockNumberError(#[from] ProviderError),
@@ -165,6 +171,7 @@ pub async fn start_indexing_traces(
     manifest: &Manifest,
     project_path: &Path,
     database: Option<Arc<PostgresClient>>,
+    clickhouse: Option<Arc<ClickhouseClient>>,
     indexer: &Indexer,
     trace_registry: Arc<TraceCallbackRegistry>,
 ) -> Result<Vec<JoinHandle<Result<(), ProcessEventError>>>, StartIndexingError> {
@@ -209,6 +216,7 @@ pub async fn start_indexing_traces(
         let sync_config = SyncConfig {
             project_path,
             database: &database,
+            clickhouse: &clickhouse,
             csv_details: &manifest.storage.csv,
             contract_csv_enabled: manifest.contract_csv_enabled(&first_event.contract_name),
             stream_details: &stream_details,
@@ -279,6 +287,7 @@ pub async fn start_indexing_contract_events(
     manifest: &Manifest,
     project_path: &Path,
     database: Option<Arc<PostgresClient>>,
+    clickhouse: Option<Arc<ClickhouseClient>>,
     indexer: &Indexer,
     registry: Arc<EventCallbackRegistry>,
     dependencies: &[ContractEventDependencies],
@@ -317,6 +326,7 @@ pub async fn start_indexing_contract_events(
             let network_contract = network_contract.clone();
             let project_path = project_path.to_path_buf();
             let database = database.clone();
+            let clickhouse = clickhouse.clone();
             let manifest_csv_details = manifest.storage.csv.clone();
             let registry = Arc::clone(&registry);
             let event_progress_state = Arc::clone(&event_progress_state);
@@ -326,6 +336,7 @@ pub async fn start_indexing_contract_events(
                 let config = SyncConfig {
                     project_path: &project_path,
                     database: &database,
+                    clickhouse: &clickhouse,
                     csv_details: &manifest_csv_details,
                     contract_csv_enabled: manifest.contract_csv_enabled(&event.contract.name),
                     stream_details: &stream_details,
@@ -354,6 +365,7 @@ pub async fn start_indexing_contract_events(
                         blocks,
                         project_path,
                         database,
+                        clickhouse,
                         manifest_csv_details,
                         registry,
                         event_progress_state,
@@ -373,6 +385,7 @@ pub async fn start_indexing_contract_events(
             (start_block, end_block, indexing_distance_from_head),
             project_path,
             database,
+            clickhouse,
             manifest_csv_details,
             registry,
             event_progress_state,
@@ -427,6 +440,7 @@ pub async fn start_indexing_contract_events(
                     end_block,
                     registry: Arc::clone(&registry),
                     progress: Arc::clone(&event_progress_state),
+                    clickhouse: clickhouse.clone(),
                     database: database.clone(),
                     config: manifest.config.clone(),
                     csv_details: manifest_csv_details.clone(),
@@ -459,6 +473,7 @@ pub async fn start_indexing_contract_events(
                 registry: Arc::clone(&registry),
                 progress: Arc::clone(&event_progress_state),
                 database: database.clone(),
+                clickhouse: clickhouse.clone(),
                 csv_details: manifest_csv_details.clone(),
                 config: manifest.config.clone(),
                 timestamps: timestamp_enabled_for_event
@@ -526,6 +541,7 @@ pub async fn start_indexing(
 ) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
     let start = Instant::now();
     let database = initialize_database(manifest).await?;
+    let clickhouse = initialize_clickhouse(manifest).await?;
 
     // any events which are non-blocking and can be fired in parallel
     let mut non_blocking_process_events = Vec::new();
@@ -538,6 +554,7 @@ pub async fn start_indexing(
             manifest,
             project_path,
             database.clone(),
+            clickhouse.clone(),
             &indexer,
             trace_registry.clone()
         ),
@@ -545,6 +562,7 @@ pub async fn start_indexing(
             manifest,
             project_path,
             database.clone(),
+            clickhouse.clone(),
             &indexer,
             registry.clone(),
             dependencies,
@@ -620,6 +638,22 @@ pub async fn initialize_database(
             Err(e) => {
                 error!("Error connecting to Postgres: {:?}", e);
                 Err(StartIndexingError::PostgresConnectionError(e))
+            }
+        }
+    } else {
+        Ok(None)
+    }
+}
+
+pub async fn initialize_clickhouse(
+    manifest: &Manifest,
+) -> Result<Option<Arc<ClickhouseClient>>, StartIndexingError> {
+    if manifest.storage.clickhouse_enabled() {
+        match ClickhouseClient::new().await {
+            Ok(clickhouse) => Ok(Some(Arc::new(clickhouse))),
+            Err(e) => {
+                error!("Error connecting to Clickhouse: {:?}", e);
+                Err(StartIndexingError::ClickhouseConnectionError(e))
             }
         }
     } else {

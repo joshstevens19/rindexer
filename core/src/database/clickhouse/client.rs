@@ -1,14 +1,15 @@
-use crate::database::postgres::client::PostgresError;
 use crate::EthereumSqlTypeWrapper;
-use bb8::RunError;
-use clickhouse::Client;
+use clickhouse::{Client, Row};
 use dotenv::dotenv;
+use serde::Deserialize;
 use std::env;
+use tracing::info;
 
 pub struct ClickhouseConnection {
     url: String,
     user: String,
     password: String,
+    db: String,
 }
 
 pub fn clickhouse_connection() -> Result<ClickhouseConnection, env::VarError> {
@@ -18,6 +19,7 @@ pub fn clickhouse_connection() -> Result<ClickhouseConnection, env::VarError> {
         url: env::var("CLICKHOUSE_URL")?,
         user: env::var("CLICKHOUSE_USER")?,
         password: env::var("CLICKHOUSE_PASSWORD")?,
+        db: env::var("CLICKHOUSE_DB")?,
     };
 
     Ok(connection)
@@ -27,6 +29,9 @@ pub fn clickhouse_connection() -> Result<ClickhouseConnection, env::VarError> {
 pub enum ClickhouseConnectionError {
     #[error("The clickhouse env vars are wrong please check your environment: {0}")]
     ClickhouseConnectionConfigWrong(#[from] env::VarError),
+
+    #[error("Could not connect to clickhouse database: {0}")]
+    ClickhouseNetworkError(#[from] clickhouse::error::Error),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -46,7 +51,11 @@ impl ClickhouseClient {
         let client = Client::default()
             .with_url(connection.url)
             .with_user(connection.user)
+            .with_database(connection.db)
             .with_password(connection.password);
+
+        client.query("select 1").execute().await?;
+        info!("Clickhouse client connected successfully!");
 
         Ok(ClickhouseClient { conn: client })
     }
@@ -58,6 +67,18 @@ impl ClickhouseClient {
             .await
             .map_err(|e| ClickhouseError::ClickhouseError(e.to_string()))
     }
+
+    pub async fn query_one<T>(&self, sql: &str) -> Result<T, ClickhouseError>
+    where
+        T: Row + for<'b> Deserialize<'b>,
+    {
+        self.conn
+            .query(sql)
+            .fetch_one()
+            .await
+            .map_err(|e| ClickhouseError::ClickhouseError(e.to_string()))
+    }
+
     pub async fn execute_batch(&self, sql: &str) -> Result<(), ClickhouseError> {
         let statements: Vec<&str> = sql
             .split(';')
@@ -71,6 +92,7 @@ impl ClickhouseClient {
 
         Ok(())
     }
+
     pub async fn bulk_insert<'a>(
         &self,
         table_name: &str,
