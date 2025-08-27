@@ -158,6 +158,10 @@ export default defineConfig({
           ],
         },
         {
+          text: "Timestamps",
+          link: "/docs/start-building/timestamps",
+        },
+        {
           text: "Phantom Events",
           link: "/docs/start-building/phantom",
         },
