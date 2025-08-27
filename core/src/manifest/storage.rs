@@ -89,6 +89,17 @@ pub struct PostgresDetails {
     pub disable_create_tables: Option<bool>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ClickhouseDetails {
+    pub enabled: bool,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drop_each_run: Option<bool>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disable_create_tables: Option<bool>,
+}
+
 fn default_csv_path() -> String {
     "./generated_csv".to_string()
 }
@@ -108,6 +119,9 @@ pub struct CsvDetails {
 pub struct Storage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub postgres: Option<PostgresDetails>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clickhouse: Option<ClickhouseDetails>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csv: Option<CsvDetails>,
@@ -150,6 +164,31 @@ impl Storage {
     pub fn postgres_drop_each_run(&self) -> bool {
         let enabled = self.postgres_enabled();
         if !enabled {
+            return false;
+        }
+
+        self.postgres.as_ref().is_some_and(|details| details.drop_each_run.unwrap_or_default())
+    }
+
+    pub fn clickhouse_enabled(&self) -> bool {
+        match &self.clickhouse {
+            Some(details) => details.enabled,
+            None => false,
+        }
+    }
+
+    pub fn clickhouse_disable_create_tables(&self) -> bool {
+        if !self.clickhouse_enabled() {
+            return true;
+        }
+
+        self.clickhouse
+            .as_ref()
+            .is_some_and(|details| details.disable_create_tables.unwrap_or_default())
+    }
+
+    pub fn clickhouse_drop_each_run(&self) -> bool {
+        if !self.clickhouse_enabled() {
             return false;
         }
 

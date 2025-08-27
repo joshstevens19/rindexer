@@ -10,8 +10,9 @@ use tokio::{
 use tracing::{debug, error};
 
 use crate::{
-    database::postgres::generate::{
-        generate_indexer_contract_schema_name, generate_internal_event_table_name,
+    database::{
+        generate::generate_indexer_contract_schema_name,
+        postgres::generate::generate_internal_event_table_name,
     },
     event::config::{EventProcessingConfig, TraceProcessingConfig},
     helpers::get_full_path,

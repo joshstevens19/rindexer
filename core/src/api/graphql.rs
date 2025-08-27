@@ -15,8 +15,8 @@ use tokio::sync::{oneshot, oneshot::Sender};
 use tracing::{error, info};
 
 use crate::{
-    database::postgres::{
-        client::connection_string, generate::generate_indexer_contract_schema_name,
+    database::{
+        generate::generate_indexer_contract_schema_name, postgres::client::connection_string,
     },
     helpers::{kill_process_on_port, set_thread_no_logging},
     indexer::Indexer,

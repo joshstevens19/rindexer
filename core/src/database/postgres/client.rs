@@ -15,8 +15,9 @@ use tokio_postgres::{
 };
 use tracing::error;
 
-use crate::database::postgres::{
-    generate::generate_event_table_columns_names_sql, sql_type_wrapper::EthereumSqlTypeWrapper,
+use crate::database::{
+    generate::generate_event_table_columns_names_sql,
+    postgres::sql_type_wrapper::EthereumSqlTypeWrapper,
 };
 
 pub fn connection_string() -> Result<String, env::VarError> {

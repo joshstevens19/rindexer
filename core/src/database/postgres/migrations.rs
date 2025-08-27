@@ -1,4 +1,4 @@
-use crate::database::postgres::generate::{
+use crate::database::generate::{
     generate_indexer_contract_schema_name, GenerateTablesForIndexerSqlError,
 };
 use crate::helpers::camel_to_snake;

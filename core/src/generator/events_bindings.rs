@@ -10,8 +10,9 @@ use crate::{
         ABIInput, ABIItem, CreateCsvFileForEvent, EventInfo, GenerateAbiPropertiesType,
         ParamTypeError, ReadAbiError,
     },
-    database::postgres::generate::{
-        generate_column_names_only_with_base_properties, generate_event_table_full_name,
+    database::{
+        generate::generate_event_table_full_name,
+        postgres::generate::generate_column_names_only_with_base_properties,
     },
     helpers::camel_to_snake,
     manifest::{
