@@ -11,9 +11,7 @@ use tokio::{
 };
 use tracing::{error, info};
 
-use crate::database::clickhouse::client::{
-    ClickhouseClient, ClickhouseConnection, ClickhouseConnectionError,
-};
+use crate::database::clickhouse::client::{ClickhouseClient, ClickhouseConnectionError};
 use crate::event::config::{ContractEventProcessingConfig, FactoryEventProcessingConfig};
 use crate::indexer::native_transfer::native_transfer_block_processor;
 use crate::indexer::Indexer;
@@ -283,6 +281,7 @@ pub async fn start_indexing_traces(
     Ok(non_blocking_process_events)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn start_indexing_contract_events(
     manifest: &Manifest,
     project_path: &Path,

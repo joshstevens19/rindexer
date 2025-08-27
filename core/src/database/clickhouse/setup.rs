@@ -7,6 +7,7 @@ use crate::manifest::core::Manifest;
 use std::path::Path;
 use tracing::info;
 
+#[allow(clippy::enum_variant_names)]
 #[derive(thiserror::Error, Debug)]
 pub enum SetupClickhouseError {
     #[error("Clickhouse connection error {0}")]

@@ -93,11 +93,11 @@ impl ClickhouseClient {
         Ok(())
     }
 
-    pub async fn bulk_insert<'a>(
+    pub async fn bulk_insert(
         &self,
         table_name: &str,
         column_names: &[String],
-        bulk_data: &'a [Vec<EthereumSqlTypeWrapper>],
+        bulk_data: &[Vec<EthereumSqlTypeWrapper>],
     ) -> Result<u64, ClickhouseError> {
         // Generate the base INSERT query
         let column_names_str = column_names.join(", ");

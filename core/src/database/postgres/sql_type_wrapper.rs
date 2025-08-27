@@ -416,37 +416,25 @@ impl EthereumSqlTypeWrapper {
             }
 
             // Hashes
-            EthereumSqlTypeWrapper::B128(value) => format!("'{}'", format!("{:?}", value)),
+            EthereumSqlTypeWrapper::B128(value) => format!("'{value:?}'"),
 
-            EthereumSqlTypeWrapper::B256(value) => format!("'{}'", format!("{:?}", value)),
-            EthereumSqlTypeWrapper::B512(value) => format!("'{}'", format!("{:?}", value)),
+            EthereumSqlTypeWrapper::B256(value) => format!("'{value:?}'"),
+            EthereumSqlTypeWrapper::B512(value) => format!("'{value:?}'"),
             EthereumSqlTypeWrapper::VecB128(values) => format!(
                 "[{}]",
-                values
-                    .iter()
-                    .map(|v| format!("'{}'", format!("{:?}", v)))
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                values.iter().map(|v| format!("'{v:?}'")).collect::<Vec<_>>().join(", ")
             ),
             EthereumSqlTypeWrapper::VecB256(values) => format!(
                 "[{}]",
-                values
-                    .iter()
-                    .map(|v| format!("'{}'", format!("{:?}", v)))
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                values.iter().map(|v| format!("'{v:?}'")).collect::<Vec<_>>().join(", ")
             ),
             EthereumSqlTypeWrapper::VecB512(values) => format!(
                 "[{}]",
-                values
-                    .iter()
-                    .map(|v| format!("'{}'", format!("{:?}", v)))
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                values.iter().map(|v| format!("'{v:?}'")).collect::<Vec<_>>().join(", ")
             ),
 
             // Address
-            EthereumSqlTypeWrapper::Address(address) => format!("'{}'", address),
+            EthereumSqlTypeWrapper::Address(address) => format!("'{address}'"),
             EthereumSqlTypeWrapper::VecAddress(addresses) => format!(
                 "[{}]",
                 addresses.iter().map(|addr| format!("'{}'", addr)).collect::<Vec<_>>().join(", ")

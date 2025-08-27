@@ -1,4 +1,3 @@
-use alloy::primitives::keccak256;
 use std::path::Path;
 use tracing::error;
 
@@ -8,13 +7,9 @@ use crate::database::generate::{
 };
 use crate::helpers::parse_solidity_integer_type;
 use crate::{
-    abi::{ABIInput, ABIItem, GenerateAbiPropertiesType, ParamTypeError, ReadAbiError},
+    abi::{ABIInput, ABIItem, GenerateAbiPropertiesType},
     helpers::camel_to_snake,
-    indexer::{
-        native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME},
-        Indexer,
-    },
-    manifest::contract::Contract,
+    indexer::Indexer,
     types::code::Code,
 };
 

@@ -1,9 +1,8 @@
-use async_std::prelude::StreamExt;
 use std::path::Path;
-use tracing::{error, info};
+use tracing::info;
 
 use crate::{
-    abi::{ABIInput, ABIItem, EventInfo, GenerateAbiPropertiesType, ParamTypeError, ReadAbiError},
+    abi::{ABIInput, ABIItem, EventInfo, GenerateAbiPropertiesType},
     helpers::camel_to_snake,
     indexer::Indexer,
     manifest::contract::Contract,
@@ -89,9 +88,9 @@ fn find_clashing_event_names(
 
 fn generate_event_table_clickhouse(
     abi_inputs: &[EventInfo],
-    contract_name: &str,
+    _contract_name: &str,
     schema_name: &str,
-    apply_full_name_comment_for_events: Vec<String>,
+    _apply_full_name_comment_for_events: Vec<String>,
 ) -> String {
     abi_inputs
         .iter()
@@ -127,7 +126,7 @@ fn generate_event_table_clickhouse(
                 table_name, event_columns
             );
 
-            return create_table_sql;
+            create_table_sql
         })
         .collect::<Vec<_>>()
         .join("\n")
