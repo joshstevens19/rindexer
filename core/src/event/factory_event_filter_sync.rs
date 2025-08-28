@@ -1,6 +1,7 @@
 use crate::database::postgres::client::PostgresError;
-use crate::database::postgres::generate::{
-    generate_internal_factory_event_table_name, GenerateInternalFactoryEventTableNameParams,
+use crate::database::{
+    generate::generate_internal_factory_event_table_name,
+    postgres::generate::GenerateInternalFactoryEventTableNameParams,
 };
 use crate::event::callback_registry::EventResult;
 use crate::event::config::FactoryEventProcessingConfig;

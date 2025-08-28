@@ -6,6 +6,7 @@ use alloy::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::database::clickhouse::generate::solidity_type_to_clickhouse_type;
 use crate::{
     database::postgres::{
         generate::solidity_type_to_db_type,
@@ -41,6 +42,7 @@ pub enum GenerateAbiPropertiesType {
     PostgresColumnsNamesOnly,
     CsvHeaderNames,
     Object,
+    ClickhouseWithDataTypes,
 }
 
 #[derive(Debug, Clone)]
@@ -162,6 +164,16 @@ impl ABIInput {
                                 "{}{}",
                                 prefix.map_or_else(|| "".to_string(), |p| format!("{p}.")),
                                 camel_to_snake(&input.name),
+                            );
+
+                            vec![AbiProperty::new(value, &input.name, &input.type_, path.clone())]
+                        }
+                        GenerateAbiPropertiesType::ClickhouseWithDataTypes => {
+                            let value = format!(
+                                "\"{}{}\" {}",
+                                prefix.map_or_else(|| "".to_string(), |p| format!("{}_", p)),
+                                camel_to_snake(&input.name),
+                                solidity_type_to_clickhouse_type(&input.type_)
                             );
 
                             vec![AbiProperty::new(value, &input.name, &input.type_, path.clone())]
