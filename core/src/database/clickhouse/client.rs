@@ -60,14 +60,6 @@ impl ClickhouseClient {
         Ok(ClickhouseClient { conn: client })
     }
 
-    pub async fn execute(&self, sql: &str) -> Result<(), ClickhouseError> {
-        self.conn
-            .query(sql)
-            .execute()
-            .await
-            .map_err(|e| ClickhouseError::ClickhouseError(e.to_string()))
-    }
-
     pub async fn query_one<T>(&self, sql: &str) -> Result<T, ClickhouseError>
     where
         T: Row + for<'b> Deserialize<'b>,
@@ -79,12 +71,17 @@ impl ClickhouseClient {
             .map_err(|e| ClickhouseError::ClickhouseError(e.to_string()))
     }
 
+    pub async fn execute(&self, sql: &str) -> Result<(), ClickhouseError> {
+        self.conn
+            .query(sql)
+            .execute()
+            .await
+            .map_err(|e| ClickhouseError::ClickhouseError(e.to_string()))
+    }
+
     pub async fn execute_batch(&self, sql: &str) -> Result<(), ClickhouseError> {
-        let statements: Vec<&str> = sql
-            .split(';')
-            .map(str::trim)
-            .filter(|s| !s.is_empty()) // Remove empty statements
-            .collect();
+        let statements: Vec<&str> =
+            sql.split(';').map(str::trim).filter(|s| !s.is_empty()).collect();
 
         for statement in statements {
             self.execute(statement).await?;
@@ -99,12 +96,10 @@ impl ClickhouseClient {
         column_names: &[String],
         bulk_data: &[Vec<EthereumSqlTypeWrapper>],
     ) -> Result<u64, ClickhouseError> {
-        // Generate the base INSERT query
         let column_names_str = column_names.join(", ");
         let query = format!("INSERT INTO {} ({}) VALUES", table_name, column_names_str);
-
-        // Serialize data for ClickHouse
         let mut values = Vec::new();
+
         for row in bulk_data.iter() {
             let row_values: Vec<String> =
                 row.iter().map(|value| value.to_clickhouse_value()).collect();

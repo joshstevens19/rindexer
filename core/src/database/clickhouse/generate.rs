@@ -10,12 +10,13 @@ use crate::{
 };
 
 use crate::database::generate::{
-    generate_indexer_contract_schema_name, generate_internal_factory_event_table_name,
-    GenerateTablesForIndexerSqlError,
+    find_clashing_event_names, generate_indexer_contract_schema_name,
+    generate_internal_factory_event_table_name, GenerateTablesForIndexerSqlError,
 };
 use crate::database::postgres::generate::{
     generate_internal_event_table_name, GenerateInternalFactoryEventTableNameParams,
 };
+use crate::manifest::contract::FactoryDetailsYaml;
 
 pub fn generate_tables_for_indexer_clickhouse(
     project_path: &Path,
@@ -30,72 +31,28 @@ pub fn generate_tables_for_indexer_clickhouse(
         let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
         let schema_name = generate_indexer_contract_schema_name(&indexer.name, &contract_name);
         let networks: Vec<&str> = contract.details.iter().map(|d| d.network.as_str()).collect();
+        let factories = contract.details.iter().flat_map(|d| d.factory.clone()).collect::<Vec<_>>();
 
         if !disable_event_tables {
             sql.push_str(format!("CREATE DATABASE IF NOT EXISTS {};", schema_name).as_str());
-
             info!("Creating database if not exists: {}", schema_name);
 
-            let event_matching_name_on_other = find_clashing_event_names(
-                project_path,
-                contract,
-                &indexer.contracts,
-                &event_names,
-            )?;
-
-            sql.push_str(&generate_event_table_clickhouse(
-                &event_names,
-                &contract.name,
-                &schema_name,
-                event_matching_name_on_other,
-            ));
+            sql.push_str(&generate_event_table_clickhouse(&event_names, &schema_name));
         }
-        // we still need to create the internal tables for the contract
+
         sql.push_str(&generate_internal_event_table_clickhouse(
             &event_names,
             &schema_name,
             networks,
         ));
+
+        sql.push_str(&generate_internal_factory_event_table_sql(&indexer.name, &factories));
     }
 
     Ok(Code::new(sql))
 }
 
-fn find_clashing_event_names(
-    project_path: &Path,
-    current_contract: &Contract,
-    other_contracts: &[Contract],
-    current_event_names: &[EventInfo],
-) -> Result<Vec<String>, GenerateTablesForIndexerSqlError> {
-    let mut clashing_events = Vec::new();
-
-    for other_contract in other_contracts {
-        if other_contract.name == current_contract.name {
-            continue;
-        }
-
-        let other_abi_items = ABIItem::read_abi_items(project_path, other_contract)?;
-        let other_event_names =
-            ABIItem::extract_event_names_and_signatures_from_abi(other_abi_items)?;
-
-        for event_name in current_event_names {
-            if other_event_names.iter().any(|e| e.name == event_name.name)
-                && !clashing_events.contains(&event_name.name)
-            {
-                clashing_events.push(event_name.name.clone());
-            }
-        }
-    }
-
-    Ok(clashing_events)
-}
-
-fn generate_event_table_clickhouse(
-    abi_inputs: &[EventInfo],
-    _contract_name: &str,
-    schema_name: &str,
-    _apply_full_name_comment_for_events: Vec<String>,
-) -> String {
+fn generate_event_table_clickhouse(abi_inputs: &[EventInfo], schema_name: &str) -> String {
     abi_inputs
         .iter()
         .map(|event_info| {
@@ -107,7 +64,6 @@ fn generate_event_table_clickhouse(
                 generate_columns_with_data_types(&event_info.inputs).join(", ") + ","
             };
 
-            //  TODO: Nullable isn't recommended in OLAP
             let create_table_sql = format!(
                 r#"CREATE TABLE IF NOT EXISTS {} (
                     contract_address FixedString(42),
@@ -170,7 +126,7 @@ fn generate_internal_event_table_clickhouse(
         let create_latest_block_query = r#"
             CREATE TABLE IF NOT EXISTS rindexer_internal.latest_block (
                 "network" String,
-                "block" UInt256
+                "block" UInt64
               )
               ENGINE = ReplacingMergeTree(block)
                 ORDER BY network;
@@ -185,6 +141,38 @@ fn generate_internal_event_table_clickhouse(
 
         format!("{} {} {} {}", create_table_query, insert_queries, create_latest_block_query, latest_block_insert_queries)
     }).collect::<Vec<_>>().join("\n")
+}
+
+fn generate_internal_factory_event_table_sql(
+    indexer_name: &str,
+    factories: &[FactoryDetailsYaml],
+) -> String {
+    factories
+        .iter()
+        .map(|factory| {
+            let params = GenerateInternalFactoryEventTableNameParams {
+                indexer_name: indexer_name.to_string(),
+                contract_name: factory.name.to_string(),
+                event_name: factory.event_name.to_string(),
+                input_names: factory.input_names(),
+            };
+            let table_name = generate_internal_factory_event_table_name(&params);
+
+            let create_table_query = format!(
+                r#"
+            CREATE TABLE IF NOT EXISTS rindexer_internal.{table_name} (
+                "factory_address" FixedString(42),
+                "factory_deployed_address" FixedString(42),
+                "network" TEXT
+            )
+            ENGINE = ReplacingMergeTree()
+                ORDER BY ("factory_address", "factory_deployed_address", "network")"#
+            );
+
+            create_table_query
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn generate_columns(inputs: &[ABIInput], property_type: &GenerateAbiPropertiesType) -> Vec<String> {
