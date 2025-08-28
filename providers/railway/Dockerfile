@@ -1,5 +1,5 @@
 # syntax = docker/dockerfile:1.6
-FROM ghcr.io/joshstevens19/rindexer-bundled:latest AS rindexer
+FROM ghcr.io/joshstevens19/rindexer:latest AS rindexer
 
 ARG PROJECT_PATH="./example-app"
 

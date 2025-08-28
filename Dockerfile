@@ -21,6 +21,9 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+RUN curl -L https://foundry.paradigm.xyz | bash
+RUN /root/.foundry/bin/foundryup
+
 COPY --from=builder /app/target/release/rindexer_cli /app/rindexer
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 

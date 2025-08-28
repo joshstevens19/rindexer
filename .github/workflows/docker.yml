@@ -19,8 +19,6 @@ jobs:
         include:
           - dockerfile: Dockerfile
             image: ghcr.io/${{ github.repository }}
-          - dockerfile: bundled.Dockerfile
-            image: ghcr.io/${{ github.repository }}-bundled
 
     steps:
       - name: Checkout repository
