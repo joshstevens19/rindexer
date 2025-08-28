@@ -158,6 +158,10 @@ export default defineConfig({
           ],
         },
         {
+          text: "Timestamps",
+          link: "/docs/start-building/timestamps",
+        },
+        {
           text: "Phantom Events",
           link: "/docs/start-building/phantom",
         },
@@ -210,15 +214,6 @@ export default defineConfig({
         { text: "From A Foundry Project - coming soon" },
         { text: "From A Hardhat Project - coming soon" },
         { text: "Using Reth ExExes", link: "/docs/advanced/using-reth-exex" },
-      ],
-    },
-    {
-      text: "Coming soon",
-      items: [
-        {
-          text: "log block timestamps",
-          link: "/docs/coming-soon/log-block-timestamps",
-        },
       ],
     },
     { text: "Changelog", link: "/docs/changelog" },
