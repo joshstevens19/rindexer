@@ -5,13 +5,12 @@ use crate::{
     abi::{ABIInput, ABIItem, EventInfo, GenerateAbiPropertiesType},
     helpers::camel_to_snake,
     indexer::Indexer,
-    manifest::contract::Contract,
     types::code::Code,
 };
 
 use crate::database::generate::{
-    find_clashing_event_names, generate_indexer_contract_schema_name,
-    generate_internal_factory_event_table_name, GenerateTablesForIndexerSqlError,
+    generate_indexer_contract_schema_name, generate_internal_factory_event_table_name,
+    GenerateTablesForIndexerSqlError,
 };
 use crate::database::postgres::generate::{
     generate_internal_event_table_name, GenerateInternalFactoryEventTableNameParams,
