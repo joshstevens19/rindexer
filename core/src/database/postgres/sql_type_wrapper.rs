@@ -1609,17 +1609,22 @@ pub fn map_ethereum_wrapper_to_json(
                 let components =
                     abi_input.components.as_ref().expect("Tuple should have components defined");
                 let total_properties = count_components(components);
+                // Extract the correct slice of wrappers for this tuple.
+                // We need wrappers[current_index..current_index + count], not wrappers[current_index..count]
+                // because current_index is the starting position, and total_properties is the number of components.
+                // For example: if we're at index 3 and need 12 components, we want indices 3-14 (12 items),
+                // not indices 3-11 (9 items).
                 let tuple_value = map_ethereum_wrapper_to_json(
                     components,
-                    &wrappers[current_wrapper_index..total_properties],
+                    &wrappers[current_wrapper_index..current_wrapper_index + total_properties],
                     transaction_information,
                     true,
                 );
                 result.insert(abi_input.name.clone(), tuple_value);
-                for i in current_wrapper_index..total_properties {
+                for i in current_wrapper_index..current_wrapper_index + total_properties {
                     wrappers_index_processed.push(i);
                 }
-                current_wrapper_index = total_properties;
+                current_wrapper_index += total_properties;
             } else {
                 let value = match wrapper {
                     EthereumSqlTypeWrapper::U64(u)
