@@ -34,18 +34,18 @@ pub struct EventInputIndexedFilters {
     pub indexed_3: Option<Vec<String>>,
 }
 
-impl From<EventInputIndexedFilters> for [Topic; 4] {
+impl From<EventInputIndexedFilters> for [Topic; 3] {
     fn from(input: EventInputIndexedFilters) -> Self {
-        let mut topics: [Topic; 4] = Default::default();
+        let mut topics: [Topic; 3] = Default::default();
 
         if let Some(indexed_1) = &input.indexed_1 {
-            topics[1] = indexed_1.iter().map(|i| parse_topic(i)).collect::<Vec<_>>().into();
+            topics[0] = indexed_1.iter().map(|i| parse_topic(i)).collect::<Vec<_>>().into();
         }
         if let Some(indexed_2) = &input.indexed_2 {
-            topics[2] = indexed_2.iter().map(|i| parse_topic(i)).collect::<Vec<_>>().into();
+            topics[1] = indexed_2.iter().map(|i| parse_topic(i)).collect::<Vec<_>>().into();
         }
         if let Some(indexed_3) = &input.indexed_3 {
-            topics[3] = indexed_3.iter().map(|i| parse_topic(i)).collect::<Vec<_>>().into();
+            topics[2] = indexed_3.iter().map(|i| parse_topic(i)).collect::<Vec<_>>().into();
         }
 
         topics
