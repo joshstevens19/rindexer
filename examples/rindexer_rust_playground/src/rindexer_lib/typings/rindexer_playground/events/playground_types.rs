@@ -250,7 +250,7 @@ where
             r"/Users/jackedgson/Development/avara/rindexer/examples/rindexer_rust_playground/generated_csv/PlaygroundTypes/playgroundtypes-basictypes.csv",
         );
         if !Path::new(r"/Users/jackedgson/Development/avara/rindexer/examples/rindexer_rust_playground/generated_csv/PlaygroundTypes/playgroundtypes-basictypes.csv").exists() {
-            csv.append_header(vec!["contract_address".into(), "a_bool".into(), "simple_address".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()].into())
+            csv.append_header(vec!["contract_address".into(), "a_bool".into(), "simple_address".into(), "simple_string".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()].into())
                 .await
                 .expect("Failed to write CSV header");
         }

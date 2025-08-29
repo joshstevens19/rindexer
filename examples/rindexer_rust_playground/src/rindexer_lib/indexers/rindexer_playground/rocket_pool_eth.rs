@@ -82,12 +82,9 @@ async fn approval_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                 .await;
 
             if let Err(e) = result {
-                rindexer_error!(
-                        "RocketPoolETH::Approval inserting bulk data: {:?}",
-                        e
-                    );
-                    return Err(e.to_string());
-                }
+                rindexer_error!("RocketPoolETH::Approval inserting bulk data: {:?}", e);
+                return Err(e.to_string());
+            }
 
             rindexer_info!(
                 "RocketPoolETH::Approval - {} - {} events",
@@ -176,10 +173,7 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                 .await;
 
             if let Err(e) = result {
-                rindexer_error!(
-                    "RocketPoolETH::Transfer inserting bulk data: {:?}",
-                    e
-                );
+                rindexer_error!("RocketPoolETH::Transfer inserting bulk data: {:?}", e);
                 return Err(e.to_string());
             }
 
