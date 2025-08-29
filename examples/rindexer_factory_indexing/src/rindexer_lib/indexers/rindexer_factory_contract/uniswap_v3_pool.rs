@@ -94,12 +94,9 @@ async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegis
                 .await;
 
             if let Err(e) = result {
-                rindexer_error!(
-                        "UniswapV3PoolEventType::Swap inserting bulk data: {:?}",
-                        e
-                    );
-                    return Err(e.to_string());
-                }
+                rindexer_error!("UniswapV3PoolEventType::Swap inserting bulk data: {:?}", e);
+                return Err(e.to_string());
+            }
 
             rindexer_info!(
                 "UniswapV3Pool::Swap - {} - {} events",

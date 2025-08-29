@@ -82,12 +82,9 @@ async fn approval_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                 .await;
 
             if let Err(e) = result {
-                rindexer_error!(
-                        "ERC20Filter::Approval inserting bulk data: {:?}",
-                        e
-                    );
-                    return Err(e.to_string());
-                }
+                rindexer_error!("ERC20Filter::Approval inserting bulk data: {:?}", e);
+                return Err(e.to_string());
+            }
 
             rindexer_info!(
                 "ERC20Filter::Approval - {} - {} events",
@@ -176,12 +173,9 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                 .await;
 
             if let Err(e) = result {
-                rindexer_error!(
-                        "ERC20Filter::Transfer inserting bulk data: {:?}",
-                        e
-                    );
-                    return Err(e.to_string());
-                }
+                rindexer_error!("ERC20Filter::Transfer inserting bulk data: {:?}", e);
+                return Err(e.to_string());
+            }
 
             rindexer_info!(
                 "ERC20Filter::Transfer - {} - {} events",
