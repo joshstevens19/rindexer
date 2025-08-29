@@ -83,7 +83,7 @@ fn generate_event_table_sql_with_comments(
             let create_table_sql = format!(
                 "CREATE TABLE IF NOT EXISTS {table_name} (\
                 rindexer_id SERIAL PRIMARY KEY NOT NULL, \
-                contract_address CHAR(66) NOT NULL, \
+                contract_address CHAR(42) NOT NULL, \
                 {event_columns} \
                 tx_hash CHAR(66) NOT NULL, \
                 block_number NUMERIC NOT NULL, \
