@@ -406,8 +406,9 @@ impl PostgresClient {
         }
 
         let total_params = postgres_bulk_data.len() * columns.len();
-        
-        // PostgreSQL has a maximum of 65535 parameters in a single query (https://www.postgresql.org/docs/current/limits.html#LIMITS-TABLE)
+
+        // PostgreSQL has a maximum of 65535 parameters in a single query
+        // (see https://www.postgresql.org/docs/current/limits.html#LIMITS-TABLE)
         // If we exceed this limit, force use of COPY method
         if postgres_bulk_data.len() > 100 || total_params > 65535 {
             let column_types: Vec<PgType> =
