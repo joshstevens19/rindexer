@@ -101,66 +101,31 @@ async fn transfer_handler(
                    return Ok(());
                 }
 
-                if bulk_data.len() > 100 {
-                    let result = context
-                        .database
-                        .bulk_insert_via_copy(
-                            "rust_rocket_pool_eth.transfer",
-                            &[
-                                "contract_address".to_string(),
-                                "from".to_string(),
-                                "to".to_string(),
-                                "value".to_string(),
-                                "tx_hash".to_string(),
-                                "block_number".to_string(),
-                                "block_hash".to_string(),
-                                "network".to_string(),
-                            ],
-                            &bulk_data
-                                .first()
-                                .ok_or("No first element in bulk data, impossible")?
-                                .iter()
-                                .map(|param| param.to_type())
-                                .collect::<Vec<PgType>>(),
-                            &bulk_data,
-                        )
-                        .await;
+                let result = context
+                    .database
+                    .insert_bulk(
+                        "rust_rocket_pool_eth.transfer",
+                        &[
+                            "contract_address".to_string(),
+                            "from".to_string(),
+                            "to".to_string(),
+                            "value".to_string(),
+                            "tx_hash".to_string(),
+                            "block_number".to_string(),
+                            "block_hash".to_string(),
+                            "network".to_string(),
+                        ],
+                        &bulk_data,
+                    )
+                    .await;
 
-                    if let Err(e) = result {
-                        rindexer_error!(
-                            "RocketPoolETHEventType::Transfer inserting bulk data: {:?}",
-                            e
-                        );
+                if let Err(e) = result {
+                    rindexer_error!(
+                        "RocketPoolETHEventType::Transfer inserting bulk data: {:?}",
+                        e
+                    );
 
-                        return Err(e.to_string());
-                    }
-                } else {
-                    let result = context
-                        .database
-                        .bulk_insert(
-                            "rust_rocket_pool_eth.transfer",
-                            &[
-                                "contract_address".to_string(),
-                                "from".to_string(),
-                                "to".to_string(),
-                                "value".to_string(),
-                                "tx_hash".to_string(),
-                                "block_number".to_string(),
-                                "block_hash".to_string(),
-                                "network".to_string(),
-                            ],
-                            &bulk_data,
-                        )
-                        .await;
-
-                    if let Err(e) = result {
-                        rindexer_error!(
-                            "RocketPoolETHEventType::Transfer inserting bulk data: {:?}",
-                            e
-                        );
-
-                        return Err(e.to_string());
-                    }
+                    return Err(e.to_string());
                 }
 
                 rindexer_info!(
@@ -822,7 +787,7 @@ You can query data from the database and write data to the database, here are th
 - `context.database.query` - This is for querying data from the database.
 - `context.database.query_one` - This is for querying a single row from the database.
 - `context.database.query_one_or_none` - This is for querying a single row from the database or returning None if no rows are found.
-- `context.database.batch_insert` - This is for inserting multiple rows into the database.
+- `context.database.insert_bulk` - This is for inserting multiple rows into the database efficiently.
 - `context.database.copy_in` - This is for inserting multiple rows into the database using the COPY command.
 
 ### EthereumSqlTypeWrapper
