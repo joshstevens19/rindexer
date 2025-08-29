@@ -2,8 +2,6 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::abi::AbiProperty;
-use crate::helpers::{is_irregular_width_solidity_integer_type, is_solidity_static_bytes_type};
 use crate::{
     abi::{
         ABIInput, ABIItem, CreateCsvFileForEvent, EventInfo, GenerateAbiPropertiesType,
@@ -20,7 +18,6 @@ use crate::{
         storage::{CsvDetails, Storage},
     },
     types::code::Code,
-    EthereumSqlTypeWrapper,
 };
 
 pub fn trace_abigen_contract_name(contract_name: &str) -> String {
