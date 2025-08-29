@@ -72,47 +72,22 @@ async fn approval_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                 "log_index".to_string(),
             ];
 
-            if postgres_bulk_data.len() > 100 {
-                let result = context
-                    .database
-                    .bulk_insert_via_copy(
-                        "rindexer_playground_erc_20_filter.approval",
-                        &rows,
-                        &postgres_bulk_data
-                            .first()
-                            .ok_or("No first element in bulk data, impossible")?
-                            .iter()
-                            .map(|param| param.to_type())
-                            .collect::<Vec<PgType>>(),
-                        &postgres_bulk_data,
-                    )
-                    .await;
+            let result = context
+                .database
+                .insert_bulk(
+                    "rindexer_playground_erc_20_filter.approval",
+                    &rows,
+                    &postgres_bulk_data,
+                )
+                .await;
 
-                if let Err(e) = result {
-                    rindexer_error!(
-                        "ERC20FilterEventType::Approval inserting bulk data via COPY: {:?}",
+            if let Err(e) = result {
+                rindexer_error!(
+                        "ERC20Filter::Approval inserting bulk data: {:?}",
                         e
                     );
                     return Err(e.to_string());
                 }
-            } else {
-                let result = context
-                    .database
-                    .bulk_insert(
-                        "rindexer_playground_erc_20_filter.approval",
-                        &rows,
-                        &postgres_bulk_data,
-                    )
-                    .await;
-
-                if let Err(e) = result {
-                    rindexer_error!(
-                        "ERC20FilterEventType::Approval inserting bulk data via INSERT: {:?}",
-                        e
-                    );
-                    return Err(e.to_string());
-                }
-            }
 
             rindexer_info!(
                 "ERC20Filter::Approval - {} - {} events",
@@ -191,47 +166,22 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                 "log_index".to_string(),
             ];
 
-            if postgres_bulk_data.len() > 100 {
-                let result = context
-                    .database
-                    .bulk_insert_via_copy(
-                        "rindexer_playground_erc_20_filter.transfer",
-                        &rows,
-                        &postgres_bulk_data
-                            .first()
-                            .ok_or("No first element in bulk data, impossible")?
-                            .iter()
-                            .map(|param| param.to_type())
-                            .collect::<Vec<PgType>>(),
-                        &postgres_bulk_data,
-                    )
-                    .await;
+            let result = context
+                .database
+                .insert_bulk(
+                    "rindexer_playground_erc_20_filter.transfer",
+                    &rows,
+                    &postgres_bulk_data,
+                )
+                .await;
 
-                if let Err(e) = result {
-                    rindexer_error!(
-                        "ERC20FilterEventType::Transfer inserting bulk data via COPY: {:?}",
+            if let Err(e) = result {
+                rindexer_error!(
+                        "ERC20Filter::Transfer inserting bulk data: {:?}",
                         e
                     );
                     return Err(e.to_string());
                 }
-            } else {
-                let result = context
-                    .database
-                    .bulk_insert(
-                        "rindexer_playground_erc_20_filter.transfer",
-                        &rows,
-                        &postgres_bulk_data,
-                    )
-                    .await;
-
-                if let Err(e) = result {
-                    rindexer_error!(
-                        "ERC20FilterEventType::Transfer inserting bulk data via INSERT: {:?}",
-                        e
-                    );
-                    return Err(e.to_string());
-                }
-            }
 
             rindexer_info!(
                 "ERC20Filter::Transfer - {} - {} events",
