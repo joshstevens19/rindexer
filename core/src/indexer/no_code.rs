@@ -441,25 +441,8 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             if let Some(postgres) = &params.postgres {
                 let bulk_data_length = postgres_bulk_data.len();
                 if bulk_data_length > 0 {
-                    // anything over 100 events is considered bulk and goes the COPY route
-                    if bulk_data_length > 100 {
-                        if let Err(e) = postgres
-                            .bulk_insert_via_copy(
-                                &params.postgres_event_table_name,
-                                &params.postgres_column_names,
-                                &postgres_bulk_column_types,
-                                &postgres_bulk_data,
-                            )
-                            .await
-                        {
-                            error!(
-                                "{}::{} - Error performing bulk insert: {}",
-                                params.contract_name, params.event_info.name, e
-                            );
-                            return Err(e.to_string());
-                        }
-                    } else if let Err(e) = postgres
-                        .bulk_insert(
+                    if let Err(e) = postgres
+                        .insert_bulk(
                             &params.postgres_event_table_name,
                             &params.postgres_column_names,
                             &postgres_bulk_data,

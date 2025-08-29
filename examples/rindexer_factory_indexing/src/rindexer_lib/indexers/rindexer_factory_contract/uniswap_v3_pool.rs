@@ -84,47 +84,22 @@ async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegis
                 "log_index".to_string(),
             ];
 
-            if postgres_bulk_data.len() > 100 {
-                let result = context
-                    .database
-                    .bulk_insert_via_copy(
-                        "rindexer_factory_contract_uniswap_v3_pool.swap",
-                        &rows,
-                        &postgres_bulk_data
-                            .first()
-                            .ok_or("No first element in bulk data, impossible")?
-                            .iter()
-                            .map(|param| param.to_type())
-                            .collect::<Vec<PgType>>(),
-                        &postgres_bulk_data,
-                    )
-                    .await;
+            let result = context
+                .database
+                .insert_bulk(
+                    "rindexer_factory_contract_uniswap_v3_pool.swap",
+                    &rows,
+                    &postgres_bulk_data,
+                )
+                .await;
 
-                if let Err(e) = result {
-                    rindexer_error!(
-                        "UniswapV3PoolEventType::Swap inserting bulk data via COPY: {:?}",
+            if let Err(e) = result {
+                rindexer_error!(
+                        "UniswapV3PoolEventType::Swap inserting bulk data: {:?}",
                         e
                     );
                     return Err(e.to_string());
                 }
-            } else {
-                let result = context
-                    .database
-                    .bulk_insert(
-                        "rindexer_factory_contract_uniswap_v3_pool.swap",
-                        &rows,
-                        &postgres_bulk_data,
-                    )
-                    .await;
-
-                if let Err(e) = result {
-                    rindexer_error!(
-                        "UniswapV3PoolEventType::Swap inserting bulk data via INSERT: {:?}",
-                        e
-                    );
-                    return Err(e.to_string());
-                }
-            }
 
             rindexer_info!(
                 "UniswapV3Pool::Swap - {} - {} events",

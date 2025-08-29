@@ -952,40 +952,18 @@ pub fn generate_trace_handlers(
                         return Ok(());
                     }}
 
-                     if postgres_bulk_data.len() > 100 {{
-                        let result = context
-                            .database
-                            .bulk_insert_via_copy(
-                                "{table_name}",
-                                &[{columns_names}],
-                                &postgres_bulk_data
-                                    .first()
-                                    .ok_or("No first element in bulk data, impossible")?
-                                    .iter()
-                                    .map(|param| param.to_type())
-                                    .collect::<Vec<PgType>>(),
-                                &postgres_bulk_data,
-                            )
-                            .await;
+                    let result = context
+                        .database
+                        .insert_bulk(
+                            "{table_name}",
+                            &[{columns_names}],
+                            &postgres_bulk_data,
+                        )
+                        .await;
 
-                        if let Err(e) = result {{
-                            rindexer_error!("{event_type_name}::{handler_name} inserting bulk data via COPY: {{:?}}", e);
-                            return Err(e.to_string());
-                        }}
-                        }} else {{
-                            let result = context
-                                .database
-                                .bulk_insert(
-                                    "{table_name}",
-                                    &[{columns_names}],
-                                    &postgres_bulk_data,
-                                )
-                                .await;
-
-                            if let Err(e) = result {{
-                                rindexer_error!("{event_type_name}::{handler_name} inserting bulk data via INSERT: {{:?}}", e);
-                                return Err(e.to_string());
-                            }}
+                    if let Err(e) = result {{
+                        rindexer_error!("{event_type_name}::{handler_name} inserting bulk data: {{:?}}", e);
+                        return Err(e.to_string());
                     }}
                 "#,
                 table_name =
