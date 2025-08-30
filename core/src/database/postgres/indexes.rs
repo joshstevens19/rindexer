@@ -83,6 +83,8 @@ impl PostgresIndexResult {
             return Ok(());
         }
 
+        info!("Applying indexes if any back to the database as historic resync is complete");
+
         let client = PostgresClient::new().await?;
 
         // do a loop due to deadlocks on concurrent execution
@@ -90,6 +92,8 @@ impl PostgresIndexResult {
             let sql = postgres_index.apply_index_sql();
             client.execute(sql.as_str(), &[]).await?;
         }
+
+        info!("Applied indexes back to database");
 
         Ok(())
     }

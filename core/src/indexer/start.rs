@@ -385,27 +385,30 @@ pub async fn start_indexing_contract_events(
             processed_up_to: end_block,
         });
 
-        let contract = manifest
-            .contracts
-            .iter()
-            .find(|c| {
-                format!("{}Filter", c.name) == event.contract.name || c.name == event.contract.name
-            })
-            .unwrap();
+        // TODO: doesnt work with factory atm so leave overrides to fix later as breaks the world
+        // let contract = manifest
+        //     .contracts
+        //     .iter()
+        //     .find(|c| {
+        //         format!("{}Filter", c.name) == event.contract.name || c.name == event.contract.name
+        //     })
+        //     .unwrap();
 
-        let timestamp_enabled_for_event = contract
-            .include_events
-            .iter()
-            .flatten()
-            .find(|a| a.name == event.event_name)
-            .unwrap()
-            .timestamps;
+        // let timestamp_enabled_for_event = contract
+        //     .include_events
+        //     .iter()
+        //     .flatten()
+        //     .find(|a| a.name == event.event_name)
+        //     .unwrap()
+        //     .timestamps;
 
-        match timestamp_enabled_for_event {
-            Some(true) => info!("Timestamps enabled for event: {}", event.event_name),
-            Some(false) => info!("Timestamps disabled for event: {}", event.event_name),
-            None => {}
-        };
+        // match timestamp_enabled_for_event {
+        //     Some(true) => info!("Timestamps enabled for event: {}", event.event_name),
+        //     Some(false) => info!("Timestamps disabled for event: {}", event.event_name),
+        //     None => {}
+        // };
+
+        let timestamp_enabled_for_event = None;
 
         let event_processing_config: EventProcessingConfig = match event.is_factory_filter_event() {
             true => {

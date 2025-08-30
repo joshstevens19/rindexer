@@ -188,13 +188,8 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                 )
                 .await?;
 
-                // TODO if graphql isn't up yet, and we apply this on graphql wont refresh we need
-                // to handle this
-                info!(
-                    "Applying indexes if any back to the database as historic resync is complete"
-                );
+                // TODO if graphql isn't up yet, and we apply this on graphql wont refresh we need to handle this
                 PostgresIndexResult::apply_indexes(postgres_indexes).await?;
-                info!("Applied indexes back to database");
 
                 if !relationships.is_empty() {
                     // TODO if graphql isn't up yet, and we apply this on graphql wont refresh we
@@ -235,16 +230,35 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                 // }
             }
 
-            if let Some(handle) = graphql_server_handle {
-                handle.await.unwrap_or_else(|e| {
-                    error!("GraphQL server task failed: {:?}", e);
-                });
+            if graphql_server_handle.is_none() && !manifest.has_any_contracts_live_indexing() {
+                return Ok(());
             }
 
-            shutdown_handle.await.map_err(|e| {
-                error!("Shutdown handler failed: {:?}", e);
-                StartRindexerError::ShutdownHandlerFailed(e.to_string())
-            })?;
+            match (graphql_server_handle, shutdown_handle) {
+                (Some(graphql_handle), shutdown_handle) => {
+                    info!("Waiting on GraphQL server and shutdown signal...");
+                    tokio::select! {
+                        result = graphql_handle => {
+                            if let Err(e) = result {
+                                error!("GraphQL server task failed: {:?}", e);
+                            }
+                        }
+                        result = shutdown_handle => {
+                            result.map_err(|e| {
+                                error!("Shutdown handler failed: {:?}", e);
+                                StartRindexerError::ShutdownHandlerFailed(e.to_string())
+                            })?;
+                        }
+                    }
+                }
+                (None, shutdown_handle) => {
+                    info!("Waiting for shutdown signal...");
+                    shutdown_handle.await.map_err(|e| {
+                        error!("Shutdown handler failed: {:?}", e);
+                        StartRindexerError::ShutdownHandlerFailed(e.to_string())
+                    })?;
+                }
+            }
 
             Ok(())
         }
