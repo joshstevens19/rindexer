@@ -408,8 +408,6 @@ pub async fn start_indexing_contract_events(
         //     None => {}
         // };
 
-        let timestamp_enabled_for_event = None;
-
         let event_processing_config: EventProcessingConfig = match event.is_factory_filter_event() {
             true => {
                 let factory_details = network_contract
@@ -433,8 +431,9 @@ pub async fn start_indexing_contract_events(
                     database: database.clone(),
                     config: manifest.config.clone(),
                     csv_details: manifest_csv_details.clone(),
-                    timestamps: timestamp_enabled_for_event
-                        .unwrap_or(manifest.timestamps.unwrap_or(false)),
+                    // timestamps: timestamp_enabled_for_event
+                    //     .unwrap_or(manifest.timestamps.unwrap_or(false)),
+                    timestamps: manifest.timestamps.unwrap_or(false),
                     stream_last_synced_block_file_path: stream_details
                         .as_ref()
                         .map(|s| s.get_streams_last_synced_block_path()),
@@ -464,8 +463,9 @@ pub async fn start_indexing_contract_events(
                 database: database.clone(),
                 csv_details: manifest_csv_details.clone(),
                 config: manifest.config.clone(),
-                timestamps: timestamp_enabled_for_event
-                    .unwrap_or(manifest.timestamps.unwrap_or(false)),
+                // timestamps: timestamp_enabled_for_event
+                //     .unwrap_or(manifest.timestamps.unwrap_or(false)),
+                timestamps: manifest.timestamps.unwrap_or(false),
                 stream_last_synced_block_file_path: stream_details
                     .as_ref()
                     .map(|s| s.get_streams_last_synced_block_path()),
