@@ -56,40 +56,18 @@ EthereumSqlTypeWrapper::U256(result.tx_information.log_index)
 
                     let rows = ["contract_address".to_string(), "token_0".to_string(), "token_1".to_string(), "fee".to_string(), "tick_spacing".to_string(), "pool".to_string(), "tx_hash".to_string(), "block_number".to_string(), "block_hash".to_string(), "network".to_string(), "tx_index".to_string(), "log_index".to_string()];
 
-                    if postgres_bulk_data.len() > 100 {
-                        let result = context
-                            .database
-                            .bulk_insert_via_copy(
-                                "rindexer_factory_contract_uniswap_v3_factory_pool_created_pool.pool_created",
-                                &rows,
-                                &postgres_bulk_data
-                                    .first()
-                                    .ok_or("No first element in bulk data, impossible")?
-                                    .iter()
-                                    .map(|param| param.to_type())
-                                    .collect::<Vec<PgType>>(),
-                                &postgres_bulk_data,
-                            )
-                            .await;
+                    let result = context
+                        .database
+                        .insert_bulk(
+                            "rindexer_factory_contract_uniswap_v3_factory_pool_created_pool.pool_created",
+                            &rows,
+                            &postgres_bulk_data,
+                        )
+                        .await;
 
-                        if let Err(e) = result {
-                            rindexer_error!("UniswapV3FactoryPoolCreatedPoolEventType::PoolCreated inserting bulk data via COPY: {:?}", e);
-                            return Err(e.to_string());
-                        }
-                        } else {
-                            let result = context
-                                .database
-                                .bulk_insert(
-                                    "rindexer_factory_contract_uniswap_v3_factory_pool_created_pool.pool_created",
-                                    &rows,
-                                    &postgres_bulk_data,
-                                )
-                                .await;
-
-                            if let Err(e) = result {
-                                rindexer_error!("UniswapV3FactoryPoolCreatedPoolEventType::PoolCreated inserting bulk data via INSERT: {:?}", e);
-                                return Err(e.to_string());
-                            }
+                    if let Err(e) = result {
+                        rindexer_error!("UniswapV3FactoryPoolCreatedPool::PoolCreated inserting bulk data: {:?}", e);
+                        return Err(e);
                     }
 
 

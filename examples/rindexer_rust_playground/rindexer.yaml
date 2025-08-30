@@ -43,11 +43,6 @@ contracts:
     abi: ./abis/uniswap-v3-pool-abi.json
     include_events:
       - Swap
-  - name: PlaygroundTypes
-    details:
-      - network: base
-        address: "0x1234567890abcdef1234567890abcdef12345678"
-    abi: ./abis/playground-types-abi.json
 global:
   contracts:
     - name: USDT

@@ -28,7 +28,7 @@ pub struct Redis {
 }
 
 async fn get_pooled_connection(
-    pool: &Arc<Pool<RedisConnectionManager>>,
+    pool: &'_ Arc<Pool<RedisConnectionManager>>,
 ) -> Result<PooledConnection<'_, RedisConnectionManager>, RedisError> {
     match pool.get().await {
         Ok(c) => Ok(c),

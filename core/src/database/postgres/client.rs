@@ -288,7 +288,10 @@ impl PostgresClient {
         conn.copy_in(statement).await.map_err(PostgresError::PgError)
     }
 
-    pub async fn bulk_insert_via_copy(
+    // Internal method used by insert_bulk for large datasets (>100 rows).
+    // Uses PostgreSQL COPY command for optimal performance with large data.
+    // Made pub(crate) to allow crate-internal access while keeping insert_bulk as the primary API.
+    pub(crate) async fn bulk_insert_via_copy(
         &self,
         table_name: &str,
         column_names: &[String],
@@ -332,7 +335,10 @@ impl PostgresClient {
         Ok(())
     }
 
-    pub async fn bulk_insert(
+    // Internal method used by insert_bulk for small datasets (≤100 rows).
+    // Uses standard INSERT queries which are more efficient for smaller data volumes.
+    // Made pub(crate) to allow crate-internal access while keeping insert_bulk as the primary API.
+    pub(crate) async fn bulk_insert_via_query(
         &self,
         table_name: &str,
         column_names: &[String],
@@ -399,7 +405,12 @@ impl PostgresClient {
             return Ok(());
         }
 
-        if postgres_bulk_data.len() > 100 {
+        let total_params = postgres_bulk_data.len() * columns.len();
+
+        // PostgreSQL has a maximum of 65535 parameters in a single query
+        // (see https://www.postgresql.org/docs/current/limits.html#LIMITS-TABLE)
+        // If we exceed this limit, force use of COPY method
+        if postgres_bulk_data.len() > 100 || total_params > 65535 {
             let column_types: Vec<PgType> =
                 postgres_bulk_data[0].iter().map(|param| param.to_type()).collect();
 
@@ -407,7 +418,7 @@ impl PostgresClient {
                 .await
                 .map_err(|e| e.to_string())
         } else {
-            self.bulk_insert(table_name, columns, postgres_bulk_data)
+            self.bulk_insert_via_query(table_name, columns, postgres_bulk_data)
                 .await
                 .map(|_| ())
                 .map_err(|e| e.to_string())
