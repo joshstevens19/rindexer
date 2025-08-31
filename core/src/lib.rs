@@ -9,11 +9,13 @@ mod system_state;
 pub use system_state::{initiate_shutdown, is_running};
 
 mod database;
-pub use database::postgres::{
-    client::{PostgresClient, ToSql},
+pub use database::{
     generate::drop_tables_for_indexer_sql,
-    setup::setup_postgres,
-    sql_type_wrapper::EthereumSqlTypeWrapper,
+    postgres::{
+        client::{PostgresClient, ToSql},
+        setup::setup_postgres,
+        sql_type_wrapper::EthereumSqlTypeWrapper,
+    },
 };
 
 mod simple_file_formatters;
