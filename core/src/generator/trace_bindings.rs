@@ -927,6 +927,7 @@ pub fn generate_trace_handlers(
 
             data.push_str("EthereumSqlTypeWrapper::B256(result.tx_information.transaction_hash),");
             data.push_str("EthereumSqlTypeWrapper::U64(result.tx_information.block_number),");
+            data.push_str("\nEthereumSqlTypeWrapper::DateTimeNullable(result.tx_information.block_timestamp_to_datetime()),");
             data.push_str("EthereumSqlTypeWrapper::B256(result.tx_information.block_hash),");
             data.push_str(
                 "EthereumSqlTypeWrapper::String(result.tx_information.network.to_string()),",
