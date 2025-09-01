@@ -39,6 +39,9 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                     EthereumSqlTypeWrapper::U256(U256::from(result.event_data.value)),
                     EthereumSqlTypeWrapper::B256(result.tx_information.transaction_hash),
                     EthereumSqlTypeWrapper::U64(result.tx_information.block_number),
+                    EthereumSqlTypeWrapper::DateTimeNullable(
+                        result.tx_information.block_timestamp_to_datetime(),
+                    ),
                     EthereumSqlTypeWrapper::B256(result.tx_information.block_hash),
                     EthereumSqlTypeWrapper::String(result.tx_information.network.to_string()),
                     EthereumSqlTypeWrapper::U64(result.tx_information.transaction_index),
@@ -69,6 +72,7 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                 "value".to_string(),
                 "tx_hash".to_string(),
                 "block_number".to_string(),
+                "block_timestamp".to_string(),
                 "block_hash".to_string(),
                 "network".to_string(),
                 "tx_index".to_string(),
@@ -85,8 +89,11 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                 .await;
 
             if let Err(e) = result {
-                rindexer_error!("UniswapV3PoolToken::Transfer inserting bulk data: {:?}", e);
-                return Err(e);
+                rindexer_error!(
+                    "UniswapV3PoolTokenEventType::Transfer inserting bulk data: {:?}",
+                    e
+                );
+                return Err(e.to_string());
             }
 
             rindexer_info!(

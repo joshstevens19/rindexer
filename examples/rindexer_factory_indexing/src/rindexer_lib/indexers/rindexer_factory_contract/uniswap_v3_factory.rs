@@ -37,6 +37,9 @@ async fn owner_changed_handler(manifest_path: &PathBuf, registry: &mut EventCall
                     EthereumSqlTypeWrapper::Address(result.event_data.newOwner),
                     EthereumSqlTypeWrapper::B256(result.tx_information.transaction_hash),
                     EthereumSqlTypeWrapper::U64(result.tx_information.block_number),
+                    EthereumSqlTypeWrapper::DateTimeNullable(
+                        result.tx_information.block_timestamp_to_datetime(),
+                    ),
                     EthereumSqlTypeWrapper::B256(result.tx_information.block_hash),
                     EthereumSqlTypeWrapper::String(result.tx_information.network.to_string()),
                     EthereumSqlTypeWrapper::U64(result.tx_information.transaction_index),
@@ -66,6 +69,7 @@ async fn owner_changed_handler(manifest_path: &PathBuf, registry: &mut EventCall
                 "new_owner".to_string(),
                 "tx_hash".to_string(),
                 "block_number".to_string(),
+                "block_timestamp".to_string(),
                 "block_hash".to_string(),
                 "network".to_string(),
                 "tx_index".to_string(),
@@ -82,8 +86,11 @@ async fn owner_changed_handler(manifest_path: &PathBuf, registry: &mut EventCall
                 .await;
 
             if let Err(e) = result {
-                rindexer_error!("UniswapV3Factory::OwnerChanged inserting bulk data: {:?}", e);
-                return Err(e);
+                rindexer_error!(
+                    "UniswapV3FactoryEventType::OwnerChanged inserting bulk data: {:?}",
+                    e
+                );
+                return Err(e.to_string());
             }
 
             rindexer_info!(

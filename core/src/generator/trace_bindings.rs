@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+use crate::abi::AbiProperty;
+use crate::helpers::{is_irregular_width_solidity_integer_type, is_solidity_static_bytes_type};
 use crate::{
     abi::{
         ABIInput, ABIItem, CreateCsvFileForEvent, EventInfo, GenerateAbiPropertiesType,
@@ -18,6 +20,7 @@ use crate::{
         storage::{CsvDetails, Storage},
     },
     types::code::Code,
+    EthereumSqlTypeWrapper,
 };
 
 pub fn trace_abigen_contract_name(contract_name: &str) -> String {
@@ -925,15 +928,19 @@ pub fn generate_trace_handlers(
                 }
             }
 
-            data.push_str("EthereumSqlTypeWrapper::B256(result.tx_information.transaction_hash),");
-            data.push_str("EthereumSqlTypeWrapper::U64(result.tx_information.block_number),");
+            data.push_str(
+                "\nEthereumSqlTypeWrapper::B256(result.tx_information.transaction_hash),",
+            );
+            data.push_str("\nEthereumSqlTypeWrapper::U64(result.tx_information.block_number),");
             data.push_str("\nEthereumSqlTypeWrapper::DateTimeNullable(result.tx_information.block_timestamp_to_datetime()),");
-            data.push_str("EthereumSqlTypeWrapper::B256(result.tx_information.block_hash),");
+            data.push_str("\nEthereumSqlTypeWrapper::B256(result.tx_information.block_hash),");
             data.push_str(
                 "EthereumSqlTypeWrapper::String(result.tx_information.network.to_string()),",
             );
-            data.push_str("EthereumSqlTypeWrapper::U64(result.tx_information.transaction_index),");
-            data.push_str("EthereumSqlTypeWrapper::U256(result.tx_information.log_index)");
+            data.push_str(
+                "\nEthereumSqlTypeWrapper::U64(result.tx_information.transaction_index),",
+            );
+            data.push_str("\nEthereumSqlTypeWrapper::U256(result.tx_information.log_index)");
             data.push(']');
 
             postgres_write = format!(

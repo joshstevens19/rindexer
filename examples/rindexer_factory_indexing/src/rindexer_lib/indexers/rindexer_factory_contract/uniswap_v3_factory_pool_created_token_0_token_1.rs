@@ -34,6 +34,7 @@ EthereumSqlTypeWrapper::I32(result.event_data.tickSpacing.unchecked_into()),
 EthereumSqlTypeWrapper::Address(result.event_data.pool),
 EthereumSqlTypeWrapper::B256(result.tx_information.transaction_hash),
 EthereumSqlTypeWrapper::U64(result.tx_information.block_number),
+EthereumSqlTypeWrapper::DateTimeNullable(result.tx_information.block_timestamp_to_datetime()),
 EthereumSqlTypeWrapper::B256(result.tx_information.block_hash),
 EthereumSqlTypeWrapper::String(result.tx_information.network.to_string()),
 EthereumSqlTypeWrapper::U64(result.tx_information.transaction_index),
@@ -54,7 +55,7 @@ EthereumSqlTypeWrapper::U256(result.tx_information.log_index)
                         return Ok(());
                     }
 
-                    let rows = ["contract_address".to_string(), "token_0".to_string(), "token_1".to_string(), "fee".to_string(), "tick_spacing".to_string(), "pool".to_string(), "tx_hash".to_string(), "block_number".to_string(), "block_hash".to_string(), "network".to_string(), "tx_index".to_string(), "log_index".to_string()];
+                    let rows = ["contract_address".to_string(), "token_0".to_string(), "token_1".to_string(), "fee".to_string(), "tick_spacing".to_string(), "pool".to_string(), "tx_hash".to_string(), "block_number".to_string(), "block_timestamp".to_string(), "block_hash".to_string(), "network".to_string(), "tx_index".to_string(), "log_index".to_string()];
 
                     let result = context
                         .database
@@ -66,8 +67,8 @@ EthereumSqlTypeWrapper::U256(result.tx_information.log_index)
                         .await;
 
                     if let Err(e) = result {
-                        rindexer_error!("UniswapV3FactoryPoolCreatedToken0Token1::PoolCreated inserting bulk data: {:?}", e);
-                        return Err(e);
+                        rindexer_error!("UniswapV3FactoryPoolCreatedToken0Token1EventType::PoolCreated inserting bulk data: {:?}", e);
+                        return Err(e.to_string());
                     }
 
 
