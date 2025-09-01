@@ -39,6 +39,9 @@ async fn approval_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                     EthereumSqlTypeWrapper::U256(U256::from(result.event_data.value)),
                     EthereumSqlTypeWrapper::B256(result.tx_information.transaction_hash),
                     EthereumSqlTypeWrapper::U64(result.tx_information.block_number),
+                    EthereumSqlTypeWrapper::DateTimeNullable(
+                        result.tx_information.block_timestamp_to_datetime(),
+                    ),
                     EthereumSqlTypeWrapper::B256(result.tx_information.block_hash),
                     EthereumSqlTypeWrapper::String(result.tx_information.network.to_string()),
                     EthereumSqlTypeWrapper::U64(result.tx_information.transaction_index),
@@ -50,7 +53,7 @@ async fn approval_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
             if !csv_bulk_data.is_empty() {
                 let csv_result = context.csv.append_bulk(csv_bulk_data).await;
                 if let Err(e) = csv_result {
-                    rindexer_error!("RocketPoolETH::Approval inserting csv data: {:?}", e);
+                    rindexer_error!("RocketPoolETHEventType::Approval inserting csv data: {:?}", e);
                     return Err(e.to_string());
                 }
             }
@@ -66,6 +69,7 @@ async fn approval_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                 "value".to_string(),
                 "tx_hash".to_string(),
                 "block_number".to_string(),
+                "block_timestamp".to_string(),
                 "block_hash".to_string(),
                 "network".to_string(),
                 "tx_index".to_string(),
@@ -82,7 +86,7 @@ async fn approval_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                 .await;
 
             if let Err(e) = result {
-                rindexer_error!("RocketPoolETH::Approval inserting bulk data: {:?}", e);
+                rindexer_error!("RocketPoolETHEventType::Approval inserting bulk data: {:?}", e);
                 return Err(e.to_string());
             }
 
@@ -130,6 +134,9 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                     EthereumSqlTypeWrapper::U256(U256::from(result.event_data.value)),
                     EthereumSqlTypeWrapper::B256(result.tx_information.transaction_hash),
                     EthereumSqlTypeWrapper::U64(result.tx_information.block_number),
+                    EthereumSqlTypeWrapper::DateTimeNullable(
+                        result.tx_information.block_timestamp_to_datetime(),
+                    ),
                     EthereumSqlTypeWrapper::B256(result.tx_information.block_hash),
                     EthereumSqlTypeWrapper::String(result.tx_information.network.to_string()),
                     EthereumSqlTypeWrapper::U64(result.tx_information.transaction_index),
@@ -141,7 +148,7 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
             if !csv_bulk_data.is_empty() {
                 let csv_result = context.csv.append_bulk(csv_bulk_data).await;
                 if let Err(e) = csv_result {
-                    rindexer_error!("RocketPoolETH::Transfer inserting csv data: {:?}", e);
+                    rindexer_error!("RocketPoolETHEventType::Transfer inserting csv data: {:?}", e);
                     return Err(e.to_string());
                 }
             }
@@ -157,6 +164,7 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                 "value".to_string(),
                 "tx_hash".to_string(),
                 "block_number".to_string(),
+                "block_timestamp".to_string(),
                 "block_hash".to_string(),
                 "network".to_string(),
                 "tx_index".to_string(),
@@ -173,7 +181,7 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                 .await;
 
             if let Err(e) = result {
-                rindexer_error!("RocketPoolETH::Transfer inserting bulk data: {:?}", e);
+                rindexer_error!("RocketPoolETHEventType::Transfer inserting bulk data: {:?}", e);
                 return Err(e.to_string());
             }
 
