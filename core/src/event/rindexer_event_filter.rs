@@ -23,7 +23,7 @@ pub enum BuildRindexerFilterError {
 pub struct SimpleEventFilter {
     pub address: Option<ValueOrArray<Address>>,
     pub topic_id: B256,
-    pub topics: [Topic; 3],
+    pub topics: [Topic; 4],
     pub current_block: U64,
     pub next_block: U64,
 }
@@ -60,7 +60,7 @@ pub struct FactoryFilter {
     pub network: String,
 
     pub topic_id: B256,
-    pub topics: [Topic; 3],
+    pub topics: [Topic; 4],
 
     pub database: Option<Arc<PostgresClient>>,
     pub csv_details: Option<CsvDetails>,
@@ -180,25 +180,25 @@ impl RindexerEventFilter {
 
     pub fn topic1(&self) -> Topic {
         match self {
-            RindexerEventFilter::Address(filter) => filter.topics[0].clone(),
-            RindexerEventFilter::Filter(filter) => filter.topics[0].clone(),
-            RindexerEventFilter::Factory(filter) => filter.topics[0].clone(),
-        }
-    }
-
-    pub fn topic2(&self) -> Topic {
-        match self {
             RindexerEventFilter::Address(filter) => filter.topics[1].clone(),
             RindexerEventFilter::Filter(filter) => filter.topics[1].clone(),
             RindexerEventFilter::Factory(filter) => filter.topics[1].clone(),
         }
     }
 
-    pub fn topic3(&self) -> Topic {
+    pub fn topic2(&self) -> Topic {
         match self {
             RindexerEventFilter::Address(filter) => filter.topics[2].clone(),
             RindexerEventFilter::Filter(filter) => filter.topics[2].clone(),
             RindexerEventFilter::Factory(filter) => filter.topics[2].clone(),
+        }
+    }
+
+    pub fn topic3(&self) -> Topic {
+        match self {
+            RindexerEventFilter::Address(filter) => filter.topics[3].clone(),
+            RindexerEventFilter::Filter(filter) => filter.topics[3].clone(),
+            RindexerEventFilter::Factory(filter) => filter.topics[3].clone(),
         }
     }
 
