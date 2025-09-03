@@ -8,6 +8,9 @@
 
 ### Bug fixes
 -------------------------------------------------
+- `contract_address` Postgres column changed from `char(66)` to `char(42)`
+- `PostgresClient` now only exposes `insert_bulk` which handles internally whether to insert rows via INSERT or COPY
+- regenerated example projects to support latest changes
 
 ### Breaking changes
 -------------------------------------------------
