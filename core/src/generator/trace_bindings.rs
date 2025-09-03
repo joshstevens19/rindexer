@@ -925,15 +925,19 @@ pub fn generate_trace_handlers(
                 }
             }
 
-            data.push_str("EthereumSqlTypeWrapper::B256(result.tx_information.transaction_hash),");
-            data.push_str("EthereumSqlTypeWrapper::U64(result.tx_information.block_number),");
+            data.push_str(
+                "\nEthereumSqlTypeWrapper::B256(result.tx_information.transaction_hash),",
+            );
+            data.push_str("\nEthereumSqlTypeWrapper::U64(result.tx_information.block_number),");
             data.push_str("\nEthereumSqlTypeWrapper::DateTimeNullable(result.tx_information.block_timestamp_to_datetime()),");
-            data.push_str("EthereumSqlTypeWrapper::B256(result.tx_information.block_hash),");
+            data.push_str("\nEthereumSqlTypeWrapper::B256(result.tx_information.block_hash),");
             data.push_str(
                 "EthereumSqlTypeWrapper::String(result.tx_information.network.to_string()),",
             );
-            data.push_str("EthereumSqlTypeWrapper::U64(result.tx_information.transaction_index),");
-            data.push_str("EthereumSqlTypeWrapper::U256(result.tx_information.log_index)");
+            data.push_str(
+                "\nEthereumSqlTypeWrapper::U64(result.tx_information.transaction_index),",
+            );
+            data.push_str("\nEthereumSqlTypeWrapper::U256(result.tx_information.log_index)");
             data.push(']');
 
             postgres_write = format!(
@@ -952,40 +956,18 @@ pub fn generate_trace_handlers(
                         return Ok(());
                     }}
 
-                     if postgres_bulk_data.len() > 100 {{
-                        let result = context
-                            .database
-                            .bulk_insert_via_copy(
-                                "{table_name}",
-                                &[{columns_names}],
-                                &postgres_bulk_data
-                                    .first()
-                                    .ok_or("No first element in bulk data, impossible")?
-                                    .iter()
-                                    .map(|param| param.to_type())
-                                    .collect::<Vec<PgType>>(),
-                                &postgres_bulk_data,
-                            )
-                            .await;
+                    let result = context
+                        .database
+                        .insert_bulk(
+                            "{table_name}",
+                            &[{columns_names}],
+                            &postgres_bulk_data,
+                        )
+                        .await;
 
-                        if let Err(e) = result {{
-                            rindexer_error!("{event_type_name}::{handler_name} inserting bulk data via COPY: {{:?}}", e);
-                            return Err(e.to_string());
-                        }}
-                        }} else {{
-                            let result = context
-                                .database
-                                .bulk_insert(
-                                    "{table_name}",
-                                    &[{columns_names}],
-                                    &postgres_bulk_data,
-                                )
-                                .await;
-
-                            if let Err(e) = result {{
-                                rindexer_error!("{event_type_name}::{handler_name} inserting bulk data via INSERT: {{:?}}", e);
-                                return Err(e.to_string());
-                            }}
+                    if let Err(e) = result {{
+                        rindexer_error!("{event_type_name}::{handler_name} inserting bulk data: {{:?}}", e);
+                        return Err(e.to_string());
                     }}
                 "#,
                 table_name =
