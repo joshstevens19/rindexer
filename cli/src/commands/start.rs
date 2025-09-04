@@ -6,7 +6,7 @@ use rindexer::{
         yaml::{read_manifest, YAML_CONFIG_NAME},
     },
     rindexer_error, rindexer_info, setup_info_logger, start_rindexer_no_code,
-    GraphqlOverrideSettings, IndexerNoCodeDetails, PostgresClient, StartNoCodeDetails,
+    GraphqlOverrideSettings, HealthOverrideSettings, IndexerNoCodeDetails, PostgresClient, StartNoCodeDetails,
 };
 
 use crate::{
@@ -182,6 +182,10 @@ pub async fn start(
                         enabled: false,
                         override_port: None,
                     },
+                    health_details: HealthOverrideSettings {
+                        enabled: true,
+                        override_port: None,
+                    },
                 };
 
                 start_rindexer_no_code(details).await.map_err(|e| {
@@ -197,6 +201,10 @@ pub async fn start(
                         enabled: true,
                         override_port: port.as_ref().and_then(|port| port.parse().ok()),
                     },
+                    health_details: HealthOverrideSettings {
+                        enabled: true,
+                        override_port: None,
+                    },
                 };
 
                 start_rindexer_no_code(details).await.map_err(|e| {
@@ -211,6 +219,10 @@ pub async fn start(
                     graphql_details: GraphqlOverrideSettings {
                         enabled: true,
                         override_port: port.as_ref().and_then(|port| port.parse().ok()),
+                    },
+                    health_details: HealthOverrideSettings {
+                        enabled: true,
+                        override_port: None,
                     },
                 };
 

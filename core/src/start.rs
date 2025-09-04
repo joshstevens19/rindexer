@@ -7,12 +7,13 @@ use tracing::{error, info};
 use crate::{
     api::{start_graphql_server, GraphqlOverrideSettings, StartGraphqlServerError},
     database::postgres::{
-        client::PostgresConnectionError,
+        client::{PostgresClient, PostgresConnectionError},
         indexes::{ApplyPostgresIndexesError, PostgresIndexResult},
         relationship::{ApplyAllRelationships, Relationship},
         setup::{setup_postgres, SetupPostgresError},
     },
     event::callback_registry::{EventCallbackRegistry, TraceCallbackRegistry},
+    health::start_health_server,
     indexer::{
         no_code::{setup_no_code, SetupNoCodeError},
         start::{start_indexing, StartIndexingError},
@@ -32,10 +33,16 @@ pub struct IndexingDetails {
     pub trace_registry: TraceCallbackRegistry,
 }
 
+pub struct HealthOverrideSettings {
+    pub enabled: bool,
+    pub override_port: Option<u16>,
+}
+
 pub struct StartDetails<'a> {
     pub manifest_path: &'a PathBuf,
     pub indexing_details: Option<IndexingDetails>,
     pub graphql_details: GraphqlOverrideSettings,
+    pub health_details: HealthOverrideSettings,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -153,6 +160,37 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     None
                 };
 
+            // Spawn a separate task for the health server if enabled
+            let health_server_handle = if details.health_details.enabled {
+                let manifest_clone = Arc::clone(&manifest);
+                let project_path_clone = project_path.to_path_buf();
+                let mut health_settings = manifest.health.clone().unwrap_or_default();
+                if let Some(override_port) = &details.health_details.override_port {
+                    health_settings.set_port(*override_port);
+                }
+                Some(tokio::spawn(async move {
+                    // Create postgres client for health server if postgres is enabled
+                    // Note: We only create a client for health checks, not setup the database schema
+                    let postgres_client = if manifest_clone.storage.postgres_enabled() {
+                        match PostgresClient::new().await {
+                            Ok(client) => Some(Arc::new(client)),
+                            Err(e) => {
+                                error!("Failed to create postgres client for health server: {:?}", e);
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    
+                    if let Err(e) = start_health_server(health_settings.port, manifest_clone, postgres_client).await {
+                        error!("Failed to start health server: {:?}", e);
+                    }
+                }))
+            } else {
+                None
+            };
+
             if graphql_server_handle.is_none() && details.graphql_details.enabled {
                 error!("GraphQL can not run without postgres storage enabled, you have tried to run GraphQL which will now be skipped.");
             }
@@ -234,8 +272,29 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                 return Ok(());
             }
 
-            match (graphql_server_handle, shutdown_handle) {
-                (Some(graphql_handle), shutdown_handle) => {
+            match (graphql_server_handle, health_server_handle, shutdown_handle) {
+                (Some(graphql_handle), Some(health_handle), shutdown_handle) => {
+                    info!("Waiting on GraphQL server, health server, and shutdown signal...");
+                    tokio::select! {
+                        result = graphql_handle => {
+                            if let Err(e) = result {
+                                error!("GraphQL server task failed: {:?}", e);
+                            }
+                        }
+                        result = health_handle => {
+                            if let Err(e) = result {
+                                error!("Health server task failed: {:?}", e);
+                            }
+                        }
+                        result = shutdown_handle => {
+                            result.map_err(|e| {
+                                error!("Shutdown handler failed: {:?}", e);
+                                StartRindexerError::ShutdownHandlerFailed(e.to_string())
+                            })?;
+                        }
+                    }
+                }
+                (Some(graphql_handle), None, shutdown_handle) => {
                     info!("Waiting on GraphQL server and shutdown signal...");
                     tokio::select! {
                         result = graphql_handle => {
@@ -251,7 +310,23 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                         }
                     }
                 }
-                (None, shutdown_handle) => {
+                (None, Some(health_handle), shutdown_handle) => {
+                    info!("Waiting on health server and shutdown signal...");
+                    tokio::select! {
+                        result = health_handle => {
+                            if let Err(e) = result {
+                                error!("Health server task failed: {:?}", e);
+                            }
+                        }
+                        result = shutdown_handle => {
+                            result.map_err(|e| {
+                                error!("Shutdown handler failed: {:?}", e);
+                                StartRindexerError::ShutdownHandlerFailed(e.to_string())
+                            })?;
+                        }
+                    }
+                }
+                (None, None, shutdown_handle) => {
                     info!("Waiting for shutdown signal...");
                     shutdown_handle.await.map_err(|e| {
                         error!("Shutdown handler failed: {:?}", e);
@@ -274,6 +349,7 @@ pub struct StartNoCodeDetails<'a> {
     pub manifest_path: &'a PathBuf,
     pub indexing_details: IndexerNoCodeDetails,
     pub graphql_details: GraphqlOverrideSettings,
+    pub health_details: HealthOverrideSettings,
 }
 
 #[derive(thiserror::Error, Debug)]
