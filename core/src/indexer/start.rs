@@ -486,16 +486,17 @@ pub async fn start_indexing_contract_events(
             &dependencies,
         );
 
-        if dependencies_status.has_dependency_in_other_contracts_multiple_times() {
-            panic!("Multiple dependencies of the same event on different contracts not supported yet - please raise an issue if you need this feature");
-        }
-
         if dependencies_status.has_dependencies() {
-            if let Some(dependency_in_other_contract) =
-                dependencies_status.get_first_dependencies_in_other_contracts()
-            {
-                apply_cross_contract_dependency_events_config_after_processing
-                    .push((dependency_in_other_contract, Arc::new(event_processing_config)));
+            // Handle multiple cross-contract dependencies
+            let cross_contract_dependencies = dependencies_status.get_all_dependencies_in_other_contracts();
+            if !cross_contract_dependencies.is_empty() {
+                // Add this event config to all contracts that depend on it
+                let event_config_arc = Arc::new(event_processing_config);
+                apply_cross_contract_dependency_events_config_after_processing.extend(
+                    cross_contract_dependencies.iter().map(|contract| {
+                        (contract.clone(), Arc::clone(&event_config_arc))
+                    })
+                );
 
                 continue;
             }
