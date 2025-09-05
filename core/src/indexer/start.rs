@@ -488,14 +488,15 @@ pub async fn start_indexing_contract_events(
 
         if dependencies_status.has_dependencies() {
             // Handle multiple cross-contract dependencies
-            let cross_contract_dependencies = dependencies_status.get_all_dependencies_in_other_contracts();
+            let cross_contract_dependencies =
+                dependencies_status.get_all_dependencies_in_other_contracts();
             if !cross_contract_dependencies.is_empty() {
                 // Add this event config to all contracts that depend on it
                 let event_config_arc = Arc::new(event_processing_config);
                 apply_cross_contract_dependency_events_config_after_processing.extend(
-                    cross_contract_dependencies.iter().map(|contract| {
-                        (contract.clone(), Arc::clone(&event_config_arc))
-                    })
+                    cross_contract_dependencies
+                        .iter()
+                        .map(|contract| (contract.clone(), Arc::clone(&event_config_arc))),
                 );
 
                 continue;

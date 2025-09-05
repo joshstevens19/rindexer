@@ -438,18 +438,14 @@ mod tests {
             ContractEventDependencies {
                 contract_name: "ContractA".to_string(),
                 event_dependencies: EventDependencies {
-                    tree: Arc::new(EventsDependencyTree::new(vec![
-                        ContractEventMapping {
-                            contract_name: "ContractA".to_string(),
-                            event_name: "EventA".to_string(),
-                        }
-                    ])),
-                    dependency_events: vec![
-                        ContractEventMapping {
-                            contract_name: "ContractA".to_string(),
-                            event_name: "EventA".to_string(),
-                        }
-                    ],
+                    tree: Arc::new(EventsDependencyTree::new(vec![ContractEventMapping {
+                        contract_name: "ContractA".to_string(),
+                        event_name: "EventA".to_string(),
+                    }])),
+                    dependency_events: vec![ContractEventMapping {
+                        contract_name: "ContractA".to_string(),
+                        event_name: "EventA".to_string(),
+                    }],
                 },
             },
             ContractEventDependencies {
@@ -463,7 +459,7 @@ mod tests {
                         ContractEventMapping {
                             contract_name: "ContractA".to_string(),
                             event_name: "EventA".to_string(),
-                        }
+                        },
                     ])),
                     dependency_events: vec![
                         ContractEventMapping {
@@ -473,17 +469,14 @@ mod tests {
                         ContractEventMapping {
                             contract_name: "ContractA".to_string(),
                             event_name: "EventA".to_string(),
-                        }
+                        },
                     ],
                 },
             },
         ];
 
-        let status = ContractEventDependencies::dependencies_status(
-            "ContractA",
-            "EventA",
-            &dependencies
-        );
+        let status =
+            ContractEventDependencies::dependencies_status("ContractA", "EventA", &dependencies);
 
         assert!(status.has_dependency_in_own_contract);
         assert_eq!(status.dependencies_in_other_contracts.len(), 1);
@@ -499,18 +492,14 @@ mod tests {
             ContractEventDependencies {
                 contract_name: "ContractA".to_string(),
                 event_dependencies: EventDependencies {
-                    tree: Arc::new(EventsDependencyTree::new(vec![
-                        ContractEventMapping {
-                            contract_name: "ContractA".to_string(),
-                            event_name: "EventA".to_string(),
-                        }
-                    ])),
-                    dependency_events: vec![
-                        ContractEventMapping {
-                            contract_name: "ContractA".to_string(),
-                            event_name: "EventA".to_string(),
-                        }
-                    ],
+                    tree: Arc::new(EventsDependencyTree::new(vec![ContractEventMapping {
+                        contract_name: "ContractA".to_string(),
+                        event_name: "EventA".to_string(),
+                    }])),
+                    dependency_events: vec![ContractEventMapping {
+                        contract_name: "ContractA".to_string(),
+                        event_name: "EventA".to_string(),
+                    }],
                 },
             },
             ContractEventDependencies {
@@ -524,7 +513,7 @@ mod tests {
                         ContractEventMapping {
                             contract_name: "ContractA".to_string(),
                             event_name: "EventA".to_string(),
-                        }
+                        },
                     ])),
                     dependency_events: vec![
                         ContractEventMapping {
@@ -534,7 +523,7 @@ mod tests {
                         ContractEventMapping {
                             contract_name: "ContractA".to_string(),
                             event_name: "EventA".to_string(),
-                        }
+                        },
                     ],
                 },
             },
@@ -549,7 +538,7 @@ mod tests {
                         ContractEventMapping {
                             contract_name: "ContractA".to_string(),
                             event_name: "EventA".to_string(),
-                        }
+                        },
                     ])),
                     dependency_events: vec![
                         ContractEventMapping {
@@ -559,23 +548,20 @@ mod tests {
                         ContractEventMapping {
                             contract_name: "ContractA".to_string(),
                             event_name: "EventA".to_string(),
-                        }
+                        },
                     ],
                 },
             },
         ];
 
-        let status = ContractEventDependencies::dependencies_status(
-            "ContractA",
-            "EventA",
-            &dependencies
-        );
+        let status =
+            ContractEventDependencies::dependencies_status("ContractA", "EventA", &dependencies);
 
         assert!(status.has_dependency_in_own_contract);
         assert_eq!(status.dependencies_in_other_contracts.len(), 2);
         assert!(status.dependencies_in_other_contracts.contains(&"ContractB".to_string()));
         assert!(status.dependencies_in_other_contracts.contains(&"ContractC".to_string()));
-        
+
         // This is now supported - multiple cross-contract dependencies work!
         assert!(status.has_dependency_in_other_contracts_multiple_times());
     }
@@ -584,7 +570,7 @@ mod tests {
     fn test_multiple_cross_contract_dependencies_now_supported() {
         // This test verifies that multiple cross-contract dependencies are now supported
         // Previously this would trigger a panic, but now it should work correctly
-        
+
         let dependencies = vec![
             ContractEventDependencies {
                 contract_name: "ContractA".to_string(),
@@ -594,43 +580,40 @@ mod tests {
                 },
             },
             ContractEventDependencies {
-                contract_name: "ContractB".to_string(), 
+                contract_name: "ContractB".to_string(),
                 event_dependencies: EventDependencies {
                     tree: Arc::new(EventsDependencyTree::new(vec![])),
-                    dependency_events: vec![
-                        ContractEventMapping {
-                            contract_name: "ContractA".to_string(),
-                            event_name: "EventA".to_string(),
-                        }
-                    ],
+                    dependency_events: vec![ContractEventMapping {
+                        contract_name: "ContractA".to_string(),
+                        event_name: "EventA".to_string(),
+                    }],
                 },
             },
             ContractEventDependencies {
                 contract_name: "ContractC".to_string(),
                 event_dependencies: EventDependencies {
                     tree: Arc::new(EventsDependencyTree::new(vec![])),
-                    dependency_events: vec![
-                        ContractEventMapping {
-                            contract_name: "ContractA".to_string(), 
-                            event_name: "EventA".to_string(),
-                        }
-                    ],
+                    dependency_events: vec![ContractEventMapping {
+                        contract_name: "ContractA".to_string(),
+                        event_name: "EventA".to_string(),
+                    }],
                 },
             },
         ];
 
-        let status = ContractEventDependencies::dependencies_status(
-            "ContractA",
-            "EventA", 
-            &dependencies
-        );
+        let status =
+            ContractEventDependencies::dependencies_status("ContractA", "EventA", &dependencies);
 
         // Verify that the multiple cross-contract dependencies are detected correctly
         assert!(status.has_dependency_in_other_contracts_multiple_times());
         assert_eq!(status.get_all_dependencies_in_other_contracts().len(), 2);
-        assert!(status.get_all_dependencies_in_other_contracts().contains(&"ContractB".to_string()));
-        assert!(status.get_all_dependencies_in_other_contracts().contains(&"ContractC".to_string()));
-        
+        assert!(status
+            .get_all_dependencies_in_other_contracts()
+            .contains(&"ContractB".to_string()));
+        assert!(status
+            .get_all_dependencies_in_other_contracts()
+            .contains(&"ContractC".to_string()));
+
         // This should no longer panic - the feature is now supported!
     }
 
@@ -651,8 +634,11 @@ mod tests {
         assert!(all_deps.contains(&"ContractB".to_string()));
         assert!(all_deps.contains(&"ContractC".to_string()));
         assert!(all_deps.contains(&"ContractD".to_string()));
-        
+
         assert!(status.has_dependency_in_other_contracts_multiple_times());
-        assert_eq!(status.get_first_dependencies_in_other_contracts(), Some("ContractB".to_string()));
+        assert_eq!(
+            status.get_first_dependencies_in_other_contracts(),
+            Some("ContractB".to_string())
+        );
     }
 }
