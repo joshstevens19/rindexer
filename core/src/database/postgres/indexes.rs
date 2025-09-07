@@ -212,10 +212,11 @@ pub async fn prepare_indexes(
             let abi_items = ABIItem::read_abi_items(project_path, contract)?;
 
             for abi_item in abi_items {
+                let contract_name = contract.before_modify_name_if_filter_readonly();
                 let db_table_name = format!(
                     "{}_{}.{}",
                     camel_to_snake(manifest_name),
-                    camel_to_snake(&contract.name),
+                    camel_to_snake(&contract_name),
                     camel_to_snake(&abi_item.name)
                 );
 
@@ -247,10 +248,11 @@ pub async fn prepare_indexes(
 
                     if let Some(injected_parameters) = &contract_event_indexes.injected_parameters {
                         for abi_item in &abi_items {
+                            let contract_name = contract.before_modify_name_if_filter_readonly();
                             let db_table_name = format!(
                                 "{}_{}.{}",
                                 camel_to_snake(manifest_name),
-                                camel_to_snake(&contract.name),
+                                camel_to_snake(&contract_name),
                                 camel_to_snake(&abi_item.name)
                             );
 
@@ -266,10 +268,11 @@ pub async fn prepare_indexes(
                     }
 
                     for event_indexes in &contract_event_indexes.events {
+                        let contract_name = contract.before_modify_name_if_filter_readonly();
                         let db_table_name = format!(
                             "{}_{}.{}",
                             camel_to_snake(manifest_name),
-                            camel_to_snake(&contract.name),
+                            camel_to_snake(&contract_name),
                             camel_to_snake(&event_indexes.name)
                         );
 
