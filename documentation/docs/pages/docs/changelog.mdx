@@ -8,20 +8,31 @@
 
 ### Bug fixes
 -------------------------------------------------
-- fix: `contract_address` Postgres column changed from `char(66)` to `char(42)`
-- fix: `PostgresClient` now only exposes `insert_bulk` which handles internally whether to insert rows via INSERT or COPY
-- fix: regenerated example projects to support latest changes
-- fix: Index creation fails for filter contracts due to schema name mismatch
 
 ### Breaking changes
 -------------------------------------------------
-- `contract_address` Postgres column changed from `char(66)` to `char(42)`
-- `PostgresClient` now only exposes `insert_bulk` which handles internally whether to insert rows via INSERT or COPY
 
 ## Releases
 -------------------------------------------------
 
 all release branches are deployed through `release/VERSION_NUMBER` branches
+
+# 0.25.3-beta - 8th September 2025
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.25.3
+
+- linux binary - https://github.com/joshstevens19/rindexer/releases/download/v0.25.3/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://github.com/joshstevens19/rindexer/releases/download/v0.25.3/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://github.com/joshstevens19/rindexer/releases/download/v0.25.3/rindexer_darwin-amd64.tar.gz
+- windows binary - https://github.com/joshstevens19/rindexer/releases/download/v0.25.3/rindexer_win32-amd64.zip
+
+### Bug fixes
+-------------------------------------------------
+- fix: `contract_address` Postgres column changed from `char(66)` to `char(42)`
+- fix: `PostgresClient` now only exposes `insert_bulk` which handles internally whether to insert rows via INSERT or COPY
+- fix: regenerated example projects to support latest changes
+- fix: Index creation fails for filter contracts due to schema name mismatch
+
 
 # 0.25.2-beta - 30th August 2025
 
