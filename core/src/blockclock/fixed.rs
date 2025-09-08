@@ -135,7 +135,7 @@ mod tests {
     #[tokio::test]
     async fn base_block_time() {
         check_block_times(
-            "https://base.llamarpc.com",
+            "https://base.gateway.tenderly.co",
             25,
             SpacedNetwork::try_from(NamedChain::Base).unwrap(),
         )
