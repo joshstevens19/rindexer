@@ -11,6 +11,7 @@
 - fix: `contract_address` Postgres column changed from `char(66)` to `char(42)`
 - fix: `PostgresClient` now only exposes `insert_bulk` which handles internally whether to insert rows via INSERT or COPY
 - fix: regenerated example projects to support latest changes
+- fix: Index creation fails for filter contracts due to schema name mismatch
 
 ### Breaking changes
 -------------------------------------------------
