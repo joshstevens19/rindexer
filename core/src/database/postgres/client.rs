@@ -1,6 +1,6 @@
 use std::{env, future::Future, time::Duration};
 
-use bb8::{Pool, RunError};
+use bb8::{Pool, PooledConnection, RunError};
 use bb8_postgres::PostgresConnectionManager;
 use bytes::Buf;
 use dotenv::dotenv;
@@ -423,5 +423,14 @@ impl PostgresClient {
                 .map(|_| ())
                 .map_err(|e| e.to_string())
         }
+    }
+
+    pub async fn raw_connection(
+        &self,
+    ) -> Result<PooledConnection<'_, PostgresConnectionManager<MakeTlsConnector>>, PostgresError>
+    {
+        let conn = self.pool.get().await?;
+
+        Ok(conn)
     }
 }
