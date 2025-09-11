@@ -1,18 +1,18 @@
 use std::path::PathBuf;
 
+use crate::{
+    cli_interface::CodegenSubcommands,
+    console::{print_error_message, print_success_message},
+    rindexer_yaml::validate_rindexer_yaml_exist,
+};
 use rindexer::{
     format_all_files_for_project, generate_graphql_queries,
     generator::build::{generate_rindexer_handlers, generate_rindexer_typings},
     manifest::{
         core::ProjectType,
+        graphql::default_graphql_port,
         yaml::{read_manifest, YAML_CONFIG_NAME},
     },
-};
-
-use crate::{
-    cli_interface::CodegenSubcommands,
-    console::{print_error_message, print_success_message},
-    rindexer_yaml::validate_rindexer_yaml_exist,
 };
 
 pub async fn handle_codegen_command(
@@ -20,7 +20,8 @@ pub async fn handle_codegen_command(
     subcommand: &CodegenSubcommands,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let CodegenSubcommands::GraphQL { endpoint } = subcommand {
-        let url = endpoint.as_deref().unwrap_or("http://localhost:3001");
+        let default_url = format!("http://localhost:{}/graphql", default_graphql_port());
+        let url = endpoint.as_deref().unwrap_or(&default_url);
         generate_graphql_queries(url, &project_path).await.map_err(|e| {
             print_error_message(&format!("Failed to generate graphql queries: {e}"));
             e

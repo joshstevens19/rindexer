@@ -5468,7 +5468,7 @@ dependencies = [
 
 [[package]]
 name = "rindexer"
-version = "0.25.2"
+version = "0.25.3"
 dependencies = [
  "alloy",
  "alloy-chains",
