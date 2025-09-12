@@ -20,7 +20,7 @@ async fn main() {
     let mut port: Option<u16> = None;
 
     let args = args.iter();
-    if args.len() == 0 {
+    if args.len() == 1 {
         enable_graphql = true;
         enable_indexer = true;
     }

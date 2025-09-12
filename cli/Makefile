@@ -39,6 +39,8 @@ factory_indexing_codegen_typings:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path $(CURDIR)/../examples/rindexer_factory_indexing typings
 factory_indexing_codegen_indexer:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path $(CURDIR)/../examples/rindexer_factory_indexing indexer
+factory_indexing_codegen_graphql:
+	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path $(CURDIR)/../examples/rindexer_factory_indexing graphql
 
 ################################################################################
 # LOCAL NONE CHECKED IN PROJECT COMMANDS
