@@ -23,7 +23,7 @@ use crate::{
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthStatus {
-    pub status: String,
+    pub status: HealthStatusType,
     pub timestamp: String,
     pub services: HealthServices,
     pub indexing: IndexingStatus,
@@ -31,15 +31,27 @@ pub struct HealthStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthServices {
-    pub database: String,
-    pub indexing: String,
-    pub sync: String,
+    pub database: HealthStatusType,
+    pub indexing: HealthStatusType,
+    pub sync: HealthStatusType,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexingStatus {
     pub active_tasks: usize,
     pub is_running: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HealthStatusType {
+    Healthy,
+    Unhealthy,
+    Unknown,
+    NotConfigured,
+    Disabled,
+    NoData,
+    Stopped,
 }
 
 #[derive(Clone)]
@@ -79,14 +91,20 @@ impl HealthServer {
     }
 }
 
-async fn health_handler(State(state): State<HealthServerState>) -> Result<Json<HealthStatus>, StatusCode> {
-    let mut health_status = HealthStatus {
-        status: "healthy".to_string(),
+async fn health_handler(State(state): State<HealthServerState>) -> Result<(StatusCode, Json<HealthStatus>), StatusCode> {
+    let database_health = check_database_health(&state).await;
+    let indexing_health = check_indexing_health();
+    let sync_health = check_sync_health(&state).await;
+    
+    let overall_status = determine_overall_status(&database_health, &indexing_health, &sync_health);
+    
+    let health_status = HealthStatus {
+        status: overall_status,
         timestamp: chrono::Utc::now().to_rfc3339(),
         services: HealthServices {
-            database: "unknown".to_string(),
-            indexing: "unknown".to_string(),
-            sync: "unknown".to_string(),
+            database: database_health,
+            indexing: indexing_health,
+            sync: sync_health,
         },
         indexing: IndexingStatus {
             active_tasks: active_indexing_count(),
@@ -94,114 +112,113 @@ async fn health_handler(State(state): State<HealthServerState>) -> Result<Json<H
         },
     };
 
-    // Check database connection if PostgreSQL is enabled
-    if state.manifest.storage.postgres_enabled() {
-        match &state.postgres_client {
-            Some(client) => {
-                match client.query_one("SELECT 1", &[]).await {
-                    Ok(_) => {
-                        health_status.services.database = "healthy".to_string();
-                    }
-                    Err(e) => {
-                        health_status.services.database = "unhealthy".to_string();
-                        health_status.status = "unhealthy".to_string();
-                        error!("Database health check failed: {}", e);
-                    }
-                }
-            }
-            None => {
-                health_status.services.database = "not_configured".to_string();
-                health_status.status = "unhealthy".to_string();
-            }
-        }
-    } else {
-        health_status.services.database = "disabled".to_string();
-    }
-
-    // Check indexing status
-    if health_status.indexing.is_running {
-        health_status.services.indexing = "healthy".to_string();
-    } else {
-        health_status.services.indexing = "stopped".to_string();
-        health_status.status = "unhealthy".to_string();
-    }
-
-    // Check sync status (basic check for event tables if using PostgreSQL)
-    if state.manifest.storage.postgres_enabled() {
-        match &state.postgres_client {
-            Some(client) => {
-                match client.query_one(
-                    "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE '%_events'",
-                    &[]
-                ).await {
-                    Ok(row) => {
-                        let count: i64 = row.get(0);
-                        if count > 0 {
-                            health_status.services.sync = "healthy".to_string();
-                        } else {
-                            health_status.services.sync = "no_data".to_string();
-                        }
-                    }
-                    Err(e) => {
-                        health_status.services.sync = "unhealthy".to_string();
-                        health_status.status = "unhealthy".to_string();
-                        error!("Sync health check failed: {}", e);
-                    }
-                }
-            }
-            None => {
-                health_status.services.sync = "not_configured".to_string();
-            }
-        }
-    } else {
-        // For CSV storage, check if the output directory exists and has files
-        if state.manifest.storage.csv_enabled() {
-            match &state.manifest.storage.csv {
-                Some(csv_details) => {
-                    let csv_path = std::path::Path::new(&csv_details.path);
-                    if csv_path.exists() {
-                        // Check if directory has CSV files
-                        match std::fs::read_dir(csv_path) {
-                            Ok(entries) => {
-                                let csv_files: Vec<_> = entries
-                                    .filter_map(|entry| entry.ok())
-                                    .filter(|entry| {
-                                        entry.path().extension()
-                                            .map_or(false, |ext| ext == "csv")
-                                    })
-                                    .collect();
-                                
-                                if !csv_files.is_empty() {
-                                    health_status.services.sync = "healthy".to_string();
-                                } else {
-                                    health_status.services.sync = "no_data".to_string();
-                                }
-                            }
-                            Err(_) => {
-                                health_status.services.sync = "unhealthy".to_string();
-                                health_status.status = "unhealthy".to_string();
-                            }
-                        }
-                    } else {
-                        health_status.services.sync = "no_data".to_string();
-                    }
-                }
-                None => {
-                    health_status.services.sync = "not_configured".to_string();
-                }
-            }
-        } else {
-            health_status.services.sync = "disabled".to_string();
-        }
-    }
-
-    let _status_code = if health_status.status == "healthy" {
+    let status_code = if matches!(health_status.status, HealthStatusType::Healthy) {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     };
 
-    Ok(Json(health_status))
+    Ok((status_code, Json(health_status)))
+}
+
+async fn check_database_health(state: &HealthServerState) -> HealthStatusType {
+    if !state.manifest.storage.postgres_enabled() {
+        return HealthStatusType::Disabled;
+    }
+
+    match &state.postgres_client {
+        Some(client) => {
+            match client.query_one("SELECT 1", &[]).await {
+                Ok(_) => HealthStatusType::Healthy,
+                Err(e) => {
+                    error!("Database health check failed: {}", e);
+                    HealthStatusType::Unhealthy
+                }
+            }
+        }
+        None => HealthStatusType::NotConfigured,
+    }
+}
+
+fn check_indexing_health() -> HealthStatusType {
+    if is_running() {
+        HealthStatusType::Healthy
+    } else {
+        HealthStatusType::Stopped
+    }
+}
+
+async fn check_sync_health(state: &HealthServerState) -> HealthStatusType {
+    if state.manifest.storage.postgres_enabled() {
+        check_postgres_sync_health(state).await
+    } else if state.manifest.storage.csv_enabled() {
+        check_csv_sync_health(state)
+    } else {
+        HealthStatusType::Disabled
+    }
+}
+
+async fn check_postgres_sync_health(state: &HealthServerState) -> HealthStatusType {
+    match &state.postgres_client {
+        Some(client) => {
+            match client.query_one(
+                "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE '%_events' LIMIT 1",
+                &[]
+            ).await {
+                Ok(_) => HealthStatusType::Healthy,
+                Err(e) => {
+                    error!("Sync health check failed: {}", e);
+                    HealthStatusType::Unhealthy
+                }
+            }
+        }
+        None => HealthStatusType::NotConfigured,
+    }
+}
+
+fn check_csv_sync_health(state: &HealthServerState) -> HealthStatusType {
+    match &state.manifest.storage.csv {
+        Some(csv_details) => {
+            let csv_path = std::path::Path::new(&csv_details.path);
+            if !csv_path.exists() {
+                return HealthStatusType::NoData;
+            }
+
+            match std::fs::read_dir(csv_path) {
+                Ok(entries) => {
+                    let csv_files: Vec<_> = entries
+                        .filter_map(|entry| entry.ok())
+                        .filter(|entry| {
+                            entry.path().extension()
+                                .map_or(false, |ext| ext == "csv")
+                        })
+                        .collect();
+                    
+                    if csv_files.is_empty() {
+                        HealthStatusType::NoData
+                    } else {
+                        HealthStatusType::Healthy
+                    }
+                }
+                Err(_) => HealthStatusType::Unhealthy,
+            }
+        }
+        None => HealthStatusType::NotConfigured,
+    }
+}
+
+fn determine_overall_status(
+    database: &HealthStatusType,
+    indexing: &HealthStatusType,
+    sync: &HealthStatusType,
+) -> HealthStatusType {
+    if matches!(database, HealthStatusType::Unhealthy | HealthStatusType::NotConfigured) ||
+       matches!(indexing, HealthStatusType::Stopped) ||
+       matches!(sync, HealthStatusType::Unhealthy | HealthStatusType::NotConfigured) {
+        HealthStatusType::Unhealthy
+    } else {
+        HealthStatusType::Healthy
+    }
 }
 
 pub async fn start_health_server(

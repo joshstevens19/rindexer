@@ -66,7 +66,6 @@ async fn main() {
                     override_port: port,
                 },
                 health_details: HealthOverrideSettings {
-                    enabled: true,
                     override_port: None,
                 },
             })

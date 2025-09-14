@@ -183,7 +183,6 @@ pub async fn start(
                         override_port: None,
                     },
                     health_details: HealthOverrideSettings {
-                        enabled: true,
                         override_port: None,
                     },
                 };
@@ -202,7 +201,6 @@ pub async fn start(
                         override_port: port.as_ref().and_then(|port| port.parse().ok()),
                     },
                     health_details: HealthOverrideSettings {
-                        enabled: true,
                         override_port: None,
                     },
                 };
@@ -221,7 +219,6 @@ pub async fn start(
                         override_port: port.as_ref().and_then(|port| port.parse().ok()),
                     },
                     health_details: HealthOverrideSettings {
-                        enabled: true,
                         override_port: None,
                     },
                 };

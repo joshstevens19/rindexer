@@ -7,7 +7,7 @@ use tracing::{error, info};
 use crate::{
     api::{start_graphql_server, GraphqlOverrideSettings, StartGraphqlServerError},
     database::postgres::{
-        client::{PostgresClient, PostgresConnectionError},
+        client::PostgresConnectionError,
         indexes::{ApplyPostgresIndexesError, PostgresIndexResult},
         relationship::{ApplyAllRelationships, Relationship},
         setup::{setup_postgres, SetupPostgresError},
@@ -34,7 +34,6 @@ pub struct IndexingDetails {
 }
 
 pub struct HealthOverrideSettings {
-    pub enabled: bool,
     pub override_port: Option<u16>,
 }
 
@@ -85,6 +84,9 @@ pub enum StartRindexerError {
     #[error("Shutdown handler failed with error: {0}")]
     ShutdownHandlerFailed(String),
 
+    #[error("Port conflict: {0}")]
+    PortConflict(String),
+
     #[error("Could not start Reth node: {0}")]
     CouldNotStartRethNode(#[from] eyre::Error),
 
@@ -103,6 +105,7 @@ async fn handle_shutdown(signal: &str) {
 }
 
 pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindexerError> {
+    info!("🚀 start_rindexer called with indexing_details.is_some() = {}", details.indexing_details.is_some());
     let project_path = details.manifest_path.parent();
 
     match project_path {
@@ -160,22 +163,56 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     None
                 };
 
-            // Spawn a separate task for the health server if enabled
-            let health_server_handle = if details.health_details.enabled {
-                let manifest_clone = Arc::clone(&manifest);
-                let project_path_clone = project_path.to_path_buf();
-                let mut health_settings = manifest.health.clone().unwrap_or_default();
-                if let Some(override_port) = &details.health_details.override_port {
-                    health_settings.set_port(*override_port);
+            // Check for port conflicts between GraphQL and health servers
+            let graphql_port = if details.graphql_details.enabled {
+                let mut graphql_settings = manifest.graphql.clone().unwrap_or_default();
+                if let Some(override_port) = &details.graphql_details.override_port {
+                    graphql_settings.set_port(*override_port);
                 }
+                Some(graphql_settings.port)
+            } else {
+                None
+            };
+
+            let health_port = if details.indexing_details.is_some() {
+                let health_port = manifest.global.as_ref()
+                    .and_then(|g| g.health_override_port)
+                    .or_else(|| details.health_details.override_port)
+                    .unwrap_or(8080);
+                Some(health_port)
+            } else {
+                None
+            };
+
+            if let (Some(graphql_port), Some(health_port)) = (graphql_port, health_port) {
+                if graphql_port == health_port {
+                    return Err(StartRindexerError::PortConflict(
+                        format!("GraphQL and health servers cannot use the same port: {}", graphql_port)
+                    ));
+                }
+            }
+
+            // Health server follows the indexer lifecycle - only runs when indexer is running
+            info!("Health server check: indexing_details.is_some() = {}", details.indexing_details.is_some());
+            let health_server_handle = if details.indexing_details.is_some() {
+                let manifest_clone = Arc::clone(&manifest);
+                let health_port = manifest_clone.global.as_ref()
+                    .and_then(|g| g.health_override_port)
+                    .or_else(|| details.health_details.override_port)
+                    .unwrap_or(8080);
+                
                 Some(tokio::spawn(async move {
-                    // Create postgres client for health server if postgres is enabled
-                    // Note: We only create a client for health checks, not setup the database schema
+                    info!("🩺 Starting health server on port {}", health_port);
+                    // Use initialize_database function for health server
                     let postgres_client = if manifest_clone.storage.postgres_enabled() {
-                        match PostgresClient::new().await {
-                            Ok(client) => Some(Arc::new(client)),
+                        match crate::indexer::start::initialize_database(&manifest_clone).await {
+                            Ok(Some(client)) => Some(client),
+                            Ok(None) => {
+                                error!("PostgreSQL is enabled but no database client was created for health server");
+                                None
+                            }
                             Err(e) => {
-                                error!("Failed to create postgres client for health server: {:?}", e);
+                                error!("Failed to initialize database for health server: {:?}", e);
                                 None
                             }
                         }
@@ -183,7 +220,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                         None
                     };
                     
-                    if let Err(e) = start_health_server(health_settings.port, manifest_clone, postgres_client).await {
+                    if let Err(e) = start_health_server(health_port, manifest_clone, postgres_client).await {
                         error!("Failed to start health server: {:?}", e);
                     }
                 }))
