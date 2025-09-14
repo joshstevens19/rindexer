@@ -17,7 +17,6 @@ use crate::{
         contract::Contract,
         global::Global,
         graphql::GraphQLSettings,
-        health::HealthSettings,
         native_transfer::{deserialize_native_transfers, NativeTransferDetails, NativeTransfers},
         network::Network,
         phantom::Phantom,
@@ -101,9 +100,6 @@ pub struct Manifest {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graphql: Option<GraphQLSettings>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub health: Option<HealthSettings>,
 }
 
 impl Manifest {

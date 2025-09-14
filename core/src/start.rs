@@ -193,7 +193,6 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
             }
 
             // Health server follows the indexer lifecycle - only runs when indexer is running
-            info!("Health server check: indexing_details.is_some() = {}", details.indexing_details.is_some());
             let health_server_handle = if details.indexing_details.is_some() {
                 let manifest_clone = Arc::clone(&manifest);
                 let health_port = manifest_clone.global.as_ref()
@@ -203,7 +202,6 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                 
                 Some(tokio::spawn(async move {
                     info!("🩺 Starting health server on port {}", health_port);
-                    // Use initialize_database function for health server
                     let postgres_client = if manifest_clone.storage.postgres_enabled() {
                         match crate::indexer::start::initialize_database(&manifest_clone).await {
                             Ok(Some(client)) => Some(client),

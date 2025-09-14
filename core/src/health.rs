@@ -98,7 +98,24 @@ async fn health_handler(State(state): State<HealthServerState>) -> Result<(Statu
     
     let overall_status = determine_overall_status(&database_health, &indexing_health, &sync_health);
     
-    let health_status = HealthStatus {
+    let health_status = build_health_status(overall_status, database_health, indexing_health, sync_health);
+
+    let status_code = if matches!(health_status.status, HealthStatusType::Healthy) {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    Ok((status_code, Json(health_status)))
+}
+
+fn build_health_status(
+    overall_status: HealthStatusType,
+    database_health: HealthStatusType,
+    indexing_health: HealthStatusType,
+    sync_health: HealthStatusType,
+) -> HealthStatus {
+    HealthStatus {
         status: overall_status,
         timestamp: chrono::Utc::now().to_rfc3339(),
         services: HealthServices {
@@ -110,15 +127,7 @@ async fn health_handler(State(state): State<HealthServerState>) -> Result<(Statu
             active_tasks: active_indexing_count(),
             is_running: is_running(),
         },
-    };
-
-    let status_code = if matches!(health_status.status, HealthStatusType::Healthy) {
-        StatusCode::OK
-    } else {
-        StatusCode::SERVICE_UNAVAILABLE
-    };
-
-    Ok((status_code, Json(health_status)))
+    }
 }
 
 async fn check_database_health(state: &HealthServerState) -> HealthStatusType {
@@ -161,11 +170,12 @@ async fn check_sync_health(state: &HealthServerState) -> HealthStatusType {
 async fn check_postgres_sync_health(state: &HealthServerState) -> HealthStatusType {
     match &state.postgres_client {
         Some(client) => {
-            match client.query_one(
-                "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE '%_events' LIMIT 1",
+            match client.query_one_or_none(
+                "SELECT 1 FROM information_schema.tables WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'rindexer_internal') AND table_name NOT LIKE 'latest_block' AND table_name NOT LIKE '%_last_known_%' AND table_name NOT LIKE '%_last_run_%' LIMIT 1",
                 &[]
             ).await {
-                Ok(_) => HealthStatusType::Healthy,
+                Ok(Some(_)) => HealthStatusType::Healthy,
+                Ok(None) => HealthStatusType::NoData,
                 Err(e) => {
                     error!("Sync health check failed: {}", e);
                     HealthStatusType::Unhealthy
@@ -216,6 +226,9 @@ fn determine_overall_status(
        matches!(indexing, HealthStatusType::Stopped) ||
        matches!(sync, HealthStatusType::Unhealthy | HealthStatusType::NotConfigured) {
         HealthStatusType::Unhealthy
+    } else if matches!(sync, HealthStatusType::NoData) {
+        // Sync NoData is acceptable when no event tables exist yet
+        HealthStatusType::Healthy
     } else {
         HealthStatusType::Healthy
     }
