@@ -171,7 +171,7 @@ async fn check_postgres_sync_health(state: &HealthServerState) -> HealthStatusTy
     match &state.postgres_client {
         Some(client) => {
             match client.query_one_or_none(
-                "SELECT 1 FROM information_schema.tables WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'rindexer_internal') AND table_name NOT LIKE 'latest_block' AND table_name NOT LIKE '%_last_known_%' AND table_name NOT LIKE '%_last_run_%' LIMIT 1",
+                r#"SELECT 1 FROM information_schema.tables WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'rindexer_internal') AND table_name NOT LIKE 'latest_block' AND table_name NOT LIKE '%_last_known_%' AND table_name NOT LIKE '%_last_run_%' LIMIT 1"#,
                 &[]
             ).await {
                 Ok(Some(_)) => HealthStatusType::Healthy,
