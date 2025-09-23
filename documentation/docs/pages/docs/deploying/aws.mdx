@@ -167,7 +167,104 @@ rindexer-rindexer-94dd58475-p8g5d   1/1     Running   0            17s
 
 ## 3. Monitor and Manage the Deployment
 
-### 3.1. View Logs
+### 3.1. Health Monitoring
+
+Rindexer includes a built-in health monitoring server that provides comprehensive system status information. The health server runs on port `8080` by default and provides real-time insights into:
+
+- **Database connectivity** - PostgreSQL connection status
+- **Indexing status** - Whether the indexer is running and how many tasks are active
+- **Sync status** - Data synchronization health between different storage backends
+- **Overall system health** - Aggregated status across all components
+
+#### 3.1.1. Health Server Lifecycle
+
+The health server's lifecycle depends on which services you start:
+
+- **`rindexer start indexer` (with end_block set)**: Short-lived - dies when historical indexing completes
+- **`rindexer start indexer` (no end_block set)**: Long-lived - stays alive for continuous live indexing  
+- **`rindexer start graphql`**: No health server - health monitoring not available
+- **`rindexer start all`**: Long-lived - follows the GraphQL server lifecycle
+
+#### 3.1.2. Accessing Health Endpoints
+
+The health server is automatically started when you run rindexer with indexing enabled. It provides the following endpoint:
+
+- `GET /health` - Complete health status with detailed service information
+
+Example health response:
+
+```json
+{
+  "status": "healthy",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "services": {
+    "database": "healthy",
+    "indexing": "healthy", 
+    "sync": "healthy"
+  },
+  "indexing": {
+    "active_tasks": 2,
+    "is_running": true
+  }
+}
+```
+
+#### 3.1.3. Health Status Types
+
+The health endpoint returns different status types:
+
+- `healthy` - Service is functioning normally
+- `unhealthy` - Service has encountered an error
+- `unknown` - Status cannot be determined
+- `not_configured` - Service is not set up
+- `disabled` - Service is intentionally disabled
+- `no_data` - Service is working but no data is available
+- `stopped` - Service is not running
+
+#### 3.1.4. Service Health Checks
+
+**Database Health Check:**
+- **`healthy`**: PostgreSQL is enabled and a simple `SELECT 1` query succeeds
+- **`unhealthy`**: PostgreSQL is enabled but the connection fails or query errors occur
+- **`not_configured`**: PostgreSQL is enabled but no database client is available
+- **`disabled`**: PostgreSQL is not enabled in the configuration
+
+**Indexing Health Check:**
+- **`healthy`**: The indexer is currently running (system state flag is set)
+- **`stopped`**: The indexer is not running (system state flag is not set)
+
+**Sync Health Check:**
+- **PostgreSQL storage**: Checks for event tables (excluding system tables)
+- **CSV storage**: Checks if CSV directory exists and contains CSV files
+- **`healthy`**: Data synchronization is working properly
+- **`no_data`**: No data tables/files exist yet (acceptable for new deployments)
+- **`unhealthy`**: Sync process has errors
+- **`disabled`**: Sync is not configured
+
+#### 3.1.5. Monitoring in Production
+
+For production deployments, you can:
+
+1. **Set up monitoring alerts** based on HTTP status codes:
+   - `200 OK` - System is healthy
+   - `503 Service Unavailable` - System has issues
+
+2. **Configure load balancer health checks** to point to `/health`
+
+3. **Use monitoring tools** like Prometheus, Grafana, or DataDog to track health metrics
+
+4. **Set up automated alerts** when the health status changes to `unhealthy`
+
+#### 3.1.6. Custom Health Port
+
+You can configure the health server port in your `rindexer.yaml` file:
+
+```yaml
+global:
+  health_override_port: 8081
+```
+
+### 3.2. View Logs
 
 ```bash
 kubectl logs -l app.kubernetes.io/name=rindexer
@@ -188,7 +285,7 @@ Output:
 20 August - 16:44:18.906414  INFO rindexer resync is complete
 ```
 
-### 3.2. Upgrade the Helm Chart
+### 3.3. Upgrade the Helm Chart
 
 ```bash
 helm upgrade rindexer ./rindexer -f values.yaml
