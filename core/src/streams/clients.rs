@@ -105,6 +105,7 @@ pub struct StreamsClients {
 
 impl StreamsClients {
     pub async fn new(stream_config: StreamsConfig) -> Self {
+        #[allow(clippy::manual_map)]
         let sns = if let Some(config) = &stream_config.sns {
             Some(SNSStream {
                 config: config.topics.clone(),
@@ -114,11 +115,13 @@ impl StreamsClients {
             None
         };
 
+        #[allow(clippy::manual_map)]
         let webhook = stream_config.webhooks.as_ref().map(|config| WebhookStream {
             config: config.clone(),
             client: Arc::new(Webhook::new()),
         });
 
+        #[allow(clippy::manual_map)]
         let rabbitmq = if let Some(config) = stream_config.rabbitmq.as_ref() {
             Some(RabbitMQStream {
                 config: config.clone(),
@@ -128,6 +131,7 @@ impl StreamsClients {
             None
         };
 
+        #[allow(clippy::manual_map)]
         let kafka = if let Some(config) = stream_config.kafka.as_ref() {
             Some(KafkaStream {
                 config: config.clone(),
@@ -141,6 +145,7 @@ impl StreamsClients {
             None
         };
 
+        #[allow(clippy::manual_map)]
         let redis = if let Some(config) = stream_config.redis.as_ref() {
             Some(RedisStream {
                 config: config.clone(),
@@ -154,6 +159,7 @@ impl StreamsClients {
             None
         };
 
+        #[allow(clippy::manual_map)]
         let cloudflare_queues = if let Some(config) = stream_config.cloudflare_queues.as_ref() {
             Some(CloudflareQueuesStream {
                 config: config.clone(),

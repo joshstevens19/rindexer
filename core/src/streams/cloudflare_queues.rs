@@ -5,6 +5,7 @@ use thiserror::Error;
 use crate::streams::STREAM_MESSAGE_ID_KEY;
 
 #[derive(Error, Debug)]
+#[allow(clippy::enum_variant_names)]
 pub enum CloudflareQueuesError {
     #[error("Request error: {0}")]
     RequestError(#[from] reqwest::Error),
