@@ -65,9 +65,7 @@ async fn main() {
                     enabled: enable_graphql,
                     override_port: port,
                 },
-                health_details: HealthOverrideSettings {
-                    override_port: None,
-                },
+                health_details: HealthOverrideSettings { override_port: None },
             })
             .await;
 

@@ -1,24 +1,13 @@
-use std::{
-    net::SocketAddr,
-    sync::Arc,
-};
+use std::{net::SocketAddr, sync::Arc};
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::Json,
-    routing::get,
-    Router,
-};
+use axum::{extract::State, http::StatusCode, response::Json, routing::get, Router};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tracing::{error, info};
 
 use crate::{
-    database::postgres::client::PostgresClient,
-    indexer::task_tracker::active_indexing_count,
-    manifest::core::Manifest,
-    system_state::is_running,
+    database::postgres::client::PostgresClient, indexer::task_tracker::active_indexing_count,
+    manifest::core::Manifest, system_state::is_running,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,20 +55,16 @@ pub struct HealthServer {
 }
 
 impl HealthServer {
-    pub fn new(port: u16, manifest: Arc<Manifest>, postgres_client: Option<Arc<PostgresClient>>) -> Self {
-        Self {
-            port,
-            state: HealthServerState {
-                manifest,
-                postgres_client,
-            },
-        }
+    pub fn new(
+        port: u16,
+        manifest: Arc<Manifest>,
+        postgres_client: Option<Arc<PostgresClient>>,
+    ) -> Self {
+        Self { port, state: HealthServerState { manifest, postgres_client } }
     }
 
     pub async fn start(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let app = Router::new()
-            .route("/health", get(health_handler))
-            .with_state(self.state);
+        let app = Router::new().route("/health", get(health_handler)).with_state(self.state);
 
         let addr = SocketAddr::from(([0, 0, 0, 0], self.port));
         let listener = TcpListener::bind(addr).await?;
@@ -91,14 +76,17 @@ impl HealthServer {
     }
 }
 
-async fn health_handler(State(state): State<HealthServerState>) -> Result<(StatusCode, Json<HealthStatus>), StatusCode> {
+async fn health_handler(
+    State(state): State<HealthServerState>,
+) -> Result<(StatusCode, Json<HealthStatus>), StatusCode> {
     let database_health = check_database_health(&state).await;
     let indexing_health = check_indexing_health();
     let sync_health = check_sync_health(&state).await;
-    
+
     let overall_status = determine_overall_status(&database_health, &indexing_health, &sync_health);
-    
-    let health_status = build_health_status(overall_status, database_health, indexing_health, sync_health);
+
+    let health_status =
+        build_health_status(overall_status, database_health, indexing_health, sync_health);
 
     let status_code = if matches!(health_status.status, HealthStatusType::Healthy) {
         StatusCode::OK
@@ -136,15 +124,13 @@ async fn check_database_health(state: &HealthServerState) -> HealthStatusType {
     }
 
     match &state.postgres_client {
-        Some(client) => {
-            match client.query_one("SELECT 1", &[]).await {
-                Ok(_) => HealthStatusType::Healthy,
-                Err(e) => {
-                    error!("Database health check failed: {}", e);
-                    HealthStatusType::Unhealthy
-                }
+        Some(client) => match client.query_one("SELECT 1", &[]).await {
+            Ok(_) => HealthStatusType::Healthy,
+            Err(e) => {
+                error!("Database health check failed: {}", e);
+                HealthStatusType::Unhealthy
             }
-        }
+        },
         None => HealthStatusType::NotConfigured,
     }
 }
@@ -198,12 +184,9 @@ fn check_csv_sync_health(state: &HealthServerState) -> HealthStatusType {
                 Ok(entries) => {
                     let csv_files: Vec<_> = entries
                         .filter_map(|entry| entry.ok())
-                        .filter(|entry| {
-                            entry.path().extension()
-                                .map_or(false, |ext| ext == "csv")
-                        })
+                        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "csv"))
                         .collect();
-                    
+
                     if csv_files.is_empty() {
                         HealthStatusType::NoData
                     } else {
@@ -222,9 +205,10 @@ fn determine_overall_status(
     indexing: &HealthStatusType,
     sync: &HealthStatusType,
 ) -> HealthStatusType {
-    if matches!(database, HealthStatusType::Unhealthy | HealthStatusType::NotConfigured) ||
-       matches!(indexing, HealthStatusType::Stopped) ||
-       matches!(sync, HealthStatusType::Unhealthy | HealthStatusType::NotConfigured) {
+    if matches!(database, HealthStatusType::Unhealthy | HealthStatusType::NotConfigured)
+        || matches!(indexing, HealthStatusType::Stopped)
+        || matches!(sync, HealthStatusType::Unhealthy | HealthStatusType::NotConfigured)
+    {
         HealthStatusType::Unhealthy
     } else if matches!(sync, HealthStatusType::NoData) {
         // Sync NoData is acceptable when no event tables exist yet

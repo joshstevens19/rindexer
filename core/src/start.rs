@@ -105,7 +105,10 @@ async fn handle_shutdown(signal: &str) {
 }
 
 pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindexerError> {
-    info!("🚀 start_rindexer called with indexing_details.is_some() = {}", details.indexing_details.is_some());
+    info!(
+        "🚀 start_rindexer called with indexing_details.is_some() = {}",
+        details.indexing_details.is_some()
+    );
     let project_path = details.manifest_path.parent();
 
     match project_path {
@@ -175,9 +178,11 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
             };
 
             let health_port = if details.indexing_details.is_some() {
-                let health_port = manifest.global.as_ref()
+                let health_port = manifest
+                    .global
+                    .as_ref()
                     .and_then(|g| g.health_override_port)
-                    .or_else(|| details.health_details.override_port)
+                    .or(details.health_details.override_port)
                     .unwrap_or(8080);
                 Some(health_port)
             } else {
@@ -186,20 +191,23 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
 
             if let (Some(graphql_port), Some(health_port)) = (graphql_port, health_port) {
                 if graphql_port == health_port {
-                    return Err(StartRindexerError::PortConflict(
-                        format!("GraphQL and health servers cannot use the same port: {}", graphql_port)
-                    ));
+                    return Err(StartRindexerError::PortConflict(format!(
+                        "GraphQL and health servers cannot use the same port: {}",
+                        graphql_port
+                    )));
                 }
             }
 
             // Health server follows the indexer lifecycle - only runs when indexer is running
             let health_server_handle = if details.indexing_details.is_some() {
                 let manifest_clone = Arc::clone(&manifest);
-                let health_port = manifest_clone.global.as_ref()
+                let health_port = manifest_clone
+                    .global
+                    .as_ref()
                     .and_then(|g| g.health_override_port)
-                    .or_else(|| details.health_details.override_port)
+                    .or(details.health_details.override_port)
                     .unwrap_or(8080);
-                
+
                 Some(tokio::spawn(async move {
                     info!("🩺 Starting health server on port {}", health_port);
                     let postgres_client = if manifest_clone.storage.postgres_enabled() {
@@ -217,8 +225,10 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     } else {
                         None
                     };
-                    
-                    if let Err(e) = start_health_server(health_port, manifest_clone, postgres_client).await {
+
+                    if let Err(e) =
+                        start_health_server(health_port, manifest_clone, postgres_client).await
+                    {
                         error!("Failed to start health server: {:?}", e);
                     }
                 }))
