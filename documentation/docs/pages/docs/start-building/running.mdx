@@ -39,47 +39,18 @@ You can also use the [drop_each_run](/docs/start-building/yaml-config/storage#dr
 
 ## Health Monitoring
 
-When you start rindexer, a health monitoring server automatically starts alongside your services. This provides real-time insights into the status of your indexing infrastructure.
+When you start rindexer with indexing enabled, a health monitoring server automatically starts on port `8080`. This provides real-time insights into your indexing infrastructure status.
 
-### Health Server Lifecycle
+### Quick Health Check
 
-The health server's lifecycle depends on which services you start:
-
-#### `rindexer start indexer` (with end_block set)
-- **Short-lived**: Health server starts with the indexer and **dies when indexing completes**
-- **Use case**: Historical data indexing that has a defined end point
-- **Health monitoring**: Only available during the indexing process
-
-#### `rindexer start indexer` (no end_block set)  
-- **Long-lived**: Health server starts with the indexer and **stays alive for live indexing**
-- **Use case**: Continuous live indexing that runs indefinitely
-- **Health monitoring**: Available continuously while the indexer is running
-
-#### `rindexer start graphql`
-- **No health server**: Health server is **not started** in GraphQL-only mode
-- **Use case**: Running only the GraphQL API without indexing
-- **Health monitoring**: Not available (health server requires indexing to be enabled)
-
-#### `rindexer start all`
-- **Long-lived**: Health server starts with the indexer and **follows the GraphQL server lifecycle**
-- **Use case**: Running both indexing and GraphQL API together
-- **Health monitoring**: Available as long as the GraphQL server is running
-
-### Health Endpoint
-
-The health server runs on port `8080` by default and provides a single endpoint:
-
-- `GET /health` - Returns complete health status
-
-Example health response:
+Access the health endpoint at `http://localhost:8080/health` to get system status:
 
 ```json
 {
   "status": "healthy",
-  "timestamp": "2024-01-15T10:30:00Z",
   "services": {
     "database": "healthy",
-    "indexing": "healthy",
+    "indexing": "healthy", 
     "sync": "healthy"
   },
   "indexing": {
@@ -89,98 +60,16 @@ Example health response:
 }
 ```
 
-### Health Status Types
+### Health Server Lifecycle
 
-| Status | Description |
-|--------|-------------|
-| `healthy` | Service is functioning normally |
-| `unhealthy` | Service has encountered an error |
-| `unknown` | Status cannot be determined |
-| `not_configured` | Service is not set up |
-| `disabled` | Service is intentionally disabled |
-| `no_data` | Service is working but no data is available |
-| `stopped` | Service is not running |
+- **`rindexer start indexer` (with end_block)**: Short-lived - dies when historical indexing completes
+- **`rindexer start indexer` (no end_block)**: Long-lived - stays alive for live indexing  
+- **`rindexer start graphql`**: No health server - health monitoring not available
+- **`rindexer start all`**: Long-lived - follows GraphQL server lifecycle
 
-### Service Health Checks
-
-#### Database Health Check
-
-The database health check verifies PostgreSQL connectivity and functionality:
-
-- **`healthy`**: PostgreSQL is enabled and a simple `SELECT 1` query succeeds
-- **`unhealthy`**: PostgreSQL is enabled but the connection fails or query errors occur
-- **`not_configured`**: PostgreSQL is enabled but no database client is available
-- **`disabled`**: PostgreSQL is not enabled in the configuration
-
-**What it checks**: Basic database connectivity by executing `SELECT 1` against the PostgreSQL instance.
-
-#### Indexing Health Check
-
-The indexing health check monitors the indexer process state:
-
-- **`healthy`**: The indexer is currently running (system state flag is set)
-- **`stopped`**: The indexer is not running (system state flag is not set)
-
-**What it checks**: The global `IS_RUNNING` flag that tracks whether the indexer process is active.
-
-#### Sync Health Check
-
-The sync health check verifies data synchronization status based on your storage configuration:
-
-**For PostgreSQL storage:**
-- **`healthy`**: Database has event tables (excluding system tables like `latest_block`, `*_last_known_*`, `*_last_run_*`)
-- **`no_data`**: No event tables exist yet (acceptable for new deployments)
-- **`unhealthy`**: Database query fails or connection issues
-- **`not_configured`**: No database client available
-
-**For CSV storage:**
-- **`healthy`**: CSV directory exists and contains `.csv` files
-- **`no_data`**: CSV directory doesn't exist or contains no `.csv` files
-- **`unhealthy`**: CSV directory exists but cannot be read
-- **`not_configured`**: CSV storage not configured
-
-**What it checks**: 
-- **PostgreSQL**: Queries `information_schema.tables` to find user-created event tables
-- **CSV**: Checks if the CSV directory exists and contains CSV files
-
-#### Overall Health Status
-
-The overall health status is determined by combining all service checks:
-
-- **`healthy`**: All critical services are healthy, or sync shows `no_data` (acceptable for new deployments)
-- **`unhealthy`**: Any critical service is `unhealthy`, `not_configured`, or indexing is `stopped`
-
-**Critical services**: Database, Indexing, and Sync (when enabled)
-
-### Custom Health Port
-
-You can configure the health server port in your `rindexer.yaml` file:
-
-```yaml
-global:
-  health_override_port: 8081
-```
-
-Or you can override it when starting:
-
-```bash
-# This would require modifying the CLI to accept health port overrides
-rindexer start all
-```
-
-### Monitoring in Production
-
-For production deployments, you can:
-
-1. **Set up monitoring alerts** based on HTTP status codes:
-   - `200 OK` - System is healthy
-   - `503 Service Unavailable` - System has issues
-
-2. **Configure load balancer health checks** to point to `/health`
-
-3. **Use monitoring tools** like Prometheus, Grafana, or DataDog to track health metrics
-
-4. **Set up automated alerts** when the health status changes to `unhealthy`
+:::info
+For detailed health monitoring documentation, see the [Health Monitoring](/docs/monitoring/health-monitoring) guide.
+:::
 
 ## Rust Project
 
