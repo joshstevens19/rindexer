@@ -25,11 +25,7 @@ pub struct CloudflareQueues {
 
 impl CloudflareQueues {
     pub fn new(api_token: String, account_id: String) -> Self {
-        Self {
-            client: Client::new(),
-            api_token,
-            account_id,
-        }
+        Self { client: Client::new(), api_token, account_id }
     }
 
     pub async fn publish(
@@ -65,10 +61,7 @@ impl CloudflareQueues {
         } else {
             let status = response.status().as_u16();
             let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            Err(CloudflareQueuesError::ApiError {
-                status,
-                message: error_text,
-            })
+            Err(CloudflareQueuesError::ApiError { status, message: error_text })
         }
     }
 
@@ -84,7 +77,7 @@ impl CloudflareQueues {
 
         // Cloudflare Queues supports up to 100 messages per batch
         const MAX_BATCH_SIZE: usize = 100;
-        
+
         for chunk in messages.chunks(MAX_BATCH_SIZE) {
             let url = format!(
                 "https://api.cloudflare.com/client/v4/accounts/{}/queues/{}/messages/batch",
@@ -113,11 +106,9 @@ impl CloudflareQueues {
 
             if !response.status().is_success() {
                 let status = response.status().as_u16();
-                let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(CloudflareQueuesError::ApiError {
-                    status,
-                    message: error_text,
-                });
+                let error_text =
+                    response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                return Err(CloudflareQueuesError::ApiError { status, message: error_text });
             }
         }
 

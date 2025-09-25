@@ -15,9 +15,9 @@ use crate::{
     indexer::native_transfer::EVENT_NAME,
     manifest::stream::{
         CloudflareQueuesStreamConfig, CloudflareQueuesStreamQueueConfig, KafkaStreamConfig,
-        KafkaStreamQueueConfig, RabbitMQStreamConfig, RabbitMQStreamQueueConfig,
-        RedisStreamConfig, RedisStreamStreamConfig, SNSStreamTopicConfig, StreamEvent,
-        StreamsConfig, WebhookStreamConfig,
+        KafkaStreamQueueConfig, RabbitMQStreamConfig, RabbitMQStreamQueueConfig, RedisStreamConfig,
+        RedisStreamStreamConfig, SNSStreamTopicConfig, StreamEvent, StreamsConfig,
+        WebhookStreamConfig,
     },
     streams::{
         kafka::{Kafka, KafkaError},
