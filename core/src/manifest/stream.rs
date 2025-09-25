@@ -161,6 +161,21 @@ pub struct KafkaStreamConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CloudflareQueuesStreamQueueConfig {
+    pub queue_id: String,
+    pub networks: Vec<String>,
+    #[serde(default)]
+    pub events: Vec<StreamEvent>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CloudflareQueuesStreamConfig {
+    pub api_token: String,
+    pub account_id: String,
+    pub queues: Vec<CloudflareQueuesStreamQueueConfig>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StreamsConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sns: Option<SNSStreamConfig>,
@@ -176,6 +191,9 @@ pub struct StreamsConfig {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub redis: Option<RedisStreamConfig>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloudflare_queues: Option<CloudflareQueuesStreamConfig>,
 }
 
 impl StreamsConfig {
@@ -199,6 +217,8 @@ impl StreamsConfig {
             path.push_str("kafka_");
         } else if self.redis.is_some() {
             path.push_str("redis_");
+        } else if self.cloudflare_queues.is_some() {
+            path.push_str("cloudflare_queues_");
         }
 
         path.trim_end_matches('_').to_string()

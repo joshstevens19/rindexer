@@ -155,6 +155,7 @@ export default defineConfig({
             { text: "Rabbitmq", link: "/docs/start-building/streams/rabbitmq" },
             { text: "SNS/SQS", link: "/docs/start-building/streams/sns" },
             { text: "Redis", link: "/docs/start-building/streams/redis" },
+            { text: "Cloudflare Queues", link: "/docs/start-building/streams/cloudflare-queues" },
           ],
         },
         {

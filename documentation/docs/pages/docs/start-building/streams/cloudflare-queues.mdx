@@ -1,0 +1,529 @@
+# Cloudflare Queues
+
+:::info
+rindexer streams can be used without any other storage providers. It can also be used with storage providers.
+:::
+
+rindexer allows you to stream blockchain events to [Cloudflare Queues](https://developers.cloudflare.com/queues/), enabling realtime processing of blockchain data in your Cloudflare Workers. This integration provides guaranteed message delivery, global distribution, and seamless integration with your Cloudflare-based backend infrastructure.
+
+This goes under the [contracts](/docs/start-building/yaml-config/contracts) or [native_transfers](/docs/start-building/yaml-config/native-transfers) section of the YAML configuration file.
+
+## Configuration with rindexer
+
+Cloudflare Queues configuration requires your Cloudflare API token, account ID, and queue definitions.
+
+## Example
+
+:::code-group
+
+```yaml [contract events]
+name: RocketPoolETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    cloudflare_queues: // [!code focus]
+      api_token: ${CLOUDFLARE_API_TOKEN} // [!code focus]
+      account_id: ${CLOUDFLARE_ACCOUNT_ID} // [!code focus]
+      queues: // [!code focus]
+        - queue_id: blockchain-transfers // [!code focus]
+          networks: // [!code focus]
+            - ethereum // [!code focus]
+          events: // [!code focus]
+            - event_name: Transfer // [!code focus]
+              alias: RocketPoolTransfer
+```
+
+```yaml [native transfers]
+name: ETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+native_transfers:
+  networks:
+    - network: ethereum
+  streams: // [!code focus]
+    cloudflare_queues: // [!code focus]
+      api_token: ${CLOUDFLARE_API_TOKEN} // [!code focus]
+      account_id: ${CLOUDFLARE_ACCOUNT_ID} // [!code focus]
+      queues: // [!code focus]
+        - queue_id: native-transfers // [!code focus]
+          networks: // [!code focus]
+            - ethereum // [!code focus]
+          events: // [!code focus]
+            - event_name: NativeTransfer // [!code focus]
+```
+
+:::
+
+## Message Format
+
+The message sent to your Cloudflare Queue is already decoded and parsed into a JSON object with a `message_id` field added for tracking.
+
+- `message_id` - Unique identifier for this message from rindexer
+- `event_name` - The name of the event
+- `event_signature_hash` - The event signature hash (keccak256 hash of the event signature)
+- `event_data` - Array of decoded event data with transaction information
+- `network` - The network the event was emitted on
+
+For example a transfer event would look like:
+
+```json
+{
+    "message_id": "rindexer_stream__blockchain-transfers-transfer-chunk-0",
+    "event_name": "Transfer",
+    "event_signature_hash": "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+    "event_data": [
+        {
+            "from": "0x0338ce5020c447f7e668dc2ef778025ce3982662",
+            "to": "0x0338ce5020c447f7e668dc2ef778025ce3982662",
+            "value": "1000000000000000000",
+            "tx_information": {
+                "address": "0xae78736cd615f374d3085123a210448e74fc6393",
+                "block_hash": "0x8461da7a1d4b47190a01fa6eae219be40aacffab0dd64af7259b2d404572c3d9",
+                "block_number": "18718011",
+                "log_index": "0",
+                "network": "ethereum",
+                "transaction_hash": "0x145c6705ffbf461e85d08b4a7f5850d6b52a7364d93a057722ca1194034f3ba4",
+                "transaction_index": "0"
+            }
+        }
+    ],
+    "network": "ethereum"
+}
+```
+
+## api_token
+
+Your Cloudflare API token with permissions to access Queues API.
+
+:::info
+We strongly recommend using environment variables for your API token.
+:::
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    cloudflare_queues: // [!code focus]
+      api_token: ${CLOUDFLARE_API_TOKEN} // [!code focus]
+```
+
+## account_id
+
+Your Cloudflare Account ID where your queues are created.
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    cloudflare_queues: // [!code focus]
+      api_token: ${CLOUDFLARE_API_TOKEN}
+      account_id: ${CLOUDFLARE_ACCOUNT_ID} // [!code focus]
+```
+
+## queues
+
+This is an array allowing you to configure multiple queues with different settings.
+
+### queue_id
+
+The ID of the Cloudflare Queue to send messages to. This queue must already exist in your Cloudflare account. You can find the queue ID in your Cloudflare dashboard or via the Queues API.
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    cloudflare_queues: // [!code focus]
+      api_token: ${CLOUDFLARE_API_TOKEN}
+      account_id: ${CLOUDFLARE_ACCOUNT_ID}
+      queues: // [!code focus]
+        - queue_id: blockchain-transfers // [!code focus]
+```
+
+### networks
+
+This is an array of networks you want to stream to this queue.
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    cloudflare_queues: // [!code focus]
+      api_token: ${CLOUDFLARE_API_TOKEN}
+      account_id: ${CLOUDFLARE_ACCOUNT_ID}
+      queues: // [!code focus]
+        - queue_id: blockchain-transfers
+          networks: // [!code focus]
+            - ethereum // [!code focus]
+```
+
+## events
+
+This is an array of events you want to stream to this queue.
+
+### event_name
+
+This is the name of the event you want to stream to this queue, must match the ABI event name.
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    cloudflare_queues: // [!code focus]
+      api_token: ${CLOUDFLARE_API_TOKEN}
+      account_id: ${CLOUDFLARE_ACCOUNT_ID}
+      queues: // [!code focus]
+        - queue_id: blockchain-transfers
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer // [!code focus]
+```
+
+#### alias
+
+This is an optional `alias` you wish to assign to the event you want published to this Queue.
+
+It is paired with the event name and allows consumers to have unique discriminator keys in the event of
+naming conflicts. E.g Transfer (ERC20) and Transfer (ERC721).
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    cloudflare_queues: // [!code focus]
+      api_token: ${CLOUDFLARE_API_TOKEN}
+      account_id: ${CLOUDFLARE_ACCOUNT_ID}
+      queues: // [!code focus]
+        - queue_id: blockchain-transfers
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer // [!code focus]
+              alias: RocketPoolTransfer // [!code focus]
+```
+
+### conditions
+
+This accepts an array of conditions you want to apply to the event data before sending to the queue.
+
+:::info
+This is optional, if you do not provide any conditions all data will be streamed.
+:::
+
+You may want to filter on the stream based on the event data, if the event data has not got an index on the on the
+solidity event you can not filter it over the logs. The `conditions` filter is here to help you with this,
+based on your ABI you can filter on the event data.
+
+rindexer has enabled a special syntax which allows you to define on your ABI fields what you want to filter on.
+
+1. `>` - higher then (for numbers only)
+2. `<` - lower then (for numbers only)
+3. `=` - equals
+4. `>=` - higher then or equals (for numbers only)
+5. `<=` - lower then or equals (for numbers only)
+6. `||` - or
+7. `&&` - and
+
+So lets look at an example lets say i only want to get transfer events which are higher then `2000000000000000000` RETH wei
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    cloudflare_queues: // [!code focus]
+      api_token: ${CLOUDFLARE_API_TOKEN}
+      account_id: ${CLOUDFLARE_ACCOUNT_ID}
+      queues: // [!code focus]
+        - queue_id: blockchain-transfers
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer // [!code focus]
+              conditions: // [!code focus]
+                - "value": ">=2000000000000000000" // [!code focus]
+```
+
+We use the ABI input name `value` to filter on the value field, you can find these names in the ABI file.
+
+```json
+{
+    "anonymous":false,
+    "inputs":[
+      {
+        "indexed":true,
+        "internalType":"address",
+        "name":"from",
+        "type":"address"
+      },
+      {
+        "indexed":true,
+        "internalType":"address",
+        "name":"to",
+        "type":"address"
+      },
+      {
+        "indexed":false,
+        "internalType":"uint256",
+        "name":"value", // [!code focus]
+        "type":"uint256"
+      }
+    ],
+    "name":"Transfer",
+    "type":"event"
+}
+```
+
+You can use the `||` or `&&` to combine conditions.
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    cloudflare_queues: // [!code focus]
+      api_token: ${CLOUDFLARE_API_TOKEN}
+      account_id: ${CLOUDFLARE_ACCOUNT_ID}
+      queues: // [!code focus]
+        - queue_id: blockchain-transfers
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer
+              conditions: // [!code focus]
+                - "value": ">=2000000000000000000 && value <=4000000000000000000" // [!code focus]
+```
+
+You can use the `=` to filter on other aspects like the `from` or `to` address.
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    cloudflare_queues: // [!code focus]
+      api_token: ${CLOUDFLARE_API_TOKEN}
+      account_id: ${CLOUDFLARE_ACCOUNT_ID}
+      queues: // [!code focus]
+        - queue_id: blockchain-transfers
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer
+              conditions: // [!code focus]
+                - "from": "0x0338ce5020c447f7e668dc2ef778025ce3982662 || 0x0338ce5020c447f7e668dc2ef778025ce398266u" // [!code focus]
+                - "value": ">=2000000000000000000 || value <=4000000000000000000" // [!code focus]
+```
+
+:::info
+Note we advise you to filer any `indexed` fields in the contract details in the `rindexer.yaml` file.
+As these can be filtered out on the request level and not filtered out in rindexer itself.
+You can read more about it [here](/docs/start-building/yaml-config/contracts#indexed_1-indexed_2-indexed_3).
+:::
+
+If you have a tuple and you want to get that value you just use the object notation.
+
+For example lets say we want to only get the events for `profileId` from the `quoteParams` tuple which equals `1`:
+
+```json
+{
+     "anonymous": false,
+     "inputs": [
+       {
+         "components": [
+           {
+             "internalType": "uint256",
+             "name": "profileId", // [!code focus]
+             "type": "uint256"
+           },
+           ...
+         ],
+         "indexed": false,
+         "internalType": "struct Types.QuoteParams",
+         "name": "quoteParams", // [!code focus]
+         "type": "tuple"
+       },
+       ...
+     ],
+     "name": "QuoteCreated", // [!code focus]
+     "type": "event"
+}
+```
+
+```yaml [rindexer.yaml]
+...
+contracts:
+- name: RocketPoolETH
+  details:
+  - network: ethereum
+    address: "0xae78736cd615f374d3085123a210448e74fc6393"
+    start_block: "18600000"
+    end_block: "18600181"
+  abi: "./abis/RocketTokenRETH.abi.json"
+  include_events:
+  - Transfer
+  streams: // [!code focus]
+    cloudflare_queues: // [!code focus]
+      api_token: ${CLOUDFLARE_API_TOKEN}
+      account_id: ${CLOUDFLARE_ACCOUNT_ID}
+      queues: // [!code focus]
+        - queue_id: blockchain-transfers
+          networks:
+            - ethereum
+          events: // [!code focus]
+            - event_name: Transfer
+              conditions: // [!code focus]
+                - "quoteParams.profileId": "=1" // [!code focus]
+```
+
+## Cloudflare Worker Consumer
+
+Here's an example of a Cloudflare Worker that consumes messages from your queues:
+
+```javascript
+export default {
+  async queue(batch, env, ctx) {
+    // Process each message in the batch
+    for (const message of batch.messages) {
+      try {
+        // Parse the blockchain event data
+        const eventData = message.body;
+        
+        console.log('Processing blockchain event:', {
+          eventName: eventData.event_name,
+          network: eventData.network,
+          messageId: eventData.message_id,
+          eventCount: eventData.event_data?.length || 0
+        });
+
+        // Process Transfer events
+        if (eventData.event_name === 'Transfer') {
+          await processTransferEvents(eventData.event_data, env);
+        }
+
+        // Acknowledge the message
+        message.ack();
+      } catch (error) {
+        console.error('Error processing message:', error);
+        // Retry the message
+        message.retry();
+      }
+    }
+  }
+};
+
+async function processTransferEvents(transfers, env) {
+  for (const transfer of transfers) {
+    // Store high-value transfers in D1 database
+    if (BigInt(transfer.value) > BigInt('1000000000000000000')) {
+      await env.DB.prepare(
+        'INSERT INTO transfers (from_address, to_address, value, block_number, tx_hash) VALUES (?, ?, ?, ?, ?)'
+      ).bind(
+        transfer.from,
+        transfer.to,
+        transfer.value,
+        transfer.tx_information.block_number,
+        transfer.tx_information.transaction_hash
+      ).run();
+    }
+  }
+}
+```

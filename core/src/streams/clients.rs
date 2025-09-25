@@ -14,13 +14,15 @@ use crate::{
     event::{filter_event_data_by_conditions, EventMessage},
     indexer::native_transfer::EVENT_NAME,
     manifest::stream::{
-        KafkaStreamConfig, KafkaStreamQueueConfig, RabbitMQStreamConfig, RabbitMQStreamQueueConfig,
+        CloudflareQueuesStreamConfig, CloudflareQueuesStreamQueueConfig, KafkaStreamConfig,
+        KafkaStreamQueueConfig, RabbitMQStreamConfig, RabbitMQStreamQueueConfig,
         RedisStreamConfig, RedisStreamStreamConfig, SNSStreamTopicConfig, StreamEvent,
         StreamsConfig, WebhookStreamConfig,
     },
     streams::{
         kafka::{Kafka, KafkaError},
-        RabbitMQ, RabbitMQError, Redis, RedisError, Webhook, WebhookError, SNS,
+        CloudflareQueues, CloudflareQueuesError, RabbitMQ, RabbitMQError, Redis, RedisError,
+        Webhook, WebhookError, SNS,
     },
 };
 
@@ -54,6 +56,9 @@ pub enum StreamError {
     #[error("Redis could not publish: {0}")]
     RedisCouldNotPublish(#[from] RedisError),
 
+    #[error("Cloudflare Queues could not publish: {0}")]
+    CloudflareQueuesCouldNotPublish(#[from] CloudflareQueuesError),
+
     #[error("Task failed: {0}")]
     JoinError(JoinError),
 }
@@ -83,12 +88,19 @@ pub struct RedisStream {
 }
 
 #[derive(Debug)]
+pub struct CloudflareQueuesStream {
+    config: CloudflareQueuesStreamConfig,
+    client: Arc<CloudflareQueues>,
+}
+
+#[derive(Debug)]
 pub struct StreamsClients {
     sns: Option<SNSStream>,
     webhook: Option<WebhookStream>,
     rabbitmq: Option<RabbitMQStream>,
     kafka: Option<KafkaStream>,
     redis: Option<RedisStream>,
+    cloudflare_queues: Option<CloudflareQueuesStream>,
 }
 
 impl StreamsClients {
@@ -142,7 +154,19 @@ impl StreamsClients {
             None
         };
 
-        Self { sns, webhook, rabbitmq, kafka, redis }
+        let cloudflare_queues = if let Some(config) = stream_config.cloudflare_queues.as_ref() {
+            Some(CloudflareQueuesStream {
+                config: config.clone(),
+                client: Arc::new(CloudflareQueues::new(
+                    config.api_token.clone(),
+                    config.account_id.clone(),
+                )),
+            })
+        } else {
+            None
+        };
+
+        Self { sns, webhook, rabbitmq, kafka, redis, cloudflare_queues }
     }
 
     fn has_any_streams(&self) -> bool {
@@ -151,6 +175,7 @@ impl StreamsClients {
             || self.rabbitmq.is_some()
             || self.kafka.is_some()
             || self.redis.is_some()
+            || self.cloudflare_queues.is_some()
     }
 
     fn chunk_data(&self, data_array: &Vec<Value>) -> Vec<Vec<Value>> {
@@ -450,6 +475,39 @@ impl StreamsClients {
         tasks
     }
 
+    fn cloudflare_queues_stream_tasks(
+        &self,
+        config: &CloudflareQueuesStreamQueueConfig,
+        client: Arc<CloudflareQueues>,
+        id: &str,
+        event_message: &EventMessage,
+        chunks: Arc<Vec<Vec<Value>>>,
+    ) -> StreamPublishes {
+        let tasks: Vec<_> = chunks
+            .iter()
+            .enumerate()
+            .map(|(index, chunk)| {
+                let filtered_chunk: Vec<Value> = self.filter_chunk_event_data_by_conditions(
+                    &config.events,
+                    event_message,
+                    chunk,
+                );
+
+                let publish_message_id = self.generate_publish_message_id(id, index, &None);
+                let client = Arc::clone(&client);
+                let queue_id = config.queue_id.clone();
+                let publish_message =
+                    self.create_chunk_message_json(&config.events, event_message, &filtered_chunk);
+
+                task::spawn(async move {
+                    client.publish(&publish_message_id, &queue_id, &publish_message).await?;
+                    Ok(filtered_chunk.len())
+                })
+            })
+            .collect();
+        tasks
+    }
+
     pub async fn stream(
         &self,
         id: String,
@@ -541,6 +599,22 @@ impl StreamsClients {
                         streams.push(self.redis_stream_tasks(
                             config,
                             Arc::clone(&redis.client),
+                            &id,
+                            event_message,
+                            Arc::clone(&chunks),
+                        ));
+                    }
+                }
+            }
+
+            if let Some(cloudflare_queues) = &self.cloudflare_queues {
+                for config in &cloudflare_queues.config.queues {
+                    if config.events.iter().any(|e| e.event_name == event_message.event_name)
+                        && config.networks.contains(&event_message.network)
+                    {
+                        streams.push(self.cloudflare_queues_stream_tasks(
+                            config,
+                            Arc::clone(&cloudflare_queues.client),
                             &id,
                             event_message,
                             Arc::clone(&chunks),
