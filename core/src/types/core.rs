@@ -6,6 +6,7 @@ use alloy::{
 use serde::{Deserialize, Serialize};
 
 /// Metadata inside a log
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogMeta {
     /// Address from which this log originated
