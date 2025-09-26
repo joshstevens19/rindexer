@@ -163,6 +163,10 @@ export default defineConfig({
           link: "/docs/start-building/timestamps",
         },
         {
+          text: "Health Monitoring",
+          link: "/docs/start-building/health-monitoring",
+        },
+        {
           text: "Phantom Events",
           link: "/docs/start-building/phantom",
         },

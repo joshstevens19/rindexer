@@ -8,6 +8,9 @@ pub mod reth;
 mod system_state;
 pub use system_state::{initiate_shutdown, is_running};
 
+mod health;
+pub use health::{start_health_server, HealthServer, HealthServerState, HealthStatus};
+
 mod database;
 pub use database::postgres::{
     client::{PostgresClient, ToSql},
@@ -49,8 +52,8 @@ pub use futures::FutureExt;
 pub use lazy_static::lazy_static;
 pub use reqwest::header::HeaderMap;
 pub use start::{
-    start_rindexer, start_rindexer_no_code, IndexerNoCodeDetails, IndexingDetails, StartDetails,
-    StartNoCodeDetails,
+    start_rindexer, start_rindexer_no_code, HealthOverrideSettings, IndexerNoCodeDetails,
+    IndexingDetails, StartDetails, StartNoCodeDetails,
 };
 pub use tokio::main as rindexer_main;
 pub use tokio_postgres::types::Type as PgType;
