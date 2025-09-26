@@ -168,3 +168,85 @@ Deleted [https://container.googleapis.com/v1/projects/my-project/zones/us-west1-
 ```
 
 This guide provides the necessary steps to deploy the rindexer Helm chart on Google Kubernetes Engine (GKE) using gcloud and kubectl.
+
+## Health Monitoring
+
+Rindexer includes a built-in health monitoring server that provides comprehensive system status information. The health server runs on port `8080` by default and provides real-time insights into:
+
+- **Database connectivity** - PostgreSQL connection status
+- **Indexing status** - Whether the indexer is running and how many tasks are active
+- **Sync status** - Data synchronization health between different storage backends
+- **Overall system health** - Aggregated status across all components
+
+### Health Server Lifecycle
+
+The health server's lifecycle depends on which services you start:
+
+- **`rindexer start indexer` (with end_block set)**: Short-lived - dies when historical indexing completes
+- **`rindexer start indexer` (no end_block set)**: Long-lived - stays alive for continuous live indexing  
+- **`rindexer start graphql`**: No health server - health monitoring not available
+- **`rindexer start all`**: Long-lived - follows the GraphQL server lifecycle
+
+### Accessing Health Endpoints
+
+The health server is automatically started when you run rindexer with indexing enabled. It provides the following endpoint:
+
+- `GET /health` - Complete health status with detailed service information
+
+Example health response:
+
+```json
+{
+  "status": "healthy",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "services": {
+    "database": "healthy",
+    "indexing": "healthy", 
+    "sync": "healthy"
+  },
+  "indexing": {
+    "active_tasks": 2,
+    "is_running": true
+  }
+}
+```
+
+### Health Status Types
+
+The health endpoint returns different status types:
+
+- `healthy` - Service is functioning normally
+- `unhealthy` - Service has encountered an error
+- `unknown` - Status cannot be determined
+- `not_configured` - Service is not set up
+- `disabled` - Service is intentionally disabled
+- `no_data` - Service is working but no data is available
+- `stopped` - Service is not running
+
+### Monitoring in Production
+
+For production deployments on GCP, you can:
+
+1. **Set up monitoring alerts** based on HTTP status codes:
+   - `200 OK` - System is healthy
+   - `503 Service Unavailable` - System has issues
+
+2. **Use Google Cloud Monitoring** to track health metrics
+
+3. **Set up automated alerts** when the health status changes to `unhealthy`
+
+4. **Configure load balancer health checks** to point to `/health`
+
+5. **Access health endpoints** through your GCP load balancer:
+   ```
+   https://your-load-balancer-ip:8080/health
+   ```
+
+### Custom Health Port
+
+You can configure the health server port in your `rindexer.yaml` file:
+
+```yaml
+global:
+  health_override_port: 8081
+```
