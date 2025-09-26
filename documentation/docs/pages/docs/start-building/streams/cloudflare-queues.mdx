@@ -81,7 +81,7 @@ The message sent to your Cloudflare Queue is already decoded and parsed into a J
 - `message_id` - Unique identifier for this message from rindexer
 - `event_name` - The name of the event
 - `event_signature_hash` - The event signature hash (keccak256 hash of the event signature)
-- `event_data` - Array of decoded event data with transaction information
+- `body` > `event_data` - Array of decoded event data with transaction information
 - `network` - The network the event was emitted on
 
 For example a transfer event would look like:
@@ -91,27 +91,71 @@ For example a transfer event would look like:
     "message_id": "rindexer_stream__blockchain-transfers-transfer-chunk-0",
     "event_name": "Transfer",
     "event_signature_hash": "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
-    "event_data": [
-        {
-            "from": "0x0338ce5020c447f7e668dc2ef778025ce3982662",
-            "to": "0x0338ce5020c447f7e668dc2ef778025ce3982662",
-            "value": "1000000000000000000",
-            "tx_information": {
-                "address": "0xae78736cd615f374d3085123a210448e74fc6393",
-                "block_hash": "0x8461da7a1d4b47190a01fa6eae219be40aacffab0dd64af7259b2d404572c3d9",
-                "block_number": "18718011",
-                "log_index": "0",
-                "network": "ethereum",
-                "transaction_hash": "0x145c6705ffbf461e85d08b4a7f5850d6b52a7364d93a057722ca1194034f3ba4",
-                "transaction_index": "0"
+    "body": {
+        "event_data": [
+            {
+                "from": "0x0338ce5020c447f7e668dc2ef778025ce3982662",
+                "to": "0x0338ce5020c447f7e668dc2ef778025ce3982662",
+                "value": "1000000000000000000",
+                "tx_information": {
+                    "address": "0xae78736cd615f374d3085123a210448e74fc6393",
+                    "block_hash": "0x8461da7a1d4b47190a01fa6eae219be40aacffab0dd64af7259b2d404572c3d9",
+                    "block_number": "18718011",
+                    "log_index": "0",
+                    "network": "ethereum",
+                    "transaction_hash": "0x145c6705ffbf461e85d08b4a7f5850d6b52a7364d93a057722ca1194034f3ba4",
+                    "transaction_index": "0"
+                }
             }
-        }
-    ],
+        ]
+    },
     "network": "ethereum"
 }
 ```
 
-## api_token
+## Cloudflare Worker Consumer
+
+Here's an example of a Cloudflare Worker that consumes messages from your queues:
+
+```javascript
+export default {
+  async queue(batch, env, ctx) {
+    for (const message of batch.messages) {
+      try {
+        for (const eventInfo of message.body.event_data) {
+            console.log(eventInfo);
+            // Result:
+            // {
+            //   "from": "0xf081470f5c6fbccf48cc4e5b82dd926409dcdd67",
+            //   "to": "0x58bd88f0c826bdc2d8adaf66abb66bb99d961a3d",
+            //   "transaction_information": {
+            //     "address": "0xae78736cd615f374d3085123a210448e74fc6393",
+            //     "block_hash": "0x58d7fd9aab0a4023f812dd0919d70f63ffa9a92ee26d83d34b04fbb000b74e9b",
+            //     "block_timestamp": "0x6567a397",
+            //     "log_index": "0x1b0",
+            //     "network": "ethereum",
+            //     "transaction_hash": "0x7cef018bc6090ac7d5a73d6ffe1975c6d52353cad315de9b7c771db6648c7a44",
+            //     "block_number": 18679752,
+            //     "chain_id": 1,
+            //     "transaction_index": 148
+            //   },
+            //   "value": "45336822342319436"
+            // }
+        }
+
+        message.ack();
+      } catch (error) {
+        console.error('Error processing message:', error);
+        message.retry();
+      }
+    }
+  }
+};
+```
+
+## YAML Config
+
+### api_token
 
 Your Cloudflare API token with permissions to access Queues API.
 
@@ -136,7 +180,7 @@ contracts:
       api_token: ${CLOUDFLARE_API_TOKEN} // [!code focus]
 ```
 
-## account_id
+### account_id
 
 Your Cloudflare Account ID where your queues are created.
 
@@ -158,11 +202,11 @@ contracts:
       account_id: ${CLOUDFLARE_ACCOUNT_ID} // [!code focus]
 ```
 
-## queues
+### queues
 
 This is an array allowing you to configure multiple queues with different settings.
 
-### queue_id
+#### queue_id
 
 The ID of the Cloudflare Queue to send messages to. This queue must already exist in your Cloudflare account. You can find the queue ID in your Cloudflare dashboard or via the Queues API.
 
@@ -212,11 +256,11 @@ contracts:
             - ethereum // [!code focus]
 ```
 
-## events
+### events
 
 This is an array of events you want to stream to this queue.
 
-### event_name
+#### event_name
 
 This is the name of the event you want to stream to this queue, must match the ABI event name.
 
@@ -244,7 +288,7 @@ contracts:
             - event_name: Transfer // [!code focus]
 ```
 
-#### alias
+##### alias
 
 This is an optional `alias` you wish to assign to the event you want published to this Queue.
 
@@ -472,43 +516,4 @@ contracts:
             - event_name: Transfer
               conditions: // [!code focus]
                 - "quoteParams.profileId": "=1" // [!code focus]
-```
-
-## Cloudflare Worker Consumer
-
-Here's an example of a Cloudflare Worker that consumes messages from your queues:
-
-```javascript
-export default {
-  async queue(batch, env, ctx) {
-    for (const message of batch.messages) {
-      try {
-        const eventData = message.body;
-
-        console.log('Processing blockchain event:', eventData);
-        // {
-        //   "from": "0xf081470f5c6fbccf48cc4e5b82dd926409dcdd67",
-        //   "to": "0x58bd88f0c826bdc2d8adaf66abb66bb99d961a3d",
-        //   "transaction_information": {
-        //     "address": "0xae78736cd615f374d3085123a210448e74fc6393",
-        //     "block_hash": "0x58d7fd9aab0a4023f812dd0919d70f63ffa9a92ee26d83d34b04fbb000b74e9b",
-        //     "block_timestamp": "0x6567a397",
-        //     "log_index": "0x1b0",
-        //     "network": "ethereum",
-        //     "transaction_hash": "0x7cef018bc6090ac7d5a73d6ffe1975c6d52353cad315de9b7c771db6648c7a44",
-        //     "block_number": 18679752,
-        //     "chain_id": 1,
-        //     "transaction_index": 148
-        //   },
-        //   "value": "45336822342319436"
-        // }
-
-        message.ack();
-      } catch (error) {
-        console.error('Error processing message:', error);
-        message.retry();
-      }
-    }
-  }
-};
 ```
