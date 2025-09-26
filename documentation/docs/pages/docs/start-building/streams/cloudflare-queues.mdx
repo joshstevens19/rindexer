@@ -481,49 +481,34 @@ Here's an example of a Cloudflare Worker that consumes messages from your queues
 ```javascript
 export default {
   async queue(batch, env, ctx) {
-    // Process each message in the batch
     for (const message of batch.messages) {
       try {
-        // Parse the blockchain event data
         const eventData = message.body;
-        
-        console.log('Processing blockchain event:', {
-          eventName: eventData.event_name,
-          network: eventData.network,
-          messageId: eventData.message_id,
-          eventCount: eventData.event_data?.length || 0
-        });
 
-        // Process Transfer events
-        if (eventData.event_name === 'Transfer') {
-          await processTransferEvents(eventData.event_data, env);
-        }
+        console.log('Processing blockchain event:', eventData);
+        // {
+        //   "from": "0xf081470f5c6fbccf48cc4e5b82dd926409dcdd67",
+        //   "to": "0x58bd88f0c826bdc2d8adaf66abb66bb99d961a3d",
+        //   "transaction_information": {
+        //     "address": "0xae78736cd615f374d3085123a210448e74fc6393",
+        //     "block_hash": "0x58d7fd9aab0a4023f812dd0919d70f63ffa9a92ee26d83d34b04fbb000b74e9b",
+        //     "block_timestamp": "0x6567a397",
+        //     "log_index": "0x1b0",
+        //     "network": "ethereum",
+        //     "transaction_hash": "0x7cef018bc6090ac7d5a73d6ffe1975c6d52353cad315de9b7c771db6648c7a44",
+        //     "block_number": 18679752,
+        //     "chain_id": 1,
+        //     "transaction_index": 148
+        //   },
+        //   "value": "45336822342319436"
+        // }
 
-        // Acknowledge the message
         message.ack();
       } catch (error) {
         console.error('Error processing message:', error);
-        // Retry the message
         message.retry();
       }
     }
   }
 };
-
-async function processTransferEvents(transfers, env) {
-  for (const transfer of transfers) {
-    // Store high-value transfers in D1 database
-    if (BigInt(transfer.value) > BigInt('1000000000000000000')) {
-      await env.DB.prepare(
-        'INSERT INTO transfers (from_address, to_address, value, block_number, tx_hash) VALUES (?, ?, ?, ?, ?)'
-      ).bind(
-        transfer.from,
-        transfer.to,
-        transfer.value,
-        transfer.tx_information.block_number,
-        transfer.tx_information.transaction_hash
-      ).run();
-    }
-  }
-}
 ```

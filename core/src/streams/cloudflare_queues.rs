@@ -45,7 +45,9 @@ impl CloudflareQueues {
             map.insert("message_id".to_string(), Value::String(id.to_string()));
         }
 
-        let payload = message_with_metadata;
+        let payload = serde_json::json!({
+            "body": message_with_metadata
+        });
 
         let response = self
             .client
@@ -92,7 +94,9 @@ impl CloudflareQueues {
                     if let Value::Object(ref mut map) = message_with_metadata {
                         map.insert("message_id".to_string(), Value::String(id.to_string()));
                     }
-                    message_with_metadata
+                    serde_json::json!({
+                        "body": message_with_metadata
+                    })
                 })
                 .collect();
 

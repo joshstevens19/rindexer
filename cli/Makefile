@@ -73,3 +73,5 @@ hyperwarp_codegen_typings:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path $(CURDIR)/../examples/hyperevm typings
 hyperwarp_codegen_indexer:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path $(CURDIR)/../examples/hyperevm indexer
+start_cloudflare_indexer:
+	RUSTFLAGS='-C target-cpu=native' RUST_BACKTRACE='full' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/rindexer_cloudflare_queues indexer
