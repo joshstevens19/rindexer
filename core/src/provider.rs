@@ -147,7 +147,6 @@ fn is_known_zk_evm_compatible_chain(chain: Chain) -> Option<bool> {
             | NamedChain::Sophon
             | NamedChain::Abstract
             | NamedChain::Scroll
-            | NamedChain::PolygonZkEvm
             | NamedChain::Linea => Some(true),
 
             // Known non-zkEVM chains
