@@ -1,8 +1,8 @@
 use std::{env, path::PathBuf};
 
 use rindexer::{
-    event::callback_registry::TraceCallbackRegistry, manifest::yaml::read_manifest, start_rindexer,
     GraphqlOverrideSettings, IndexingDetails, StartDetails,
+    event::callback_registry::TraceCallbackRegistry, manifest::yaml::read_manifest, start_rindexer,
 };
 
 use self::rindexer_lib::indexers::all_handlers::register_all_handlers;
