@@ -117,6 +117,6 @@ fn generate_contracts_code(contracts: &[Contract], networks: &[Network]) -> Code
     output
 }
 
-pub fn generate_context_code(contracts: &Vec<Contract>, networks: &[Network]) -> Code {
+pub fn generate_context_code(contracts: &[Contract], networks: &[Network]) -> Code {
     generate_contracts_code(contracts, networks)
 }

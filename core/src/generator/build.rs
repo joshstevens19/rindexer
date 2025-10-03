@@ -68,7 +68,7 @@ pub enum WriteGlobalError {
 
 fn write_global(
     output: &Path,
-    global_contracts: &Vec<Contract>,
+    global_contracts: &[Contract],
     networks: &[Network],
 ) -> Result<(), WriteGlobalError> {
     let global_contract_file_path = generate_file_location(output, "global_contracts");
