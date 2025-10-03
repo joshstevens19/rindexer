@@ -1,8 +1,8 @@
 use std::{env, path::PathBuf};
 
 use rindexer::{
-    GraphqlOverrideSettings, HealthOverrideSettings, IndexingDetails, StartDetails,
     event::callback_registry::TraceCallbackRegistry, manifest::yaml::read_manifest, start_rindexer,
+    GraphqlOverrideSettings, IndexingDetails, StartDetails,
 };
 
 use self::rindexer_lib::indexers::all_handlers::register_all_handlers;
@@ -65,7 +65,6 @@ async fn main() {
                     enabled: enable_graphql,
                     override_port: port,
                 },
-                health_details: HealthOverrideSettings { override_port: None },
             })
             .await;
 
