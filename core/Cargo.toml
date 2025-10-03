@@ -62,7 +62,7 @@ tokio-postgres = { version = "0.7", features = [
 ] }
 tokio-stream = "0.1.17"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = [
+tracing-subscriber = { version = "=0.3.19", features = [
     "env-filter",
     "fmt",
     "time",
