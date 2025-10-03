@@ -161,9 +161,9 @@ where
         Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
     {
         let csv = AsyncCsvAppender::new(
-            r"/Users/jackedgson/Development/avara/rindexer/examples/rindexer_factory_indexing/generated_csv/UniswapV3Factory/uniswapv3factory-ownerchanged.csv",
+            r"/Users/pawellula/RustroverProjects/rindexer/cli/../examples/rindexer_factory_indexing/generated_csv/UniswapV3Factory/uniswapv3factory-ownerchanged.csv",
         );
-        if !Path::new(r"/Users/jackedgson/Development/avara/rindexer/examples/rindexer_factory_indexing/generated_csv/UniswapV3Factory/uniswapv3factory-ownerchanged.csv").exists() {
+        if !Path::new(r"/Users/pawellula/RustroverProjects/rindexer/cli/../examples/rindexer_factory_indexing/generated_csv/UniswapV3Factory/uniswapv3factory-ownerchanged.csv").exists() {
             csv.append_header(vec!["contract_address".into(), "old_owner".into(), "new_owner".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()].into())
                 .await
                 .expect("Failed to write CSV header");

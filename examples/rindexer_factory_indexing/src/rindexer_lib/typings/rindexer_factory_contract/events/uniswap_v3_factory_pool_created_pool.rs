@@ -164,9 +164,9 @@ where
         Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
     {
         let csv = AsyncCsvAppender::new(
-            r"/Users/jackedgson/Development/avara/rindexer/examples/rindexer_factory_indexing/generated_csv/UniswapV3FactoryPoolCreatedPool/uniswapv3factorypoolcreatedpool-poolcreated.csv",
+            r"/Users/pawellula/RustroverProjects/rindexer/cli/../examples/rindexer_factory_indexing/generated_csv/UniswapV3FactoryPoolCreatedPool/uniswapv3factorypoolcreatedpool-poolcreated.csv",
         );
-        if !Path::new(r"/Users/jackedgson/Development/avara/rindexer/examples/rindexer_factory_indexing/generated_csv/UniswapV3FactoryPoolCreatedPool/uniswapv3factorypoolcreatedpool-poolcreated.csv").exists() {
+        if !Path::new(r"/Users/pawellula/RustroverProjects/rindexer/cli/../examples/rindexer_factory_indexing/generated_csv/UniswapV3FactoryPoolCreatedPool/uniswapv3factorypoolcreatedpool-poolcreated.csv").exists() {
             csv.append_header(vec!["contract_address".into(), "token_0".into(), "token_1".into(), "fee".into(), "tick_spacing".into(), "pool".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()].into())
                 .await
                 .expect("Failed to write CSV header");
