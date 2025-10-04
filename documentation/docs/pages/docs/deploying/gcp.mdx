@@ -19,8 +19,8 @@ gcloud container clusters create my-cluster --zone us-west1-a --machine-type n1-
 Output:
 
 ```bash
-Creating cluster my-cluster in us-west1-a... Cluster is being created.                                                                                                                                                                                                            
-Created [https://container.googleapis.com/v1/projects/my-project/zones/us-west1-a/clusters/my-cluster].                                                                                                                           
+Creating cluster my-cluster in us-west1-a... Cluster is being created.
+Created [https://container.googleapis.com/v1/projects/my-project/zones/us-west1-a/clusters/my-cluster].
 To inspect the contents of your cluster, go to: https://console.cloud.google.com/kubernetes/workload_/gcloud/us-west1-a/my-cluster?project=my-project
 kubeconfig entry generated for my-cluster.
 NAME        LOCATION    MASTER_VERSION    MASTER_IP     MACHINE_TYPE   NODE_VERSION      NUM_NODES  STATUS
@@ -183,7 +183,7 @@ Rindexer includes a built-in health monitoring server that provides comprehensiv
 The health server's lifecycle depends on which services you start:
 
 - **`rindexer start indexer` (with end_block set)**: Short-lived - dies when historical indexing completes
-- **`rindexer start indexer` (no end_block set)**: Long-lived - stays alive for continuous live indexing  
+- **`rindexer start indexer` (no end_block set)**: Long-lived - stays alive for continuous live indexing
 - **`rindexer start graphql`**: No health server - health monitoring not available
 - **`rindexer start all`**: Long-lived - follows the GraphQL server lifecycle
 
@@ -201,7 +201,7 @@ Example health response:
   "timestamp": "2024-01-15T10:30:00Z",
   "services": {
     "database": "healthy",
-    "indexing": "healthy", 
+    "indexing": "healthy",
     "sync": "healthy"
   },
   "indexing": {
@@ -228,8 +228,8 @@ The health endpoint returns different status types:
 For production deployments on GCP, you can:
 
 1. **Set up monitoring alerts** based on HTTP status codes:
-   - `200 OK` - System is healthy
-   - `503 Service Unavailable` - System has issues
+- `200 OK` - System is healthy
+- `503 Service Unavailable` - System has issues
 
 2. **Use Google Cloud Monitoring** to track health metrics
 
@@ -238,8 +238,8 @@ For production deployments on GCP, you can:
 4. **Configure load balancer health checks** to point to `/health`
 
 5. **Access health endpoints** through your GCP load balancer:
-   ```
-   https://your-load-balancer-ip:8080/health
+```
+https://your-load-balancer-ip:8080/health
    ```
 
 ### Custom Health Port
@@ -248,5 +248,5 @@ You can configure the health server port in your `rindexer.yaml` file:
 
 ```yaml
 global:
-  health_override_port: 8081
+  health_port: 8081
 ```

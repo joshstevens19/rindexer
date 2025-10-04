@@ -63,11 +63,10 @@ pub async fn handle_add_contract_command(
     let contract_address =
         prompt_for_input(&format!("Enter {network} Contract Address"), None, None, None);
 
-    let etherscan_api_key =
-        manifest.global.as_ref().and_then(|global| global.etherscan_api_key.as_ref()).map_or_else(
-            || BACKUP_ETHERSCAN_API_KEY.to_string(),
-            |key| public_read_env_value(key).unwrap_or_else(|_| key.to_string()),
-        );
+    let etherscan_api_key = manifest.global.etherscan_api_key.as_ref().map_or_else(
+        || BACKUP_ETHERSCAN_API_KEY.to_string(),
+        |key| public_read_env_value(key).unwrap_or_else(|_| key.to_string()),
+    );
 
     let client = Client::builder()
         .with_api_key(etherscan_api_key)

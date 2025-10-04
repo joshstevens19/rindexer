@@ -488,17 +488,19 @@ async fn live_indexing_stream(
                         let from_block = current_filter.from_block();
                         if from_block > safe_block_number {
                             if reorg_safe_distance.is_zero() {
-                                info!(
-                                    "{}::{} - RPC has gone back on latest block: rpc returned {}, last seen: {}",
+                                error!(
+                                    "{}::{} - {} - LIVE INDEXING STEAM - RPC has gone back on latest block: rpc returned {}, last seen: {}",
                                     info_log_name,
+                                    network,
                                     IndexingEventProgressStatus::Live.log(),
                                     latest_block_number,
                                     from_block
                                 );
                             } else {
                                 info!(
-                                    "{} - {} - not in safe reorg block range yet block: {} > range: {}",
+                                    "{}::{} - {} - LIVE INDEXING STEAM - not in safe reorg block range yet block: {} > range: {}",
                                     info_log_name,
+                                    network,
                                     IndexingEventProgressStatus::Live.log(),
                                     from_block,
                                     safe_block_number
@@ -698,7 +700,7 @@ async fn live_indexing_stream(
             }
             Err(e) => {
                 error!(
-                    "Error getting latest block, will try again in 1 seconds - err: {}",
+                    "Error getting latest block, will try again in 1 second - err: {}",
                     e.to_string()
                 );
                 tokio::time::sleep(Duration::from_secs(1)).await;

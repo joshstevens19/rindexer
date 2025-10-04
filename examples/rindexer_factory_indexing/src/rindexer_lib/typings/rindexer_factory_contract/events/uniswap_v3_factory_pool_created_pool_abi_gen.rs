@@ -1,7 +1,6 @@
 use alloy::sol;
 
 sol!(
-    #[derive(Debug)]
     #[sol(rpc, all_derives)]
     RindexerUniswapV3FactoryPoolCreatedPoolGen,
     r#"[

@@ -10,7 +10,6 @@ use rindexer::provider::RindexerProvider;
 use std::sync::Arc;
 
 sol!(
-    #[derive(Debug)]
     #[sol(rpc, all_derives)]
     USDTEthereum,
     "./abis/erc20-abi.json"
@@ -25,7 +24,6 @@ pub async fn usdt_get_ethereum_provider_contract()
 }
 
 sol!(
-    #[derive(Debug)]
     #[sol(rpc, all_derives)]
     USDTBase,
     "./abis/erc20-abi.json"

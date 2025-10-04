@@ -33,15 +33,10 @@ pub struct IndexingDetails {
     pub trace_registry: TraceCallbackRegistry,
 }
 
-pub struct HealthOverrideSettings {
-    pub override_port: Option<u16>,
-}
-
 pub struct StartDetails<'a> {
     pub manifest_path: &'a PathBuf,
     pub indexing_details: Option<IndexingDetails>,
     pub graphql_details: GraphqlOverrideSettings,
-    pub health_details: HealthOverrideSettings,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -177,19 +172,9 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                 None
             };
 
-            let health_port = if details.indexing_details.is_some() {
-                let health_port = manifest
-                    .global
-                    .as_ref()
-                    .and_then(|g| g.health_override_port)
-                    .or(details.health_details.override_port)
-                    .unwrap_or(8080);
-                Some(health_port)
-            } else {
-                None
-            };
+            let health_port = manifest.global.health_port;
 
-            if let (Some(graphql_port), Some(health_port)) = (graphql_port, health_port) {
+            if let Some(graphql_port) = graphql_port {
                 if graphql_port == health_port {
                     return Err(StartRindexerError::PortConflict(format!(
                         "GraphQL and health servers cannot use the same port: {}",
@@ -201,12 +186,6 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
             // Health server follows the indexer lifecycle - only runs when indexer is running
             let health_server_handle = if details.indexing_details.is_some() {
                 let manifest_clone = Arc::clone(&manifest);
-                let health_port = manifest_clone
-                    .global
-                    .as_ref()
-                    .and_then(|g| g.health_override_port)
-                    .or(details.health_details.override_port)
-                    .unwrap_or(8080);
 
                 Some(tokio::spawn(async move {
                     info!("🩺 Starting health server on port {}", health_port);
@@ -394,7 +373,6 @@ pub struct StartNoCodeDetails<'a> {
     pub manifest_path: &'a PathBuf,
     pub indexing_details: IndexerNoCodeDetails,
     pub graphql_details: GraphqlOverrideSettings,
-    pub health_details: HealthOverrideSettings,
 }
 
 #[derive(thiserror::Error, Debug)]

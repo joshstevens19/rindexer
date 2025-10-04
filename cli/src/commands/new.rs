@@ -13,6 +13,7 @@ use alloy::{
 };
 use rindexer::manifest::config::Config;
 use rindexer::manifest::contract::ContractEvent;
+use rindexer::manifest::global::Global;
 #[cfg(feature = "reth")]
 use rindexer::manifest::reth::RethConfig;
 use rindexer::{
@@ -250,7 +251,7 @@ pub fn handle_new_command(
         }],
         native_transfers: NativeTransfers::default(),
         phantom: None,
-        global: None,
+        global: Global::default(),
         storage: Storage {
             postgres: if postgres_enabled {
                 Some(PostgresDetails {

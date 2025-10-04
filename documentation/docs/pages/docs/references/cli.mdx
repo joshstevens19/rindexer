@@ -19,7 +19,7 @@ Options:
   -V, --version  Print version
 ```
 
-## new 
+## new
 
 Creates a new rindexer no-code project or rust project. This will walk you through setting up your project by asking
 you a series of questions in the terminal.
@@ -48,7 +48,7 @@ Both `no-code` and `rust` subcommands support:
 Options:
   -r, --reth
           optional - Enable Reth support for high-performance indexing
-          
+
   [-- <RETH_ARGS>...]
           Additional arguments to pass to reth when --reth is enabled
           These should be provided after -- e.g. -- --datadir /path --http true
@@ -56,10 +56,10 @@ Options:
 Examples:
   # Standard project
   rindexer new no-code
-  
+
   # Reth-enabled project
   rindexer new no-code --reth
-  
+
   # Reth project with custom arguments
   rindexer new rust --reth -- --datadir /custom/path --http true
 ```
@@ -87,7 +87,7 @@ Options:
           Print help (see a summary with '-h')
 
 :::info
-The health monitoring server runs on port 8080 by default. You can configure it in your `rindexer.yaml` file using the `health_override_port` setting. See the [Running](/docs/start-building/running#health-monitoring) documentation for more details.
+The health monitoring server runs on port 8080 by default. You can configure it in your `rindexer.yaml` file using the `health_port` setting. See the [Running](/docs/start-building/running#health-monitoring) documentation for more details.
 :::
 ```
 

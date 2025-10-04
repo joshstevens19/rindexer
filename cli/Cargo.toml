@@ -13,7 +13,7 @@ resolver = "2"
 rindexer = { path = "../core" }
 
 # external dependencies
-alloy = { version = "1.0.30", features = ["full"] }
+alloy = { version = "1.0.37", features = ["full"] }
 alloy-chains = "0.2.8"# pegged to version in "foundry-block-explorers"
 foundry-block-explorers = "0.17.0"
 clap = { version = "4.5.46", features = ["derive"] }

@@ -95,8 +95,8 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phantom: Option<Phantom>,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub global: Option<Global>,
+    #[serde(default)]
+    pub global: Global,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graphql: Option<GraphQLSettings>,

@@ -24,7 +24,7 @@ https://github.com/joshstevens19/rindexer/tree/master/providers/railway
 
 2. Initialize a new Railway project
 
-  Install [Railway CLI](https://docs.railway.com/guides/cli) if not already installed.
+Install [Railway CLI](https://docs.railway.com/guides/cli) if not already installed.
 
   ```bash
   railway login
@@ -36,13 +36,13 @@ https://github.com/joshstevens19/rindexer/tree/master/providers/railway
   ```
 
 3. Create a service and link it to the project
-  
+
   ```bash
   railway up --detach
   railway link
   ? Select a project
   > rindexer-example
-  ? Select an environment  
+  ? Select an environment
   > production
   ? Select a service
   > rindexer-example
@@ -62,11 +62,11 @@ https://github.com/joshstevens19/rindexer/tree/master/providers/railway
 
   - Open the service "Variables" tab:
 
-    - Select "Add Variable Reference" and add a reference for `DATABASE_URL` and append ?sslmode=disable to the end of the value. The result should look like `${{Postgres.DATABASE_URL}}?sslmode=disable`.
+- Select "Add Variable Reference" and add a reference for `DATABASE_URL` and append ?sslmode=disable to the end of the value. The result should look like `${{Postgres.DATABASE_URL}}?sslmode=disable`.
 
-    - Select "Add Variable Reference" and add a reference for `POSTGRES_PASSWORD`.
+- Select "Add Variable Reference" and add a reference for `POSTGRES_PASSWORD`.
 
-    - Select "New Variable" with name `PORT` and value `3001` (This is the default value for the rindexer service, update this variable accordingly if the value is changed in the rindexer Dockerfile).
+- Select "New Variable" with name `PORT` and value `3001` (This is the default value for the rindexer service, update this variable accordingly if the value is changed in the rindexer Dockerfile).
 
   - Hit "Deploy" or press Shift+Enter.
 
@@ -96,7 +96,7 @@ Rindexer includes a built-in health monitoring server that provides comprehensiv
 The health server's lifecycle depends on which services you start:
 
 - **`rindexer start indexer` (with end_block set)**: Short-lived - dies when historical indexing completes
-- **`rindexer start indexer` (no end_block set)**: Long-lived - stays alive for continuous live indexing  
+- **`rindexer start indexer` (no end_block set)**: Long-lived - stays alive for continuous live indexing
 - **`rindexer start graphql`**: No health server - health monitoring not available
 - **`rindexer start all`**: Long-lived - follows the GraphQL server lifecycle
 
@@ -114,7 +114,7 @@ Example health response:
   "timestamp": "2024-01-15T10:30:00Z",
   "services": {
     "database": "healthy",
-    "indexing": "healthy", 
+    "indexing": "healthy",
     "sync": "healthy"
   },
   "indexing": {
@@ -141,16 +141,16 @@ The health endpoint returns different status types:
 For production deployments on Railway, you can:
 
 1. **Set up monitoring alerts** based on HTTP status codes:
-   - `200 OK` - System is healthy
-   - `503 Service Unavailable` - System has issues
+- `200 OK` - System is healthy
+- `503 Service Unavailable` - System has issues
 
 2. **Use Railway's built-in monitoring** to track health metrics
 
 3. **Set up automated alerts** when the health status changes to `unhealthy`
 
 4. **Access health endpoints** through your Railway domain:
-   ```
-   https://your-app.railway.app/health
+```
+https://your-app.railway.app/health
    ```
 
 ### Custom Health Port
@@ -159,5 +159,5 @@ You can configure the health server port in your `rindexer.yaml` file:
 
 ```yaml
 global:
-  health_override_port: 8081
+  health_port: 8081
 ```

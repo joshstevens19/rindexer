@@ -216,18 +216,14 @@ fn validate_manifest(
         }
     }
 
-    if let Some(global) = &manifest.global {
-        if let Some(contracts) = &global.contracts {
-            for contract in contracts {
-                match &contract.abi {
-                    StringOrArray::Single(_) => {}
-                    StringOrArray::Multiple(value) => {
-                        return Err(ValidateManifestError::GlobalAbiCanOnlyBeASingleString(
-                            format!(
-                                "Global ABI can only be a single string but found multiple: {value:?}"
-                            ),
-                        ));
-                    }
+    if let Some(contracts) = &manifest.global.contracts {
+        for contract in contracts {
+            match &contract.abi {
+                StringOrArray::Single(_) => {}
+                StringOrArray::Multiple(value) => {
+                    return Err(ValidateManifestError::GlobalAbiCanOnlyBeASingleString(format!(
+                        "Global ABI can only be a single string but found multiple: {value:?}"
+                    )));
                 }
             }
         }

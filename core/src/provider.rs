@@ -170,7 +170,8 @@ fn is_known_zk_evm_compatible_chain(chain: Chain) -> Option<bool> {
             | NamedChain::BaseSepolia
             | NamedChain::Sonic
             | NamedChain::Metis
-            | NamedChain::Celo => Some(false),
+            | NamedChain::Celo
+            | NamedChain::Plasma => Some(false),
 
             // Fallback for unknown chains
             _ => None,
