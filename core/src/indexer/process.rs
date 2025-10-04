@@ -5,13 +5,14 @@ use futures::StreamExt;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
 use tokio::{
-    sync::{Mutex, MutexGuard},
+    sync::Mutex,
     task::{JoinError, JoinHandle},
     time::Instant,
 };
 use tracing::{debug, error, info};
 
 use crate::helpers::is_relevant_block;
+use crate::provider::JsonRpcCachedProvider;
 use crate::{
     event::{
         callback_registry::EventResult, config::EventProcessingConfig, BuildRindexerFilterError,
@@ -167,17 +168,14 @@ async fn process_contract_events_with_dependencies(
     let mut stack = vec![dependencies.tree];
 
     let live_indexing_events =
-        Arc::new(Mutex::new(Vec::<(Arc<EventProcessingConfig>, RindexerEventFilter)>::new()));
+        Arc::new(Mutex::new(HashMap::<String, EventDependenciesIndexingConfig>::new()));
 
     while let Some(current_tree) = stack.pop() {
         let mut tasks = vec![];
 
         for dependency in &current_tree.contract_events {
-            let event_processing_config = Arc::clone(&events_processing_config);
-            let dependency = dependency.clone();
-            let live_indexing_events = Arc::clone(&live_indexing_events);
             // multi network can have many of the same event names so we need to get them all
-            let event_processing_configs = event_processing_config
+            let event_processing_configs = events_processing_config
                 .iter()
                 .filter(|e| {
                     // TODO - this is a hacky way to check if it's a filter event
@@ -197,9 +195,21 @@ async fn process_contract_events_with_dependencies(
                             .await?;
 
                         if event_processing_config.live_indexing() {
+                            let network_contract = event_processing_config.network_contract();
+
+                            let mut live_indexing_events = live_indexing_events.lock().await;
+                            let entry = live_indexing_events
+                                .entry(network_contract.network.clone())
+                                .or_insert_with(|| EventDependenciesIndexingConfig {
+                                    network: network_contract.network.clone(),
+                                    cached_provider: network_contract.cached_provider.clone(),
+                                    events: Vec::new(),
+                                });
+
                             let rindexer_event_filter =
                                 event_processing_config.to_event_filter()?;
-                            live_indexing_events.lock().await.push((
+
+                            entry.events.push((
                                 Arc::clone(&event_processing_config),
                                 rindexer_event_filter,
                             ));
@@ -240,26 +250,45 @@ async fn process_contract_events_with_dependencies(
         return Ok(());
     }
 
-    live_indexing_for_contract_event_dependencies(&live_indexing_events).await;
+    let live_indexing_tasks = live_indexing_events
+        .values()
+        .map(|config| tokio::spawn(live_indexing_for_contract_event_dependencies(config.clone())))
+        .collect::<Vec<_>>();
+
+    futures::future::try_join_all(live_indexing_tasks).await?;
 
     Ok(())
+}
+
+#[derive(Clone)]
+pub struct EventDependenciesIndexingConfig {
+    pub network: String,
+    pub cached_provider: Arc<JsonRpcCachedProvider>,
+    pub events: Vec<(Arc<EventProcessingConfig>, RindexerEventFilter)>,
 }
 
 // TODO - this is a similar to live_indexing_stream but has to be a bit different we should merge
 // code
 #[allow(clippy::type_complexity)]
-async fn live_indexing_for_contract_event_dependencies<'a>(
-    live_indexing_events: &'a MutexGuard<
-        'a,
-        Vec<(Arc<EventProcessingConfig>, RindexerEventFilter)>,
-    >,
+async fn live_indexing_for_contract_event_dependencies(
+    EventDependenciesIndexingConfig { cached_provider, events, network }: EventDependenciesIndexingConfig,
 ) {
+    debug!(
+        "Live indexing events on {} - {}",
+        network,
+        events
+            .iter()
+            .map(|(config, _)| format!("{}::{}", config.contract_name(), config.event_name()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
     let mut ordering_live_indexing_details_map: HashMap<
         B256,
         Arc<Mutex<OrderedLiveIndexingDetails>>,
-    > = HashMap::with_capacity(live_indexing_events.len());
+    > = HashMap::with_capacity(events.len());
 
-    for (config, event_filter) in live_indexing_events.iter() {
+    for (config, event_filter) in events.iter() {
         let mut filter = event_filter.clone();
         let last_seen_block_number = filter.to_block();
         let next_block_number = last_seen_block_number + U64::from(1);
@@ -288,10 +317,8 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
 
         let iteration_start = Instant::now();
 
-        // note: all events share the same network, so we can just get provider from the first event
-        let (config, _) = &live_indexing_events[0];
-        let provider = &config.network_contract().cached_provider;
-        let latest_block = match provider.get_latest_block().await {
+        // a consistent latest block number across all events in the batch is required to avoid race conditions
+        let latest_block = match cached_provider.get_latest_block().await {
             Ok(Some(block)) => block,
             Ok(None) => {
                 error!("Empty latest block returned from provider, will try again in 200ms");
@@ -313,7 +340,7 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
         };
         let latest_block_number = U64::from(latest_block.header.number);
 
-        for (config, _) in live_indexing_events.iter() {
+        for (config, _) in events.iter() {
             let mut ordering_live_indexing_details = ordering_live_indexing_details_map
                 .get(&config.id())
                 .expect("Failed to get ordering_live_indexing_details_map")
@@ -428,7 +455,7 @@ async fn live_indexing_for_contract_event_dependencies<'a>(
                 ordering_live_indexing_details.filter
             );
 
-            match provider.get_logs(&ordering_live_indexing_details.filter).await {
+            match cached_provider.get_logs(&ordering_live_indexing_details.filter).await {
                 Ok(logs) => {
                     debug!(
                         "{}::{} - {} - Live id {} topic_id {}, Logs: {} from {} to {}",
