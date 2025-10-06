@@ -62,8 +62,25 @@ pub struct RedisStreamStreamConfig {
     pub events: Vec<StreamEvent>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExchangeKindWrapper(pub ExchangeKind);
+
+impl Serialize for ExchangeKindWrapper {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let kind = match &self.0 {
+            ExchangeKind::Direct => "direct",
+            ExchangeKind::Fanout => "fanout",
+            ExchangeKind::Headers => "headers",
+            ExchangeKind::Topic => "topic",
+            ExchangeKind::Custom(s) => s,
+        };
+
+        serializer.serialize_str(&kind)
+    }
+}
 
 impl<'de> Deserialize<'de> for ExchangeKindWrapper {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
