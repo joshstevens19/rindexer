@@ -8,19 +8,30 @@
 
 ### Bug fixes
 -------------------------------------------------
-- fix: build break after alloy v2.10.0: remove NamedChain::PolygonZkEvm usage
-- fix: resolved race condition in event dependencies indexing that caused issues on networks with high block production rates
-- fix: support for the latest alloy
 
 ### Breaking changes
 -------------------------------------------------
-- `health_details` removed from rust project `StartDetails`. `rindexer.yaml` configuration is the source of truth for `port`
-- `health_override_port` in yaml `global` config renamed to `health_port`
 
 ## Releases
 -------------------------------------------------
 
 all release branches are deployed through `release/VERSION_NUMBER` branches
+
+# 0.27.1-beta - 6th October 2025
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.27.1
+
+- linux binary - https://github.com/joshstevens19/rindexer/releases/download/v0.27.1/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://github.com/joshstevens19/rindexer/releases/download/v0.27.1/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://github.com/joshstevens19/rindexer/releases/download/v0.27.1/rindexer_darwin-amd64.tar.gz
+- windows binary - https://github.com/joshstevens19/rindexer/releases/download/v0.27.1/rindexer_win32-amd64.zip
+
+### Bug fixes
+-------------------------------------------------
+- fix: build break after alloy v2.10.0: remove NamedChain::PolygonZkEvm usage
+- fix: resolved race condition in event dependencies indexing that caused issues on networks with high block production rates
+- fix: support for the latest alloy
+
 
 # 0.27.0-beta - 26th September 2025
 
