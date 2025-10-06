@@ -15,7 +15,7 @@ async fn main() {
     let mut enable_graphql = false;
     let mut enable_indexer = false;
 
-    let mut port: Option<u16> = None;
+    let mut graphql_port: Option<u16> = None;
 
     let args = args.iter();
 
@@ -32,7 +32,7 @@ async fn main() {
                 if let Some(value) = arg.split('=').nth(1) {
                     let overridden_port = value.parse::<u16>();
                     match overridden_port {
-                        Ok(overridden_port) => port = Some(overridden_port),
+                        Ok(overridden_port) => graphql_port = Some(overridden_port),
                         Err(_) => {
                             println!("Invalid port number");
                             return;
@@ -60,7 +60,7 @@ async fn main() {
                 },
                 graphql_details: GraphqlOverrideSettings {
                     enabled: enable_graphql,
-                    override_port: port,
+                    override_port: graphql_port,
                 },
             })
             .await;

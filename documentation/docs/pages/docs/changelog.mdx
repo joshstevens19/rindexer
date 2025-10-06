@@ -9,9 +9,13 @@
 ### Bug fixes
 -------------------------------------------------
 - fix: build break after alloy v2.10.0: remove NamedChain::PolygonZkEvm usage
+- fix: resolved race condition in event dependencies indexing that caused issues on networks with high block production rates
+- fix: support for the latest alloy
 
 ### Breaking changes
 -------------------------------------------------
+- `health_details` removed from rust project `StartDetails`. `rindexer.yaml` configuration is the source of truth for `port`
+- `health_override_port` in yaml `global` config renamed to `health_port`
 
 ## Releases
 -------------------------------------------------

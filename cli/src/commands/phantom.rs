@@ -286,14 +286,10 @@ fn handle_phantom_clone(project_path: &Path, args: &PhantomBaseArgs) -> Result<(
                         fs::create_dir(&clone_in)?;
                     }
 
-                    let etherscan_api_key = manifest
-                        .global
-                        .as_ref()
-                        .and_then(|global| global.etherscan_api_key.as_ref())
-                        .map_or_else(
-                            || BACKUP_ETHERSCAN_API_KEY.to_string(),
-                            |key| public_read_env_value(key).unwrap_or_else(|_| key.to_string()),
-                        );
+                    let etherscan_api_key = manifest.global.etherscan_api_key.as_ref().map_or_else(
+                        || BACKUP_ETHERSCAN_API_KEY.to_string(),
+                        |key| public_read_env_value(key).unwrap_or_else(|_| key.to_string()),
+                    );
 
                     forge_clone_contract(
                         &clone_in,

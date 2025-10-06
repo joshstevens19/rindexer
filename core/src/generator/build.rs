@@ -11,7 +11,7 @@ use super::{
     },
     networks_bindings::generate_networks_code,
 };
-
+use crate::manifest::contract::Contract;
 use crate::{
     generator::database_bindings::{generate_clickhouse_code, generate_postgres_code},
     generator::trace_bindings::{
@@ -29,7 +29,6 @@ use crate::{
     manifest::{
         contract::ParseAbiError,
         core::Manifest,
-        global::Global,
         network::Network,
         storage::Storage,
         yaml::{read_manifest, ReadManifestError, YAML_CONFIG_NAME},
@@ -67,7 +66,7 @@ pub enum WriteGlobalError {
 
 fn write_global(
     output: &Path,
-    global: &Global,
+    global_contracts: &[Contract],
     networks: &[Network],
 ) -> Result<(), WriteGlobalError> {
     let global_contract_file_path = generate_file_location(output, "global_contracts");
@@ -75,7 +74,7 @@ fn write_global(
         fs::remove_file(&global_contract_file_path)?;
     }
 
-    let context_code = generate_context_code(&global.contracts, networks);
+    let context_code = generate_context_code(global_contracts, networks);
     write_file(&global_contract_file_path, context_code.as_str())?;
 
     Ok(())
@@ -130,7 +129,6 @@ fn write_indexer_events(
             use alloy::sol;
 
             sol!(
-                #[derive(Debug)]
                 #[sol(rpc, all_derives)]
                 {contract_name},
                 r#"{contract_path}"#
@@ -180,7 +178,6 @@ fn write_indexer_events(
             use alloy::sol;
 
             sol!(
-                #[derive(Debug)]
                 #[sol(rpc, all_derives)]
                 {abigen_contract_name},
                 r#"{abi_string}"#
@@ -239,8 +236,8 @@ pub fn generate_rindexer_typings(
 
             write_networks(&output, &manifest.networks)?;
 
-            if let Some(global) = &manifest.global {
-                write_global(&output, global, &manifest.networks)?;
+            if let Some(global_contracts) = &manifest.global.contracts {
+                write_global(&output, global_contracts, &manifest.networks)?;
             }
 
             if manifest.storage.postgres_enabled() {
@@ -501,7 +498,7 @@ edition = "2021"
 [dependencies]
 rindexer = {{ git = "https://github.com/joshstevens19/rindexer", branch = "master" {reth_dep}}}
 tokio = {{ version = "1", features = ["full"] }}
-alloy = {{ version = "1.0.30", features = ["full"] }}
+alloy = {{ version = "1.0.37", features = ["full"] }}
 serde = {{ version = "1.0", features = ["derive"] }}
 "#,
         project_name = manifest.name,

@@ -11,9 +11,9 @@ start_all:
 start_graphql:
 	RUSTFLAGS='-C target-cpu=native' RUST_BACKTRACE='full' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/rindexer_demo_cli graphql
 playground_codegen_typings:
-	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path $(CURDIR)/../rindexer_rust_playground typings
+	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path $(CURDIR)/../examples/rindexer_rust_playground typings
 playground_codegen_indexer:
-	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path $(CURDIR)/../rindexer_rust_playground indexer
+	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path $(CURDIR)/../examples/rindexer_rust_playground indexer
 codegen_graphql:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path $(CURDIR)/../examples/rindexer_demo_cli graphql --endpoint  http://0.0.0.0:5005/graphql
 add_contract:

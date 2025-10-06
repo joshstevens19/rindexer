@@ -17,7 +17,7 @@ mockito = "1.7.0"
 
 [dependencies]
 # TODO: Trim down alloy features needed later, for now opt in to all.
-alloy = { version = "1.0.30", features = ["full", "json-rpc"] }
+alloy = { version = "1.0.37", features = ["full", "json-rpc"] }
 async-trait = "0.1.89"
 aws-config = "1.8.5"
 aws-sdk-sns = "1.82.0"
@@ -62,7 +62,7 @@ tokio-postgres = { version = "0.7", features = [
 ] }
 tokio-stream = "0.1.17"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = [
+tracing-subscriber = { version = "=0.3.19", features = [
     "env-filter",
     "fmt",
     "time",
@@ -83,17 +83,15 @@ axum = "0.7"
 # build
 jemallocator = { version = "0.6.0", package = "tikv-jemallocator", optional = true }
 jemalloc-ctl = { version = "0.6.0", package = "tikv-jemalloc-ctl", optional = true }
-foundry-compilers = "0.19.2"
-alloy-chains = "0.2.8"
+foundry-compilers = "0.19.4"
+alloy-chains = "0.2.14"
 
 # reth
-reth = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", optional = true }
-reth-exex = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", features = ["serde"], optional = true }
-reth-node-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", optional = true }
-reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", optional = true }
-reth-tracing = { git = "https://github.com/paradigmxyz/reth", tag = "v1.5.0", optional = true }
-async-std = "1.13.2"
-clickhouse = { version = "0.13.3" }
+reth = { git = "https://github.com/paradigmxyz/reth", tag = "v1.8.2", optional = true }
+reth-exex = { git = "https://github.com/paradigmxyz/reth", tag = "v1.8.2", features = ["serde"], optional = true }
+reth-node-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.8.2", optional = true }
+reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.8.2", optional = true }
+reth-tracing = { git = "https://github.com/paradigmxyz/reth", tag = "v1.8.2", optional = true }
 
 [target.'cfg(not(windows))'.dependencies]
 rdkafka = { version = "0.37.0", features = ["tokio"] }
