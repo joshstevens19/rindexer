@@ -1,11 +1,9 @@
-use std::{env, path::PathBuf};
-
+use self::rindexer_lib::indexers::all_handlers::register_all_handlers;
 use rindexer::{
-    GraphqlOverrideSettings, HealthOverrideSettings, IndexingDetails, StartDetails,
+    GraphqlOverrideSettings, IndexingDetails, StartDetails,
     event::callback_registry::TraceCallbackRegistry, manifest::yaml::read_manifest, start_rindexer,
 };
-
-use self::rindexer_lib::indexers::all_handlers::register_all_handlers;
+use std::{env, path::PathBuf};
 
 #[allow(clippy::all)]
 mod rindexer_lib;
@@ -65,7 +63,6 @@ async fn main() {
                     enabled: enable_graphql,
                     override_port: port,
                 },
-                health_details: HealthOverrideSettings { override_port: None },
             })
             .await;
 
