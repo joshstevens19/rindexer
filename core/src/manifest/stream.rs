@@ -78,7 +78,7 @@ impl Serialize for ExchangeKindWrapper {
             ExchangeKind::Custom(s) => s,
         };
 
-        serializer.serialize_str(&kind)
+        serializer.serialize_str(kind)
     }
 }
 
