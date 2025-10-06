@@ -235,7 +235,6 @@ fn generate_event_callback_structs_code(
     contract: &Contract,
     storage: &Storage,
 ) -> Result<Code, GenerateEventCallbackStructsError> {
-    let databases_enabled = storage.postgres_enabled();
     let csv_enabled = storage.csv_enabled();
     let is_filter = contract.is_filter();
 
@@ -335,8 +334,10 @@ fn generate_event_callback_structs_code(
             lower_name = info.name.to_lowercase(),
             struct_result = info.struct_result(),
             struct_data = info.struct_data(),
-            database = if databases_enabled {
+            database = if storage.postgres_enabled() {
                 "database: get_or_init_postgres_client().await,"
+            } else if storage.clickhouse_enabled() {
+                "database: get_or_init_clickhouse_client().await,"
             } else {
                 ""
             },
@@ -661,17 +662,30 @@ fn generate_event_bindings_code(
         "#,
         postgres_import = if storage.postgres_enabled() {
             "use super::super::super::super::typings::database::get_or_init_postgres_client;"
+        } else if storage.clickhouse_enabled() {
+            "use super::super::super::super::typings::database::get_or_init_clickhouse_client;"
         } else {
             ""
         },
-        postgres_client_import = if storage.postgres_enabled() { "PostgresClient," } else { "" },
+        postgres_client_import = if storage.postgres_enabled() {
+            "PostgresClient,"
+        } else if storage.clickhouse_enabled() {
+            "ClickhouseClient,"
+        } else {
+            ""
+        },
         csv_import = if storage.csv_enabled() { "AsyncCsvAppender," } else { "" },
         abigen_file_name = abigen_contract_file_name(contract),
         abigen_name = abigen_contract_name(contract),
         structs = generate_structs(project_path, contract)?,
         event_type_name = &event_type_name,
-        event_context_database =
-            if storage.postgres_enabled() { "pub database: Arc<PostgresClient>," } else { "" },
+        event_context_database = if storage.postgres_enabled() {
+            "pub database: Arc<PostgresClient>,"
+        } else if storage.clickhouse_enabled() {
+            "pub database: Arc<ClickhouseClient>,"
+        } else {
+            ""
+        },
         event_context_csv =
             if storage.csv_enabled() { "pub csv: Arc<AsyncCsvAppender>," } else { "" },
         event_callback_structs =
@@ -865,7 +879,8 @@ pub fn generate_event_handlers(
         let mut postgres_write = String::new();
 
         // this checks storage enabled as well
-        if !storage.postgres_disable_create_tables() {
+        if !storage.postgres_disable_create_tables() || !storage.clickhouse_disable_create_tables()
+        {
             let mut data = "vec![\nEthereumSqlTypeWrapper::Address(result.tx_information.address),"
                 .to_string();
 

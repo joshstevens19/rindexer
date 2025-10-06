@@ -90,7 +90,7 @@ impl ClickhouseClient {
         Ok(())
     }
 
-    pub async fn bulk_insert(
+    pub(crate) async fn bulk_insert_via_query(
         &self,
         table_name: &str,
         column_names: &[String],
@@ -111,5 +111,14 @@ impl ClickhouseClient {
         self.execute(&full_query).await?;
 
         Ok(bulk_data.len() as u64)
+    }
+
+    pub async fn insert_bulk(
+        &self,
+        table_name: &str,
+        column_names: &[String],
+        bulk_data: &[Vec<EthereumSqlTypeWrapper>],
+    ) -> Result<u64, ClickhouseError> {
+        self.bulk_insert_via_query(table_name, column_names, bulk_data).await
     }
 }

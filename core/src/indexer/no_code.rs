@@ -488,7 +488,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
 
             if let Some(clickhouse) = &params.clickhouse {
                 if let Err(e) = clickhouse
-                    .bulk_insert(
+                    .insert_bulk(
                         &params.sql_event_table_name,
                         &params.sql_column_names,
                         &sql_bulk_data,

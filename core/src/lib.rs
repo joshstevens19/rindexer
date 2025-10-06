@@ -13,6 +13,7 @@ pub use health::{start_health_server, HealthServer, HealthServerState, HealthSta
 
 mod database;
 pub use database::{
+    clickhouse::{client::ClickhouseClient, setup::setup_clickhouse},
     generate::drop_tables_for_indexer_sql,
     postgres::{
         client::{PostgresClient, ToSql},
