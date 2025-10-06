@@ -22,6 +22,7 @@ examples/*
 !examples/rindexer_native_transfers
 !examples/rindexer_factory_indexing
 !examples/rindexer_rust_playground
+!examples/rust_clickhouse
 documentation/node_modules
 documentation/dist
 documentation/docs/dist

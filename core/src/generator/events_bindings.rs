@@ -988,6 +988,13 @@ pub fn generate_event_handlers(
                         return Err(e.to_string());
                     }}
                 "#,
+                // table_name = if storage.postgres_enabled() {
+                //     generate_event_table_full_name(indexer_name, &contract.name, &event.name)
+                // } else if storage.clickhouse_enabled() {
+                //     camel_to_snake(&event.name) // clickhouse just puts in default database
+                // } else {
+                //     unreachable!()
+                // },
                 table_name =
                     generate_event_table_full_name(indexer_name, &contract.name, &event.name),
                 handler_name = event.name,

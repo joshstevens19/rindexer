@@ -1,0 +1,24 @@
+name: ClickhouseIndexer
+description: My first clickhouse rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: rust
+timestamps: true
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+    block_poll_frequency: rapid
+storage:
+  clickhouse:
+    enabled: true
+    drop_each_run: true
+contracts:
+  - name: RocketPool
+    details:
+      - network: ethereum
+        address: 0xae78736cd615f374d3085123a210448e74fc6393
+        start_block: '18600000'
+        end_block: '18718056'
+    abi: ./abis/RocketTokenRETH.abi.json
+    include_events:
+      - Transfer
