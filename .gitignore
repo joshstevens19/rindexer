@@ -18,6 +18,7 @@ cli/rindexer.yaml
 cli/.env
 examples/*
 !examples/rindexer_demo_cli
+!examples/rindexer_clickhouse
 !examples/rindexer_native_transfers
 !examples/rindexer_factory_indexing
 !examples/rindexer_rust_playground

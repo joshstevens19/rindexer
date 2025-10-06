@@ -379,7 +379,7 @@ impl Contract {
         }
     }
 
-    pub fn before_modify_name_if_filter_readonly(&self) -> Cow<'_, str> {
+    pub fn before_modify_name_if_filter_readonly(&'_ self) -> Cow<'_, str> {
         if self.is_filter() {
             Cow::Owned(self.contract_name_to_filter_name())
         } else {

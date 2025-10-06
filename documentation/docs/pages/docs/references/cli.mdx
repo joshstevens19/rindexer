@@ -66,7 +66,7 @@ Examples:
 
 ## start
 
-Start various services like indexers, GraphQL APIs or both together. This will start the services based on the rindexer.yaml file.
+Start various services like indexers, GraphQL APIs or both together. This will start the services based on the rindexer.yaml file. A health monitoring server is automatically started alongside these services.
 
 ```bash
 `rindexer start indexer` or `rindexer start graphql` or `rindexer start all`
@@ -85,7 +85,10 @@ Options:
 
   -h, --help
           Print help (see a summary with '-h')
-`rindexer start indexer` or `rindexer start graphql` or `rindexer start all`
+
+:::info
+The health monitoring server runs on port 8080 by default. You can configure it in your `rindexer.yaml` file using the `health_override_port` setting. See the [Running](/docs/start-building/running#health-monitoring) documentation for more details.
+:::
 ```
 
 ## add

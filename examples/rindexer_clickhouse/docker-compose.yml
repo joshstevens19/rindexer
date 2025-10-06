@@ -1,0 +1,24 @@
+volumes:
+  clickhouse_data:
+    driver: local
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.7
+    container_name: rindexer_clickhouse
+    restart: unless-stopped
+    shm_size: 1g
+    env_file:
+      - ./.env
+    volumes:
+      - clickhouse_data:/var
+    healthcheck:
+      test: [ "CMD-SHELL", "clickhouse-client --query='SELECT 1' || exit 1" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    ports:
+      - "8123:8123" # HTTP interface
+      - "9000:9000" # Native TCP interface
+      - "9009:9009" # Interserver communication

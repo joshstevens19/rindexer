@@ -13,6 +13,7 @@ use crate::{
         setup::{setup_postgres, SetupPostgresError},
     },
     event::callback_registry::{EventCallbackRegistry, TraceCallbackRegistry},
+    health::start_health_server,
     indexer::{
         no_code::{setup_no_code, SetupNoCodeError},
         start::{start_indexing, StartIndexingError},
@@ -32,10 +33,15 @@ pub struct IndexingDetails {
     pub trace_registry: TraceCallbackRegistry,
 }
 
+pub struct HealthOverrideSettings {
+    pub override_port: Option<u16>,
+}
+
 pub struct StartDetails<'a> {
     pub manifest_path: &'a PathBuf,
     pub indexing_details: Option<IndexingDetails>,
     pub graphql_details: GraphqlOverrideSettings,
+    pub health_details: HealthOverrideSettings,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -78,6 +84,9 @@ pub enum StartRindexerError {
     #[error("Shutdown handler failed with error: {0}")]
     ShutdownHandlerFailed(String),
 
+    #[error("Port conflict: {0}")]
+    PortConflict(String),
+
     #[error("Could not start Reth node: {0}")]
     CouldNotStartRethNode(#[from] eyre::Error),
 
@@ -96,6 +105,10 @@ async fn handle_shutdown(signal: &str) {
 }
 
 pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindexerError> {
+    info!(
+        "🚀 start_rindexer called with indexing_details.is_some() = {}",
+        details.indexing_details.is_some()
+    );
     let project_path = details.manifest_path.parent();
 
     match project_path {
@@ -153,6 +166,76 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     None
                 };
 
+            // Check for port conflicts between GraphQL and health servers
+            let graphql_port = if details.graphql_details.enabled {
+                let mut graphql_settings = manifest.graphql.clone().unwrap_or_default();
+                if let Some(override_port) = &details.graphql_details.override_port {
+                    graphql_settings.set_port(*override_port);
+                }
+                Some(graphql_settings.port)
+            } else {
+                None
+            };
+
+            let health_port = if details.indexing_details.is_some() {
+                let health_port = manifest
+                    .global
+                    .as_ref()
+                    .and_then(|g| g.health_override_port)
+                    .or(details.health_details.override_port)
+                    .unwrap_or(8080);
+                Some(health_port)
+            } else {
+                None
+            };
+
+            if let (Some(graphql_port), Some(health_port)) = (graphql_port, health_port) {
+                if graphql_port == health_port {
+                    return Err(StartRindexerError::PortConflict(format!(
+                        "GraphQL and health servers cannot use the same port: {}",
+                        graphql_port
+                    )));
+                }
+            }
+
+            // Health server follows the indexer lifecycle - only runs when indexer is running
+            let health_server_handle = if details.indexing_details.is_some() {
+                let manifest_clone = Arc::clone(&manifest);
+                let health_port = manifest_clone
+                    .global
+                    .as_ref()
+                    .and_then(|g| g.health_override_port)
+                    .or(details.health_details.override_port)
+                    .unwrap_or(8080);
+
+                Some(tokio::spawn(async move {
+                    info!("🩺 Starting health server on port {}", health_port);
+                    let postgres_client = if manifest_clone.storage.postgres_enabled() {
+                        match crate::indexer::start::initialize_database(&manifest_clone).await {
+                            Ok(Some(client)) => Some(client),
+                            Ok(None) => {
+                                error!("PostgreSQL is enabled but no database client was created for health server");
+                                None
+                            }
+                            Err(e) => {
+                                error!("Failed to initialize database for health server: {:?}", e);
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
+                    if let Err(e) =
+                        start_health_server(health_port, manifest_clone, postgres_client).await
+                    {
+                        error!("Failed to start health server: {:?}", e);
+                    }
+                }))
+            } else {
+                None
+            };
+
             if graphql_server_handle.is_none() && details.graphql_details.enabled {
                 error!("GraphQL can not run without postgres storage enabled, you have tried to run GraphQL which will now be skipped.");
             }
@@ -188,13 +271,8 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                 )
                 .await?;
 
-                // TODO if graphql isn't up yet, and we apply this on graphql wont refresh we need
-                // to handle this
-                info!(
-                    "Applying indexes if any back to the database as historic resync is complete"
-                );
+                // TODO if graphql isn't up yet, and we apply this on graphql wont refresh we need to handle this
                 PostgresIndexResult::apply_indexes(postgres_indexes).await?;
-                info!("Applied indexes back to database");
 
                 if !relationships.is_empty() {
                     // TODO if graphql isn't up yet, and we apply this on graphql wont refresh we
@@ -235,16 +313,72 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                 // }
             }
 
-            if let Some(handle) = graphql_server_handle {
-                handle.await.unwrap_or_else(|e| {
-                    error!("GraphQL server task failed: {:?}", e);
-                });
+            if graphql_server_handle.is_none() && !manifest.has_any_contracts_live_indexing() {
+                return Ok(());
             }
 
-            shutdown_handle.await.map_err(|e| {
-                error!("Shutdown handler failed: {:?}", e);
-                StartRindexerError::ShutdownHandlerFailed(e.to_string())
-            })?;
+            match (graphql_server_handle, health_server_handle, shutdown_handle) {
+                (Some(graphql_handle), Some(health_handle), shutdown_handle) => {
+                    info!("Waiting on GraphQL server, health server, and shutdown signal...");
+                    tokio::select! {
+                        result = graphql_handle => {
+                            if let Err(e) = result {
+                                error!("GraphQL server task failed: {:?}", e);
+                            }
+                        }
+                        result = health_handle => {
+                            if let Err(e) = result {
+                                error!("Health server task failed: {:?}", e);
+                            }
+                        }
+                        result = shutdown_handle => {
+                            result.map_err(|e| {
+                                error!("Shutdown handler failed: {:?}", e);
+                                StartRindexerError::ShutdownHandlerFailed(e.to_string())
+                            })?;
+                        }
+                    }
+                }
+                (Some(graphql_handle), None, shutdown_handle) => {
+                    info!("Waiting on GraphQL server and shutdown signal...");
+                    tokio::select! {
+                        result = graphql_handle => {
+                            if let Err(e) = result {
+                                error!("GraphQL server task failed: {:?}", e);
+                            }
+                        }
+                        result = shutdown_handle => {
+                            result.map_err(|e| {
+                                error!("Shutdown handler failed: {:?}", e);
+                                StartRindexerError::ShutdownHandlerFailed(e.to_string())
+                            })?;
+                        }
+                    }
+                }
+                (None, Some(health_handle), shutdown_handle) => {
+                    info!("Waiting on health server and shutdown signal...");
+                    tokio::select! {
+                        result = health_handle => {
+                            if let Err(e) = result {
+                                error!("Health server task failed: {:?}", e);
+                            }
+                        }
+                        result = shutdown_handle => {
+                            result.map_err(|e| {
+                                error!("Shutdown handler failed: {:?}", e);
+                                StartRindexerError::ShutdownHandlerFailed(e.to_string())
+                            })?;
+                        }
+                    }
+                }
+                (None, None, shutdown_handle) => {
+                    info!("Waiting for shutdown signal...");
+                    shutdown_handle.await.map_err(|e| {
+                        error!("Shutdown handler failed: {:?}", e);
+                        StartRindexerError::ShutdownHandlerFailed(e.to_string())
+                    })?;
+                }
+            }
 
             Ok(())
         }
@@ -260,6 +394,7 @@ pub struct StartNoCodeDetails<'a> {
     pub manifest_path: &'a PathBuf,
     pub indexing_details: IndexerNoCodeDetails,
     pub graphql_details: GraphqlOverrideSettings,
+    pub health_details: HealthOverrideSettings,
 }
 
 #[derive(thiserror::Error, Debug)]

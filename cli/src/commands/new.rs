@@ -154,17 +154,11 @@ pub fn handle_new_command(
     let repository = prompt_for_optional_input::<String>("Repository", None);
     let storage_choice = prompt_for_input_list(
         "What Storages To Enable? (graphql can only be supported if postgres is enabled)",
-        &[
-            "postgres".to_string(),
-            "clickhouse".to_string(),
-            "csv".to_string(),
-            "postgres and csv".to_string(),
-            "none".to_string(),
-        ],
+        &["postgres".to_string(), "clickhouse".to_string(), "csv".to_string(), "none".to_string()],
         None,
     );
     let mut postgres_docker_enable = false;
-    if storage_choice == "postgres" || storage_choice == "postgres and csv" {
+    if storage_choice == "postgres" {
         let postgres_docker = prompt_for_input_list(
             "Postgres Docker Support Out The Box?",
             &["yes".to_string(), "no".to_string()],
@@ -173,8 +167,8 @@ pub fn handle_new_command(
         postgres_docker_enable = postgres_docker == "yes";
     }
 
-    let postgres_enabled = storage_choice == "postgres" || storage_choice == "postgres and csv";
-    let csv_enabled = storage_choice == "csv" || storage_choice == "postgres and csv";
+    let postgres_enabled = storage_choice == "postgres";
+    let csv_enabled = storage_choice == "csv";
     let clickhouse_enabled = storage_choice == "clickhouse";
 
     // Handle Reth configuration if enabled
@@ -298,7 +292,7 @@ pub fn handle_new_command(
 
     // Write .env if required
     if clickhouse_enabled {
-        let env = "CLICKHOUSE_URL=\nCLICKHOUSE_USER=\nCLICKHOUSE_PASSWORD=";
+        let env = "CLICKHOUSE_URL=\nCLICKHOUSE_USER=\nCLICKHOUSE_PASSWORD=\nCLICKHOUSE_DB=";
 
         write_file(&project_path.join(".env"), env).map_err(|e| {
             print_error_message(&format!("Failed to write .env file: {}", e));

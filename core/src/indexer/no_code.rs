@@ -110,6 +110,7 @@ pub async fn setup_no_code(
                     manifest_path: details.manifest_path,
                     indexing_details: None,
                     graphql_details: details.graphql_details,
+                    health_details: details.health_details,
                 });
             }
 
@@ -171,6 +172,7 @@ pub async fn setup_no_code(
                 manifest_path: details.manifest_path,
                 indexing_details: Some(IndexingDetails { registry, trace_registry }),
                 graphql_details: details.graphql_details,
+                health_details: details.health_details,
             })
         }
         None => Err(SetupNoCodeError::NoProjectPathFoundUsingParentOfManifestPath),
@@ -467,10 +469,9 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                     // anything over 100 events is considered bulk and goes the COPY route
                     if bulk_data_length > 100 {
                         if let Err(e) = postgres
-                            .bulk_insert_via_copy(
+                            .insert_bulk(
                                 &params.sql_event_table_name,
                                 &params.sql_column_names,
-                                &sql_bulk_column_types,
                                 &sql_bulk_data,
                             )
                             .await
@@ -481,19 +482,6 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                             );
                             return Err(e.to_string());
                         }
-                    } else if let Err(e) = postgres
-                        .bulk_insert(
-                            &params.sql_event_table_name,
-                            &params.sql_column_names,
-                            &sql_bulk_data,
-                        )
-                        .await
-                    {
-                        error!(
-                            "{}::{} - Error performing bulk insert: {}",
-                            params.contract_name, params.event_info.name, e
-                        );
-                        return Err(e.to_string());
                     }
                 }
             }

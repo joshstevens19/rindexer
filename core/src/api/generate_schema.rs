@@ -1,23 +1,19 @@
 use std::path::Path;
 
+use crate::api::generate_operations::{generate_operations, GenerateOperationsError};
 use reqwest::Client;
 use serde_json::Value;
-
-use crate::api::generate_operations::{generate_operations, GenerateOperationsError};
 
 #[derive(thiserror::Error, Debug)]
 pub enum GenerateGraphqlQueriesError {
     #[error("Network request failed: {0}")]
     Network(#[from] reqwest::Error),
 
-    #[error("Failed to parse JSON: {0}")]
-    JsonParse(#[from] serde_json::Error),
-
-    #[error("File system error: {0}")]
-    Io(#[from] std::io::Error),
-
     #[error("No data in response")]
     NoData,
+
+    #[error("Invalid response. Make sure that {0} can receive GraphQL introspection query.")]
+    InvalidData(String),
 
     #[error("Failed to generate operations: {0}")]
     GenerateOperationsError(#[from] GenerateOperationsError),
@@ -89,7 +85,8 @@ pub async fn generate_graphql_queries(
         .send()
         .await?
         .json::<Value>()
-        .await?;
+        .await
+        .map_err(|_| GenerateGraphqlQueriesError::InvalidData(endpoint.to_string()))?;
 
     let schema = res["data"]["__schema"].clone();
     if schema.is_null() {

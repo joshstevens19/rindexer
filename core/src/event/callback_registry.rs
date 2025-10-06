@@ -9,6 +9,7 @@ use alloy::{
         Log,
     },
 };
+use chrono::Utc;
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
@@ -51,6 +52,17 @@ pub struct TxInformation {
     pub transaction_hash: TxHash,
     pub log_index: U256,
     pub transaction_index: u64,
+}
+
+impl TxInformation {
+    pub fn block_timestamp_to_datetime(&self) -> Option<chrono::DateTime<Utc>> {
+        if let Some(timestamp) = self.block_timestamp {
+            let timestamp = timestamp.to::<i64>();
+            Some(chrono::DateTime::from_timestamp(timestamp, 0).expect("invalid timestamp"))
+        } else {
+            None
+        }
+    }
 }
 
 /// Define a trait over any entity that has attached transaction information. This is very useful
