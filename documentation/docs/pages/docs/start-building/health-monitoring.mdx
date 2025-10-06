@@ -105,7 +105,7 @@ The sync health check verifies data synchronization status based on your storage
 - **`unhealthy`**: CSV directory exists but cannot be read
 - **`not_configured`**: CSV storage not configured
 
-**What it checks**: 
+**What it checks**:
 - **PostgreSQL**: Queries `information_schema.tables` to find user-created event tables
 - **CSV**: Checks if the CSV directory exists and contains CSV files
 
@@ -127,7 +127,7 @@ The health server's lifecycle depends on which services you start:
 - **Use case**: Historical data indexing that has a defined end point
 - **Health monitoring**: Only available during the indexing process
 
-### `rindexer start indexer` (no end_block set)  
+### `rindexer start indexer` (no end_block set)
 - **Long-lived**: Health server starts with the indexer and **stays alive for live indexing**
 - **Use case**: Continuous live indexing that runs indefinitely
 - **Health monitoring**: Available continuously while the indexer is running
@@ -146,11 +146,11 @@ The health server's lifecycle depends on which services you start:
 
 ### Custom Health Port
 
-You can configure the health server port using the `health_override_port` setting in your `rindexer.yaml` file:
+You can configure the health server port using the `health_port` setting in your `rindexer.yaml` file:
 
 ```yaml
 global:
-  health_override_port: 8081
+  health_port: 8081
 ```
 
 ## Production Monitoring
