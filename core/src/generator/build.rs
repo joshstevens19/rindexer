@@ -248,7 +248,7 @@ pub fn generate_rindexer_typings(
                     &generate_file_location(&output, "database"),
                     generate_postgres_code().as_str(),
                 )
-                .map_err(|e| WriteGlobalError::from(e))?;
+                .map_err(WriteGlobalError::from)?;
             }
 
             if manifest.storage.clickhouse_enabled() {
@@ -256,7 +256,7 @@ pub fn generate_rindexer_typings(
                     &generate_file_location(&output, "database"),
                     generate_clickhouse_code().as_str(),
                 )
-                .map_err(|e| WriteGlobalError::from(e))?;
+                .map_err(WriteGlobalError::from)?;
             }
 
             write_indexer_events(project_path, &output, manifest.to_indexer(), &manifest.storage)?;
