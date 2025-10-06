@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 rindexer = { path = "../../core" }
 tokio = { version = "1", features = ["full"] }
-alloy = { version = "1.0.30", features = ["full"] }
+alloy = { version = "1.0.37", features = ["full"] }
 
 [features]
 reth = ["rindexer/reth"]
