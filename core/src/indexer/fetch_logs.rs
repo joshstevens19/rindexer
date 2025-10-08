@@ -1,5 +1,6 @@
 use crate::blockclock::BlockClock;
 use crate::helpers::{halved_block_number, is_relevant_block};
+use crate::indexer::reorg::reorg_safe_distance_for_chain;
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
     indexer::{reorg::handle_chain_notification, IndexingEventProgressStatus},
@@ -488,14 +489,31 @@ async fn live_indexing_stream(
                         let from_block = current_filter.from_block();
                         if from_block > safe_block_number {
                             if reorg_safe_distance.is_zero() {
-                                error!(
-                                    "{}::{} - {} - LIVE INDEXING STEAM - RPC has gone back on latest block: rpc returned {}, last seen: {}",
-                                    info_log_name,
-                                    network,
-                                    IndexingEventProgressStatus::Live.log(),
-                                    latest_block_number,
-                                    from_block
-                                );
+                                let block_distance = latest_block_number - from_block;
+                                let is_outside_reorg_range = block_distance
+                                    > reorg_safe_distance_for_chain(cached_provider.chain.id());
+
+                                // it should never get under normal conditions outside the reorg range,
+                                // therefore, we log an error as means RCP state is not in sync with the blockchain
+                                if is_outside_reorg_range {
+                                    error!(
+                                        "{}::{} - {} - LIVE INDEXING STEAM - RPC has gone back on latest block: rpc returned {}, last seen: {}",
+                                        info_log_name,
+                                        network,
+                                        IndexingEventProgressStatus::Live.log(),
+                                        latest_block_number,
+                                        from_block
+                                    );
+                                } else {
+                                    info!(
+                                        "{}::{} - {} - LIVE INDEXING STEAM - RPC has gone back on latest block: rpc returned {}, last seen: {}",
+                                        info_log_name,
+                                        network,
+                                        IndexingEventProgressStatus::Live.log(),
+                                        latest_block_number,
+                                        from_block
+                                    );
+                                }
                             } else {
                                 info!(
                                     "{}::{} - {} - LIVE INDEXING STEAM - not in safe reorg block range yet block: {} > range: {}",

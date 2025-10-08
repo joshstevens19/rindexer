@@ -75,8 +75,6 @@ pub struct JsonRpcCachedProvider {
     client: RpcClient,
     cache: Mutex<Option<(Instant, Arc<AnyRpcBlock>)>>,
     is_zk_chain: bool,
-    #[allow(unused)]
-    chain_id: u64,
     pub chain: Chain,
     block_poll_frequency: Option<BlockPollFrequency>,
     address_filtering: Option<AddressFiltering>,
@@ -182,44 +180,6 @@ fn is_known_zk_evm_compatible_chain(chain: Chain) -> Option<bool> {
 }
 
 impl JsonRpcCachedProvider {
-    pub async fn new(
-        provider: RindexerProvider,
-        chain_id: u64,
-        client: RpcClient,
-        block_poll_frequency: Option<BlockPollFrequency>,
-        max_block_range: Option<U64>,
-        address_filtering: Option<AddressFiltering>,
-        chain_state_notification: Option<Sender<ChainStateNotification>>,
-    ) -> Self {
-        let chain = Chain::from(chain_id);
-        let is_zk_chain = match is_known_zk_evm_compatible_chain(chain) {
-            Some(zk) => zk,
-            None => {
-                let response: Result<String, _> =
-                    provider.raw_request("zks_L1ChainId".into(), [&()]).await;
-                let is_zk_chain = response.is_ok();
-                if is_zk_chain {
-                    debug!("Chain {} is zk chain. Trace indexing adjusted if enabled.", chain_id);
-                }
-
-                is_zk_chain
-            }
-        };
-
-        JsonRpcCachedProvider {
-            provider: Arc::new(provider),
-            cache: Mutex::new(None),
-            max_block_range,
-            client,
-            chain,
-            chain_id,
-            is_zk_chain,
-            block_poll_frequency,
-            address_filtering,
-            chain_state_notification,
-        }
-    }
-
     /// Return a duration for block poll caching based on user configuration.
     fn block_poll_frequency(&self) -> Duration {
         let Some(block_poll_frequency) = self.block_poll_frequency else {
@@ -402,7 +362,7 @@ impl JsonRpcCachedProvider {
         block_numbers: &[U64],
         include_txs: bool,
     ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
-        let chain = self.chain_id;
+        let chain_id = self.chain.id();
 
         if block_numbers.is_empty() {
             return Ok(Vec::new());
@@ -436,7 +396,7 @@ impl JsonRpcCachedProvider {
                         error!(
                             "Failed to send {} batch 'eth_getBlockByNumber' request for {}: {:?}",
                             request_futures.len(),
-                            chain,
+                            chain_id,
                             e
                         );
                         return Err(e);
@@ -596,12 +556,6 @@ impl JsonRpcCachedProvider {
         Ok(filtered_logs)
     }
 
-    #[tracing::instrument(skip_all)]
-    pub async fn get_chain_id(&self) -> Result<U256, ProviderError> {
-        let chain_id = self.provider.get_chain_id().await?;
-        Ok(U256::from(chain_id))
-    }
-
     pub fn get_inner_provider(&self) -> Arc<RindexerProvider> {
         Arc::clone(&self.provider)
     }
@@ -612,11 +566,11 @@ impl JsonRpcCachedProvider {
 }
 #[derive(Error, Debug)]
 pub enum RetryClientError {
-    #[error("IPC provider can't be created for {0}: {1}")]
-    IpcProviderCantBeCreated(String, String),
+    #[error("Provider can't be created for {0}: {1}")]
+    ProviderCantBeCreated(String, String),
 
-    #[error("http provider can't be created for {0}: {1}")]
-    HttpProviderCantBeCreated(String, String),
+    #[error("Invalid client chain id for {0}. Expected {1}, received {2}")]
+    InvalidClientChainId(String, u64, u64),
 
     #[error("Could not build client: {0}")]
     CouldNotBuildClient(#[from] ReqwestError),
@@ -639,7 +593,9 @@ pub async fn create_client(
     address_filtering: Option<AddressFiltering>,
     chain_state_notification: Option<Sender<ChainStateNotification>>,
 ) -> Result<Arc<JsonRpcCachedProvider>, RetryClientError> {
-    let (rpc_client, provider) = if rpc_url.ends_with(".ipc") {
+    let chain = Chain::from(chain_id);
+
+    let (client, provider) = if rpc_url.ends_with(".ipc") {
         let ipc = IpcConnect::new(rpc_url.to_string());
         let retry_layer =
             RetryBackoffLayer::new(5000, 1000, compute_units_per_second.unwrap_or(660));
@@ -650,7 +606,7 @@ pub async fn create_client(
 
         let provider =
             ProviderBuilder::new().network::<AnyNetwork>().connect_ipc(ipc).await.map_err(|e| {
-                RetryClientError::HttpProviderCantBeCreated(
+                RetryClientError::ProviderCantBeCreated(
                     rpc_url.to_string(),
                     format!("IPC connection failed: {e}"),
                 )
@@ -659,7 +615,7 @@ pub async fn create_client(
         (rpc_client, provider)
     } else {
         let rpc_url = Url::parse(rpc_url).map_err(|e| {
-            RetryClientError::HttpProviderCantBeCreated(rpc_url.to_string(), e.to_string())
+            RetryClientError::ProviderCantBeCreated(rpc_url.to_string(), e.to_string())
         })?;
 
         let client_with_auth = Client::builder()
@@ -679,18 +635,43 @@ pub async fn create_client(
         (rpc_client, provider)
     };
 
-    Ok(Arc::new(
-        JsonRpcCachedProvider::new(
-            provider,
+    let real_rpc_chain_id = provider.get_chain_id().await.map_err(|e| {
+        RetryClientError::CouldNotConnectClient(RpcError::LocalUsageError(Box::new(e)))
+    })?;
+
+    if real_rpc_chain_id != chain_id {
+        return Err(RetryClientError::InvalidClientChainId(
+            rpc_url.to_string(),
             chain_id,
-            rpc_client,
-            block_poll_frequency,
-            max_block_range,
-            address_filtering,
-            chain_state_notification,
-        )
-        .await,
-    ))
+            real_rpc_chain_id,
+        ));
+    }
+
+    let is_zk_chain = match is_known_zk_evm_compatible_chain(chain) {
+        Some(zk) => zk,
+        None => {
+            let response: Result<String, _> =
+                provider.raw_request("zks_L1ChainId".into(), [&()]).await;
+            let is_zk_chain = response.is_ok();
+            if is_zk_chain {
+                debug!("Chain {} is zk chain. Trace indexing adjusted if enabled.", chain_id);
+            }
+
+            is_zk_chain
+        }
+    };
+
+    Ok(Arc::new(JsonRpcCachedProvider {
+        provider: Arc::new(provider),
+        cache: Mutex::new(None),
+        max_block_range,
+        client,
+        chain,
+        is_zk_chain,
+        block_poll_frequency,
+        address_filtering,
+        chain_state_notification,
+    }))
 }
 
 pub async fn get_chain_id(rpc_url: &str) -> Result<U256, RpcError<TransportErrorKind>> {
@@ -790,7 +771,7 @@ mod tests {
         let result =
             create_client(rpc_url, 1, Some(660), None, None, HeaderMap::new(), None, None).await;
         assert!(result.is_err());
-        if let Err(RetryClientError::HttpProviderCantBeCreated(url, _)) = result {
+        if let Err(RetryClientError::ProviderCantBeCreated(url, _)) = result {
             assert_eq!(url, rpc_url);
         } else {
             panic!("Expected HttpProviderCantBeCreated error");
