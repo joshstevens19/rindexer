@@ -42,13 +42,26 @@ pub enum ProcessEventError {
     ProviderCallError(#[from] ProviderError),
 }
 
-pub async fn process_event(
+/// Processes an event that doesn't have dependencies.
+/// First processes historical logs, then starts live indexing if the event is configured for live indexing.
+pub async fn process_non_blocking_event(
     config: EventProcessingConfig,
-    block_until_indexed: bool,
 ) -> Result<(), ProcessEventError> {
-    debug!("{} - Processing events", config.info_log_name());
+    debug!("{} - Processing non blocking event", config.info_log_name());
 
-    process_event_logs(Arc::new(config), false, block_until_indexed).await?;
+    process_event_logs(Arc::new(config), false, false).await?;
+
+    Ok(())
+}
+
+/// Processes an event that doesn't have dependencies.
+/// First processes historical logs, then starts live indexing if the event is configured for live indexing.
+pub async fn process_blocking_event_historical_data(
+    config: Arc<EventProcessingConfig>,
+) -> Result<(), Box<ProviderError>> {
+    debug!("{} - Processing blocking event historical data", config.info_log_name());
+
+    process_event_logs(config, true, true).await?;
 
     Ok(())
 }
@@ -191,9 +204,10 @@ async fn process_contract_events_with_dependencies(
                 let task = tokio::spawn({
                     let live_indexing_events = Arc::clone(&live_indexing_events);
                     async move {
-                        // forces live indexing off as it has to handle it a bit differently
-                        process_event_logs(Arc::clone(&event_processing_config), true, true)
-                            .await?;
+                        process_blocking_event_historical_data(Arc::clone(
+                            &event_processing_config,
+                        ))
+                        .await?;
 
                         if event_processing_config.live_indexing() {
                             let network_contract = event_processing_config.network_contract();
@@ -275,7 +289,7 @@ async fn live_indexing_for_contract_event_dependencies(
     EventDependenciesIndexingConfig { cached_provider, events, network }: EventDependenciesIndexingConfig,
 ) {
     debug!(
-        "Live indexing events on {} - {}",
+        "Live indexing events on {} in order: {}",
         network,
         events
             .iter()
@@ -359,12 +373,11 @@ async fn live_indexing_for_contract_event_dependencies(
                     >= log_no_new_block_interval
                 {
                     info!(
-                                        "{}::{} - {} - No new blocks published in the last 5 minutes - latest block number {}",
-                                        &config.info_log_name(),
-                                        &config.network_contract().network,
-                                        IndexingEventProgressStatus::Live.log(),
-                                        latest_block_number
-                                    );
+                        "{} - {} - No new blocks published in the last 5 minutes - latest block number {}",
+                        &config.info_log_name(),
+                        IndexingEventProgressStatus::Live.log(),
+                        latest_block_number
+                    );
                     ordering_live_indexing_details.last_no_new_block_log_time = Instant::now();
                     *ordering_live_indexing_details_map
                         .get(&config.id())
@@ -396,18 +409,16 @@ async fn live_indexing_for_contract_event_dependencies(
                     // therefore, we log an error as means RCP state is not in sync with the blockchain
                     if is_outside_reorg_range {
                         error!(
-                            "{}::{} - {} - RPC has gone back on latest block: rpc returned {}, last seen: {}",
+                            "{} - {} - RPC has gone back on latest block: rpc returned {}, last seen: {}",
                             &config.info_log_name(),
-                            &config.network_contract().network,
                             IndexingEventProgressStatus::Live.log(),
                             latest_block_number,
                             from_block
                         );
                     } else {
                         info!(
-                            "{}::{} - {} - RPC has gone back on latest block: rpc returned {}, last seen: {}",
+                            "{} - {} - RPC has gone back on latest block: rpc returned {}, last seen: {}",
                             &config.info_log_name(),
-                            &config.network_contract().network,
                             IndexingEventProgressStatus::Live.log(),
                             latest_block_number,
                             from_block
@@ -417,9 +428,8 @@ async fn live_indexing_for_contract_event_dependencies(
                     continue;
                 } else {
                     info!(
-                        "{}::{} - {} - not in safe reorg block range yet block: {} > range: {}",
+                        "{} - {} - not in safe reorg block range yet block: {} > range: {}",
                         &config.info_log_name(),
-                        &config.network_contract().network,
                         IndexingEventProgressStatus::Live.log(),
                         from_block,
                         safe_block_number
@@ -438,16 +448,14 @@ async fn live_indexing_for_contract_event_dependencies(
                 )
             {
                 debug!(
-                    "{}::{} - {} - Skipping block {} as it's not relevant",
+                    "{} - {} - Skipping block {} as it's not relevant",
                     &config.info_log_name(),
-                    &config.network_contract().network,
                     IndexingEventProgressStatus::Live.log(),
                     from_block
                 );
                 debug!(
-                    "{}::{} - {} - Did not need to hit RPC as no events in {} block - LogsBloom for block checked",
+                    "{} - {} - Did not need to hit RPC as no events in {} block - LogsBloom for block checked",
                     &config.info_log_name(),
-                    &config.network_contract().network,
                     IndexingEventProgressStatus::Live.log(),
                     from_block
                 );
@@ -477,9 +485,8 @@ async fn live_indexing_for_contract_event_dependencies(
             match cached_provider.get_logs(&ordering_live_indexing_details.filter).await {
                 Ok(logs) => {
                     debug!(
-                        "{}::{} - {} - Live id {} topic_id {}, Logs: {} from {} to {}",
+                        "{} - {} - Live id {} topic_id {}, Logs: {} from {} to {}",
                         &config.info_log_name(),
-                        &config.network_contract().network,
                         IndexingEventProgressStatus::Live.log(),
                         &config.id(),
                         &config.topic_id(),
@@ -489,9 +496,8 @@ async fn live_indexing_for_contract_event_dependencies(
                     );
 
                     debug!(
-                        "{}::{} - {} - Fetched {} event logs - blocks: {} - {}",
+                        "{} - {} - Fetched {} event logs - blocks: {} - {}",
                         &config.info_log_name(),
-                        &config.network_contract().network,
                         IndexingEventProgressStatus::Live.log(),
                         logs.len(),
                         from_block,
@@ -516,12 +522,11 @@ async fn live_indexing_for_contract_event_dependencies(
                             let complete = task.await;
                             if let Err(e) = complete {
                                 error!(
-                                                        "{}::{} - {} - Error indexing task: {} - will try again in 200ms",
-                                                        &config.info_log_name(),
-                                                        &config.network_contract().network,
-                                                        IndexingEventProgressStatus::Live.log(),
-                                                        e
-                                                    );
+                                    "{} - {} - Error indexing task: {} - will try again in 200ms",
+                                    &config.info_log_name(),
+                                    IndexingEventProgressStatus::Live.log(),
+                                    e
+                                );
                                 break;
                             }
                             ordering_live_indexing_details.last_seen_block_number = to_block;
@@ -531,9 +536,8 @@ async fn live_indexing_for_contract_event_dependencies(
                                         .filter
                                         .set_from_block(to_block + U64::from(1));
                                 debug!(
-                                    "{}::{} - {} - No events found between blocks {} - {}",
+                                    "{} - {} - No events found between blocks {} - {}",
                                     &config.info_log_name(),
-                                    &config.network_contract().network,
                                     IndexingEventProgressStatus::Live.log(),
                                     from_block,
                                     to_block
@@ -557,9 +561,8 @@ async fn live_indexing_for_contract_event_dependencies(
                         }
                         Err(err) => {
                             error!(
-                                "{}::{} - {} - Error fetching logs: {} - will try again in 200ms",
+                                "{} - {} - Error fetching logs: {} - will try again in 200ms",
                                 &config.info_log_name(),
-                                &config.network_contract().network,
                                 IndexingEventProgressStatus::Live.log(),
                                 err
                             );
@@ -569,9 +572,8 @@ async fn live_indexing_for_contract_event_dependencies(
                 }
                 Err(err) => {
                     error!(
-                        "{}::{} - {} - Error fetching logs: {} - will try again in 200ms",
+                        "{} - {} - Error fetching logs: {} - will try again in 200ms",
                         &config.info_log_name(),
-                        &config.network_contract().network,
                         IndexingEventProgressStatus::Live.log(),
                         err
                     );
@@ -621,7 +623,7 @@ async fn handle_logs_result(
 ) -> Result<JoinHandle<()>, Box<dyn std::error::Error + Send>> {
     match result {
         Ok(result) => {
-            debug!("Processing logs {} - length {}", config.event_name(), result.logs.len());
+            debug!("{} - Processing {} logs", config.info_log_name(), result.logs.len());
 
             let fn_data = result
                 .logs

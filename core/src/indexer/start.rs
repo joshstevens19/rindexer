@@ -25,7 +25,7 @@ use crate::{
         last_synced::{get_last_synced_block_number, SyncConfig},
         native_transfer::{native_transfer_block_fetch, NATIVE_TRANSFER_CONTRACT_NAME},
         process::{
-            process_contracts_events_with_dependencies, process_event,
+            process_contracts_events_with_dependencies, process_non_blocking_event,
             ProcessContractsEventsWithDependenciesError, ProcessEventError,
         },
         progress::IndexingEventsProgressState,
@@ -451,7 +451,6 @@ pub async fn start_indexing_contract_events(
                 project_path: project_path.clone(),
                 indexer_name: event.indexer_name.clone(),
                 contract_name: event.contract.name.clone(),
-                info_log_name: event.info_log_name(),
                 topic_id: event.topic_id,
                 event_name: event.event_name.clone(),
                 network_contract: Arc::new(network_contract.clone()),
@@ -505,7 +504,7 @@ pub async fn start_indexing_contract_events(
                 &dependencies,
             );
         } else {
-            let process_event = tokio::spawn(process_event(event_processing_config, false));
+            let process_event = tokio::spawn(process_non_blocking_event(event_processing_config));
             non_blocking_process_events.push(process_event);
         }
     }

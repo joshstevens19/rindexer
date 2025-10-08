@@ -73,8 +73,12 @@ impl tracing_subscriber::fmt::time::FormatTime for CustomTimer {
     }
 }
 
-pub fn setup_logger(log_level: LevelFilter) {
-    let filter = EnvFilter::from_default_env().add_directive(log_level.into());
+const LOG_LEVEL_ENV: &str = "RINDEXER_LOG";
+
+pub fn setup_logger(default_log_level: LevelFilter) {
+    let filter = EnvFilter::try_from_env(LOG_LEVEL_ENV).unwrap_or(
+        EnvFilter::builder().with_default_directive(default_log_level.into()).parse_lossy(""),
+    );
 
     let format = Format::default().with_timer(CustomTimer).with_level(true).with_target(false);
 
