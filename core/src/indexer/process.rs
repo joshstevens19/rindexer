@@ -44,6 +44,7 @@ pub enum ProcessEventError {
 
 /// Processes an event that doesn't have dependencies.
 /// First processes historical logs, then starts live indexing if the event is configured for live indexing.
+/// This function returns immediately without waiting for the indexing to complete.
 pub async fn process_non_blocking_event(
     config: EventProcessingConfig,
 ) -> Result<(), ProcessEventError> {
@@ -54,8 +55,8 @@ pub async fn process_non_blocking_event(
     Ok(())
 }
 
-/// Processes an event that doesn't have dependencies.
-/// First processes historical logs, then starts live indexing if the event is configured for live indexing.
+/// Processes historical logs for a blocking event that has dependencies.
+/// This function waits for the indexing to complete before returning.
 pub async fn process_blocking_event_historical_data(
     config: Arc<EventProcessingConfig>,
 ) -> Result<(), Box<ProviderError>> {
