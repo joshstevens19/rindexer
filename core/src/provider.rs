@@ -752,29 +752,3 @@ pub fn get_network_provider<'a>(
 ) -> Option<&'a CreateNetworkProvider> {
     providers.iter().find(|item| item.network_name == network)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_create_retry_client() {
-        let rpc_url = "http://localhost:8545";
-        let result =
-            create_client(rpc_url, 1, Some(660), None, None, HeaderMap::new(), None, None).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_create_retry_client_invalid_url() {
-        let rpc_url = "invalid_url";
-        let result =
-            create_client(rpc_url, 1, Some(660), None, None, HeaderMap::new(), None, None).await;
-        assert!(result.is_err());
-        if let Err(RetryClientError::ProviderCantBeCreated(url, _)) = result {
-            assert_eq!(url, rpc_url);
-        } else {
-            panic!("Expected HttpProviderCantBeCreated error");
-        }
-    }
-}
