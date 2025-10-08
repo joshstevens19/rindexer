@@ -563,6 +563,29 @@ impl JsonRpcCachedProvider {
     pub fn get_chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
         self.chain_state_notification.clone()
     }
+
+    #[cfg(test)]
+    pub fn mock(chain_id: u64) -> Arc<Self> {
+        let chain = Chain::from(chain_id);
+        let client = RpcClient::new_http(
+            Url::parse("http://localhost:8545").expect("mock URL must be valid"),
+        );
+        let provider =
+            ProviderBuilder::new().network::<AnyNetwork>().connect_client(client.clone());
+        let is_zk_chain = is_known_zk_evm_compatible_chain(chain).unwrap_or(false);
+
+        Arc::new(Self {
+            provider: Arc::new(provider),
+            client,
+            cache: Mutex::new(None),
+            is_zk_chain,
+            chain,
+            block_poll_frequency: None,
+            address_filtering: None,
+            max_block_range: None,
+            chain_state_notification: None,
+        })
+    }
 }
 #[derive(Error, Debug)]
 pub enum RetryClientError {
