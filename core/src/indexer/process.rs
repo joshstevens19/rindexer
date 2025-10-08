@@ -9,11 +9,10 @@ use tokio::{
     task::{JoinError, JoinHandle},
     time::Instant,
 };
-use tracing::{debug, error, event, info, Level};
+use tracing::{debug, error, info};
 
 use crate::helpers::is_relevant_block;
 use crate::indexer::reorg::reorg_safe_distance_for_chain;
-use crate::indexer::start::StartIndexingError;
 use crate::provider::JsonRpcCachedProvider;
 use crate::{
     event::{

@@ -1,4 +1,4 @@
-use alloy::primitives::{U256, U64};
+use alloy::primitives::U64;
 use tracing::{debug, warn};
 
 use crate::notifications::ChainStateNotification;
