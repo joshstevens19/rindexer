@@ -129,6 +129,10 @@ postgresql:
   enabled: false
 ```
 
+:::info
+If you are using AWS RDS for your PostgreSQL database with `sslmode=require`, you will need to include the RDS certificates in your connection configuration. You can find the necessary certificates in the [AWS RDS SSL documentation](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.SSL.html).
+:::
+
 ### 2.3. Install the Helm Chart
 
 ```bash
