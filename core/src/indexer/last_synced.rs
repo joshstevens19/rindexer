@@ -74,7 +74,7 @@ fn build_last_synced_block_number_file(
 
 pub struct SyncConfig<'a> {
     pub project_path: &'a Path,
-    pub database: &'a Option<Arc<PostgresClient>>,
+    pub postgres: &'a Option<Arc<PostgresClient>>,
     pub clickhouse: &'a Option<Arc<ClickhouseClient>>,
     pub csv_details: &'a Option<CsvDetails>,
     pub stream_details: &'a Option<&'a StreamsConfig>,
@@ -87,7 +87,7 @@ pub struct SyncConfig<'a> {
 
 pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64> {
     // Check CSV file for last seen block as no database enabled
-    if config.database.is_none() && config.contract_csv_enabled {
+    if config.postgres.is_none() && config.contract_csv_enabled {
         if let Some(csv_details) = config.csv_details {
             return if let Ok(result) = get_last_synced_block_number_file(
                 &get_full_path(config.project_path, &csv_details.path).unwrap_or_else(|_| {
@@ -114,7 +114,7 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
     }
 
     // Then check streams if no csv or database to find out last synced block
-    if config.database.is_none() && !config.contract_csv_enabled && config.stream_details.is_some()
+    if config.postgres.is_none() && !config.contract_csv_enabled && config.stream_details.is_some()
     {
         let stream_details = config.stream_details.as_ref().unwrap();
 
@@ -149,7 +149,7 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
     }
 
     // Query database for last synced block
-    if let Some(database) = config.database {
+    if let Some(postgres) = config.postgres {
         let schema =
             generate_indexer_contract_schema_name(config.indexer_name, config.contract_name);
         let table_name = generate_internal_event_table_name(&schema, config.event_name);
@@ -157,7 +157,7 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
             "SELECT last_synced_block FROM rindexer_internal.{table_name} WHERE network = $1"
         );
 
-        return match database.query_one(&query, &[&config.network]).await {
+        return match postgres.query_one(&query, &[&config.network]).await {
             Ok(row) => {
                 let result: Decimal = row.get("last_synced_block");
                 let parsed =
@@ -289,7 +289,7 @@ pub async fn update_progress_and_last_synced_task(
         .map(|b| b.header.number)
         .unwrap_or(0);
 
-    if let Some(database) = &config.database() {
+    if let Some(postgres) = &config.postgres() {
         let schema =
             generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
         let table_name = generate_internal_event_table_name(&schema, &config.event_name());
@@ -299,7 +299,7 @@ pub async fn update_progress_and_last_synced_task(
              UPDATE rindexer_internal.latest_block SET block = {latest} WHERE network = '{network}' AND {latest} > block;"
         );
 
-        let result = database.batch_execute(&query).await;
+        let result = postgres.batch_execute(&query).await;
 
         if let Err(e) = result {
             error!("Error updating db last synced block: {:?}", e);
@@ -382,7 +382,7 @@ pub async fn evm_trace_update_progress_and_last_synced_task(
         _ => {}
     }
 
-    if let Some(database) = &config.database {
+    if let Some(postgres) = &config.postgres {
         // Use the native_transfer table for all trace events since they share the same pipeline
         let schema =
             generate_indexer_contract_schema_name(&config.indexer_name, &config.contract_name);
@@ -390,7 +390,7 @@ pub async fn evm_trace_update_progress_and_last_synced_task(
         let query = format!(
                 "UPDATE rindexer_internal.{table_name} SET last_synced_block = $1 WHERE network = $2 AND $1 > last_synced_block"
             );
-        let result = database
+        let result = postgres
             .execute(&query, &[&EthereumSqlTypeWrapper::U64(to_block.to()), &config.network])
             .await;
 

@@ -8,9 +8,10 @@ use crate::event::config::FactoryEventProcessingConfig;
 use crate::helpers::{get_full_path, parse_log};
 use crate::manifest::storage::CsvDetails;
 use crate::simple_file_formatters::csv::AsyncCsvReader;
-use crate::{AsyncCsvAppender, EthereumSqlTypeWrapper, PostgresClient};
+use crate::{AsyncCsvAppender, ClickhouseClient, EthereumSqlTypeWrapper, PostgresClient};
 use alloy::primitives::Address;
 use mini_moka::sync::Cache;
+use serde::Deserialize;
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
@@ -137,7 +138,7 @@ pub async fn update_known_factory_deployed_addresses(
     };
     invalidate_known_factory_deployed_addresses_cache(&key);
 
-    if let Some(database) = &config.database {
+    if let Some(postgres) = &config.postgres {
         let params = GenerateInternalFactoryEventTableNameParams {
             indexer_name: config.indexer_name.clone(),
             contract_name: config.contract_name.clone(),
@@ -146,7 +147,7 @@ pub async fn update_known_factory_deployed_addresses(
         };
         let table_name = generate_internal_factory_event_table_name(&params);
 
-        database
+        postgres
             .insert_bulk(
                 &format!("rindexer_internal.{table_name}"),
                 &[
@@ -218,6 +219,9 @@ pub enum GetKnownFactoryDeployedAddressesError {
 
     #[error("Could not read addresses from postgres: {0}")]
     PostgresRead(#[from] PostgresError),
+
+    #[error("Could not read addresses from clickhouse: {0}")]
+    ClickhouseRead(#[from] clickhouse::error::Error),
 }
 
 #[derive(Clone)]
@@ -228,8 +232,8 @@ pub struct GetKnownFactoryDeployedAddressesParams {
     pub event_name: String,
     pub input_names: Vec<String>,
     pub network: String,
-
-    pub database: Option<Arc<PostgresClient>>,
+    pub postgres: Option<Arc<PostgresClient>>,
+    pub clickhouse: Option<Arc<ClickhouseClient>>,
     pub csv_details: Option<CsvDetails>,
 }
 
@@ -248,7 +252,7 @@ pub async fn get_known_factory_deployed_addresses(
         return Ok(Some(cache));
     }
 
-    if let Some(database) = &params.database {
+    if let Some(database) = &params.postgres {
         let table_params = GenerateInternalFactoryEventTableNameParams {
             indexer_name: params.indexer_name.clone(),
             contract_name: params.contract_name.clone(),
@@ -267,6 +271,43 @@ pub async fn get_known_factory_deployed_addresses(
             .into_iter()
             .map(|row| {
                 Address::from_str(row.get("factory_deployed_address"))
+                    .expect("Factory deployed address not a valid ethereum address")
+            })
+            .collect::<HashSet<_>>();
+
+        set_known_factory_deployed_addresses_cache(key, values.clone());
+
+        return Ok(Some(values));
+    }
+
+    if let Some(database) = &params.clickhouse {
+        let table_params = GenerateInternalFactoryEventTableNameParams {
+            indexer_name: params.indexer_name.clone(),
+            contract_name: params.contract_name.clone(),
+            event_name: params.event_name.clone(),
+            input_names: params.input_names.clone(),
+        };
+        let table_name = generate_internal_factory_event_table_name(&table_params);
+        let query = format!(
+            r#"
+            SELECT factory_deployed_address 
+            FROM rindexer_internal.{table_name} FINAL 
+            WHERE network = ?
+            "#
+        );
+
+        #[derive(clickhouse::Row, Deserialize)]
+        struct FactoryDeployedAddresses {
+            factory_deployed_address: String,
+        }
+
+        let result: Vec<FactoryDeployedAddresses> =
+            database.conn.query(&query).bind(params.network.clone()).fetch_all().await?;
+
+        let values = result
+            .into_iter()
+            .map(|row| {
+                Address::from_str(row.factory_deployed_address.as_str())
                     .expect("Factory deployed address not a valid ethereum address")
             })
             .collect::<HashSet<_>>();

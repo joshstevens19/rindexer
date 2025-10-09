@@ -46,8 +46,12 @@ pub async fn setup_clickhouse(
         info!("Creating tables for {}", manifest.name);
     }
 
-    let sql = generate_tables_for_indexer_clickhouse(project_path, &manifest.to_indexer(), false)
-        .map_err(SetupClickhouseError::ClickhouseTableGenerationError)?;
+    let sql = generate_tables_for_indexer_clickhouse(
+        project_path,
+        &manifest.to_indexer(),
+        disable_event_tables,
+    )
+    .map_err(SetupClickhouseError::ClickhouseTableGenerationError)?;
 
     client.execute_batch(sql.as_str()).await?;
 

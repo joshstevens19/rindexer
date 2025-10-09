@@ -38,7 +38,7 @@ pub struct ContractEventProcessingConfig {
     pub end_block: U64,
     pub registry: Arc<EventCallbackRegistry>,
     pub progress: Arc<Mutex<IndexingEventsProgressState>>,
-    pub database: Option<Arc<PostgresClient>>,
+    pub postgres: Option<Arc<PostgresClient>>,
     pub clickhouse: Option<Arc<ClickhouseClient>>,
     pub csv_details: Option<CsvDetails>,
     pub stream_last_synced_block_file_path: Option<String>,
@@ -79,7 +79,8 @@ impl ContractEventProcessingConfig {
                     network: self.network_contract.network.clone(),
                     topic_id: self.topic_id,
                     topics: index_filter.cloned().map(Into::into).unwrap_or_default(),
-                    database: self.database.clone(),
+                    clickhouse: self.clickhouse.clone(),
+                    postgres: self.postgres.clone(),
                     csv_details: self.csv_details.clone(),
 
                     current_block: self.start_block,
@@ -109,7 +110,7 @@ pub struct FactoryEventProcessingConfig {
     pub end_block: U64,
     pub registry: Arc<EventCallbackRegistry>,
     pub progress: Arc<Mutex<IndexingEventsProgressState>>,
-    pub database: Option<Arc<PostgresClient>>,
+    pub postgres: Option<Arc<PostgresClient>>,
     pub clickhouse: Option<Arc<ClickhouseClient>>,
     pub csv_details: Option<CsvDetails>,
     pub stream_last_synced_block_file_path: Option<String>,
@@ -278,10 +279,10 @@ impl EventProcessingConfig {
         }
     }
 
-    pub fn database(&self) -> Option<Arc<PostgresClient>> {
+    pub fn postgres(&self) -> Option<Arc<PostgresClient>> {
         match self {
-            Self::ContractEventProcessing(config) => config.database.clone(),
-            Self::FactoryEventProcessing(config) => config.database.clone(),
+            Self::ContractEventProcessing(config) => config.postgres.clone(),
+            Self::FactoryEventProcessing(config) => config.postgres.clone(),
         }
     }
 
@@ -343,7 +344,7 @@ pub struct TraceProcessingConfig {
     pub event_name: String,
     pub network: String,
     pub progress: Arc<Mutex<IndexingEventsProgressState>>,
-    pub database: Option<Arc<PostgresClient>>,
+    pub postgres: Option<Arc<PostgresClient>>,
     pub csv_details: Option<CsvDetails>,
     pub registry: Arc<TraceCallbackRegistry>,
     pub method: TraceProcessingMethod,

@@ -300,6 +300,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_conflicting_storage() {
+        let yaml = r#"
+        name: test
+        project_type: no-code
+        networks: []
+        contracts: []
+        storage:
+          clickhouse:
+            enabled: true
+          postgres:
+            enabled: true
+        "#;
+
+        let manifest: Result<Manifest, _> = serde_yaml::from_str(yaml);
+
+        assert_eq!(manifest.is_err(), true);
+        assert!(manifest
+            .unwrap_err()
+            .to_string()
+            .contains("cannot specify both `postgres` and `clickhouse` at the same time"));
+    }
+
+    #[test]
+    fn test_clickhouse_storage() {
+        let yaml = r#"
+        name: test
+        project_type: no-code
+        networks: []
+        contracts: []
+        storage:
+          clickhouse:
+            enabled: true
+        "#;
+
+        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+
+        assert!(manifest.storage.clickhouse.is_some());
+    }
+
+    #[test]
     fn test_native_transfers_complex() {
         let yaml = r#"
         name: test

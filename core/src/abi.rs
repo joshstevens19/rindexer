@@ -7,11 +7,11 @@ use alloy::{
 use serde::{Deserialize, Serialize};
 
 use crate::database::clickhouse::generate::solidity_type_to_clickhouse_type;
+use crate::database::sql_type_wrapper::{
+    solidity_type_to_ethereum_sql_type_wrapper, EthereumSqlTypeWrapper,
+};
 use crate::{
-    database::postgres::{
-        generate::solidity_type_to_db_type,
-        sql_type_wrapper::{solidity_type_to_ethereum_sql_type_wrapper, EthereumSqlTypeWrapper},
-    },
+    database::postgres::generate::solidity_type_to_db_type,
     helpers::camel_to_snake,
     manifest::contract::{Contract, ParseAbiError},
 };

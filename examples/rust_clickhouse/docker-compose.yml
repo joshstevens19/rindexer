@@ -5,7 +5,7 @@ volumes:
 services:
   clickhouse:
     image: clickhouse/clickhouse-server:25.7
-    container_name: rindexer_clickhouse
+    container_name: nocode_clickhouse
     restart: unless-stopped
     shm_size: 1g
     env_file:

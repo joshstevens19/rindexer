@@ -33,17 +33,17 @@ fn generate_event_table_sql_with_comments(
 
             let create_table_sql = format!(
                 "CREATE TABLE IF NOT EXISTS {table_name} (\
-                rindexer_id SERIAL PRIMARY KEY NOT NULL, \
-                contract_address CHAR(42) NOT NULL, \
-                {event_columns} \
-                tx_hash CHAR(66) NOT NULL, \
-                block_number NUMERIC NOT NULL, \
-                block_timestamp TIMESTAMPTZ, \
-                block_hash CHAR(66) NOT NULL, \
-                network VARCHAR(50) NOT NULL, \
-                tx_index NUMERIC NOT NULL, \
-                log_index VARCHAR(78) NOT NULL\
-            );"
+                    rindexer_id SERIAL PRIMARY KEY NOT NULL, \
+                    contract_address CHAR(42) NOT NULL, \
+                    {event_columns} \
+                    tx_hash CHAR(66) NOT NULL, \
+                    block_number NUMERIC NOT NULL, \
+                    block_timestamp TIMESTAMPTZ, \
+                    block_hash CHAR(66) NOT NULL, \
+                    network VARCHAR(50) NOT NULL, \
+                    tx_index NUMERIC NOT NULL, \
+                    log_index VARCHAR(78) NOT NULL\
+                );"
             );
 
             if !apply_full_name_comment_for_events.contains(&event_info.name) {

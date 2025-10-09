@@ -17,6 +17,9 @@ use super::native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME}
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::clickhouse::setup::{setup_clickhouse, SetupClickhouseError};
 use crate::database::generate::generate_event_table_full_name;
+use crate::database::sql_type_wrapper::{
+    map_ethereum_wrapper_to_json, map_log_params_to_ethereum_wrapper, EthereumSqlTypeWrapper,
+};
 use crate::manifest::contract::Contract;
 use crate::{
     abi::{ABIItem, CreateCsvFileForEvent, EventInfo, ParamTypeError, ReadAbiError},
@@ -25,10 +28,6 @@ use crate::{
         client::PostgresClient,
         generate::generate_column_names_only_with_base_properties,
         setup::{setup_postgres, SetupPostgresError},
-        sql_type_wrapper::{
-            map_ethereum_wrapper_to_json, map_log_params_to_ethereum_wrapper,
-            EthereumSqlTypeWrapper,
-        },
     },
     event::{
         callback_registry::{
@@ -462,43 +461,41 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             }
 
             if let Some(postgres) = &params.postgres {
-                let bulk_data_length = sql_bulk_data.len();
-                if bulk_data_length > 0 {
-                    // anything over 100 events is considered bulk and goes the COPY route
-                    if bulk_data_length > 100 {
-                        if let Err(e) = postgres
-                            .insert_bulk(
-                                &params.sql_event_table_name,
-                                &params.sql_column_names,
-                                &sql_bulk_data,
-                            )
-                            .await
-                        {
-                            error!(
-                                "{}::{} - Error performing bulk insert: {}",
-                                params.contract_name, params.event_info.name, e
-                            );
-                            return Err(e.to_string());
-                        }
+                if !sql_bulk_data.is_empty() {
+                    if let Err(e) = postgres
+                        .insert_bulk(
+                            &params.sql_event_table_name,
+                            &params.sql_column_names,
+                            &sql_bulk_data,
+                        )
+                        .await
+                    {
+                        error!(
+                            "{}::{} - Error performing postgres bulk insert: {}",
+                            params.contract_name, params.event_info.name, e
+                        );
+                        return Err(e.to_string());
                     }
                 }
             }
 
             if let Some(clickhouse) = &params.clickhouse {
-                if let Err(e) = clickhouse
-                    .insert_bulk(
-                        &params.sql_event_table_name,
-                        &params.sql_column_names,
-                        &sql_bulk_data,
-                    )
-                    .await
-                {
-                    error!(
-                        "{}::{} - Error performing clickhouse bulk insert: {}",
-                        params.contract_name, params.event_info.name, e
-                    );
-                    return Err(e.to_string());
-                };
+                if !sql_bulk_data.is_empty() {
+                    if let Err(e) = clickhouse
+                        .insert_bulk(
+                            &params.sql_event_table_name,
+                            &params.sql_column_names,
+                            &sql_bulk_data,
+                        )
+                        .await
+                    {
+                        error!(
+                            "{}::{} - Error performing clickhouse bulk insert: {}",
+                            params.contract_name, params.event_info.name, e
+                        );
+                        return Err(e.to_string());
+                    };
+                }
             }
 
             if let Some(csv) = &params.csv {

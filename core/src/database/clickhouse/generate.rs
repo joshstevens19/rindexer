@@ -162,10 +162,10 @@ fn generate_internal_factory_event_table_sql(
             CREATE TABLE IF NOT EXISTS rindexer_internal.{table_name} (
                 "factory_address" FixedString(42),
                 "factory_deployed_address" FixedString(42),
-                "network" TEXT
+                "network" String
             )
             ENGINE = ReplacingMergeTree()
-                ORDER BY ("factory_address", "factory_deployed_address", "network")"#
+                ORDER BY ("network", "factory_address", "factory_deployed_address")"#
             );
 
             create_table_query

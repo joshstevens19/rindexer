@@ -1,6 +1,7 @@
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
+use serde::de::Error;
+use serde::{Deserialize, Deserializer, Serialize};
 use tracing::info;
 
 use crate::{
@@ -115,7 +116,7 @@ pub struct CsvDetails {
     pub disable_create_headers: Option<bool>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[derive(Debug, Serialize, Default, Clone)]
 pub struct Storage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub postgres: Option<PostgresDetails>,
@@ -125,6 +126,33 @@ pub struct Storage {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csv: Option<CsvDetails>,
+}
+
+impl<'de> Deserialize<'de> for Storage {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct StorageRaw {
+            #[serde(default)]
+            postgres: Option<PostgresDetails>,
+            #[serde(default)]
+            clickhouse: Option<ClickhouseDetails>,
+            #[serde(default)]
+            csv: Option<CsvDetails>,
+        }
+
+        let raw = StorageRaw::deserialize(deserializer)?;
+
+        if raw.postgres.is_some() && raw.clickhouse.is_some() {
+            return Err(Error::custom(
+                "cannot specify both `postgres` and `clickhouse` at the same time",
+            ));
+        }
+
+        Ok(Storage { postgres: raw.postgres, clickhouse: raw.clickhouse, csv: raw.csv })
+    }
 }
 
 #[derive(thiserror::Error, Debug)]

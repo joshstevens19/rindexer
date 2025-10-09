@@ -36,12 +36,12 @@ pub enum ClickhouseConnectionError {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ClickhouseError {
-    #[error("ClickhouseError {0}")]
-    ClickhouseError(String),
+    #[error("ClickhouseError: {0}")]
+    ClickhouseError(#[from] clickhouse::error::Error),
 }
 
 pub struct ClickhouseClient {
-    conn: Client,
+    pub(crate) conn: Client,
 }
 
 impl ClickhouseClient {
@@ -64,19 +64,24 @@ impl ClickhouseClient {
     where
         T: Row + for<'b> Deserialize<'b>,
     {
-        self.conn
-            .query(sql)
-            .fetch_one()
-            .await
-            .map_err(|e| ClickhouseError::ClickhouseError(e.to_string()))
+        let data = self.conn.query(sql).fetch_one().await?;
+
+        Ok(data)
+    }
+
+    pub async fn query<T>(&self, sql: &str) -> Result<T, ClickhouseError>
+    where
+        T: Row + for<'b> Deserialize<'b>,
+    {
+        let data = self.conn.query(sql).fetch_one().await?;
+
+        Ok(data)
     }
 
     pub async fn execute(&self, sql: &str) -> Result<(), ClickhouseError> {
-        self.conn
-            .query(sql)
-            .execute()
-            .await
-            .map_err(|e| ClickhouseError::ClickhouseError(e.to_string()))
+        self.conn.query(sql).execute().await?;
+
+        Ok(())
     }
 
     pub async fn execute_batch(&self, sql: &str) -> Result<(), ClickhouseError> {
@@ -96,19 +101,20 @@ impl ClickhouseClient {
         column_names: &[String],
         bulk_data: &[Vec<EthereumSqlTypeWrapper>],
     ) -> Result<u64, ClickhouseError> {
-        let column_names_str = column_names.join(", ");
-        let query = format!("INSERT INTO {} ({}) VALUES", table_name, column_names_str);
-        let mut values = Vec::new();
+        let values = bulk_data
+            .iter()
+            .map(|row| row.iter().map(|v| v.to_clickhouse_value()).collect::<Vec<_>>().join(", "))
+            .map(|row| format!("({})", row))
+            .collect::<Vec<_>>()
+            .join(", ");
 
-        for row in bulk_data.iter() {
-            let row_values: Vec<String> =
-                row.iter().map(|value| value.to_clickhouse_value()).collect();
-            values.push(format!("({})", row_values.join(", ")));
-        }
-
-        let full_query = format!("{} {}", query, values.join(", "));
-
-        self.execute(&full_query).await?;
+        self.execute(&format!(
+            "INSERT INTO {} ({}) VALUES {}",
+            table_name,
+            column_names.join(", "),
+            values
+        ))
+        .await?;
 
         Ok(bulk_data.len() as u64)
     }

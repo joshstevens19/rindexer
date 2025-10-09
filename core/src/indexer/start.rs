@@ -168,7 +168,7 @@ async fn get_start_end_block(
 pub async fn start_indexing_traces(
     manifest: &Manifest,
     project_path: &Path,
-    database: Option<Arc<PostgresClient>>,
+    postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
     indexer: &Indexer,
     trace_registry: Arc<TraceCallbackRegistry>,
@@ -213,7 +213,7 @@ pub async fn start_indexing_traces(
 
         let sync_config = SyncConfig {
             project_path,
-            database: &database,
+            postgres: &postgres,
             clickhouse: &clickhouse,
             csv_details: &manifest.storage.csv,
             contract_csv_enabled: manifest.contract_csv_enabled(&first_event.contract_name),
@@ -251,7 +251,7 @@ pub async fn start_indexing_traces(
             event_name: "TraceEvents".to_string(),
             network: network_name.clone(),
             progress: trace_progress_state.clone(),
-            database: database.clone(),
+            postgres: postgres.clone(),
             csv_details: None,
             registry: network_registry,
             method: network_details.method,
@@ -285,7 +285,7 @@ pub async fn start_indexing_traces(
 pub async fn start_indexing_contract_events(
     manifest: &Manifest,
     project_path: &Path,
-    database: Option<Arc<PostgresClient>>,
+    postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
     indexer: &Indexer,
     registry: Arc<EventCallbackRegistry>,
@@ -324,7 +324,7 @@ pub async fn start_indexing_contract_events(
             let event = event.clone();
             let network_contract = network_contract.clone();
             let project_path = project_path.to_path_buf();
-            let database = database.clone();
+            let postgres = postgres.clone();
             let clickhouse = clickhouse.clone();
             let manifest_csv_details = manifest.storage.csv.clone();
             let registry = Arc::clone(&registry);
@@ -334,7 +334,7 @@ pub async fn start_indexing_contract_events(
             block_tasks.push(async move {
                 let config = SyncConfig {
                     project_path: &project_path,
-                    database: &database,
+                    postgres: &postgres,
                     clickhouse: &clickhouse,
                     csv_details: &manifest_csv_details,
                     contract_csv_enabled: manifest.contract_csv_enabled(&event.contract.name),
@@ -363,7 +363,7 @@ pub async fn start_indexing_contract_events(
                         stream_details,
                         blocks,
                         project_path,
-                        database,
+                        postgres,
                         clickhouse,
                         manifest_csv_details,
                         registry,
@@ -383,7 +383,7 @@ pub async fn start_indexing_contract_events(
             stream_details,
             (start_block, end_block, indexing_distance_from_head),
             project_path,
-            database,
+            postgres,
             clickhouse,
             manifest_csv_details,
             registry,
@@ -441,7 +441,7 @@ pub async fn start_indexing_contract_events(
                     registry: Arc::clone(&registry),
                     progress: Arc::clone(&event_progress_state),
                     clickhouse: clickhouse.clone(),
-                    database: database.clone(),
+                    postgres: postgres.clone(),
                     config: manifest.config.clone(),
                     csv_details: manifest_csv_details.clone(),
                     // timestamps: timestamp_enabled_for_event
@@ -473,7 +473,7 @@ pub async fn start_indexing_contract_events(
                 end_block,
                 registry: Arc::clone(&registry),
                 progress: Arc::clone(&event_progress_state),
-                database: database.clone(),
+                postgres: postgres.clone(),
                 clickhouse: clickhouse.clone(),
                 csv_details: manifest_csv_details.clone(),
                 config: manifest.config.clone(),
