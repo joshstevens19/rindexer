@@ -25,7 +25,7 @@ pub async fn wait_for_ipc_ready(ipc_path: &str, timeout: Duration) -> Result<(),
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    Err(RetryClientError::HttpProviderCantBeCreated(
+    Err(RetryClientError::ProviderCantBeCreated(
         ipc_path.to_string(),
         "IPC connection timeout".to_string(),
     ))

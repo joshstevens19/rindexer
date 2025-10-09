@@ -209,20 +209,14 @@ impl BlockFetcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::create_client;
-    use crate::HeaderMap;
 
-    async fn client() -> Arc<JsonRpcCachedProvider> {
-        let rpc_url = "http://localhost:8545";
-        let client = create_client(rpc_url, 1, Some(660), None, None, HeaderMap::new(), None, None)
-            .await
-            .unwrap();
-        client
+    fn mock_provider() -> Arc<JsonRpcCachedProvider> {
+        JsonRpcCachedProvider::mock(1)
     }
 
-    #[tokio::test]
-    async fn test_simple_interpolation() {
-        let clock = BlockFetcher::new(None, client().await);
+    #[test]
+    fn test_simple_interpolation() {
+        let clock = BlockFetcher::new(None, mock_provider());
 
         // Lets assume perfect times, 1 block = 1 second.
         let mut anchors = vec![(1, 1), (10, 10), (20, 20), (30, 30), (10_000, 10_000)];
@@ -239,28 +233,28 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_ratio_sampling_min() {
-        let clock = BlockFetcher::new(Some(1.0), client().await);
+    #[test]
+    fn test_ratio_sampling_min() {
+        let clock = BlockFetcher::new(Some(1.0), mock_provider());
         let samples = clock.block_range_samples(1000, 1234);
         let actual_sampling_ratio = samples.len() as f32 / (1234 - 1000) as f32;
 
         assert!(actual_sampling_ratio >= 1.0);
 
-        let clock = BlockFetcher::new(Some(0.1), client().await);
+        let clock = BlockFetcher::new(Some(0.1), mock_provider());
         let samples = clock.block_range_samples(1000, 1019);
         let actual_sampling_ratio = samples.len() as f32 / (1019 - 1000) as f32;
 
         assert!(actual_sampling_ratio >= 0.1);
 
-        let clock = BlockFetcher::new(Some(0.1), client().await);
+        let clock = BlockFetcher::new(Some(0.1), mock_provider());
         let samples = clock.block_range_samples(1000, 1600);
         let actual_sampling_ratio = samples.len() as f32 / (1600 - 1000) as f32;
 
         assert!(actual_sampling_ratio >= 0.1);
         assert!(actual_sampling_ratio <= 0.15); // Ensure we don't oversample here either
 
-        let clock = BlockFetcher::new(Some(0.5), client().await);
+        let clock = BlockFetcher::new(Some(0.5), mock_provider());
         let samples = clock.block_range_samples(1000, 1300);
         let actual_sampling_ratio = samples.len() as f32 / (1300 - 1000) as f32;
 
@@ -268,9 +262,9 @@ mod tests {
         assert!(actual_sampling_ratio <= 0.6); // Ensure we don't oversample here either
     }
 
-    #[tokio::test]
-    async fn test_sampling() {
-        let clock = BlockFetcher::new(Some(0.1), client().await);
+    #[test]
+    fn test_sampling() {
+        let clock = BlockFetcher::new(Some(0.1), mock_provider());
 
         assert_eq!(clock.block_range_samples(10, 10), vec![10]);
         assert_eq!(clock.block_range_samples(10, 11), vec![10, 11]);
@@ -280,9 +274,9 @@ mod tests {
         assert!(clock.block_range_samples(11, 10).is_empty());
     }
 
-    #[tokio::test]
-    async fn test_sampling_unique() {
-        let clock = BlockFetcher::new(Some(0.1), client().await);
+    #[test]
+    fn test_sampling_unique() {
+        let clock = BlockFetcher::new(Some(0.1), mock_provider());
         let samples = clock.block_range_samples(1000, 1600);
         let unique_samples = samples.iter().cloned().collect::<std::collections::HashSet<_>>();
 
@@ -295,9 +289,9 @@ mod tests {
         assert!(wide_samples.contains(&20_000));
     }
 
-    #[tokio::test]
-    async fn test_sampling_window_sequence() {
-        let clock = BlockFetcher::new(Some(0.1), client().await);
+    #[test]
+    fn test_sampling_window_sequence() {
+        let clock = BlockFetcher::new(Some(0.1), mock_provider());
         let samples = clock.block_range_samples(1000, 1600);
 
         assert!(samples.windows(2).all(|w| w[0] < w[1]));

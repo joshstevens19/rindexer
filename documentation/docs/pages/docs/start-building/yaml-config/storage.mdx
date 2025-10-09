@@ -31,7 +31,7 @@ DATABASE_URL=postgresql://[user[:password]@][host][:port][/dbname]
 ```
 
 :::info
-`sslmode=require` is supported as well just include it in the connection string.
+`sslmode=require` is supported as well just include it in the connection string. If you are using AWS RDS, you will need to include the RDS certificates in your connection configuration. You can find the necessary certificates in the [AWS RDS SSL documentation](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.SSL.html).
 :::
 
 ### enabled

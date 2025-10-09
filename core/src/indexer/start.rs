@@ -159,8 +159,7 @@ async fn get_start_end_block(
     }
 
     let (end_block, indexing_distance_from_head) =
-        calculate_safe_block_number(reorg_safe_distance, &provider, latest_block, end_block)
-            .await?;
+        calculate_safe_block_number(reorg_safe_distance, &provider, latest_block, end_block);
 
     Ok((start_block, end_block, indexing_distance_from_head))
 }
@@ -663,22 +662,21 @@ pub async fn initialize_clickhouse(
     }
 }
 
-pub async fn calculate_safe_block_number(
+pub fn calculate_safe_block_number(
     reorg_safe_distance: bool,
     provider: &Arc<JsonRpcCachedProvider>,
     latest_block: U64,
     mut end_block: U64,
-) -> Result<(U64, U64), StartIndexingError> {
+) -> (U64, U64) {
     let mut indexing_distance_from_head = U64::ZERO;
     if reorg_safe_distance {
-        let chain_id =
-            provider.get_chain_id().await.map_err(StartIndexingError::GetChainIdError)?;
-        let reorg_safe_distance = reorg_safe_distance_for_chain(&chain_id);
+        let chain_id = provider.chain.id();
+        let reorg_safe_distance = reorg_safe_distance_for_chain(chain_id);
         let safe_block_number = latest_block - reorg_safe_distance;
         if end_block > safe_block_number {
             end_block = safe_block_number;
         }
         indexing_distance_from_head = reorg_safe_distance;
     }
-    Ok((end_block, indexing_distance_from_head))
+    (end_block, indexing_distance_from_head)
 }
