@@ -3,7 +3,7 @@ use crate::event::factory_event_filter_sync::{
     get_known_factory_deployed_addresses, GetKnownFactoryDeployedAddressesParams,
 };
 use crate::manifest::storage::CsvDetails;
-use crate::PostgresClient;
+use crate::{ClickhouseClient, PostgresClient};
 use alloy::rpc::types::Topic;
 use alloy::{
     primitives::{Address, B256, U64},
@@ -62,7 +62,8 @@ pub struct FactoryFilter {
     pub topic_id: B256,
     pub topics: [Topic; 4],
 
-    pub database: Option<Arc<PostgresClient>>,
+    pub clickhouse: Option<Arc<ClickhouseClient>>,
+    pub postgres: Option<Arc<PostgresClient>>,
     pub csv_details: Option<CsvDetails>,
 
     pub current_block: U64,
@@ -112,10 +113,12 @@ impl FactoryFilter {
             event_name: self.factory_event_name.clone(),
             input_names,
             network: self.network.clone(),
-            database: self.database.clone(),
+            clickhouse: self.clickhouse.clone(),
+            postgres: self.postgres.clone(),
             csv_details: self.csv_details.clone(),
         })
         .await
+        .inspect_err(|e| tracing::error!("Failed to get known factory deployed addresses: {}", e))
         .expect("Failed to get known factory deployed addresses")
     }
 }

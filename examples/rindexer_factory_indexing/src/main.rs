@@ -6,6 +6,7 @@ use rindexer::{
     IndexingDetails, StartDetails,
 };
 
+#[allow(clippy::all)]
 mod rindexer_lib;
 
 #[tokio::main]

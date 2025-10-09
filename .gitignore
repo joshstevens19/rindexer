@@ -18,9 +18,12 @@ cli/rindexer.yaml
 cli/.env
 examples/*
 !examples/rindexer_demo_cli
+!examples/nocode_clickhouse
 !examples/rindexer_native_transfers
 !examples/rindexer_factory_indexing
 !examples/rindexer_rust_playground
+!examples/rust_clickhouse
+!examples/clickhouse_factory_indexing
 documentation/node_modules
 documentation/dist
 documentation/docs/dist
