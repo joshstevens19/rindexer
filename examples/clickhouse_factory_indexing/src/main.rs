@@ -1,11 +1,11 @@
-use std::env;
-
 use self::rindexer_lib::indexers::all_handlers::register_all_handlers;
 use rindexer::{
     event::callback_registry::TraceCallbackRegistry, start_rindexer, GraphqlOverrideSettings,
     IndexingDetails, StartDetails,
 };
+use std::env;
 
+#[allow(clippy::all)]
 mod rindexer_lib;
 
 #[tokio::main]
