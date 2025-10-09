@@ -12,6 +12,7 @@ use tokio::{
 use tracing::{debug, error};
 
 use crate::database::clickhouse::client::ClickhouseClient;
+use crate::database::postgres::generate::generate_internal_event_table_name_no_shorten;
 use crate::{
     database::{
         generate::generate_indexer_contract_schema_name,
@@ -184,7 +185,7 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
 
         let schema =
             generate_indexer_contract_schema_name(config.indexer_name, config.contract_name);
-        let table_name = generate_internal_event_table_name(&schema, config.event_name);
+        let table_name = generate_internal_event_table_name_no_shorten(&schema, config.event_name);
         let query = format!(
             "SELECT last_synced_block FROM rindexer_internal.{table_name} FINAL WHERE network = '{}'",
             config.network
@@ -307,7 +308,8 @@ pub async fn update_progress_and_last_synced_task(
     } else if let Some(clickhouse) = &config.clickhouse() {
         let schema =
             generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
-        let table_name = generate_internal_event_table_name(&schema, &config.event_name());
+        let table_name =
+            generate_internal_event_table_name_no_shorten(&schema, &config.event_name());
         let network = &config.network_contract().network;
         let query = format!(
             r#"

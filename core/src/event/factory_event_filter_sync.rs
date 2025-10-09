@@ -1,3 +1,5 @@
+use crate::database::clickhouse::client::ClickhouseError;
+use crate::database::generate::generate_internal_factory_event_table_name_no_shorten;
 use crate::database::postgres::client::PostgresError;
 use crate::database::{
     generate::generate_internal_factory_event_table_name,
@@ -35,6 +37,9 @@ pub enum UpdateKnownFactoryDeployedAddressesError {
 
     #[error("Could not write addresses to postgres: {0}")]
     PostgresWrite(String),
+
+    #[error("Could not write addresses to clickhouse: {0}")]
+    ClickhouseWrite(#[from] ClickhouseError),
 
     #[error("Could not parse logs")]
     LogsParse,
@@ -173,6 +178,40 @@ pub async fn update_known_factory_deployed_addresses(
         return Ok(());
     }
 
+    if let Some(clickhouse) = &config.clickhouse {
+        let params = GenerateInternalFactoryEventTableNameParams {
+            indexer_name: config.indexer_name.clone(),
+            contract_name: config.contract_name.clone(),
+            event_name: config.event.name.clone(),
+            input_names: config.input_names().clone(),
+        };
+        let table_name = generate_internal_factory_event_table_name_no_shorten(&params);
+
+        clickhouse
+            .insert_bulk(
+                &format!("rindexer_internal.{table_name}"),
+                &[
+                    "factory_address".to_string(),
+                    "factory_deployed_address".to_string(),
+                    "network".to_string(),
+                ],
+                &addresses
+                    .clone()
+                    .into_iter()
+                    .map(|item| {
+                        vec![
+                            EthereumSqlTypeWrapper::Address(item.factory_address),
+                            EthereumSqlTypeWrapper::Address(item.address),
+                            EthereumSqlTypeWrapper::String(config.network_contract.network.clone()),
+                        ]
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .await?;
+
+        return Ok(());
+    }
+
     if let Some(csv_details) = &config.csv_details {
         let full_path = get_full_path(&config.project_path, &csv_details.path)?;
 
@@ -287,16 +326,16 @@ pub async fn get_known_factory_deployed_addresses(
             event_name: params.event_name.clone(),
             input_names: params.input_names.clone(),
         };
-        let table_name = generate_internal_factory_event_table_name(&table_params);
+        let table_name = generate_internal_factory_event_table_name_no_shorten(&table_params);
         let query = format!(
             r#"
-            SELECT factory_deployed_address 
+            SELECT toString(factory_deployed_address) AS factory_deployed_address
             FROM rindexer_internal.{table_name} FINAL 
             WHERE network = ?
             "#
         );
 
-        #[derive(clickhouse::Row, Deserialize)]
+        #[derive(Debug, clickhouse::Row, Deserialize)]
         struct FactoryDeployedAddresses {
             factory_deployed_address: String,
         }
@@ -307,7 +346,7 @@ pub async fn get_known_factory_deployed_addresses(
         let values = result
             .into_iter()
             .map(|row| {
-                Address::from_str(row.factory_deployed_address.as_str())
+                Address::from_str(&row.factory_deployed_address)
                     .expect("Factory deployed address not a valid ethereum address")
             })
             .collect::<HashSet<_>>();

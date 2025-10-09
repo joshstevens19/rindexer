@@ -292,6 +292,19 @@ pub fn generate_internal_factory_event_table_name(
     compact_table_name_if_needed(table_name)
 }
 
+pub fn generate_internal_factory_event_table_name_no_shorten(
+    params: &GenerateInternalFactoryEventTableNameParams,
+) -> String {
+    let schema_name =
+        generate_indexer_contract_schema_name(&params.indexer_name, &params.contract_name);
+    format!(
+        "{}_{}_{}",
+        schema_name,
+        camel_to_snake(&params.event_name),
+        &params.input_names.iter().map(|v| camel_to_snake(v)).collect::<Vec<String>>().join("_")
+    )
+}
+
 pub fn compact_table_name_if_needed(table_name: String) -> String {
     // sql table names cant be as long as 63
     if table_name.len() > 63 {

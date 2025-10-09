@@ -41,6 +41,13 @@ pub fn generate_internal_event_table_name(schema_name: &str, event_name: &str) -
     compact_table_name_if_needed(table_name)
 }
 
+pub fn generate_internal_event_table_name_no_shorten(
+    schema_name: &str,
+    event_name: &str,
+) -> String {
+    format!("{}_{}", schema_name, camel_to_snake(event_name))
+}
+
 pub struct GenerateInternalFactoryEventTableNameParams {
     pub indexer_name: String,
     pub contract_name: String,

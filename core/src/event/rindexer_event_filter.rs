@@ -118,6 +118,7 @@ impl FactoryFilter {
             csv_details: self.csv_details.clone(),
         })
         .await
+        .inspect_err(|e| tracing::error!("Failed to get known factory deployed addresses: {}", e))
         .expect("Failed to get known factory deployed addresses")
     }
 }

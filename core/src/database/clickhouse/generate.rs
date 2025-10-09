@@ -10,10 +10,10 @@ use crate::{
 
 use crate::database::generate::{
     generate_indexer_contract_schema_name, generate_internal_factory_event_table_name,
-    GenerateTablesForIndexerSqlError,
+    generate_internal_factory_event_table_name_no_shorten, GenerateTablesForIndexerSqlError,
 };
 use crate::database::postgres::generate::{
-    generate_internal_event_table_name, GenerateInternalFactoryEventTableNameParams,
+    generate_internal_event_table_name_no_shorten, GenerateInternalFactoryEventTableNameParams,
 };
 use crate::manifest::contract::FactoryDetailsYaml;
 
@@ -155,17 +155,18 @@ fn generate_internal_factory_event_table_sql(
                 event_name: factory.event_name.to_string(),
                 input_names: factory.input_names(),
             };
-            let table_name = generate_internal_factory_event_table_name(&params);
+            let table_name = generate_internal_factory_event_table_name_no_shorten(&params);
 
             let create_table_query = format!(
                 r#"
-            CREATE TABLE IF NOT EXISTS rindexer_internal.{table_name} (
-                "factory_address" FixedString(42),
-                "factory_deployed_address" FixedString(42),
-                "network" String
-            )
-            ENGINE = ReplacingMergeTree()
-                ORDER BY ("network", "factory_address", "factory_deployed_address")"#
+                CREATE TABLE IF NOT EXISTS rindexer_internal.{table_name} (
+                    "factory_address" FixedString(42),
+                    "factory_deployed_address" FixedString(42),
+                    "network" String
+                )
+                ENGINE = ReplacingMergeTree()
+                    ORDER BY ("network", "factory_address", "factory_deployed_address");
+                "#
             );
 
             create_table_query
@@ -199,7 +200,8 @@ pub fn drop_tables_for_indexer_clickhouse(project_path: &Path, indexer: &Indexer
         let abi_items = ABIItem::read_abi_items(project_path, contract);
         if let Ok(abi_items) = abi_items {
             for abi_item in abi_items.iter() {
-                let table_name = generate_internal_event_table_name(&schema_name, &abi_item.name);
+                let table_name =
+                    generate_internal_event_table_name_no_shorten(&schema_name, &abi_item.name);
                 sql.push_str(
                     format!("DROP TABLE IF EXISTS rindexer_internal.{table_name};").as_str(),
                 );
@@ -233,32 +235,39 @@ pub fn solidity_type_to_clickhouse_type(abi_type: &str) -> String {
     let base_type = abi_type.trim_end_matches("[]");
 
     let sql_type = match base_type {
-        "address" => "FixedString(42)", // Use FixedString for fixed-size strings
-        "bool" => "Bool",               // Use UInt8 to represent booleans (0 or 1)
-        "string" => "String",           // Use String for variable-length text
-        t if t.starts_with("bytes") => "String", // Use String for binary data
+        "address" => "FixedString(42)",
+        "bool" => "Bool",
+        "string" => "String",
+        t if t.starts_with("bytes") => "String",
         t if t.starts_with("int") || t.starts_with("uint") => {
-            // Handling fixed-size integers (intN and uintN where N can be 8 to 256 in steps of 8)
             let (prefix, size): (&str, usize) = if t.starts_with("int") {
-                ("int", t[3..].parse().expect("Invalid intN type"))
+                ("int", t[3..].parse().unwrap_or(256))
             } else {
-                ("uint", t[4..].parse().expect("Invalid uintN type"))
+                ("uint", t[4..].parse().unwrap_or(256))
             };
 
-            let int = match size {
+            let rounded_size = match size {
+                0..=8 => 8,
+                9..=16 => 16,
+                17..=32 => 32,
+                33..=64 => 64,
+                65..=128 => 128,
+                129..=256 => 256,
+                _ => 512, // fallback to String
+            };
+
+            let int = match rounded_size {
                 8 => "Int8",
                 16 => "Int16",
                 32 => "Int32",
                 64 => "Int64",
                 128 => "Int128",
                 256 => "Int256",
-                // Use String for very large integers as ClickHouse
-                // doesn't support greater than UInt256.
                 512 => "String",
-                _ => panic!("Unsupported {}N size: {}", prefix, size),
+                _ => unreachable!(),
             };
 
-            if prefix == "uint" {
+            if prefix == "uint" && rounded_size <= 256 {
                 &format!("U{}", int)
             } else {
                 int

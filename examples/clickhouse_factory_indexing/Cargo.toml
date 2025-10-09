@@ -1,5 +1,5 @@
 [package]
-name = "rindexer_factory_contract"
+name = "clickhouse_factory_indexing"
 version = "0.1.0"
 edition = "2021"
 

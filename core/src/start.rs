@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tokio::signal;
 use tracing::{error, info};
 
+use crate::database::clickhouse::setup::SetupClickhouseError;
 use crate::{
     api::{start_graphql_server, GraphqlOverrideSettings, StartGraphqlServerError},
     database::postgres::{
@@ -26,8 +27,9 @@ use crate::{
         storage::RelationshipsAndIndexersError,
         yaml::{read_manifest, ReadManifestError},
     },
-    setup_info_logger,
+    setup_clickhouse, setup_info_logger,
 };
+
 pub struct IndexingDetails {
     pub registry: EventCallbackRegistry,
     pub trace_registry: TraceCallbackRegistry,
@@ -55,6 +57,9 @@ pub enum StartRindexerError {
 
     #[error("Could not setup postgres: {0}")]
     SetupPostgresError(#[from] SetupPostgresError),
+
+    #[error("Could not setup clickhouse: {0}")]
+    SetupClickhouseError(#[from] SetupClickhouseError),
 
     #[error("Could not start indexing: {0}")]
     CouldNotStartIndexing(#[from] StartIndexingError),
@@ -221,10 +226,16 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
 
             if let Some(mut indexing_details) = details.indexing_details {
                 let postgres_enabled = &manifest.storage.postgres_enabled();
+                let clickhouse_enabled = &manifest.storage.clickhouse_enabled();
 
                 // setup postgres is already called in no-code startup
                 if manifest.project_type != ProjectType::NoCode && *postgres_enabled {
                     setup_postgres(project_path, &manifest).await?;
+                }
+
+                // setup clickhouse is already called in no-code startup
+                if manifest.project_type != ProjectType::NoCode && *clickhouse_enabled {
+                    setup_clickhouse(project_path, &manifest).await?;
                 }
 
                 let (relationships, postgres_indexes) = manifest
