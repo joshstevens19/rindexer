@@ -28,7 +28,6 @@ pub struct ContractEventProcessingConfig {
     pub project_path: PathBuf,
     pub indexer_name: String,
     pub contract_name: String,
-    pub info_log_name: String,
     pub topic_id: B256,
     pub event_name: String,
     pub config: Config,
@@ -48,6 +47,10 @@ pub struct ContractEventProcessingConfig {
 }
 
 impl ContractEventProcessingConfig {
+    pub fn info_log_name(&self) -> String {
+        format!("{}::{}::{}", self.contract_name, self.event_name, self.network_contract.network)
+    }
+
     pub fn to_event_filter(&self) -> Result<RindexerEventFilter, BuildRindexerFilterError> {
         match &self.network_contract.indexing_contract_setup {
             IndexingContractSetup::Address(details) => RindexerEventFilter::new_address_filter(
@@ -157,7 +160,7 @@ impl FactoryEventProcessingConfig {
     }
 
     pub fn info_log_name(&self) -> String {
-        format!("{}::{}", self.contract_name, self.event.name)
+        format!("{}::{}::{}", self.contract_name, self.event.name, self.network_contract.network)
     }
 }
 
@@ -218,7 +221,7 @@ impl EventProcessingConfig {
 
     pub fn info_log_name(&self) -> String {
         match self {
-            Self::ContractEventProcessing(config) => config.info_log_name.clone(),
+            Self::ContractEventProcessing(config) => config.info_log_name().clone(),
             Self::FactoryEventProcessing(config) => config.info_log_name(),
         }
     }

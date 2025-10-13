@@ -6,11 +6,13 @@
 ### Features
 -------------------------------------------------
 - feat: check if the RPC chain id is matching the configured chain id in the yaml config on startup
+- feat: add support for `RINDEXER_LOG` environment variable to control the log level of rindexer
 - feat: Add clickhouse integration to rindexer rust project and nocode
 
 ### Bug fixes
 -------------------------------------------------
 - fix: only log error when the current block lumber is lower than the last seen when range is outside chain reorg safe
+- fix: unpin `tracing-subscriber` version
 
 ### Breaking changes
 -------------------------------------------------

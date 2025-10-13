@@ -119,11 +119,10 @@ pub async fn native_transfer_block_fetch(
     // Spawn a separate task to handle notifications
     if let Some(notifications) = chain_state_notification {
         // Subscribe to notifications for this network
-        let network_clone = network.clone();
         let mut notifications_clone = notifications.subscribe();
         tokio::spawn(async move {
             while let Ok(notification) = notifications_clone.recv().await {
-                handle_chain_notification(notification, "NativeTransfer", &network_clone);
+                handle_chain_notification(notification, "NativeTransfer");
             }
         });
     }
