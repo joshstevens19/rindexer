@@ -16,6 +16,7 @@ use rindexer::manifest::contract::ContractEvent;
 use rindexer::manifest::global::Global;
 #[cfg(feature = "reth")]
 use rindexer::manifest::reth::RethConfig;
+use rindexer::manifest::storage::ClickhouseDetails;
 use rindexer::{
     generator::{build::generate_rust_project, generate_docker_file},
     manifest::{
@@ -154,11 +155,11 @@ pub fn handle_new_command(
     let repository = prompt_for_optional_input::<String>("Repository", None);
     let storage_choice = prompt_for_input_list(
         "What Storages To Enable? (graphql can only be supported if postgres is enabled)",
-        &["postgres".to_string(), "csv".to_string(), "both".to_string(), "none".to_string()],
+        &["postgres".to_string(), "clickhouse".to_string(), "csv".to_string(), "none".to_string()],
         None,
     );
     let mut postgres_docker_enable = false;
-    if storage_choice == "postgres" || storage_choice == "both" {
+    if storage_choice == "postgres" {
         let postgres_docker = prompt_for_input_list(
             "Postgres Docker Support Out The Box?",
             &["yes".to_string(), "no".to_string()],
@@ -167,8 +168,9 @@ pub fn handle_new_command(
         postgres_docker_enable = postgres_docker == "yes";
     }
 
-    let postgres_enabled = storage_choice == "postgres" || storage_choice == "both";
-    let csv_enabled = storage_choice == "csv" || storage_choice == "both";
+    let postgres_enabled = storage_choice == "postgres";
+    let csv_enabled = storage_choice == "csv";
+    let clickhouse_enabled = storage_choice == "clickhouse";
 
     // Handle Reth configuration if enabled
     let final_reth_config = get_reth_config(reth_config);
@@ -256,9 +258,18 @@ pub fn handle_new_command(
             postgres: if postgres_enabled {
                 Some(PostgresDetails {
                     enabled: true,
-                    drop_each_run: None,
                     relationships: None,
                     indexes: None,
+                    drop_each_run: None,
+                    disable_create_tables: None,
+                })
+            } else {
+                None
+            },
+            clickhouse: if clickhouse_enabled {
+                Some(ClickhouseDetails {
+                    enabled: true,
+                    drop_each_run: None,
                     disable_create_tables: None,
                 })
             } else {
@@ -279,6 +290,16 @@ pub fn handle_new_command(
 
     // Write the rindexer.yaml file
     write_manifest(&manifest, &rindexer_yaml_path)?;
+
+    // Write .env if required
+    if clickhouse_enabled {
+        let env = "CLICKHOUSE_URL=\nCLICKHOUSE_USER=\nCLICKHOUSE_PASSWORD=\nCLICKHOUSE_DB=";
+
+        write_file(&project_path.join(".env"), env).map_err(|e| {
+            print_error_message(&format!("Failed to write .env file: {}", e));
+            e
+        })?;
+    }
 
     // Write .env if required
     if postgres_enabled {

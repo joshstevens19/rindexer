@@ -986,6 +986,157 @@ storage:
 
 You can read more about how this changes the GraphQL ability to query the data [here](/docs/accessing-data/graphql#relationships).
 
+
+## clickhouse
+
+If you wish to store the data in a clickhouse database with the no-code project you can enable the clickhouse storage.
+
+:::info
+This is optional if you do not wish to store the data in a clickhouse database you can leave this section out of your YAML.
+:::
+
+### Internal tables
+
+When rindexer is running with clickhouse it uses the database to manage some internal state including the network and contract last seen block.
+You can see those tables in a schema called `rindexer_internal` and should never be modified manually.
+
+### Own connection string
+
+If you are deploying the indexer or want to point to an external database you can supply your own
+connection string, to do this you have to change/define it the `.env` file.
+
+```bash
+CLICKHOUSE_URL="http://[host]:[port]"
+CLICKHOUSE_DB="default"
+CLICKHOUSE_USER="default"
+CLICKHOUSE_PASSWORD="default"
+```
+
+### enabled
+
+If clickhouse is enabled or not, if you do not wish to use clickhouse you can set this to false or remove clickhouse from the storage completely.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  clickhouse:
+    enabled: true // [!code focus]
+```
+
+### drop_each_run
+
+rindexer will keep track of the last synced block for each contracts and events meaning when you start and stop the indexer
+it will start from the last synced block. rindexer will also create tables for you again which could clash if you
+are using rindexer to grab throw away data and want to start over each time you run it.
+
+You can use `drop_each_run` to drop all the data for the indexer before starting which will ensure you start fresh.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  clickhouse:
+    enabled: true
+    drop_each_run: true // [!code focus]
+```
+
+### disable_create_tables
+
+:::info
+This is only relevant for the rust projects, as no-code (if clickhouse is enabled) will have to create the tables.
+:::
+
+If you do not wish for rindexer to create the database tables for you automatically you can set this to true.
+By default if will create the tables for you. When this is disabled it will not write the sql in the handlers for you either.
+This field is optional and can be ignored if you do not need it.
+
+It will still create the rindexer internal tables for tracking last known block.
+
+```yaml [rindexer.yaml]
+name: rETHIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+- name: ethereum
+  chain_id: 1
+  rpc: https://mainnet.gateway.tenderly.co
+storage:
+  clickhouse:
+    enabled: true
+    disable_create_tables: true // [!code focus]
+```
+
+### indexes
+
+Clickhouse does not use indexes like other databases, instead the order by clause on the storage engine is critical for
+performance.
+
+By default we use an order by clause of:
+
+```sql
+ORDER BY (network, block_number, tx_hash, log_index)
+```
+
+This allows efficient searches of per network block ranges, and is a valid "uniqueness" constraint meaning it allows us
+to ensure the data indexed does not contain duplicates. It also works with or without timestamps being enabled.
+
+To assist with performance on common queries we automatically opt-in tables to minmax indexes on `block_number`,
+`block-timestamp` and add bloom filters for `tx_hash` and `network`. This will allow fast queries for any generic block
+pruning query, or transaction lookup.
+
+```sql
+index idx_block_num (block_number) type minmax granularity 1
+index idx_timestamp (block_timestamp) type minmax granularity 1
+index idx_network (network) type bloom_filter granularity 1
+index idx_tx_hash (tx_hash) type bloom_filter granularity 1
+```
+
+#### additional information
+
+You could add custom indexes on fields like `from` or `to` as needed. However indexing in OLAP databases is a complex topic,
+if you wish to hyper-optimise for some specific query patterns such as a particular field like a wallet address it is more
+appropriate to leverage the **Rust Project** and custom tables where you can control the order by to index on your primary
+filter constraint first.
+
+An example of this is erc20 transfers where we want to search quickly on a wallet address. In this case it is most benefical
+to either create a [projection](https://clickhouse.com/docs/sql-reference/statements/alter/projection), or to denormalize
+the from and to inserts directly into a unified `wallet_address` table with a `direction` field.
+
+An example of this would be as follows and would allow extremely optimised `wallet_address = ?` in block timestamp descending queries:
+
+```sql
+create table if not exists erc20_transfer
+(
+    block_timestamp             DateTime('UTC'),
+    block_number                UInt64,
+    network_id                  UInt32,
+    transaction_index           UInt16,
+    log_index                   UInt16,
+    currency_address            FixedString(20),
+    wallet_address              FixedString(20),
+    counterparty_address        FixedString(20),
+    transaction_hash            FixedString(32),
+    amount                      UInt256,
+    is_send                     Bool
+)
+    engine = ReplacingMergeTree
+        order by (wallet_address, block_timestamp, transaction_hash, log_index);
+```
+
 ## csv
 
 If you wish to store the data in a CSV files you can enable the csv storage.

@@ -4,6 +4,7 @@ use alloy::rpc::types::ValueOrArray;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
 
+use crate::database::clickhouse::client::ClickhouseClient;
 use crate::event::contract_setup::{AddressDetails, IndexingContractSetup};
 use crate::event::factory_event_filter_sync::update_known_factory_deployed_addresses;
 use crate::event::rindexer_event_filter::FactoryFilter;
@@ -36,7 +37,8 @@ pub struct ContractEventProcessingConfig {
     pub end_block: U64,
     pub registry: Arc<EventCallbackRegistry>,
     pub progress: Arc<Mutex<IndexingEventsProgressState>>,
-    pub database: Option<Arc<PostgresClient>>,
+    pub postgres: Option<Arc<PostgresClient>>,
+    pub clickhouse: Option<Arc<ClickhouseClient>>,
     pub csv_details: Option<CsvDetails>,
     pub stream_last_synced_block_file_path: Option<String>,
     pub index_event_in_order: bool,
@@ -80,7 +82,8 @@ impl ContractEventProcessingConfig {
                     network: self.network_contract.network.clone(),
                     topic_id: self.topic_id,
                     topics: index_filter.cloned().map(Into::into).unwrap_or_default(),
-                    database: self.database.clone(),
+                    clickhouse: self.clickhouse.clone(),
+                    postgres: self.postgres.clone(),
                     csv_details: self.csv_details.clone(),
 
                     current_block: self.start_block,
@@ -110,7 +113,8 @@ pub struct FactoryEventProcessingConfig {
     pub end_block: U64,
     pub registry: Arc<EventCallbackRegistry>,
     pub progress: Arc<Mutex<IndexingEventsProgressState>>,
-    pub database: Option<Arc<PostgresClient>>,
+    pub postgres: Option<Arc<PostgresClient>>,
+    pub clickhouse: Option<Arc<ClickhouseClient>>,
     pub csv_details: Option<CsvDetails>,
     pub stream_last_synced_block_file_path: Option<String>,
     pub index_event_in_order: bool,
@@ -278,10 +282,17 @@ impl EventProcessingConfig {
         }
     }
 
-    pub fn database(&self) -> Option<Arc<PostgresClient>> {
+    pub fn postgres(&self) -> Option<Arc<PostgresClient>> {
         match self {
-            Self::ContractEventProcessing(config) => config.database.clone(),
-            Self::FactoryEventProcessing(config) => config.database.clone(),
+            Self::ContractEventProcessing(config) => config.postgres.clone(),
+            Self::FactoryEventProcessing(config) => config.postgres.clone(),
+        }
+    }
+
+    pub fn clickhouse(&self) -> Option<Arc<ClickhouseClient>> {
+        match self {
+            Self::ContractEventProcessing(config) => config.clickhouse.clone(),
+            Self::FactoryEventProcessing(config) => config.clickhouse.clone(),
         }
     }
 
@@ -336,7 +347,7 @@ pub struct TraceProcessingConfig {
     pub event_name: String,
     pub network: String,
     pub progress: Arc<Mutex<IndexingEventsProgressState>>,
-    pub database: Option<Arc<PostgresClient>>,
+    pub postgres: Option<Arc<PostgresClient>>,
     pub csv_details: Option<CsvDetails>,
     pub registry: Arc<TraceCallbackRegistry>,
     pub method: TraceProcessingMethod,

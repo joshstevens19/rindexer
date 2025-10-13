@@ -13,12 +13,10 @@ use super::{
 };
 use crate::manifest::contract::Contract;
 use crate::{
-    generator::{
-        database_bindings::generate_database_code,
-        trace_bindings::{
-            generate_trace_bindings, generate_trace_handlers, trace_abigen_contract_file_name,
-            GenerateTraceBindingsError, GenerateTraceHandlersError,
-        },
+    generator::database_bindings::{generate_clickhouse_code, generate_postgres_code},
+    generator::trace_bindings::{
+        generate_trace_bindings, generate_trace_handlers, trace_abigen_contract_file_name,
+        GenerateTraceBindingsError, GenerateTraceHandlersError,
     },
     helpers::{
         camel_to_snake, create_mod_file, format_all_files_for_project, write_file,
@@ -78,13 +76,6 @@ fn write_global(
 
     let context_code = generate_context_code(global_contracts, networks);
     write_file(&global_contract_file_path, context_code.as_str())?;
-
-    Ok(())
-}
-
-fn write_database(output: &Path) -> Result<(), WriteGlobalError> {
-    let database_code = generate_database_code();
-    write_file(&generate_file_location(output, "database"), database_code.as_str())?;
 
     Ok(())
 }
@@ -250,7 +241,19 @@ pub fn generate_rindexer_typings(
             }
 
             if manifest.storage.postgres_enabled() {
-                write_database(&output)?;
+                write_file(
+                    &generate_file_location(&output, "database"),
+                    generate_postgres_code().as_str(),
+                )
+                .map_err(WriteGlobalError::from)?;
+            }
+
+            if manifest.storage.clickhouse_enabled() {
+                write_file(
+                    &generate_file_location(&output, "database"),
+                    generate_clickhouse_code().as_str(),
+                )
+                .map_err(WriteGlobalError::from)?;
             }
 
             write_indexer_events(project_path, &output, manifest.to_indexer(), &manifest.storage)?;

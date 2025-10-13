@@ -12,11 +12,13 @@ mod health;
 pub use health::{start_health_server, HealthServer, HealthServerState, HealthStatus};
 
 mod database;
-pub use database::postgres::{
-    client::{PostgresClient, ToSql},
+pub use database::{
+    clickhouse::{client::ClickhouseClient, setup::setup_clickhouse},
     generate::drop_tables_for_indexer_sql,
-    setup::setup_postgres,
-    sql_type_wrapper::EthereumSqlTypeWrapper,
+    postgres::{
+        client::{PostgresClient, ToSql},
+        setup::setup_postgres,
+    },
 };
 
 mod simple_file_formatters;
@@ -48,6 +50,7 @@ mod types;
 // export 3rd party dependencies
 pub use async_trait::async_trait;
 pub use colored::Colorize as RindexerColorize;
+pub use database::sql_type_wrapper::EthereumSqlTypeWrapper;
 pub use futures::FutureExt;
 pub use lazy_static::lazy_static;
 pub use reqwest::header::HeaderMap;
