@@ -16,7 +16,7 @@ use tracing::{debug, error, info, warn};
 use super::native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME};
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::clickhouse::setup::{setup_clickhouse, SetupClickhouseError};
-use crate::database::generate::generate_event_table_full_name;
+use crate::database::generate::{generate_event_table_full_name, generate_event_table_full_name_clickhouse};
 use crate::database::sql_type_wrapper::{
     map_ethereum_wrapper_to_json, map_log_params_to_ethereum_wrapper, EthereumSqlTypeWrapper,
 };
@@ -186,6 +186,7 @@ struct NoCodeCallbackParams {
     csv: Option<Arc<AsyncCsvAppender>>,
     postgres: Option<Arc<PostgresClient>>,
     sql_event_table_name: String,
+    clickhouse_table_name: String,
     sql_column_names: Vec<String>,
     clickhouse: Option<Arc<ClickhouseClient>>,
     streams_clients: Arc<Option<StreamsClients>>,
@@ -483,7 +484,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                 if !sql_bulk_data.is_empty() {
                     if let Err(e) = clickhouse
                         .insert_bulk(
-                            &params.sql_event_table_name,
+                            &params.clickhouse_table_name,
                             &params.sql_column_names,
                             &sql_bulk_data,
                         )
@@ -742,6 +743,19 @@ async fn process_contract(
         let sql_event_table_name =
             generate_event_table_full_name(&manifest.name, &contract.name, &event_info.name);
 
+        // Generate ClickHouse-specific table name if ClickHouse is enabled
+        let clickhouse_table_name = if let Some(ref ch_client) = clickhouse {
+            generate_event_table_full_name_clickhouse(
+                ch_client.get_database_name(),
+                &manifest.name,
+                &contract.name,
+                &event_info.name,
+            )
+        } else {
+            // If no ClickHouse, use the same as PostgreSQL (won't be used anyway)
+            sql_event_table_name.clone()
+        };
+
         let streams_client = if let Some(streams) = &contract.streams {
             Some(StreamsClients::new(streams.clone()).await)
         } else {
@@ -776,6 +790,7 @@ async fn process_contract(
                 postgres: postgres.clone(),
                 clickhouse: clickhouse.clone(),
                 sql_event_table_name,
+                clickhouse_table_name,
                 sql_column_names,
                 streams_clients: Arc::new(streams_client),
                 chat_clients: Arc::new(chat_clients),
@@ -860,6 +875,19 @@ pub async fn process_trace_events(
         let sql_event_table_name =
             generate_event_table_full_name(&manifest.name, &contract_name, &event_info.name);
 
+        // Generate ClickHouse-specific table name if ClickHouse is enabled
+        let clickhouse_table_name = if let Some(ref ch_client) = clickhouse {
+            generate_event_table_full_name_clickhouse(
+                ch_client.get_database_name(),
+                &manifest.name,
+                &contract_name,
+                &event_info.name,
+            )
+        } else {
+            // If no ClickHouse, use the same as PostgreSQL (won't be used anyway)
+            sql_event_table_name.clone()
+        };
+
         let streams_client = if let Some(streams) = &contract.streams {
             Some(StreamsClients::new(streams.clone()).await)
         } else {
@@ -882,6 +910,7 @@ pub async fn process_trace_events(
             postgres: postgres.clone(),
             clickhouse: clickhouse.clone(),
             sql_event_table_name,
+            clickhouse_table_name,
             sql_column_names,
             streams_clients: Arc::new(streams_client),
             chat_clients: Arc::new(chat_clients),

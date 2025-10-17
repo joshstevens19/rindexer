@@ -6,10 +6,10 @@ use std::env;
 use tracing::info;
 
 pub struct ClickhouseConnection {
-    url: String,
-    user: String,
-    password: String,
-    db: String,
+    pub url: String,
+    pub user: String,
+    pub password: String,
+    pub db: String,
 }
 
 pub fn clickhouse_connection() -> Result<ClickhouseConnection, env::VarError> {
@@ -42,11 +42,13 @@ pub enum ClickhouseError {
 
 pub struct ClickhouseClient {
     pub(crate) conn: Client,
+    pub(crate) database_name: String,
 }
 
 impl ClickhouseClient {
     pub async fn new() -> Result<Self, ClickhouseConnectionError> {
         let connection = clickhouse_connection()?;
+        let database_name = connection.db.clone();
 
         let client = Client::default()
             .with_url(connection.url)
@@ -57,7 +59,11 @@ impl ClickhouseClient {
         client.query("select 1").execute().await?;
         info!("Clickhouse client connected successfully!");
 
-        Ok(ClickhouseClient { conn: client })
+        Ok(ClickhouseClient { conn: client, database_name })
+    }
+
+    pub fn get_database_name(&self) -> &str {
+        &self.database_name
     }
 
     pub async fn query_one<T>(&self, sql: &str) -> Result<T, ClickhouseError>
