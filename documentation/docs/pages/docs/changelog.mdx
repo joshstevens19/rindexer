@@ -17,6 +17,13 @@
 
 all release branches are deployed through `release/VERSION_NUMBER` branches
 
+# 0.28.1-beta - 17th October 2025
+
+### Bug fixes
+-------------------------------------------------
+- fix: add tls for hosted clickhouse databases 
+- fix: ClickHouse now uses single database from `CLICKHOUSE_DB` env var instead of requiring `CREATE DATABASE` privileges, rationale: giving all permissions to one script to drop any database is unreasonable.
+
 # 0.28.0-beta - 13th October 2025
 
 github branch - https://github.com/joshstevens19/rindexer/tree/release/0.28.0

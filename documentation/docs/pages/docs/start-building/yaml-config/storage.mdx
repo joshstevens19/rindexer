@@ -1006,11 +1006,18 @@ If you are deploying the indexer or want to point to an external database you ca
 connection string, to do this you have to change/define it the `.env` file.
 
 ```bash
-CLICKHOUSE_URL="http://[host]:[port]"
+CLICKHOUSE_URL="http://[host]:[port]"  # or https://[host]:[port] for hosted services
 CLICKHOUSE_DB="default"
 CLICKHOUSE_USER="default"
 CLICKHOUSE_PASSWORD="default"
 ```
+
+:::info
+Both HTTP and HTTPS protocols are supported. For hosted ClickHouse services (ClickHouse Cloud, Aiven, etc.), use HTTPS with the appropriate port (typically 8443):
+```bash
+CLICKHOUSE_URL="https://your-instance.clickhouse.cloud:8443"
+```
+:::
 
 ### enabled
 

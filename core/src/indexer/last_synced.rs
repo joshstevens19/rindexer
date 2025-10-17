@@ -183,11 +183,12 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
             last_synced_block: u64,
         }
 
+        let database_name = clickhouse.get_database_name();
         let schema =
             generate_indexer_contract_schema_name(config.indexer_name, config.contract_name);
         let table_name = generate_internal_event_table_name_no_shorten(&schema, config.event_name);
         let query = format!(
-            "SELECT last_synced_block FROM rindexer_internal.{table_name} FINAL WHERE network = '{}'",
+            "SELECT last_synced_block FROM {database_name}.rindexer_internal_{table_name} FINAL WHERE network = '{}'",
             config.network
         );
 
@@ -306,6 +307,7 @@ pub async fn update_progress_and_last_synced_task(
             error!("Error updating db last synced block: {:?}", e);
         }
     } else if let Some(clickhouse) = &config.clickhouse() {
+        let database_name = clickhouse.get_database_name();
         let schema =
             generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
         let table_name =
@@ -313,8 +315,8 @@ pub async fn update_progress_and_last_synced_task(
         let network = &config.network_contract().network;
         let query = format!(
             r#"
-            INSERT INTO rindexer_internal.{table_name} (network, last_synced_block) VALUES ('{network}', {to_block});
-            INSERT INTO rindexer_internal.latest_block (network, block) VALUES ('{network}', {latest});
+            INSERT INTO {database_name}.rindexer_internal_{table_name} (network, last_synced_block) VALUES ('{network}', {to_block});
+            INSERT INTO {database_name}.rindexer_internal_latest_block (network, block) VALUES ('{network}', {latest});
             "#
         );
 
