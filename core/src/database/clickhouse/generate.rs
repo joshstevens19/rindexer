@@ -36,7 +36,11 @@ pub fn generate_tables_for_indexer_clickhouse(
         if !disable_event_tables {
             info!("Creating event tables in database: {}", database_name);
 
-            sql.push_str(&generate_event_table_clickhouse(&event_names, database_name, &schema_name));
+            sql.push_str(&generate_event_table_clickhouse(
+                &event_names,
+                database_name,
+                &schema_name,
+            ));
         }
 
         sql.push_str(&generate_internal_event_table_clickhouse(
@@ -46,17 +50,26 @@ pub fn generate_tables_for_indexer_clickhouse(
             networks,
         ));
 
-        sql.push_str(&generate_internal_factory_event_table_sql(database_name, &indexer.name, &factories));
+        sql.push_str(&generate_internal_factory_event_table_sql(
+            database_name,
+            &indexer.name,
+            &factories,
+        ));
     }
 
     Ok(Code::new(sql))
 }
 
-fn generate_event_table_clickhouse(abi_inputs: &[EventInfo], database_name: &str, schema_name: &str) -> String {
+fn generate_event_table_clickhouse(
+    abi_inputs: &[EventInfo],
+    database_name: &str,
+    schema_name: &str,
+) -> String {
     abi_inputs
         .iter()
         .map(|event_info| {
-            let table_name = format!("{}.{}_{}", database_name, schema_name, camel_to_snake(&event_info.name));
+            let table_name =
+                format!("{}.{}_{}", database_name, schema_name, camel_to_snake(&event_info.name));
             info!("Creating table if not exists: {}", table_name);
             let event_columns = if event_info.inputs.is_empty() {
                 "".to_string()
@@ -98,54 +111,73 @@ fn generate_internal_event_table_clickhouse(
     schema_name: &str,
     networks: Vec<&str>,
 ) -> String {
-    abi_inputs.iter().map(|event_info| {
-        let table_name = format!(
-            "{}.rindexer_internal_{}_{}",
-            database_name,
-            schema_name,
-            camel_to_snake(&event_info.name)
-        );
+    abi_inputs
+        .iter()
+        .map(|event_info| {
+            let table_name = format!(
+                "{}.rindexer_internal_{}_{}",
+                database_name,
+                schema_name,
+                camel_to_snake(&event_info.name)
+            );
 
-        let create_table_query = format!(
-            r#"
+            let create_table_query = format!(
+                r#"
                 CREATE TABLE IF NOT EXISTS {} (
                     "network" String,
                     "last_synced_block" UInt64
                 )
                     ENGINE = ReplacingMergeTree(last_synced_block)
                     ORDER BY network;"#,
-            table_name
-        );
+                table_name
+            );
 
-        let insert_queries = networks.iter().map(|network| {
-            format!(
-                r#"INSERT INTO {} ("network", "last_synced_block") VALUES ('{}', 0);"#,
-                table_name,
-                network
-            )
-        }).collect::<Vec<_>>().join("\n");
+            let insert_queries = networks
+                .iter()
+                .map(|network| {
+                    format!(
+                        r#"INSERT INTO {} ("network", "last_synced_block") VALUES ('{}', 0);"#,
+                        table_name, network
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
 
-        let latest_block_table_name = format!("{}.rindexer_internal_latest_block", database_name);
-        let create_latest_block_query = format!(
-            r#"
+            let latest_block_table_name =
+                format!("{}.rindexer_internal_latest_block", database_name);
+            let create_latest_block_query = format!(
+                r#"
             CREATE TABLE IF NOT EXISTS {} (
                 "network" String,
                 "block" UInt64
               )
               ENGINE = ReplacingMergeTree(block)
                 ORDER BY network;
-        "#, latest_block_table_name);
-
-        let latest_block_insert_queries = networks.iter().map(|network| {
-            format!(
-                r#"INSERT INTO {} ("network", "block") VALUES ('{network}', 0);"#,
+        "#,
                 latest_block_table_name
+            );
+
+            let latest_block_insert_queries = networks
+                .iter()
+                .map(|network| {
+                    format!(
+                        r#"INSERT INTO {} ("network", "block") VALUES ('{network}', 0);"#,
+                        latest_block_table_name
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            format!(
+                "{} {} {} {}",
+                create_table_query,
+                insert_queries,
+                create_latest_block_query,
+                latest_block_insert_queries
             )
-        }).collect::<Vec<_>>().join("\n");
-
-
-        format!("{} {} {} {}", create_table_query, insert_queries, create_latest_block_query, latest_block_insert_queries)
-    }).collect::<Vec<_>>().join("\n")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn generate_internal_factory_event_table_sql(
@@ -194,10 +226,17 @@ pub fn generate_columns_with_data_types(inputs: &[ABIInput]) -> Vec<String> {
     generate_columns(inputs, &GenerateAbiPropertiesType::ClickhouseWithDataTypes)
 }
 
-pub fn drop_tables_for_indexer_clickhouse(project_path: &Path, indexer: &Indexer, database_name: &str) -> Code {
+pub fn drop_tables_for_indexer_clickhouse(
+    project_path: &Path,
+    indexer: &Indexer,
+    database_name: &str,
+) -> Code {
     let mut sql = String::new();
 
-    sql.push_str(&format!("DROP TABLE IF EXISTS {}.rindexer_internal_latest_block;", database_name));
+    sql.push_str(&format!(
+        "DROP TABLE IF EXISTS {}.rindexer_internal_latest_block;",
+        database_name
+    ));
 
     for contract in &indexer.contracts {
         let contract_name = contract.before_modify_name_if_filter_readonly();
@@ -208,17 +247,20 @@ pub fn drop_tables_for_indexer_clickhouse(project_path: &Path, indexer: &Indexer
         if let Ok(abi_items) = abi_items {
             for abi_item in abi_items.iter() {
                 // Drop event table
-                let event_table_name = format!("{}_{}", schema_name, camel_to_snake(&abi_item.name));
-                sql.push_str(
-                    &format!("DROP TABLE IF EXISTS {}.{};", database_name, event_table_name),
-                );
+                let event_table_name =
+                    format!("{}_{}", schema_name, camel_to_snake(&abi_item.name));
+                sql.push_str(&format!(
+                    "DROP TABLE IF EXISTS {}.{};",
+                    database_name, event_table_name
+                ));
 
                 // Drop internal tracking table
                 let internal_table_name =
                     generate_internal_event_table_name_no_shorten(&schema_name, &abi_item.name);
-                sql.push_str(
-                    &format!("DROP TABLE IF EXISTS {}.rindexer_internal_{};", database_name, internal_table_name),
-                );
+                sql.push_str(&format!(
+                    "DROP TABLE IF EXISTS {}.rindexer_internal_{};",
+                    database_name, internal_table_name
+                ));
             }
         } else {
             error!(
@@ -236,7 +278,10 @@ pub fn drop_tables_for_indexer_clickhouse(project_path: &Path, indexer: &Indexer
                 input_names: factory.input_names(),
             };
             let table_name = generate_internal_factory_event_table_name(&params);
-            sql.push_str(&format!("DROP TABLE IF EXISTS {}.rindexer_internal_{};", database_name, table_name))
+            sql.push_str(&format!(
+                "DROP TABLE IF EXISTS {}.rindexer_internal_{};",
+                database_name, table_name
+            ))
         }
     }
 

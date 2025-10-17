@@ -36,13 +36,17 @@ pub async fn setup_clickhouse(
             "`drop_each_run` enabled so dropping all data for {} before starting",
             &manifest.name
         );
-        let sql = drop_tables_for_indexer_clickhouse(project_path, &manifest.to_indexer(), database_name);
+        let sql =
+            drop_tables_for_indexer_clickhouse(project_path, &manifest.to_indexer(), database_name);
         client.execute_batch(sql.as_str()).await?;
         info!("Dropped all data for {}", manifest.name);
     }
 
     if disable_event_tables {
-        info!("Creating internal rindexer tables for {} in database: {}", manifest.name, database_name);
+        info!(
+            "Creating internal rindexer tables for {} in database: {}",
+            manifest.name, database_name
+        );
     } else {
         info!("Creating tables for {} in database: {}", manifest.name, database_name);
     }
