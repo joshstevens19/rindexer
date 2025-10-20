@@ -10,7 +10,7 @@ resolver = "2"
 
 [dependencies]
 # internal dependencies
-rindexer = { path = "../core" }
+rindexer = { path = "../core", features = ["kafka"] }
 
 # external dependencies
 alloy = { version = "1.0.37", features = ["full"] }
