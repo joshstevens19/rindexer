@@ -14,16 +14,20 @@ use crate::{
     event::{filter_event_data_by_conditions, EventMessage},
     indexer::native_transfer::EVENT_NAME,
     manifest::stream::{
-        CloudflareQueuesStreamConfig, CloudflareQueuesStreamQueueConfig, KafkaStreamConfig,
-        KafkaStreamQueueConfig, RabbitMQStreamConfig, RabbitMQStreamQueueConfig, RedisStreamConfig,
-        RedisStreamStreamConfig, SNSStreamTopicConfig, StreamEvent, StreamsConfig,
-        WebhookStreamConfig,
+        CloudflareQueuesStreamConfig, CloudflareQueuesStreamQueueConfig, RabbitMQStreamConfig,
+        RabbitMQStreamQueueConfig, RedisStreamConfig, RedisStreamStreamConfig,
+        SNSStreamTopicConfig, StreamEvent, StreamsConfig, WebhookStreamConfig,
     },
     streams::{
-        kafka::{Kafka, KafkaError},
         CloudflareQueues, CloudflareQueuesError, RabbitMQ, RabbitMQError, Redis, RedisError,
         Webhook, WebhookError, SNS,
     },
+};
+
+#[cfg(feature = "kafka")]
+use crate::{
+    manifest::stream::{KafkaStreamConfig, KafkaStreamQueueConfig},
+    streams::kafka::{Kafka, KafkaError},
 };
 
 // we should limit the max chunk size we send over when streaming to 70KB - 100KB is most limits
@@ -50,6 +54,7 @@ pub enum StreamError {
     #[error("RabbitMQ could not publish: {0}")]
     RabbitMQCouldNotPublish(#[from] RabbitMQError),
 
+    #[cfg(feature = "kafka")]
     #[error("Kafka could not publish: {0}")]
     KafkaCouldNotPublish(#[from] KafkaError),
 
@@ -75,6 +80,7 @@ pub struct RabbitMQStream {
     client: Arc<RabbitMQ>,
 }
 
+#[cfg(feature = "kafka")]
 #[derive(Debug)]
 pub struct KafkaStream {
     config: KafkaStreamConfig,
@@ -98,6 +104,7 @@ pub struct StreamsClients {
     sns: Option<SNSStream>,
     webhook: Option<WebhookStream>,
     rabbitmq: Option<RabbitMQStream>,
+    #[cfg(feature = "kafka")]
     kafka: Option<KafkaStream>,
     redis: Option<RedisStream>,
     cloudflare_queues: Option<CloudflareQueuesStream>,
@@ -131,6 +138,7 @@ impl StreamsClients {
             None
         };
 
+        #[cfg(feature = "kafka")]
         #[allow(clippy::manual_map)]
         let kafka = if let Some(config) = stream_config.kafka.as_ref() {
             Some(KafkaStream {
@@ -172,14 +180,31 @@ impl StreamsClients {
             None
         };
 
-        Self { sns, webhook, rabbitmq, kafka, redis, cloudflare_queues }
+        Self {
+            sns,
+            webhook,
+            rabbitmq,
+            #[cfg(feature = "kafka")]
+            kafka,
+            redis,
+            cloudflare_queues,
+        }
     }
 
     fn has_any_streams(&self) -> bool {
         self.sns.is_some()
             || self.webhook.is_some()
             || self.rabbitmq.is_some()
-            || self.kafka.is_some()
+            || {
+                #[cfg(feature = "kafka")]
+                {
+                    self.kafka.is_some()
+                }
+                #[cfg(not(feature = "kafka"))]
+                {
+                    false
+                }
+            }
             || self.redis.is_some()
             || self.cloudflare_queues.is_some()
     }
@@ -413,6 +438,7 @@ impl StreamsClients {
         tasks
     }
 
+    #[cfg(feature = "kafka")]
     fn kafka_stream_tasks(
         &self,
         config: &KafkaStreamQueueConfig,
@@ -581,6 +607,7 @@ impl StreamsClients {
                 }
             }
 
+            #[cfg(feature = "kafka")]
             if let Some(kafka) = &self.kafka {
                 for config in &kafka.config.topics {
                     if config.events.iter().any(|e| e.event_name == event_message.event_name)

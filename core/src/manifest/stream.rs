@@ -148,6 +148,7 @@ impl RabbitMQStreamConfig {
     }
 }
 
+#[cfg(feature = "kafka")]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct KafkaStreamQueueConfig {
     pub topic: String,
@@ -159,6 +160,7 @@ pub struct KafkaStreamQueueConfig {
     pub events: Vec<StreamEvent>,
 }
 
+#[cfg(feature = "kafka")]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct KafkaStreamConfig {
     pub brokers: Vec<String>,
@@ -203,6 +205,7 @@ pub struct StreamsConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rabbitmq: Option<RabbitMQStreamConfig>,
 
+    #[cfg(feature = "kafka")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kafka: Option<KafkaStreamConfig>,
 
@@ -224,13 +227,19 @@ impl StreamsConfig {
 
     pub fn get_streams_last_synced_block_path(&self) -> String {
         let mut path = ".rindexer/".to_string();
+        #[allow(clippy::blocks_in_conditions)]
         if self.rabbitmq.is_some() {
             path.push_str("rabbitmq_");
         } else if self.sns.is_some() {
             path.push_str("sns_");
         } else if self.webhooks.is_some() {
             path.push_str("webhooks_");
-        } else if self.kafka.is_some() {
+        } else if {
+            #[cfg(feature = "kafka")]
+                { self.kafka.is_some() }
+            #[cfg(not(feature = "kafka"))]
+                { false }
+        } {
             path.push_str("kafka_");
         } else if self.redis.is_some() {
             path.push_str("redis_");

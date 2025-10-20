@@ -95,10 +95,10 @@ reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.8.
 reth-tracing = { git = "https://github.com/paradigmxyz/reth", tag = "v1.8.2", optional = true }
 
 [target.'cfg(not(windows))'.dependencies]
-rdkafka = { version = "0.38.0", features = ["tokio"] }
+rdkafka = { version = "0.38.0", features = ["tokio"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
-rdkafka = { version = "0.38.0", features = ["tokio", "cmake-build"] }
+rdkafka = { version = "0.38.0", features = ["tokio", "cmake-build"], optional = true }
 
 [profile.release]
 lto = "fat"
@@ -108,6 +108,7 @@ incremental = false
 [features]
 jemalloc = ["dep:jemallocator", "dep:jemalloc-ctl"]
 debug-json = []
+kafka = ["dep:rdkafka"]
 reth = [
     "dep:reth",
     "dep:reth-exex",
