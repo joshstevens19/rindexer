@@ -236,9 +236,13 @@ impl StreamsConfig {
             path.push_str("webhooks_");
         } else if {
             #[cfg(feature = "kafka")]
-                { self.kafka.is_some() }
+            {
+                self.kafka.is_some()
+            }
             #[cfg(not(feature = "kafka"))]
-                { false }
+            {
+                false
+            }
         } {
             path.push_str("kafka_");
         } else if self.redis.is_some() {
