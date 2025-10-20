@@ -186,9 +186,9 @@ jobs:
           flags=()
 
           if [[ "$target" != *msvc* && "$target" != "aarch64-unknown-linux-gnu" ]]; then
-            flags+=(--features jemalloc,reth,kafka)
+            flags+=(--features jemalloc,reth)
           else
-            flags+=(--features reth,kafka)
+            flags+=(--features reth)
           fi
 
           [[ "$target" == *windows* ]] && exe=".exe"
@@ -267,7 +267,7 @@ jobs:
           flags=()
           
           if [[ "$target" != *msvc* && "$target" != "aarch64-unknown-linux-gnu" ]]; then
-            flags+=(--features jemalloc,kafka)
+            flags+=(--features jemalloc)
           fi
           
           cargo test --exclude rindexer_rust_playground --workspace --release --target "$target" "${flags[@]}"
@@ -280,9 +280,9 @@ jobs:
           flags=()
 
           if [[ "$target" != *msvc* && "$target" != "aarch64-unknown-linux-gnu" ]]; then
-            flags+=(--features jemalloc,reth,kafka)
+            flags+=(--features jemalloc,reth)
           else
-            flags+=(--features reth,kafka)
+            flags+=(--features reth)
           fi
 
           cargo test --exclude rindexer_rust_playground --workspace --release --target "$target" "${flags[@]}"
@@ -651,9 +651,9 @@ jobs:
           flags=()
 
           if [[ "$target" != *msvc* && "$target" != "aarch64-unknown-linux-gnu" ]]; then
-            flags+=(--features jemalloc,reth,kafka)
+            flags+=(--features jemalloc,reth)
           else
-            flags+=(--features reth,kafka)
+            flags+=(--features reth)
           fi
 
           if [[ "$target" == *windows* ]]; then
