@@ -10,7 +10,7 @@ resolver = "2"
 
 [dependencies]
 # internal dependencies
-rindexer = { path = "../core", features = ["kafka"] }
+rindexer = { path = "../core" }
 
 # external dependencies
 alloy = { version = "1.0.37", features = ["full"] }
@@ -33,5 +33,7 @@ codegen-units = 1
 incremental = false
 
 [features]
+default = ["kafka"]
 jemalloc = ["dep:jemallocator", "dep:jemalloc-ctl"]
 reth = ["rindexer/reth"]
+kafka = ["rindexer/kafka"]
