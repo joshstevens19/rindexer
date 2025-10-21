@@ -105,7 +105,7 @@ fn generate_internal_event_table_sql(
 
         let latest_block_insert_queries = networks.iter().map(|network| {
             format!(
-                r#"INSERT INTO rindexer_internal.latest_block ("network", "block") VALUES ("{network}", 0) ON CONFLICT ("network") DO NOTHING;"#
+                r#"INSERT INTO rindexer_internal.latest_block ("network", "block") VALUES ('{network}', 0) ON CONFLICT ("network") DO NOTHING;"#
             )
         }).collect::<Vec<_>>().join("\n");
 
