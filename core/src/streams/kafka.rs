@@ -1,7 +1,7 @@
-use std::{
-    fmt::{Debug, Formatter},
-    time::Duration,
-};
+use std::fmt::{Debug, Formatter};
+
+#[cfg(not(windows))]
+use std::time::Duration;
 
 #[cfg(not(windows))]
 use rdkafka::{

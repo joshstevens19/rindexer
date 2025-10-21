@@ -33,5 +33,7 @@ codegen-units = 1
 incremental = false
 
 [features]
+default = ["kafka"]
 jemalloc = ["dep:jemallocator", "dep:jemalloc-ctl"]
 reth = ["rindexer/reth"]
+kafka = ["rindexer/kafka"]

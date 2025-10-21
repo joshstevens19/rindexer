@@ -278,7 +278,7 @@ jobs:
           set -eo pipefail
           target="${{ matrix.target }}"
           flags=()
-          
+
           if [[ "$target" != *msvc* && "$target" != "aarch64-unknown-linux-gnu" ]]; then
             flags+=(--features jemalloc,reth)
           else
@@ -649,9 +649,9 @@ jobs:
           set -eo pipefail
           target="${{ matrix.target }}"
           flags=()
-          
+
           if [[ "$target" != *msvc* && "$target" != "aarch64-unknown-linux-gnu" ]]; then
-          flags+=(--features jemalloc,reth)
+            flags+=(--features jemalloc,reth)
           else
             flags+=(--features reth)
           fi

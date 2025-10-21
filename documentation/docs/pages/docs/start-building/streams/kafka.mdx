@@ -6,6 +6,17 @@ If you are on windows and want to use kafka streams you should use the docker im
 :::
 
 :::info
+**Feature Gate:** If you're including the rindexer crate in your Rust project, Kafka support is gated behind the `kafka` feature flag. Add it to your `Cargo.toml`:
+
+```toml
+[dependencies]
+rindexer = { version = "*", features = ["kafka"] }
+```
+
+**Docker Images:** Kafka support is enabled by default in all official rindexer Docker images - no additional configuration needed.
+:::
+
+:::info
 rindexer streams can be used without any other storage providers. It can also be used with storage providers.
 :::
 
