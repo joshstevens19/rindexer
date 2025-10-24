@@ -101,7 +101,11 @@ impl TestSuite {
                 if let TestResult::Failed(msg) = &test.result {
                     println!("  [ERROR] {} - {}", test.name, msg);
                 } else if let TestResult::Timeout = &test.result {
-                    println!("  [TIMEOUT] {} - Test timed out after {} seconds", test.name, test.duration.as_secs());
+                    println!(
+                        "  [TIMEOUT] {} - Test timed out after {} seconds",
+                        test.name,
+                        test.duration.as_secs()
+                    );
                 }
             }
         }

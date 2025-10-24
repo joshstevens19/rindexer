@@ -1,7 +1,7 @@
-use anyhow::{Result, Context};
-use tracing::{info, warn};
+use anyhow::{Context, Result};
 use std::path::PathBuf;
 use tempfile::TempDir;
+use tracing::{info, warn};
 
 use crate::anvil_setup::AnvilInstance;
 use crate::rindexer_client::RindexerInstance;
@@ -85,31 +85,29 @@ pub struct TestContext {
 impl TestContext {
     pub async fn new(rindexer_binary: String, anvil_port: u16, health_port: u16) -> Result<Self> {
         info!("Setting up fresh test context...");
-        
+
         // Kill any existing Anvil processes and start fresh
         info!("Killing any existing Anvil processes...");
-        let _ = std::process::Command::new("pkill")
-            .arg("-f")
-            .arg("anvil")
-            .output();
-        
+        let _ = std::process::Command::new("pkill").arg("-f").arg("anvil").output();
+
         // Wait for processes to be killed and port to be free
         wait_for_port_free(anvil_port, 10).await?;
-        
+
         // Start a fresh Anvil instance
-        let anvil = AnvilInstance::start_local("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80").await
-            .context("Failed to start Anvil instance")?;
-        
+        let anvil = AnvilInstance::start_local(
+            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+        )
+        .await
+        .context("Failed to start Anvil instance")?;
+
         info!("Anvil ready at: {}", anvil.rpc_url);
-        
+
         // Create temporary directory for this test run
-        let temp_dir = TempDir::new()
-            .context("Failed to create temporary directory")?;
-        
+        let temp_dir = TempDir::new().context("Failed to create temporary directory")?;
+
         let project_path = temp_dir.path().join("test_project");
-        std::fs::create_dir(&project_path)
-            .context("Failed to create project directory")?;
-        
+        std::fs::create_dir(&project_path).context("Failed to create project directory")?;
+
         Ok(Self {
             anvil,
             rindexer: None,
@@ -121,10 +119,10 @@ impl TestContext {
             health_client: Some(HealthClient::new(health_port)),
         })
     }
-    
+
     pub async fn cleanup(&mut self) -> Result<()> {
         info!("Cleaning up test suite...");
-        
+
         // Stop Rindexer if running
         if let Some(mut rindexer) = self.rindexer.take() {
             if let Err(e) = rindexer.stop().await {
@@ -137,38 +135,40 @@ impl TestContext {
                 warn!("Error stopping GraphQL: {}", e);
             }
         }
-        
+
         // Anvil will be cleaned up automatically when the process is dropped
-        
+
         // TempDir will be cleaned up automatically on drop
         self.temp_dir.take();
-        
+
         info!("Test suite cleanup completed");
         Ok(())
     }
-    
+
     /// Deploy a test contract using the Anvil instance
     pub async fn deploy_test_contract(&mut self) -> Result<String> {
         let address = self.anvil.deploy_test_contract().await?;
         self.test_contract_address = Some(address.clone());
         Ok(address)
     }
-    
+
     /// Create a minimal Rindexer configuration
     pub fn create_minimal_config(&self) -> RindexerConfig {
         crate::rindexer_client::RindexerInstance::create_minimal_config(&self.anvil.rpc_url)
     }
-    
+
     /// Create a configuration with a specific contract
     pub fn create_contract_config(&self, contract_address: &str) -> RindexerConfig {
-        crate::rindexer_client::RindexerInstance::create_contract_config(&self.anvil.rpc_url, contract_address)
+        crate::rindexer_client::RindexerInstance::create_contract_config(
+            &self.anvil.rpc_url,
+            contract_address,
+        )
     }
-    
+
     pub async fn start_rindexer(&mut self, config: RindexerConfig) -> Result<()> {
         // Create abis directory and copy all ABI files from repo abis/
         let abis_dir = self.project_path.join("abis");
-        std::fs::create_dir_all(&abis_dir)
-            .context("Failed to create abis directory")?;
+        std::fs::create_dir_all(&abis_dir).context("Failed to create abis directory")?;
 
         if let Ok(entries) = std::fs::read_dir("abis") {
             for entry in entries.flatten() {
@@ -183,29 +183,27 @@ impl TestContext {
                 }
             }
         }
-        
+
         // Write the Rindexer configuration
         let config_path = self.project_path.join("rindexer.yaml");
-        let config_yaml = serde_yaml::to_string(&config)
-            .context("Failed to serialize config to YAML")?;
-        
-        std::fs::write(&config_path, config_yaml)
-            .context("Failed to write config file")?;
-        
+        let config_yaml =
+            serde_yaml::to_string(&config).context("Failed to serialize config to YAML")?;
+
+        std::fs::write(&config_path, config_yaml).context("Failed to write config file")?;
+
         info!("Created Rindexer project at: {:?}", self.project_path);
-        
+
         // Create Rindexer instance and start indexer
         let mut rindexer = RindexerInstance::new(&self.rindexer_binary, self.project_path.clone());
-        
-        rindexer.start_indexer().await
-            .context("Failed to start Rindexer indexer")?;
-        
+
+        rindexer.start_indexer().await.context("Failed to start Rindexer indexer")?;
+
         self.rindexer = Some(rindexer);
         info!("Rindexer started successfully");
-        
+
         Ok(())
     }
-    
+
     /// Wait for Rindexer sync completion based on log output
     pub async fn wait_for_sync_completion(&mut self, timeout_seconds: u64) -> Result<()> {
         if let Some(rindexer) = &mut self.rindexer {
@@ -214,7 +212,7 @@ impl TestContext {
         }
         Ok(())
     }
-    
+
     pub fn get_csv_output_path(&self) -> PathBuf {
         self.project_path.join("generated_csv")
     }
@@ -228,9 +226,14 @@ impl TestContext {
     }
 
     /// Wait for new events to appear in CSV output (for live indexing tests)
-    pub async fn wait_for_new_events(&self, expected_min_events: usize, timeout_seconds: u64) -> Result<usize> {
-        let csv_path = self.get_csv_output_path().join("SimpleERC20").join("simpleerc20-transfer.csv");
-        
+    pub async fn wait_for_new_events(
+        &self,
+        expected_min_events: usize,
+        timeout_seconds: u64,
+    ) -> Result<usize> {
+        let csv_path =
+            self.get_csv_output_path().join("SimpleERC20").join("simpleerc20-transfer.csv");
+
         if !csv_path.exists() {
             return Err(anyhow::anyhow!("CSV file does not exist yet: {:?}", csv_path));
         }
@@ -244,23 +247,34 @@ impl TestContext {
                 let event_count = if lines.len() > 1 { lines.len() - 1 } else { 0 }; // Subtract header
 
                 if event_count >= expected_min_events {
-                    info!("✓ Found {} events (expected at least {})", event_count, expected_min_events);
+                    info!(
+                        "✓ Found {} events (expected at least {})",
+                        event_count, expected_min_events
+                    );
                     return Ok(event_count);
                 }
 
-                info!("Waiting for events: found {} of {} expected", event_count, expected_min_events);
+                info!(
+                    "Waiting for events: found {} of {} expected",
+                    event_count, expected_min_events
+                );
             }
 
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
 
-        Err(anyhow::anyhow!("Timeout waiting for {} events after {}s", expected_min_events, timeout_seconds))
+        Err(anyhow::anyhow!(
+            "Timeout waiting for {} events after {}s",
+            expected_min_events,
+            timeout_seconds
+        ))
     }
 
     /// Get the current number of events in CSV output
     pub fn get_event_count(&self) -> Result<usize> {
-        let csv_path = self.get_csv_output_path().join("SimpleERC20").join("simpleerc20-transfer.csv");
-        
+        let csv_path =
+            self.get_csv_output_path().join("SimpleERC20").join("simpleerc20-transfer.csv");
+
         if !csv_path.exists() {
             return Ok(0);
         }

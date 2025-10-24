@@ -1,8 +1,8 @@
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tracing::{info, debug};
+use tracing::{debug, info};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct HealthResponse {
@@ -32,17 +32,15 @@ pub struct HealthClient {
 
 impl HealthClient {
     pub fn new(port: u16) -> Self {
-        Self {
-            client: Client::new(),
-            base_url: format!("http://localhost:{}", port),
-        }
+        Self { client: Client::new(), base_url: format!("http://localhost:{}", port) }
     }
 
     pub async fn get_health(&self) -> Result<HealthResponse> {
         let url = format!("{}/health", self.base_url);
         debug!("Checking health at: {}", url);
-        
-        let response = self.client
+
+        let response = self
+            .client
             .get(&url)
             .timeout(Duration::from_secs(5))
             .send()
@@ -53,10 +51,8 @@ impl HealthClient {
             return Err(anyhow::anyhow!("Health endpoint returned status: {}", response.status()));
         }
 
-        let health: HealthResponse = response
-            .json()
-            .await
-            .context("Failed to parse health response")?;
+        let health: HealthResponse =
+            response.json().await.context("Failed to parse health response")?;
 
         Ok(health)
     }

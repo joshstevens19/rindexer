@@ -14,12 +14,18 @@ pub async fn start_postgres_container() -> Result<(String, u16)> {
     // Run container
     let status = Command::new("docker")
         .args([
-            "run", "-d",
-            "--name", &name,
-            "-e", "POSTGRES_PASSWORD=postgres",
-            "-e", "POSTGRES_USER=postgres",
-            "-e", "POSTGRES_DB=postgres",
-            "-p", &format!("{}:5432", port),
+            "run",
+            "-d",
+            "--name",
+            &name,
+            "-e",
+            "POSTGRES_PASSWORD=postgres",
+            "-e",
+            "POSTGRES_USER=postgres",
+            "-e",
+            "POSTGRES_DB=postgres",
+            "-p",
+            &format!("{}:5432", port),
             "postgres:16",
         ])
         .output();
@@ -52,7 +58,9 @@ pub async fn start_postgres_container() -> Result<(String, u16)> {
 /// or Colima if available. Times out after ~30s if daemon is unavailable.
 pub async fn ensure_docker_daemon() -> Result<()> {
     // If docker info works, we're done
-    if docker_info_ok() { return Ok(()); }
+    if docker_info_ok() {
+        return Ok(());
+    }
 
     // Try to start Docker Desktop on macOS
     #[cfg(target_os = "macos")]
@@ -67,7 +75,9 @@ pub async fn ensure_docker_daemon() -> Result<()> {
 
     // Poll for docker daemon readiness
     for _ in 0..60 {
-        if docker_info_ok() { return Ok(()); }
+        if docker_info_ok() {
+            return Ok(());
+        }
         sleep(Duration::from_millis(500)).await;
     }
     Err(anyhow::anyhow!("Docker daemon not available after waiting"))
@@ -96,5 +106,3 @@ fn allocate_free_port() -> Result<u16> {
 async fn port_open(port: u16) -> bool {
     tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok()
 }
-
-

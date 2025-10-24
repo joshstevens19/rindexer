@@ -31,7 +31,7 @@ impl TestDefinition {
         self
     }
 
-    pub fn as_live_test(mut self) -> Self {
+    pub fn with_live_test(mut self) -> Self {
         self.is_live_test = true;
         self
     }
@@ -83,14 +83,11 @@ impl TestRegistry {
 
     pub fn get_tests_by_filter(filter: &[String]) -> Vec<TestDefinition> {
         let all_tests = Self::get_all_tests();
-        
+
         if filter.is_empty() {
             return all_tests;
         }
 
-        all_tests
-            .into_iter()
-            .filter(|test| filter.contains(&test.name.to_string()))
-            .collect()
+        all_tests.into_iter().filter(|test| filter.contains(&test.name.to_string())).collect()
     }
 }

@@ -1,7 +1,7 @@
 use anyhow::Result;
-use tracing::info;
-use std::pin::Pin;
 use std::future::Future;
+use std::pin::Pin;
+use tracing::info;
 
 use crate::test_suite::TestContext;
 use crate::tests::registry::{TestDefinition, TestModule};
@@ -10,17 +10,18 @@ pub struct RestartCheckpointTests;
 
 impl TestModule for RestartCheckpointTests {
     fn get_tests() -> Vec<TestDefinition> {
-        vec![
-            TestDefinition::new(
-                "test_restart_checkpoint_no_duplicates",
-                "Restart indexer and ensure no duplicate events are written",
-                restart_checkpoint_no_duplicates_test,
-            ).with_timeout(180),
-        ]
+        vec![TestDefinition::new(
+            "test_restart_checkpoint_no_duplicates",
+            "Restart indexer and ensure no duplicate events are written",
+            restart_checkpoint_no_duplicates_test,
+        )
+        .with_timeout(180)]
     }
 }
 
-fn restart_checkpoint_no_duplicates_test(context: &mut TestContext) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
+fn restart_checkpoint_no_duplicates_test(
+    context: &mut TestContext,
+) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
     Box::pin(async move {
         info!("Running Restart/Checkpoint Test: No Duplicates");
 
@@ -55,7 +56,8 @@ fn restart_checkpoint_no_duplicates_test(context: &mut TestContext) -> Pin<Box<d
         if second_count != first_count {
             return Err(anyhow::anyhow!(
                 "Duplicate or missing events across restart (before={}, after={})",
-                first_count, second_count
+                first_count,
+                second_count
             ));
         }
 
@@ -63,5 +65,3 @@ fn restart_checkpoint_no_duplicates_test(context: &mut TestContext) -> Pin<Box<d
         Ok(())
     })
 }
-
-

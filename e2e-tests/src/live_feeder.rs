@@ -1,12 +1,12 @@
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
+use ethers::middleware::MiddlewareBuilder;
+use ethers::providers::{Http, Middleware, Provider};
+use ethers::signers::{LocalWallet, Signer};
+use ethers::types::{Address, TransactionRequest, U256};
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::time::interval;
-use tracing::{info, debug, warn};
-use ethers::types::{Address, U256, TransactionRequest};
-use ethers::providers::{Provider, Http, Middleware};
-use ethers::signers::{LocalWallet, Signer};
-use ethers::middleware::MiddlewareBuilder;
+use tracing::{debug, info, warn};
 
 pub struct LiveFeeder {
     anvil_url: String,
@@ -55,7 +55,10 @@ impl LiveFeeder {
         let tx_interval = self.tx_interval;
         let mine_interval = self.mine_interval;
 
-        info!("Starting live feeder with tx_interval={:?}, mine_interval={:?}", tx_interval, mine_interval);
+        info!(
+            "Starting live feeder with tx_interval={:?}, mine_interval={:?}",
+            tx_interval, mine_interval
+        );
 
         // Spawn transaction submission task
         let tx_task = {
@@ -141,13 +144,12 @@ impl LiveFeeder {
         tx_counter: u64,
     ) -> Result<()> {
         // Create provider and derive the actual chain ID from the node
-        let base_provider = Provider::<Http>::try_from(anvil_url)
-            .context("Failed to create provider")?;
+        let base_provider =
+            Provider::<Http>::try_from(anvil_url).context("Failed to create provider")?;
         let chain_id = base_provider.get_chainid().await?.as_u64();
 
         // Prepare wallet configured with the correct chain ID
-        let wallet: LocalWallet = private_key.parse()
-            .context("Invalid private key")?;
+        let wallet: LocalWallet = private_key.parse().context("Invalid private key")?;
         let wallet = wallet.with_chain_id(chain_id);
         let signer_address = wallet.address();
 
@@ -158,16 +160,19 @@ impl LiveFeeder {
             // Call the contract's transfer function to emit Transfer events
             let recipient = Self::generate_test_address(tx_counter);
             let transfer_amount = U256::from(1000u64); // Transfer 1000 tokens
-            
-            debug!("Attempting contract transfer: to={}, amount={}, contract={}", recipient, transfer_amount, contract_addr);
-            
+
+            debug!(
+                "Attempting contract transfer: to={}, amount={}, contract={}",
+                recipient, transfer_amount, contract_addr
+            );
+
             // Encode the transfer(address,uint256) function call
             let transfer_data = Self::encode_transfer_call(recipient, transfer_amount);
             debug!("Encoded transfer data: {:?}", hex::encode(&transfer_data));
-            
+
             // Get the current nonce for the account
             let nonce = provider.get_transaction_count(signer_address, None).await?;
-            
+
             let tx_request = TransactionRequest {
                 from: Some(signer_address),
                 to: Some(contract_addr.into()),
@@ -183,7 +188,12 @@ impl LiveFeeder {
                 Ok(tx) => tx,
                 Err(e) => {
                     warn!("Transaction failed with error: {:?}", e);
-                    return Err(e).with_context(|| format!("Failed to send contract transaction to {} with data: {:?}", contract_addr, transfer_data));
+                    return Err(e).with_context(|| {
+                        format!(
+                            "Failed to send contract transaction to {} with data: {:?}",
+                            contract_addr, transfer_data
+                        )
+                    });
                 }
             };
 
@@ -243,18 +253,18 @@ impl LiveFeeder {
         // ABI encoding for transfer(address,uint256)
         // Function selector: transfer(address,uint256) = 0xa9059cbb
         let mut data = vec![0xa9, 0x05, 0x9c, 0xbb];
-        
+
         // Encode address parameter (32 bytes, right-padded)
         let mut to_bytes = [0u8; 32];
         to_bytes[12..].copy_from_slice(to.as_bytes());
         data.extend_from_slice(&to_bytes);
-        
+
         // Encode uint256 parameter (32 bytes)
         let mut value_bytes = [0u8; 32];
         let value_bytes_be: [u8; 32] = value.into();
         value_bytes.copy_from_slice(&value_bytes_be);
         data.extend_from_slice(&value_bytes);
-        
+
         data
     }
 
