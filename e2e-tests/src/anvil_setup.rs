@@ -170,14 +170,17 @@ impl AnvilInstance {
     pub async fn deploy_test_contract(&self) -> Result<String> {
         info!("Deploying SimpleERC20 test contract...");
         
+        let e2e_tests_dir = std::env::current_dir()?;
+        let contract_path = e2e_tests_dir.join("contracts/SimpleERC20.sol:SimpleERC20");
         let output = std::process::Command::new("forge")
             .args([
                 "create",
                 "--rpc-url", &self.rpc_url,
                 "--private-key", "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
                 "--broadcast",
-                "contracts/SimpleERC20.sol:SimpleERC20"
+                &contract_path.to_string_lossy()
             ])
+            .current_dir(&e2e_tests_dir)
             .output()
             .context("Failed to run forge command")?;
         

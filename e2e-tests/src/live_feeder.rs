@@ -140,13 +140,19 @@ impl LiveFeeder {
         contract_address: Option<Address>,
         tx_counter: u64,
     ) -> Result<()> {
+        // Create provider and derive the actual chain ID from the node
+        let base_provider = Provider::<Http>::try_from(anvil_url)
+            .context("Failed to create provider")?;
+        let chain_id = base_provider.get_chainid().await?.as_u64();
+
+        // Prepare wallet configured with the correct chain ID
         let wallet: LocalWallet = private_key.parse()
             .context("Invalid private key")?;
+        let wallet = wallet.with_chain_id(chain_id);
         let signer_address = wallet.address();
 
-        let provider = Provider::<Http>::try_from(anvil_url)
-            .context("Failed to create provider")?
-            .with_signer(wallet);
+        // Build signer-enabled provider
+        let provider = base_provider.with_signer(wallet);
 
         if let Some(contract_addr) = contract_address {
             // Call the contract's transfer function to emit Transfer events
@@ -170,7 +176,7 @@ impl LiveFeeder {
                 nonce: Some(nonce),
                 gas_price: Some(20000000000u128.into()),
                 value: None,
-                chain_id: Some(31337u64.into()),
+                chain_id: None, // let signer/provider supply the correct chain id
             };
 
             let pending_tx = match provider.send_transaction(tx_request, None).await {
@@ -193,7 +199,7 @@ impl LiveFeeder {
                 gas_price: Some(20000000000u128.into()),
                 nonce: Some(provider.get_transaction_count(signer_address, None).await?),
                 data: None,
-                chain_id: Some(31337u64.into()),
+                chain_id: None, // let signer/provider supply the correct chain id
             };
 
             let pending_tx = provider
