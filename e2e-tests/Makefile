@@ -34,10 +34,10 @@ install-deps: ## Install required dependencies (Foundry, Anvil)
 build: ## Build the E2E test binary
 	@cargo build --bin e2e-tests
 
-build-rindexer: ## Build the Rindexer binary (assumes it's in ../rindexer)
-	@echo "Building Rindexer binary..."
-	@cd ../rindexer && cargo build --release --bin rindexer_cli
-	@echo "Rindexer binary built at ../rindexer/target/release/rindexer_cli"
+build-rindexer: ## Build the Rindexer binary using the CLI Makefile
+	@echo "Building Rindexer binary using CLI Makefile..."
+	@cd ../cli && make prod_build
+	@echo "Rindexer binary built at ../target/release/rindexer_cli"
 
 clean: stop-anvil ## Clean up all running processes and files
 	@rm -f *.pid *.log
