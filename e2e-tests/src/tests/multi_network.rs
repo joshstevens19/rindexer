@@ -188,13 +188,20 @@ async fn feed_transfer_on_anvil(rpc_url: &str, contract_address: &str, nonce: us
     use ethers::providers::{Provider, Http, Middleware};
     use ethers::signers::{LocalWallet, Signer};
     use ethers::middleware::MiddlewareBuilder;
-    
+
+    // Base provider to derive chain id
+    let base_provider = Provider::<Http>::try_from(rpc_url)?;
+    let chain_id = base_provider.get_chainid().await?.as_u64();
+
+    // Configure wallet with correct chain id
     let private_key = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
     let wallet: LocalWallet = private_key.parse()?;
+    let wallet = wallet.with_chain_id(chain_id);
     let signer_address = wallet.address();
-    let provider = Provider::<Http>::try_from(rpc_url)?
-        .with_signer(wallet);
-    
+
+    // Signer-enabled provider
+    let provider = base_provider.with_signer(wallet);
+
     let contract_addr: Address = contract_address.parse()?;
     let recipient = generate_test_address(nonce as u64);
     let amount = U256::from(1000u64);
@@ -220,7 +227,7 @@ async fn feed_transfer_on_anvil(rpc_url: &str, contract_address: &str, nonce: us
         nonce: Some(tx_nonce),
         gas_price: Some(20000000000u128.into()),
         value: None,
-        chain_id: Some(31337u64.into()),
+        chain_id: None, // let signer/provider enforce correct chain id
     };
     
     let _pending = provider.send_transaction(tx, None).await?;
