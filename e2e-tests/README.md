@@ -45,11 +45,29 @@ make run-tests-live
 - **`test_2_contract_discovery`**: Contract ABI discovery and event registration
 - **`test_3_historic_indexing`**: Historic event indexing from contract deployment
 - **`test_6_demo_yaml`**: Demo YAML configuration test
-- **`test_8_forked_anvil`**: Forked Anvil test (placeholder)
+- **`test_restart_checkpoint_no_duplicates`**: Restart and ensure no duplicates
 
 ### Live Indexing Tests
 - **`test_live_indexing_basic`**: Live indexing with background transaction feeder
 - **`test_live_indexing_high_frequency`**: High-frequency live indexing test
+
+### GraphQL Tests
+- **`test_graphql_service_starts`**: Start all services with Postgres and keep GraphQL up
+- **`test_graphql_basic_query`**: Query transfers with filter & pagination
+
+### Postgres E2E Tests
+- **`test_postgres_end_to_end`**: Enable Postgres, index, and verify rows inserted
+- **`test_postgres_live_exact_events`**: Feed live transfers and assert exact recipients
+
+### Direct RPC Test
+- **`test_direct_rpc`**: Rocket Pool rETH Transfer vs expected CSV using a mainnet RPC
+
+### Multi-Network Test
+- **`test_multi_network_mixed`**: Mainnet rETH (historic) + Anvil SimpleERC20 (historic)
+
+### Config Validation
+- **`test_invalid_yaml_fails`**: Invalid YAML fails fast with actionable error
+- **`test_missing_abi_path_fails`**: Missing ABI path yields actionable error
 
 ## 🎯 Individual Test Execution
 
@@ -126,6 +144,24 @@ TestDefinition::new(
 ```
 
 The `TestRunner` will automatically start a `LiveFeeder` for these tests.
+
+#### Chain ID Handling
+
+Live transactions are signed against the node's actual chain ID (queried at runtime). If you ever see a "DifferentChainID" error, ensure your local node is reachable and not overridden by a different chain configuration.
+
+## 🔧 Paths: Contracts and ABIs
+
+- Test contracts live under `e2e-tests/contracts/` and are deployed with Foundry `forge`.
+- ABI files live under `e2e-tests/abis/`. The runner copies them into the ephemeral project folder under `./abis/` before launching Rindexer.
+- Per-test temporary projects are created in your system temp directory and cleaned up after execution.
+
+## 🔑 Environment Variables
+
+Some tests require external RPCs or accept optional tuning:
+
+- `MAINNET_RPC_URL` (required for multi-network tests): HTTPS RPC for Ethereum mainnet.
+- `DIRECT_RPC_EXPECTED_CSV` (optional): Path to expected CSV for direct RPC comparisons. Defaults to `data/rocketpooleth-transfer.csv`.
+- `MULTI_NETWORK_SYNC_TIMEOUT` (optional): Seconds to wait for multi-network historic sync. Defaults to `600`.
 
 ## 🏗️ Architecture
 
