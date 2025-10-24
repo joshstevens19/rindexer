@@ -3,12 +3,12 @@ use std::time::{Duration, Instant};
 use tokio::time::timeout;
 use tracing::info;
 
+use crate::live_feeder::LiveFeeder;
 use crate::test_suite::TestContext;
-use crate::tests::test_suite::TestSuite;
 use crate::tests::registry::{TestDefinition, TestRegistry};
+use crate::tests::test_suite::TestSuite;
 use crate::tests::test_suite::{TestInfo, TestResult};
 use thiserror::Error;
-use crate::live_feeder::LiveFeeder;
 
 #[derive(Debug, Error)]
 #[error("{0}")]
@@ -87,10 +87,9 @@ impl TestRunner {
         println!("[TEST] {} ... ", test_def.description);
         let start = Instant::now();
 
-        let result = timeout(
-            Duration::from_secs(test_def.timeout_seconds),
-            self.run_single_test(test_def)
-        ).await;
+        let result =
+            timeout(Duration::from_secs(test_def.timeout_seconds), self.run_single_test(test_def))
+                .await;
 
         let test_result = match result {
             Ok(Ok(())) => {
@@ -122,21 +121,23 @@ impl TestRunner {
             self.config.rindexer_binary.clone(),
             self.config.anvil_port,
             self.config.health_port,
-        ).await?;
+        )
+        .await?;
 
         // Start live feeder if this is a live test
         let mut live_feeder = if test_def.is_live_test {
             info!("Starting live feeder for live indexing test: {}", test_def.name);
             let contract_address = context.deploy_test_contract().await?;
-            
+
             // Store the contract address in the context for the test to use
             context.test_contract_address = Some(contract_address.clone());
-            
+
             let mut feeder = LiveFeeder::new(
                 context.anvil.rpc_url.clone(),
                 "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string(),
-            ).with_contract(contract_address.parse()?);
-            
+            )
+            .with_contract(contract_address.parse()?);
+
             // Start feeder in background
             feeder.start().await?;
             Some(feeder)

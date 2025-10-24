@@ -1,7 +1,7 @@
 use anyhow::Result;
-use tracing::info;
-use std::pin::Pin;
 use std::future::Future;
+use std::pin::Pin;
+use tracing::info;
 
 use crate::test_suite::TestContext;
 use crate::tests::registry::{TestDefinition, TestModule};
@@ -15,17 +15,21 @@ impl TestModule for ConfigValidationTests {
                 "test_invalid_yaml_fails",
                 "Invalid YAML causes rindexer to fail fast with clear error",
                 invalid_yaml_fails_test,
-            ).with_timeout(60),
+            )
+            .with_timeout(60),
             TestDefinition::new(
                 "test_missing_abi_path_fails",
                 "Missing ABI path for contract yields actionable error",
                 missing_abi_path_fails_test,
-            ).with_timeout(90),
+            )
+            .with_timeout(90),
         ]
     }
 }
 
-fn invalid_yaml_fails_test(context: &mut TestContext) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
+fn invalid_yaml_fails_test(
+    context: &mut TestContext,
+) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
     Box::pin(async move {
         info!("Running Invalid YAML Failure Test");
 
@@ -36,7 +40,10 @@ fn invalid_yaml_fails_test(context: &mut TestContext) -> Pin<Box<dyn Future<Outp
         std::fs::write(&target_yaml_path, bad_yaml)?;
 
         // Attempt to start the indexer; it should fail
-        let mut r = crate::rindexer_client::RindexerInstance::new(&context.rindexer_binary, context.project_path.clone());
+        let mut r = crate::rindexer_client::RindexerInstance::new(
+            &context.rindexer_binary,
+            context.project_path.clone(),
+        );
         let res = r.start_indexer().await;
         if res.is_ok() {
             return Err(anyhow::anyhow!("Indexer unexpectedly started with invalid YAML"));
@@ -47,7 +54,9 @@ fn invalid_yaml_fails_test(context: &mut TestContext) -> Pin<Box<dyn Future<Outp
     })
 }
 
-fn missing_abi_path_fails_test(context: &mut TestContext) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
+fn missing_abi_path_fails_test(
+    context: &mut TestContext,
+) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
     Box::pin(async move {
         // Create a valid contract config but point ABI to a non-existent file
         let contract_address = context.deploy_test_contract().await?;
@@ -61,7 +70,10 @@ fn missing_abi_path_fails_test(context: &mut TestContext) -> Pin<Box<dyn Future<
         let yaml = serde_yaml::to_string(&config)?;
         std::fs::write(&target_yaml_path, yaml)?;
 
-        let mut r = crate::rindexer_client::RindexerInstance::new(&context.rindexer_binary, context.project_path.clone());
+        let mut r = crate::rindexer_client::RindexerInstance::new(
+            &context.rindexer_binary,
+            context.project_path.clone(),
+        );
         let res = r.start_indexer().await;
         if res.is_ok() {
             return Err(anyhow::anyhow!("Indexer unexpectedly started with missing ABI path"));
@@ -69,5 +81,3 @@ fn missing_abi_path_fails_test(context: &mut TestContext) -> Pin<Box<dyn Future<
         Ok(())
     })
 }
-
-
