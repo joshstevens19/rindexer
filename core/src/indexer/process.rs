@@ -402,7 +402,7 @@ async fn live_indexing_for_contract_event_dependencies(
             // check reorg distance and skip if not safe
             if from_block > safe_block_number {
                 if reorg_safe_distance.is_zero() {
-                    let block_distance = latest_block_number - from_block;
+                    let block_distance = from_block - latest_block_number;
                     let is_outside_reorg_range =
                         block_distance > reorg_safe_distance_for_chain(cached_provider.chain.id());
 
