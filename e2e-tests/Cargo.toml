@@ -1,0 +1,28 @@
+[package]
+name = "e2e-tests"
+publish = false
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1.0"
+reqwest = { version = "0.11", features = ["json"] }
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4.0", features = ["derive"] }
+tempfile = "3.0"
+wait-timeout = "0.2"
+hex = "0.4"
+ethers = { version = "2.0", features = ["ws", "rustls"] }
+eyre = "0.6"
+tokio-postgres = { version = "0.7", features = ["runtime"] }
+regex = "1.10"
+dotenvy = "0.15"
+[dev-dependencies]
+tokio-test = "0.4"
+
