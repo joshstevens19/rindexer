@@ -468,7 +468,7 @@ async fn live_indexing_stream(
                         let from_block = current_filter.from_block();
                         if from_block > safe_block_number {
                             if reorg_safe_distance.is_zero() {
-                                let block_distance = latest_block_number - from_block;
+                                let block_distance = from_block - latest_block_number;
                                 let is_outside_reorg_range = block_distance
                                     > reorg_safe_distance_for_chain(cached_provider.chain.id());
 
@@ -476,7 +476,7 @@ async fn live_indexing_stream(
                                 // therefore, we log an error as means RCP state is not in sync with the blockchain
                                 if is_outside_reorg_range {
                                     error!(
-                                        "{} - {} - LIVE INDEXING STEAM - RPC has gone back on latest block: rpc returned {}, last seen: {}",
+                                        "{} - {} - LIVE INDEXING STREAM - RPC has gone back on latest block: rpc returned {}, last seen: {}",
                                         info_log_name,
                                         IndexingEventProgressStatus::Live.log(),
                                         latest_block_number,
@@ -484,7 +484,7 @@ async fn live_indexing_stream(
                                     );
                                 } else {
                                     info!(
-                                        "{} - {} - LIVE INDEXING STEAM - RPC has gone back on latest block: rpc returned {}, last seen: {}",
+                                        "{} - {} - LIVE INDEXING STREAM - RPC has gone back on latest block: rpc returned {}, last seen: {}",
                                         info_log_name,
                                         IndexingEventProgressStatus::Live.log(),
                                         latest_block_number,
@@ -493,7 +493,7 @@ async fn live_indexing_stream(
                                 }
                             } else {
                                 info!(
-                                    "{} - {} - LIVE INDEXING STEAM - not in safe reorg block range yet block: {} > range: {}",
+                                    "{} - {} - LIVE INDEXING STREAM - not in safe reorg block range yet block: {} > range: {}",
                                     info_log_name,
                                     IndexingEventProgressStatus::Live.log(),
                                     from_block,
