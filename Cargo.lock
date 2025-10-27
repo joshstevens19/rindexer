@@ -2904,9 +2904,11 @@ dependencies = [
  "futures-channel",
  "http-body-util",
  "hyper 1.7.0",
+ "hyper-rustls 0.27.7",
  "hyper-util",
  "lz4_flex",
  "replace_with",
+ "rustls 0.23.31",
  "sealed",
  "serde",
  "static_assertions",
@@ -10815,7 +10817,7 @@ dependencies = [
 
 [[package]]
 name = "rindexer"
-version = "0.28.0"
+version = "0.28.1"
 dependencies = [
  "alloy",
  "alloy-chains",
@@ -10885,7 +10887,7 @@ dependencies = [
 
 [[package]]
 name = "rindexer_cli"
-version = "0.28.0"
+version = "0.28.1"
 dependencies = [
  "alloy",
  "alloy-chains",

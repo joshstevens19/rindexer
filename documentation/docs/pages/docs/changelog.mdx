@@ -12,11 +12,27 @@
 
 ### Breaking changes
 -------------------------------------------------
+- fix: gate kafka streams support behind `kafka` feature
 
 ## Releases
 -------------------------------------------------
 
 all release branches are deployed through `release/VERSION_NUMBER` branches
+
+# 0.28.1-beta - 21st October 2025
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.28.1
+
+- linux binary - https://github.com/joshstevens19/rindexer/releases/download/v0.28.1/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://github.com/joshstevens19/rindexer/releases/download/v0.28.1/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://github.com/joshstevens19/rindexer/releases/download/v0.28.1/rindexer_darwin-amd64.tar.gz
+- windows binary - https://github.com/joshstevens19/rindexer/releases/download/v0.28.1/rindexer_win32-amd64.zip
+
+### Bug fixes
+-------------------------------------------------
+- fix: allow https connections for clickhouse
+- fix: resolve issue with "" on postgres insert
+
 
 # 0.28.0-beta - 13th October 2025
 
