@@ -16,7 +16,7 @@ tempfile = "3.23"
 mockito = "1.7.0"
 
 [dependencies]
-# TODO: Trim down alloy features needed later, for now opt in to all.
+# TODO: Trim down alloy features needed later, for now opt iun to all.
 alloy = { version = "1.0.41", features = ["full", "json-rpc"] }
 async-trait = "0.1.89"
 aws-config = "1.8.8"
