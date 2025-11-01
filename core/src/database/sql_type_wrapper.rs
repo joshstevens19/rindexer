@@ -450,12 +450,12 @@ impl EthereumSqlTypeWrapper {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            EthereumSqlTypeWrapper::Bytes(value) => format!("0x{}", hex::encode(value)),
+            EthereumSqlTypeWrapper::Bytes(value) => format!("'0x{}'", hex::encode(value)),
             EthereumSqlTypeWrapper::VecBytes(values) => format!(
                 "[{}]",
                 values
                     .iter()
-                    .map(|v| format!("0x{}", hex::encode(v)))
+                    .map(|v| format!("'0x{}'", hex::encode(v)))
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
@@ -489,7 +489,7 @@ impl EthereumSqlTypeWrapper {
             EthereumSqlTypeWrapper::StringVarcharNullable(v) => v.to_string(),
             EthereumSqlTypeWrapper::StringCharNullable(v) => v.to_string(),
             EthereumSqlTypeWrapper::AddressNullable(v) => v.to_string(),
-            EthereumSqlTypeWrapper::BytesNullable(v) => v.to_string(),
+            EthereumSqlTypeWrapper::BytesNullable(v) => format!("'0x{}'", hex::encode(v)),
 
             #[allow(deprecated)]
             EthereumSqlTypeWrapper::H160(v) => v.to_string(),
