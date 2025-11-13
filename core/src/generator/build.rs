@@ -13,7 +13,9 @@ use super::{
 };
 use crate::manifest::contract::Contract;
 use crate::{
-    generator::database_bindings::{generate_clickhouse_code, generate_postgres_code},
+    generator::database_bindings::{
+        generate_clickhouse_code, generate_postgres_code, generate_sqlite_code,
+    },
     generator::trace_bindings::{
         generate_trace_bindings, generate_trace_handlers, trace_abigen_contract_file_name,
         GenerateTraceBindingsError, GenerateTraceHandlersError,
@@ -252,6 +254,14 @@ pub fn generate_rindexer_typings(
                 write_file(
                     &generate_file_location(&output, "database"),
                     generate_clickhouse_code().as_str(),
+                )
+                .map_err(WriteGlobalError::from)?;
+            }
+
+            if manifest.storage.sqlite_enabled() {
+                write_file(
+                    &generate_file_location(&output, "database"),
+                    generate_sqlite_code().as_str(),
                 )
                 .map_err(WriteGlobalError::from)?;
             }

@@ -19,6 +19,7 @@ pub use database::{
         client::{PostgresClient, ToSql},
         setup::setup_postgres,
     },
+    sqlite::{client::SqliteClient, setup::setup_sqlite},
 };
 
 mod simple_file_formatters;

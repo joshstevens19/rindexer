@@ -17,6 +17,8 @@ use super::native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME}
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::clickhouse::setup::{setup_clickhouse, SetupClickhouseError};
 use crate::database::generate::generate_event_table_full_name;
+use crate::database::sqlite::client::SqliteClient;
+use crate::database::sqlite::setup::{setup_sqlite, SetupSqliteError};
 use crate::database::sql_type_wrapper::{
     map_ethereum_wrapper_to_json, map_log_params_to_ethereum_wrapper, EthereumSqlTypeWrapper,
 };
@@ -75,6 +77,9 @@ pub enum SetupNoCodeError {
     #[error("Could not setup clickhouse: {0}")]
     SetupClickhouseError(#[from] SetupClickhouseError),
 
+    #[error("Could not setup sqlite: {0}")]
+    SetupSqliteError(#[from] SetupSqliteError),
+
     #[error("You have graphql disabled as well as indexer so nothing can startup")]
     NothingToStartNoCode,
 }
@@ -104,6 +109,11 @@ pub async fn setup_no_code(
                 clickhouse = Some(Arc::new(setup_clickhouse(project_path, &manifest).await?));
             }
 
+            let mut sqlite: Option<Arc<SqliteClient>> = None;
+            if manifest.storage.sqlite_enabled() {
+                sqlite = Some(Arc::new(setup_sqlite(project_path, &manifest).await?));
+            }
+
             if !details.indexing_details.enabled {
                 return Ok(StartDetails {
                     manifest_path: details.manifest_path,
@@ -127,6 +137,7 @@ pub async fn setup_no_code(
                 &manifest,
                 postgres.clone(),
                 clickhouse.clone(),
+                sqlite.clone(),
                 &network_providers,
             )
             .await?;
@@ -147,6 +158,7 @@ pub async fn setup_no_code(
                 &mut manifest,
                 postgres,
                 clickhouse,
+                sqlite,
                 &network_providers,
             )
             .await?;
@@ -185,6 +197,7 @@ struct NoCodeCallbackParams {
     index_event_in_order: bool,
     csv: Option<Arc<AsyncCsvAppender>>,
     postgres: Option<Arc<PostgresClient>>,
+    sqlite: Option<Arc<SqliteClient>>,
     sql_event_table_name: String,
     sql_column_names: Vec<String>,
     clickhouse: Option<Arc<ClickhouseClient>>,
@@ -498,6 +511,25 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                 }
             }
 
+            if let Some(sqlite) = &params.sqlite {
+                if !sql_bulk_data.is_empty() {
+                    if let Err(e) = sqlite
+                        .insert_bulk(
+                            &params.sql_event_table_name,
+                            &params.sql_column_names,
+                            &sql_bulk_data,
+                        )
+                        .await
+                    {
+                        error!(
+                            "{}::{} - Error performing sqlite bulk insert: {}",
+                            params.contract_name, params.event_info.name, e
+                        );
+                        return Err(e.to_string());
+                    }
+                }
+            }
+
             if let Some(csv) = &params.csv {
                 if !csv_bulk_data.is_empty() {
                     if let Err(e) = csv.append_bulk(csv_bulk_data).await {
@@ -655,6 +687,7 @@ pub async fn process_events(
     manifest: &Manifest,
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
+    sqlite: Option<Arc<SqliteClient>>,
     network_providers: &[CreateNetworkProvider],
 ) -> Result<Vec<EventCallbackRegistryInformation>, ProcessIndexersError> {
     let mut events: Vec<EventCallbackRegistryInformation> = vec![];
@@ -665,6 +698,7 @@ pub async fn process_events(
             manifest,
             postgres.clone(),
             clickhouse.clone(),
+            sqlite.clone(),
             network_providers,
             &mut contract,
         )
@@ -681,6 +715,7 @@ async fn process_contract(
     manifest: &Manifest,
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
+    sqlite: Option<Arc<SqliteClient>>,
     network_providers: &[CreateNetworkProvider],
     contract: &mut Contract,
 ) -> Result<Vec<EventCallbackRegistryInformation>, ProcessIndexersError> {
@@ -774,6 +809,7 @@ async fn process_contract(
                 index_event_in_order,
                 csv,
                 postgres: postgres.clone(),
+                sqlite: sqlite.clone(),
                 clickhouse: clickhouse.clone(),
                 sql_event_table_name,
                 sql_column_names,
@@ -794,6 +830,7 @@ pub async fn process_trace_events(
     manifest: &mut Manifest,
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
+    sqlite: Option<Arc<SqliteClient>>,
     network_providers: &[CreateNetworkProvider],
 ) -> Result<Vec<TraceCallbackRegistryInformation>, ProcessIndexersError> {
     let mut events: Vec<TraceCallbackRegistryInformation> = vec![];
@@ -880,6 +917,7 @@ pub async fn process_trace_events(
             index_event_in_order: false,
             csv,
             postgres: postgres.clone(),
+            sqlite: sqlite.clone(),
             clickhouse: clickhouse.clone(),
             sql_event_table_name,
             sql_column_names,

@@ -11,7 +11,7 @@ use alloy::{
     primitives::{Address, U64},
     rpc::types::ValueOrArray,
 };
-use rindexer::manifest::config::Config;
+use rindexer::manifest::{config::Config, storage::SqliteDetails};
 use rindexer::manifest::contract::ContractEvent;
 use rindexer::manifest::global::Global;
 #[cfg(feature = "reth")]
@@ -155,7 +155,7 @@ pub fn handle_new_command(
     let repository = prompt_for_optional_input::<String>("Repository", None);
     let storage_choice = prompt_for_input_list(
         "What Storages To Enable? (graphql can only be supported if postgres is enabled)",
-        &["postgres".to_string(), "clickhouse".to_string(), "csv".to_string(), "none".to_string()],
+        &["postgres".to_string(), "clickhouse".to_string(), "csv".to_string(), "sqlite".to_string(), "none".to_string()],
         None,
     );
     let mut postgres_docker_enable = false;
@@ -171,7 +171,7 @@ pub fn handle_new_command(
     let postgres_enabled = storage_choice == "postgres";
     let csv_enabled = storage_choice == "csv";
     let clickhouse_enabled = storage_choice == "clickhouse";
-
+    let sqlite_enabled = storage_choice == "sqlite";
     // Handle Reth configuration if enabled
     let final_reth_config = get_reth_config(reth_config);
 
@@ -280,6 +280,15 @@ pub fn handle_new_command(
                     enabled: true,
                     path: "./generated_csv".to_string(),
                     disable_create_headers: None,
+                })
+            } else {
+                None
+            },
+            sqlite: if sqlite_enabled {
+                Some(SqliteDetails {
+                    enabled: true,
+                    drop_each_run: None,
+                    disable_create_tables: None,
                 })
             } else {
                 None
