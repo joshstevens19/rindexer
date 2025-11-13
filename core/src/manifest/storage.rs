@@ -116,6 +116,17 @@ pub struct CsvDetails {
     pub disable_create_headers: Option<bool>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SqliteDetails {
+    pub enabled: bool,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drop_each_run: Option<bool>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disable_create_tables: Option<bool>,
+}
+
 #[derive(Debug, Serialize, Default, Clone)]
 pub struct Storage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -123,6 +134,9 @@ pub struct Storage {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clickhouse: Option<ClickhouseDetails>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sqlite: Option<SqliteDetails>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csv: Option<CsvDetails>,
@@ -140,18 +154,31 @@ impl<'de> Deserialize<'de> for Storage {
             #[serde(default)]
             clickhouse: Option<ClickhouseDetails>,
             #[serde(default)]
+            sqlite: Option<SqliteDetails>,
+            #[serde(default)]
             csv: Option<CsvDetails>,
         }
 
         let raw = StorageRaw::deserialize(deserializer)?;
 
-        if raw.postgres.is_some() && raw.clickhouse.is_some() {
+        // Count how many database options are enabled
+        let db_count = [raw.postgres.is_some(), raw.clickhouse.is_some(), raw.sqlite.is_some()]
+            .iter()
+            .filter(|&&x| x)
+            .count();
+
+        if db_count > 1 {
             return Err(Error::custom(
-                "cannot specify both `postgres` and `clickhouse` at the same time",
+                "cannot specify more than one database option (postgres, clickhouse, sqlite) at the same time",
             ));
         }
 
-        Ok(Storage { postgres: raw.postgres, clickhouse: raw.clickhouse, csv: raw.csv })
+        Ok(Storage {
+            postgres: raw.postgres,
+            clickhouse: raw.clickhouse,
+            sqlite: raw.sqlite,
+            csv: raw.csv,
+        })
     }
 }
 
@@ -237,6 +264,33 @@ impl Storage {
         }
 
         self.csv.as_ref().is_some_and(|details| details.disable_create_headers.unwrap_or_default())
+    }
+
+    pub fn sqlite_enabled(&self) -> bool {
+        match &self.sqlite {
+            Some(details) => details.enabled,
+            None => false,
+        }
+    }
+
+    pub fn sqlite_disable_create_tables(&self) -> bool {
+        let enabled = self.sqlite_enabled();
+        if !enabled {
+            return true;
+        }
+
+        self.sqlite
+            .as_ref()
+            .is_some_and(|details| details.disable_create_tables.unwrap_or_default())
+    }
+
+    pub fn sqlite_drop_each_run(&self) -> bool {
+        let enabled = self.sqlite_enabled();
+        if !enabled {
+            return false;
+        }
+
+        self.sqlite.as_ref().is_some_and(|details| details.drop_each_run.unwrap_or_default())
     }
 
     pub async fn create_relationships_and_indexes(
