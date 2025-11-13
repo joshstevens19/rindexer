@@ -162,14 +162,10 @@ impl<'de> Deserialize<'de> for Storage {
         let raw = StorageRaw::deserialize(deserializer)?;
 
         // Count how many database options are enabled
-        let db_count = [
-            raw.postgres.is_some(),
-            raw.clickhouse.is_some(),
-            raw.sqlite.is_some(),
-        ]
-        .iter()
-        .filter(|&&x| x)
-        .count();
+        let db_count = [raw.postgres.is_some(), raw.clickhouse.is_some(), raw.sqlite.is_some()]
+            .iter()
+            .filter(|&&x| x)
+            .count();
 
         if db_count > 1 {
             return Err(Error::custom(

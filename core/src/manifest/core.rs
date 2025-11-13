@@ -314,12 +314,11 @@ mod tests {
         "#;
 
         let manifest: Result<Manifest, _> = serde_yaml::from_str(yaml);
-
         assert_eq!(manifest.is_err(), true);
         assert!(manifest
             .unwrap_err()
             .to_string()
-            .contains("cannot specify both `postgres` and `clickhouse` at the same time"));
+            .contains("cannot specify more than one database option (postgres, clickhouse, sqlite) at the same time"));
     }
 
     #[test]

@@ -11,12 +11,12 @@ use alloy::{
     primitives::{Address, U64},
     rpc::types::ValueOrArray,
 };
-use rindexer::manifest::{config::Config, storage::SqliteDetails};
 use rindexer::manifest::contract::ContractEvent;
 use rindexer::manifest::global::Global;
 #[cfg(feature = "reth")]
 use rindexer::manifest::reth::RethConfig;
 use rindexer::manifest::storage::ClickhouseDetails;
+use rindexer::manifest::{config::Config, storage::SqliteDetails};
 use rindexer::{
     generator::{build::generate_rust_project, generate_docker_file},
     manifest::{
@@ -155,7 +155,13 @@ pub fn handle_new_command(
     let repository = prompt_for_optional_input::<String>("Repository", None);
     let storage_choice = prompt_for_input_list(
         "What Storages To Enable? (graphql can only be supported if postgres is enabled)",
-        &["postgres".to_string(), "clickhouse".to_string(), "csv".to_string(), "sqlite".to_string(), "none".to_string()],
+        &[
+            "postgres".to_string(),
+            "clickhouse".to_string(),
+            "csv".to_string(),
+            "sqlite".to_string(),
+            "none".to_string(),
+        ],
         None,
     );
     let mut postgres_docker_enable = false;

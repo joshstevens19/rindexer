@@ -35,27 +35,27 @@ fn sqlite_type_for_solidity(solidity_type: &str) -> &'static str {
     }
 }
 
-fn generate_event_table_sql(
-    abi_inputs: &[EventInfo],
-    table_prefix: &str,
-) -> String {
+fn generate_event_table_sql(abi_inputs: &[EventInfo], table_prefix: &str) -> String {
     abi_inputs
         .iter()
         .map(|event_info| {
             let table_name = format!("{}_{}", table_prefix, camel_to_snake(&event_info.name));
             info!("Creating table if not exists: {}", table_name);
-            
+
             let event_columns = if event_info.inputs.is_empty() {
                 String::new()
             } else {
-                event_info.inputs.iter()
+                event_info
+                    .inputs
+                    .iter()
                     .map(|input| {
                         let col_name = camel_to_snake(&input.name);
                         let col_type = sqlite_type_for_solidity(&input.type_);
                         format!("{} {}", col_name, col_type)
                     })
                     .collect::<Vec<_>>()
-                    .join(", ") + ","
+                    .join(", ")
+                    + ","
             };
 
             format!(
@@ -137,16 +137,17 @@ pub fn generate_tables_for_indexer_sql(
         let contract_name = contract.before_modify_name_if_filter_readonly();
         let abi_items = ABIItem::read_abi_items(project_path, contract)?;
         let events = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
-        let table_prefix = format!("{}_{}", camel_to_snake(&indexer.name), camel_to_snake(&contract_name));
+        let table_prefix =
+            format!("{}_{}", camel_to_snake(&indexer.name), camel_to_snake(&contract_name));
         let networks: Vec<&str> = contract.details.iter().map(|d| d.network.as_str()).collect();
         let factories = contract.details.iter().flat_map(|d| d.factory.clone()).collect::<Vec<_>>();
 
         // Create event tables
         sql.push_str(&generate_event_table_sql(&events, &table_prefix));
-        
+
         // Create internal tracking tables
         sql.push_str(&generate_internal_event_table_sql(&events, &table_prefix, networks));
-        
+
         // Create factory tables if needed
         if !factories.is_empty() {
             sql.push_str(&generate_internal_factory_event_table_sql(&indexer.name, &factories));
@@ -159,7 +160,8 @@ pub fn generate_tables_for_indexer_sql(
         let abi_items: Vec<ABIItem> =
             serde_json::from_str(abi_str).expect("JSON was not well-formatted");
         let event_names = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
-        let table_prefix = format!("{}_{}", camel_to_snake(&indexer.name), camel_to_snake(&contract_name));
+        let table_prefix =
+            format!("{}_{}", camel_to_snake(&indexer.name), camel_to_snake(&contract_name));
         let networks = indexer.clone().native_transfers.networks.unwrap();
         let networks: Vec<&str> = networks.iter().map(|d| d.network.as_str()).collect();
 
@@ -205,20 +207,28 @@ pub fn drop_tables_for_indexer_sql(project_path: &Path, indexer: &Indexer) -> Co
         "DROP TABLE IF EXISTS rindexer_internal_{}_last_known_indexes_dropping_sql;",
         camel_to_snake(&indexer.name)
     );
-    sql.push_str(&format!("DROP TABLE IF EXISTS rindexer_internal_{}_last_known_relationship_dropping_sql;", camel_to_snake(&indexer.name)));
+    sql.push_str(&format!(
+        "DROP TABLE IF EXISTS rindexer_internal_{}_last_known_relationship_dropping_sql;",
+        camel_to_snake(&indexer.name)
+    ));
     sql.push_str("DROP TABLE IF EXISTS rindexer_internal_latest_block;");
 
     for contract in &indexer.contracts {
         let contract_name = contract.before_modify_name_if_filter_readonly();
-        let table_prefix = format!("{}_{}", camel_to_snake(&indexer.name), camel_to_snake(&contract_name));
+        let table_prefix =
+            format!("{}_{}", camel_to_snake(&indexer.name), camel_to_snake(&contract_name));
 
         let abi_items = ABIItem::read_abi_items(project_path, contract);
         if let Ok(abi_items) = abi_items {
             for abi_item in abi_items.iter() {
                 let table_name = format!("{}_{}", table_prefix, camel_to_snake(&abi_item.name));
                 sql.push_str(&format!("DROP TABLE IF EXISTS {table_name};"));
-                
-                let internal_table_name = format!("rindexer_internal_{}_{}", table_prefix, camel_to_snake(&abi_item.name));
+
+                let internal_table_name = format!(
+                    "rindexer_internal_{}_{}",
+                    table_prefix,
+                    camel_to_snake(&abi_item.name)
+                );
                 sql.push_str(&format!("DROP TABLE IF EXISTS {internal_table_name};"));
             }
         } else {
@@ -235,7 +245,12 @@ pub fn drop_tables_for_indexer_sql(project_path: &Path, indexer: &Indexer) -> Co
                 camel_to_snake(&indexer.name),
                 camel_to_snake(&factory.name),
                 camel_to_snake(&factory.event_name),
-                factory.input_names().iter().map(|v| camel_to_snake(v)).collect::<Vec<String>>().join("_")
+                factory
+                    .input_names()
+                    .iter()
+                    .map(|v| camel_to_snake(v))
+                    .collect::<Vec<String>>()
+                    .join("_")
             );
             sql.push_str(&format!("DROP TABLE IF EXISTS {factory_table_name};"));
         }
@@ -245,4 +260,3 @@ pub fn drop_tables_for_indexer_sql(project_path: &Path, indexer: &Indexer) -> Co
 }
 
 // Note: generate_event_table_full_name is defined in database/generate.rs and used by no_code.rs
-

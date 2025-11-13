@@ -10,8 +10,7 @@ use crate::database::sql_type_wrapper::EthereumSqlTypeWrapper;
 pub fn connection_string() -> Result<String, env::VarError> {
     dotenv().ok();
     // Default to ./rindexer.db if DATABASE_URL is not set
-    let connection = env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "./rindexer.db".to_string());
+    let connection = env::var("DATABASE_URL").unwrap_or_else(|_| "./rindexer.db".to_string());
     Ok(connection)
 }
 
@@ -56,34 +55,33 @@ pub struct SqliteClient {
 impl SqliteClient {
     pub async fn new() -> Result<Self, SqliteConnectionError> {
         let connection_str = connection_string()?;
-        
+
         info!("Connecting to SQLite database at: {}", connection_str);
-        
+
         // Create parent directories if they don't exist
         let db_path_clone = connection_str.clone();
         tokio::task::spawn_blocking(move || {
             if let Some(parent) = PathBuf::from(&db_path_clone).parent() {
                 if !parent.exists() {
-                    std::fs::create_dir_all(parent)
-                        .map_err(|e| {
-                            error!("Failed to create parent directories for SQLite database: {}", e);
-                            SqliteConnectionError::CanNotConnectToDatabase
-                        })?;
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        error!("Failed to create parent directories for SQLite database: {}", e);
+                        SqliteConnectionError::CanNotConnectToDatabase
+                    })?;
                 }
             }
 
-            let conn = Connection::open(&db_path_clone)
-                .map_err(|e| {
-                    error!("Error connecting to SQLite database: {}", e);
-                    SqliteConnectionError::CanNotConnectToDatabase
-                })?;
+            let conn = Connection::open(&db_path_clone).map_err(|e| {
+                error!("Error connecting to SQLite database: {}", e);
+                SqliteConnectionError::CanNotConnectToDatabase
+            })?;
 
             // Enable WAL mode for better concurrent performance
-            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
-                .map_err(|_e| {
+            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;").map_err(
+                |_e| {
                     error!("Error setting SQLite pragmas");
                     SqliteConnectionError::CanNotConnectToDatabase
-                })?;
+                },
+            )?;
 
             info!("Successfully connected to SQLite database");
             Ok::<(), SqliteConnectionError>(())
@@ -91,15 +89,13 @@ impl SqliteClient {
         .await
         .map_err(|_| SqliteConnectionError::CanNotConnectToDatabase)??;
 
-        Ok(SqliteClient {
-            db_path: connection_str,
-        })
+        Ok(SqliteClient { db_path: connection_str })
     }
 
     pub async fn batch_execute(&self, sql: &str) -> Result<(), SqliteError> {
         let db_path = self.db_path.clone();
         let sql = sql.to_string();
-        
+
         tokio::task::spawn_blocking(move || {
             let conn = Connection::open(&db_path)?;
             conn.execute_batch(&sql)?;
@@ -115,14 +111,12 @@ impl SqliteClient {
     pub async fn execute(&self, query: &str, params: Vec<String>) -> Result<usize, SqliteError> {
         let db_path = self.db_path.clone();
         let query = query.to_string();
-        
+
         tokio::task::spawn_blocking(move || {
             let conn = Connection::open(&db_path)?;
             // Use dynamic dispatch with explicit type annotation to avoid trait object issues
-            let params_dynamic: Vec<Box<dyn ToSql>> = params
-                .into_iter()
-                .map(|p| Box::new(p) as Box<dyn ToSql>)
-                .collect();
+            let params_dynamic: Vec<Box<dyn ToSql>> =
+                params.into_iter().map(|p| Box::new(p) as Box<dyn ToSql>).collect();
             let params_refs: Vec<&dyn ToSql> = params_dynamic.iter().map(|p| p.as_ref()).collect();
             let result = conn.execute(&query, params_refs.as_slice())?;
             Ok::<usize, rusqlite::Error>(result)
@@ -147,12 +141,11 @@ impl SqliteClient {
         let db_path = self.db_path.clone();
         let table_name = table_name.to_string();
         let columns = columns.to_vec();
-        
+
         // Convert all data to strings for SQLite (simplest approach)
-        let string_data: Vec<Vec<String>> = bulk_data.iter()
-            .map(|row| {
-                row.iter().map(|wrapper| wrapper.to_sqlite_string_value()).collect()
-            })
+        let string_data: Vec<Vec<String>> = bulk_data
+            .iter()
+            .map(|row| row.iter().map(|wrapper| wrapper.to_sqlite_string_value()).collect())
             .collect();
 
         tokio::task::spawn_blocking(move || {
@@ -163,10 +156,8 @@ impl SqliteClient {
             conn.execute("BEGIN TRANSACTION", [])
                 .map_err(|e| format!("Failed to begin transaction: {}", e))?;
 
-            let placeholders = (1..=columns.len())
-                .map(|i| format!("?{}", i))
-                .collect::<Vec<_>>()
-                .join(", ");
+            let placeholders =
+                (1..=columns.len()).map(|i| format!("?{}", i)).collect::<Vec<_>>().join(", ");
 
             let query = format!(
                 "INSERT INTO {} ({}) VALUES ({})",
@@ -177,13 +168,12 @@ impl SqliteClient {
 
             for row in &string_data {
                 let params: Vec<&dyn ToSql> = row.iter().map(|s| s as &dyn ToSql).collect();
-                
-                conn.execute(&query, params.as_slice())
-                    .map_err(|e| {
-                        // Try to rollback on error
-                        let _ = conn.execute("ROLLBACK", []);
-                        format!("Failed to insert row: {}", e)
-                    })?;
+
+                conn.execute(&query, params.as_slice()).map_err(|e| {
+                    // Try to rollback on error
+                    let _ = conn.execute("ROLLBACK", []);
+                    format!("Failed to insert row: {}", e)
+                })?;
             }
 
             conn.execute("COMMIT", [])
@@ -197,4 +187,3 @@ impl SqliteClient {
         Ok(())
     }
 }
-

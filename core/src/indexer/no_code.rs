@@ -17,11 +17,11 @@ use super::native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME}
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::clickhouse::setup::{setup_clickhouse, SetupClickhouseError};
 use crate::database::generate::generate_event_table_full_name;
-use crate::database::sqlite::client::SqliteClient;
-use crate::database::sqlite::setup::{setup_sqlite, SetupSqliteError};
 use crate::database::sql_type_wrapper::{
     map_ethereum_wrapper_to_json, map_log_params_to_ethereum_wrapper, EthereumSqlTypeWrapper,
 };
+use crate::database::sqlite::client::SqliteClient;
+use crate::database::sqlite::setup::{setup_sqlite, SetupSqliteError};
 use crate::manifest::contract::Contract;
 use crate::{
     abi::{ABIItem, CreateCsvFileForEvent, EventInfo, ParamTypeError, ReadAbiError},

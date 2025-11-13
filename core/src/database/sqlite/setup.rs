@@ -64,4 +64,3 @@ pub async fn setup_sqlite(
 
     Ok(client)
 }
-
