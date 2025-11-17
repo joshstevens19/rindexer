@@ -449,7 +449,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                         all_params.iter().map(|param| param.to_type()).collect();
                 }
 
-                if params.postgres.is_some() || params.clickhouse.is_some() {
+                if params.postgres.is_some() || params.clickhouse.is_some() || params.sqlite.is_some() {
                     sql_bulk_data.push(all_params);
                 }
 

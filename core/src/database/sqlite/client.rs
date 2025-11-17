@@ -70,18 +70,19 @@ impl SqliteClient {
                 }
             }
 
-            let conn = Connection::open(&db_path_clone).map_err(|e| {
-                error!("Error connecting to SQLite database: {}", e);
-                SqliteConnectionError::CanNotConnectToDatabase
-            })?;
+            // TODO: Not sure if we need this with only one writer.
+            // let conn = Connection::open(&db_path_clone).map_err(|e| {
+            //     error!("Error connecting to SQLite database: {}", e);
+            //     SqliteConnectionError::CanNotConnectToDatabase
+            // })?;
 
-            // Enable WAL mode for better concurrent performance
-            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;").map_err(
-                |_e| {
-                    error!("Error setting SQLite pragmas");
-                    SqliteConnectionError::CanNotConnectToDatabase
-                },
-            )?;
+            // // Enable WAL mode for better concurrent performance
+            // conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;").map_err(
+            //     |_e| {
+            //         error!("Error setting SQLite pragmas");
+            //         SqliteConnectionError::CanNotConnectToDatabase
+            //     },
+            // )?;
 
             info!("Successfully connected to SQLite database");
             Ok::<(), SqliteConnectionError>(())
@@ -99,6 +100,10 @@ impl SqliteClient {
         tokio::task::spawn_blocking(move || {
             let conn = Connection::open(&db_path)?;
             conn.execute_batch(&sql)?;
+
+            // Explicitly close the connection to ensure data is flushed to disk
+            drop(conn);
+
             Ok::<(), rusqlite::Error>(())
         })
         .await
@@ -139,7 +144,8 @@ impl SqliteClient {
         }
 
         let db_path = self.db_path.clone();
-        let table_name = table_name.to_string();
+        // SQLite doesn't support schema.table notation - replace dots with underscores
+        let table_name = table_name.replace('.', "_");
         let columns = columns.to_vec();
 
         // Convert all data to strings for SQLite (simplest approach)
@@ -178,6 +184,9 @@ impl SqliteClient {
 
             conn.execute("COMMIT", [])
                 .map_err(|e| format!("Failed to commit transaction: {}", e))?;
+
+            // Explicitly close the connection to ensure data is flushed to disk
+            drop(conn);
 
             Ok::<(), String>(())
         })
