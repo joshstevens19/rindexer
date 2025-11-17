@@ -28,9 +28,8 @@ fn sqlite_type_for_solidity(solidity_type: &str) -> &'static str {
         "TEXT" // Store large numbers as text to avoid overflow
     } else if solidity_type == "bool" {
         "INTEGER" // 0 or 1
-    } else if solidity_type.starts_with("bytes") || solidity_type == "address" {
-        "TEXT" // Hex strings
     } else {
+        // includes bytes, address and anything else
         "TEXT"
     }
 }

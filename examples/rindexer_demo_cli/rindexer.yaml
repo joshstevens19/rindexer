@@ -9,9 +9,11 @@ networks:
   rpc: https://mainnet.gateway.tenderly.co
   block_poll_frequency: rapid
 storage:
-  postgres:
+  # postgres:
+  #   enabled: true
+  #   drop_each_run: true
+  sqlite:
     enabled: true
-    drop_each_run: true
 contracts:
 - name: RocketPoolETH
   details:
