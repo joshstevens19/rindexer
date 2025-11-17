@@ -34,6 +34,22 @@ fn sqlite_type_for_solidity(solidity_type: &str) -> &'static str {
     }
 }
 
+/// SQLite reserved identifiers you want to quote.
+const RESERVED_IDENTS: &[&str] = &[
+    "from",
+    "to",
+    // add more as needed
+];
+
+/// Wraps the identifier in quotes if it is a reserved keyword.
+fn quote_if_reserved(ident: &str) -> String {
+    if RESERVED_IDENTS.contains(&ident) {
+        format!("\"{}\"", ident)
+    } else {
+        ident.to_string()
+    }
+}
+
 fn generate_event_table_sql(abi_inputs: &[EventInfo], table_prefix: &str) -> String {
     abi_inputs
         .iter()
@@ -48,7 +64,7 @@ fn generate_event_table_sql(abi_inputs: &[EventInfo], table_prefix: &str) -> Str
                     .inputs
                     .iter()
                     .map(|input| {
-                        let col_name = camel_to_snake(&input.name);
+                        let col_name = quote_if_reserved(&camel_to_snake(&input.name));
                         let col_type = sqlite_type_for_solidity(&input.type_);
                         format!("{} {}", col_name, col_type)
                     })
@@ -140,7 +156,6 @@ pub fn generate_tables_for_indexer_sql(
             format!("{}_{}", camel_to_snake(&indexer.name), camel_to_snake(&contract_name));
         let networks: Vec<&str> = contract.details.iter().map(|d| d.network.as_str()).collect();
         let factories = contract.details.iter().flat_map(|d| d.factory.clone()).collect::<Vec<_>>();
-
         // Create event tables
         sql.push_str(&generate_event_table_sql(&events, &table_prefix));
 
