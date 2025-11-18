@@ -235,10 +235,10 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             // TODO
             // Remove unwrap
             let (from_block, to_block) = match &results {
-                CallbackResult::Event(event) => (
-                    event.first().unwrap().found_in_request.from_block,
-                    event.first().unwrap().found_in_request.to_block,
-                ),
+                CallbackResult::Event(event) => {
+                    let first = event.first().ok_or("No events found")?;
+                    (first.found_in_request.from_block, first.found_in_request.to_block)
+                }
                 CallbackResult::Trace(event) => {
                     // Filter to only NativeTransfer events and get the first one
                     let native_transfer = event
@@ -249,19 +249,31 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                             }
                             TraceResult::Block { .. } => None,
                         })
-                        .next()
-                        .unwrap();
-                    (native_transfer.from_block, native_transfer.to_block)
+                        .next();
+                    
+                    match native_transfer {
+                        Some(transfer) => (transfer.from_block, transfer.to_block),
+                        None => {
+                            debug!(
+                                "{} {}: {} - {}",
+                                params.indexer_name,
+                                params.contract_name,
+                                params.event_info.name,
+                                "NO NATIVE TRANSFER EVENTS (only Block events)".red()
+                            );
+                            return Ok(());
+                        }
+                    }
                 }
             };
 
             let network = match &results {
                 CallbackResult::Event(event) => {
-                    event.first().unwrap().tx_information.network.clone()
+                    event.first().ok_or("No events found")?.tx_information.network.clone()
                 }
                 CallbackResult::Trace(event) => {
                     // Filter to only NativeTransfer events and get the first one
-                    event
+                    let network = event
                         .iter()
                         .filter_map(|result| match result {
                             TraceResult::NativeTransfer { tx_information, .. } => {
@@ -269,9 +281,16 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                             }
                             TraceResult::Block { .. } => None,
                         })
-                        .next()
-                        .unwrap()
-                        .clone()
+                        .next();
+                    
+                    match network {
+                        Some(net) => net.clone(),
+                        None => {
+                            // This shouldn't happen as we already checked for NativeTransfer above
+                            // but handle it gracefully just in case
+                            return Ok(());
+                        }
+                    }
                 }
             };
 
@@ -449,7 +468,10 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                         all_params.iter().map(|param| param.to_type()).collect();
                 }
 
-                if params.postgres.is_some() || params.clickhouse.is_some() || params.sqlite.is_some() {
+                if params.postgres.is_some()
+                    || params.clickhouse.is_some()
+                    || params.sqlite.is_some()
+                {
                     sql_bulk_data.push(all_params);
                 }
 

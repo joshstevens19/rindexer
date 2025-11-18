@@ -692,11 +692,11 @@ mod tests {
             return Ok(());
         }
 
-        let mut encoder = DeltaEncoder::new(network_id, Some(&rpc_url), &file_path);
+        let mut encoder = DeltaEncoder::new(network_id, Some(rpc_url), &file_path);
         encoder.fetch_encode_persist(100).await?;
         drop(encoder);
 
-        let mut reloaded = DeltaEncoder::from_file_inner(network_id, Some(&rpc_url), &file_path)?;
+        let mut reloaded = DeltaEncoder::from_file_inner(network_id, Some(rpc_url), &file_path)?;
 
         reloaded.fetch_encode_persist(100).await?;
 
@@ -739,7 +739,7 @@ mod tests {
             return Ok(());
         }
 
-        let reloaded = DeltaEncoder::from_file(network_id, Some(&rpc_url), &base_path)?;
+        let reloaded = DeltaEncoder::from_file(network_id, Some(rpc_url), &base_path)?;
         let mut samples = Vec::with_capacity(sample_count);
 
         for _ in 1..=sample_count {

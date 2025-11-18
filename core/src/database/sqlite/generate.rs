@@ -36,8 +36,7 @@ fn sqlite_type_for_solidity(solidity_type: &str) -> &'static str {
 
 /// SQLite reserved identifiers you want to quote.
 const RESERVED_IDENTS: &[&str] = &[
-    "from",
-    "to",
+    "from", "to",
     // add more as needed
 ];
 

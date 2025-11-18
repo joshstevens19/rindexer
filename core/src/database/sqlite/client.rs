@@ -131,6 +131,43 @@ impl SqliteClient {
         .map_err(SqliteError::SqliteError)
     }
 
+    /// Query a single value from the database
+    /// Returns the value as a String, automatically converting from various SQLite types
+    pub async fn query_one_value(
+        &self,
+        query: &str,
+        params: Vec<String>,
+    ) -> Result<String, SqliteError> {
+        let db_path = self.db_path.clone();
+        let query = query.to_string();
+
+        tokio::task::spawn_blocking(move || {
+            let conn = Connection::open(&db_path)?;
+            let params_dynamic: Vec<Box<dyn ToSql>> =
+                params.into_iter().map(|p| Box::new(p) as Box<dyn ToSql>).collect();
+            let params_refs: Vec<&dyn ToSql> = params_dynamic.iter().map(|p| p.as_ref()).collect();
+
+            let mut stmt = conn.prepare(&query)?;
+            let result: String = stmt.query_row(params_refs.as_slice(), |row| {
+                // Try to get as i64 first (most common for numeric columns in SQLite)
+                if let Ok(val) = row.get::<_, i64>(0) {
+                    return Ok(val.to_string());
+                }
+                // If that fails, try as String
+                if let Ok(val) = row.get::<_, String>(0) {
+                    return Ok(val);
+                }
+                // If both fail, try as text (covers more cases)
+                row.get::<_, String>(0)
+            })?;
+
+            Ok::<String, rusqlite::Error>(result)
+        })
+        .await
+        .map_err(|_| SqliteError::ConnectionLockError)?
+        .map_err(SqliteError::SqliteError)
+    }
+
     /// Bulk insert method using SQLite transactions for better performance
     /// Note: SQLite doesn't have COPY like PostgreSQL, but transactions significantly improve bulk insert performance
     pub async fn insert_bulk(

@@ -41,6 +41,9 @@ pub enum UpdateKnownFactoryDeployedAddressesError {
     #[error("Could not write addresses to clickhouse: {0}")]
     ClickhouseWrite(#[from] ClickhouseError),
 
+    #[error("Could not write addresses to sqlite: {0}")]
+    SqliteWrite(String),
+
     #[error("Could not parse logs")]
     LogsParse,
 }
@@ -208,6 +211,41 @@ pub async fn update_known_factory_deployed_addresses(
                     .collect::<Vec<_>>(),
             )
             .await?;
+
+        return Ok(());
+    }
+
+    if let Some(sqlite) = &config.sqlite {
+        let params = GenerateInternalFactoryEventTableNameParams {
+            indexer_name: config.indexer_name.clone(),
+            contract_name: config.contract_name.clone(),
+            event_name: config.event.name.clone(),
+            input_names: config.input_names().clone(),
+        };
+        let table_name = generate_internal_factory_event_table_name(&params);
+
+        sqlite
+            .insert_bulk(
+                &format!("rindexer_internal_{table_name}"),
+                &[
+                    "factory_address".to_string(),
+                    "factory_deployed_address".to_string(),
+                    "network".to_string(),
+                ],
+                &addresses
+                    .clone()
+                    .into_iter()
+                    .map(|item| {
+                        vec![
+                            EthereumSqlTypeWrapper::Address(item.factory_address),
+                            EthereumSqlTypeWrapper::Address(item.address),
+                            EthereumSqlTypeWrapper::String(config.network_contract.network.clone()),
+                        ]
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .await
+            .map_err(UpdateKnownFactoryDeployedAddressesError::SqliteWrite)?;
 
         return Ok(());
     }

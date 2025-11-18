@@ -10,6 +10,7 @@ use crate::event::factory_event_filter_sync::update_known_factory_deployed_addre
 use crate::event::rindexer_event_filter::FactoryFilter;
 use crate::manifest::config::Config;
 use crate::manifest::contract::EventInputIndexedFilters;
+use crate::SqliteClient;
 use crate::{
     event::{
         callback_registry::{
@@ -39,6 +40,7 @@ pub struct ContractEventProcessingConfig {
     pub progress: Arc<Mutex<IndexingEventsProgressState>>,
     pub postgres: Option<Arc<PostgresClient>>,
     pub clickhouse: Option<Arc<ClickhouseClient>>,
+    pub sqlite: Option<Arc<SqliteClient>>,
     pub csv_details: Option<CsvDetails>,
     pub stream_last_synced_block_file_path: Option<String>,
     pub index_event_in_order: bool,
@@ -115,6 +117,7 @@ pub struct FactoryEventProcessingConfig {
     pub progress: Arc<Mutex<IndexingEventsProgressState>>,
     pub postgres: Option<Arc<PostgresClient>>,
     pub clickhouse: Option<Arc<ClickhouseClient>>,
+    pub sqlite: Option<Arc<SqliteClient>>,
     pub csv_details: Option<CsvDetails>,
     pub stream_last_synced_block_file_path: Option<String>,
     pub index_event_in_order: bool,
@@ -296,6 +299,13 @@ impl EventProcessingConfig {
         }
     }
 
+    pub fn sqlite(&self) -> Option<Arc<SqliteClient>> {
+        match self {
+            Self::ContractEventProcessing(config) => config.sqlite.clone(),
+            Self::FactoryEventProcessing(config) => config.sqlite.clone(),
+        }
+    }
+
     pub fn csv_details(&self) -> Option<CsvDetails> {
         match self {
             Self::ContractEventProcessing(config) => config.csv_details.clone(),
@@ -348,6 +358,7 @@ pub struct TraceProcessingConfig {
     pub network: String,
     pub progress: Arc<Mutex<IndexingEventsProgressState>>,
     pub postgres: Option<Arc<PostgresClient>>,
+    pub sqlite: Option<Arc<SqliteClient>>,
     pub csv_details: Option<CsvDetails>,
     pub registry: Arc<TraceCallbackRegistry>,
     pub method: TraceProcessingMethod,
