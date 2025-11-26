@@ -64,7 +64,7 @@ jobs:
             svm_target_platform: linux-amd64
             platform: linux
             arch: amd64
-          - runner: macos-13
+          - runner: macos-15
             target: x86_64-apple-darwin
             svm_target_platform: macosx-amd64
             platform: darwin
@@ -505,7 +505,7 @@ jobs:
             svm_target_platform: linux-amd64
             platform: linux
             arch: amd64
-          - runner: macos-13
+          - runner: macos-15
             target: x86_64-apple-darwin
             svm_target_platform: macosx-amd64
             platform: darwin
