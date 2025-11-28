@@ -47,6 +47,7 @@ redis = { version = "0.32.7", features = ["streams"] }
 regex = "1.12.2"
 reqwest = { version = "0.12.24", features = ["json", "gzip"] }
 rust_decimal = { version = "1.39.0", features = ["db-tokio-postgres"] }
+rusqlite = "0.36"
 serde = "1.0"
 serde_json = "1.0"
 serde_yaml = "0.9.34"
