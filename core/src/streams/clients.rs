@@ -8,7 +8,6 @@ use tokio::{
     task,
     task::{JoinError, JoinHandle},
 };
-use tracing::error;
 
 use crate::{
     event::{filter_event_data_by_conditions, EventMessage},

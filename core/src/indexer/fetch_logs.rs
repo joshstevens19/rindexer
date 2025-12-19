@@ -54,6 +54,7 @@ pub fn fetch_logs_stream(
         let original_max_limit = config.network_contract().cached_provider.max_block_range;
         let mut max_block_range_limitation =
             config.network_contract().cached_provider.max_block_range;
+        #[allow(clippy::unnecessary_unwrap)]
         if max_block_range_limitation.is_some() {
             current_filter = current_filter.set_to_block(calculate_process_historic_log_to_block(
                 &from_block,

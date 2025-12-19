@@ -19,7 +19,6 @@ use std::hash::Hash;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
-use tracing::error;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct KnownFactoryDeployedAddress {
@@ -330,7 +329,7 @@ pub async fn get_known_factory_deployed_addresses(
         let query = format!(
             r#"
             SELECT toString(factory_deployed_address) AS factory_deployed_address
-            FROM rindexer_internal.{table_name} FINAL 
+            FROM rindexer_internal.{table_name} FINAL
             WHERE network = ?
             "#
         );
