@@ -5,7 +5,7 @@ use crate::{abi::ABIInput, event::callback_registry::TxInformation, types::core:
 #[allow(deprecated)]
 use alloy::{
     dyn_abi::DynSolValue,
-    primitives::{Address, Bytes, B128, B160, B256, B512, I256, U256, U512},
+    primitives::{Address, Bytes, B128, B256, B512, I256, U256, U512},
 };
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, Utc};
@@ -79,14 +79,14 @@ pub enum EthereumSqlTypeWrapper {
     B128(B128),
     #[deprecated(note = "Use Address instead")]
     #[allow(deprecated)]
-    H160(B160),
+    H160(Address),
     B256(B256),
     B256Bytes(B256),
     B512(B512),
     VecB128(Vec<B128>),
     #[deprecated(note = "Use Address instead")]
     #[allow(deprecated)]
-    VecH160(Vec<B160>),
+    VecH160(Vec<Address>),
     VecB256(Vec<B256>),
     VecB256Bytes(Vec<B256>),
     VecB512(Vec<B512>),
