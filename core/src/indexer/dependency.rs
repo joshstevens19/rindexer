@@ -20,6 +20,7 @@ impl EventsDependencyTree {
         EventsDependencyTree { contract_events: events, then: Box::new(None) }
     }
 
+    #[allow(clippy::replace_box)]
     pub fn add_then(&mut self, tree: EventsDependencyTree) {
         self.then = Box::new(Some(Arc::new(tree)));
     }
