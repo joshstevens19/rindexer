@@ -162,8 +162,8 @@ pub async fn start(
                         None => "-- --graphql".to_string(),
                     },
                     StartSubcommands::All { port } => match port {
-                        Some(port) => format!("-- --port={port}"),
-                        None => "".to_string(),
+                        Some(port) => format!("-- --graphql --indexer --port={port}"),
+                        None => "-- --graphql --indexer".to_string(),
                     },
                 })
                 .status()
