@@ -23,6 +23,7 @@ examples/*
 !examples/rindexer_factory_indexing
 !examples/rindexer_rust_playground
 !examples/rust_clickhouse
+!examples/rindexer_sqlite_db
 !examples/clickhouse_factory_indexing
 documentation/node_modules
 documentation/dist

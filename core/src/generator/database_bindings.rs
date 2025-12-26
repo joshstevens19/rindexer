@@ -43,3 +43,25 @@ pub fn generate_clickhouse_code() -> Code {
         .to_string(),
     )
 }
+
+pub fn generate_sqlite_code() -> Code {
+    Code::new(
+        r#"
+    use std::sync::Arc;
+    use rindexer::SqliteClient;
+    use tokio::sync::OnceCell;
+
+    static SQLITE_CLIENT: OnceCell<Arc<SqliteClient>> = OnceCell::const_new();
+
+    pub async fn get_or_init_sqlite_client() -> Arc<SqliteClient> {
+        SQLITE_CLIENT
+            .get_or_init(|| async {
+                Arc::new(SqliteClient::new().await.expect("Failed to connect to SQLite"))
+            })
+            .await
+            .clone()
+    }
+    "#
+        .to_string(),
+    )
+}

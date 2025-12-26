@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     curl \
     git \
+    libsqlite3-0 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -L https://foundry.paradigm.xyz | bash
