@@ -11,6 +11,12 @@ pub struct RindexerEventStream {
     tx: tokio::sync::broadcast::Sender<RindexerEvent>,
 }
 
+impl Default for RindexerEventStream {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RindexerEventStream {
     pub fn new() -> Self {
         let (tx, _) = tokio::sync::broadcast::channel(100);
