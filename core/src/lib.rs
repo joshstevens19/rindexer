@@ -47,6 +47,9 @@ mod start;
 mod streams;
 mod types;
 
+mod events;
+pub use events::{RindexerEvent, RindexerEventStream};
+
 // export 3rd party dependencies
 pub use async_trait::async_trait;
 pub use colored::Colorize as RindexerColorize;

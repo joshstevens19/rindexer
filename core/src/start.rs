@@ -5,6 +5,8 @@ use tokio::signal;
 use tracing::{error, info};
 
 use crate::database::clickhouse::setup::SetupClickhouseError;
+use crate::events::RindexerEventEmitter;
+use crate::indexer::start::{start_historical_indexing, start_live_indexing};
 use crate::{
     api::{start_graphql_server, GraphqlOverrideSettings, StartGraphqlServerError},
     database::postgres::{
@@ -17,7 +19,7 @@ use crate::{
     health::start_health_server,
     indexer::{
         no_code::{setup_no_code, SetupNoCodeError},
-        start::{start_indexing, StartIndexingError},
+        start::StartIndexingError,
         ContractEventDependencies, ContractEventDependenciesMapFromRelationshipsError,
     },
     initiate_shutdown,
@@ -27,12 +29,13 @@ use crate::{
         storage::RelationshipsAndIndexersError,
         yaml::{read_manifest, ReadManifestError},
     },
-    setup_clickhouse, setup_info_logger,
+    setup_clickhouse, setup_info_logger, RindexerEventStream,
 };
 
 pub struct IndexingDetails {
     pub registry: EventCallbackRegistry,
     pub trace_registry: TraceCallbackRegistry,
+    pub event_stream: Option<RindexerEventStream>,
 }
 
 pub struct StartDetails<'a> {
@@ -250,14 +253,13 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                 let mut dependencies: Vec<ContractEventDependencies> =
                     ContractEventDependencies::parse(&manifest);
 
-                let processed_network_contracts = start_indexing(
+                let processed_network_contracts = start_historical_indexing(
                     &manifest,
                     project_path,
                     &dependencies,
-                    // we index all the historic data first before then applying FKs
-                    !relationships.is_empty(),
                     indexing_details.registry.complete(),
                     indexing_details.trace_registry.complete(),
+                    indexing_details.event_stream.map(RindexerEventEmitter::from_stream),
                 )
                 .await?;
 
@@ -269,30 +271,27 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     // need to handle this
                     info!("Applying constraints relationships back to the database as historic resync is complete");
                     Relationship::apply_all(&relationships).await?;
+                }
 
-                    if manifest.has_any_contracts_live_indexing() {
-                        info!("Starting live indexing now relationship re-applied..");
-
-                        if dependencies.is_empty() {
-                            dependencies =
-                                ContractEventDependencies::map_from_relationships(&relationships)?;
-                        } else {
-                            info!("Manual dependency_events found, skipping auto-applying the dependency_events with the relationships");
-                        }
-
-                        start_indexing(
-                            &manifest,
-                            project_path,
-                            &dependencies,
-                            false,
-                            indexing_details
-                                .registry
-                                .reapply_after_historic(processed_network_contracts),
-                            indexing_details.trace_registry.complete(),
-                        )
-                        .await
-                        .map_err(StartRindexerError::CouldNotStartIndexing)?;
+                if manifest.has_any_contracts_live_indexing() {
+                    if dependencies.is_empty() {
+                        dependencies =
+                            ContractEventDependencies::map_from_relationships(&relationships)?;
+                    } else {
+                        info!("Manual dependency_events found, skipping auto-applying the dependency_events with the relationships");
                     }
+
+                    start_live_indexing(
+                        &manifest,
+                        project_path,
+                        &dependencies,
+                        indexing_details
+                            .registry
+                            .reapply_after_historic(processed_network_contracts),
+                        indexing_details.trace_registry.complete(),
+                    )
+                    .await
+                    .map_err(StartRindexerError::CouldNotStartIndexing)?;
                 }
 
                 // Do not need now with the main shutdown keeping around in-case

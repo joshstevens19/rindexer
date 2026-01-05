@@ -200,11 +200,7 @@ impl Manifest {
     }
 
     pub fn has_any_contracts_live_indexing(&self) -> bool {
-        self.all_contracts()
-            .iter()
-            .filter(|c| c.details.iter().any(|p| p.end_block.is_none()))
-            .count()
-            > 0
+        self.all_contracts().iter().any(|c| c.details.iter().any(|p| p.end_block.is_none()))
     }
 
     /// Check if the manifest has opted-in to indexing native transfers. It is off by default.

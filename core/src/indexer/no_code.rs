@@ -168,7 +168,11 @@ pub async fn setup_no_code(
 
             Ok(StartDetails {
                 manifest_path: details.manifest_path,
-                indexing_details: Some(IndexingDetails { registry, trace_registry }),
+                indexing_details: Some(IndexingDetails {
+                    registry,
+                    trace_registry,
+                    event_stream: None,
+                }),
                 graphql_details: details.graphql_details,
             })
         }

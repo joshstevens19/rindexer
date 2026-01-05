@@ -1,8 +1,8 @@
 use std::{env, path::PathBuf};
 
 use rindexer::{
-    GraphqlOverrideSettings, IndexingDetails, StartDetails,
     event::callback_registry::TraceCallbackRegistry, manifest::yaml::read_manifest, start_rindexer,
+    GraphqlOverrideSettings, IndexingDetails, StartDetails,
 };
 
 use self::rindexer_lib::indexers::all_handlers::register_all_handlers;
@@ -57,6 +57,7 @@ async fn main() {
                     Some(IndexingDetails {
                         registry: register_all_handlers(&manifest_path).await,
                         trace_registry: TraceCallbackRegistry { events: vec![] },
+                        event_stream: None,
                     })
                 } else {
                     None
