@@ -1,5 +1,4 @@
 use alloy::primitives::U64;
-use colored::{ColoredString, Colorize};
 use std::collections::HashMap;
 use std::{
     hash::{Hash, Hasher},
@@ -30,8 +29,8 @@ impl IndexingEventProgressStatus {
         }
     }
 
-    pub fn log(&self) -> ColoredString {
-        self.as_str().green()
+    pub fn log(&self) -> &str {
+        self.as_str()
     }
 }
 
