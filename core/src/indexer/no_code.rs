@@ -213,10 +213,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             if event_length == 0 {
                 debug!(
                     "{} {}: {} - {}",
-                    params.indexer_name,
-                    params.contract_name,
-                    params.event_info.name,
-                    "NO EVENTS"
+                    params.indexer_name, params.contract_name, params.event_info.name, "NO EVENTS"
                 );
 
                 return Ok(());
