@@ -790,7 +790,7 @@ pub fn generate_event_handlers(
         r#"#![allow(non_snake_case)]
             use rindexer::{
                 event::callback_registry::EventCallbackRegistry,
-                EthereumSqlTypeWrapper, PgType, RindexerColorize, rindexer_error, rindexer_info
+                EthereumSqlTypeWrapper, PgType, rindexer_error, rindexer_info
             };
         "#,
     );
@@ -1034,8 +1034,7 @@ pub fn generate_event_handlers(
                                 {postgres_write}
 
                                 rindexer_info!(
-                                    "{contract_name}::{handler_name} - {{}} - {{}} events",
-                                    "INDEXED".green(),
+                                    "{contract_name}::{handler_name} - INDEXED - {{}} events",
                                     results.len(),
                                 );
 

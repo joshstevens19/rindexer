@@ -830,7 +830,7 @@ pub fn generate_trace_handlers(
         r#"#![allow(non_snake_case)]
             use rindexer::{
                 event::callback_registry::TraceCallbackRegistry,
-                EthereumSqlTypeWrapper, PgType, RindexerColorize, rindexer_error, rindexer_info
+                EthereumSqlTypeWrapper, PgType, rindexer_error, rindexer_info
             };
         "#,
     );
@@ -1018,8 +1018,7 @@ pub fn generate_trace_handlers(
                             {postgres_write}
 
                             rindexer_info!(
-                                "{contract_name}::{handler_name} - {{}} - {{}} events",
-                                "INDEXED".green(),
+                                "{contract_name}::{handler_name} - INDEXED - {{}} events",
                                 results.len(),
                             );
 
@@ -1062,8 +1061,7 @@ pub fn generate_trace_handlers(
                 }}
 
                 rindexer_info!(
-                    "{contract_name}::Block - {{}} - {{}} blocks",
-                    "INDEXED".green(),
+                    "{contract_name}::Block - INDEXED - {{}} blocks",
                     results.len(),
                 );
 

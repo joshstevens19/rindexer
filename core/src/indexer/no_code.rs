@@ -8,7 +8,6 @@ use alloy::{
     dyn_abi::DynSolValue,
     json_abi::{Event, JsonAbi},
 };
-use colored::Colorize;
 use serde_json::Value;
 use tokio_postgres::types::Type as PgType;
 use tracing::{debug, error, info, warn};
@@ -214,10 +213,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             if event_length == 0 {
                 debug!(
                     "{} {}: {} - {}",
-                    params.indexer_name,
-                    params.contract_name,
-                    params.event_info.name,
-                    "NO EVENTS".red()
+                    params.indexer_name, params.contract_name, params.event_info.name, "NO EVENTS"
                 );
 
                 return Ok(());
@@ -538,7 +534,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                                 "{}::{} - {} - {} events {}",
                                 params.contract_name,
                                 params.event_info.name,
-                                "STREAMED".green(),
+                                "STREAMED",
                                 streamed,
                                 format!(
                                     "- blocks: {} - {} - network: {}",
@@ -560,7 +556,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                         "{}::{} - {} - messages has a max 10 block range due the rate limits - {}",
                         params.contract_name,
                         params.event_info.name,
-                        "CHAT_MESSAGES_DISABLED".yellow(),
+                        "CHAT_MESSAGES_DISABLED",
                         format!("- blocks: {} - {} - network: {}", from_block, to_block, network)
                     );
                 } else {
@@ -579,7 +575,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                                     "{}::{} - {} - {} events {}",
                                     params.contract_name,
                                     params.event_info.name,
-                                    "CHAT_MESSAGES_SENT".green(),
+                                    "CHAT_MESSAGES_SENT",
                                     messages_sent,
                                     format!(
                                         "- blocks: {} - {} - network: {}",
@@ -600,7 +596,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                 "{}::{} - {} - {} events {}",
                 params.contract_name,
                 params.event_info.name,
-                "INDEXED".green(),
+                "INDEXED",
                 indexed_count,
                 format!("- blocks: {} - {} - network: {}", from_block, to_block, network)
             );

@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - 'release/**'
-      - 'master'
+      - "release/**"
+      - "master"
   pull_request:
     branches:
-      - 'master'
-      - '**'
+      - "master"
+      - "**"
     types: [opened, synchronize, reopened]
 
 jobs:
@@ -48,9 +48,9 @@ jobs:
           (contains(github.event.pull_request.head.ref, '/merge') ||
            startsWith(github.event.pull_request.head.ref, 'merge')))
       ) &&
-      !(github.ref == 'refs/heads/master' && 
-        github.event_name == 'push' && 
-        (contains(github.event.head_commit.message, 'Release v') || 
+      !(github.ref == 'refs/heads/master' &&
+        github.event_name == 'push' &&
+        (contains(github.event.head_commit.message, 'Release v') ||
          contains(github.event.head_commit.message, 'release/')))
     name: ${{ matrix.target }} (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
@@ -99,7 +99,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: "22"
 
       - name: Apple M1 setup
         if: matrix.target == 'aarch64-apple-darwin'
@@ -215,11 +215,11 @@ jobs:
           target="${{ matrix.target }}"
           build_type="${{ env.BUILD_TYPE }}"
           binary_path="${{ github.workspace }}/target/$target/$build_type/rindexer_cli"
-          
+
           if [[ "$target" == *windows* ]]; then
             binary_path+=".exe"
           fi
-          
+
           echo "Running smoke test for $binary_path"
           "$binary_path" --version
           "$binary_path" help
@@ -238,7 +238,7 @@ jobs:
           BUILD_DIR="${{ github.workspace }}/target/${TARGET}/${{ env.BUILD_TYPE }}"
           CLI_BINARY_NAME="rindexer_cli"
           [[ "$PLATFORM_NAME" == "win32" ]] && CLI_BINARY_NAME="rindexer_cli.exe"
-          
+
           # Create a temporary staging directory for creating the archive
           STAGING_DIR="staging"
           mkdir -p "$STAGING_DIR"
@@ -246,7 +246,7 @@ jobs:
           # Copy binaries to the staging directory
           echo "Copying $BUILD_DIR/$CLI_BINARY_NAME to $STAGING_DIR/"
           cp "$BUILD_DIR/$CLI_BINARY_NAME" "$STAGING_DIR/"
-          
+
           # Create the final archive
           if [ "$PLATFORM_NAME" == "linux" ] || [ "$PLATFORM_NAME" == "darwin" ]; then
             FILE_NAME="rindexer_${PLATFORM_NAME}-${ARCH}.tar.gz"
@@ -255,7 +255,7 @@ jobs:
             FILE_NAME="rindexer_${PLATFORM_NAME}-${ARCH}.zip"
             (cd "$STAGING_DIR" && 7z a -tzip "${{ github.workspace }}/$FILE_NAME" .)
           fi
-          
+
           echo "Created archive: $FILE_NAME"
           echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
 
@@ -265,11 +265,11 @@ jobs:
           set -eo pipefail
           target="${{ matrix.target }}"
           flags=()
-          
+
           if [[ "$target" != *msvc* && "$target" != "aarch64-unknown-linux-gnu" ]]; then
             flags+=(--features jemalloc)
           fi
-          
+
           cargo test --exclude rindexer_rust_playground --workspace --release --target "$target" "${flags[@]}"
 
       - name: Run tests (reth feature)
@@ -299,7 +299,7 @@ jobs:
     runs-on: ubuntu-22.04
     needs: build
     if: |
-      github.actor != 'github-actions[bot]' && 
+      github.actor != 'github-actions[bot]' &&
       startsWith(github.ref, 'refs/heads/release/')
     steps:
       - uses: actions/checkout@v4
@@ -319,132 +319,132 @@ jobs:
           sed -i 's/^version = ".*"/version = "${{ env.VERSION_NAME }}"/' cli/Cargo.toml
           sed -i 's/^version = ".*"/version = "${{ env.VERSION_NAME }}"/' core/Cargo.toml
 
-      - name: Update Changelog
-        shell: bash
-        run: |
-          CHANGELOG_FILE="documentation/docs/pages/docs/changelog.mdx"
-          DAY=$(date '+%d' | sed 's/^0*//')
-          MONTH=$(date '+%B')
-          YEAR=$(date '+%Y')
-          
-          # Add ordinal suffix
-          case $DAY in
-            1|21|31) SUFFIX="st";;
-            2|22) SUFFIX="nd";;
-            3|23) SUFFIX="rd";;
-            *) SUFFIX="th";;
-          esac
-          
-          DATE="$DAY$SUFFIX $MONTH $YEAR"
-          
-          echo "Updating changelog for version ${{ env.VERSION_NAME }}"
-          
-          # Create a temporary file to work with
-          cp "$CHANGELOG_FILE" changelog_temp.mdx
-          
-          # Extract just the bug fixes line directly from Changes Not Deployed section
-          BUG_FIXES=$(sed -n '/^## Changes Not Deployed/,/^## Releases/p' changelog_temp.mdx | grep "^- fix:" | head -5)
-          
-          # Use the simple extraction for now
-          FEATURES=""
-          BUG_FIXES="$BUG_FIXES"
-          BREAKING_CHANGES=""
-          
-          # Save the extracted content for PR creation
-          {
-            echo "### Changes in this release:"
-            echo "-------------------------------------------------"
-            echo "### Features"
-            echo "-------------------------------------------------"
-            if [[ -n "$FEATURES" ]]; then
-              echo "$FEATURES"
-            fi
-            echo ""
-            echo "### Bug fixes"
-            echo "-------------------------------------------------"
-            if [[ -n "$BUG_FIXES" ]]; then
-              echo "$BUG_FIXES"
-            fi
-            echo ""
-            echo "### Breaking changes"
-            echo "-------------------------------------------------"
-            if [[ -n "$BREAKING_CHANGES" ]]; then
-              echo "$BREAKING_CHANGES"
-            fi
-          } > pr_body_content.txt
-          
-          # Save to environment variable
-          echo "PR_BODY_CONTENT<<EOF" >> $GITHUB_ENV
-          cat pr_body_content.txt >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
-          
-          # Create new release entry
-          cat > new_release.txt << EOF
-          # ${{ env.VERSION_NAME }}-beta - $DATE
-          
-          github branch - https://github.com/joshstevens19/rindexer/tree/release/${{ env.VERSION_NAME }}
-          
-          - linux binary - https://github.com/joshstevens19/rindexer/releases/download/v${{ env.VERSION_NAME }}/rindexer_linux-amd64.tar.gz
-          - mac apple silicon binary - https://github.com/joshstevens19/rindexer/releases/download/v${{ env.VERSION_NAME }}/rindexer_darwin-arm64.tar.gz
-          - mac apple intel binary - https://github.com/joshstevens19/rindexer/releases/download/v${{ env.VERSION_NAME }}/rindexer_darwin-amd64.tar.gz
-          - windows binary - https://github.com/joshstevens19/rindexer/releases/download/v${{ env.VERSION_NAME }}/rindexer_win32-amd64.zip
-          EOF
-          
-          # Add sections if they have content
-          if [[ -n "$FEATURES" && "$FEATURES" =~ [^[:space:]] ]]; then
-            echo "" >> new_release.txt
-            echo "### Features" >> new_release.txt
-            echo "-------------------------------------------------" >> new_release.txt
-            echo "$FEATURES" >> new_release.txt
-          fi
-          
-          if [[ -n "$BUG_FIXES" && "$BUG_FIXES" =~ [^[:space:]] ]]; then
-            echo "" >> new_release.txt
-            echo "### Bug fixes" >> new_release.txt
-            echo "-------------------------------------------------" >> new_release.txt
-            echo "$BUG_FIXES" >> new_release.txt
-          fi
-          
-          if [[ -n "$BREAKING_CHANGES" && "$BREAKING_CHANGES" =~ [^[:space:]] ]]; then
-            echo "" >> new_release.txt
-            echo "### Breaking changes" >> new_release.txt
-            echo "-------------------------------------------------" >> new_release.txt
-            echo "$BREAKING_CHANGES" >> new_release.txt
-          fi
-          
-          # Get existing releases (everything after "## Releases")
-          EXISTING_RELEASES=$(awk '/^## Releases/,0' changelog_temp.mdx | tail -n +5)
-          
-          # Create new changelog
-          cat > "$CHANGELOG_FILE" << EOF
-          # Changelog
-          
-          ## Changes Not Deployed
-          -------------------------------------------------
-          
-          ### Features
-          -------------------------------------------------
-          
-          ### Bug fixes
-          -------------------------------------------------
-          
-          ### Breaking changes
-          -------------------------------------------------
-          
-          ## Releases
-          -------------------------------------------------
-          
-          all release branches are deployed through \`release/VERSION_NUMBER\` branches
-          
-          $(cat new_release.txt)
-          
-          $EXISTING_RELEASES
-          EOF
-          
-          # Clean up temporary files
-          rm -f changelog_temp.mdx new_release.txt pr_body_content.txt
-          
-          echo "Changelog updated successfully"
+      # - name: Update Changelog
+      #   shell: bash
+      #   run: |
+      #     CHANGELOG_FILE="documentation/docs/pages/docs/changelog.mdx"
+      #     DAY=$(date '+%d' | sed 's/^0*//')
+      #     MONTH=$(date '+%B')
+      #     YEAR=$(date '+%Y')
+
+      #     # Add ordinal suffix
+      #     case $DAY in
+      #       1|21|31) SUFFIX="st";;
+      #       2|22) SUFFIX="nd";;
+      #       3|23) SUFFIX="rd";;
+      #       *) SUFFIX="th";;
+      #     esac
+
+      #     DATE="$DAY$SUFFIX $MONTH $YEAR"
+
+      #     echo "Updating changelog for version ${{ env.VERSION_NAME }}"
+
+      #     # Create a temporary file to work with
+      #     cp "$CHANGELOG_FILE" changelog_temp.mdx
+
+      #     # Extract just the bug fixes line directly from Changes Not Deployed section
+      #     BUG_FIXES=$(sed -n '/^## Changes Not Deployed/,/^## Releases/p' changelog_temp.mdx | grep "^- fix:" | head -5)
+
+      #     # Use the simple extraction for now
+      #     FEATURES=""
+      #     BUG_FIXES="$BUG_FIXES"
+      #     BREAKING_CHANGES=""
+
+      #     # Save the extracted content for PR creation
+      #     {
+      #       echo "### Changes in this release:"
+      #       echo "-------------------------------------------------"
+      #       echo "### Features"
+      #       echo "-------------------------------------------------"
+      #       if [[ -n "$FEATURES" ]]; then
+      #         echo "$FEATURES"
+      #       fi
+      #       echo ""
+      #       echo "### Bug fixes"
+      #       echo "-------------------------------------------------"
+      #       if [[ -n "$BUG_FIXES" ]]; then
+      #         echo "$BUG_FIXES"
+      #       fi
+      #       echo ""
+      #       echo "### Breaking changes"
+      #       echo "-------------------------------------------------"
+      #       if [[ -n "$BREAKING_CHANGES" ]]; then
+      #         echo "$BREAKING_CHANGES"
+      #       fi
+      #     } > pr_body_content.txt
+
+      #     # Save to environment variable
+      #     echo "PR_BODY_CONTENT<<EOF" >> $GITHUB_ENV
+      #     cat pr_body_content.txt >> $GITHUB_ENV
+      #     echo "EOF" >> $GITHUB_ENV
+
+      #     # Create new release entry
+      #     cat > new_release.txt << EOF
+      #     # ${{ env.VERSION_NAME }}-beta - $DATE
+
+      #     github branch - https://github.com/joshstevens19/rindexer/tree/release/${{ env.VERSION_NAME }}
+
+      #     - linux binary - https://github.com/joshstevens19/rindexer/releases/download/v${{ env.VERSION_NAME }}/rindexer_linux-amd64.tar.gz
+      #     - mac apple silicon binary - https://github.com/joshstevens19/rindexer/releases/download/v${{ env.VERSION_NAME }}/rindexer_darwin-arm64.tar.gz
+      #     - mac apple intel binary - https://github.com/joshstevens19/rindexer/releases/download/v${{ env.VERSION_NAME }}/rindexer_darwin-amd64.tar.gz
+      #     - windows binary - https://github.com/joshstevens19/rindexer/releases/download/v${{ env.VERSION_NAME }}/rindexer_win32-amd64.zip
+      #     EOF
+
+      #     # Add sections if they have content
+      #     if [[ -n "$FEATURES" && "$FEATURES" =~ [^[:space:]] ]]; then
+      #       echo "" >> new_release.txt
+      #       echo "### Features" >> new_release.txt
+      #       echo "-------------------------------------------------" >> new_release.txt
+      #       echo "$FEATURES" >> new_release.txt
+      #     fi
+
+      #     if [[ -n "$BUG_FIXES" && "$BUG_FIXES" =~ [^[:space:]] ]]; then
+      #       echo "" >> new_release.txt
+      #       echo "### Bug fixes" >> new_release.txt
+      #       echo "-------------------------------------------------" >> new_release.txt
+      #       echo "$BUG_FIXES" >> new_release.txt
+      #     fi
+
+      #     if [[ -n "$BREAKING_CHANGES" && "$BREAKING_CHANGES" =~ [^[:space:]] ]]; then
+      #       echo "" >> new_release.txt
+      #       echo "### Breaking changes" >> new_release.txt
+      #       echo "-------------------------------------------------" >> new_release.txt
+      #       echo "$BREAKING_CHANGES" >> new_release.txt
+      #     fi
+
+      #     # Get existing releases (everything after "## Releases")
+      #     EXISTING_RELEASES=$(awk '/^## Releases/,0' changelog_temp.mdx | tail -n +5)
+
+      #     # Create new changelog
+      #     cat > "$CHANGELOG_FILE" << EOF
+      #     # Changelog
+
+      #     ## Changes Not Deployed
+      #     -------------------------------------------------
+
+      #     ### Features
+      #     -------------------------------------------------
+
+      #     ### Bug fixes
+      #     -------------------------------------------------
+
+      #     ### Breaking changes
+      #     -------------------------------------------------
+
+      #     ## Releases
+      #     -------------------------------------------------
+
+      #     all release branches are deployed through \`release/VERSION_NUMBER\` branches
+
+      #     $(cat new_release.txt)
+
+      #     $EXISTING_RELEASES
+      #     EOF
+
+      #     # Clean up temporary files
+      #     rm -f changelog_temp.mdx new_release.txt pr_body_content.txt
+
+      #     echo "Changelog updated successfully"
 
       - name: Commit changes
         run: |
@@ -492,8 +492,8 @@ jobs:
     name: Build Release Binaries
     runs-on: ${{ matrix.runner }}
     if: |
-      github.actor != 'github-actions[bot]' && 
-      github.ref == 'refs/heads/master' && 
+      github.actor != 'github-actions[bot]' &&
+      github.ref == 'refs/heads/master' &&
       github.event_name == 'push'
     timeout-minutes: 240
     strategy:
@@ -537,15 +537,15 @@ jobs:
           git log --oneline -10 --pretty=format:"%H %s"
           echo ""
           echo "=== DEBUG: Checking for release pattern ==="
-          
+
           # Check the most recent commit (HEAD) for release pattern
           RECENT_COMMIT_MSG=$(git log --oneline -1 --pretty=format:"%s")
           echo "Most recent commit: '$RECENT_COMMIT_MSG'"
-          
+
           # Try to extract version from Release v pattern (including PR number)
           VERSION_FROM_RELEASE=$(echo "$RECENT_COMMIT_MSG" | grep -o 'Release v[0-9]*\.[0-9]*\.[0-9]*' | sed 's/Release v//' || echo "")
           echo "VERSION_FROM_RELEASE: '$VERSION_FROM_RELEASE'"
-          
+
           if [[ -n "$VERSION_FROM_RELEASE" ]]; then
             echo "VERSION_NAME=$VERSION_FROM_RELEASE" >> $GITHUB_ENV
             echo "is_release=true" >> $GITHUB_OUTPUT
@@ -583,7 +583,7 @@ jobs:
         if: steps.check_release.outputs.is_release == 'true'
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: "22"
 
       - name: Apple M1 setup
         if: steps.check_release.outputs.is_release == 'true' && matrix.target == 'aarch64-apple-darwin'
@@ -674,11 +674,11 @@ jobs:
           set -eo pipefail
           target="${{ matrix.target }}"
           binary_path="${{ github.workspace }}/target/$target/release/rindexer_cli"
-          
+
           if [[ "$target" == *windows* ]]; then
             binary_path+=".exe"
           fi
-          
+
           echo "Running smoke test for $binary_path"
           "$binary_path" --version
           "$binary_path" help
@@ -697,7 +697,7 @@ jobs:
           BUILD_DIR="${{ github.workspace }}/target/${TARGET}/release"
           CLI_BINARY_NAME="rindexer_cli"
           [[ "$PLATFORM_NAME" == "win32" ]] && CLI_BINARY_NAME="rindexer_cli.exe"
-          
+
           # Create a temporary staging directory for creating the archive
           STAGING_DIR="staging"
           mkdir -p "$STAGING_DIR"
@@ -705,7 +705,7 @@ jobs:
           # Copy binaries to the staging directory
           echo "Copying $BUILD_DIR/$CLI_BINARY_NAME to $STAGING_DIR/"
           cp "$BUILD_DIR/$CLI_BINARY_NAME" "$STAGING_DIR/"
-          
+
           # Create the final archive
           if [ "$PLATFORM_NAME" == "linux" ] || [ "$PLATFORM_NAME" == "darwin" ]; then
             FILE_NAME="rindexer_${PLATFORM_NAME}-${ARCH}.tar.gz"
@@ -714,7 +714,7 @@ jobs:
             FILE_NAME="rindexer_${PLATFORM_NAME}-${ARCH}.zip"
             (cd "$STAGING_DIR" && 7z a -tzip "${{ github.workspace }}/$FILE_NAME" .)
           fi
-          
+
           echo "Created archive: $FILE_NAME"
           echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
 
@@ -730,8 +730,8 @@ jobs:
     runs-on: ubuntu-22.04
     needs: release_build
     if: |
-      github.actor != 'github-actions[bot]' && 
-      github.ref == 'refs/heads/master' && 
+      github.actor != 'github-actions[bot]' &&
+      github.ref == 'refs/heads/master' &&
       github.event_name == 'push'
     steps:
       - name: Checkout repository
@@ -749,15 +749,15 @@ jobs:
           git log --oneline -10 --pretty=format:"%H %s"
           echo ""
           echo "=== DEBUG: Checking for release pattern ==="
-          
+
           # Check the most recent commit (HEAD) for release pattern
           RECENT_COMMIT_MSG=$(git log --oneline -1 --pretty=format:"%s")
           echo "Most recent commit: '$RECENT_COMMIT_MSG'"
-          
+
           # Try to extract version from Release v pattern (including PR number)
           VERSION_FROM_RELEASE=$(echo "$RECENT_COMMIT_MSG" | grep -o 'Release v[0-9]*\.[0-9]*\.[0-9]*' | sed 's/Release v//' || echo "")
           echo "VERSION_FROM_RELEASE: '$VERSION_FROM_RELEASE'"
-          
+
           if [[ -n "$VERSION_FROM_RELEASE" ]]; then
             echo "VERSION_NAME=$VERSION_FROM_RELEASE" >> $GITHUB_ENV
             echo "is_release=true" >> $GITHUB_OUTPUT
@@ -796,13 +796,13 @@ jobs:
           prerelease: false
           body: |
             Release v${{ env.VERSION_NAME }}
-            
+
             ## Installation
             ```bash
             # Latest version
             curl -L https://rindexer.xyz/install.sh | bash
-            
-            # Specific version  
+
+            # Specific version
             curl -L https://rindexer.xyz/install.sh | bash -s -- --version ${{ env.VERSION_NAME }}
             ```
         continue-on-error: true
