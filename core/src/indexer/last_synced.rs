@@ -13,6 +13,7 @@ use tracing::{debug, error};
 
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::postgres::generate::generate_internal_event_table_name_no_shorten;
+use crate::SqliteClient;
 use crate::{
     database::{
         generate::generate_indexer_contract_schema_name,
@@ -77,6 +78,7 @@ pub struct SyncConfig<'a> {
     pub project_path: &'a Path,
     pub postgres: &'a Option<Arc<PostgresClient>>,
     pub clickhouse: &'a Option<Arc<ClickhouseClient>>,
+    pub sqlite: &'a Option<Arc<SqliteClient>>,
     pub csv_details: &'a Option<CsvDetails>,
     pub stream_details: &'a Option<&'a StreamsConfig>,
     pub contract_csv_enabled: bool,
@@ -115,7 +117,10 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
     }
 
     // Then check streams if no csv or database to find out last synced block
-    if config.postgres.is_none() && !config.contract_csv_enabled && config.stream_details.is_some()
+    if config.postgres.is_none()
+        && config.sqlite.is_none()
+        && !config.contract_csv_enabled
+        && config.stream_details.is_some()
     {
         let stream_details = config.stream_details.as_ref().unwrap();
 
@@ -199,6 +204,31 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
                 let parsed =
                     U64::from_str(&result.to_string()).expect("Failed to parse last_synced_block");
 
+                if parsed.is_zero() {
+                    None
+                } else {
+                    Some(parsed)
+                }
+            }
+            Err(e) => {
+                error!("Error fetching last synced block: {:?}", e);
+                None
+            }
+        };
+    }
+
+    // Query database for last synced block
+    if let Some(sqlite) = config.sqlite {
+        let schema =
+            generate_indexer_contract_schema_name(config.indexer_name, config.contract_name);
+        let table_name = generate_internal_event_table_name(&schema, config.event_name);
+        // SQLite doesn't support schema.table notation - use underscore
+        let table_name = format!("rindexer_internal_{}", table_name);
+        let query = format!("SELECT last_synced_block FROM {} WHERE network = ?1", table_name);
+
+        return match sqlite.query_one_value(&query, vec![config.network.to_string()]).await {
+            Ok(result) => {
+                let parsed = U64::from_str(&result).expect("Failed to parse last_synced_block");
                 if parsed.is_zero() {
                     None
                 } else {
@@ -323,6 +353,24 @@ pub async fn update_progress_and_last_synced_task(
         if let Err(e) = result {
             error!("Error updating clickhouse last synced block: {:?}", e);
         }
+    } else if let Some(sqlite) = &config.sqlite() {
+        let schema =
+            generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
+        let table_name = generate_internal_event_table_name(&schema, &config.event_name());
+        let network = &config.network_contract().network;
+        // SQLite doesn't support schema.table notation - use underscore
+        let table_name = format!("rindexer_internal_{}", table_name);
+        let query = format!(
+            "UPDATE {} SET last_synced_block = {} WHERE network = '{}' AND {} > last_synced_block;
+             UPDATE rindexer_internal_latest_block SET block = {} WHERE network = '{}' AND {} > block;",
+            table_name, to_block, network, to_block, latest, network, latest
+        );
+
+        let result = sqlite.batch_execute(&query).await;
+
+        if let Err(e) = result {
+            error!("Error updating sqlite last synced block: {:?}", e);
+        }
     } else if let Some(csv_details) = &config.csv_details() {
         if let Err(e) = update_last_synced_block_number_for_file(
             &config.contract_name(),
@@ -398,6 +446,24 @@ pub async fn evm_trace_update_progress_and_last_synced_task(
 
         if let Err(e) = result {
             error!("Error updating last synced trace block db: {:?}", e);
+        }
+    }
+
+    if let Some(ref sqlite) = config.sqlite {
+        // Use the native_transfer table for all trace events since they share the same pipeline
+        let schema =
+            generate_indexer_contract_schema_name(&config.indexer_name, &config.contract_name);
+        let table_name = generate_internal_event_table_name(&schema, "native_transfer");
+        // SQLite doesn't support schema.table notation - use underscore
+        let table_name = format!("rindexer_internal_{}", table_name);
+        let query = format!(
+            "UPDATE {} SET last_synced_block = {} WHERE network = '{}' AND {} > last_synced_block",
+            table_name, to_block, config.network, to_block
+        );
+        let result = sqlite.batch_execute(&query).await;
+
+        if let Err(e) = result {
+            error!("Error updating last synced trace block sqlite: {:?}", e);
         }
     }
 

@@ -338,6 +338,8 @@ fn generate_event_callback_structs_code(
                 "database: get_or_init_postgres_client().await,"
             } else if storage.clickhouse_enabled() {
                 "database: get_or_init_clickhouse_client().await,"
+            } else if storage.sqlite_enabled() {
+                "database: get_or_init_sqlite_client().await,"
             } else {
                 ""
             },
@@ -664,6 +666,8 @@ fn generate_event_bindings_code(
             "use super::super::super::super::typings::database::get_or_init_postgres_client;"
         } else if storage.clickhouse_enabled() {
             "use super::super::super::super::typings::database::get_or_init_clickhouse_client;"
+        } else if storage.sqlite_enabled() {
+            "use super::super::super::super::typings::database::get_or_init_sqlite_client;"
         } else {
             ""
         },
@@ -671,6 +675,8 @@ fn generate_event_bindings_code(
             "PostgresClient,"
         } else if storage.clickhouse_enabled() {
             "ClickhouseClient,"
+        } else if storage.sqlite_enabled() {
+            "SqliteClient,"
         } else {
             ""
         },
@@ -683,6 +689,8 @@ fn generate_event_bindings_code(
             "pub database: Arc<PostgresClient>,"
         } else if storage.clickhouse_enabled() {
             "pub database: Arc<ClickhouseClient>,"
+        } else if storage.sqlite_enabled() {
+            "pub database: Arc<SqliteClient>,"
         } else {
             ""
         },

@@ -64,6 +64,9 @@ pub enum StartIndexingError {
     #[error("{0}")]
     ClickhouseConnectionError(#[from] ClickhouseConnectionError),
 
+    #[error("{0}")]
+    SqliteConnectionError(#[from] crate::database::sqlite::client::SqliteConnectionError),
+
     #[error("Could not get block number from provider: {0}")]
     GetBlockNumberError(#[from] ProviderError),
 
@@ -171,6 +174,7 @@ async fn start_indexing_traces(
     project_path: &Path,
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
+    sqlite: Option<Arc<crate::SqliteClient>>,
     indexer: &Indexer,
     trace_registry: Arc<TraceCallbackRegistry>,
 ) -> Result<Vec<JoinHandle<Result<(), ProcessEventError>>>, StartIndexingError> {
@@ -216,6 +220,7 @@ async fn start_indexing_traces(
             project_path,
             postgres: &postgres,
             clickhouse: &clickhouse,
+            sqlite: &sqlite,
             csv_details: &manifest.storage.csv,
             contract_csv_enabled: manifest.contract_csv_enabled(&first_event.contract_name),
             stream_details: &stream_details,
@@ -253,6 +258,7 @@ async fn start_indexing_traces(
             network: network_name.clone(),
             progress: trace_progress_state.clone(),
             postgres: postgres.clone(),
+            sqlite: sqlite.clone(),
             csv_details: None,
             registry: network_registry,
             method: network_details.method,
@@ -288,6 +294,7 @@ async fn start_indexing_contract_events(
     project_path: &Path,
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
+    sqlite: Option<Arc<crate::SqliteClient>>,
     indexer: &Indexer,
     registry: Arc<EventCallbackRegistry>,
     dependencies: &[ContractEventDependencies],
@@ -327,7 +334,9 @@ async fn start_indexing_contract_events(
             let project_path = project_path.to_path_buf();
             let postgres = postgres.clone();
             let clickhouse = clickhouse.clone();
+            let sqlite = sqlite.clone();
             let manifest_csv_details = manifest.storage.csv.clone();
+            let manifest = manifest.clone();
             let registry = Arc::clone(&registry);
             let event_progress_state = Arc::clone(&event_progress_state);
             let dependencies = dependencies.to_vec();
@@ -337,6 +346,7 @@ async fn start_indexing_contract_events(
                     project_path: &project_path,
                     postgres: &postgres,
                     clickhouse: &clickhouse,
+                    sqlite: &sqlite,
                     csv_details: &manifest_csv_details,
                     contract_csv_enabled: manifest.contract_csv_enabled(&event.contract.name),
                     stream_details: &stream_details,
@@ -443,6 +453,7 @@ async fn start_indexing_contract_events(
                     progress: Arc::clone(&event_progress_state),
                     clickhouse: clickhouse.clone(),
                     postgres: postgres.clone(),
+                    sqlite: sqlite.clone(),
                     config: manifest.config.clone(),
                     csv_details: manifest_csv_details.clone(),
                     // timestamps: timestamp_enabled_for_event
@@ -475,6 +486,7 @@ async fn start_indexing_contract_events(
                 progress: Arc::clone(&event_progress_state),
                 postgres: postgres.clone(),
                 clickhouse: clickhouse.clone(),
+                sqlite: sqlite.clone(),
                 csv_details: manifest_csv_details.clone(),
                 config: manifest.config.clone(),
                 // timestamps: timestamp_enabled_for_event
@@ -582,6 +594,7 @@ async fn start_indexing(
 ) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
     let database = initialize_database(manifest).await?;
     let clickhouse = initialize_clickhouse(manifest).await?;
+    let sqlite = initialize_sqlite(manifest).await?;
 
     // any events which are non-blocking and can be fired in parallel
     let mut non_blocking_process_events = Vec::new();
@@ -595,6 +608,7 @@ async fn start_indexing(
             project_path,
             database.clone(),
             clickhouse.clone(),
+            sqlite.clone(),
             &indexer,
             trace_registry.clone()
         ),
@@ -603,6 +617,7 @@ async fn start_indexing(
             project_path,
             database.clone(),
             clickhouse.clone(),
+            sqlite.clone(),
             &indexer,
             registry.clone(),
             dependencies,
@@ -690,6 +705,22 @@ pub async fn initialize_clickhouse(
             Err(e) => {
                 error!("Error connecting to Clickhouse: {:?}", e);
                 Err(StartIndexingError::ClickhouseConnectionError(e))
+            }
+        }
+    } else {
+        Ok(None)
+    }
+}
+
+pub async fn initialize_sqlite(
+    manifest: &Manifest,
+) -> Result<Option<Arc<crate::SqliteClient>>, StartIndexingError> {
+    if manifest.storage.sqlite_enabled() {
+        match crate::SqliteClient::new().await {
+            Ok(sqlite) => Ok(Some(Arc::new(sqlite))),
+            Err(e) => {
+                error!("Error connecting to SQLite: {:?}", e);
+                Err(StartIndexingError::SqliteConnectionError(e))
             }
         }
     } else {

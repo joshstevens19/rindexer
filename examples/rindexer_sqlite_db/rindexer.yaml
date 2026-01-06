@@ -1,0 +1,28 @@
+name: Circles
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+timestamps: true
+networks:
+- name: gnosis
+  chain_id: 100
+  rpc: https://rpc.gnosischain.com/
+storage:
+  sqlite:
+    enabled: true
+    drop_each_run: true
+native_transfers:
+  enabled: true
+contracts:
+- name: Subscriptions
+  details:
+  - network: gnosis
+    address: 0xcEbE4B6d50Ce877A9689ce4516Fe96911e099A78
+    start_block: 41149803
+    end_block: 41155000
+  abi: ./abis/SubscriptionModule.abi.json
+  include_events:
+  - SubscriptionCreated
+  - Unsubscribed
+  - Redeemed
+  - RecipientUpdated
