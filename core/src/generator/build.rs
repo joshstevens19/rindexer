@@ -566,6 +566,7 @@ serde = {{ version = "1.0", features = ["derive"] }}
                                 Some(IndexingDetails {
                                     registry: register_all_handlers(&manifest_path).await,
                                     trace_registry: TraceCallbackRegistry { events: vec![] },
+                                    event_stream: None,
                                 })
                             } else {
                                 None

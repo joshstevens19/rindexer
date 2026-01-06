@@ -1063,6 +1063,7 @@ async fn main() {
                     Some(IndexingDetails {
                         registry: register_all_handlers(&manifest_path).await,
                         trace_registry: TraceCallbackRegistry { events: vec![] },
+                        event_stream: None,
                     })
                 } else {
                     None
@@ -1125,3 +1126,77 @@ cargo run -- --graphql
 When you start changing your YAML configuration file and regenerating your typings the indexer functions may break or need editing
 to match the new typings. You can regenerate the indexers folder but this will overwrite any changes you did.
 Luckily the rust compiler is very good at telling you what you need to change.
+
+## Subscribing to indexer events
+
+More advanced use cases may require reacting to some internal rindexer events, which can be done through the `RindexerEventStream` attached to `IndexingDetails`.
+
+```rs
+use self::rindexer_lib::indexers::all_handlers::register_all_handlers;
+use rindexer::{
+    event::callback_registry::TraceCallbackRegistry, start_rindexer, GraphqlOverrideSettings,
+    IndexingDetails, RindexerEvent, RindexerEventStream, StartDetails,
+};
+use std::env;
+use tokio::sync::broadcast;
+use tokio::task;
+
+mod rindexer_lib;
+
+fn handle_rindexer_events(mut receiver: broadcast::Receiver<RindexerEvent>) {
+    task::spawn(async move {
+        loop {
+            match receiver.recv().await {
+                Ok(event) => {
+                    println!("Received {:?}", event);
+                }
+                Err(e) => {
+                    println!("Error {:?}", e);
+                }
+            }
+        }
+    });
+}
+
+#[tokio::main]
+async fn main() {
+    let indexer_event_stream = RindexerEventStream::new();
+
+    handle_rindexer_events(indexer_event_stream.subscribe());
+
+    let path = env::current_dir();
+    match path {
+        Ok(path) => {
+            let manifest_path = path.join("rindexer.yaml");
+            let result = start_rindexer(StartDetails {
+                manifest_path: &manifest_path,
+                indexing_details: Some(IndexingDetails {
+                    registry: register_all_handlers(&manifest_path).await,
+                    trace_registry: TraceCallbackRegistry { events: vec![] },
+                    event_stream: Some(indexer_event_stream),
+                }),
+                graphql_details: GraphqlOverrideSettings {
+                    enabled: false,
+                    override_port: None,
+                },
+            })
+            .await;
+
+            match result {
+                Ok(_) => {}
+                Err(e) => {
+                    println!("Error starting rindexer: {:?}", e);
+                }
+            }
+        }
+        Err(e) => {
+            println!("Error getting current directory: {:?}", e);
+        }
+    }
+}
+```
+
+For now only a single event is emitted:
+- `HistoricalIndexingCompleted` - emitted when historical indexing was completed (happens every restart of the indexer once it catches up with the latest block)
+
+

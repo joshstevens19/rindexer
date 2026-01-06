@@ -29,6 +29,9 @@ pub use file::{
 };
 use rand::{distr::Alphanumeric, Rng};
 
+mod duration;
+pub use duration::format_duration;
+
 pub fn camel_to_snake(s: &str) -> String {
     camel_to_snake_advanced(s, false)
 }
