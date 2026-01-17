@@ -1,3 +1,5 @@
+// Types are used by exported macros, not internally
+#![allow(dead_code)]
 use crate::EthereumSqlTypeWrapper;
 
 /// The type of batch operation to perform.

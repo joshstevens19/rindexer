@@ -4,8 +4,8 @@ use super::super::super::typings::rindexer_playground::events::rocket_pool_eth::
 };
 use alloy::primitives::{I256, U64, U256};
 use rindexer::{
-    EthereumSqlTypeWrapper, PgType, RindexerColorize,
-    event::callback_registry::EventCallbackRegistry, rindexer_error, rindexer_info,
+    EthereumSqlTypeWrapper, PgType, event::callback_registry::EventCallbackRegistry,
+    rindexer_error, rindexer_info,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -90,11 +90,7 @@ async fn approval_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                 return Err(e.to_string());
             }
 
-            rindexer_info!(
-                "RocketPoolETH::Approval - {} - {} events",
-                "INDEXED".green(),
-                results.len(),
-            );
+            rindexer_info!("RocketPoolETH::Approval - INDEXED - {} events", results.len(),);
 
             Ok(())
         },
@@ -185,11 +181,7 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                 return Err(e.to_string());
             }
 
-            rindexer_info!(
-                "RocketPoolETH::Transfer - {} - {} events",
-                "INDEXED".green(),
-                results.len(),
-            );
+            rindexer_info!("RocketPoolETH::Transfer - INDEXED - {} events", results.len(),);
 
             Ok(())
         },

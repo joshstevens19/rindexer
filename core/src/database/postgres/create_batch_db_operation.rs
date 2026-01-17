@@ -1,3 +1,52 @@
+/// Creates a batch operation function for PostgreSQL database.
+///
+/// # Example
+///
+/// ```ignore
+/// // Define the batch operation
+/// create_batch_postgres_operation!(
+///     update_reserve_supplied_shares,
+///     UpdateReserveInfo,
+///     "spoke.reserve",
+///     BatchOperationType::Update,
+///     |result: &UpdateReserveInfo| {
+///         vec![
+///             column(
+///                 "spoke",
+///                 EthereumSqlTypeWrapper::AddressBytes(result.withdraw.tx_information.address),
+///                 BatchOperationSqlType::Bytea,
+///                 BatchOperationColumnBehavior::Distinct,
+///                 BatchOperationAction::Where,
+///             ),
+///             column(
+///                 "reserve_id",
+///                 EthereumSqlTypeWrapper::U256Numeric(result.withdraw.event_data.reserveId),
+///                 BatchOperationSqlType::Numeric,
+///                 BatchOperationColumnBehavior::Distinct,
+///                 BatchOperationAction::Where,
+///             ),
+///             column(
+///                 "chain_id",
+///                 EthereumSqlTypeWrapper::U64BigInt(result.withdraw.tx_information.chain_id),
+///                 BatchOperationSqlType::Bigint,
+///                 BatchOperationColumnBehavior::Distinct,
+///                 BatchOperationAction::Where,
+///             ),
+///             column(
+///                 "supplied_shares",
+///                 EthereumSqlTypeWrapper::U256Numeric(result.withdrawn_shares),
+///                 BatchOperationSqlType::Numeric,
+///                 BatchOperationColumnBehavior::Normal,
+///                 BatchOperationAction::Subtract,
+///             ),
+///         ]
+///     },
+///     "Spoke::Withdraw - Update spoke.reserve"
+/// );
+///
+/// // Call the generated function
+/// update_reserve_supplied_shares(&context.database, &reserve_update_data).await?;
+/// ```
 #[macro_export]
 macro_rules! create_batch_postgres_operation {
     (
@@ -497,5 +546,27 @@ macro_rules! create_batch_postgres_operation {
 
             Ok(())
         }
+    };
+}
+
+/// Backwards-compatible alias for [`create_batch_postgres_operation`].
+#[macro_export]
+macro_rules! create_batch_db_operation {
+    (
+        $func_name:ident,
+        $result_type:ty,
+        $table_name:expr,
+        $op_type:expr,
+        $columns_def:expr,
+        $event_name:expr
+    ) => {
+        $crate::create_batch_postgres_operation!(
+            $func_name,
+            $result_type,
+            $table_name,
+            $op_type,
+            $columns_def,
+            $event_name
+        );
     };
 }

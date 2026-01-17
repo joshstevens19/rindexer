@@ -4,8 +4,8 @@ use super::super::super::typings::rindexer_playground::events::erc_20_filter::{
 };
 use alloy::primitives::{I256, U64, U256};
 use rindexer::{
-    EthereumSqlTypeWrapper, PgType, RindexerColorize,
-    event::callback_registry::EventCallbackRegistry, rindexer_error, rindexer_info,
+    EthereumSqlTypeWrapper, PgType, event::callback_registry::EventCallbackRegistry,
+    rindexer_error, rindexer_info,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -90,11 +90,7 @@ async fn approval_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                 return Err(e.to_string());
             }
 
-            rindexer_info!(
-                "ERC20Filter::Approval - {} - {} events",
-                "INDEXED".green(),
-                results.len(),
-            );
+            rindexer_info!("ERC20Filter::Approval - INDEXED - {} events", results.len(),);
 
             Ok(())
         },
@@ -185,11 +181,7 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                 return Err(e.to_string());
             }
 
-            rindexer_info!(
-                "ERC20Filter::Transfer - {} - {} events",
-                "INDEXED".green(),
-                results.len(),
-            );
+            rindexer_info!("ERC20Filter::Transfer - INDEXED - {} events", results.len(),);
 
             Ok(())
         },

@@ -97,6 +97,7 @@ mod tests {
     ///
     /// Each provider has different limits on their free-tiers for batch-sizes, so we include a
     /// "runs" property to control the number of blocks we check in a single test.
+    #[allow(dead_code)]
     async fn check_block_times(rpc: &str, runs: usize, network: SpacedNetwork) {
         let mut blocks = Vec::with_capacity(runs);
 

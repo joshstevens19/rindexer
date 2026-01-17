@@ -4,8 +4,8 @@ use super::super::super::typings::rindexer_playground::events::uniswap_v3_pool_f
 };
 use alloy::primitives::{I256, U64, U256};
 use rindexer::{
-    EthereumSqlTypeWrapper, PgType, RindexerColorize,
-    event::callback_registry::EventCallbackRegistry, rindexer_error, rindexer_info,
+    EthereumSqlTypeWrapper, PgType, event::callback_registry::EventCallbackRegistry,
+    rindexer_error, rindexer_info,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -105,11 +105,7 @@ async fn swap_handler(manifest_path: &PathBuf, registry: &mut EventCallbackRegis
                 return Err(e.to_string());
             }
 
-            rindexer_info!(
-                "UniswapV3PoolFilter::Swap - {} - {} events",
-                "INDEXED".green(),
-                results.len(),
-            );
+            rindexer_info!("UniswapV3PoolFilter::Swap - INDEXED - {} events", results.len(),);
 
             Ok(())
         },

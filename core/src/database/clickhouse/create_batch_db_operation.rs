@@ -1,12 +1,52 @@
 /// Creates a batch operation function for ClickHouse database.
 ///
-/// In ClickHouse:
-/// - **Update**: Maps to INSERT (ReplacingMergeTree deduplicates based on ORDER BY columns)
-/// - **Upsert**: Maps to INSERT (ReplacingMergeTree deduplicates based on ORDER BY columns)
-/// - **Delete**: Maps to `ALTER TABLE ... DELETE WHERE` (mutation)
+/// # Example
 ///
-/// Note: ClickHouse uses string interpolation via `to_clickhouse_value()` instead of
-/// parameterized queries.
+/// ```ignore
+/// // Define the batch operation
+/// create_batch_clickhouse_operation!(
+///     update_reserve_supplied_shares,
+///     UpdateReserveInfo,
+///     "spoke.reserve",
+///     BatchOperationType::Update,
+///     |result: &UpdateReserveInfo| {
+///         vec![
+///             column(
+///                 "spoke",
+///                 EthereumSqlTypeWrapper::AddressBytes(result.withdraw.tx_information.address),
+///                 BatchOperationSqlType::Bytea,
+///                 BatchOperationColumnBehavior::Distinct,
+///                 BatchOperationAction::Where,
+///             ),
+///             column(
+///                 "reserve_id",
+///                 EthereumSqlTypeWrapper::U256Numeric(result.withdraw.event_data.reserveId),
+///                 BatchOperationSqlType::Numeric,
+///                 BatchOperationColumnBehavior::Distinct,
+///                 BatchOperationAction::Where,
+///             ),
+///             column(
+///                 "chain_id",
+///                 EthereumSqlTypeWrapper::U64BigInt(result.withdraw.tx_information.chain_id),
+///                 BatchOperationSqlType::Bigint,
+///                 BatchOperationColumnBehavior::Distinct,
+///                 BatchOperationAction::Where,
+///             ),
+///             column(
+///                 "supplied_shares",
+///                 EthereumSqlTypeWrapper::U256Numeric(result.withdrawn_shares),
+///                 BatchOperationSqlType::Numeric,
+///                 BatchOperationColumnBehavior::Normal,
+///                 BatchOperationAction::Subtract,
+///             ),
+///         ]
+///     },
+///     "Spoke::Withdraw - Update spoke.reserve"
+/// );
+///
+/// // Call the generated function
+/// update_reserve_supplied_shares(&context.database, &reserve_update_data).await?;
+/// ```
 #[macro_export]
 macro_rules! create_batch_clickhouse_operation {
     (

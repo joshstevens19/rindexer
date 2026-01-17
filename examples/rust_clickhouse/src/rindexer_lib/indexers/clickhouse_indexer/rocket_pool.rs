@@ -4,8 +4,8 @@ use super::super::super::typings::clickhouse_indexer::events::rocket_pool::{
 };
 use alloy::primitives::{I256, U64, U256};
 use rindexer::{
-    EthereumSqlTypeWrapper, PgType, RindexerColorize,
-    event::callback_registry::EventCallbackRegistry, rindexer_error, rindexer_info,
+    EthereumSqlTypeWrapper, PgType, event::callback_registry::EventCallbackRegistry,
+    rindexer_error, rindexer_info,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -66,11 +66,7 @@ async fn transfer_handler(manifest_path: &PathBuf, registry: &mut EventCallbackR
                 return Err(e.to_string());
             }
 
-            rindexer_info!(
-                "RocketPool::Transfer - {} - {} events",
-                "INDEXED".green(),
-                results.len(),
-            );
+            rindexer_info!("RocketPool::Transfer - INDEXED - {} events", results.len(),);
 
             Ok(())
         },
