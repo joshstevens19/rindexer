@@ -499,25 +499,3 @@ macro_rules! create_batch_postgres_operation {
         }
     };
 }
-
-// Keep the old macro name as an alias for backwards compatibility
-#[macro_export]
-macro_rules! create_batch_db_operation {
-    (
-        $func_name:ident,
-        $result_type:ty,
-        $table_name:expr,
-        $op_type:expr,
-        $columns_def:expr,
-        $event_name:expr
-    ) => {
-        $crate::create_batch_postgres_operation!(
-            $func_name,
-            $result_type,
-            $table_name,
-            $op_type,
-            $columns_def,
-            $event_name
-        );
-    };
-}
