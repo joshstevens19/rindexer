@@ -151,6 +151,31 @@ impl Manifest {
                         generate_csv: contract.generate_csv,
                         streams: None,
                         chat: None,
+                        tables: None,
+                    };
+
+                    // Get event names from include_events or tables before moving contract
+                    let fallback_events: Option<DependencyEventTreeYaml> = if contract.dependency_events.is_none() {
+                        let event_names: Vec<String> = if let Some(events) = &contract.include_events {
+                            events.iter().map(|e| e.name.clone()).collect()
+                        } else {
+                            // Fall back to events from tables
+                            let table_events = contract.get_table_event_names();
+                            if table_events.is_empty() {
+                                panic!("Contract using factory must specify `include_events` or `tables` with events.");
+                            }
+                            table_events
+                        };
+
+                        Some(DependencyEventTreeYaml {
+                            events: event_names
+                                .into_iter()
+                                .map(SimpleEventOrContractEvent::SimpleEvent)
+                                .collect::<Vec<_>>(),
+                            then: None,
+                        })
+                    } else {
+                        None
                     };
 
                     let dependency_contract = Contract {
@@ -159,20 +184,7 @@ impl Manifest {
                                 contract_name: factory_contract.name.clone(),
                                 event_name: first_factory.event_name,
                             })],
-                            then: contract.dependency_events.or_else(|| {
-                                let events = contract
-                                    .include_events
-                                    .clone()
-                                    .expect("Contract using factory filter must specify `include_events`.");
-
-                                Some(DependencyEventTreeYaml {
-                                    events: events
-                                        .into_iter()
-                                        .map(|e|SimpleEventOrContractEvent::SimpleEvent(e.name))
-                                        .collect::<Vec<_>>(),
-                                    then: None,
-                                })
-                            }).map(Box::new),
+                            then: contract.dependency_events.or(fallback_events).map(Box::new),
                         }),
                         details: contract.details.into_iter().map(|detail| ContractDetails {
                             factory: Some(FactoryDetailsYaml {

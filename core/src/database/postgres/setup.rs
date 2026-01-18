@@ -55,7 +55,11 @@ pub async fn setup_postgres(
     )?;
 
     debug!("{}", sql);
-    client.batch_execute(sql.as_str()).await?;
+    if let Err(e) = client.batch_execute(sql.as_str()).await {
+        tracing::error!("Failed to execute SQL:\n{}", sql);
+        tracing::error!("Error: {:?}", e);
+        return Err(e.into());
+    }
 
     if disable_event_tables {
         info!("Created tables for {}", manifest.name);

@@ -4,6 +4,7 @@ mod progress;
 pub use progress::{IndexingEventProgressStatus, IndexingEventsProgressState};
 use serde::{Deserialize, Serialize};
 
+pub mod tables;
 mod dependency;
 pub use dependency::ContractEventDependenciesMapFromRelationshipsError;
 mod fetch_logs;

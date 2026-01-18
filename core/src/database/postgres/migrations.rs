@@ -92,7 +92,14 @@ pub async fn execute_migrations_for_indexer_sql(
             let events = ABIItem::extract_event_names_and_signatures_from_abi(abi_items)?;
             let schema_name = generate_indexer_contract_schema_name(&indexer.name, &contract_name);
 
-            for event_info in events {
+            // Only run migrations on raw event tables (events in include_events)
+            // Skip events that are only used for custom tables
+            let raw_events: Vec<_> = events
+                .iter()
+                .filter(|e| contract.is_event_in_include_events(&e.name))
+                .collect();
+
+            for event_info in raw_events {
                 let table_name = format!("{}.{}", schema_name, camel_to_snake(&event_info.name));
                 statements.push_str(&version.generate_table_migration_sql(&table_name));
             }

@@ -1,0 +1,40 @@
+# ERC721 NFT Ownership Example
+# Tracks who owns each NFT (BoredApeYachtClub)
+name: ERC721OwnershipExample
+description: Track NFT ownership per token ID
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+
+storage:
+  postgres:
+    enabled: true
+    drop_each_run: true
+
+contracts:
+  - name: BoredApes
+    details:
+      - network: ethereum
+        address: "0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d"
+        start_block: "18600000"
+        end_block: "18610000"  # ~10000 blocks for testing
+    abi: ./abis/ERC721.abi.json
+    tables:
+      - name: ownership
+        columns:
+          - name: token_id
+          - name: owner
+        events:
+          - event: Transfer
+            operations:
+              - type: upsert
+                where:
+                  token_id: $tokenId
+                set:
+                  - column: owner
+                    action: set
+                    value: $to

@@ -250,6 +250,7 @@ pub fn handle_new_command(
             generate_csv: None,
             streams: None,
             chat: None,
+            tables: None,
         }],
         native_transfers: NativeTransfers::default(),
         phantom: None,

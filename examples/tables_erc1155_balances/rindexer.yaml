@@ -1,0 +1,79 @@
+name: ERC1155BalancesExample
+description: Test ERC1155 token balance tracking using iterate for TransferBatch
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+    drop_each_run: true
+contracts:
+  - name: OpenSea
+    details:
+      - network: ethereum
+        # OpenSea's Seaport - has ERC1155 TransferBatch events
+        address: "0x00000000006c3852cbEf3e08E8dF289169EdE581"
+        start_block: 18600000
+        end_block: 18600500
+    abi: ./abis/ERC1155.json
+    tables:
+      - name: balances
+        columns:
+          - name: holder
+          - name: token_id
+          - name: balance
+            type: uint256
+            default: "0"
+        events:
+          # Handle batch transfers with iterate
+          - event: TransferBatch
+            iterate:
+              - "$ids as token_id"
+              - "$values as amount"
+            operations:
+              # Credit recipient for each token
+              - type: upsert
+                where:
+                  holder: $to
+                  token_id: $token_id
+                if: "$to != 0x0000000000000000000000000000000000000000"
+                set:
+                  - column: balance
+                    action: add
+                    value: $amount
+              # Debit sender for each token
+              - type: upsert
+                where:
+                  holder: $from
+                  token_id: $token_id
+                if: "$from != 0x0000000000000000000000000000000000000000"
+                set:
+                  - column: balance
+                    action: subtract
+                    value: $amount
+          # Handle single transfers normally (no iterate needed)
+          - event: TransferSingle
+            operations:
+              # Credit recipient
+              - type: upsert
+                where:
+                  holder: $to
+                  token_id: $id
+                if: "$to != 0x0000000000000000000000000000000000000000"
+                set:
+                  - column: balance
+                    action: add
+                    value: $value
+              # Debit sender
+              - type: upsert
+                where:
+                  holder: $from
+                  token_id: $id
+                if: "$from != 0x0000000000000000000000000000000000000000"
+                set:
+                  - column: balance
+                    action: subtract
+                    value: $value

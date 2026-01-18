@@ -1,3 +1,5 @@
+//! ClickHouse batch operation macro for efficient bulk database updates.
+
 /// Creates a batch operation function for ClickHouse database.
 ///
 /// # Example

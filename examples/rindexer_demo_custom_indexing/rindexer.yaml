@@ -1,0 +1,116 @@
+name: RocketPoolETHCustomIndexer
+description: My first rindexer project
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+timestamps: true
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+    block_poll_frequency: rapid
+storage:
+  postgres:
+    enabled: true
+    drop_each_run: true
+contracts:
+  - name: RocketPoolETH
+    details:
+      - network: ethereum
+        address: 0xae78736cd615f374d3085123a210448e74fc6393
+        start_block: "18600000"
+        end_block: "18718056"
+    abi: ./abis/RocketTokenRETH.abi.json
+    tables:
+      # Track token balances per address
+      - name: token_balances
+        columns:
+          - name: holder
+          - name: balance
+            default: "0"
+
+        events:
+          - event: Transfer
+            operations:
+              # Credit recipient
+              - type: upsert
+                where:
+                  holder: $to
+                if: "$to != 0x0000000000000000000000000000000000000000"
+                set:
+                  - column: balance
+                    action: add
+                    value: $value
+
+              # Debit sender
+              - type: upsert
+                where:
+                  holder: $from
+                if: "$from != 0x0000000000000000000000000000000000000000"
+                set:
+                  - column: balance
+                    action: subtract
+                    value: $value
+
+      # Track global token supply (mints and burns)
+      - name: token_supply
+        global: true
+        columns:
+          - name: total_supply
+            default: "0"
+          - name: total_minted
+            default: "0"
+          - name: total_burned
+            default: "0"
+
+        events:
+          - event: Transfer
+            operations:
+              # Mint (from zero address)
+              - type: upsert
+                if: "$from == 0x0000000000000000000000000000000000000000"
+                set:
+                  - column: total_supply
+                    action: add
+                    value: $value
+                  - column: total_minted
+                    action: add
+                    value: $value
+
+              # Burn (to zero address)
+              - type: upsert
+                if: "$to == 0x0000000000000000000000000000000000000000"
+                set:
+                  - column: total_supply
+                    action: subtract
+                    value: $value
+                  - column: total_burned
+                    action: add
+                    value: $value
+
+      # TEST: Delete operation
+      # Track "active senders" - anyone who sends tokens gets added
+      # When they receive tokens, they get deleted (contrived test case)
+      - name: delete_test
+        columns:
+          - name: address
+          - name: last_sent_amount
+            default: "0"
+
+        events:
+          - event: Transfer
+            operations:
+              # Add sender to table (when someone sends tokens)
+              - type: upsert
+                where:
+                  address: $from
+                if: "$from != 0x0000000000000000000000000000000000000000"
+                set:
+                  - column: last_sent_amount
+                    action: set
+                    value: $value
+
+              # Delete from table when they receive tokens (tests delete)
+              - type: delete
+                where:
+                  address: $to
+                if: "$to != 0x0000000000000000000000000000000000000000"

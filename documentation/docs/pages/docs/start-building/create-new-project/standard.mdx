@@ -96,6 +96,14 @@ Generating a rindexer project will generate a `rindexer.yaml` file for you. This
 You can read all about the rindexer.yaml settings in the [yaml configuration documentation](/docs/start-building/yaml-config).
 You can also use the [rindexer add](/docs/start-building/add) command to add contracts to your project and pull in ABIs for you.
 
+:::tip[Want to track balances, counters, or aggregations?]
+Instead of just logging raw events, you can use **Custom Tables** to maintain derived state.
+For example, track token balances that automatically update with each Transfer event, or count
+user actions, or aggregate data across multiple chains.
+
+[Learn about Custom Tables →](/docs/start-building/tables)
+:::
+
 It will generate you an boilerplate project which is configured to index rETH transfer and approval events from ethereum mainnet between a specific block range.
 
 ```yaml

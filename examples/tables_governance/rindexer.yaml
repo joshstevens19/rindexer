@@ -1,0 +1,102 @@
+# Governance Voting Example
+# Tracks votes per proposal with compound primary keys
+name: GovernanceExample
+description: Track governance votes per proposal and voter
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+
+storage:
+  postgres:
+    enabled: true
+    drop_each_run: true
+
+contracts:
+  # Compound Governor Bravo
+  - name: CompoundGovernor
+    details:
+      - network: ethereum
+        address: "0xc0Da02939E1441F497fd74F78cE7Decb17B66529"
+        start_block: "18600000"
+        end_block: "18700000"  # ~100k blocks for testing
+    abi: ./abis/Governor.abi.json
+    tables:
+      # Individual votes with compound key (proposal_id, voter)
+      - name: votes
+        columns:
+          - name: proposal_id
+          - name: voter
+          - name: support        # 0 = against, 1 = for, 2 = abstain
+            type: uint8
+          - name: voting_power
+            default: "0"
+        events:
+          - event: VoteCast
+            operations:
+              - type: upsert
+                where:
+                  proposal_id: $proposalId
+                  voter: $voter
+                set:
+                  - column: support
+                    action: set
+                    value: $support
+                  - column: voting_power
+                    action: set
+                    value: $votes
+
+      # Aggregated totals per proposal
+      - name: proposal_totals
+        columns:
+          - name: proposal_id
+          - name: for_votes
+            default: "0"
+          - name: against_votes
+            default: "0"
+          - name: abstain_votes
+            default: "0"
+          - name: total_votes
+            type: uint64
+            default: "0"
+        events:
+          - event: VoteCast
+            operations:
+              # For votes (support == 1)
+              - type: upsert
+                where:
+                  proposal_id: $proposalId
+                if: "$support == 1"
+                set:
+                  - column: for_votes
+                    action: add
+                    value: $votes
+                  - column: total_votes
+                    action: increment
+
+              # Against votes (support == 0)
+              - type: upsert
+                where:
+                  proposal_id: $proposalId
+                if: "$support == 0"
+                set:
+                  - column: against_votes
+                    action: add
+                    value: $votes
+                  - column: total_votes
+                    action: increment
+
+              # Abstain votes (support == 2)
+              - type: upsert
+                where:
+                  proposal_id: $proposalId
+                if: "$support == 2"
+                set:
+                  - column: abstain_votes
+                    action: add
+                    value: $votes
+                  - column: total_votes
+                    action: increment

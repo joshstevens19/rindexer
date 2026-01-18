@@ -13,6 +13,7 @@ use tracing::error;
 
 use crate::{
     abi::ABIItem,
+    event::{parse_arithmetic_expression, parse_filter_expression},
     helpers::{load_env_from_full_path, replace_env_variable_to_raw_name},
     manifest::{
         core::{Manifest, ProjectType},
@@ -22,6 +23,107 @@ use crate::{
 };
 
 pub const YAML_CONFIG_NAME: &str = "rindexer.yaml";
+
+/// Checks if a value string contains arithmetic operators indicating it's a computed expression.
+fn is_arithmetic_expression(value: &str) -> bool {
+    // Must contain at least one arithmetic operator
+    let has_operator = value
+        .chars()
+        .enumerate()
+        .any(|(i, c)| {
+            if c == '*' || c == '/' {
+                true
+            } else if c == '+' || c == '-' {
+                // Check it's not a unary operator at the start
+                i > 0
+            } else {
+                false
+            }
+        });
+
+    has_operator && value.contains('$')
+}
+
+/// Extracts variable names from a filter/condition expression string.
+/// For example, "from != to && value > 100" would return ["from", "to", "value"].
+/// Also handles $ prefix: "$from != $to" returns ["from", "to"].
+fn extract_filter_variables(expr: &str) -> Vec<String> {
+    let mut variables = Vec::new();
+    let mut chars = expr.chars().peekable();
+    let mut current_word = String::new();
+    let mut has_dollar_prefix = false;
+
+    // Keywords and operators to skip
+    let keywords = ["true", "false", "null", "and", "or", "AND", "OR"];
+
+    while let Some(c) = chars.next() {
+        if c == '$' && current_word.is_empty() {
+            // Start of a $-prefixed variable
+            has_dollar_prefix = true;
+        } else if c.is_alphanumeric() || c == '_' || c == '.' {
+            current_word.push(c);
+        } else {
+            if !current_word.is_empty() {
+                // Check if it's a variable (starts with letter or underscore, not a keyword or number)
+                let first_char = current_word.chars().next().unwrap();
+                if (first_char.is_alphabetic() || first_char == '_' || has_dollar_prefix)
+                    && !keywords.contains(&current_word.as_str())
+                {
+                    // Get root variable name (before any dot)
+                    let root_name = current_word.split('.').next().unwrap_or(&current_word);
+                    // Avoid duplicates
+                    if !variables.contains(&root_name.to_string()) {
+                        variables.push(root_name.to_string());
+                    }
+                }
+                current_word.clear();
+                has_dollar_prefix = false;
+            }
+        }
+    }
+
+    // Handle last word
+    if !current_word.is_empty() {
+        let first_char = current_word.chars().next().unwrap();
+        if (first_char.is_alphabetic() || first_char == '_' || has_dollar_prefix)
+            && !keywords.contains(&current_word.as_str())
+        {
+            let root_name = current_word.split('.').next().unwrap_or(&current_word);
+            if !variables.contains(&root_name.to_string()) {
+                variables.push(root_name.to_string());
+            }
+        }
+    }
+
+    variables
+}
+
+/// Extracts variable names from an arithmetic expression string.
+/// For example, "$amount + $fee * 2" would return ["amount", "fee"].
+fn extract_arithmetic_variables(expr: &str) -> Vec<String> {
+    let mut variables = Vec::new();
+    let mut chars = expr.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '$' {
+            let mut var_name = String::new();
+            while let Some(&next_c) = chars.peek() {
+                if next_c.is_alphanumeric() || next_c == '_' || next_c == '.' {
+                    var_name.push(chars.next().unwrap());
+                } else {
+                    break;
+                }
+            }
+            if !var_name.is_empty() {
+                // Get root variable name (before any dot)
+                let root_name = var_name.split('.').next().unwrap_or(&var_name);
+                variables.push(root_name.to_string());
+            }
+        }
+    }
+
+    variables
+}
 
 fn substitute_env_variables(contents: &str) -> Result<String, regex::Error> {
     let re = Regex::new(r"\$\{([^}]+)\}")?;
@@ -75,6 +177,28 @@ pub enum ValidateManifestError {
 
     #[error("Global ABI can only be a single string")]
     GlobalAbiCanOnlyBeASingleString(String),
+
+    // Custom indexing validation errors
+    #[error("Table validation error in contract '{1}': {0}")]
+    CustomIndexingValidationError(String, String),
+
+    #[error("Custom indexing event '{0}' in table '{1}' for contract '{2}' not found in ABI")]
+    CustomIndexingEventNotFoundInABI(String, String, String),
+
+    #[error("Custom indexing field '{0}' referenced in operation for event '{1}' in table '{2}' for contract '{3}' not found in table fields")]
+    CustomIndexingFieldNotFound(String, String, String, String),
+
+    #[error("Custom indexing event field '${0}' referenced in operation for event '{1}' in table '{2}' for contract '{3}' not found in event ABI")]
+    CustomIndexingEventFieldNotFound(String, String, String, String),
+
+    #[error("Invalid arithmetic expression '{0}' in operation for event '{1}' in table '{2}' for contract '{3}': {4}")]
+    CustomIndexingInvalidArithmeticExpression(String, String, String, String, String),
+
+    #[error("Invalid condition expression '{0}' in operation for event '{1}' in table '{2}' for contract '{3}': {4}")]
+    CustomIndexingInvalidConditionExpression(String, String, String, String, String),
+
+    #[error("Iterate field '${0}' in event '{1}' for table '{2}' in contract '{3}' not found in event ABI")]
+    CustomIndexingIterateFieldNotFound(String, String, String, String),
 }
 
 fn validate_manifest(
@@ -189,6 +313,251 @@ fn validate_manifest(
         if let Some(streams) = &contract.streams {
             if let Err(e) = streams.validate() {
                 return Err(ValidateManifestError::StreamsConfigValidationError(e));
+            }
+        }
+
+        // Validate tables (custom aggregation tables)
+        if let Some(tables) = &contract.tables {
+            for table in tables {
+                // Validate that all operations have consistent where columns
+                // (which become the primary key)
+                if let Err(e) = table.validate_where_columns() {
+                    return Err(ValidateManifestError::CustomIndexingValidationError(
+                        e,
+                        contract.name.clone(),
+                    ));
+                }
+
+                // Collect table column names for validation
+                let table_column_names: std::collections::HashSet<&str> =
+                    table.columns.iter().map(|c| c.name.as_str()).collect();
+
+                for event_mapping in &table.events {
+                    // Check event exists in ABI
+                    let abi_event =
+                        events.iter().find(|e| e.name == event_mapping.event && e.type_ == "event");
+                    if abi_event.is_none() {
+                        return Err(ValidateManifestError::CustomIndexingEventNotFoundInABI(
+                            event_mapping.event.clone(),
+                            table.name.clone(),
+                            contract.name.clone(),
+                        ));
+                    }
+                    let abi_event = abi_event.unwrap();
+
+                    // Collect event input names for validation
+                    let event_input_names: std::collections::HashSet<&str> =
+                        abi_event.inputs.iter().map(|i| i.name.as_str()).collect();
+
+                    // Built-in transaction metadata fields that are always available
+                    const BUILTIN_METADATA_FIELDS: &[&str] = &[
+                        "block_number",
+                        "block_timestamp",
+                        "tx_hash",
+                        "block_hash",
+                        "contract_address",
+                        "log_index",
+                        "tx_index",
+                    ];
+
+                    // Validate iterate bindings and collect aliases for later validation
+                    let mut iterate_aliases: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
+                    for binding in &event_mapping.iterate {
+                        // Check that the array field exists in the event
+                        // Strip any nested path to get the root field
+                        let root_field = binding
+                            .array_field
+                            .split('.')
+                            .next()
+                            .unwrap_or(&binding.array_field);
+                        if !event_input_names.contains(root_field) {
+                            return Err(ValidateManifestError::CustomIndexingIterateFieldNotFound(
+                                binding.array_field.clone(),
+                                event_mapping.event.clone(),
+                                table.name.clone(),
+                                contract.name.clone(),
+                            ));
+                        }
+                        iterate_aliases.insert(binding.alias.clone());
+                    }
+
+                    for operation in &event_mapping.operations {
+                        // Validate where clause columns
+                        for (table_column, value) in &operation.where_clause {
+                            // Check table column exists
+                            if !table_column_names.contains(table_column.as_str()) {
+                                return Err(ValidateManifestError::CustomIndexingFieldNotFound(
+                                    table_column.clone(),
+                                    event_mapping.event.clone(),
+                                    table.name.clone(),
+                                    contract.name.clone(),
+                                ));
+                            }
+
+                            // Check event field reference if starts with $
+                            if value.starts_with('$') {
+                                let event_field = &value[1..];
+                                // For nested fields like $data.amount, validate the root field
+                                // Also strip array indices like ids[0] -> ids
+                                let root_field = event_field
+                                    .split(&['.', '['][..])
+                                    .next()
+                                    .unwrap_or(event_field);
+                                // Skip validation for built-in metadata fields
+                                if BUILTIN_METADATA_FIELDS.contains(&root_field) {
+                                    continue;
+                                }
+                                // Also accept iterate aliases
+                                if iterate_aliases.contains(root_field) {
+                                    continue;
+                                }
+                                if !event_input_names.contains(root_field) {
+                                    return Err(
+                                        ValidateManifestError::CustomIndexingEventFieldNotFound(
+                                            event_field.to_string(),
+                                            event_mapping.event.clone(),
+                                            table.name.clone(),
+                                            contract.name.clone(),
+                                        ),
+                                    );
+                                }
+                            }
+                        }
+
+                        // Validate condition expression (from `if` or `filter` field)
+                        if let Some(condition_expr) = operation.condition() {
+                            // Validate the expression parses correctly
+                            if let Err(e) = parse_filter_expression(condition_expr) {
+                                return Err(
+                                    ValidateManifestError::CustomIndexingInvalidConditionExpression(
+                                        condition_expr.to_string(),
+                                        event_mapping.event.clone(),
+                                        table.name.clone(),
+                                        contract.name.clone(),
+                                        e.to_string(),
+                                    ),
+                                );
+                            }
+
+                            // Extract and validate variable references in the condition
+                            // Variables in filter expressions don't use $ prefix
+                            let variables = extract_filter_variables(condition_expr);
+                            for var_name in variables {
+                                // Strip array indices like ids[0] -> ids
+                                let root_field = var_name
+                                    .split(&['.', '['][..])
+                                    .next()
+                                    .unwrap_or(&var_name);
+                                // Skip validation for built-in metadata fields
+                                if BUILTIN_METADATA_FIELDS.contains(&root_field) {
+                                    continue;
+                                }
+                                // Also accept iterate aliases
+                                if iterate_aliases.contains(root_field) {
+                                    continue;
+                                }
+                                if !event_input_names.contains(root_field) {
+                                    return Err(
+                                        ValidateManifestError::CustomIndexingEventFieldNotFound(
+                                            var_name,
+                                            event_mapping.event.clone(),
+                                            table.name.clone(),
+                                            contract.name.clone(),
+                                        ),
+                                    );
+                                }
+                            }
+                        }
+
+                        // Validate set columns
+                        for set_col in &operation.set {
+                            // Check table column exists
+                            if !table_column_names.contains(set_col.column.as_str()) {
+                                return Err(ValidateManifestError::CustomIndexingFieldNotFound(
+                                    set_col.column.clone(),
+                                    event_mapping.event.clone(),
+                                    table.name.clone(),
+                                    contract.name.clone(),
+                                ));
+                            }
+
+                            // Get the effective value (handles increment/decrement defaults)
+                            let effective_value = set_col.effective_value();
+
+                            // Check for arithmetic expression (e.g., "$value * 2", "$amount + $fee")
+                            if is_arithmetic_expression(effective_value) {
+                                // Validate the expression parses correctly
+                                if let Err(e) = parse_arithmetic_expression(effective_value) {
+                                    return Err(
+                                        ValidateManifestError::CustomIndexingInvalidArithmeticExpression(
+                                            effective_value.to_string(),
+                                            event_mapping.event.clone(),
+                                            table.name.clone(),
+                                            contract.name.clone(),
+                                            e.to_string(),
+                                        ),
+                                    );
+                                }
+
+                                // Extract and validate all variable references
+                                let variables = extract_arithmetic_variables(effective_value);
+                                for var_name in variables {
+                                    // Strip array indices like ids[0] -> ids
+                                    let root_field = var_name
+                                        .split(&['.', '['][..])
+                                        .next()
+                                        .unwrap_or(&var_name);
+                                    // Skip validation for built-in metadata fields
+                                    if BUILTIN_METADATA_FIELDS.contains(&root_field) {
+                                        continue;
+                                    }
+                                    // Also accept iterate aliases
+                                    if iterate_aliases.contains(root_field) {
+                                        continue;
+                                    }
+                                    if !event_input_names.contains(root_field) {
+                                        return Err(
+                                            ValidateManifestError::CustomIndexingEventFieldNotFound(
+                                                var_name,
+                                                event_mapping.event.clone(),
+                                                table.name.clone(),
+                                                contract.name.clone(),
+                                            ),
+                                        );
+                                    }
+                                }
+                            } else if effective_value.starts_with('$') {
+                                // Simple event field reference
+                                let event_field = &effective_value[1..];
+                                // For nested fields like $data.amount, validate the root field
+                                // Also strip array indices like ids[0] -> ids
+                                let root_field = event_field
+                                    .split(&['.', '['][..])
+                                    .next()
+                                    .unwrap_or(event_field);
+                                // Skip validation for built-in metadata fields
+                                if BUILTIN_METADATA_FIELDS.contains(&root_field) {
+                                    continue;
+                                }
+                                // Also accept iterate aliases
+                                if iterate_aliases.contains(root_field) {
+                                    continue;
+                                }
+                                if !event_input_names.contains(root_field) {
+                                    return Err(
+                                        ValidateManifestError::CustomIndexingEventFieldNotFound(
+                                            event_field.to_string(),
+                                            event_mapping.event.clone(),
+                                            table.name.clone(),
+                                            contract.name.clone(),
+                                        ),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

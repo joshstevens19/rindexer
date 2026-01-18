@@ -1,0 +1,107 @@
+# Uniswap V3 Factory Indexing with Tables Example
+# Demonstrates combining factory indexing with custom tables
+# Tracks swap counts and volumes per pool
+name: UniswapFactoryTables
+description: Track Uniswap V3 pool swap metrics using factory indexing with tables
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+
+storage:
+  postgres:
+    enabled: true
+    drop_each_run: true
+
+contracts:
+  # The factory contract - we need to index PoolCreated events
+  # so the factory indexing can discover pool addresses
+  - name: UniswapV3Factory
+    details:
+      - network: ethereum
+        address: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
+        start_block: "21000000"
+        end_block: "21010000"  # ~10k blocks for testing
+    abi: ./abis/uniswap-v3-factory-abi.json
+    include_events:
+      - PoolCreated
+
+  # Factory-indexed pool contract with custom tables
+  - name: UniswapV3Pool
+    details:
+      - network: ethereum
+        start_block: "21000000"
+        end_block: "21010000"
+        factory:
+          name: UniswapV3Factory
+          address: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
+          abi: ./abis/uniswap-v3-factory-abi.json
+          event_name: PoolCreated
+          input_name: "pool"
+    abi: ./abis/uniswap-v3-pool-abi.json
+
+    # Custom tables for aggregated metrics
+    tables:
+      # Track swap counts and volume per pool
+      - name: pool_metrics
+        columns:
+          - name: pool_address
+          - name: swap_count
+            type: uint64
+            default: "0"
+          - name: total_amount0
+            type: int256
+            default: "0"
+          - name: total_amount1
+            type: int256
+            default: "0"
+          - name: last_swap_block
+            type: uint64
+
+        events:
+          - event: Swap
+            operations:
+              - type: upsert
+                where:
+                  pool_address: $contract_address
+                set:
+                  - column: swap_count
+                    action: increment
+                  - column: total_amount0
+                    action: add
+                    value: $amount0
+                  - column: total_amount1
+                    action: add
+                    value: $amount1
+                  - column: last_swap_block
+                    action: max
+                    value: $block_number
+
+      # Track unique traders per pool
+      - name: pool_traders
+        columns:
+          - name: pool_address
+          - name: trader
+          - name: swap_count
+            type: uint64
+            default: "0"
+          - name: last_swap_block
+            type: uint64
+
+        events:
+          - event: Swap
+            operations:
+              # Track sender as trader
+              - type: upsert
+                where:
+                  pool_address: $contract_address
+                  trader: $sender
+                set:
+                  - column: swap_count
+                    action: increment
+                  - column: last_swap_block
+                    action: max
+                    value: $block_number

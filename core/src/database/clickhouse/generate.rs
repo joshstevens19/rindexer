@@ -15,7 +15,7 @@ use crate::database::generate::{
 use crate::database::postgres::generate::{
     generate_internal_event_table_name_no_shorten, GenerateInternalFactoryEventTableNameParams,
 };
-use crate::manifest::contract::FactoryDetailsYaml;
+use crate::manifest::contract::{injected_columns, FactoryDetailsYaml, Table};
 
 pub fn generate_tables_for_indexer_clickhouse(
     project_path: &Path,
@@ -36,7 +36,21 @@ pub fn generate_tables_for_indexer_clickhouse(
             sql.push_str(format!("CREATE DATABASE IF NOT EXISTS {};", schema_name).as_str());
             info!("Creating database if not exists: {}", schema_name);
 
-            sql.push_str(&generate_event_table_clickhouse(&event_names, &schema_name));
+            // Only create raw event tables for events in include_events (not for table-only events)
+            let raw_events: Vec<_> = event_names
+                .iter()
+                .filter(|e| contract.is_event_in_include_events(&e.name))
+                .cloned()
+                .collect();
+
+            if !raw_events.is_empty() {
+                sql.push_str(&generate_event_table_clickhouse(&raw_events, &schema_name));
+            }
+
+            // Generate custom tables if defined
+            if let Some(tables) = &contract.tables {
+                sql.push_str(&generate_tables_clickhouse(tables, &schema_name));
+            }
         }
 
         sql.push_str(&generate_internal_event_table_clickhouse(
@@ -86,6 +100,100 @@ fn generate_event_table_clickhouse(abi_inputs: &[EventInfo], schema_name: &str) 
             );
 
             create_table_sql
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Generate ClickHouse SQL for custom tables
+fn generate_tables_clickhouse(tables: &[Table], schema_name: &str) -> String {
+    tables
+        .iter()
+        .map(|table| {
+            let table_name = format!("{}.{}", schema_name, camel_to_snake(&table.name));
+            info!("Creating custom table if not exists: {}", table_name);
+
+            // Build column definitions
+            let mut columns: Vec<String> = vec![];
+
+            // Add network column (part of ORDER BY unless cross_chain is true)
+            if !table.cross_chain {
+                columns.push("`network` String".to_string());
+            }
+
+            // Add user-defined columns
+            for column in &table.columns {
+                let column_type = column.resolved_type().to_clickhouse_type();
+                let mut column_def = format!("`{}` {}", column.name, column_type);
+
+                if let Some(default) = &column.default {
+                    // Handle default values
+                    let default_value = if column_type == "Bool" {
+                        default.clone()
+                    } else if column_type == "Int64" || column_type == "String" {
+                        // ClickHouse needs proper quoting for defaults
+                        if column_type == "String" {
+                            format!("'{}'", default.replace('\'', "\\'"))
+                        } else {
+                            default.clone()
+                        }
+                    } else {
+                        format!("'{}'", default.replace('\'', "\\'"))
+                    };
+                    column_def.push_str(&format!(" DEFAULT {}", default_value));
+                }
+
+                columns.push(column_def);
+            }
+
+            // Auto-injected metadata columns
+            columns.push(format!(
+                "`{}` UInt64 DEFAULT 0",
+                injected_columns::LAST_UPDATED_BLOCK
+            ));
+            columns.push(format!(
+                "`{}` Nullable(DateTime('UTC'))",
+                injected_columns::LAST_UPDATED_AT
+            ));
+            columns.push(format!(
+                "`{}` FixedString(66)",
+                injected_columns::TX_HASH
+            ));
+            columns.push(format!(
+                "`{}` FixedString(66)",
+                injected_columns::BLOCK_HASH
+            ));
+            columns.push(format!(
+                "`{}` FixedString(42)",
+                injected_columns::CONTRACT_ADDRESS
+            ));
+            columns.push(format!(
+                "`{}` UInt128 DEFAULT 0",
+                injected_columns::RINDEXER_SEQUENCE_ID
+            ));
+
+            // Build ORDER BY clause
+            let mut order_by: Vec<String> = vec![];
+            if !table.cross_chain {
+                order_by.push("`network`".to_string());
+            }
+            for pk_col in table.primary_key_columns() {
+                order_by.push(format!("`{}`", pk_col));
+            }
+
+            // Use ReplacingMergeTree with rindexer_sequence_id as version column
+            let engine = format!(
+                "ReplacingMergeTree(`{}`)",
+                injected_columns::RINDEXER_SEQUENCE_ID
+            );
+
+            format!(
+                "CREATE TABLE IF NOT EXISTS {} ({}) ENGINE = {} ORDER BY ({});",
+                table_name,
+                columns.join(", "),
+                engine,
+                order_by.join(", ")
+            )
         })
         .collect::<Vec<_>>()
         .join("\n")

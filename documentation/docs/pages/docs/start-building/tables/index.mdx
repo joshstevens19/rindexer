@@ -1,0 +1,1796 @@
+# Custom Tables
+
+:::tip[The Recommended Way to Build No-Code Indexers]
+Custom Tables let you build powerful indexers that maintain **derived state** - like token balances,
+NFT ownership, and protocol metrics - all through simple YAML configuration. No code required.
+:::
+
+## Key Features
+
+- **Upsert, Update, Delete** - Full CRUD operations on your custom tables
+- **Computed Values** - Arithmetic expressions like `$amount * 2` or `$price / $quantity`
+- **String Templates** - Concatenate fields with `"$from-$to"` or `"Pool: $token0/$token1"`
+- **Conditional Logic** - Filter with `if: "$value > 0 && from != 0x000..."`
+- **Array Iteration** - Process batch events (ERC1155 `TransferBatch`) with [`iterate`](#array-iteration-batch-events)
+- **Array Indexing** - Access specific elements with `$ids[0]` or struct fields with `$transfers[0].amount`
+- **Global Tables** - Single-row aggregates (total supply, TVL)
+- **Cross-Chain** - Aggregate data across multiple networks
+- **Transaction Metadata** - Access `$block_number`, `$tx_hash`, `$contract_address`, etc.
+
+## The Problem with Raw Event Logging
+
+Traditional indexing logs every event as a new database row:
+
+```
+Transfer: Alice → Bob, 100 USDC  →  Row 1
+Transfer: Bob → Carol, 50 USDC   →  Row 2
+Transfer: Carol → Alice, 25 USDC →  Row 3
+```
+
+To get Alice's current balance, you need to query and aggregate all these rows.
+For popular tokens, that's millions of rows to process.
+
+## The Custom Tables Solution
+
+With Custom Tables, you maintain the **current state** directly:
+
+```
+Transfer: Alice → Bob, 100 USDC  →  Alice: 900, Bob: 100
+Transfer: Bob → Carol, 50 USDC   →  Bob: 50, Carol: 50
+Transfer: Carol → Alice, 25 USDC →  Alice: 925, Carol: 25
+```
+
+One row per address. Instant balance lookups. No aggregation needed.
+
+---
+
+## Real-World Examples
+
+### ERC20 Token Balances (USDC, USDT, DAI, etc.)
+
+Track every holder's balance for any ERC20 token:
+
+```yaml [rindexer.yaml]
+name: USDCIndexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+contracts:
+  - name: USDC
+    details:
+      - network: ethereum
+        address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+        start_block: 18600000
+    abi: ./abis/ERC20.json
+    tables: // [!code focus]
+      - name: balances // [!code focus]
+        columns: // [!code focus]
+          - name: holder // [!code focus]
+          - name: balance // [!code focus]
+            default: "0" // [!code focus]
+        events: // [!code focus]
+          - event: Transfer // [!code focus]
+            operations: // [!code focus]
+              # Credit the recipient // [!code focus]
+              - type: upsert // [!code focus]
+                where: // [!code focus]
+                  holder: $to // [!code focus]
+                if: "$to != 0x0000000000000000000000000000000000000000" // [!code focus]
+                set: // [!code focus]
+                  - column: balance // [!code focus]
+                    action: add // [!code focus]
+                    value: $value // [!code focus]
+              # Debit the sender // [!code focus]
+              - type: upsert // [!code focus]
+                where: // [!code focus]
+                  holder: $from // [!code focus]
+                if: "$from != 0x0000000000000000000000000000000000000000" // [!code focus]
+                set: // [!code focus]
+                  - column: balance // [!code focus]
+                    action: subtract // [!code focus]
+                    value: $value // [!code focus]
+```
+
+**Result:** A `balances` table with one row per holder, instantly queryable.
+
+---
+
+### NFT Ownership (ERC721)
+
+Track who owns each NFT:
+
+```yaml [rindexer.yaml]
+contracts:
+  - name: BoredApes
+    details:
+      - network: ethereum
+        address: "0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d"
+        start_block: 12287507
+    abi: ./abis/ERC721.json
+    tables: // [!code focus]
+      - name: ownership // [!code focus]
+        columns: // [!code focus]
+          - name: token_id // [!code focus]
+          - name: owner // [!code focus]
+        events: // [!code focus]
+          - event: Transfer // [!code focus]
+            operations: // [!code focus]
+              - type: upsert // [!code focus]
+                where: // [!code focus]
+                  token_id: $tokenId // [!code focus]
+                set: // [!code focus]
+                  - column: owner // [!code focus]
+                    action: set // [!code focus]
+                    value: $to // [!code focus]
+```
+
+**Result:** An `ownership` table where you can instantly look up who owns any NFT.
+
+---
+
+### ERC20 Allowances (Approvals)
+
+Track how much each spender is approved to spend on behalf of each owner:
+
+```yaml [rindexer.yaml]
+contracts:
+  - name: USDC
+    details:
+      - network: ethereum
+        address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+        start_block: 18600000
+    abi: ./abis/ERC20.json
+    tables: // [!code focus]
+      - name: allowances // [!code focus]
+        columns: // [!code focus]
+          - name: owner // [!code focus]
+          - name: spender // [!code focus]
+          - name: amount // [!code focus]
+            default: "0" // [!code focus]
+        events: // [!code focus]
+          - event: Approval // [!code focus]
+            operations: // [!code focus]
+              - type: upsert // [!code focus]
+                where: // [!code focus]
+                  owner: $owner // [!code focus]
+                  spender: $spender // [!code focus]
+                set: // [!code focus]
+                  - column: amount // [!code focus]
+                    action: set  # Approvals replace, not add // [!code focus]
+                    value: $value // [!code focus]
+```
+
+**Result:** An `allowances` table with one row per (owner, spender) pair. Query any approval instantly.
+
+:::tip[Approvals Replace, Not Add]
+Unlike balances where transfers add/subtract, approvals **replace** the previous value.
+Use `action: set` instead of `action: add`.
+:::
+
+---
+
+### ERC1155 Multi-Token Balances (Compound Primary Keys)
+
+ERC1155 tokens require tracking balances per **(holder, token_id)** combination - a compound primary key:
+
+```yaml [rindexer.yaml]
+contracts:
+  - name: GameItems
+    details:
+      - network: ethereum
+        address: "0x..."
+        start_block: 18600000
+    abi: ./abis/ERC1155.json
+    tables: // [!code focus]
+      - name: balances // [!code focus]
+        columns: // [!code focus]
+          - name: holder // [!code focus]
+          - name: token_id // [!code focus]
+          - name: balance // [!code focus]
+            default: "0" // [!code focus]
+        events: // [!code focus]
+          # Handle single transfers // [!code focus]
+          - event: TransferSingle // [!code focus]
+            operations: // [!code focus]
+              # Credit recipient // [!code focus]
+              - type: upsert // [!code focus]
+                where: // [!code focus]
+                  holder: $to // [!code focus]
+                  token_id: $id  # Compound key: (holder, token_id) // [!code focus]
+                if: "$to != 0x0000000000000000000000000000000000000000" // [!code focus]
+                set: // [!code focus]
+                  - column: balance // [!code focus]
+                    action: add // [!code focus]
+                    value: $value // [!code focus]
+              # Debit sender // [!code focus]
+              - type: upsert // [!code focus]
+                where: // [!code focus]
+                  holder: $from // [!code focus]
+                  token_id: $id // [!code focus]
+                if: "$from != 0x0000000000000000000000000000000000000000" // [!code focus]
+                set: // [!code focus]
+                  - column: balance // [!code focus]
+                    action: subtract // [!code focus]
+                    value: $value // [!code focus]
+          # Handle batch transfers using iterate // [!code focus]
+          - event: TransferBatch // [!code focus]
+            iterate: // [!code focus]
+              - "$ids as token_id" // [!code focus]
+              - "$values as amount" // [!code focus]
+            operations: // [!code focus]
+              # Credit recipient for each token // [!code focus]
+              - type: upsert // [!code focus]
+                where: // [!code focus]
+                  holder: $to // [!code focus]
+                  token_id: $token_id // [!code focus]
+                if: "$to != 0x0000000000000000000000000000000000000000" // [!code focus]
+                set: // [!code focus]
+                  - column: balance // [!code focus]
+                    action: add // [!code focus]
+                    value: $amount // [!code focus]
+              # Debit sender for each token // [!code focus]
+              - type: upsert // [!code focus]
+                where: // [!code focus]
+                  holder: $from // [!code focus]
+                  token_id: $token_id // [!code focus]
+                if: "$from != 0x0000000000000000000000000000000000000000" // [!code focus]
+                set: // [!code focus]
+                  - column: balance // [!code focus]
+                    action: subtract // [!code focus]
+                    value: $amount // [!code focus]
+```
+
+**Result:** A `balances` table with one row per (holder, token_id) pair. Query any user's balance for any token instantly.
+
+:::tip[Compound Primary Keys]
+Any columns in the `where` clause become part of the primary key. Use multiple columns for:
+- **ERC1155**: (holder, token_id)
+- **LP Positions**: (user, pool_address)
+- **Staking by Pool**: (staker, pool_id)
+- **Votes by Proposal**: (voter, proposal_id)
+:::
+
+:::tip[TransferBatch with iterate]
+The `iterate` feature lets you process array fields like `ids` and `values` in `TransferBatch`.
+Each array element is processed as a separate operation. See [Array Iteration](#array-iteration-batch-events) for details.
+:::
+
+---
+
+### DEX Pool State (Uniswap V2/V3 Style)
+
+Track pool reserves, liquidity, and trading metrics for any AMM:
+
+```yaml [rindexer.yaml]
+contracts:
+  - name: UniswapV2Pool
+    details:
+      - network: ethereum
+        address: "0x..."  # USDC/WETH pool
+        start_block: 18600000
+    abi: ./abis/UniswapV2Pair.json
+    tables: // [!code focus]
+      # Pool state - reserves and liquidity // [!code focus]
+      - name: pool_state // [!code focus]
+        global: true  # One row per pool per network // [!code focus]
+        columns: // [!code focus]
+          - name: reserve0 // [!code focus]
+            type: uint256 // [!code focus]
+            default: "0" // [!code focus]
+          - name: reserve1 // [!code focus]
+            type: uint256 // [!code focus]
+            default: "0" // [!code focus]
+          - name: total_supply // [!code focus]
+            type: uint256 // [!code focus]
+            default: "0" // [!code focus]
+        events: // [!code focus]
+          - event: Sync // [!code focus]
+            operations: // [!code focus]
+              - type: upsert // [!code focus]
+                set: // [!code focus]
+                  - column: reserve0 // [!code focus]
+                    action: set // [!code focus]
+                    value: $reserve0 // [!code focus]
+                  - column: reserve1 // [!code focus]
+                    action: set // [!code focus]
+                    value: $reserve1 // [!code focus]
+          - event: Transfer  # LP token mints/burns // [!code focus]
+            operations: // [!code focus]
+              # Mint (from zero address) // [!code focus]
+              - type: upsert // [!code focus]
+                if: "$from == 0x0000000000000000000000000000000000000000" // [!code focus]
+                set: // [!code focus]
+                  - column: total_supply // [!code focus]
+                    action: add // [!code focus]
+                    value: $value // [!code focus]
+              # Burn (to zero address) // [!code focus]
+              - type: upsert // [!code focus]
+                if: "$to == 0x0000000000000000000000000000000000000000" // [!code focus]
+                set: // [!code focus]
+                  - column: total_supply // [!code focus]
+                    action: subtract // [!code focus]
+                    value: $value // [!code focus]
+      # Trading metrics // [!code focus]
+      - name: trading_metrics // [!code focus]
+        global: true // [!code focus]
+        columns: // [!code focus]
+          - name: swap_count // [!code focus]
+            type: uint64 // [!code focus]
+            default: "0" // [!code focus]
+          - name: volume0 // [!code focus]
+            type: uint256 // [!code focus]
+            default: "0" // [!code focus]
+          - name: volume1 // [!code focus]
+            type: uint256 // [!code focus]
+            default: "0" // [!code focus]
+        events: // [!code focus]
+          - event: Swap // [!code focus]
+            operations: // [!code focus]
+              - type: upsert // [!code focus]
+                set: // [!code focus]
+                  - column: swap_count // [!code focus]
+                    action: increment // [!code focus]
+                  - column: volume0 // [!code focus]
+                    action: add // [!code focus]
+                    value: $amount0In // [!code focus]
+                  - column: volume1 // [!code focus]
+                    action: add // [!code focus]
+                    value: $amount1In // [!code focus]
+      # LP positions per user // [!code focus]
+      - name: lp_positions // [!code focus]
+        columns: // [!code focus]
+          - name: holder // [!code focus]
+          - name: balance // [!code focus]
+            type: uint256 // [!code focus]
+            default: "0" // [!code focus]
+        events: // [!code focus]
+          - event: Transfer // [!code focus]
+            operations: // [!code focus]
+              - type: upsert // [!code focus]
+                where: // [!code focus]
+                  holder: $to // [!code focus]
+                if: "$to != 0x0000000000000000000000000000000000000000" // [!code focus]
+                set: // [!code focus]
+                  - column: balance // [!code focus]
+                    action: add // [!code focus]
+                    value: $value // [!code focus]
+              - type: upsert // [!code focus]
+                where: // [!code focus]
+                  holder: $from // [!code focus]
+                if: "$from != 0x0000000000000000000000000000000000000000" // [!code focus]
+                set: // [!code focus]
+                  - column: balance // [!code focus]
+                    action: subtract // [!code focus]
+                    value: $value // [!code focus]
+```
+
+**Result:** Three tables giving you complete pool state:
+- `pool_state` - Current reserves and LP supply
+- `trading_metrics` - Cumulative volume and swap count
+- `lp_positions` - Each user's LP token balance
+
+:::tip[Factory Indexing for Multiple Pools]
+To index all pools from a DEX factory (Uniswap, SushiSwap, etc.), see [Factory Indexing](#factory-indexing-with-tables-uniswap-aave-etc).
+:::
+
+---
+
+### Token Supply Tracking (Mints & Burns)
+
+Track total supply, minted, and burned amounts:
+
+```yaml [rindexer.yaml]
+contracts:
+  - name: USDC
+    details:
+      - network: ethereum
+        address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+        start_block: 18600000
+    abi: ./abis/ERC20.json
+    tables: // [!code focus]
+      - name: supply // [!code focus]
+        global: true  # One row per network // [!code focus]
+        columns: // [!code focus]
+          - name: total_supply // [!code focus]
+            type: uint256 // [!code focus]
+            default: "0" // [!code focus]
+          - name: total_minted // [!code focus]
+            type: uint256 // [!code focus]
+            default: "0" // [!code focus]
+          - name: total_burned // [!code focus]
+            type: uint256 // [!code focus]
+            default: "0" // [!code focus]
+        events: // [!code focus]
+          - event: Transfer // [!code focus]
+            operations: // [!code focus]
+              # Mint (from zero address) // [!code focus]
+              - type: upsert // [!code focus]
+                if: "$from == 0x0000000000000000000000000000000000000000" // [!code focus]
+                set: // [!code focus]
+                  - column: total_supply // [!code focus]
+                    action: add // [!code focus]
+                    value: $value // [!code focus]
+                  - column: total_minted // [!code focus]
+                    action: add // [!code focus]
+                    value: $value // [!code focus]
+              # Burn (to zero address) // [!code focus]
+              - type: upsert // [!code focus]
+                if: "$to == 0x0000000000000000000000000000000000000000" // [!code focus]
+                set: // [!code focus]
+                  - column: total_supply // [!code focus]
+                    action: subtract // [!code focus]
+                    value: $value // [!code focus]
+                  - column: total_burned // [!code focus]
+                    action: add // [!code focus]
+                    value: $value // [!code focus]
+```
+
+**Result:** A single row per network with live supply metrics.
+
+---
+
+### Cross-Chain Aggregation
+
+Track total balance across Ethereum, Arbitrum, Optimism, and more:
+
+```yaml [rindexer.yaml]
+name: CrossChainUSDC
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+  - name: arbitrum
+    chain_id: 42161
+    rpc: https://arbitrum.gateway.tenderly.co
+  - name: optimism
+    chain_id: 10
+    rpc: https://optimism.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+contracts:
+  - name: USDC
+    details:
+      - network: ethereum
+        address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+        start_block: 18600000
+      - network: arbitrum
+        address: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
+        start_block: 150000000
+      - network: optimism
+        address: "0x0b2c639c533813f4aa9d7837caf62653d097ff85"
+        start_block: 112000000
+    abi: ./abis/ERC20.json
+    tables: // [!code focus]
+      - name: total_balances // [!code focus]
+        cross_chain: true  # Aggregate across ALL networks // [!code focus]
+        columns: // [!code focus]
+          - name: holder // [!code focus]
+          - name: balance // [!code focus]
+            default: "0" // [!code focus]
+        events: // [!code focus]
+          - event: Transfer // [!code focus]
+            operations: // [!code focus]
+              - type: upsert // [!code focus]
+                where: // [!code focus]
+                  holder: $to // [!code focus]
+                if: "$to != 0x0000000000000000000000000000000000000000" // [!code focus]
+                set: // [!code focus]
+                  - column: balance // [!code focus]
+                    action: add // [!code focus]
+                    value: $value // [!code focus]
+              - type: upsert // [!code focus]
+                where: // [!code focus]
+                  holder: $from // [!code focus]
+                if: "$from != 0x0000000000000000000000000000000000000000" // [!code focus]
+                set: // [!code focus]
+                  - column: balance // [!code focus]
+                    action: subtract // [!code focus]
+                    value: $value // [!code focus]
+```
+
+**Result:** One row per holder with their **total** balance across all chains.
+
+---
+
+## For Rust Project Users
+
+:::warning[Advanced Users]
+If you're using a **Rust project**, you're an advanced user who writes custom indexing logic.
+Custom Tables are designed for **no-code projects**. In Rust, you have full control to build
+your own database schemas and update logic.
+:::
+
+---
+
+## Tables vs Raw Event Logging
+
+Custom Tables work **independently** from raw event logging (`include_events`):
+
+| Config | What Happens |
+|--------|--------------|
+| `tables` only | Only custom tables are created and populated. No raw event tables. |
+| `include_events` only | Only raw event tables are created (traditional logging). |
+| Both `tables` and `include_events` | Both custom tables AND raw event tables are created. |
+
+:::tip[Recommended: Tables Only]
+For most use cases, just use `tables` without `include_events`. This gives you exactly
+the data you need without wasting storage on raw event logs you won't use.
+:::
+
+**Example: Tables only (no raw event storage)**
+```yaml
+contracts:
+  - name: USDC
+    abi: ./abis/ERC20.json
+    details:
+      - network: ethereum
+        address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+        start_block: 18600000
+    # No include_events = no raw event table
+    tables:
+      - name: balances
+        # ... table definition
+```
+
+**Example: Both tables AND raw events**
+```yaml
+contracts:
+  - name: USDC
+    abi: ./abis/ERC20.json
+    details:
+      - network: ethereum
+        address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+        start_block: 18600000
+    include_events:
+      - Transfer  # Creates raw transfer table
+    tables:
+      - name: balances
+        # ... table definition
+```
+
+---
+
+## Validation Errors
+
+rindexer validates your configuration at startup and provides clear error messages:
+
+| Error | Meaning |
+|-------|---------|
+| `Event 'X' not found in ABI` | The event name in `tables.events` doesn't exist in the contract ABI |
+| `Field '$X' not found in event ABI` | The event field you referenced (e.g., `$foo`) doesn't exist |
+| `Column 'X' not found in table fields` | The column name in `set` or `where` doesn't match any defined column |
+| `Invalid condition expression` | Syntax error in your `if:` condition |
+
+All errors include the table name, event name, and contract name to help you locate the issue.
+
+---
+
+## Table Configuration Reference
+
+:::tip[Multiple Tables Per Contract]
+You can define **multiple tables** under a single contract. Each table can listen to the same or different events.
+This is useful for tracking different views of the same data (e.g., balances + supply metrics from Transfer events).
+:::
+
+### name
+
+The table name. Will be created as `{indexer}_{contract}_{name}` in the database.
+
+```yaml
+tables:
+  - name: balances  # Creates: usdcindexer_usdc_balances
+```
+
+---
+
+### global
+
+When `true`, creates a single row per network - perfect for counters and aggregate metrics.
+No `where` clause needed since the primary key is just `network`.
+
+```yaml
+tables:
+  - name: metrics
+    global: true  // [!code focus]
+    columns:
+      - name: transfer_count
+        type: uint256
+        default: "0"
+    events:
+      - event: Transfer
+        operations:
+          - type: upsert
+            set:
+              - column: transfer_count
+                action: increment  # Adds 1 each time
+```
+
+---
+
+### cross_chain
+
+When `true`, aggregates data across ALL networks. The `network` column is **not created**,
+so data from Ethereum, Arbitrum, Optimism, etc. all contribute to the same rows.
+
+```yaml
+tables:
+  - name: global_supply
+    cross_chain: true  // [!code focus]
+    global: true
+    columns:
+      - name: total
+        type: uint256
+        default: "0"
+```
+
+---
+
+### columns
+
+Define the columns in your table.
+
+| Property | Required | Description |
+|----------|----------|-------------|
+| `name` | Yes | Column name |
+| `type` | No | Data type (auto-inferred from event ABI if not specified) |
+| `default` | No | Default value for new rows |
+
+:::tip[Primary Keys]
+Primary keys are automatically derived from columns used in `where` clauses. Any column that appears
+in a `where` clause becomes part of the primary key. You don't need to explicitly mark columns as primary keys.
+:::
+
+:::info[Type Inference]
+Column types are automatically inferred when the value references an event field (e.g., `holder: $to`).
+The type is read from the event ABI. You only need to specify `type:` for:
+- Literal values (e.g., `value: "global"`)
+- When you want to override the inferred type
+:::
+
+#### Supported Types
+
+| Type | Description | PostgreSQL | ClickHouse |
+|------|-------------|------------|------------|
+| `address` | Ethereum address | CHAR(42) | FixedString(42) |
+| `string` | Text | TEXT | String |
+| `bool` | Boolean | BOOLEAN | Bool |
+| `uint8` - `uint64` | Unsigned integers | BIGINT | UInt64 |
+| `uint128` - `uint256` | Large unsigned integers | NUMERIC | UInt256 |
+| `int8` - `int64` | Signed integers | BIGINT | Int64 |
+| `int128` - `int256` | Large signed integers | NUMERIC | Int256 |
+| `bytes` | Dynamic bytes | BYTEA | String |
+| `bytes32` | Fixed 32 bytes | BYTEA | FixedString(66) |
+| `timestamp` | Date/time | TIMESTAMPTZ | DateTime |
+| `address[]` | Array of addresses | TEXT[] | Array(String) |
+| `uint256[]` | Array of uint256 | TEXT[] | Array(String) |
+| `bytes32[]` | Array of bytes32 | TEXT[] | Array(String) |
+
+#### Array Types
+
+Arrays from event parameters are supported and stored as database arrays:
+
+```yaml
+columns:
+  - name: participants
+    type: address[]
+  - name: amounts
+    type: uint256[]
+```
+
+**What works:**
+- Storing entire arrays from events (e.g., `$addresses`, `$values`)
+- Querying arrays via GraphQL
+- Address arrays are stored efficiently
+- **Iterating over arrays** with `iterate` (see [Array Iteration](#array-iteration-batch-events))
+- **Accessing individual elements** with `$array[0]` syntax (see [Array Indexing](#array-indexing))
+
+**Limitations:**
+- **Cannot use arrays in `where` clauses** - Arrays can't be part of primary keys (use `iterate` to expand arrays into individual rows)
+
+:::tip[Array Features]
+Use `iterate` to process array elements in batch events like ERC1155 `TransferBatch`.
+Use `$array[0]` to access specific elements when you only need certain positions.
+See [Array Iteration](#array-iteration-batch-events) and [Array Indexing](#array-indexing) for details.
+:::
+
+---
+
+## Events & Operations
+
+### events
+
+Maps contract events to table operations.
+
+```yaml
+events:
+  - event: Transfer  # Must match the ABI event name
+    operations:
+      - ...
+```
+
+---
+
+### operations
+
+Each operation defines what happens when an event is received.
+
+#### type
+
+| Type | Description | Use Case |
+|------|-------------|----------|
+| `upsert` | Insert new row or update existing | Most common - balances, ownership |
+| `update` | Update existing row only (no insert) | Modify existing records |
+| `delete` | Remove the row | Clean up data |
+
+#### where
+
+Identifies which row to affect. Maps column names to values.
+
+```yaml
+where:
+  holder: $to           # Column "holder" = event field "to"
+  token_id: $tokenId    # Column "token_id" = event field "tokenId"
+```
+
+:::info
+For `global: true` tables, omit the `where` clause - the primary key is just `network`.
+:::
+
+#### if
+
+Skip events that don't match the condition. Supports comparison and logical operators.
+
+```yaml
+# Skip zero address
+if: "$to != 0x0000000000000000000000000000000000000000"
+
+# Multiple conditions
+if: "$value > 0 && $from != 0x0000000000000000000000000000000000000000"
+
+# Only update if new value is greater than existing
+if: "$value > @balance"
+```
+
+:::info
+You can also use `filter:` as an alias for `if:`, but `if:` is recommended for clarity.
+:::
+
+#### set
+
+Define what columns to update and how.
+
+```yaml
+set:
+  - column: balance
+    action: add
+    value: $value
+```
+
+---
+
+## Set Actions
+
+| Action | Description | Example Result |
+|--------|-------------|----------------|
+| `set` | Replace value | `balance = 100` |
+| `add` | Add to existing | `balance = balance + 50` |
+| `subtract` | Subtract from existing | `balance = balance - 50` |
+| `max` | Keep the larger value | `high = max(high, 150)` |
+| `min` | Keep the smaller value | `low = min(low, 50)` |
+| `increment` | Add 1 | `count = count + 1` |
+| `decrement` | Subtract 1 | `count = count - 1` |
+
+---
+
+## Value References
+
+### Event Fields
+
+Reference any field from the event using `$fieldName`:
+
+```yaml
+value: $from           # Sender address
+value: $to             # Recipient address
+value: $value          # Transfer amount
+value: $tokenId        # NFT token ID
+```
+
+### Tuples and Structs (Nested Fields)
+
+Many events contain tuple or struct fields with nested data. Access nested fields using dot notation:
+
+```yaml
+value: $data.amount           # Access 'amount' inside 'data' tuple
+value: $order.maker           # Access 'maker' inside 'order' struct
+value: $info.token.address    # Access deeply nested fields
+```
+
+**Example: Uniswap V3 Swap Event**
+
+The Uniswap V3 `Swap` event has this structure:
+```solidity
+event Swap(
+    address indexed sender,
+    address indexed recipient,
+    int256 amount0,
+    int256 amount1,
+    uint160 sqrtPriceX96,
+    uint128 liquidity,
+    int24 tick
+);
+```
+
+Reference these fields directly:
+```yaml
+where:
+  pool: $contract_address
+set:
+  - column: last_price
+    action: set
+    value: $sqrtPriceX96
+  - column: liquidity
+    action: set
+    value: $liquidity
+```
+
+**Example: Event with Tuple/Struct Parameter**
+
+For an event like:
+```solidity
+struct OrderInfo {
+    address maker;
+    address taker;
+    uint256 amount;
+}
+event OrderFilled(bytes32 indexed orderId, OrderInfo info);
+```
+
+Access the nested fields:
+```yaml
+where:
+  order_id: $orderId
+set:
+  - column: maker
+    action: set
+    value: $info.maker
+  - column: taker
+    action: set
+    value: $info.taker
+  - column: amount
+    action: set
+    value: $info.amount
+```
+
+:::tip[Finding Field Names]
+The field names must match exactly what's in the ABI. Check your contract's ABI JSON file
+to see the exact parameter names. The ABI defines both the event signature and parameter names.
+:::
+
+### Array Indexing
+
+Access specific elements from array fields using bracket notation:
+
+```yaml
+value: $ids[0]            # First element of 'ids' array
+value: $values[1]         # Second element of 'values' array
+value: $data.tokens[0]    # First element of nested 'tokens' array
+```
+
+This is useful when you only need specific elements from an array, such as the first token in a batch.
+
+#### Post-Array Field Access
+
+For arrays of structs, you can access fields within each element:
+
+```yaml
+value: $transfers[0].amount    # 'amount' field of first transfer
+value: $orders[1].maker        # 'maker' field of second order
+value: $swaps[0].tokenIn       # 'tokenIn' field of first swap
+```
+
+**Example: Multi-Hop Swap Route**
+
+For DEX aggregator events with an array of swap steps:
+
+```solidity
+struct SwapStep {
+    address tokenIn;
+    address tokenOut;
+    uint256 amountIn;
+    uint256 amountOut;
+}
+event MultiSwap(SwapStep[] steps, address recipient);
+```
+
+Access specific elements:
+
+```yaml
+tables:
+  - name: routes
+    columns:
+      - name: tx_hash
+      - name: first_token_in
+      - name: last_token_out
+      - name: total_steps
+        type: uint64
+    events:
+      - event: MultiSwap
+        operations:
+          - type: upsert
+            where:
+              tx_hash: $tx_hash
+            set:
+              - column: first_token_in
+                action: set
+                value: $steps[0].tokenIn      # First hop input token
+              - column: last_token_out
+                action: set
+                value: $steps[0].tokenOut     # Use iterate for dynamic access
+```
+
+:::tip[When to Use Post-Array Field Access]
+Use `$array[index].field` when:
+- You need a **specific element** from an array of structs
+- The array has a **fixed/known structure** (e.g., always 2 hops)
+- You want the **first or last element** of a route
+
+For **variable-length arrays**, use [`iterate`](#array-iteration-batch-events) instead to process all elements.
+:::
+
+### Array Iteration (Batch Events)
+
+For events with parallel arrays (like ERC1155 `TransferBatch`), use `iterate` to process each array element as a separate operation:
+
+```yaml
+events:
+  - event: TransferBatch
+    iterate:                           # Iterate over parallel arrays
+      - "$ids as token_id"             # Bind each id to 'token_id'
+      - "$values as amount"            # Bind each value to 'amount'
+    operations:
+      - type: upsert
+        where:
+          holder: $to
+          token_id: $token_id          # Use the iterated value
+        if: "$to != 0x0000000000000000000000000000000000000000"
+        set:
+          - column: balance
+            action: add
+            value: $amount             # Use the iterated value
+```
+
+**How it works:**
+1. `iterate` takes a list of array bindings in the format `"$arrayField as alias"`
+2. All arrays must have the same length (they're processed in parallel)
+3. For each index, the operations are executed with the aliased values bound
+4. Use the aliases (`$token_id`, `$amount`) in `where`, `if`, and `set` clauses
+
+**Example: ERC1155 Token Balances**
+
+```yaml
+tables:
+  - name: balances
+    columns:
+      - name: holder
+      - name: token_id
+      - name: balance
+        default: "0"
+    events:
+      - event: TransferBatch
+        iterate:
+          - "$ids as token_id"
+          - "$values as amount"
+        operations:
+          # Credit recipient for each token
+          - type: upsert
+            where:
+              holder: $to
+              token_id: $token_id
+            if: "$to != 0x0000000000000000000000000000000000000000"
+            set:
+              - column: balance
+                action: add
+                value: $amount
+          # Debit sender for each token
+          - type: upsert
+            where:
+              holder: $from
+              token_id: $token_id
+            if: "$from != 0x0000000000000000000000000000000000000000"
+            set:
+              - column: balance
+                action: subtract
+                value: $amount
+```
+
+:::tip[Single Transfers]
+For `TransferSingle` events (which don't have arrays), you don't need `iterate` - just reference `$id` and `$value` directly.
+:::
+
+### Transaction Metadata
+
+Access transaction and block information:
+
+```yaml
+value: $block_number      # Block number
+value: $block_timestamp   # Block timestamp
+value: $tx_hash           # Transaction hash
+value: $block_hash        # Block hash
+value: $contract_address  # Contract that emitted the event
+value: $log_index         # Log index in transaction
+value: $tx_index          # Transaction index in block
+```
+
+### Literal Values
+
+Use fixed values:
+
+```yaml
+value: "0"                                              # Number as string
+value: "default"                                        # String identifier
+value: 0x0000000000000000000000000000000000000000       # Address
+```
+
+### Arithmetic Expressions
+
+Perform calculations using event fields:
+
+```yaml
+value: $value * 2              # Multiply by constant
+value: $amount + $fee          # Add two event fields
+value: $amount0 - $amount1     # Subtract fields
+value: $ratio / 100            # Divide by constant
+value: $amount * $price        # Multiply two fields
+```
+
+**Supported operators:** `+`, `-`, `*`, `/`
+
+**Example: Calculate USD Value from Token Amount**
+
+```yaml
+tables:
+  - name: trades
+    columns:
+      - name: pair
+      - name: token_amount
+        default: "0"
+      - name: usd_value
+        default: "0"
+    events:
+      - event: Swap
+        operations:
+          - type: upsert
+            where:
+              pair: $contract_address
+            set:
+              - column: token_amount
+                action: add
+                value: $amountIn
+              - column: usd_value
+                action: add
+                value: $amountIn * $price  # Calculated value
+```
+
+**Example: Track Net Flow (Deposits minus Withdrawals)**
+
+```yaml
+tables:
+  - name: vault_flow
+    global: true
+    columns:
+      - name: net_flow
+        type: int256
+        default: "0"
+    events:
+      - event: Deposit
+        operations:
+          - type: upsert
+            set:
+              - column: net_flow
+                action: add
+                value: $amount
+      - event: Withdraw
+        operations:
+          - type: upsert
+            set:
+              - column: net_flow
+                action: subtract
+                value: $amount
+```
+
+:::tip[When to Use Arithmetic]
+Arithmetic is useful for:
+- **USD value calculations**: `$amount * $price`
+- **Fee calculations**: `$amount - $fee` or `$gross * $feePercent / 10000`
+- **Combining amounts**: `$amount0 + $amount1`
+- **Scaling values**: `$value / 1000000` (e.g., converting from wei)
+:::
+
+### String Templates
+
+Embed event fields into strings using `$fieldName` within any text:
+
+```yaml
+value: "$from-$to"                    # Concatenate two addresses with dash
+value: "Pool: $token0/$token1"        # Create pool identifier
+value: "Transfer from $from"          # Prefix text with field
+value: "Block $block_number: $tx_hash" # Mix tx metadata with text
+```
+
+**Example: Create Unique Identifiers**
+
+```yaml
+tables:
+  - name: swaps
+    columns:
+      - name: pair_id          # e.g., "0xToken0-0xToken1"
+      - name: volume
+        type: uint256
+        default: "0"
+    events:
+      - event: Swap
+        operations:
+          - type: upsert
+            where:
+              pair_id: "$token0-$token1"  # Composite key from two addresses
+            set:
+              - column: volume
+                action: add
+                value: $amountIn
+```
+
+**Example: Human-Readable Labels**
+
+```yaml
+tables:
+  - name: activity_log
+    columns:
+      - name: tx_hash
+      - name: description
+    events:
+      - event: Transfer
+        operations:
+          - type: upsert
+            where:
+              tx_hash: $tx_hash
+            set:
+              - column: description
+                action: set
+                value: "Transfer $value from $from"
+```
+
+:::tip[When to Use String Templates]
+String templates are useful for:
+- **Composite keys**: `"$token0-$token1"` for pool identifiers
+- **Human-readable labels**: `"Transfer from $from to $to"`
+- **Unique identifiers**: `"$contract_address:$tokenId"`
+- **Combining metadata**: `"Block $block_number"`
+:::
+
+---
+
+## Condition Expressions
+
+Use the `if:` field to filter which events trigger operations.
+
+### Comparison Operators
+
+| Operator | Meaning | Example |
+|----------|---------|---------|
+| `==` | Equal | `$from == 0x0000...` |
+| `!=` | Not equal | `$to != 0x0000...` |
+| `>` | Greater than | `$value > 0` |
+| `>=` | Greater or equal | `$value >= 1000000` |
+| `<` | Less than | `$value < 1000000` |
+| `<=` | Less or equal | `$value <= 100` |
+
+:::tip[Nested Fields in Conditions]
+You can use dot notation for nested tuple/struct fields in conditions too:
+```yaml
+if: "$order.amount > 0 && $order.maker != 0x0000000000000000000000000000000000000000"
+```
+:::
+
+### Logical Operators
+
+| Operator | Meaning | Example |
+|----------|---------|---------|
+| `&&` | AND | `$value > 0 && $from != 0x0000...` |
+| `\|\|` | OR | `$from == 0x0000... \|\| $to == 0x0000...` |
+
+### Event vs Table References
+
+| Syntax | Meaning | When to Use |
+|--------|---------|-------------|
+| `$value` | Incoming event value | Compare event data |
+| `@balance` | Current database value | Compare with existing state |
+
+**Example: Only update if the new value exceeds the current balance**
+
+```yaml
+if: "$value > @balance"
+```
+
+This is powerful for:
+- High water marks (only store if higher)
+- Conditional updates (only update if changed)
+- Preventing stale data overwrites
+
+:::info[Performance]
+Conditions with `@` table references are pushed to SQL (`WHERE EXCLUDED.value > table.balance`),
+so the database handles the comparison efficiently.
+:::
+
+---
+
+## Auto-Injected Columns
+
+Every custom table automatically includes these columns - you don't need to define them:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `network` | VARCHAR | Network name (omitted if `cross_chain: true`) |
+| `rindexer_sequence_id` | NUMERIC | Unique ID for deterministic ordering |
+| `last_updated_block` | BIGINT | Block number when row was last updated |
+| `last_updated_at` | TIMESTAMP | Timestamp when row was last updated |
+| `tx_hash` | CHAR(66) | Transaction hash of last update |
+| `block_hash` | CHAR(66) | Block hash of last update |
+| `contract_address` | CHAR(42) | Contract that emitted the event |
+
+These let you track when and how each row was last modified.
+
+---
+
+## More Examples
+
+### DEX Trading Volume
+
+Track 24h volume per trading pair:
+
+```yaml
+tables:
+  - name: pair_volume
+    columns:
+      - name: pair_address
+      - name: volume_token0
+        default: "0"
+      - name: volume_token1
+        default: "0"
+      - name: trade_count
+        default: "0"
+    events:
+      - event: Swap
+        operations:
+          - type: upsert
+            where:
+              pair_address: $contract_address
+            set:
+              - column: volume_token0
+                action: add
+                value: $amount0In
+              - column: volume_token1
+                action: add
+                value: $amount1In
+              - column: trade_count
+                action: increment
+```
+
+---
+
+### User Activity Counter
+
+Count actions per user:
+
+```yaml
+tables:
+  - name: user_stats
+    columns:
+      - name: user
+      - name: deposits
+        default: "0"
+      - name: withdrawals
+        default: "0"
+      - name: total_deposited
+        default: "0"
+    events:
+      - event: Deposit
+        operations:
+          - type: upsert
+            where:
+              user: $user
+            set:
+              - column: deposits
+                action: increment
+              - column: total_deposited
+                action: add
+                value: $amount
+      - event: Withdraw
+        operations:
+          - type: upsert
+            where:
+              user: $user
+            set:
+              - column: withdrawals
+                action: increment
+```
+
+---
+
+### Governance Votes
+
+Track votes per proposal with compound primary keys:
+
+```yaml
+tables:
+  - name: votes
+    columns:
+      - name: proposal_id
+      - name: voter
+      - name: support        # 0 = against, 1 = for, 2 = abstain
+      - name: voting_power
+        default: "0"
+    events:
+      - event: VoteCast
+        operations:
+          - type: upsert
+            where:
+              proposal_id: $proposalId
+              voter: $voter        # Compound key: (proposal_id, voter)
+            set:
+              - column: support
+                action: set
+                value: $support
+              - column: voting_power
+                action: set
+                value: $votes
+
+  - name: proposal_totals
+    columns:
+      - name: proposal_id
+      - name: for_votes
+        default: "0"
+      - name: against_votes
+        default: "0"
+      - name: abstain_votes
+        default: "0"
+    events:
+      - event: VoteCast
+        operations:
+          - type: upsert
+            where:
+              proposal_id: $proposalId
+            if: "$support == 1"
+            set:
+              - column: for_votes
+                action: add
+                value: $votes
+          - type: upsert
+            where:
+              proposal_id: $proposalId
+            if: "$support == 0"
+            set:
+              - column: against_votes
+                action: add
+                value: $votes
+          - type: upsert
+            where:
+              proposal_id: $proposalId
+            if: "$support == 2"
+            set:
+              - column: abstain_votes
+                action: add
+                value: $votes
+```
+
+**Result:** Two tables - individual votes by (proposal, voter) and aggregated totals per proposal.
+
+---
+
+### Price High/Low Tracker
+
+Track the highest and lowest prices:
+
+```yaml
+tables:
+  - name: price_extremes
+    global: true
+    columns:
+      - name: highest_price
+        type: uint256
+        default: "0"
+      - name: lowest_price
+        type: uint256
+        default: "115792089237316195423570985008687907853269984665640564039457584007913129639935"  # uint256 max
+    events:
+      - event: PriceUpdate
+        operations:
+          - type: upsert
+            set:
+              - column: highest_price
+                action: max
+                value: $price
+              - column: lowest_price
+                action: min
+                value: $price
+```
+
+---
+
+### Staking Positions
+
+Track staked amounts per user:
+
+```yaml
+tables:
+  - name: stakes
+    columns:
+      - name: staker
+      - name: staked_amount
+        default: "0"
+    events:
+      - event: Staked
+        operations:
+          - type: upsert
+            where:
+              staker: $user
+            set:
+              - column: staked_amount
+                action: add
+                value: $amount
+      - event: Unstaked
+        operations:
+          - type: upsert
+            where:
+              staker: $user
+            set:
+              - column: staked_amount
+                action: subtract
+                value: $amount
+```
+
+---
+
+### Factory Indexing with Tables (Uniswap, Aave, etc.)
+
+Many protocols deploy contracts dynamically - Uniswap creates pools, Aave deploys markets, lending protocols spin up vaults.
+**Factory indexing** discovers these contracts automatically, and **Tables** can aggregate their data.
+
+This combination is powerful: you can track metrics across thousands of dynamically-created contracts without knowing their addresses upfront.
+
+```yaml [rindexer.yaml]
+name: UniswapPoolMetrics
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+contracts:
+  # The factory contract - discovers pool addresses
+  - name: UniswapV3Factory
+    details:
+      - network: ethereum
+        address: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
+        start_block: 21000000
+    abi: ./abis/uniswap-v3-factory-abi.json
+    include_events:
+      - PoolCreated
+
+  # Factory-indexed pools with custom tables // [!code focus]
+  - name: UniswapV3Pool // [!code focus]
+    details: // [!code focus]
+      - network: ethereum // [!code focus]
+        start_block: 21000000 // [!code focus]
+        factory: // [!code focus]
+          name: UniswapV3Factory // [!code focus]
+          address: "0x1F98431c8aD98523631AE4a59f267346ea31F984" // [!code focus]
+          abi: ./abis/uniswap-v3-factory-abi.json // [!code focus]
+          event_name: PoolCreated // [!code focus]
+          input_name: "pool"  # Field containing the new pool address // [!code focus]
+    abi: ./abis/uniswap-v3-pool-abi.json // [!code focus]
+    tables: // [!code focus]
+      # Aggregate metrics per pool // [!code focus]
+      - name: pool_metrics // [!code focus]
+        columns: // [!code focus]
+          - name: pool_address // [!code focus]
+          - name: swap_count // [!code focus]
+            type: uint64 // [!code focus]
+            default: "0" // [!code focus]
+          - name: total_volume_token0 // [!code focus]
+            type: int256 // [!code focus]
+            default: "0" // [!code focus]
+          - name: total_volume_token1 // [!code focus]
+            type: int256 // [!code focus]
+            default: "0" // [!code focus]
+        events: // [!code focus]
+          - event: Swap // [!code focus]
+            operations: // [!code focus]
+              - type: upsert // [!code focus]
+                where: // [!code focus]
+                  pool_address: $contract_address  # The pool that emitted the event // [!code focus]
+                set: // [!code focus]
+                  - column: swap_count // [!code focus]
+                    action: increment // [!code focus]
+                  - column: total_volume_token0 // [!code focus]
+                    action: add // [!code focus]
+                    value: $amount0 // [!code focus]
+                  - column: total_volume_token1 // [!code focus]
+                    action: add // [!code focus]
+                    value: $amount1 // [!code focus]
+
+      # Track unique traders per pool // [!code focus]
+      - name: pool_traders // [!code focus]
+        columns: // [!code focus]
+          - name: pool_address // [!code focus]
+          - name: trader // [!code focus]
+          - name: swap_count // [!code focus]
+            type: uint64 // [!code focus]
+            default: "0" // [!code focus]
+        events: // [!code focus]
+          - event: Swap // [!code focus]
+            operations: // [!code focus]
+              - type: upsert // [!code focus]
+                where: // [!code focus]
+                  pool_address: $contract_address // [!code focus]
+                  trader: $sender  # Compound key: (pool, trader) // [!code focus]
+                set: // [!code focus]
+                  - column: swap_count // [!code focus]
+                    action: increment // [!code focus]
+```
+
+**How it works:**
+1. The factory contract (`UniswapV3Factory`) is indexed first
+2. When `PoolCreated` events are found, rindexer automatically starts indexing those pool addresses
+3. `Swap` events from all discovered pools update the custom tables
+4. `$contract_address` references the specific pool that emitted each event
+
+**Result:** Aggregated metrics for every Uniswap V3 pool, discovered automatically.
+
+:::tip[No include_events Needed]
+When using factory indexing with `tables`, you don't need `include_events` on the factory-indexed contract.
+The events are automatically derived from your table definitions.
+:::
+
+:::info[Factory Indexing Details]
+For full factory indexing configuration options (multiple input fields, token indexing, etc.),
+see the [Factory Indexing documentation](/docs/start-building/yaml-config/contracts#factory-indexing).
+:::
+
+---
+
+### Registry with Delete (Whitelist/Blacklist)
+
+Track active entries in a registry where items can be added and removed:
+
+```yaml
+tables:
+  - name: verified_tokens
+    columns:
+      - name: token_address
+      - name: name
+      - name: symbol
+      - name: added_at
+        type: uint64
+    events:
+      - event: TokenAdded
+        operations:
+          - type: upsert
+            where:
+              token_address: $token
+            set:
+              - column: name
+                action: set
+                value: $name
+              - column: symbol
+                action: set
+                value: $symbol
+              - column: added_at
+                action: set
+                value: $block_number
+      - event: TokenRemoved
+        operations:
+          - type: delete  # Remove from registry entirely
+            where:
+              token_address: $token
+```
+
+**Result:** Only currently verified tokens exist in the table. Removed tokens are deleted, not marked inactive.
+
+:::tip[When to Use Delete]
+Use `delete` when you want rows **completely removed** from the database:
+- **Registries/Whitelists**: Token lists, verified contracts, approved operators
+- **Active positions only**: Remove closed positions instead of marking them closed
+- **Membership lists**: DAO members, stakers, liquidity providers
+
+If you need historical data, use `upsert` with a status column instead.
+:::
+
+---
+
+## Putting It All Together
+
+A complete indexer with multiple tables:
+
+```yaml
+name: DeFiDashboard
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+contracts:
+  - name: Token
+    details:
+      - network: ethereum
+        address: "0x..."
+        start_block: 18600000
+    abi: ./abis/ERC20.json
+    tables:
+      # Table 1: Individual balances
+      - name: balances
+        columns:
+          - name: holder
+          - name: balance
+            default: "0"
+        events:
+          - event: Transfer
+            operations:
+              - type: upsert
+                where:
+                  holder: $to
+                if: "$to != 0x0000000000000000000000000000000000000000"
+                set:
+                  - column: balance
+                    action: add
+                    value: $value
+              - type: upsert
+                where:
+                  holder: $from
+                if: "$from != 0x0000000000000000000000000000000000000000"
+                set:
+                  - column: balance
+                    action: subtract
+                    value: $value
+
+      # Table 2: Global metrics
+      - name: metrics
+        global: true
+        columns:
+          - name: total_supply
+            type: uint256
+            default: "0"
+          - name: holder_count
+            type: uint256
+            default: "0"
+          - name: transfer_count
+            type: uint256
+            default: "0"
+        events:
+          - event: Transfer
+            operations:
+              # Track mints
+              - type: upsert
+                if: "$from == 0x0000000000000000000000000000000000000000"
+                set:
+                  - column: total_supply
+                    action: add
+                    value: $value
+              # Track burns
+              - type: upsert
+                if: "$to == 0x0000000000000000000000000000000000000000"
+                set:
+                  - column: total_supply
+                    action: subtract
+                    value: $value
+              # Count all transfers
+              - type: upsert
+                set:
+                  - column: transfer_count
+                    action: increment
+```
+
+---
+
+## Querying Your Tables with GraphQL
+
+Once you define custom tables, rindexer **automatically generates a full GraphQL API** to query them.
+No extra configuration needed - just enable GraphQL and your tables are instantly queryable.
+
+### Enable GraphQL
+
+```yaml [rindexer.yaml]
+storage:
+  postgres:
+    enabled: true
+graphql:
+  enabled: true
+```
+
+### Start the GraphQL Server
+
+```bash
+rindexer start all  # Starts both indexer and GraphQL server
+```
+
+GraphQL will be available at `http://localhost:3001/graphql` with a playground at `http://localhost:3001/playground`.
+
+### Example Queries
+
+For a `balances` table, rindexer automatically generates queries like:
+
+```graphql
+# Get all balances
+query {
+  allBalances(first: 100, orderBy: BALANCE_DESC) {
+    nodes {
+      holder
+      balance
+      network
+      lastUpdatedBlock
+      lastUpdatedAt
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+  }
+}
+
+# Get a specific holder's balance
+query {
+  allBalances(condition: { holder: "0x..." }) {
+    nodes {
+      holder
+      balance
+      network
+    }
+  }
+}
+
+# Filter by network
+query {
+  allBalances(condition: { network: "ethereum" }, first: 50) {
+    nodes {
+      holder
+      balance
+    }
+  }
+}
+```
+
+### What Gets Generated
+
+For each custom table, you get:
+
+| Query | Description |
+|-------|-------------|
+| `all{TableName}` | Query all rows with filtering, pagination, and ordering |
+| `{tableName}ById` | Get a specific row by primary key |
+
+All your columns become queryable fields, including the auto-injected metadata columns
+(`network`, `lastUpdatedBlock`, `lastUpdatedAt`, `txHash`, etc.).
+
+:::tip[Full API Documentation]
+For complete GraphQL API details including filtering, pagination, and ordering options, see the
+[GraphQL API documentation](/docs/accessing-data/graphql).
+:::
+
+---
+
+## Next Steps
+
+- [YAML Config Reference](/docs/start-building/yaml-config) - Full configuration options
+- [Running Your Indexer](/docs/start-building/running) - Start indexing
+- [GraphQL API](/docs/accessing-data/graphql) - Query your data

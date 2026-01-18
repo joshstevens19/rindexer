@@ -3,6 +3,7 @@
 use crate::EthereumSqlTypeWrapper;
 
 /// The type of batch operation to perform.
+#[derive(Clone, Copy)]
 pub enum BatchOperationType {
     Update,
     Delete,
@@ -10,6 +11,7 @@ pub enum BatchOperationType {
 }
 
 /// Column behavior determines how columns are used in deduplication and ordering.
+#[derive(Clone, Copy)]
 pub enum BatchOperationColumnBehavior {
     /// Normal column with no special behavior
     Normal,
@@ -20,14 +22,19 @@ pub enum BatchOperationColumnBehavior {
 }
 
 /// SQL type mapping for batch operations.
+#[derive(Clone, Copy)]
 pub enum BatchOperationSqlType {
     Bytea,
     Numeric,
     Bool,
     Jsonb,
     Varchar,
+    Char,
+    Smallint,
+    Integer,
     Bigint,
     DateTime,
+    TextArray,
     Custom(&'static str),
 }
 
@@ -40,8 +47,12 @@ impl BatchOperationSqlType {
             BatchOperationSqlType::Bool => "BOOL",
             BatchOperationSqlType::Jsonb => "JSONB",
             BatchOperationSqlType::Varchar => "VARCHAR",
+            BatchOperationSqlType::Char => "CHAR(42)",
+            BatchOperationSqlType::Smallint => "SMALLINT",
+            BatchOperationSqlType::Integer => "INTEGER",
             BatchOperationSqlType::Bigint => "BIGINT",
             BatchOperationSqlType::DateTime => "TIMESTAMPTZ",
+            BatchOperationSqlType::TextArray => "TEXT[]",
             BatchOperationSqlType::Custom(type_name) => type_name,
         }
     }
@@ -54,14 +65,19 @@ impl BatchOperationSqlType {
             BatchOperationSqlType::Bool => "Bool",
             BatchOperationSqlType::Jsonb => "String",
             BatchOperationSqlType::Varchar => "String",
+            BatchOperationSqlType::Char => "String",
+            BatchOperationSqlType::Smallint => "Int16",
+            BatchOperationSqlType::Integer => "Int32",
             BatchOperationSqlType::Bigint => "Int64",
             BatchOperationSqlType::DateTime => "DateTime('UTC')",
+            BatchOperationSqlType::TextArray => "Array(String)",
             BatchOperationSqlType::Custom(type_name) => type_name,
         }
     }
 }
 
 /// Action to perform on a column during batch operations.
+#[derive(Clone, Copy)]
 pub enum BatchOperationAction {
     /// No action (column is included but not updated)
     Nothing,
@@ -73,6 +89,10 @@ pub enum BatchOperationAction {
     Add,
     /// Subtract the new value from the existing value
     Subtract,
+    /// Keep the maximum (higher) value
+    Max,
+    /// Keep the minimum (lower) value
+    Min,
 }
 
 /// Definition of a column for batch operations.
@@ -112,3 +132,26 @@ pub fn column_with_table_name(
 /// Reserved SQL keywords that need quoting.
 pub const RESERVED_KEYWORDS: &[&str] =
     &["group", "user", "order", "table", "index", "primary", "key"];
+
+/// Dynamic column definition for runtime batch operations (used by custom indexing).
+#[derive(Clone)]
+pub struct DynamicColumnDefinition {
+    pub name: String,
+    pub table_column: Option<String>,
+    pub value: EthereumSqlTypeWrapper,
+    pub sql_type: BatchOperationSqlType,
+    pub behavior: BatchOperationColumnBehavior,
+    pub action: BatchOperationAction,
+}
+
+impl DynamicColumnDefinition {
+    pub fn new(
+        name: String,
+        value: EthereumSqlTypeWrapper,
+        sql_type: BatchOperationSqlType,
+        behavior: BatchOperationColumnBehavior,
+        action: BatchOperationAction,
+    ) -> Self {
+        Self { name, table_column: None, value, sql_type, behavior, action }
+    }
+}

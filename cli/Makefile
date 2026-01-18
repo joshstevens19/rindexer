@@ -75,3 +75,27 @@ hyperwarp_codegen_indexer:
 	RUSTFLAGS='-C target-cpu=native' cargo run --release --features jemalloc -- codegen --path $(CURDIR)/../examples/hyperevm indexer
 start_cloudflare_indexer:
 	RUSTFLAGS='-C target-cpu=native' RUST_BACKTRACE='full' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/rindexer_cloudflare_queues indexer
+start_custom_indexer:
+	RUSTFLAGS='-C target-cpu=native' RUST_BACKTRACE='full' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/rindexer_demo_custom_indexing indexer
+start_custom_all:
+	RUSTFLAGS='-C target-cpu=native' RUST_BACKTRACE='full' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/rindexer_demo_custom_indexing all
+
+################################################################################
+# TABLES EXAMPLE COMMANDS
+################################################################################
+start_tables_erc20_balances_all:
+	RUSTFLAGS='-C target-cpu=native' RUST_BACKTRACE='full' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/tables_erc20_balances all
+start_tables_erc721_ownership_all:
+	RUSTFLAGS='-C target-cpu=native' RUST_BACKTRACE='full' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/tables_erc721_ownership all
+start_tables_erc20_allowances_all:
+	RUSTFLAGS='-C target-cpu=native' RUST_BACKTRACE='full' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/tables_erc20_allowances all
+start_tables_token_supply_all:
+	RUSTFLAGS='-C target-cpu=native' RUST_BACKTRACE='full' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/tables_token_supply all
+start_tables_governance_all:
+	RUSTFLAGS='-C target-cpu=native' RUST_BACKTRACE='full' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/tables_governance all
+start_tables_registry_delete_all:
+	RUSTFLAGS='-C target-cpu=native' RUST_BACKTRACE='full' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/tables_registry_delete all
+start_tables_factory_uniswap_all:
+	RUSTFLAGS='-C target-cpu=native' RUST_BACKTRACE='full' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/tables_factory_uniswap all
+start_tables_dex_pool_all:
+	RUSTFLAGS='-C target-cpu=native' RUST_BACKTRACE='full' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/tables_dex_pool all

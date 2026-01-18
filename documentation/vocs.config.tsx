@@ -84,6 +84,10 @@ export default defineConfig({
           link: "/docs/start-building/live-indexing-and-historic",
         },
         {
+          text: "Custom Tables",
+          link: "/docs/start-building/tables",
+        },
+        {
           text: "YAML Config",
           link: "/docs/start-building/yaml-config",
           items: [
@@ -155,7 +159,10 @@ export default defineConfig({
             { text: "Rabbitmq", link: "/docs/start-building/streams/rabbitmq" },
             { text: "SNS/SQS", link: "/docs/start-building/streams/sns" },
             { text: "Redis", link: "/docs/start-building/streams/redis" },
-            { text: "Cloudflare Queues", link: "/docs/start-building/streams/cloudflare-queues" },
+            {
+              text: "Cloudflare Queues",
+              link: "/docs/start-building/streams/cloudflare-queues",
+            },
           ],
         },
         {
@@ -182,8 +189,10 @@ export default defineConfig({
               text: "Indexers",
               link: "/docs/start-building/rust-project-deep-dive/indexers",
             },
-            { text: "Building Own DB Schema - coming soon" },
-            { text: "Ethers to Alloy Migration", link: "/docs/start-building/rust-project-deep-dive/ethers-alloy-migration" },
+            {
+              text: "Ethers to Alloy Migration",
+              link: "/docs/start-building/rust-project-deep-dive/ethers-alloy-migration",
+            },
           ],
         },
       ],

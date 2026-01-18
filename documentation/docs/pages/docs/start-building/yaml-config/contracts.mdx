@@ -508,10 +508,11 @@ contracts: // [!code focus]
 
 ## include_events
 
-The events you wish to include in the indexer.
+The events you wish to include for **raw event logging** - each event creates a row in its own table (e.g., `transfer`, `approval`).
 
 :::info
-This is optional if you do not provide this it will include all events in the ABI.
+This is optional. If you only want custom [tables](#tables) without raw event logging, you can omit this entirely.
+If neither `include_events` nor `tables` is specified, all events in the ABI will be indexed.
 :::
 
 ```yaml [rindexer.yaml]
@@ -688,6 +689,61 @@ contracts: // [!code focus]
 
 So now `WrappedRocketPoolETH` > `Approval` will not be processed until `RocketPoolETH` > `Transfer` is processed.
 
+
+## tables
+
+:::tip[Recommended for No-Code Projects]
+**Custom tables are the most powerful feature for no-code indexing.** Instead of just logging raw events,
+you can maintain derived state like token balances, NFT ownership, counters, and cross-chain aggregations -
+all without writing any Rust code.
+:::
+
+Custom tables let you define exactly what data you want to track and how events should update it.
+When using `tables`, you don't need `include_events` - rindexer will automatically subscribe to
+the events your tables reference.
+
+**Quick example - Track ERC20 token balances:**
+
+```yaml [rindexer.yaml]
+contracts:
+  - name: USDC
+    details:
+      - network: ethereum
+        address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+        start_block: 18600000
+    abi: ./abis/ERC20.json
+    tables: // [!code focus]
+      - name: balances // [!code focus]
+        columns: // [!code focus]
+          - name: holder // [!code focus]
+          - name: balance // [!code focus]
+            default: "0" // [!code focus]
+        events: // [!code focus]
+          - event: Transfer // [!code focus]
+            operations: // [!code focus]
+              - type: upsert // [!code focus]
+                where: // [!code focus]
+                  holder: $to // [!code focus]
+                if: "$to != 0x0000000000000000000000000000000000000000" // [!code focus]
+                set: // [!code focus]
+                  - column: balance // [!code focus]
+                    action: add // [!code focus]
+                    value: $value // [!code focus]
+              - type: upsert // [!code focus]
+                where: // [!code focus]
+                  holder: $from // [!code focus]
+                if: "$from != 0x0000000000000000000000000000000000000000" // [!code focus]
+                set: // [!code focus]
+                  - column: balance // [!code focus]
+                    action: subtract // [!code focus]
+                    value: $value // [!code focus]
+```
+
+For complete documentation including column types, operations (`upsert`, `update`, `delete`),
+set actions (`add`, `subtract`, `max`, `min`), condition expressions (`if`), `global` tables,
+`cross_chain` aggregation, and more examples:
+
+[**Custom Tables Documentation →**](/docs/start-building/tables)
 
 ## reorg_safe_distance
 

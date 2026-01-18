@@ -266,20 +266,32 @@ impl ABIItem {
         let abi_str = contract.parse_abi(project_path)?;
         let abi_items: Vec<ABIItem> = serde_json::from_str(&abi_str)?;
 
-        let filtered_abi_items = match &contract.include_events {
-            Some(events) => abi_items
-                .into_iter()
-                .filter(|item| {
-                    item.type_ != "event"
-                        || events
-                            .iter()
-                            .map(|a| a.name.clone())
-                            .collect::<Vec<_>>()
-                            .contains(&item.name)
-                })
-                .collect(),
-            None => abi_items,
-        };
+        // Get events from include_events
+        let include_event_names: Vec<String> = contract
+            .include_events
+            .as_ref()
+            .map(|events| events.iter().map(|a| a.name.clone()).collect())
+            .unwrap_or_default();
+
+        // Get events from tables
+        let table_event_names = contract.get_table_event_names();
+
+        // If both are empty, return all events (backward compatible behavior)
+        if include_event_names.is_empty() && table_event_names.is_empty() {
+            return Ok(abi_items);
+        }
+
+        // Combine both sets of event names
+        let all_needed_events: std::collections::HashSet<String> = include_event_names
+            .into_iter()
+            .chain(table_event_names)
+            .collect();
+
+        // Filter to only include needed events (keep all non-event items)
+        let filtered_abi_items = abi_items
+            .into_iter()
+            .filter(|item| item.type_ != "event" || all_needed_events.contains(&item.name))
+            .collect();
 
         Ok(filtered_abi_items)
     }
