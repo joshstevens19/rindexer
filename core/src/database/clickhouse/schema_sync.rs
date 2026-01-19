@@ -25,10 +25,7 @@ pub enum SchemaChange {
         default_value: Option<String>,
     },
     /// A column exists in DB but not in YAML (user removed it).
-    RemoveColumn {
-        table_full_name: String,
-        column_name: String,
-    },
+    RemoveColumn { table_full_name: String, column_name: String },
     /// ORDER BY columns have changed (equivalent to PK change in ClickHouse).
     ChangeOrderBy {
         table_full_name: String,
@@ -68,20 +65,13 @@ impl SchemaChange {
                     column_name, column_type, default_str, table_full_name
                 )
             }
-            SchemaChange::RemoveColumn {
-                table_full_name,
-                column_name,
-            } => {
+            SchemaChange::RemoveColumn { table_full_name, column_name } => {
                 format!(
                     "Column '{}' exists in database but not in YAML for table '{}'",
                     column_name, table_full_name
                 )
             }
-            SchemaChange::ChangeOrderBy {
-                table_full_name,
-                current_order_by,
-                new_order_by,
-            } => {
+            SchemaChange::ChangeOrderBy { table_full_name, current_order_by, new_order_by } => {
                 format!(
                     "ORDER BY change for table '{}': ({}) -> ({})",
                     table_full_name,
@@ -212,30 +202,15 @@ fn get_expected_columns(table: &Table) -> HashMap<String, String> {
     }
 
     // Injected columns
-    columns.insert(
-        injected_columns::LAST_UPDATED_BLOCK.to_string(),
-        "UInt64".to_string(),
-    );
+    columns.insert(injected_columns::LAST_UPDATED_BLOCK.to_string(), "UInt64".to_string());
     columns.insert(
         injected_columns::LAST_UPDATED_AT.to_string(),
         "Nullable(DateTime('UTC'))".to_string(),
     );
-    columns.insert(
-        injected_columns::TX_HASH.to_string(),
-        "FixedString(66)".to_string(),
-    );
-    columns.insert(
-        injected_columns::BLOCK_HASH.to_string(),
-        "FixedString(66)".to_string(),
-    );
-    columns.insert(
-        injected_columns::CONTRACT_ADDRESS.to_string(),
-        "FixedString(42)".to_string(),
-    );
-    columns.insert(
-        injected_columns::RINDEXER_SEQUENCE_ID.to_string(),
-        "UInt128".to_string(),
-    );
+    columns.insert(injected_columns::TX_HASH.to_string(), "FixedString(66)".to_string());
+    columns.insert(injected_columns::BLOCK_HASH.to_string(), "FixedString(66)".to_string());
+    columns.insert(injected_columns::CONTRACT_ADDRESS.to_string(), "FixedString(42)".to_string());
+    columns.insert(injected_columns::RINDEXER_SEQUENCE_ID.to_string(), "UInt128".to_string());
 
     columns
 }
@@ -283,10 +258,8 @@ pub async fn detect_schema_changes(
             let existing_columns = get_existing_columns(client, &database, &table_name).await?;
             let existing_col_names: HashSet<String> =
                 existing_columns.iter().map(|c| c.name.clone()).collect();
-            let existing_col_types: HashMap<String, String> = existing_columns
-                .iter()
-                .map(|c| (c.name.clone(), c.data_type.clone()))
-                .collect();
+            let existing_col_types: HashMap<String, String> =
+                existing_columns.iter().map(|c| (c.name.clone(), c.data_type.clone())).collect();
 
             // Get expected columns from YAML
             let expected_columns = get_expected_columns(table);
@@ -389,11 +362,8 @@ pub async fn detect_schema_changes(
 fn normalize_ch_type(ch_type: &str) -> String {
     let t = ch_type.to_lowercase();
     // Handle nullable wrapper
-    let inner = if t.starts_with("nullable(") && t.ends_with(')') {
-        &t[9..t.len() - 1]
-    } else {
-        &t
-    };
+    let inner =
+        if t.starts_with("nullable(") && t.ends_with(')') { &t[9..t.len() - 1] } else { &t };
 
     match inner {
         "string" => "string".to_string(),
@@ -414,12 +384,7 @@ pub async fn apply_schema_change(
     change: &SchemaChange,
 ) -> Result<(), String> {
     match change {
-        SchemaChange::AddColumn {
-            table_full_name,
-            column_name,
-            column_type,
-            default_value,
-        } => {
+        SchemaChange::AddColumn { table_full_name, column_name, column_type, default_value } => {
             let default_clause = match default_value {
                 Some(val) => format!(" DEFAULT {}", val),
                 None => String::new(),
@@ -429,46 +394,22 @@ pub async fn apply_schema_change(
                 table_full_name, column_name, column_type, default_clause
             );
 
-            client
-                .execute(&sql)
-                .await
-                .map_err(|e| format!("Failed to add column: {}", e))?;
+            client.execute(&sql).await.map_err(|e| format!("Failed to add column: {}", e))?;
         }
-        SchemaChange::RemoveColumn {
-            table_full_name,
-            column_name,
-        } => {
-            let sql = format!(
-                "ALTER TABLE {} DROP COLUMN `{}`",
-                table_full_name, column_name
-            );
+        SchemaChange::RemoveColumn { table_full_name, column_name } => {
+            let sql = format!("ALTER TABLE {} DROP COLUMN `{}`", table_full_name, column_name);
 
-            client
-                .execute(&sql)
-                .await
-                .map_err(|e| format!("Failed to remove column: {}", e))?;
+            client.execute(&sql).await.map_err(|e| format!("Failed to remove column: {}", e))?;
         }
-        SchemaChange::ChangeOrderBy {
-            table_full_name,
-            current_order_by: _,
-            new_order_by,
-        } => {
+        SchemaChange::ChangeOrderBy { table_full_name, current_order_by: _, new_order_by } => {
             // ClickHouse supports MODIFY ORDER BY for ReplacingMergeTree
-            let order_by_cols = new_order_by
-                .iter()
-                .map(|c| format!("`{}`", c))
-                .collect::<Vec<_>>()
-                .join(", ");
+            let order_by_cols =
+                new_order_by.iter().map(|c| format!("`{}`", c)).collect::<Vec<_>>().join(", ");
 
-            let sql = format!(
-                "ALTER TABLE {} MODIFY ORDER BY ({})",
-                table_full_name, order_by_cols
-            );
+            let sql =
+                format!("ALTER TABLE {} MODIFY ORDER BY ({})", table_full_name, order_by_cols);
 
-            client
-                .execute(&sql)
-                .await
-                .map_err(|e| format!("Failed to change ORDER BY: {}", e))?;
+            client.execute(&sql).await.map_err(|e| format!("Failed to change ORDER BY: {}", e))?;
         }
         SchemaChange::ColumnTypeChanged { .. } => {
             // Type changes require manual migration in ClickHouse

@@ -243,10 +243,7 @@ async fn handle_clickhouse_schema_sync(
         return Ok(true);
     }
 
-    println!(
-        "\n{}",
-        "[rindexer] ClickHouse schema changes detected:".cyan().bold()
-    );
+    println!("\n{}", "[rindexer] ClickHouse schema changes detected:".cyan().bold());
 
     for change in &changes {
         match change {
@@ -276,10 +273,7 @@ async fn handle_clickhouse_schema_sync(
                 }
                 println!("    {} Column added successfully", "→".green());
             }
-            ClickhouseSchemaChange::RemoveColumn {
-                table_full_name,
-                column_name,
-            } => {
+            ClickhouseSchemaChange::RemoveColumn { table_full_name, column_name } => {
                 println!(
                     "\n  {} Column '{}' exists in database but not in YAML for table '{}'",
                     "?".yellow(),
@@ -322,10 +316,7 @@ async fn handle_clickhouse_schema_sync(
                 println!("    New:     ({})", new_order_by.join(", ").green());
 
                 let should_change = if auto_yes {
-                    println!(
-                        "    {} Auto-confirming ORDER BY change (--yes flag)",
-                        "→".cyan()
-                    );
+                    println!("    {} Auto-confirming ORDER BY change (--yes flag)", "→".cyan());
                     true
                 } else {
                     prompt_yes_no(
