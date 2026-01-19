@@ -69,6 +69,10 @@ pub enum Commands {
         /// optional - The path to run the command in, default will be where the command is run.
         #[clap(long, short)]
         path: Option<String>,
+
+        /// Auto-confirm all schema migration prompts. Useful for CI/CD pipelines.
+        #[clap(long, short)]
+        yes: bool,
     },
 
     /// Add elements such as contracts to the rindexer.yaml file.

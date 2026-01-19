@@ -17,6 +17,7 @@ NFT ownership, and protocol metrics - all through simple YAML configuration. No 
 - **Global Tables** - Single-row aggregates (total supply, TVL)
 - **Cross-Chain** - Aggregate data across multiple networks
 - **Transaction Metadata** - Access `$rindexer_block_number`, `$rindexer_tx_hash`, `$rindexer_contract_address`, etc.
+- **Schema Migration** - [Auto-detect and apply](#schema-migration) column changes when your YAML evolves
 
 ## The Problem with Raw Event Logging
 
@@ -646,6 +647,8 @@ Define the columns in your table.
 :::tip[Primary Keys]
 Primary keys are automatically derived from columns used in `where` clauses. Any column that appears
 in a `where` clause becomes part of the primary key. You don't need to explicitly mark columns as primary keys.
+
+**Important:** All operations in a table must use the same `where` columns. See [where](#where) for details.
 :::
 
 #### Type Inference Rules
@@ -795,6 +798,40 @@ where:
   holder: $to           # Column "holder" = event field "to"
   token_id: $tokenId    # Column "token_id" = event field "tokenId"
 ```
+
+:::warning[All Operations Must Use the Same `where` Columns]
+Every operation in a table must use **identical `where` columns** because they define the table's primary key.
+A table can only have one primary key, so all operations must agree on what uniquely identifies a row.
+
+**Valid** - same columns, different values:
+```yaml
+operations:
+  - type: upsert
+    where:
+      holder: $to      # ✓ Uses 'holder'
+    set: [...]
+  - type: upsert
+    where:
+      holder: $from    # ✓ Uses 'holder' (same column, different value)
+    set: [...]
+```
+
+**Invalid** - different columns:
+```yaml
+operations:
+  - type: upsert
+    where:
+      holder: $to
+      token_id: $id    # ✗ Uses 'holder' AND 'token_id'
+    set: [...]
+  - type: upsert
+    where:
+      holder: $from    # ✗ Uses only 'holder' - inconsistent!
+    set: [...]
+```
+
+If you need different key granularities, use **separate tables** instead.
+:::
 
 :::info
 For `global: true` tables, omit the `where` clause - the primary key is just `network`.
@@ -2213,6 +2250,186 @@ All your columns become queryable fields, including the auto-injected metadata c
 For complete GraphQL API details including filtering, pagination, and ordering options, see the
 [GraphQL API documentation](/docs/accessing-data/graphql).
 :::
+
+---
+
+## Schema Migration
+
+When you modify your custom tables in YAML (add columns, remove columns, change primary keys), rindexer
+**automatically detects and handles schema changes** when you run `rindexer start`.
+
+:::tip[PostgreSQL & ClickHouse Support]
+Schema migration works with both PostgreSQL and ClickHouse. For ClickHouse, "primary key" changes
+refer to `ORDER BY` clause changes (which serve the same purpose in ClickHouse's ReplacingMergeTree engine).
+:::
+
+### How It Works
+
+On startup, rindexer compares your YAML table definitions against the actual database schema and:
+
+| Change Type | Behavior |
+|-------------|----------|
+| **New column added** | Auto-applies the change (adds column with default value) |
+| **Column removed** | Prompts you to confirm deletion |
+| **Primary key changed** | Prompts you to confirm (may fail if duplicates exist) |
+| **Column type changed** | Warns you - requires manual migration |
+
+**ClickHouse-specific:** ORDER BY changes use `ALTER TABLE ... MODIFY ORDER BY` syntax.
+
+### Example Console Output
+
+When schema changes are detected, you'll see output like this:
+
+```
+[rindexer] Schema changes detected:
+
+  ✓ Adding column 'balance2' (NUMERIC) DEFAULT 0 to table 'my_indexer_usdc.balances'
+    → Column added successfully
+
+  ✓ Adding column 'last_activity' (BIGINT) DEFAULT NULL to table 'my_indexer_usdc.balances'
+    → Column added successfully
+
+  ? Column 'old_field' exists in database but not in YAML for table 'my_indexer_usdc.balances'
+    Delete this column? This will permanently remove data [y/N]: y
+    → Column deleted
+
+  ? Primary key change detected for table 'my_indexer_usdc.balances':
+    Current: (network, holder)
+    New:     (network, holder, token_id)
+    Change primary key? This may fail if data has duplicates [y/N]: y
+    → Primary key updated successfully
+
+  ! Column type change detected for 'amount' in table 'my_indexer_usdc.balances':
+    Current: bigint
+    New:     numeric
+    Type changes require manual migration. Please backup your data and handle this manually.
+```
+
+### Adding New Columns
+
+New columns are automatically added with their default value from YAML:
+
+```yaml
+tables:
+  - name: balances
+    columns:
+      - name: holder
+      - name: balance
+        default: "0"
+      - name: last_activity    # NEW: will be auto-added
+        default: "0"
+```
+
+When you run `rindexer start`, the column is added:
+
+```
+[rindexer] Schema changes detected:
+
+  ✓ Adding column 'last_activity' (NUMERIC) DEFAULT 0 to table 'my_indexer_usdc.balances'
+    → Column added successfully
+```
+
+Existing rows will have the default value (or `NULL` if no default specified).
+
+### Removing Columns
+
+If you remove a column from your YAML, rindexer will prompt before deleting:
+
+```
+[rindexer] Schema changes detected:
+
+  ? Column 'old_field' exists in database but not in YAML for table 'my_indexer_usdc.balances'
+    Delete this column? This will permanently remove data [y/N]:
+```
+
+- Press `y` to delete the column and its data
+- Press `n` (or Enter) to keep the column - rindexer will ignore it during indexing
+
+### Changing Primary Keys
+
+If you modify the `where` clause (which determines the primary key), rindexer will prompt:
+
+```yaml
+# Before: PK is (network, holder)
+where:
+  holder: $to
+
+# After: PK is (network, holder, token_id)
+where:
+  holder: $to
+  token_id: $tokenId
+```
+
+Console output (PostgreSQL):
+
+```
+[rindexer] Schema changes detected:
+
+  ? Primary key change detected for table 'my_indexer_usdc.balances':
+    Current: (network, holder)
+    New:     (network, holder, token_id)
+    Change primary key? This may fail if data has duplicates [y/N]:
+```
+
+Console output (ClickHouse):
+
+```
+[rindexer] ClickHouse schema changes detected:
+
+  ? ORDER BY change detected for table 'my_indexer_usdc.balances':
+    Current: (network, holder)
+    New:     (network, holder, token_id)
+    Change ORDER BY? This may fail if data has duplicates [y/N]:
+```
+
+:::warning[Duplicate Data]
+Primary key (PostgreSQL) or ORDER BY (ClickHouse) changes may fail if your existing data has duplicate
+values for the new key columns. You may need to clean up data manually before the change can be applied.
+:::
+
+### Type Changes (Manual Migration Required)
+
+If you change a column's type, rindexer will warn you but cannot automatically migrate:
+
+```
+[rindexer] Schema changes detected:
+
+  ! Column type change detected for 'amount' in table 'my_indexer_usdc.balances':
+    Current: bigint
+    New:     numeric
+    Type changes require manual migration. Please backup your data and handle this manually.
+```
+
+For type changes, you'll need to:
+1. Backup your data
+2. Drop and recreate the table, or
+3. Manually ALTER the column type with appropriate casting
+
+### CI/CD Automation with `--yes`
+
+For automated deployments where interactive prompts aren't possible, use the `--yes` flag:
+
+```bash
+rindexer start all --yes
+```
+
+With `--yes`:
+- New columns are still auto-added (same as normal)
+- Column deletions are auto-confirmed
+- Primary key changes are auto-confirmed
+- Type change warnings are still shown (no auto-fix)
+
+:::warning[Use with Caution]
+The `--yes` flag will automatically delete columns and change primary keys.
+Make sure your CI/CD pipeline has proper safeguards and backups before using this flag.
+:::
+
+### Best Practices
+
+1. **Test schema changes locally first** - Run `rindexer start` locally to see what changes will be applied
+2. **Backup before primary key changes** - PK changes can fail and may require manual cleanup
+3. **Avoid type changes when possible** - If you need a different type, consider adding a new column instead
+4. **Use defaults for new columns** - Adding `default: "0"` ensures existing rows have valid values
 
 ---
 

@@ -82,7 +82,7 @@ pub enum SetupNoCodeError {
 /// Resolves column types in custom tables from the event ABI.
 /// This must be called before database table generation.
 #[allow(clippy::result_large_err)]
-fn resolve_table_column_types(
+pub fn resolve_table_column_types(
     project_path: &Path,
     manifest: &mut Manifest,
 ) -> Result<(), SetupNoCodeError> {

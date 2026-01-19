@@ -13,7 +13,6 @@ networks:
 storage:
   postgres:
     enabled: true
-    drop_each_run: true
 
 contracts:
   - name: USDC
@@ -21,13 +20,17 @@ contracts:
       - network: ethereum
         address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
         start_block: "18600000"
-        end_block: "18601000"  # ~1000 blocks for testing
+        end_block: "18601000" # ~1000 blocks for testing
     abi: ./abis/ERC20.abi.json
     tables:
       - name: balances
         columns:
           - name: holder
           - name: balance
+            default: "0"
+          - name: balance2
+            default: "0"
+          - name: balance3
             default: "0"
         events:
           - event: Transfer
@@ -39,6 +42,12 @@ contracts:
                 if: "$to != 0x0000000000000000000000000000000000000000"
                 set:
                   - column: balance
+                    action: add
+                    value: $value
+                  - column: balance2
+                    action: add
+                    value: $value
+                  - column: balance3
                     action: add
                     value: $value
               # Debit the sender
