@@ -374,11 +374,13 @@ fn parse_condition<'a>(input: &mut Input<'a>) -> ParserResult<Expression<'a>> {
     Ok(Expression::Condition(condition))
 }
 
-/// Parses the highest precedence components: conditions and parenthesized expressions
+/// Parses the highest precedence components: conditions, parenthesized expressions, and negations
 fn parse_term<'a>(input: &mut Input<'a>) -> ParserResult<Expression<'a>> {
     delimited(
         space0,
         alt((
+            // Parse negated expression: !(...) or !condition
+            (literal("!"), space0, parse_term).map(|(_, _, expr)| Expression::Not(Box::new(expr))),
             // Parse a parenthesized expression
             delimited(
                 (literal("("), space0),
@@ -393,7 +395,7 @@ fn parse_term<'a>(input: &mut Input<'a>) -> ParserResult<Expression<'a>> {
         space0,
     )
     .context(StrContext::Expected(StrContextValue::Description(
-        "condition or parenthesized expression",
+        "condition, parenthesized expression, or negation",
     )))
     .parse_next(input)
 }
@@ -1275,5 +1277,101 @@ mod tests {
         // Multiple quotes
         let expr2 = parse("$desc == \"It's a 'test'\"").unwrap();
         assert_eq!(expr2.to_sql_condition(table_name), "EXCLUDED.\"desc\" = 'It''s a ''test'''");
+    }
+
+    #[test]
+    fn test_parse_not_operator() {
+        // Simple negation of a condition
+        let expr1 = parse("!($value > 100)").unwrap();
+        let expected1 = Expression::Not(Box::new(Expression::Condition(Condition {
+            left: ArithmeticExpr::Variable(ConditionLeft::Simple("value", VariableSource::Event)),
+            operator: ComparisonOperator::Gt,
+            right: ArithmeticExpr::Literal(LiteralValue::Number("100")),
+        })));
+        assert_eq!(expr1, expected1);
+
+        // Negation of a logical AND expression
+        let expr2 = parse("!($a == 1 && $b == 2)").unwrap();
+        let expected2 = Expression::Not(Box::new(Expression::Logical {
+            left: Box::new(Expression::Condition(Condition {
+                left: ArithmeticExpr::Variable(ConditionLeft::Simple("a", VariableSource::Event)),
+                operator: ComparisonOperator::Eq,
+                right: ArithmeticExpr::Literal(LiteralValue::Number("1")),
+            })),
+            operator: LogicalOperator::And,
+            right: Box::new(Expression::Condition(Condition {
+                left: ArithmeticExpr::Variable(ConditionLeft::Simple("b", VariableSource::Event)),
+                operator: ComparisonOperator::Eq,
+                right: ArithmeticExpr::Literal(LiteralValue::Number("2")),
+            })),
+        }));
+        assert_eq!(expr2, expected2);
+
+        // Double negation
+        let expr3 = parse("!!($value > 0)").unwrap();
+        let inner = Expression::Condition(Condition {
+            left: ArithmeticExpr::Variable(ConditionLeft::Simple("value", VariableSource::Event)),
+            operator: ComparisonOperator::Gt,
+            right: ArithmeticExpr::Literal(LiteralValue::Number("0")),
+        });
+        let expected3 = Expression::Not(Box::new(Expression::Not(Box::new(inner))));
+        assert_eq!(expr3, expected3);
+
+        // Negation combined with AND
+        let expr4 = parse("!($paused == true) && $active == true").unwrap();
+        let expected4 = Expression::Logical {
+            left: Box::new(Expression::Not(Box::new(Expression::Condition(Condition {
+                left: ArithmeticExpr::Variable(ConditionLeft::Simple(
+                    "paused",
+                    VariableSource::Event,
+                )),
+                operator: ComparisonOperator::Eq,
+                right: ArithmeticExpr::Literal(LiteralValue::Bool(true)),
+            })))),
+            operator: LogicalOperator::And,
+            right: Box::new(Expression::Condition(Condition {
+                left: ArithmeticExpr::Variable(ConditionLeft::Simple(
+                    "active",
+                    VariableSource::Event,
+                )),
+                operator: ComparisonOperator::Eq,
+                right: ArithmeticExpr::Literal(LiteralValue::Bool(true)),
+            })),
+        };
+        assert_eq!(expr4, expected4);
+    }
+
+    #[test]
+    fn test_not_operator_to_sql() {
+        let table_name = "my_table";
+
+        // Simple NOT
+        let expr1 = parse("!($value > 100)").unwrap();
+        assert_eq!(expr1.to_sql_condition(table_name), "NOT (EXCLUDED.\"value\" > 100)");
+
+        // NOT with table reference
+        let expr2 = parse("!($value > @balance)").unwrap();
+        assert_eq!(
+            expr2.to_sql_condition(table_name),
+            "NOT (EXCLUDED.\"value\" > my_table.\"balance\")"
+        );
+
+        // NOT with AND inside
+        let expr3 = parse("!($a == 1 && $b == 2)").unwrap();
+        assert_eq!(
+            expr3.to_sql_condition(table_name),
+            "NOT ((EXCLUDED.\"a\" = 1 AND EXCLUDED.\"b\" = 2))"
+        );
+    }
+
+    #[test]
+    fn test_not_operator_has_table_references() {
+        // NOT with event variable only - no table references
+        let expr1 = parse("!($value > 100)").unwrap();
+        assert!(!expr1.has_table_references());
+
+        // NOT with table variable inside - has table references
+        let expr2 = parse("!($value > @balance)").unwrap();
+        assert!(expr2.has_table_references());
     }
 }

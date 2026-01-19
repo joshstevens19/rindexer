@@ -115,6 +115,10 @@ pub fn evaluate<'a>(
                 }
             }
         }
+        Expression::Not(inner) => {
+            let result = evaluate(inner, data)?;
+            Ok(!result)
+        }
         Expression::Condition(condition) => evaluate_condition_with_table(condition, data, None),
     }
 }
@@ -156,6 +160,10 @@ pub fn evaluate_with_table_data<'a>(
                     }
                 }
             }
+        }
+        Expression::Not(inner) => {
+            let result = evaluate_with_table_data(inner, event_data, table_data)?;
+            Ok(!result)
         }
         Expression::Condition(condition) => {
             evaluate_condition_with_table(condition, event_data, table_data)
@@ -1232,6 +1240,56 @@ mod tests {
         let data = json!({"value": 100, "threshold": 50, "active": true});
         // (value > threshold * 1) && active == true = (100 > 50) && true = true
         let expr = parse("value > threshold * 1 && active == true").unwrap();
+        assert!(evaluate(&expr, &data).unwrap());
+    }
+
+    // --- Tests for NOT Operator ---
+
+    #[test]
+    fn test_not_operator_simple() {
+        let data = json!({"value": 100});
+
+        // !(100 > 50) = !true = false
+        let expr1 = parse("!($value > 50)").unwrap();
+        assert!(!evaluate(&expr1, &data).unwrap());
+
+        // !(100 < 50) = !false = true
+        let expr2 = parse("!($value < 50)").unwrap();
+        assert!(evaluate(&expr2, &data).unwrap());
+    }
+
+    #[test]
+    fn test_not_operator_with_logical() {
+        let data = json!({"a": 10, "b": 20});
+
+        // !(10 > 5 && 20 > 15) = !(true && true) = !true = false
+        let expr1 = parse("!($a > 5 && $b > 15)").unwrap();
+        assert!(!evaluate(&expr1, &data).unwrap());
+
+        // !(10 > 15 && 20 > 15) = !(false && true) = !false = true
+        let expr2 = parse("!($a > 15 && $b > 15)").unwrap();
+        assert!(evaluate(&expr2, &data).unwrap());
+
+        // !(10 > 15 || 20 > 25) = !(false || false) = !false = true
+        let expr3 = parse("!($a > 15 || $b > 25)").unwrap();
+        assert!(evaluate(&expr3, &data).unwrap());
+    }
+
+    #[test]
+    fn test_not_operator_double_negation() {
+        let data = json!({"value": 100});
+
+        // !!(100 > 50) = !!true = true
+        let expr = parse("!!($value > 50)").unwrap();
+        assert!(evaluate(&expr, &data).unwrap());
+    }
+
+    #[test]
+    fn test_not_operator_combined_with_and() {
+        let data = json!({"paused": false, "active": true});
+
+        // !(paused == true) && active == true = !false && true = true && true = true
+        let expr = parse("!($paused == true) && $active == true").unwrap();
         assert!(evaluate(&expr, &data).unwrap());
     }
 }

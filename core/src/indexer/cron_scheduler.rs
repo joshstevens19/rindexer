@@ -193,6 +193,12 @@ impl CronScheduler {
     }
 }
 
+/// Maximum number of retry attempts for failed cron operations.
+const MAX_RETRIES: u32 = 3;
+
+/// Initial backoff delay for retries (doubles each attempt).
+const INITIAL_BACKOFF_SECS: u64 = 2;
+
 /// Run a single cron task until shutdown.
 async fn run_cron_task(
     task: CronTask,
@@ -259,15 +265,70 @@ async fn run_cron_task(
             break;
         }
 
-        // Execute the cron operations
-        if let Err(e) =
-            execute_cron_operations(&task, postgres.clone(), clickhouse.clone(), providers.clone())
-                .await
-        {
-            error!(
-                "Cron task failed for table '{}' on network '{}': {}",
-                task.table.name, task.network, e
-            );
+        // Execute the cron operations with retry and exponential backoff
+        let mut retry_count = 0;
+        let mut last_error: Option<String> = None;
+
+        while retry_count <= MAX_RETRIES {
+            if !is_running() {
+                break;
+            }
+
+            match execute_cron_operations(
+                &task,
+                postgres.clone(),
+                clickhouse.clone(),
+                providers.clone(),
+            )
+            .await
+            {
+                Ok(()) => {
+                    // Success - clear any previous error state
+                    if retry_count > 0 {
+                        info!(
+                            "Cron task for table '{}' succeeded after {} retry attempt(s)",
+                            task.table.name, retry_count
+                        );
+                    }
+                    break;
+                }
+                Err(e) => {
+                    last_error = Some(e.clone());
+                    retry_count += 1;
+
+                    if retry_count <= MAX_RETRIES {
+                        // Calculate exponential backoff: 2s, 4s, 8s
+                        let backoff_secs = INITIAL_BACKOFF_SECS * (1 << (retry_count - 1));
+                        let backoff = Duration::from_secs(backoff_secs);
+
+                        warn!(
+                            "Cron task failed for table '{}' on network '{}': {}. Retrying in {:?} (attempt {}/{})",
+                            task.table.name, task.network, e, backoff, retry_count, MAX_RETRIES
+                        );
+
+                        // Sleep with shutdown check
+                        let mut backoff_remaining = backoff;
+                        while backoff_remaining > Duration::ZERO {
+                            if !is_running() {
+                                return;
+                            }
+                            let sleep_time = backoff_remaining.min(Duration::from_secs(1));
+                            tokio::time::sleep(sleep_time).await;
+                            backoff_remaining = backoff_remaining.saturating_sub(sleep_time);
+                        }
+                    }
+                }
+            }
+        }
+
+        // If we exhausted all retries, log the final error
+        if retry_count > MAX_RETRIES {
+            if let Some(e) = last_error {
+                error!(
+                    "Cron task failed for table '{}' on network '{}' after {} retries: {}",
+                    task.table.name, task.network, MAX_RETRIES, e
+                );
+            }
         }
     }
 }

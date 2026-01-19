@@ -10,7 +10,7 @@ NFT ownership, and protocol metrics - all through simple YAML configuration. No 
 - **Upsert, Update, Delete** - Full CRUD operations on your custom tables
 - **Computed Values** - Arithmetic expressions like `$amount * 2` or `$price / $quantity`
 - **String Templates** - Concatenate fields with `"$from-$to"` or `"Pool: $token0/$token1"`
-- **Conditional Logic** - Filter with `if: "$value > 0 && from != 0x000..."`
+- **Conditional Logic** - Filter with `if: "$value > 0 && $from != 0x000..."`, negate with `!($condition)`
 - **Array Iteration** - Process batch events (ERC1155 `TransferBatch`) with [`iterate`](#array-iteration-batch-events)
 - **Array Indexing** - Access specific elements with `$ids[0]` or struct fields with `$transfers[0].amount`
 - **View Calls** - Fetch on-chain data with `$call($contract, "balanceOf(address)", $holder)`, access tuple returns with `[0]` or `.fieldName`
@@ -1957,6 +1957,26 @@ if: "$order.amount > 0 && $order.maker != 0x000000000000000000000000000000000000
 |----------|---------|---------|
 | `&&` | AND | `$value > 0 && $from != 0x0000...` |
 | `\|\|` | OR | `$from == 0x0000... \|\| $to == 0x0000...` |
+| `!` | NOT | `!($paused == true)` |
+
+### NOT Operator
+
+The `!` operator negates an expression. Use it to invert the result of a condition or group of conditions:
+
+```yaml
+# Skip if paused
+if: "!($paused == true)"
+
+# Skip if either frozen or paused
+if: "!($frozen == true || $paused == true)"
+
+# Only process if NOT a mint AND NOT a burn
+if: "!($from == 0x0000000000000000000000000000000000000000) && !($to == 0x0000000000000000000000000000000000000000)"
+```
+
+:::tip[Parentheses Required]
+When using `!`, wrap the expression in parentheses: `!($condition)` not `!$condition`.
+:::
 
 ### Event vs Table References
 

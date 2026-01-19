@@ -180,6 +180,8 @@ pub enum Expression<'a> {
         /// The right side sub-expression.
         right: Box<Expression<'a>>,
     },
+    /// A negated expression (e.g., "!($value > 100)" or "!($a == 1 && $b == 2)")
+    Not(Box<Expression<'a>>),
 }
 
 impl<'a> Expression<'a> {
@@ -193,6 +195,7 @@ impl<'a> Expression<'a> {
             Expression::Logical { left, right, .. } => {
                 left.has_table_references() || right.has_table_references()
             }
+            Expression::Not(inner) => inner.has_table_references(),
         }
     }
 
@@ -222,6 +225,9 @@ impl<'a> Expression<'a> {
                     LogicalOperator::Or => "OR",
                 };
                 format!("({} {} {})", left_sql, op_sql, right_sql)
+            }
+            Expression::Not(inner) => {
+                format!("NOT ({})", inner.to_sql_condition(table_name))
             }
         }
     }
