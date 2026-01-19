@@ -1,13 +1,3 @@
-# View Calls Example
-# Demonstrates using $call() to fetch on-chain data during indexing
-#
-# NOTE: View calls add RPC load. Use sparingly for data not available in events.
-# Token metadata (symbol, decimals) is often static - fetch it once in a global table.
-# Per-event calls like balanceOf should be used carefully with paid RPCs.
-#
-# ACCESSOR SYNTAX: For functions returning tuples/structs, use:
-#   Position-based: $call($addr, "getReserves()")[0]    # Access by index
-#   Named fields:   $call($addr, "getReserves() returns (uint112 reserve0, uint112 reserve1)").reserve0
 name: ViewCallsExample
 description: Enrich events with on-chain view call data
 repository: https://github.com/joshstevens19/rindexer

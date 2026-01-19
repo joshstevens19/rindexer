@@ -47,9 +47,7 @@ pub fn build_cte_header(column_names: &[&str]) -> String {
 
 /// Builds the `to_process` CTE with optional DISTINCT ON for deduplication.
 pub fn build_to_process_cte(distinct_cols: &[&str], sequence_col: Option<&str>) -> String {
-    if !distinct_cols.is_empty() && sequence_col.is_some() {
-        let seq_col = sequence_col.unwrap();
-
+    if let (false, Some(seq_col)) = (distinct_cols.is_empty(), sequence_col) {
         let quoted_distinct_cols =
             distinct_cols.iter().map(|col| quote_identifier(col)).collect::<Vec<_>>().join(", ");
 

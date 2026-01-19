@@ -145,7 +145,7 @@ async fn execute_batch(
     }
 
     query.push_str(&placeholders.join(", "));
-    query.push_str(")");
+    query.push(')');
 
     // Add to_process CTE
     query.push_str(&build_to_process_cte(&distinct_cols, sequence_col));

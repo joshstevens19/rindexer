@@ -430,8 +430,6 @@ fn evaluate_condition_with_table<'a>(
             // Determine the right literal type
             let rhs_literal = if rv == "true" || rv == "false" {
                 LiteralValue::Bool(rv == "true")
-            } else if rv.starts_with("0x") || rv.starts_with("0X") {
-                LiteralValue::Str(rv)
             } else {
                 LiteralValue::Str(rv)
             };

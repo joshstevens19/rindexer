@@ -474,9 +474,7 @@ impl Table {
         value_ref: &str,
         event_types: Option<&HashMap<String, String>>,
     ) -> Option<ColumnType> {
-        if value_ref.starts_with('$') {
-            let field_name = &value_ref[1..];
-
+        if let Some(field_name) = value_ref.strip_prefix('$') {
             // Check for tx metadata fields first
             if let Some(column_type) = ColumnType::from_tx_metadata_field(field_name) {
                 return Some(column_type);
@@ -912,11 +910,7 @@ impl SetColumn {
     /// Get the event field name (without $ prefix)
     pub fn event_field_name(&self) -> Option<&str> {
         let value = self.effective_value();
-        if value.starts_with('$') {
-            Some(&value[1..])
-        } else {
-            None
-        }
+        value.strip_prefix('$')
     }
 }
 

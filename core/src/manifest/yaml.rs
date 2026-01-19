@@ -46,36 +46,33 @@ fn is_arithmetic_expression(value: &str) -> bool {
 /// Also handles $ prefix: "$from != $to" returns ["from", "to"].
 fn extract_filter_variables(expr: &str) -> Vec<String> {
     let mut variables = Vec::new();
-    let mut chars = expr.chars().peekable();
     let mut current_word = String::new();
     let mut has_dollar_prefix = false;
 
     // Keywords and operators to skip
     let keywords = ["true", "false", "null", "and", "or", "AND", "OR"];
 
-    while let Some(c) = chars.next() {
+    for c in expr.chars() {
         if c == '$' && current_word.is_empty() {
             // Start of a $-prefixed variable
             has_dollar_prefix = true;
         } else if c.is_alphanumeric() || c == '_' || c == '.' {
             current_word.push(c);
-        } else {
-            if !current_word.is_empty() {
-                // Check if it's a variable (starts with letter or underscore, not a keyword or number)
-                let first_char = current_word.chars().next().unwrap();
-                if (first_char.is_alphabetic() || first_char == '_' || has_dollar_prefix)
-                    && !keywords.contains(&current_word.as_str())
-                {
-                    // Get root variable name (before any dot)
-                    let root_name = current_word.split('.').next().unwrap_or(&current_word);
-                    // Avoid duplicates
-                    if !variables.contains(&root_name.to_string()) {
-                        variables.push(root_name.to_string());
-                    }
+        } else if !current_word.is_empty() {
+            // Check if it's a variable (starts with letter or underscore, not a keyword or number)
+            let first_char = current_word.chars().next().unwrap();
+            if (first_char.is_alphabetic() || first_char == '_' || has_dollar_prefix)
+                && !keywords.contains(&current_word.as_str())
+            {
+                // Get root variable name (before any dot)
+                let root_name = current_word.split('.').next().unwrap_or(&current_word);
+                // Avoid duplicates
+                if !variables.contains(&root_name.to_string()) {
+                    variables.push(root_name.to_string());
                 }
-                current_word.clear();
-                has_dollar_prefix = false;
             }
+            current_word.clear();
+            has_dollar_prefix = false;
         }
     }
 
@@ -391,18 +388,15 @@ fn validate_manifest(
                             }
 
                             // Check event field reference if starts with $
-                            if value.starts_with('$') {
-                                // Skip validation for view calls ($call(...))
-                                if value.starts_with("$call(") {
-                                    continue;
-                                }
-                                let event_field = &value[1..];
+                            // Skip validation for view calls ($call(...))
+                            if value.starts_with("$call(") {
+                                continue;
+                            }
+                            if let Some(event_field) = value.strip_prefix('$') {
                                 // For nested fields like $data.amount, validate the root field
                                 // Also strip array indices like ids[0] -> ids
-                                let root_field = event_field
-                                    .split(&['.', '['][..])
-                                    .next()
-                                    .unwrap_or(event_field);
+                                let root_field =
+                                    event_field.split(['.', '[']).next().unwrap_or(event_field);
                                 // Skip validation for built-in metadata fields
                                 if BUILTIN_METADATA_FIELDS.contains(&root_field) {
                                     continue;
@@ -522,19 +516,15 @@ fn validate_manifest(
                                         );
                                     }
                                 }
-                            } else if effective_value.starts_with('$') {
-                                // Skip validation for view calls ($call(...))
-                                if effective_value.starts_with("$call(") {
-                                    continue;
-                                }
+                            } else if effective_value.starts_with("$call(") {
+                                // Skip validation for view calls
+                                continue;
+                            } else if let Some(event_field) = effective_value.strip_prefix('$') {
                                 // Simple event field reference
-                                let event_field = &effective_value[1..];
                                 // For nested fields like $data.amount, validate the root field
                                 // Also strip array indices like ids[0] -> ids
-                                let root_field = event_field
-                                    .split(&['.', '['][..])
-                                    .next()
-                                    .unwrap_or(event_field);
+                                let root_field =
+                                    event_field.split(['.', '[']).next().unwrap_or(event_field);
                                 // Skip validation for built-in metadata fields
                                 if BUILTIN_METADATA_FIELDS.contains(&root_field) {
                                     continue;
@@ -618,6 +608,7 @@ pub enum ReadManifestError {
     NoProjectPathFoundUsingParentOfManifestPath,
 }
 
+#[allow(clippy::result_large_err)]
 pub fn read_manifest_raw(file_path: &PathBuf) -> Result<Manifest, ReadManifestError> {
     let mut file = File::open(file_path)?;
     let mut contents = String::new();
@@ -651,6 +642,7 @@ fn extract_environment_path(contents: &str, file_path: &Path) -> Option<PathBuf>
     })
 }
 
+#[allow(clippy::result_large_err)]
 pub fn read_manifest(file_path: &PathBuf) -> Result<Manifest, ReadManifestError> {
     let mut file = File::open(file_path)?;
     let mut contents = String::new();

@@ -164,9 +164,12 @@ use crate::manifest::contract::{
 use crate::provider::JsonRpcCachedProvider;
 use crate::types::core::LogParam;
 
+/// Cache key type for view calls: (network, contract_address, calldata, block_number).
+type ViewCallCacheKey = (String, Address, Bytes, u64);
+
 /// Global cache for view call results. Key is (network, contract, calldata, block_number).
 /// Uses block_number for determinism - same call at same block always returns same result.
-static VIEW_CALL_CACHE: Lazy<RwLock<HashMap<(String, Address, Bytes, u64), DynSolValue>>> =
+static VIEW_CALL_CACHE: Lazy<RwLock<HashMap<ViewCallCacheKey, DynSolValue>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
 /// Default limit for concurrent view calls.
@@ -261,11 +264,7 @@ fn is_string_template(value: &str) -> bool {
 
     // Pure field reference starts with $ and has no other content before it
     // e.g., "$from" or "$data.amount" or "$ids[0]"
-    if value.starts_with('$') {
-        // Check if there's any content after the field reference
-        // A field reference is: $fieldname or $field.nested or $field[0]
-        let after_dollar = &value[1..];
-
+    if let Some(after_dollar) = value.strip_prefix('$') {
         // Simple heuristic: if it's a pure field reference, it should only contain
         // alphanumeric, dots, underscores, and brackets
         // String templates have extra characters like spaces, colons, slashes, etc.
@@ -369,7 +368,8 @@ fn dyn_sol_value_to_string(value: &DynSolValue) -> String {
 /// Checks if a value string is a view call expression like `$call(address, "signature", args...)`.
 /// May have accessor after: `$call(...)[0]` or `$call(...).fieldName`
 fn is_view_call(value: &str) -> bool {
-    value.starts_with("$call(")
+    // Must start with $call( and have at least one closing paren
+    value.starts_with("$call(") && value.contains(')')
 }
 
 /// Parsed view call expression.
@@ -400,10 +400,9 @@ fn parse_view_call(value: &str) -> Option<ViewCall> {
     let start = "$call(".len();
     let mut paren_depth = 1;
     let mut call_end = None;
-    let chars: Vec<char> = value.chars().collect();
 
-    for i in start..chars.len() {
-        match chars[i] {
+    for (i, c) in value.chars().enumerate().skip(start) {
+        match c {
             '(' => paren_depth += 1,
             ')' => {
                 paren_depth -= 1;
@@ -638,7 +637,7 @@ fn parse_accessor_segments(accessor: &str) -> Vec<AccessorSegment> {
             // Field access
             remaining = &remaining[1..]; // skip the dot
                                          // Find end of field name (next . or [ or end)
-            let end = remaining.find(|c| c == '.' || c == '[').unwrap_or(remaining.len());
+            let end = remaining.find(['.', '[']).unwrap_or(remaining.len());
             let field_name = &remaining[..end];
             if !field_name.is_empty() {
                 segments.push(AccessorSegment::Field(field_name.to_string()));
@@ -851,9 +850,7 @@ fn resolve_arg_value(
 ) -> Option<DynSolValue> {
     let arg_str = arg_str.trim();
 
-    if arg_str.starts_with('$') {
-        let field_name = &arg_str[1..];
-
+    if let Some(field_name) = arg_str.strip_prefix('$') {
         // Check tx metadata (all prefixed with rindexer_)
         match field_name {
             "rindexer_contract_address" => {
@@ -1140,9 +1137,7 @@ fn extract_value_from_event(
             .map(EthereumSqlTypeWrapper::String);
     }
 
-    if value_ref.starts_with('$') {
-        let field_name = &value_ref[1..];
-
+    if let Some(field_name) = value_ref.strip_prefix('$') {
         // Check for built-in transaction metadata fields first (all prefixed with rindexer_)
         match field_name {
             "rindexer_block_number" => {
@@ -1918,7 +1913,7 @@ async fn execute_postgres_operation(
 
     let op_type = operation_type_to_batch_type(&operation.operation_type);
     // Extract short table name (after the schema prefix)
-    let short_table_name = table_name.split('.').last().unwrap_or(table_name);
+    let short_table_name = table_name.split('.').next_back().unwrap_or(table_name);
     let event_name = format!("Tables::{}", short_table_name);
 
     execute_dynamic_batch_operation(
@@ -2083,7 +2078,7 @@ async fn execute_clickhouse_operation(
 
     let op_type = operation_type_to_batch_type(&operation.operation_type);
     // Extract short table name (after the schema prefix)
-    let short_table_name = table_name.split('.').last().unwrap_or(table_name);
+    let short_table_name = table_name.split('.').next_back().unwrap_or(table_name);
     let event_name = format!("Tables::{}", short_table_name);
 
     execute_clickhouse_dynamic_batch_operation(
