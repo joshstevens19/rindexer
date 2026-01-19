@@ -193,6 +193,9 @@ pub enum ValidateManifestError {
 
     #[error("Iterate field '${0}' in event '{1}' for table '{2}' in contract '{3}' not found in event ABI")]
     CustomIndexingIterateFieldNotFound(String, String, String, String),
+
+    #[error("Tables are defined in contract '{0}' but project_type is not 'no-code'. Tables only work with 'project_type: no-code'. Either change project_type to 'no-code' or remove the tables configuration.")]
+    TablesRequireNoCodeProjectType(String),
 }
 
 fn validate_manifest(
@@ -210,6 +213,16 @@ fn validate_manifest(
         return Err(ValidateManifestError::ContractNameMustBeUnique(
             duplicates_contract_names.join(", "),
         ));
+    }
+
+    if manifest.project_type != ProjectType::NoCode {
+        for contract in &manifest.contracts {
+            if contract.tables.is_some() {
+                return Err(ValidateManifestError::TablesRequireNoCodeProjectType(
+                    contract.name.clone(),
+                ));
+            }
+        }
     }
 
     for contract in &manifest.all_contracts() {
