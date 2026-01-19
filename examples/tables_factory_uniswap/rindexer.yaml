@@ -66,7 +66,7 @@ contracts:
             operations:
               - type: upsert
                 where:
-                  pool_address: $contract_address
+                  pool_address: $rindexer_contract_address
                 set:
                   - column: swap_count
                     action: increment
@@ -78,7 +78,7 @@ contracts:
                     value: $amount1
                   - column: last_swap_block
                     action: max
-                    value: $block_number
+                    value: $rindexer_block_number
 
       # Track unique traders per pool
       - name: pool_traders
@@ -97,11 +97,11 @@ contracts:
               # Track sender as trader
               - type: upsert
                 where:
-                  pool_address: $contract_address
+                  pool_address: $rindexer_contract_address
                   trader: $sender
                 set:
                   - column: swap_count
                     action: increment
                   - column: last_swap_block
                     action: max
-                    value: $block_number
+                    value: $rindexer_block_number

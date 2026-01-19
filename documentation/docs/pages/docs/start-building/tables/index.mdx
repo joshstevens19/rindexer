@@ -13,9 +13,10 @@ NFT ownership, and protocol metrics - all through simple YAML configuration. No 
 - **Conditional Logic** - Filter with `if: "$value > 0 && from != 0x000..."`
 - **Array Iteration** - Process batch events (ERC1155 `TransferBatch`) with [`iterate`](#array-iteration-batch-events)
 - **Array Indexing** - Access specific elements with `$ids[0]` or struct fields with `$transfers[0].amount`
+- **View Calls** - Fetch on-chain data with `$call($contract, "balanceOf(address)", $holder)`, access tuple returns with `[0]` or `.fieldName`
 - **Global Tables** - Single-row aggregates (total supply, TVL)
 - **Cross-Chain** - Aggregate data across multiple networks
-- **Transaction Metadata** - Access `$block_number`, `$tx_hash`, `$contract_address`, etc.
+- **Transaction Metadata** - Access `$rindexer_block_number`, `$rindexer_tx_hash`, `$rindexer_contract_address`, etc.
 
 ## The Problem with Raw Event Logging
 
@@ -647,11 +648,67 @@ Primary keys are automatically derived from columns used in `where` clauses. Any
 in a `where` clause becomes part of the primary key. You don't need to explicitly mark columns as primary keys.
 :::
 
-:::info[Type Inference]
-Column types are automatically inferred when the value references an event field (e.g., `holder: $to`).
-The type is read from the event ABI. You only need to specify `type:` for:
-- Literal values (e.g., `value: "global"`)
-- When you want to override the inferred type
+#### Type Inference Rules
+
+Column types are **automatically inferred** in these cases - no `type:` needed:
+
+| Value Source | Example | Inferred Type |
+|--------------|---------|---------------|
+| Event field | `$from`, `$value`, `$to` | From ABI (e.g., `address`, `uint256`) |
+| Nested event field | `$data.amount` | From ABI |
+| Transaction metadata | `$rindexer_block_number` | `uint64` |
+| Transaction metadata | `$rindexer_tx_hash`, `$rindexer_block_hash` | `string` |
+| Transaction metadata | `$rindexer_contract_address` | `address` |
+| Transaction metadata | `$rindexer_block_timestamp` | `timestamp` |
+| Default value `"0"` | `default: "0"` | `uint256` |
+| Default value boolean | `default: "true"` | `bool` |
+| Default value address | `default: "0x000..."` | `address` |
+
+You **must specify `type:`** in these cases:
+
+| Value Source | Example | Why |
+|--------------|---------|-----|
+| View calls | `$call($addr, "balanceOf(address)", $holder)` | Return type unknown |
+| Computed/arithmetic | `$amount * 2`, `$a + $b` | Result type ambiguous |
+| String templates | `"$from-$to"` | Always produces string |
+| Literal values | `"global"`, `"1000"` | No type context |
+| No value reference | Column not used in `set` or `where` | Nothing to infer from |
+
+**Examples:**
+
+```yaml
+columns:
+  # ✅ Type inferred from event ABI - $to is address, $value is uint256
+  - name: holder           # type: address (inferred from $to)
+  - name: balance          # type: uint256 (inferred from $value)
+    default: "0"
+
+  # ✅ Type inferred from metadata
+  - name: last_block       # type: uint64 (inferred from $rindexer_block_number)
+  - name: tx_hash          # type: string (inferred from $rindexer_tx_hash)
+
+  # ⚠️ Must specify type - view call return type unknown
+  - name: token_symbol
+    type: string           # Required! $call() can't infer type
+  - name: token_decimals
+    type: uint8            # Required!
+
+  # ⚠️ Must specify type - arithmetic result
+  - name: doubled_amount
+    type: uint256          # Required! $value * 2 needs explicit type
+
+  # ⚠️ Must specify type - string template
+  - name: pair_id
+    type: string           # Required! "$token0-$token1" is a string
+
+  # ⚠️ Must specify type - literal value
+  - name: status
+    type: string           # Required! "active" is a literal
+```
+
+:::tip[When in Doubt, Specify the Type]
+If you're unsure whether a type will be inferred, just add `type:` explicitly. It never hurts
+and makes your YAML more readable.
 :::
 
 #### Supported Types
@@ -830,7 +887,7 @@ event Swap(
 Reference these fields directly:
 ```yaml
 where:
-  pool: $contract_address
+  pool: $rindexer_contract_address
 set:
   - column: last_price
     action: set
@@ -925,7 +982,7 @@ tables:
         operations:
           - type: upsert
             where:
-              tx_hash: $tx_hash
+              tx_hash: $rindexer_tx_hash
             set:
               - column: first_token_in
                 action: set
@@ -1019,14 +1076,379 @@ For `TransferSingle` events (which don't have arrays), you don't need `iterate` 
 Access transaction and block information:
 
 ```yaml
-value: $block_number      # Block number
-value: $block_timestamp   # Block timestamp
-value: $tx_hash           # Transaction hash
-value: $block_hash        # Block hash
-value: $contract_address  # Contract that emitted the event
-value: $log_index         # Log index in transaction
-value: $tx_index          # Transaction index in block
+value: $rindexer_block_number      # Block number
+value: $rindexer_block_timestamp   # Block timestamp
+value: $rindexer_tx_hash           # Transaction hash
+value: $rindexer_block_hash        # Block hash
+value: $rindexer_contract_address  # Contract that emitted the event
+value: $rindexer_log_index         # Log index in transaction
+value: $rindexer_tx_index          # Transaction index in block
 ```
+
+### View Calls (On-Chain Data)
+
+Call view functions on smart contracts to fetch additional data not available in events:
+
+```yaml
+value: $call($rindexer_contract_address, "balanceOf(address)", $holder)
+value: $call($token, "decimals()")
+value: $call($token, "totalSupply()")
+value: $call(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48, "allowance(address,address)", $owner, $spender)
+```
+
+**Syntax:** `$call(contract_address, "function_signature", arg1, arg2, ...)`
+
+- **contract_address**: A literal address or `$field` reference from the event
+- **function_signature**: The function signature in Solidity format (e.g., `"balanceOf(address)"`)
+- **args**: Arguments to pass to the function (can be `$field` references or literals)
+
+#### Accessing Tuple/Struct Returns
+
+Many Solidity view functions return multiple values (tuples) or structs. rindexer provides two ways to access specific elements from these returns.
+
+##### Quick Reference
+
+| Approach | Syntax | When to Use |
+|----------|--------|-------------|
+| Position-based | `$call(...)[0]` | Quick, no setup needed |
+| Named fields | `$call(... returns (type name, ...)).fieldName` | Self-documenting, readable YAML |
+
+---
+
+##### Position-Based Access `[index]`
+
+Use `[index]` after the call to access tuple elements by their position (0-indexed):
+
+```yaml
+# Uniswap V2 getReserves() returns (uint112, uint112, uint32)
+# Position: [0] = reserve0, [1] = reserve1, [2] = blockTimestampLast
+
+value: $call($pool, "getReserves()")[0]   # Get reserve0
+value: $call($pool, "getReserves()")[1]   # Get reserve1
+value: $call($pool, "getReserves()")[2]   # Get blockTimestampLast
+```
+
+```yaml
+# Uniswap V3 slot0() returns (uint160, int24, uint16, uint16, uint16, uint8, bool)
+# Position: [0] = sqrtPriceX96, [1] = tick, [2] = observationIndex, etc.
+
+value: $call($pool, "slot0()")[0]   # Get sqrtPriceX96
+value: $call($pool, "slot0()")[1]   # Get tick
+```
+
+**Pros:** Simple, no extra typing
+**Cons:** Have to remember what each position means
+
+---
+
+##### Named Field Access `.fieldName`
+
+Add `returns (type name, type name, ...)` to your function signature to enable `.fieldName` access:
+
+```yaml
+# Same getReserves() call, but with named access
+value: $call($pool, "getReserves() returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)").reserve0
+value: $call($pool, "getReserves() returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)").reserve1
+value: $call($pool, "getReserves() returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)").blockTimestampLast
+```
+
+```yaml
+# Uniswap V3 slot0() with named fields
+value: $call($pool, "slot0() returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked)").sqrtPriceX96
+value: $call($pool, "slot0() returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked)").tick
+```
+
+**Pros:** Self-documenting, YAML is readable without looking up ABI
+**Cons:** More verbose
+
+---
+
+##### Nested Struct Access
+
+For functions returning nested structs, chain accessors:
+
+```yaml
+# Position-based nested access
+value: $call($pool, "positions(bytes32)")[0]      # First element of outer tuple
+value: $call($pool, "positions(bytes32)")[0][1]   # Second element of inner tuple
+
+# Named nested access - define the nested structure in returns
+value: $call($pool, "positions(bytes32) returns ((uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, uint128 tokensOwed0, uint128 tokensOwed1) position)").position.liquidity
+value: $call($pool, "positions(bytes32) returns ((uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, uint128 tokensOwed0, uint128 tokensOwed1) position)").position.tokensOwed0
+```
+
+---
+
+##### Full Example: Uniswap V2 Pool Tracking
+
+This example shows both accessor styles tracking a Uniswap V2 pair:
+
+```yaml
+contracts:
+  - name: UniswapV2Pair
+    details:
+      - network: ethereum
+        address: "0xB4e16d0168e52d35CaCD2c6185b44281Ec28C9Dc"  # USDC/WETH
+        start_block: 18600000
+    abi: ./abis/UniswapV2Pair.json
+    tables:
+      # Track reserves using POSITION-BASED access (simple)
+      - name: pool_reserves_simple
+        global: true
+        columns:
+          - name: reserve0
+            type: uint112
+          - name: reserve1
+            type: uint112
+          - name: last_update
+            type: uint32
+        events:
+          - event: Sync
+            operations:
+              - type: upsert
+                set:
+                  - column: reserve0
+                    action: set
+                    value: $call($rindexer_contract_address, "getReserves()")[0]
+                  - column: reserve1
+                    action: set
+                    value: $call($rindexer_contract_address, "getReserves()")[1]
+                  - column: last_update
+                    action: set
+                    value: $call($rindexer_contract_address, "getReserves()")[2]
+
+      # Track reserves using NAMED FIELD access (self-documenting)
+      - name: pool_reserves_named
+        global: true
+        columns:
+          - name: usdc_reserve
+            type: uint112
+          - name: weth_reserve
+            type: uint112
+          - name: block_timestamp_last
+            type: uint32
+        events:
+          - event: Sync
+            operations:
+              - type: upsert
+                set:
+                  - column: usdc_reserve
+                    action: set
+                    value: $call($rindexer_contract_address, "getReserves() returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)").reserve0
+                  - column: weth_reserve
+                    action: set
+                    value: $call($rindexer_contract_address, "getReserves() returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)").reserve1
+                  - column: block_timestamp_last
+                    action: set
+                    value: $call($rindexer_contract_address, "getReserves() returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)").blockTimestampLast
+```
+
+---
+
+##### Full Example: Uniswap V3 Position Tracking
+
+Track liquidity positions with nested struct access:
+
+```yaml
+contracts:
+  - name: UniswapV3Pool
+    details:
+      - network: ethereum
+        address: "0x8ad599c3A0ff1De082011EFDDc58f1908eb6e6D8"  # USDC/WETH 0.3%
+        start_block: 18600000
+    abi: ./abis/UniswapV3Pool.json
+    tables:
+      - name: pool_state
+        global: true
+        columns:
+          - name: sqrt_price_x96
+            type: uint256
+          - name: current_tick
+            type: int256
+          - name: liquidity
+            type: uint128
+        events:
+          - event: Swap
+            operations:
+              - type: upsert
+                set:
+                  # Using position-based access for slot0()
+                  - column: sqrt_price_x96
+                    action: set
+                    value: $call($rindexer_contract_address, "slot0()")[0]
+                  - column: current_tick
+                    action: set
+                    value: $call($rindexer_contract_address, "slot0()")[1]
+                  - column: liquidity
+                    action: set
+                    value: $call($rindexer_contract_address, "liquidity()")
+```
+
+:::tip[When to Use Each Approach]
+- **Position-based `[0]`** - Best for quick prototyping or when the function signature is well-known
+- **Named `.fieldName`** - Best for production configs where readability matters
+
+Both approaches work identically at runtime. Choose based on your preference for brevity vs. clarity.
+:::
+
+**Example: Track Pool TVL with Token Decimals**
+
+```yaml
+tables:
+  - name: pool_tvl
+    columns:
+      - name: pool_address
+      - name: token0_decimals
+        type: uint8
+      - name: token1_decimals
+        type: uint8
+      - name: reserve0
+        type: uint256
+        default: "0"
+      - name: reserve1
+        type: uint256
+        default: "0"
+    events:
+      - event: Sync
+        operations:
+          - type: upsert
+            where:
+              pool_address: $rindexer_contract_address
+            set:
+              - column: reserve0
+                action: set
+                value: $reserve0
+              - column: reserve1
+                action: set
+                value: $reserve1
+              - column: token0_decimals
+                action: set
+                value: $call($rindexer_contract_address, "token0()")  # Get token0 address
+              - column: token1_decimals
+                action: set
+                value: $call($rindexer_contract_address, "token1()")  # Get token1 address
+```
+
+**Example: Enrich Transfer Events with Token Metadata**
+
+```yaml
+tables:
+  - name: enriched_transfers
+    columns:
+      - name: tx_hash
+      - name: token_symbol
+        type: string
+      - name: token_decimals
+        type: uint8
+      - name: sender_balance_after
+        type: uint256
+    events:
+      - event: Transfer
+        operations:
+          - type: upsert
+            where:
+              tx_hash: $rindexer_tx_hash
+            set:
+              - column: token_symbol
+                action: set
+                value: $call($rindexer_contract_address, "symbol()")
+              - column: token_decimals
+                action: set
+                value: $call($rindexer_contract_address, "decimals()")
+              - column: sender_balance_after
+                action: set
+                value: $call($rindexer_contract_address, "balanceOf(address)", $from)
+```
+
+:::tip[View Call Caching]
+View call results are cached by (network, contract, calldata, block_number). Repeated calls
+with the same parameters at the same block are served from cache, reducing RPC load.
+:::
+
+:::info[Determinism]
+View calls are executed at the specific block number of the event, ensuring deterministic results
+during re-indexing. The same event will always produce the same view call result.
+:::
+
+:::warning[Performance & Rate Limiting]
+View calls add RPC load. rindexer automatically limits concurrent view calls to avoid overwhelming
+your RPC node (default: 10 concurrent calls). Failed calls are retried with exponential backoff.
+
+**Best Practices:**
+- Use **global tables** for static data (symbol, decimals, name) - fetched once, cached forever
+- Reserve per-event view calls for truly dynamic data (balances, allowances)
+- Use a paid RPC for heavy view call workloads
+:::
+
+#### Configuring Concurrency Limit
+
+You can adjust the maximum concurrent view calls in your `rindexer.yaml`:
+
+```yaml
+config:
+  max_concurrent_view_calls: 20  # Default is 10
+```
+
+**Recommended values:**
+- `5` - Conservative, for free/shared RPC nodes
+- `10` - Default, works well for most nodes
+- `20-50` - For dedicated/paid nodes with high rate limits
+
+#### Best Practice: Use Global Tables for Token Metadata
+
+Token metadata (symbol, decimals, name) rarely changes. Fetch it once with a global table:
+
+```yaml
+tables:
+  # Good: Token metadata in global table (fetched once)
+  - name: token_metadata
+    global: true
+    columns:
+      - name: symbol
+        type: string
+      - name: decimals
+        type: uint8
+      - name: name
+        type: string
+    events:
+      - event: Transfer
+        operations:
+          - type: upsert
+            set:
+              - column: symbol
+                action: set
+                value: $call($rindexer_contract_address, "symbol()")
+              - column: decimals
+                action: set
+                value: $call($rindexer_contract_address, "decimals()")
+              - column: name
+                action: set
+                value: $call($rindexer_contract_address, "name()")
+
+  # Then use regular tables for per-address data
+  - name: balances
+    columns:
+      - name: holder
+      - name: balance
+        type: uint256
+        default: "0"
+    events:
+      - event: Transfer
+        operations:
+          - type: upsert
+            where:
+              holder: $to
+            set:
+              - column: balance
+                action: add
+                value: $value
+```
+
+This pattern:
+1. Fetches token metadata once (global table = single row)
+2. Caches results - subsequent events don't make new RPC calls
+3. Tracks per-holder balances without view calls (from events)
+:::
 
 ### Literal Values
 
@@ -1068,7 +1490,7 @@ tables:
         operations:
           - type: upsert
             where:
-              pair: $contract_address
+              pair: $rindexer_contract_address
             set:
               - column: token_amount
                 action: add
@@ -1121,7 +1543,7 @@ Embed event fields into strings using `$fieldName` within any text:
 value: "$from-$to"                    # Concatenate two addresses with dash
 value: "Pool: $token0/$token1"        # Create pool identifier
 value: "Transfer from $from"          # Prefix text with field
-value: "Block $block_number: $tx_hash" # Mix tx metadata with text
+value: "Block $rindexer_block_number: $rindexer_tx_hash" # Mix tx metadata with text
 ```
 
 **Example: Create Unique Identifiers**
@@ -1159,7 +1581,7 @@ tables:
         operations:
           - type: upsert
             where:
-              tx_hash: $tx_hash
+              tx_hash: $rindexer_tx_hash
             set:
               - column: description
                 action: set
@@ -1170,8 +1592,8 @@ tables:
 String templates are useful for:
 - **Composite keys**: `"$token0-$token1"` for pool identifiers
 - **Human-readable labels**: `"Transfer from $from to $to"`
-- **Unique identifiers**: `"$contract_address:$tokenId"`
-- **Combining metadata**: `"Block $block_number"`
+- **Unique identifiers**: `"$rindexer_contract_address:$tokenId"`
+- **Combining metadata**: `"Block $rindexer_block_number"`
 :::
 
 ---
@@ -1238,13 +1660,18 @@ Every custom table automatically includes these columns - you don't need to defi
 |--------|------|-------------|
 | `network` | VARCHAR | Network name (omitted if `cross_chain: true`) |
 | `rindexer_sequence_id` | NUMERIC | Unique ID for deterministic ordering |
-| `last_updated_block` | BIGINT | Block number when row was last updated |
-| `last_updated_at` | TIMESTAMP | Timestamp when row was last updated |
-| `tx_hash` | CHAR(66) | Transaction hash of last update |
-| `block_hash` | CHAR(66) | Block hash of last update |
-| `contract_address` | CHAR(42) | Contract that emitted the event |
+| `rindexer_last_updated_block` | BIGINT | Block number when row was last updated |
+| `rindexer_last_updated_at` | TIMESTAMP | Timestamp when row was last updated |
+| `rindexer_tx_hash` | CHAR(66) | Transaction hash of last update |
+| `rindexer_block_hash` | CHAR(66) | Block hash of last update |
+| `rindexer_contract_address` | CHAR(42) | Contract that emitted the event |
 
 These let you track when and how each row was last modified.
+
+:::tip[Why the `rindexer_` prefix?]
+All auto-injected columns are prefixed with `rindexer_` to avoid conflicts with your own column names.
+You can safely define columns like `tx_hash`, `contract_address`, etc. without any clashes.
+:::
 
 ---
 
@@ -1270,7 +1697,7 @@ tables:
         operations:
           - type: upsert
             where:
-              pair_address: $contract_address
+              pair_address: $rindexer_contract_address
             set:
               - column: volume_token0
                 action: add
@@ -1516,7 +1943,7 @@ contracts:
             operations: // [!code focus]
               - type: upsert // [!code focus]
                 where: // [!code focus]
-                  pool_address: $contract_address  # The pool that emitted the event // [!code focus]
+                  pool_address: $rindexer_contract_address  # The pool that emitted the event // [!code focus]
                 set: // [!code focus]
                   - column: swap_count // [!code focus]
                     action: increment // [!code focus]
@@ -1540,7 +1967,7 @@ contracts:
             operations: // [!code focus]
               - type: upsert // [!code focus]
                 where: // [!code focus]
-                  pool_address: $contract_address // [!code focus]
+                  pool_address: $rindexer_contract_address // [!code focus]
                   trader: $sender  # Compound key: (pool, trader) // [!code focus]
                 set: // [!code focus]
                   - column: swap_count // [!code focus]
@@ -1551,7 +1978,7 @@ contracts:
 1. The factory contract (`UniswapV3Factory`) is indexed first
 2. When `PoolCreated` events are found, rindexer automatically starts indexing those pool addresses
 3. `Swap` events from all discovered pools update the custom tables
-4. `$contract_address` references the specific pool that emitted each event
+4. `$rindexer_contract_address` references the specific pool that emitted each event
 
 **Result:** Aggregated metrics for every Uniswap V3 pool, discovered automatically.
 
@@ -1595,7 +2022,7 @@ tables:
                 value: $symbol
               - column: added_at
                 action: set
-                value: $block_number
+                value: $rindexer_block_number
       - event: TokenRemoved
         operations:
           - type: delete  # Remove from registry entirely

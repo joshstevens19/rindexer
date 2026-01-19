@@ -32,6 +32,21 @@ pub struct Config {
     /// block times so often no accuracy loss occurs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timestamp_sample_rate: Option<f32>,
+
+    /// Maximum number of concurrent view calls (`$call()`) to RPC nodes.
+    ///
+    /// View calls in custom tables can generate significant RPC load. This setting limits
+    /// how many view calls can be in-flight simultaneously to avoid overwhelming your RPC node.
+    ///
+    /// The default is `10`, which works well for most nodes including free tiers (with retries).
+    /// Increase for high-capacity paid nodes, decrease if you're still seeing rate limits.
+    ///
+    /// Example values:
+    /// - `5` - Conservative, for free/shared nodes
+    /// - `10` - Default, good balance for most use cases
+    /// - `20-50` - For dedicated/paid nodes with high rate limits
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrent_view_calls: Option<usize>,
 }
 
 #[cfg(test)]

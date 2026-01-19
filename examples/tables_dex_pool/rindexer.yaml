@@ -152,7 +152,7 @@ contracts:
                     action: increment
                   - column: first_swap_block
                     action: min
-                    value: $block_number
+                    value: $rindexer_block_number
                   - column: last_swap_block
                     action: max
-                    value: $block_number
+                    value: $rindexer_block_number

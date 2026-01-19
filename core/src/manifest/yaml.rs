@@ -350,14 +350,15 @@ fn validate_manifest(
                         abi_event.inputs.iter().map(|i| i.name.as_str()).collect();
 
                     // Built-in transaction metadata fields that are always available
+                    // All prefixed with rindexer_ to avoid conflicts with event fields
                     const BUILTIN_METADATA_FIELDS: &[&str] = &[
-                        "block_number",
-                        "block_timestamp",
-                        "tx_hash",
-                        "block_hash",
-                        "contract_address",
-                        "log_index",
-                        "tx_index",
+                        "rindexer_block_number",
+                        "rindexer_block_timestamp",
+                        "rindexer_tx_hash",
+                        "rindexer_block_hash",
+                        "rindexer_contract_address",
+                        "rindexer_log_index",
+                        "rindexer_tx_index",
                     ];
 
                     // Validate iterate bindings and collect aliases for later validation
@@ -397,6 +398,10 @@ fn validate_manifest(
 
                             // Check event field reference if starts with $
                             if value.starts_with('$') {
+                                // Skip validation for view calls ($call(...))
+                                if value.starts_with("$call(") {
+                                    continue;
+                                }
                                 let event_field = &value[1..];
                                 // For nested fields like $data.amount, validate the root field
                                 // Also strip array indices like ids[0] -> ids
@@ -528,6 +533,10 @@ fn validate_manifest(
                                     }
                                 }
                             } else if effective_value.starts_with('$') {
+                                // Skip validation for view calls ($call(...))
+                                if effective_value.starts_with("$call(") {
+                                    continue;
+                                }
                                 // Simple event field reference
                                 let event_field = &effective_value[1..];
                                 // For nested fields like $data.amount, validate the root field

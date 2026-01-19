@@ -10,11 +10,11 @@
 //!
 //! - `rindexer_sequence_id` (NUMERIC) - Unique ID for deterministic ordering
 //!   computed as: `block_number * 100_000_000 + tx_index * 100_000 + log_index`
-//! - `last_updated_block` (BIGINT) - The block number when the row was last updated
-//! - `last_updated_at` (TIMESTAMPTZ) - The timestamp when the row was last updated
-//! - `tx_hash` (CHAR(66)) - The transaction hash of the event that last updated this row
-//! - `block_hash` (CHAR(66)) - The block hash of the event that last updated this row
-//! - `contract_address` (CHAR(42)) - The contract address that emitted the event
+//! - `rindexer_last_updated_block` (BIGINT) - The block number when the row was last updated
+//! - `rindexer_last_updated_at` (TIMESTAMPTZ) - The timestamp when the row was last updated
+//! - `rindexer_tx_hash` (CHAR(66)) - The transaction hash of the event that last updated this row
+//! - `rindexer_block_hash` (CHAR(66)) - The block hash of the event that last updated this row
+//! - `rindexer_contract_address` (CHAR(42)) - The contract address that emitted the event
 //!
 //! These columns are automatically set by rindexer and do NOT need to be defined
 //! in your YAML configuration.
@@ -28,14 +28,18 @@
 //! - **Array indexing**: `$ids[0]`, `$data.tokens[1]` (access specific array elements)
 //! - **Post-array field access**: `$transfers[0].amount`, `$orders[1].maker` (array element then named field)
 //! - **String templates**: `"Pool: $token0/$token1"`, `"$from-$to"` (embed fields in strings)
-//! - **Transaction metadata**:
-//!   - `$block_number` - The block number
-//!   - `$block_timestamp` - The block timestamp (as TIMESTAMPTZ)
-//!   - `$tx_hash` - The transaction hash (as hex string)
-//!   - `$block_hash` - The block hash (as hex string)
-//!   - `$contract_address` - The contract address that emitted the event
-//!   - `$log_index` - The log index within the transaction
-//!   - `$tx_index` - The transaction index within the block
+//! - **View calls**: `$call($rindexer_contract_address, "balanceOf(address)", $holder)` (on-chain data)
+//!   - **Position-based access**: `$call($addr, "getReserves()")[0]` - access tuple/array elements by index
+//!   - **Named field access**: `$call($addr, "getReserves() returns (uint112 reserve0, uint112 reserve1)").reserve0`
+//!   - **Chained access**: `$call($addr, "getData() returns ((uint256 x, uint256 y) point)").point.x`
+//! - **Transaction metadata** (all prefixed with `rindexer_` to avoid conflicts with event fields):
+//!   - `$rindexer_block_number` - The block number
+//!   - `$rindexer_block_timestamp` - The block timestamp (as TIMESTAMPTZ)
+//!   - `$rindexer_tx_hash` - The transaction hash (as hex string)
+//!   - `$rindexer_block_hash` - The block hash (as hex string)
+//!   - `$rindexer_contract_address` - The contract address that emitted the event
+//!   - `$rindexer_log_index` - The log index within the transaction
+//!   - `$rindexer_tx_index` - The transaction index within the block
 //!
 //! ## Filter Expressions
 //!
@@ -132,11 +136,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use alloy::dyn_abi::DynSolValue;
-use alloy::primitives::{Address, B256, U256};
+use alloy::dyn_abi::{DynSolType, DynSolValue};
+use alloy::primitives::{Address, Bytes, B256, U256};
 use chrono::{DateTime, Utc};
+use once_cell::sync::Lazy;
 use serde_json::{json, Value};
-use tracing::{debug, info};
+use tokio::sync::RwLock;
+use tracing::{debug, info, warn};
 
 use crate::database::batch_operations::{
     BatchOperationAction, BatchOperationColumnBehavior, BatchOperationSqlType, BatchOperationType,
@@ -155,7 +161,30 @@ use crate::manifest::contract::{
     compute_sequence_id, injected_columns, ColumnType, IterateBinding, OperationType, SetAction,
     Table, TableOperation,
 };
+use crate::provider::JsonRpcCachedProvider;
 use crate::types::core::LogParam;
+
+/// Global cache for view call results. Key is (network, contract, calldata, block_number).
+/// Uses block_number for determinism - same call at same block always returns same result.
+static VIEW_CALL_CACHE: Lazy<RwLock<HashMap<(String, Address, Bytes, u64), DynSolValue>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+
+/// Default limit for concurrent view calls.
+const DEFAULT_MAX_CONCURRENT_VIEW_CALLS: usize = 10;
+
+/// Semaphore to limit concurrent view calls and avoid overwhelming RPC nodes.
+/// Initialized with default, can be reconfigured via `configure_view_call_limit`.
+static VIEW_CALL_SEMAPHORE: Lazy<RwLock<std::sync::Arc<tokio::sync::Semaphore>>> =
+    Lazy::new(|| RwLock::new(std::sync::Arc::new(tokio::sync::Semaphore::new(DEFAULT_MAX_CONCURRENT_VIEW_CALLS))));
+
+/// Configure the maximum number of concurrent view calls.
+/// Should be called once at startup before any view calls are made.
+/// If not called, defaults to 10 concurrent calls.
+pub async fn configure_view_call_limit(limit: usize) {
+    let mut semaphore = VIEW_CALL_SEMAPHORE.write().await;
+    *semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(limit));
+    info!("View call concurrency limit set to {}", limit);
+}
 
 /// Transaction metadata available for table value references.
 #[derive(Clone, Debug)]
@@ -299,17 +328,17 @@ fn resolve_field_to_string(
     log_params: &[LogParam],
     tx_metadata: &TxMetadata,
 ) -> Option<String> {
-    // Check for built-in transaction metadata fields first
+    // Check for built-in transaction metadata fields first (all prefixed with rindexer_)
     match field_name {
-        "block_number" => return Some(tx_metadata.block_number.to_string()),
-        "block_timestamp" => {
+        "rindexer_block_number" => return Some(tx_metadata.block_number.to_string()),
+        "rindexer_block_timestamp" => {
             return tx_metadata.block_timestamp.map(|ts| ts.to_string());
         }
-        "tx_hash" => return Some(format!("{:?}", tx_metadata.tx_hash)),
-        "block_hash" => return Some(format!("{:?}", tx_metadata.block_hash)),
-        "contract_address" => return Some(format!("{:?}", tx_metadata.contract_address)),
-        "log_index" => return Some(tx_metadata.log_index.to_string()),
-        "tx_index" => return Some(tx_metadata.tx_index.to_string()),
+        "rindexer_tx_hash" => return Some(format!("{:?}", tx_metadata.tx_hash)),
+        "rindexer_block_hash" => return Some(format!("{:?}", tx_metadata.block_hash)),
+        "rindexer_contract_address" => return Some(format!("{:?}", tx_metadata.contract_address)),
+        "rindexer_log_index" => return Some(tx_metadata.log_index.to_string()),
+        "rindexer_tx_index" => return Some(tx_metadata.tx_index.to_string()),
         _ => {}
     }
 
@@ -330,6 +359,574 @@ fn dyn_sol_value_to_string(value: &DynSolValue) -> String {
         DynSolValue::FixedBytes(b, _) => format!("0x{}", hex::encode(b)),
         _ => format!("{:?}", value),
     }
+}
+
+/// Checks if a value string is a view call expression like `$call(address, "signature", args...)`.
+/// May have accessor after: `$call(...)[0]` or `$call(...).fieldName`
+fn is_view_call(value: &str) -> bool {
+    value.starts_with("$call(")
+}
+
+/// Parsed view call expression.
+#[derive(Debug)]
+struct ViewCall {
+    contract_address: String, // Either literal address or $field reference
+    function_sig: String,     // e.g., "balanceOf(address)" or "decimals()"
+    args: Vec<String>,        // Argument values (can be $field references)
+    accessor: Option<String>, // Optional accessor like "[0]" or ".fieldName" or ".field[0].nested"
+    return_fields: Vec<ReturnField>, // Parsed from "returns (type name, ...)" if present
+}
+
+/// A parsed return field from "returns (type name, ...)" syntax.
+#[derive(Debug, Clone)]
+struct ReturnField {
+    name: String,
+    type_str: String,
+    children: Vec<ReturnField>, // For nested tuples like "(uint256 x, uint256 y) coords"
+}
+
+/// Parses a `$call(address, "signature", args...)` expression with optional accessor.
+/// Supports:
+/// - `$call($addr, "totalSupply()")` - simple, returns value directly
+/// - `$call($addr, "getReserves()")[0]` - position-based access
+/// - `$call($addr, "getReserves() returns (uint112 reserve0, uint112 reserve1)").reserve0` - named access
+fn parse_view_call(value: &str) -> Option<ViewCall> {
+    // Find the matching closing paren for $call(
+    let start = "$call(".len();
+    let mut paren_depth = 1;
+    let mut call_end = None;
+    let chars: Vec<char> = value.chars().collect();
+
+    for i in start..chars.len() {
+        match chars[i] {
+            '(' => paren_depth += 1,
+            ')' => {
+                paren_depth -= 1;
+                if paren_depth == 0 {
+                    call_end = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let call_end = call_end?;
+    let inner = &value[start..call_end];
+
+    // Extract accessor if present (everything after the closing paren)
+    let accessor = if call_end + 1 < value.len() {
+        let acc = value[call_end + 1..].trim();
+        if acc.is_empty() { None } else { Some(acc.to_string()) }
+    } else {
+        None
+    };
+
+    // Split by comma, respecting quoted strings
+    let parts = split_call_args(inner);
+    if parts.len() < 2 {
+        return None;
+    }
+
+    let contract_address = parts[0].trim().to_string();
+    let full_sig = parts[1].trim().trim_matches('"').to_string();
+    let args: Vec<String> = parts[2..].iter().map(|s| s.trim().to_string()).collect();
+
+    // Parse "returns (...)" if present
+    let (function_sig, return_fields) = parse_function_sig_with_returns(&full_sig);
+
+    Some(ViewCall { contract_address, function_sig, args, accessor, return_fields })
+}
+
+/// Parses a function signature that may include "returns (type name, ...)".
+/// Returns (clean_sig, return_fields).
+fn parse_function_sig_with_returns(sig: &str) -> (String, Vec<ReturnField>) {
+    if let Some(returns_idx) = sig.to_lowercase().find(" returns ") {
+        let clean_sig = sig[..returns_idx].trim().to_string();
+        let returns_part = &sig[returns_idx + 9..].trim(); // skip " returns "
+        let return_fields = parse_return_fields(returns_part);
+        (clean_sig, return_fields)
+    } else {
+        (sig.to_string(), vec![])
+    }
+}
+
+/// Parses return fields from "(type name, type name, ...)" syntax.
+/// Supports nested tuples like "(uint256 x, uint256 y) coords".
+fn parse_return_fields(s: &str) -> Vec<ReturnField> {
+    let s = s.trim();
+    if !s.starts_with('(') || !s.ends_with(')') {
+        return vec![];
+    }
+
+    // Strip outer parens
+    let inner = &s[1..s.len()-1];
+    parse_return_field_list(inner)
+}
+
+/// Parses a comma-separated list of return fields.
+fn parse_return_field_list(s: &str) -> Vec<ReturnField> {
+    let mut fields = Vec::new();
+    let mut current = String::new();
+    let mut paren_depth = 0;
+
+    for c in s.chars() {
+        match c {
+            '(' => {
+                paren_depth += 1;
+                current.push(c);
+            }
+            ')' => {
+                paren_depth -= 1;
+                current.push(c);
+            }
+            ',' if paren_depth == 0 => {
+                if let Some(field) = parse_single_return_field(current.trim()) {
+                    fields.push(field);
+                }
+                current.clear();
+            }
+            _ => current.push(c),
+        }
+    }
+
+    // Don't forget the last field
+    if !current.trim().is_empty() {
+        if let Some(field) = parse_single_return_field(current.trim()) {
+            fields.push(field);
+        }
+    }
+
+    fields
+}
+
+/// Parses a single return field like "uint256 amount" or "(uint256 x, uint256 y) coords".
+fn parse_single_return_field(s: &str) -> Option<ReturnField> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+
+    // Check for nested tuple: "(type name, ...) fieldName"
+    if s.starts_with('(') {
+        // Find matching closing paren
+        let mut paren_depth = 0;
+        let mut tuple_end = None;
+        for (i, c) in s.chars().enumerate() {
+            match c {
+                '(' => paren_depth += 1,
+                ')' => {
+                    paren_depth -= 1;
+                    if paren_depth == 0 {
+                        tuple_end = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(end) = tuple_end {
+            let tuple_part = &s[..=end];
+            let name = s[end + 1..].trim().to_string();
+            let children = parse_return_fields(tuple_part);
+            return Some(ReturnField {
+                name,
+                type_str: "tuple".to_string(),
+                children,
+            });
+        }
+    }
+
+    // Simple field: "type name" or just "type" (unnamed)
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    match parts.len() {
+        1 => Some(ReturnField {
+            name: String::new(), // Unnamed, must use position
+            type_str: parts[0].to_string(),
+            children: vec![],
+        }),
+        2 => Some(ReturnField {
+            name: parts[1].to_string(),
+            type_str: parts[0].to_string(),
+            children: vec![],
+        }),
+        _ => None,
+    }
+}
+
+/// Applies an accessor path to a DynSolValue.
+/// Supports: [0], .fieldName, and chains like [0].field.nested
+fn apply_accessor(value: DynSolValue, accessor: &str, return_fields: &[ReturnField]) -> Option<DynSolValue> {
+    if accessor.is_empty() {
+        return Some(value);
+    }
+
+    let segments = parse_accessor_segments(accessor);
+    let mut current = value;
+    let mut current_fields = return_fields.to_vec();
+
+    for segment in segments {
+        match segment {
+            AccessorSegment::Index(idx) => {
+                // Array/tuple index access
+                current = match &current {
+                    DynSolValue::Tuple(items) |
+                    DynSolValue::Array(items) |
+                    DynSolValue::FixedArray(items) => {
+                        items.get(idx)?.clone()
+                    }
+                    _ => return None,
+                };
+                // Update current_fields for nested access
+                if idx < current_fields.len() {
+                    current_fields = current_fields[idx].children.clone();
+                } else {
+                    current_fields = vec![];
+                }
+            }
+            AccessorSegment::Field(name) => {
+                // Named field access - look up position from return_fields
+                let (idx, field) = current_fields.iter().enumerate()
+                    .find(|(_, f)| f.name == name)?;
+
+                current = match &current {
+                    DynSolValue::Tuple(items) |
+                    DynSolValue::Array(items) |
+                    DynSolValue::FixedArray(items) => {
+                        items.get(idx)?.clone()
+                    }
+                    _ => return None,
+                };
+                current_fields = field.children.clone();
+            }
+        }
+    }
+
+    Some(current)
+}
+
+#[derive(Debug)]
+enum AccessorSegment {
+    Index(usize),
+    Field(String),
+}
+
+/// Parses accessor string into segments.
+/// "[0].field[1].nested" -> [Index(0), Field("field"), Index(1), Field("nested")]
+fn parse_accessor_segments(accessor: &str) -> Vec<AccessorSegment> {
+    let mut segments = Vec::new();
+    let mut remaining = accessor.trim();
+
+    while !remaining.is_empty() {
+        if remaining.starts_with('[') {
+            // Index access
+            if let Some(end) = remaining.find(']') {
+                if let Ok(idx) = remaining[1..end].parse::<usize>() {
+                    segments.push(AccessorSegment::Index(idx));
+                }
+                remaining = &remaining[end + 1..];
+            } else {
+                break;
+            }
+        } else if remaining.starts_with('.') {
+            // Field access
+            remaining = &remaining[1..]; // skip the dot
+            // Find end of field name (next . or [ or end)
+            let end = remaining.find(|c| c == '.' || c == '[').unwrap_or(remaining.len());
+            let field_name = &remaining[..end];
+            if !field_name.is_empty() {
+                segments.push(AccessorSegment::Field(field_name.to_string()));
+            }
+            remaining = &remaining[end..];
+        } else {
+            // Unexpected character, stop parsing
+            break;
+        }
+    }
+
+    segments
+}
+
+/// Splits comma-separated arguments, respecting quoted strings.
+fn split_call_args(s: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut paren_depth = 0;
+
+    for c in s.chars() {
+        match c {
+            '"' => {
+                in_quotes = !in_quotes;
+                current.push(c);
+            }
+            '(' => {
+                paren_depth += 1;
+                current.push(c);
+            }
+            ')' => {
+                paren_depth -= 1;
+                current.push(c);
+            }
+            ',' if !in_quotes && paren_depth == 0 => {
+                parts.push(std::mem::take(&mut current));
+            }
+            _ => current.push(c),
+        }
+    }
+    if !current.is_empty() {
+        parts.push(current);
+    }
+    parts
+}
+
+/// Executes a view call against the blockchain and applies any accessor.
+async fn execute_view_call(
+    view_call: &ViewCall,
+    log_params: &[LogParam],
+    tx_metadata: &TxMetadata,
+    provider: &JsonRpcCachedProvider,
+    network: &str,
+) -> Option<DynSolValue> {
+    use alloy::primitives::keccak256;
+
+    // Resolve contract address
+    let contract_address: Address = if view_call.contract_address.starts_with('$') {
+        let field_name = &view_call.contract_address[1..];
+        if field_name == "rindexer_contract_address" {
+            tx_metadata.contract_address
+        } else {
+            let value = resolve_field_path(field_name, log_params)?;
+            match value {
+                DynSolValue::Address(addr) => addr,
+                _ => return None,
+            }
+        }
+    } else {
+        view_call.contract_address.parse().ok()?
+    };
+
+    // Parse function signature to get types
+    // e.g., "balanceOf(address)" -> selector + encode args
+    let (func_name, param_types) = parse_function_signature(&view_call.function_sig)?;
+
+    // Build function selector (first 4 bytes of keccak256 of signature)
+    let selector = &keccak256(view_call.function_sig.as_bytes())[..4];
+
+    // Encode arguments
+    let mut encoded_args = Vec::new();
+    for (i, arg_str) in view_call.args.iter().enumerate() {
+        let param_type = param_types.get(i)?;
+        let value = resolve_arg_value(arg_str, log_params, tx_metadata, param_type)?;
+        encoded_args.push(value);
+    }
+
+    // Build calldata: selector + encoded args
+    let calldata = if encoded_args.is_empty() {
+        Bytes::copy_from_slice(selector)
+    } else {
+        let encoded = DynSolValue::Tuple(encoded_args).abi_encode_params();
+        let mut data = selector.to_vec();
+        data.extend(encoded);
+        Bytes::from(data)
+    };
+
+    // Check cache first (no semaphore needed for cache lookups)
+    let cache_key = (network.to_string(), contract_address, calldata.clone(), tx_metadata.block_number);
+    {
+        let cache = VIEW_CALL_CACHE.read().await;
+        if let Some(cached) = cache.get(&cache_key) {
+            debug!("View call cache hit for {}::{}", contract_address, func_name);
+            // Apply accessor to cached result
+            return apply_accessor_if_present(cached.clone(), view_call);
+        }
+    }
+
+    // Acquire semaphore permit to limit concurrent RPC calls
+    // This prevents overwhelming the RPC node while maintaining good throughput
+    let semaphore = VIEW_CALL_SEMAPHORE.read().await.clone();
+    let _permit = semaphore.acquire().await.ok()?;
+
+    // Double-check cache after acquiring permit (another task may have populated it)
+    {
+        let cache = VIEW_CALL_CACHE.read().await;
+        if let Some(cached) = cache.get(&cache_key) {
+            return apply_accessor_if_present(cached.clone(), view_call);
+        }
+    }
+
+    // Execute the call using the provider's eth_call method
+    let result_bytes: String = match provider.eth_call(contract_address, calldata.clone(), tx_metadata.block_number).await {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("View call failed for {}::{}: {}", contract_address, func_name, e);
+            return None;
+        }
+    };
+
+    // Decode the result
+    let result_bytes = hex::decode(result_bytes.trim_start_matches("0x")).ok()?;
+
+    // Determine return type - use explicit return_fields if provided, otherwise infer
+    let return_type = if !view_call.return_fields.is_empty() {
+        build_return_type_from_fields(&view_call.return_fields)
+    } else {
+        infer_return_type(&view_call.function_sig)
+    };
+    let decoded = return_type.abi_decode(&result_bytes).ok()?;
+
+    // Cache the full result (before accessor is applied)
+    {
+        let mut cache = VIEW_CALL_CACHE.write().await;
+        cache.insert(cache_key, decoded.clone());
+    }
+
+    // Apply accessor if present
+    apply_accessor_if_present(decoded, view_call)
+}
+
+/// Applies accessor to a view call result if one is specified.
+fn apply_accessor_if_present(value: DynSolValue, view_call: &ViewCall) -> Option<DynSolValue> {
+    match &view_call.accessor {
+        Some(accessor) => apply_accessor(value, accessor, &view_call.return_fields),
+        None => Some(value),
+    }
+}
+
+/// Builds a DynSolType from parsed return fields.
+/// This allows proper ABI decoding when "returns (...)" syntax is used.
+fn build_return_type_from_fields(fields: &[ReturnField]) -> DynSolType {
+    if fields.len() == 1 && fields[0].children.is_empty() {
+        // Single return value - parse type directly
+        fields[0].type_str.parse().unwrap_or(DynSolType::Uint(256))
+    } else {
+        // Multiple return values or nested tuple - build tuple type
+        let inner_types: Vec<DynSolType> = fields
+            .iter()
+            .map(|f| {
+                if !f.children.is_empty() {
+                    // Nested tuple
+                    build_return_type_from_fields(&f.children)
+                } else {
+                    f.type_str.parse().unwrap_or(DynSolType::Uint(256))
+                }
+            })
+            .collect();
+        DynSolType::Tuple(inner_types)
+    }
+}
+
+/// Parses a function signature like "balanceOf(address)" into (name, param_types).
+fn parse_function_signature(sig: &str) -> Option<(String, Vec<DynSolType>)> {
+    let open_paren = sig.find('(')?;
+    let close_paren = sig.rfind(')')?;
+
+    let name = sig[..open_paren].to_string();
+    let params_str = &sig[open_paren + 1..close_paren];
+
+    let param_types: Vec<DynSolType> = if params_str.is_empty() {
+        vec![]
+    } else {
+        params_str
+            .split(',')
+            .filter_map(|p| p.trim().parse::<DynSolType>().ok())
+            .collect()
+    };
+
+    Some((name, param_types))
+}
+
+/// Resolves an argument value from a string (literal or $field reference).
+fn resolve_arg_value(
+    arg_str: &str,
+    log_params: &[LogParam],
+    tx_metadata: &TxMetadata,
+    expected_type: &DynSolType,
+) -> Option<DynSolValue> {
+    let arg_str = arg_str.trim();
+
+    if arg_str.starts_with('$') {
+        let field_name = &arg_str[1..];
+
+        // Check tx metadata (all prefixed with rindexer_)
+        match field_name {
+            "rindexer_contract_address" => return Some(DynSolValue::Address(tx_metadata.contract_address)),
+            "rindexer_block_number" => return Some(DynSolValue::Uint(U256::from(tx_metadata.block_number), 256)),
+            _ => {}
+        }
+
+        // Resolve from log params
+        resolve_field_path(field_name, log_params)
+    } else {
+        // Parse literal value based on expected type
+        parse_literal_as_type(arg_str, expected_type)
+    }
+}
+
+/// Parses a literal string as the expected DynSolType.
+fn parse_literal_as_type(value: &str, sol_type: &DynSolType) -> Option<DynSolValue> {
+    match sol_type {
+        DynSolType::Address => {
+            let addr: Address = value.parse().ok()?;
+            Some(DynSolValue::Address(addr))
+        }
+        DynSolType::Uint(bits) => {
+            let num: U256 = value.parse().ok()?;
+            Some(DynSolValue::Uint(num, *bits))
+        }
+        DynSolType::Bool => {
+            let b = value.to_lowercase() == "true" || value == "1";
+            Some(DynSolValue::Bool(b))
+        }
+        DynSolType::String => Some(DynSolValue::String(value.to_string())),
+        DynSolType::Bytes => {
+            let bytes = hex::decode(value.trim_start_matches("0x")).ok()?;
+            Some(DynSolValue::Bytes(bytes))
+        }
+        _ => None,
+    }
+}
+
+/// Infers the return type from a function signature.
+/// Defaults to uint256 for common functions, otherwise uses the ABI convention.
+fn infer_return_type(sig: &str) -> DynSolType {
+    // Common functions with known return types
+    let sig_lower = sig.to_lowercase();
+    if sig_lower.starts_with("balanceof") || sig_lower.starts_with("totalsupply") || sig_lower.starts_with("allowance") {
+        DynSolType::Uint(256)
+    } else if sig_lower.starts_with("decimals") {
+        DynSolType::Uint(8)
+    } else if sig_lower.starts_with("symbol") || sig_lower.starts_with("name") {
+        DynSolType::String
+    } else if sig_lower.starts_with("owner") || sig_lower.ends_with("address") {
+        DynSolType::Address
+    } else {
+        // Default to uint256
+        DynSolType::Uint(256)
+    }
+}
+
+/// Async version of extract_value_from_event that supports view calls.
+/// Falls back to sync extraction for non-view-call values.
+async fn extract_value_from_event_async(
+    value_ref: &str,
+    log_params: &[LogParam],
+    tx_metadata: &TxMetadata,
+    column_type: &ColumnType,
+    provider: Option<&JsonRpcCachedProvider>,
+    network: &str,
+) -> Option<EthereumSqlTypeWrapper> {
+    // Check for view call first
+    if is_view_call(value_ref) {
+        let provider = provider?;
+        let view_call = parse_view_call(value_ref)?;
+        let result = execute_view_call(&view_call, log_params, tx_metadata, provider, network).await?;
+        return Some(dyn_sol_value_to_wrapper(&result, column_type));
+    }
+
+    // Fall back to sync extraction for everything else
+    extract_value_from_event(value_ref, log_params, tx_metadata, column_type)
 }
 
 /// Resolves a field path from event log parameters, supporting:
@@ -541,39 +1138,39 @@ fn extract_value_from_event(
     if value_ref.starts_with('$') {
         let field_name = &value_ref[1..];
 
-        // Check for built-in transaction metadata fields first
+        // Check for built-in transaction metadata fields first (all prefixed with rindexer_)
         match field_name {
-            "block_number" => {
+            "rindexer_block_number" => {
                 // Use U64BigInt for proper BIGINT binary serialization
                 return Some(EthereumSqlTypeWrapper::U64BigInt(tx_metadata.block_number));
             }
-            "block_timestamp" => {
+            "rindexer_block_timestamp" => {
                 return tx_metadata.block_timestamp.and_then(|ts| {
                     DateTime::from_timestamp(ts.to::<i64>(), 0)
                         .map(|dt| EthereumSqlTypeWrapper::DateTime(dt.with_timezone(&Utc)))
                 });
             }
-            "tx_hash" => {
+            "rindexer_tx_hash" => {
                 // Store as hex string for readability (e.g., "0x...")
                 return Some(EthereumSqlTypeWrapper::String(format!(
                     "{:?}",
                     tx_metadata.tx_hash
                 )));
             }
-            "block_hash" => {
+            "rindexer_block_hash" => {
                 // Store as hex string for readability (e.g., "0x...")
                 return Some(EthereumSqlTypeWrapper::String(format!(
                     "{:?}",
                     tx_metadata.block_hash
                 )));
             }
-            "contract_address" => {
+            "rindexer_contract_address" => {
                 return Some(EthereumSqlTypeWrapper::Address(tx_metadata.contract_address));
             }
-            "log_index" => {
+            "rindexer_log_index" => {
                 return Some(EthereumSqlTypeWrapper::U256(tx_metadata.log_index));
             }
-            "tx_index" => {
+            "rindexer_tx_index" => {
                 // Use U64BigInt for proper BIGINT binary serialization
                 return Some(EthereumSqlTypeWrapper::U64BigInt(tx_metadata.tx_index));
             }
@@ -965,12 +1562,14 @@ fn expand_iterate_bindings(
 /// * `events_data` - Batch of events with (log_params, network, tx_metadata)
 /// * `postgres` - Optional PostgreSQL client
 /// * `clickhouse` - Optional ClickHouse client
+/// * `providers` - RPC providers for view calls (keyed by network name)
 pub async fn process_table_operations(
     tables: &[TableRuntime],
     event_name: &str,
     events_data: &[(Vec<LogParam>, String, TxMetadata)], // (log_params, network, tx_metadata)
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
+    providers: Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>>,
 ) -> Result<(), String> {
     for table_runtime in tables {
         // Find operations for this event
@@ -1035,6 +1634,9 @@ pub async fn process_table_operations(
 
                     let mut columns: HashMap<String, EthereumSqlTypeWrapper> = HashMap::new();
 
+                    // Get provider for this network (for view calls)
+                    let provider = providers.get(network).map(|p| p.as_ref());
+
                     // Add where clause columns
                     for (column_name, value_ref) in &operation.where_clause {
                         let column_def = table_runtime
@@ -1044,12 +1646,14 @@ pub async fn process_table_operations(
                             .find(|c| &c.name == column_name);
 
                         if let Some(column_def) = column_def {
-                            if let Some(value) = extract_value_from_event(
+                            if let Some(value) = extract_value_from_event_async(
                                 value_ref,
                                 expanded_log_params,
                                 tx_metadata,
                                 column_def.resolved_type(),
-                            ) {
+                                provider,
+                                network,
+                            ).await {
                                 columns.insert(column_name.clone(), value);
                             }
                         }
@@ -1064,12 +1668,14 @@ pub async fn process_table_operations(
                             .find(|c| c.name == set_col.column);
 
                         if let Some(column_def) = column_def {
-                            if let Some(value) = extract_value_from_event(
+                            if let Some(value) = extract_value_from_event_async(
                                 set_col.effective_value(),
                                 expanded_log_params,
                                 tx_metadata,
                                 column_def.resolved_type(),
-                            ) {
+                                provider,
+                                network,
+                            ).await {
                                 columns.insert(set_col.column.clone(), value);
                             }
                         }
@@ -1658,8 +2264,8 @@ mod tests {
             "0x1111111111111111111111111111111111111111 -> 0x2222222222222222222222222222222222222222: 1000"
         );
 
-        // With tx metadata
-        let result = expand_string_template("Block $block_number", &params, &tx_metadata).unwrap();
+        // With tx metadata (uses rindexer_ prefix)
+        let result = expand_string_template("Block $rindexer_block_number", &params, &tx_metadata).unwrap();
         assert_eq!(result, "Block 12345");
 
         // Non-existent field returns None
@@ -1751,5 +2357,113 @@ mod tests {
         // Test out of bounds returns None
         let result = resolve_field_path("transfers[5].amount", &params);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_is_view_call() {
+        // Valid view call expressions
+        assert!(is_view_call("$call(0x1234, \"balanceOf(address)\", $holder)"));
+        assert!(is_view_call("$call($contract_address, \"decimals()\")"));
+        assert!(is_view_call("$call($token, \"totalSupply()\")"));
+
+        // Not view calls
+        assert!(!is_view_call("$from"));
+        assert!(!is_view_call("$value"));
+        assert!(!is_view_call("call(something)"));
+        assert!(!is_view_call("$call("));
+        assert!(!is_view_call("$call"));
+    }
+
+    #[test]
+    fn test_parse_view_call() {
+        // Simple call with no args
+        let result = parse_view_call("$call(0x1234, \"decimals()\")");
+        assert!(result.is_some());
+        let vc = result.unwrap();
+        assert_eq!(vc.contract_address, "0x1234");
+        assert_eq!(vc.function_sig, "decimals()");
+        assert!(vc.args.is_empty());
+
+        // Call with one argument
+        let result = parse_view_call("$call($contract_address, \"balanceOf(address)\", $holder)");
+        assert!(result.is_some());
+        let vc = result.unwrap();
+        assert_eq!(vc.contract_address, "$contract_address");
+        assert_eq!(vc.function_sig, "balanceOf(address)");
+        assert_eq!(vc.args, vec!["$holder"]);
+
+        // Call with multiple arguments
+        let result = parse_view_call("$call(0xABCD, \"allowance(address,address)\", $owner, $spender)");
+        assert!(result.is_some());
+        let vc = result.unwrap();
+        assert_eq!(vc.contract_address, "0xABCD");
+        assert_eq!(vc.function_sig, "allowance(address,address)");
+        assert_eq!(vc.args, vec!["$owner", "$spender"]);
+
+        // Invalid - missing signature
+        let result = parse_view_call("$call(0x1234)");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_split_call_args() {
+        // Simple arguments
+        let result = split_call_args("a, b, c");
+        assert_eq!(result, vec!["a", " b", " c"]);
+
+        // Quoted strings
+        let result = split_call_args("0x1234, \"balanceOf(address)\", $holder");
+        assert_eq!(result, vec!["0x1234", " \"balanceOf(address)\"", " $holder"]);
+
+        // Commas inside quotes
+        let result = split_call_args("$addr, \"transfer(address,uint256)\", $to, $amount");
+        assert_eq!(result, vec!["$addr", " \"transfer(address,uint256)\"", " $to", " $amount"]);
+
+        // Nested parentheses
+        let result = split_call_args("foo(1,2), bar");
+        assert_eq!(result, vec!["foo(1,2)", " bar"]);
+    }
+
+    #[test]
+    fn test_parse_function_signature() {
+        // No params
+        let result = parse_function_signature("decimals()");
+        assert!(result.is_some());
+        let (name, params) = result.unwrap();
+        assert_eq!(name, "decimals");
+        assert!(params.is_empty());
+
+        // Single param
+        let result = parse_function_signature("balanceOf(address)");
+        assert!(result.is_some());
+        let (name, params) = result.unwrap();
+        assert_eq!(name, "balanceOf");
+        assert_eq!(params.len(), 1);
+
+        // Multiple params
+        let result = parse_function_signature("transfer(address,uint256)");
+        assert!(result.is_some());
+        let (name, params) = result.unwrap();
+        assert_eq!(name, "transfer");
+        assert_eq!(params.len(), 2);
+
+        // Invalid - no parens
+        let result = parse_function_signature("invalid");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_infer_return_type() {
+        // Known function patterns
+        assert_eq!(infer_return_type("balanceOf(address)"), DynSolType::Uint(256));
+        assert_eq!(infer_return_type("totalSupply()"), DynSolType::Uint(256));
+        assert_eq!(infer_return_type("allowance(address,address)"), DynSolType::Uint(256));
+        assert_eq!(infer_return_type("decimals()"), DynSolType::Uint(8));
+        assert_eq!(infer_return_type("symbol()"), DynSolType::String);
+        assert_eq!(infer_return_type("name()"), DynSolType::String);
+        assert_eq!(infer_return_type("owner()"), DynSolType::Address);
+
+        // Unknown functions default to uint256
+        assert_eq!(infer_return_type("unknownFunction()"), DynSolType::Uint(256));
     }
 }

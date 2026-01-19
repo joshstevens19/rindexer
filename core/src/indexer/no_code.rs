@@ -146,6 +146,11 @@ pub async fn setup_no_code(
 
             info!("Starting rindexer no code");
 
+            // Configure view call concurrency limit if specified
+            if let Some(limit) = manifest.config.max_concurrent_view_calls {
+                crate::indexer::tables::configure_view_call_limit(limit).await;
+            }
+
             // Resolve table column types from ABI before database setup
             resolve_table_column_types(project_path, &mut manifest)?;
 
@@ -254,6 +259,8 @@ struct NoCodeCallbackParams {
     /// Whether to store raw events in the event table.
     /// False when event is only used for custom tables (not in include_events).
     store_raw_events: bool,
+    /// RPC providers for view calls in custom tables (keyed by network name)
+    providers: Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>>,
 }
 
 struct EventCallbacks {
@@ -599,6 +606,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                     &table_events_data,
                     params.postgres.clone(),
                     params.clickhouse.clone(),
+                    params.providers.clone(),
                 )
                 .await
                 {
@@ -795,6 +803,15 @@ async fn process_contract(
         return Err(ProcessIndexersError::ContractNameConflict(contract.name.to_string()));
     }
 
+    // Build providers map for view calls
+    let providers: Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>> =
+        Arc::new(
+            network_providers
+                .iter()
+                .map(|p| (p.network_name.clone(), p.client.clone()))
+                .collect(),
+        );
+
     // TODO - this could be shared with `get_abi_items`
     let abi_str = contract.parse_abi(project_path)?;
     let abi: JsonAbi = serde_json::from_str(&abi_str)?;
@@ -904,6 +921,7 @@ async fn process_contract(
                 chat_clients: Arc::new(chat_clients),
                 tables: Arc::new(contract_tables),
                 store_raw_events,
+                providers: providers.clone(),
             }))
             .event_callback,
         };
@@ -997,6 +1015,15 @@ pub async fn process_trace_events(
             None
         };
 
+        // Build providers map for view calls (native transfers don't use them but need for struct)
+        let providers: Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>> =
+            Arc::new(
+                network_providers
+                    .iter()
+                    .map(|p| (p.network_name.clone(), p.client.clone()))
+                    .collect(),
+            );
+
         let callback_params = Arc::new(NoCodeCallbackParams {
             event_info: event_info.clone(),
             indexer_name: manifest.name.clone(),
@@ -1012,6 +1039,7 @@ pub async fn process_trace_events(
             chat_clients: Arc::new(chat_clients),
             tables: Arc::new(Vec::new()), // Native transfers don't support custom tables
             store_raw_events: true,       // Native transfers always store raw events
+            providers,
         });
 
         let event = TraceCallbackRegistryInformation {

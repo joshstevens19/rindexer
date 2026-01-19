@@ -258,19 +258,19 @@ pub mod injected_columns {
     pub const RINDEXER_SEQUENCE_ID: &str = "rindexer_sequence_id";
 
     /// The block number when this row was last updated.
-    pub const LAST_UPDATED_BLOCK: &str = "last_updated_block";
+    pub const LAST_UPDATED_BLOCK: &str = "rindexer_last_updated_block";
 
     /// The timestamp when this row was last updated.
-    pub const LAST_UPDATED_AT: &str = "last_updated_at";
+    pub const LAST_UPDATED_AT: &str = "rindexer_last_updated_at";
 
     /// The transaction hash of the event that last updated this row.
-    pub const TX_HASH: &str = "tx_hash";
+    pub const TX_HASH: &str = "rindexer_tx_hash";
 
     /// The block hash of the event that last updated this row.
-    pub const BLOCK_HASH: &str = "block_hash";
+    pub const BLOCK_HASH: &str = "rindexer_block_hash";
 
     /// The contract address that emitted the event.
-    pub const CONTRACT_ADDRESS: &str = "contract_address";
+    pub const CONTRACT_ADDRESS: &str = "rindexer_contract_address";
 }
 
 /// Computes a unique sequence ID from block number, transaction index, and log index.
@@ -734,16 +734,17 @@ impl ColumnType {
     }
 
     /// Get the column type for transaction metadata fields.
+    /// All metadata fields are prefixed with rindexer_ to avoid conflicts with event fields.
     pub fn from_tx_metadata_field(field_name: &str) -> Option<Self> {
         Some(match field_name {
-            "block_number" => ColumnType::Uint64,
-            "block_timestamp" => ColumnType::Timestamp,
+            "rindexer_block_number" => ColumnType::Uint64,
+            "rindexer_block_timestamp" => ColumnType::Timestamp,
             // tx_hash and block_hash are stored as hex strings for readability
-            "tx_hash" => ColumnType::String,
-            "block_hash" => ColumnType::String,
-            "contract_address" => ColumnType::Address,
-            "log_index" => ColumnType::Uint256,
-            "tx_index" => ColumnType::Uint64,
+            "rindexer_tx_hash" => ColumnType::String,
+            "rindexer_block_hash" => ColumnType::String,
+            "rindexer_contract_address" => ColumnType::Address,
+            "rindexer_log_index" => ColumnType::Uint256,
+            "rindexer_tx_index" => ColumnType::Uint64,
             _ => return None,
         })
     }

@@ -1,0 +1,107 @@
+# View Calls Example
+# Demonstrates using $call() to fetch on-chain data during indexing
+#
+# NOTE: View calls add RPC load. Use sparingly for data not available in events.
+# Token metadata (symbol, decimals) is often static - fetch it once in a global table.
+# Per-event calls like balanceOf should be used carefully with paid RPCs.
+#
+# ACCESSOR SYNTAX: For functions returning tuples/structs, use:
+#   Position-based: $call($addr, "getReserves()")[0]    # Access by index
+#   Named fields:   $call($addr, "getReserves() returns (uint112 reserve0, uint112 reserve1)").reserve0
+name: ViewCallsExample
+description: Enrich events with on-chain view call data
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+
+# Advanced configuration for view calls
+config:
+  # Limit concurrent view calls to avoid overwhelming RPC nodes.
+  # Default is 10. Increase for paid RPCs with higher rate limits,
+  # decrease for free nodes that rate limit more aggressively.
+  max_concurrent_view_calls: 10
+
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+
+storage:
+  postgres:
+    enabled: true
+    drop_each_run: true
+
+contracts:
+  - name: USDC
+    details:
+      - network: ethereum
+        address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+        start_block: "18600000"
+        end_block: "18600010" # Very small range - view calls are RPC-intensive
+    abi: ./abis/ERC20.abi.json
+    tables:
+      # Token metadata - fetched once via view calls (global table = single row)
+      # This is the recommended pattern for static data like symbol/decimals
+      - name: token_info
+        global: true
+        columns:
+          - name: symbol
+            type: string
+          - name: decimals
+            type: uint8
+          - name: total_supply
+            type: uint256
+          - name: last_checked_block
+            type: uint64
+        events:
+          - event: Transfer
+            operations:
+              - type: upsert
+                set:
+                  - column: symbol
+                    action: set
+                    value: $call($rindexer_contract_address, "symbol()")
+                  - column: decimals
+                    action: set
+                    value: $call($rindexer_contract_address, "decimals()")
+                  - column: total_supply
+                    action: set
+                    value: $call($rindexer_contract_address, "totalSupply()")
+                  - column: last_checked_block
+                    action: set
+                    value: $rindexer_block_number
+
+      # Per-transfer balance tracking - makes 2 view calls per transfer
+      # This demonstrates the RPC load issue with per-event view calls
+      - name: transfer_balances
+        columns:
+          - name: tx_hash
+          - name: from_address
+          - name: to_address
+          - name: amount
+            type: uint256
+          - name: sender_balance_after
+            type: uint256
+          - name: recipient_balance_after
+            type: uint256
+        events:
+          - event: Transfer
+            operations:
+              - type: upsert
+                where:
+                  tx_hash: $rindexer_tx_hash
+                set:
+                  - column: from_address
+                    action: set
+                    value: $from
+                  - column: to_address
+                    action: set
+                    value: $to
+                  - column: amount
+                    action: set
+                    value: $value
+                  - column: sender_balance_after
+                    action: set
+                    value: $call($rindexer_contract_address, "balanceOf(address)", $from)
+                  - column: recipient_balance_after
+                    action: set
+                    value: $call($rindexer_contract_address, "balanceOf(address)", $to)
