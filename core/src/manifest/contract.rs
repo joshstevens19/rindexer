@@ -330,11 +330,9 @@ impl Table {
 
     /// Check if a column is part of the primary key (used in any where clause)
     pub fn is_primary_key_column(&self, column_name: &str) -> bool {
-        self.events.iter().any(|em| {
-            em.operations
-                .iter()
-                .any(|op| op.where_clause.contains_key(column_name))
-        })
+        self.events
+            .iter()
+            .any(|em| em.operations.iter().any(|op| op.where_clause.contains_key(column_name)))
     }
 
     /// Validate that all operations use the same where clause columns.
@@ -362,8 +360,7 @@ impl Table {
 
         for event_mapping in &self.events {
             for operation in &event_mapping.operations {
-                let mut op_columns: Vec<String> =
-                    operation.where_clause.keys().cloned().collect();
+                let mut op_columns: Vec<String> = operation.where_clause.keys().cloned().collect();
                 op_columns.sort();
 
                 match &expected_columns {
@@ -421,9 +418,7 @@ impl Table {
             for operation in &event_mapping.operations {
                 // Check where clause columns
                 for (column_name, value_ref) in &operation.where_clause {
-                    if let Some(inferred) =
-                        Self::infer_type_from_value(value_ref, event_types)
-                    {
+                    if let Some(inferred) = Self::infer_type_from_value(value_ref, event_types) {
                         inferred_types.entry(column_name.clone()).or_insert(inferred);
                     }
                 }
@@ -595,10 +590,9 @@ impl ColumnType {
             ColumnType::Uint16 | ColumnType::Int16 => "SMALLINT".to_string(),
             ColumnType::Uint32 | ColumnType::Int32 => "INTEGER".to_string(),
             ColumnType::Uint64 | ColumnType::Int64 => "BIGINT".to_string(),
-            ColumnType::Uint128
-            | ColumnType::Int128
-            | ColumnType::Uint256
-            | ColumnType::Int256 => "NUMERIC".to_string(),
+            ColumnType::Uint128 | ColumnType::Int128 | ColumnType::Uint256 | ColumnType::Int256 => {
+                "NUMERIC".to_string()
+            }
             ColumnType::Address => "CHAR(42)".to_string(),
             ColumnType::Bytes | ColumnType::Bytes32 => "BYTEA".to_string(),
             ColumnType::String => "TEXT".to_string(),
@@ -868,9 +862,7 @@ impl TableOperation {
     /// Returns the condition expression (from `if` or `filter` field).
     /// The `if` field takes precedence if both are specified.
     pub fn condition(&self) -> Option<&str> {
-        self.if_condition
-            .as_deref()
-            .or(self.filter.as_deref())
+        self.if_condition.as_deref().or(self.filter.as_deref())
     }
 }
 

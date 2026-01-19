@@ -213,7 +213,12 @@ pub fn handle_new_command(
         description: project_description,
         repository,
         project_type,
-        config: Config { buffer: None, callback_concurrency: None, timestamp_sample_rate: None, max_concurrent_view_calls: None },
+        config: Config {
+            buffer: None,
+            callback_concurrency: None,
+            timestamp_sample_rate: None,
+            max_concurrent_view_calls: None,
+        },
         timestamps: None,
         networks: vec![Network {
             name: "ethereum".to_string(),

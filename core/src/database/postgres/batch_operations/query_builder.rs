@@ -33,11 +33,8 @@ pub fn format_table_name(table_name: &str) -> String {
 
 /// Builds the CTE header: `WITH raw_data (col1, col2, ...) AS (VALUES`
 pub fn build_cte_header(column_names: &[&str]) -> String {
-    let formatted_cols = column_names
-        .iter()
-        .map(|col| quote_identifier(col))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let formatted_cols =
+        column_names.iter().map(|col| quote_identifier(col)).collect::<Vec<_>>().join(", ");
 
     format!(
         "
@@ -53,11 +50,8 @@ pub fn build_to_process_cte(distinct_cols: &[&str], sequence_col: Option<&str>) 
     if !distinct_cols.is_empty() && sequence_col.is_some() {
         let seq_col = sequence_col.unwrap();
 
-        let quoted_distinct_cols = distinct_cols
-            .iter()
-            .map(|col| quote_identifier(col))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let quoted_distinct_cols =
+            distinct_cols.iter().map(|col| quote_identifier(col)).collect::<Vec<_>>().join(", ");
 
         let quoted_seq_col = quote_identifier(seq_col);
 
@@ -86,10 +80,7 @@ pub struct ColumnInfo<'a> {
 }
 
 /// Builds SET clauses for UPDATE operations.
-pub fn build_set_clause(
-    column: &ColumnInfo,
-    clause_type: SetClauseType,
-) -> String {
+pub fn build_set_clause(column: &ColumnInfo, clause_type: SetClauseType) -> String {
     let table_col_name = column.table_column.unwrap_or(column.name);
     let cte_col_name = column.name;
 
@@ -115,10 +106,7 @@ pub enum SetClauseType {
 }
 
 /// Builds the UPDATE statement body.
-pub fn build_update_body(
-    formatted_table_name: &str,
-    set_clauses: Vec<String>,
-) -> String {
+pub fn build_update_body(formatted_table_name: &str, set_clauses: Vec<String>) -> String {
     let mut query = format!("\nUPDATE {} am\nSET ", formatted_table_name);
     query.push_str(&set_clauses.join(", "));
     query.push_str("\nFROM to_process tp");
@@ -127,10 +115,7 @@ pub fn build_update_body(
 
 /// Builds the DELETE statement body.
 pub fn build_delete_body(formatted_table_name: &str) -> String {
-    format!(
-        "\nDELETE FROM {} am\nUSING to_process tp",
-        formatted_table_name
-    )
+    format!("\nDELETE FROM {} am\nUSING to_process tp", formatted_table_name)
 }
 
 /// Builds the INSERT ... ON CONFLICT statement for upserts.
@@ -150,11 +135,8 @@ pub fn build_upsert_body(
     sequence_col: Option<&str>,
     custom_where: Option<&str>,
 ) -> String {
-    let formatted_columns = all_columns
-        .iter()
-        .map(|col| quote_identifier(col))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let formatted_columns =
+        all_columns.iter().map(|col| quote_identifier(col)).collect::<Vec<_>>().join(", ");
 
     let tp_columns = all_columns
         .iter()
@@ -168,11 +150,8 @@ pub fn build_upsert_body(
     );
 
     if !conflict_columns.is_empty() {
-        let conflict_cols_str = conflict_columns
-            .iter()
-            .map(|col| quote_identifier(col))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let conflict_cols_str =
+            conflict_columns.iter().map(|col| quote_identifier(col)).collect::<Vec<_>>().join(", ");
 
         query.push_str(&format!("\nON CONFLICT ({})", conflict_cols_str));
 
@@ -268,19 +247,12 @@ pub fn build_where_condition(column: &ColumnInfo) -> String {
 }
 
 /// Builds the sequence comparison condition.
-pub fn build_sequence_condition(
-    seq_col: &str,
-    op_type: BatchOperationType,
-) -> Option<String> {
+pub fn build_sequence_condition(seq_col: &str, op_type: BatchOperationType) -> Option<String> {
     let seq_col_name = quote_identifier(seq_col);
 
     match op_type {
-        BatchOperationType::Update => {
-            Some(format!("tp.{} > am.{}", seq_col_name, seq_col_name))
-        }
-        BatchOperationType::Delete => {
-            Some(format!("tp.{} >= am.{}", seq_col_name, seq_col_name))
-        }
+        BatchOperationType::Update => Some(format!("tp.{} > am.{}", seq_col_name, seq_col_name)),
+        BatchOperationType::Delete => Some(format!("tp.{} >= am.{}", seq_col_name, seq_col_name)),
         BatchOperationType::Upsert => None,
     }
 }

@@ -66,9 +66,9 @@ macro_rules! create_batch_postgres_operation {
             };
             use $crate::database::postgres::batch_operations::{
                 build_cte_header, build_delete_body, build_sequence_condition, build_set_clause,
-                build_to_process_cte, build_update_body, build_upsert_body, build_upsert_set_clause,
-                build_where_clause, build_where_condition, format_table_name, ColumnInfo,
-                SetClauseType, UpsertClauseType,
+                build_to_process_cte, build_update_body, build_upsert_body,
+                build_upsert_set_clause, build_where_clause, build_where_condition,
+                format_table_name, ColumnInfo, SetClauseType, UpsertClauseType,
             };
 
             async fn execute_batch(
@@ -262,20 +262,15 @@ macro_rules! create_batch_postgres_operation {
 
                 for col in &where_columns {
                     let column_def = columns.iter().find(|c| c.name == *col).unwrap();
-                    let col_info = ColumnInfo {
-                        name: col,
-                        table_column: column_def.table_column,
-                    };
+                    let col_info = ColumnInfo { name: col, table_column: column_def.table_column };
                     where_conditions.push(build_where_condition(&col_info));
                 }
 
                 for col in &distinct_cols {
                     if !where_columns.contains(col) {
                         let column_def = columns.iter().find(|c| c.name == *col).unwrap();
-                        let col_info = ColumnInfo {
-                            name: col,
-                            table_column: column_def.table_column,
-                        };
+                        let col_info =
+                            ColumnInfo { name: col, table_column: column_def.table_column };
                         where_conditions.push(build_where_condition(&col_info));
                     }
                 }

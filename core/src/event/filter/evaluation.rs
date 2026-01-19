@@ -2,8 +2,8 @@
 
 use super::{
     ast::{
-        Accessor, ArithmeticExpr, ArithmeticOperator, ComparisonOperator, Condition,
-        ConditionLeft, Expression, LiteralValue, LogicalOperator, VariableSource,
+        Accessor, ArithmeticExpr, ArithmeticOperator, ComparisonOperator, Condition, ConditionLeft,
+        Expression, LiteralValue, LogicalOperator, VariableSource,
     },
     helpers::{are_same_address, compare_ordered_values, string_to_i256, string_to_u256},
 };
@@ -157,7 +157,9 @@ pub fn evaluate_with_table_data<'a>(
                 }
             }
         }
-        Expression::Condition(condition) => evaluate_condition_with_table(condition, event_data, table_data),
+        Expression::Condition(condition) => {
+            evaluate_condition_with_table(condition, event_data, table_data)
+        }
     }
 }
 
@@ -212,10 +214,9 @@ fn evaluate_arithmetic_expr<'a>(
                     Ok(ArithmeticValue::Other { kind: kind.to_string(), value: s.to_string() })
                 }
             }
-            LiteralValue::Bool(b) => Ok(ArithmeticValue::Other {
-                kind: "bool".to_string(),
-                value: b.to_string(),
-            }),
+            LiteralValue::Bool(b) => {
+                Ok(ArithmeticValue::Other { kind: "bool".to_string(), value: b.to_string() })
+            }
             LiteralValue::Str(s) => {
                 // Try to parse as number first
                 if let Ok(num) = string_to_u256(s) {
@@ -241,15 +242,19 @@ fn evaluate_arithmetic_expr<'a>(
             };
 
             let result = match operator {
-                ArithmeticOperator::Add => left_num
-                    .checked_add(right_num)
-                    .ok_or_else(|| EvaluationError::ArithmeticOverflow("addition overflow".to_string()))?,
-                ArithmeticOperator::Subtract => left_num
-                    .checked_sub(right_num)
-                    .ok_or_else(|| EvaluationError::ArithmeticOverflow("subtraction underflow".to_string()))?,
-                ArithmeticOperator::Multiply => left_num
-                    .checked_mul(right_num)
-                    .ok_or_else(|| EvaluationError::ArithmeticOverflow("multiplication overflow".to_string()))?,
+                ArithmeticOperator::Add => left_num.checked_add(right_num).ok_or_else(|| {
+                    EvaluationError::ArithmeticOverflow("addition overflow".to_string())
+                })?,
+                ArithmeticOperator::Subtract => {
+                    left_num.checked_sub(right_num).ok_or_else(|| {
+                        EvaluationError::ArithmeticOverflow("subtraction underflow".to_string())
+                    })?
+                }
+                ArithmeticOperator::Multiply => {
+                    left_num.checked_mul(right_num).ok_or_else(|| {
+                        EvaluationError::ArithmeticOverflow("multiplication overflow".to_string())
+                    })?
+                }
                 ArithmeticOperator::Divide => {
                     if right_num.is_zero() {
                         return Err(EvaluationError::DivisionByZero);
@@ -306,10 +311,9 @@ fn evaluate_arithmetic_expr_with_table<'a>(
                     Ok(ArithmeticValue::Other { kind: kind.to_string(), value: s.to_string() })
                 }
             }
-            LiteralValue::Bool(b) => Ok(ArithmeticValue::Other {
-                kind: "bool".to_string(),
-                value: b.to_string(),
-            }),
+            LiteralValue::Bool(b) => {
+                Ok(ArithmeticValue::Other { kind: "bool".to_string(), value: b.to_string() })
+            }
             LiteralValue::Str(s) => {
                 if let Ok(num) = string_to_u256(s) {
                     Ok(ArithmeticValue::Number(num))
@@ -333,15 +337,19 @@ fn evaluate_arithmetic_expr_with_table<'a>(
             };
 
             let result = match operator {
-                ArithmeticOperator::Add => left_num
-                    .checked_add(right_num)
-                    .ok_or_else(|| EvaluationError::ArithmeticOverflow("addition overflow".to_string()))?,
-                ArithmeticOperator::Subtract => left_num
-                    .checked_sub(right_num)
-                    .ok_or_else(|| EvaluationError::ArithmeticOverflow("subtraction underflow".to_string()))?,
-                ArithmeticOperator::Multiply => left_num
-                    .checked_mul(right_num)
-                    .ok_or_else(|| EvaluationError::ArithmeticOverflow("multiplication overflow".to_string()))?,
+                ArithmeticOperator::Add => left_num.checked_add(right_num).ok_or_else(|| {
+                    EvaluationError::ArithmeticOverflow("addition overflow".to_string())
+                })?,
+                ArithmeticOperator::Subtract => {
+                    left_num.checked_sub(right_num).ok_or_else(|| {
+                        EvaluationError::ArithmeticOverflow("subtraction underflow".to_string())
+                    })?
+                }
+                ArithmeticOperator::Multiply => {
+                    left_num.checked_mul(right_num).ok_or_else(|| {
+                        EvaluationError::ArithmeticOverflow("multiplication overflow".to_string())
+                    })?
+                }
                 ArithmeticOperator::Divide => {
                     if right_num.is_zero() {
                         return Err(EvaluationError::DivisionByZero);
@@ -407,9 +415,17 @@ fn evaluate_condition_with_table<'a>(
         }
         (ArithmeticValue::Number(l), ArithmeticValue::Other { kind: _rk, value: rv }) => {
             // Left is numeric, right is non-numeric
-            compare_final_values("uint256", &l.to_string(), &condition.operator, &LiteralValue::Str(rv))
+            compare_final_values(
+                "uint256",
+                &l.to_string(),
+                &condition.operator,
+                &LiteralValue::Str(rv),
+            )
         }
-        (ArithmeticValue::Other { kind: lk, value: lv }, ArithmeticValue::Other { value: rv, .. }) => {
+        (
+            ArithmeticValue::Other { kind: lk, value: lv },
+            ArithmeticValue::Other { value: rv, .. },
+        ) => {
             // Both non-numeric - use original comparison logic
             // Determine the right literal type
             let rhs_literal = if rv == "true" || rv == "false" {
@@ -478,14 +494,12 @@ fn resolve_path_with_table<'a>(
     // Select the data source based on VariableSource
     let data = match path.source() {
         VariableSource::Event => event_data,
-        VariableSource::Table => {
-            table_data.ok_or_else(|| {
-                EvaluationError::VariableNotFound(format!(
-                    "@{} (table data not available - row may not exist yet)",
-                    path.base_name()
-                ))
-            })?
-        }
+        VariableSource::Table => table_data.ok_or_else(|| {
+            EvaluationError::VariableNotFound(format!(
+                "@{} (table data not available - row may not exist yet)",
+                path.base_name()
+            ))
+        })?,
     };
 
     let base_name = path.base_name();
@@ -825,11 +839,15 @@ fn compare_boolean(
 /// # Returns
 /// * `Ok(ComputedValue)` - The computed result (U256 for numeric, String for non-numeric).
 /// * `Err(EvaluationError)` - An error if parsing or evaluation fails.
-pub fn evaluate_arithmetic(expr_str: &str, data: &JsonValue) -> Result<ComputedValue, EvaluationError> {
+pub fn evaluate_arithmetic(
+    expr_str: &str,
+    data: &JsonValue,
+) -> Result<ComputedValue, EvaluationError> {
     use super::parsing::parse_arithmetic_expression;
 
-    let expr = parse_arithmetic_expression(expr_str)
-        .map_err(|e| EvaluationError::ParseError(format!("Failed to parse expression '{}': {}", expr_str, e)))?;
+    let expr = parse_arithmetic_expression(expr_str).map_err(|e| {
+        EvaluationError::ParseError(format!("Failed to parse expression '{}': {}", expr_str, e))
+    })?;
 
     let result = evaluate_arithmetic_expr(&expr, data)?;
 

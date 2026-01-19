@@ -1,8 +1,7 @@
 //! Dynamic batch operations for runtime-defined columns (used by custom indexing).
 
 use crate::database::batch_operations::{
-    BatchOperationAction, BatchOperationColumnBehavior, BatchOperationType,
-    DynamicColumnDefinition,
+    BatchOperationAction, BatchOperationColumnBehavior, BatchOperationType, DynamicColumnDefinition,
 };
 use crate::database::clickhouse::client::ClickhouseClient;
 
@@ -69,19 +68,14 @@ async fn execute_batch(
         BatchOperationType::Update | BatchOperationType::Upsert => {
             // In ClickHouse, both Update and Upsert map to INSERT
             // ReplacingMergeTree automatically keeps the latest version
-            let formatted_columns = column_names
-                .iter()
-                .map(|col| quote_identifier(col))
-                .collect::<Vec<_>>()
-                .join(", ");
+            let formatted_columns =
+                column_names.iter().map(|col| quote_identifier(col)).collect::<Vec<_>>().join(", ");
 
             let mut values_parts: Vec<String> = Vec::new();
 
             for row_columns in batch.iter() {
-                let row_values: Vec<String> = row_columns
-                    .iter()
-                    .map(|col| col.value.to_clickhouse_value())
-                    .collect();
+                let row_values: Vec<String> =
+                    row_columns.iter().map(|col| col.value.to_clickhouse_value()).collect();
                 values_parts.push(format!("({})", row_values.join(", ")));
             }
 
@@ -102,11 +96,8 @@ async fn execute_batch(
         }
         BatchOperationType::Delete => {
             // Determine which columns to use for matching
-            let match_columns: Vec<&str> = if !where_columns.is_empty() {
-                where_columns
-            } else {
-                distinct_cols
-            };
+            let match_columns: Vec<&str> =
+                if !where_columns.is_empty() { where_columns } else { distinct_cols };
 
             if match_columns.is_empty() {
                 return Err("Delete operation requires WHERE or DISTINCT columns".to_string());

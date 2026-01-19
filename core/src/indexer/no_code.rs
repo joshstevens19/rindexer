@@ -804,13 +804,11 @@ async fn process_contract(
     }
 
     // Build providers map for view calls
-    let providers: Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>> =
-        Arc::new(
-            network_providers
-                .iter()
-                .map(|p| (p.network_name.clone(), p.client.clone()))
-                .collect(),
-        );
+    let providers: Arc<
+        std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>,
+    > = Arc::new(
+        network_providers.iter().map(|p| (p.network_name.clone(), p.client.clone())).collect(),
+    );
 
     // TODO - this could be shared with `get_abi_items`
     let abi_str = contract.parse_abi(project_path)?;
@@ -1016,13 +1014,11 @@ pub async fn process_trace_events(
         };
 
         // Build providers map for view calls (native transfers don't use them but need for struct)
-        let providers: Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>> =
-            Arc::new(
-                network_providers
-                    .iter()
-                    .map(|p| (p.network_name.clone(), p.client.clone()))
-                    .collect(),
-            );
+        let providers: Arc<
+            std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>,
+        > = Arc::new(
+            network_providers.iter().map(|p| (p.network_name.clone(), p.client.clone())).collect(),
+        );
 
         let callback_params = Arc::new(NoCodeCallbackParams {
             event_info: event_info.clone(),

@@ -175,7 +175,11 @@ const DEFAULT_MAX_CONCURRENT_VIEW_CALLS: usize = 10;
 /// Semaphore to limit concurrent view calls and avoid overwhelming RPC nodes.
 /// Initialized with default, can be reconfigured via `configure_view_call_limit`.
 static VIEW_CALL_SEMAPHORE: Lazy<RwLock<std::sync::Arc<tokio::sync::Semaphore>>> =
-    Lazy::new(|| RwLock::new(std::sync::Arc::new(tokio::sync::Semaphore::new(DEFAULT_MAX_CONCURRENT_VIEW_CALLS))));
+    Lazy::new(|| {
+        RwLock::new(std::sync::Arc::new(tokio::sync::Semaphore::new(
+            DEFAULT_MAX_CONCURRENT_VIEW_CALLS,
+        )))
+    });
 
 /// Configure the maximum number of concurrent view calls.
 /// Should be called once at startup before any view calls are made.
@@ -209,8 +213,7 @@ pub struct TableRuntime {
 
 impl TableRuntime {
     pub fn new(table: Table, indexer_name: &str, contract_name: &str) -> Self {
-        let full_table_name =
-            generate_table_full_name(indexer_name, contract_name, &table.name);
+        let full_table_name = generate_table_full_name(indexer_name, contract_name, &table.name);
         Self {
             table,
             full_table_name,
@@ -234,19 +237,16 @@ pub struct TableRowData {
 fn is_arithmetic_expression(value: &str) -> bool {
     // Must contain at least one arithmetic operator
     // Check for operators that are not part of comparison (==, !=, >=, <=)
-    let has_operator = value
-        .chars()
-        .enumerate()
-        .any(|(i, c)| {
-            if c == '*' || c == '/' {
-                true
-            } else if c == '+' || c == '-' {
-                // Check it's not a unary operator at the start
-                i > 0
-            } else {
-                false
-            }
-        });
+    let has_operator = value.chars().enumerate().any(|(i, c)| {
+        if c == '*' || c == '/' {
+            true
+        } else if c == '+' || c == '-' {
+            // Check it's not a unary operator at the start
+            i > 0
+        } else {
+            false
+        }
+    });
 
     has_operator && value.contains('$')
 }
@@ -269,9 +269,9 @@ fn is_string_template(value: &str) -> bool {
         // Simple heuristic: if it's a pure field reference, it should only contain
         // alphanumeric, dots, underscores, and brackets
         // String templates have extra characters like spaces, colons, slashes, etc.
-        let is_pure_field = after_dollar.chars().all(|c| {
-            c.is_alphanumeric() || c == '.' || c == '_' || c == '[' || c == ']'
-        });
+        let is_pure_field = after_dollar
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '.' || c == '_' || c == '[' || c == ']');
 
         if is_pure_field {
             return false;
@@ -298,7 +298,12 @@ fn expand_string_template(
             let mut field_name = String::new();
 
             while let Some(&next_c) = chars.peek() {
-                if next_c.is_alphanumeric() || next_c == '.' || next_c == '_' || next_c == '[' || next_c == ']' {
+                if next_c.is_alphanumeric()
+                    || next_c == '.'
+                    || next_c == '_'
+                    || next_c == '['
+                    || next_c == ']'
+                {
                     field_name.push(chars.next().unwrap());
                 } else {
                     break;
@@ -417,7 +422,11 @@ fn parse_view_call(value: &str) -> Option<ViewCall> {
     // Extract accessor if present (everything after the closing paren)
     let accessor = if call_end + 1 < value.len() {
         let acc = value[call_end + 1..].trim();
-        if acc.is_empty() { None } else { Some(acc.to_string()) }
+        if acc.is_empty() {
+            None
+        } else {
+            Some(acc.to_string())
+        }
     } else {
         None
     };
@@ -460,7 +469,7 @@ fn parse_return_fields(s: &str) -> Vec<ReturnField> {
     }
 
     // Strip outer parens
-    let inner = &s[1..s.len()-1];
+    let inner = &s[1..s.len() - 1];
     parse_return_field_list(inner)
 }
 
@@ -530,11 +539,7 @@ fn parse_single_return_field(s: &str) -> Option<ReturnField> {
             let tuple_part = &s[..=end];
             let name = s[end + 1..].trim().to_string();
             let children = parse_return_fields(tuple_part);
-            return Some(ReturnField {
-                name,
-                type_str: "tuple".to_string(),
-                children,
-            });
+            return Some(ReturnField { name, type_str: "tuple".to_string(), children });
         }
     }
 
@@ -557,7 +562,11 @@ fn parse_single_return_field(s: &str) -> Option<ReturnField> {
 
 /// Applies an accessor path to a DynSolValue.
 /// Supports: [0], .fieldName, and chains like [0].field.nested
-fn apply_accessor(value: DynSolValue, accessor: &str, return_fields: &[ReturnField]) -> Option<DynSolValue> {
+fn apply_accessor(
+    value: DynSolValue,
+    accessor: &str,
+    return_fields: &[ReturnField],
+) -> Option<DynSolValue> {
     if accessor.is_empty() {
         return Some(value);
     }
@@ -571,11 +580,9 @@ fn apply_accessor(value: DynSolValue, accessor: &str, return_fields: &[ReturnFie
             AccessorSegment::Index(idx) => {
                 // Array/tuple index access
                 current = match &current {
-                    DynSolValue::Tuple(items) |
-                    DynSolValue::Array(items) |
-                    DynSolValue::FixedArray(items) => {
-                        items.get(idx)?.clone()
-                    }
+                    DynSolValue::Tuple(items)
+                    | DynSolValue::Array(items)
+                    | DynSolValue::FixedArray(items) => items.get(idx)?.clone(),
                     _ => return None,
                 };
                 // Update current_fields for nested access
@@ -587,15 +594,13 @@ fn apply_accessor(value: DynSolValue, accessor: &str, return_fields: &[ReturnFie
             }
             AccessorSegment::Field(name) => {
                 // Named field access - look up position from return_fields
-                let (idx, field) = current_fields.iter().enumerate()
-                    .find(|(_, f)| f.name == name)?;
+                let (idx, field) =
+                    current_fields.iter().enumerate().find(|(_, f)| f.name == name)?;
 
                 current = match &current {
-                    DynSolValue::Tuple(items) |
-                    DynSolValue::Array(items) |
-                    DynSolValue::FixedArray(items) => {
-                        items.get(idx)?.clone()
-                    }
+                    DynSolValue::Tuple(items)
+                    | DynSolValue::Array(items)
+                    | DynSolValue::FixedArray(items) => items.get(idx)?.clone(),
                     _ => return None,
                 };
                 current_fields = field.children.clone();
@@ -632,7 +637,7 @@ fn parse_accessor_segments(accessor: &str) -> Vec<AccessorSegment> {
         } else if remaining.starts_with('.') {
             // Field access
             remaining = &remaining[1..]; // skip the dot
-            // Find end of field name (next . or [ or end)
+                                         // Find end of field name (next . or [ or end)
             let end = remaining.find(|c| c == '.' || c == '[').unwrap_or(remaining.len());
             let field_name = &remaining[..end];
             if !field_name.is_empty() {
@@ -733,7 +738,8 @@ async fn execute_view_call(
     };
 
     // Check cache first (no semaphore needed for cache lookups)
-    let cache_key = (network.to_string(), contract_address, calldata.clone(), tx_metadata.block_number);
+    let cache_key =
+        (network.to_string(), contract_address, calldata.clone(), tx_metadata.block_number);
     {
         let cache = VIEW_CALL_CACHE.read().await;
         if let Some(cached) = cache.get(&cache_key) {
@@ -757,13 +763,15 @@ async fn execute_view_call(
     }
 
     // Execute the call using the provider's eth_call method
-    let result_bytes: String = match provider.eth_call(contract_address, calldata.clone(), tx_metadata.block_number).await {
-        Ok(r) => r,
-        Err(e) => {
-            warn!("View call failed for {}::{}: {}", contract_address, func_name, e);
-            return None;
-        }
-    };
+    let result_bytes: String =
+        match provider.eth_call(contract_address, calldata.clone(), tx_metadata.block_number).await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("View call failed for {}::{}: {}", contract_address, func_name, e);
+                return None;
+            }
+        };
 
     // Decode the result
     let result_bytes = hex::decode(result_bytes.trim_start_matches("0x")).ok()?;
@@ -828,10 +836,7 @@ fn parse_function_signature(sig: &str) -> Option<(String, Vec<DynSolType>)> {
     let param_types: Vec<DynSolType> = if params_str.is_empty() {
         vec![]
     } else {
-        params_str
-            .split(',')
-            .filter_map(|p| p.trim().parse::<DynSolType>().ok())
-            .collect()
+        params_str.split(',').filter_map(|p| p.trim().parse::<DynSolType>().ok()).collect()
     };
 
     Some((name, param_types))
@@ -851,8 +856,12 @@ fn resolve_arg_value(
 
         // Check tx metadata (all prefixed with rindexer_)
         match field_name {
-            "rindexer_contract_address" => return Some(DynSolValue::Address(tx_metadata.contract_address)),
-            "rindexer_block_number" => return Some(DynSolValue::Uint(U256::from(tx_metadata.block_number), 256)),
+            "rindexer_contract_address" => {
+                return Some(DynSolValue::Address(tx_metadata.contract_address))
+            }
+            "rindexer_block_number" => {
+                return Some(DynSolValue::Uint(U256::from(tx_metadata.block_number), 256))
+            }
             _ => {}
         }
 
@@ -893,7 +902,10 @@ fn parse_literal_as_type(value: &str, sol_type: &DynSolType) -> Option<DynSolVal
 fn infer_return_type(sig: &str) -> DynSolType {
     // Common functions with known return types
     let sig_lower = sig.to_lowercase();
-    if sig_lower.starts_with("balanceof") || sig_lower.starts_with("totalsupply") || sig_lower.starts_with("allowance") {
+    if sig_lower.starts_with("balanceof")
+        || sig_lower.starts_with("totalsupply")
+        || sig_lower.starts_with("allowance")
+    {
         DynSolType::Uint(256)
     } else if sig_lower.starts_with("decimals") {
         DynSolType::Uint(8)
@@ -921,7 +933,8 @@ async fn extract_value_from_event_async(
     if is_view_call(value_ref) {
         let provider = provider?;
         let view_call = parse_view_call(value_ref)?;
-        let result = execute_view_call(&view_call, log_params, tx_metadata, provider, network).await?;
+        let result =
+            execute_view_call(&view_call, log_params, tx_metadata, provider, network).await?;
         return Some(dyn_sol_value_to_wrapper(&result, column_type));
     }
 
@@ -969,10 +982,8 @@ fn resolve_field_path(field_path: &str, log_params: &[LogParam]) -> Option<DynSo
             let mut components = param.components.clone();
 
             for part in rest.split('.') {
-                let (idx, nested_param) = components
-                    .iter()
-                    .enumerate()
-                    .find(|(_, p)| p.name == part)?;
+                let (idx, nested_param) =
+                    components.iter().enumerate().find(|(_, p)| p.name == part)?;
 
                 value = value.as_fixed_seq()?.get(idx)?.clone();
                 components = nested_param.components.clone();
@@ -993,9 +1004,7 @@ fn resolve_field_path(field_path: &str, log_params: &[LogParam]) -> Option<DynSo
             let index: usize = index_str.parse().ok()?;
 
             current_value = match &current_value {
-                DynSolValue::Array(arr) | DynSolValue::FixedArray(arr) => {
-                    arr.get(index)?.clone()
-                }
+                DynSolValue::Array(arr) | DynSolValue::FixedArray(arr) => arr.get(index)?.clone(),
                 _ => return None, // Not an array
             };
             // Components stay the same - they describe each element's structure
@@ -1015,10 +1024,8 @@ fn resolve_field_path(field_path: &str, log_params: &[LogParam]) -> Option<DynSo
                 }
             } else {
                 // Named field access - use components to find position
-                let (idx, nested_param) = current_components
-                    .iter()
-                    .enumerate()
-                    .find(|(_, p)| p.name == *segment)?;
+                let (idx, nested_param) =
+                    current_components.iter().enumerate().find(|(_, p)| p.name == *segment)?;
 
                 current_value = match &current_value {
                     DynSolValue::Tuple(items) => items.get(idx)?.clone(),
@@ -1115,9 +1122,7 @@ fn extract_value_from_event(
                 // Convert based on column type
                 match column_type {
                     ColumnType::Uint64 => Some(EthereumSqlTypeWrapper::U64BigInt(val.to::<u64>())),
-                    ColumnType::Uint128 => {
-                        Some(EthereumSqlTypeWrapper::U256Numeric(val))
-                    }
+                    ColumnType::Uint128 => Some(EthereumSqlTypeWrapper::U256Numeric(val)),
                     _ => Some(EthereumSqlTypeWrapper::U256Numeric(val)),
                 }
             }
@@ -1152,10 +1157,7 @@ fn extract_value_from_event(
             }
             "rindexer_tx_hash" => {
                 // Store as hex string for readability (e.g., "0x...")
-                return Some(EthereumSqlTypeWrapper::String(format!(
-                    "{:?}",
-                    tx_metadata.tx_hash
-                )));
+                return Some(EthereumSqlTypeWrapper::String(format!("{:?}", tx_metadata.tx_hash)));
             }
             "rindexer_block_hash" => {
                 // Store as hex string for readability (e.g., "0x...")
@@ -1195,9 +1197,7 @@ fn dyn_sol_value_to_wrapper(
     column_type: &ColumnType,
 ) -> EthereumSqlTypeWrapper {
     match (value, column_type) {
-        (DynSolValue::Address(addr), ColumnType::Address) => {
-            EthereumSqlTypeWrapper::Address(*addr)
-        }
+        (DynSolValue::Address(addr), ColumnType::Address) => EthereumSqlTypeWrapper::Address(*addr),
         (DynSolValue::Uint(val, _), ColumnType::Uint256) => {
             // Use U256Numeric for NUMERIC columns in PostgreSQL
             EthereumSqlTypeWrapper::U256Numeric(*val)
@@ -1211,9 +1211,7 @@ fn dyn_sol_value_to_wrapper(
             EthereumSqlTypeWrapper::I256Numeric(*val)
         }
         (DynSolValue::Bool(b), ColumnType::Bool) => EthereumSqlTypeWrapper::Bool(*b),
-        (DynSolValue::String(s), ColumnType::String) => {
-            EthereumSqlTypeWrapper::String(s.clone())
-        }
+        (DynSolValue::String(s), ColumnType::String) => EthereumSqlTypeWrapper::String(s.clone()),
         (DynSolValue::FixedBytes(bytes, _), ColumnType::Bytes32) => {
             if bytes.len() == 32 {
                 EthereumSqlTypeWrapper::B256(alloy::primitives::B256::from_slice(bytes.as_slice()))
@@ -1248,10 +1246,8 @@ fn dyn_sol_value_to_wrapper(
                 EthereumSqlTypeWrapper::VecAddress(addresses)
             } else {
                 // For other array types, serialize as JSON string
-                let json_array: Vec<String> = items
-                    .iter()
-                    .map(|item| format!("{:?}", item))
-                    .collect();
+                let json_array: Vec<String> =
+                    items.iter().map(|item| format!("{:?}", item)).collect();
                 EthereumSqlTypeWrapper::String(format!("{:?}", json_array))
             }
         }
@@ -1265,18 +1261,10 @@ fn dyn_sol_value_to_wrapper(
         (DynSolValue::Uint(val, _), ColumnType::Uint32) => {
             EthereumSqlTypeWrapper::U32(val.to::<u32>())
         }
-        (DynSolValue::Int(val, _), ColumnType::Int8) => {
-            EthereumSqlTypeWrapper::I8(val.as_i8())
-        }
-        (DynSolValue::Int(val, _), ColumnType::Int16) => {
-            EthereumSqlTypeWrapper::I16(val.as_i16())
-        }
-        (DynSolValue::Int(val, _), ColumnType::Int32) => {
-            EthereumSqlTypeWrapper::I32(val.as_i32())
-        }
-        (DynSolValue::Int(val, _), ColumnType::Int64) => {
-            EthereumSqlTypeWrapper::I64(val.as_i64())
-        }
+        (DynSolValue::Int(val, _), ColumnType::Int8) => EthereumSqlTypeWrapper::I8(val.as_i8()),
+        (DynSolValue::Int(val, _), ColumnType::Int16) => EthereumSqlTypeWrapper::I16(val.as_i16()),
+        (DynSolValue::Int(val, _), ColumnType::Int32) => EthereumSqlTypeWrapper::I32(val.as_i32()),
+        (DynSolValue::Int(val, _), ColumnType::Int64) => EthereumSqlTypeWrapper::I64(val.as_i64()),
         // Fallback conversions - use PostgreSQL-compatible types
         (DynSolValue::Uint(val, _), _) => EthereumSqlTypeWrapper::U256Numeric(*val),
         (DynSolValue::Int(val, _), _) => EthereumSqlTypeWrapper::I256Numeric(*val),
@@ -1506,10 +1494,7 @@ fn expand_iterate_bindings(
         let elements = match value {
             DynSolValue::Array(arr) | DynSolValue::FixedArray(arr) => arr,
             _ => {
-                debug!(
-                    "iterate binding '{}' references non-array field",
-                    binding.array_field
-                );
+                debug!("iterate binding '{}' references non-array field", binding.array_field);
                 return None;
             }
         };
@@ -1573,11 +1558,7 @@ pub async fn process_table_operations(
 ) -> Result<(), String> {
     for table_runtime in tables {
         // Find operations for this event
-        let event_mapping = table_runtime
-            .table
-            .events
-            .iter()
-            .find(|e| e.event == event_name);
+        let event_mapping = table_runtime.table.events.iter().find(|e| e.event == event_name);
 
         let event_mapping = match event_mapping {
             Some(em) => em,
@@ -1588,26 +1569,25 @@ pub async fn process_table_operations(
             let mut rows_to_process: Vec<TableRowData> = Vec::new();
 
             // Check if condition has @table references - push to SQL instead of Rust evaluation
-            let (should_filter_in_rust, sql_condition) = if let Some(condition_expr) =
-                operation.condition()
-            {
-                match parse_filter_expression(condition_expr) {
-                    Ok(expr) => {
-                        if expr.has_table_references() {
-                            let sql = expr.to_sql_condition(&table_runtime.full_table_name);
-                            (false, Some(sql))
-                        } else {
+            let (should_filter_in_rust, sql_condition) =
+                if let Some(condition_expr) = operation.condition() {
+                    match parse_filter_expression(condition_expr) {
+                        Ok(expr) => {
+                            if expr.has_table_references() {
+                                let sql = expr.to_sql_condition(&table_runtime.full_table_name);
+                                (false, Some(sql))
+                            } else {
+                                (true, None)
+                            }
+                        }
+                        Err(e) => {
+                            debug!("Failed to parse condition for SQL generation: {}", e);
                             (true, None)
                         }
                     }
-                    Err(e) => {
-                        debug!("Failed to parse condition for SQL generation: {}", e);
-                        (true, None)
-                    }
-                }
-            } else {
-                (false, None)
-            };
+                } else {
+                    (false, None)
+                };
 
             for (log_params, network, tx_metadata) in events_data {
                 // Expand iterate bindings - creates multiple virtual events from array fields
@@ -1615,10 +1595,7 @@ pub async fn process_table_operations(
                     match expand_iterate_bindings(&event_mapping.iterate, log_params) {
                         Some(params) => params,
                         None => {
-                            debug!(
-                                "Failed to expand iterate bindings for event {}",
-                                event_name
-                            );
+                            debug!("Failed to expand iterate bindings for event {}", event_name);
                             continue;
                         }
                     };
@@ -1639,11 +1616,8 @@ pub async fn process_table_operations(
 
                     // Add where clause columns
                     for (column_name, value_ref) in &operation.where_clause {
-                        let column_def = table_runtime
-                            .table
-                            .columns
-                            .iter()
-                            .find(|c| &c.name == column_name);
+                        let column_def =
+                            table_runtime.table.columns.iter().find(|c| &c.name == column_name);
 
                         if let Some(column_def) = column_def {
                             if let Some(value) = extract_value_from_event_async(
@@ -1653,7 +1627,9 @@ pub async fn process_table_operations(
                                 column_def.resolved_type(),
                                 provider,
                                 network,
-                            ).await {
+                            )
+                            .await
+                            {
                                 columns.insert(column_name.clone(), value);
                             }
                         }
@@ -1661,11 +1637,8 @@ pub async fn process_table_operations(
 
                     // Add set columns with their values
                     for set_col in &operation.set {
-                        let column_def = table_runtime
-                            .table
-                            .columns
-                            .iter()
-                            .find(|c| c.name == set_col.column);
+                        let column_def =
+                            table_runtime.table.columns.iter().find(|c| c.name == set_col.column);
 
                         if let Some(column_def) = column_def {
                             if let Some(value) = extract_value_from_event_async(
@@ -1675,7 +1648,9 @@ pub async fn process_table_operations(
                                 column_def.resolved_type(),
                                 provider,
                                 network,
-                            ).await {
+                            )
+                            .await
+                            {
                                 columns.insert(set_col.column.clone(), value);
                             }
                         }
@@ -1717,10 +1692,7 @@ pub async fn process_table_operations(
                             EthereumSqlTypeWrapper::Address(tx_metadata.contract_address),
                         );
 
-                        rows_to_process.push(TableRowData {
-                            columns,
-                            network: network.clone(),
-                        });
+                        rows_to_process.push(TableRowData { columns, network: network.clone() });
                     }
                 } // end for expanded_log_params
             }
@@ -1771,10 +1743,9 @@ fn column_type_to_batch_sql_type(column_type: &ColumnType) -> BatchOperationSqlT
         // 64-bit integers
         ColumnType::Uint64 | ColumnType::Int64 => BatchOperationSqlType::Bigint,
         // Large integers -> NUMERIC
-        ColumnType::Uint128
-        | ColumnType::Uint256
-        | ColumnType::Int128
-        | ColumnType::Int256 => BatchOperationSqlType::Numeric,
+        ColumnType::Uint128 | ColumnType::Uint256 | ColumnType::Int128 | ColumnType::Int256 => {
+            BatchOperationSqlType::Numeric
+        }
         // Bytes types
         ColumnType::Bytes | ColumnType::Bytes32 => BatchOperationSqlType::Bytea,
         ColumnType::String => BatchOperationSqlType::Varchar,
@@ -1950,7 +1921,15 @@ async fn execute_postgres_operation(
     let short_table_name = table_name.split('.').last().unwrap_or(table_name);
     let event_name = format!("Tables::{}", short_table_name);
 
-    execute_dynamic_batch_operation(postgres, table_name, op_type, batch_rows, &event_name, sql_where).await?;
+    execute_dynamic_batch_operation(
+        postgres,
+        table_name,
+        op_type,
+        batch_rows,
+        &event_name,
+        sql_where,
+    )
+    .await?;
 
     let op_label = match operation.operation_type {
         OperationType::Upsert => "UPSERT",
@@ -1958,12 +1937,7 @@ async fn execute_postgres_operation(
         OperationType::Delete => "DELETE",
     };
 
-    info!(
-        "Tables::{} - {} - {} rows",
-        short_table_name,
-        op_label,
-        rows.len()
-    );
+    info!("Tables::{} - {} - {} rows", short_table_name, op_label, rows.len());
 
     Ok(())
 }
@@ -2112,7 +2086,14 @@ async fn execute_clickhouse_operation(
     let short_table_name = table_name.split('.').last().unwrap_or(table_name);
     let event_name = format!("Tables::{}", short_table_name);
 
-    execute_clickhouse_dynamic_batch_operation(clickhouse, table_name, op_type, batch_rows, &event_name).await?;
+    execute_clickhouse_dynamic_batch_operation(
+        clickhouse,
+        table_name,
+        op_type,
+        batch_rows,
+        &event_name,
+    )
+    .await?;
 
     let op_label = match operation.operation_type {
         OperationType::Upsert => "UPSERT",
@@ -2120,12 +2101,7 @@ async fn execute_clickhouse_operation(
         OperationType::Delete => "DELETE",
     };
 
-    info!(
-        "Tables::{} - {} - {} rows",
-        short_table_name,
-        op_label,
-        rows.len()
-    );
+    info!("Tables::{} - {} - {} rows", short_table_name, op_label, rows.len());
 
     Ok(())
 }
@@ -2141,14 +2117,8 @@ mod tests {
             DynSolValue::Address(alloy::primitives::Address::ZERO),
         )];
 
-        assert!(evaluate_filter(
-            "from == 0x0000000000000000000000000000000000000000",
-            &params
-        ));
-        assert!(!evaluate_filter(
-            "from == 0x1111111111111111111111111111111111111111",
-            &params
-        ));
+        assert!(evaluate_filter("from == 0x0000000000000000000000000000000000000000", &params));
+        assert!(!evaluate_filter("from == 0x1111111111111111111111111111111111111111", &params));
     }
 
     #[test]
@@ -2158,14 +2128,8 @@ mod tests {
             DynSolValue::Address(alloy::primitives::Address::ZERO),
         )];
 
-        assert!(!evaluate_filter(
-            "to != 0x0000000000000000000000000000000000000000",
-            &params
-        ));
-        assert!(evaluate_filter(
-            "to != 0x1111111111111111111111111111111111111111",
-            &params
-        ));
+        assert!(!evaluate_filter("to != 0x0000000000000000000000000000000000000000", &params));
+        assert!(evaluate_filter("to != 0x1111111111111111111111111111111111111111", &params));
     }
 
     #[test]
@@ -2175,10 +2139,7 @@ mod tests {
                 "from".to_string(),
                 DynSolValue::Address(alloy::primitives::Address::ZERO),
             ),
-            LogParam::new(
-                "value".to_string(),
-                DynSolValue::Uint(U256::from(1000u64), 256),
-            ),
+            LogParam::new("value".to_string(), DynSolValue::Uint(U256::from(1000u64), 256)),
         ];
 
         // Complex AND expression
@@ -2205,7 +2166,7 @@ mod tests {
         assert!(!is_string_template("$data.amount"));
         assert!(!is_string_template("$ids[0]"));
         assert!(!is_string_template("$transfers[0].value"));
-        assert!(!is_string_template("global"));  // No $ at all
+        assert!(!is_string_template("global")); // No $ at all
 
         // String templates - ARE templates
         assert!(is_string_template("$from-$to"));
@@ -2220,20 +2181,13 @@ mod tests {
         let params = vec![
             LogParam::new(
                 "from".to_string(),
-                DynSolValue::Address(
-                    "0x1111111111111111111111111111111111111111".parse().unwrap()
-                ),
+                DynSolValue::Address("0x1111111111111111111111111111111111111111".parse().unwrap()),
             ),
             LogParam::new(
                 "to".to_string(),
-                DynSolValue::Address(
-                    "0x2222222222222222222222222222222222222222".parse().unwrap()
-                ),
+                DynSolValue::Address("0x2222222222222222222222222222222222222222".parse().unwrap()),
             ),
-            LogParam::new(
-                "value".to_string(),
-                DynSolValue::Uint(U256::from(1000u64), 256),
-            ),
+            LogParam::new("value".to_string(), DynSolValue::Uint(U256::from(1000u64), 256)),
         ];
 
         let tx_metadata = TxMetadata {
@@ -2265,7 +2219,8 @@ mod tests {
         );
 
         // With tx metadata (uses rindexer_ prefix)
-        let result = expand_string_template("Block $rindexer_block_number", &params, &tx_metadata).unwrap();
+        let result =
+            expand_string_template("Block $rindexer_block_number", &params, &tx_metadata).unwrap();
         assert_eq!(result, "Block 12345");
 
         // Non-existent field returns None
@@ -2315,11 +2270,8 @@ mod tests {
         ];
 
         // Create LogParam with components
-        let params = vec![LogParam {
-            name: "transfers".to_string(),
-            value: transfers_array,
-            components,
-        }];
+        let params =
+            vec![LogParam { name: "transfers".to_string(), value: transfers_array, components }];
 
         // Test post-array field access: $transfers[0].amount
         let result = resolve_field_path("transfers[0].amount", &params);
@@ -2393,7 +2345,8 @@ mod tests {
         assert_eq!(vc.args, vec!["$holder"]);
 
         // Call with multiple arguments
-        let result = parse_view_call("$call(0xABCD, \"allowance(address,address)\", $owner, $spender)");
+        let result =
+            parse_view_call("$call(0xABCD, \"allowance(address,address)\", $owner, $spender)");
         assert!(result.is_some());
         let vc = result.unwrap();
         assert_eq!(vc.contract_address, "0xABCD");

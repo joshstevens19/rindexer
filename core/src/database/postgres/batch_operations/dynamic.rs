@@ -2,15 +2,14 @@
 
 use tokio_postgres::types::ToSql;
 
-use crate::database::batch_operations::{
-    BatchOperationAction, BatchOperationColumnBehavior, BatchOperationType,
-    DynamicColumnDefinition,
-};
 use super::query_builder::{
     build_cte_header, build_delete_body, build_sequence_condition, build_set_clause,
     build_to_process_cte, build_update_body, build_upsert_body, build_upsert_set_clause,
     build_where_clause, build_where_condition, format_table_name, ColumnInfo, SetClauseType,
     UpsertClauseType,
+};
+use crate::database::batch_operations::{
+    BatchOperationAction, BatchOperationColumnBehavior, BatchOperationType, DynamicColumnDefinition,
 };
 use crate::database::postgres::client::PostgresClient;
 use crate::EthereumSqlTypeWrapper;
@@ -159,46 +158,36 @@ async fn execute_batch(
 
             for col_name in &set_columns {
                 let column_def = columns.iter().find(|c| c.name == *col_name).unwrap();
-                let col_info = ColumnInfo {
-                    name: col_name,
-                    table_column: column_def.table_column.as_deref(),
-                };
+                let col_info =
+                    ColumnInfo { name: col_name, table_column: column_def.table_column.as_deref() };
                 all_set_clauses.push(build_set_clause(&col_info, SetClauseType::Set));
             }
 
             for col_name in &add_columns {
                 let column_def = columns.iter().find(|c| c.name == *col_name).unwrap();
-                let col_info = ColumnInfo {
-                    name: col_name,
-                    table_column: column_def.table_column.as_deref(),
-                };
+                let col_info =
+                    ColumnInfo { name: col_name, table_column: column_def.table_column.as_deref() };
                 all_set_clauses.push(build_set_clause(&col_info, SetClauseType::Add));
             }
 
             for col_name in &subtract_columns {
                 let column_def = columns.iter().find(|c| c.name == *col_name).unwrap();
-                let col_info = ColumnInfo {
-                    name: col_name,
-                    table_column: column_def.table_column.as_deref(),
-                };
+                let col_info =
+                    ColumnInfo { name: col_name, table_column: column_def.table_column.as_deref() };
                 all_set_clauses.push(build_set_clause(&col_info, SetClauseType::Subtract));
             }
 
             for col_name in &max_columns {
                 let column_def = columns.iter().find(|c| c.name == *col_name).unwrap();
-                let col_info = ColumnInfo {
-                    name: col_name,
-                    table_column: column_def.table_column.as_deref(),
-                };
+                let col_info =
+                    ColumnInfo { name: col_name, table_column: column_def.table_column.as_deref() };
                 all_set_clauses.push(build_set_clause(&col_info, SetClauseType::Max));
             }
 
             for col_name in &min_columns {
                 let column_def = columns.iter().find(|c| c.name == *col_name).unwrap();
-                let col_info = ColumnInfo {
-                    name: col_name,
-                    table_column: column_def.table_column.as_deref(),
-                };
+                let col_info =
+                    ColumnInfo { name: col_name, table_column: column_def.table_column.as_deref() };
                 all_set_clauses.push(build_set_clause(&col_info, SetClauseType::Min));
             }
 
@@ -275,21 +264,18 @@ async fn execute_batch(
                 custom_where,
             ));
 
-            let params: Vec<&(dyn ToSql + Sync)> = owned_params
-                .iter()
-                .map(|param| param as &(dyn ToSql + Sync))
-                .collect();
+            let params: Vec<&(dyn ToSql + Sync)> =
+                owned_params.iter().map(|param| param as &(dyn ToSql + Sync)).collect();
 
             tracing::debug!("Custom indexing query: {}", query);
 
-            database
-                .with_transaction(&query, &params, |_| async move { Ok(()) })
-                .await
-                .map_err(|e| {
+            database.with_transaction(&query, &params, |_| async move { Ok(()) }).await.map_err(
+                |e| {
                     tracing::error!("PostgreSQL error: {:?}", e);
                     tracing::error!("Failed query:\n{}", query);
                     e.to_string()
-                })?;
+                },
+            )?;
 
             return Ok(());
         }
@@ -300,20 +286,15 @@ async fn execute_batch(
 
     for col in &where_columns {
         let column_def = columns.iter().find(|c| c.name == *col).unwrap();
-        let col_info = ColumnInfo {
-            name: col,
-            table_column: column_def.table_column.as_deref(),
-        };
+        let col_info = ColumnInfo { name: col, table_column: column_def.table_column.as_deref() };
         where_conditions.push(build_where_condition(&col_info));
     }
 
     for col in &distinct_cols {
         if !where_columns.contains(col) {
             let column_def = columns.iter().find(|c| c.name == *col).unwrap();
-            let col_info = ColumnInfo {
-                name: col,
-                table_column: column_def.table_column.as_deref(),
-            };
+            let col_info =
+                ColumnInfo { name: col, table_column: column_def.table_column.as_deref() };
             where_conditions.push(build_where_condition(&col_info));
         }
     }
@@ -326,21 +307,16 @@ async fn execute_batch(
 
     query.push_str(&build_where_clause(&where_conditions));
 
-    let params: Vec<&(dyn ToSql + Sync)> = owned_params
-        .iter()
-        .map(|param| param as &(dyn ToSql + Sync))
-        .collect();
+    let params: Vec<&(dyn ToSql + Sync)> =
+        owned_params.iter().map(|param| param as &(dyn ToSql + Sync)).collect();
 
     tracing::debug!("Custom indexing query: {}", query);
 
-    database
-        .with_transaction(&query, &params, |_| async move { Ok(()) })
-        .await
-        .map_err(|e| {
-            tracing::error!("PostgreSQL error: {:?}", e);
-            tracing::error!("Failed query:\n{}", query);
-            e.to_string()
-        })?;
+    database.with_transaction(&query, &params, |_| async move { Ok(()) }).await.map_err(|e| {
+        tracing::error!("PostgreSQL error: {:?}", e);
+        tracing::error!("Failed query:\n{}", query);
+        e.to_string()
+    })?;
 
     Ok(())
 }

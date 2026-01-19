@@ -282,10 +282,8 @@ impl ABIItem {
         }
 
         // Combine both sets of event names
-        let all_needed_events: std::collections::HashSet<String> = include_event_names
-            .into_iter()
-            .chain(table_event_names)
-            .collect();
+        let all_needed_events: std::collections::HashSet<String> =
+            include_event_names.into_iter().chain(table_event_names).collect();
 
         // Filter to only include needed events (keep all non-event items)
         let filtered_abi_items = abi_items

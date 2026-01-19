@@ -27,19 +27,16 @@ pub const YAML_CONFIG_NAME: &str = "rindexer.yaml";
 /// Checks if a value string contains arithmetic operators indicating it's a computed expression.
 fn is_arithmetic_expression(value: &str) -> bool {
     // Must contain at least one arithmetic operator
-    let has_operator = value
-        .chars()
-        .enumerate()
-        .any(|(i, c)| {
-            if c == '*' || c == '/' {
-                true
-            } else if c == '+' || c == '-' {
-                // Check it's not a unary operator at the start
-                i > 0
-            } else {
-                false
-            }
-        });
+    let has_operator = value.chars().enumerate().any(|(i, c)| {
+        if c == '*' || c == '/' {
+            true
+        } else if c == '+' || c == '-' {
+            // Check it's not a unary operator at the start
+            i > 0
+        } else {
+            false
+        }
+    });
 
     has_operator && value.contains('$')
 }
@@ -367,11 +364,8 @@ fn validate_manifest(
                     for binding in &event_mapping.iterate {
                         // Check that the array field exists in the event
                         // Strip any nested path to get the root field
-                        let root_field = binding
-                            .array_field
-                            .split('.')
-                            .next()
-                            .unwrap_or(&binding.array_field);
+                        let root_field =
+                            binding.array_field.split('.').next().unwrap_or(&binding.array_field);
                         if !event_input_names.contains(root_field) {
                             return Err(ValidateManifestError::CustomIndexingIterateFieldNotFound(
                                 binding.array_field.clone(),
@@ -450,10 +444,8 @@ fn validate_manifest(
                             let variables = extract_filter_variables(condition_expr);
                             for var_name in variables {
                                 // Strip array indices like ids[0] -> ids
-                                let root_field = var_name
-                                    .split(&['.', '['][..])
-                                    .next()
-                                    .unwrap_or(&var_name);
+                                let root_field =
+                                    var_name.split(&['.', '['][..]).next().unwrap_or(&var_name);
                                 // Skip validation for built-in metadata fields
                                 if BUILTIN_METADATA_FIELDS.contains(&root_field) {
                                     continue;
@@ -509,10 +501,8 @@ fn validate_manifest(
                                 let variables = extract_arithmetic_variables(effective_value);
                                 for var_name in variables {
                                     // Strip array indices like ids[0] -> ids
-                                    let root_field = var_name
-                                        .split(&['.', '['][..])
-                                        .next()
-                                        .unwrap_or(&var_name);
+                                    let root_field =
+                                        var_name.split(&['.', '['][..]).next().unwrap_or(&var_name);
                                     // Skip validation for built-in metadata fields
                                     if BUILTIN_METADATA_FIELDS.contains(&root_field) {
                                         continue;

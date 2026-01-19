@@ -167,22 +167,10 @@ fn generate_tables_sql(tables: &[Table], schema_name: &str) -> String {
                 "\"{}\" BIGINT NOT NULL DEFAULT 0",
                 injected_columns::LAST_UPDATED_BLOCK
             ));
-            columns.push(format!(
-                "\"{}\" TIMESTAMPTZ",
-                injected_columns::LAST_UPDATED_AT
-            ));
-            columns.push(format!(
-                "\"{}\" CHAR(66)",
-                injected_columns::TX_HASH
-            ));
-            columns.push(format!(
-                "\"{}\" CHAR(66)",
-                injected_columns::BLOCK_HASH
-            ));
-            columns.push(format!(
-                "\"{}\" CHAR(42)",
-                injected_columns::CONTRACT_ADDRESS
-            ));
+            columns.push(format!("\"{}\" TIMESTAMPTZ", injected_columns::LAST_UPDATED_AT));
+            columns.push(format!("\"{}\" CHAR(66)", injected_columns::TX_HASH));
+            columns.push(format!("\"{}\" CHAR(66)", injected_columns::BLOCK_HASH));
+            columns.push(format!("\"{}\" CHAR(42)", injected_columns::CONTRACT_ADDRESS));
             columns.push(format!(
                 "\"{}\" NUMERIC NOT NULL DEFAULT 0",
                 injected_columns::RINDEXER_SEQUENCE_ID
@@ -200,18 +188,13 @@ fn generate_tables_sql(tables: &[Table], schema_name: &str) -> String {
 
             columns.push(primary_key_constraint);
 
-            let create_table_sql = format!(
-                "CREATE TABLE IF NOT EXISTS {} ({});",
-                table_name,
-                columns.join(", ")
-            );
+            let create_table_sql =
+                format!("CREATE TABLE IF NOT EXISTS {} ({});", table_name, columns.join(", "));
 
             // Add table comment for GraphQL naming - allows querying by table name in camelCase
             let graphql_name = snake_to_camel(&table.name);
-            let table_comment = format!(
-                "COMMENT ON TABLE {} IS E'@name {}';",
-                table_name, graphql_name
-            );
+            let table_comment =
+                format!("COMMENT ON TABLE {} IS E'@name {}';", table_name, graphql_name);
 
             format!("{}\n{}", create_table_sql, table_comment)
         })
