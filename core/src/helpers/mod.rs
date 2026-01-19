@@ -81,6 +81,19 @@ pub fn camel_to_snake_advanced(s: &str, numbers_attach_to_last_word: bool) -> St
     snake_case
 }
 
+pub fn snake_to_camel(s: &str) -> String {
+    let pascal = to_pascal_case(s);
+    if pascal.is_empty() {
+        return pascal;
+    }
+    // Convert first character to lowercase for camelCase
+    let mut chars = pascal.chars();
+    match chars.next() {
+        Some(first) => first.to_lowercase().to_string() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
 pub fn to_pascal_case(input: &str) -> String {
     if input.is_empty() {
         return String::new();
@@ -253,6 +266,15 @@ mod tests {
     #[test]
     fn test_empty_string() {
         assert_eq!(to_pascal_case(""), "");
+    }
+
+    #[test]
+    fn test_snake_to_camel() {
+        assert_eq!(snake_to_camel("token_balances"), "tokenBalances");
+        assert_eq!(snake_to_camel("token_supply"), "tokenSupply");
+        assert_eq!(snake_to_camel("delete_test"), "deleteTest");
+        assert_eq!(snake_to_camel("simple"), "simple");
+        assert_eq!(snake_to_camel(""), "");
     }
 
     #[test]

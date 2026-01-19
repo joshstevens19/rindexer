@@ -181,6 +181,7 @@ pub async fn handle_add_contract_command(
             generate_csv: None,
             streams: None,
             chat: None,
+            tables: None,
         });
 
         write_manifest(&manifest, &rindexer_yaml_path).map_err(|e| {

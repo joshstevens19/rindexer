@@ -1,0 +1,158 @@
+name: DEXPoolExample
+description: Track Uniswap V2 pool state - reserves, volume, and LP positions
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+    drop_each_run: true
+contracts:
+  - name: USDC_WETH_Pool
+    details:
+      - network: ethereum
+        # Uniswap V2 USDC/WETH pool
+        address: "0xB4e16d0168e52d35CaCD2c6185b44281Ec28C9Dc"
+        start_block: 18600000
+        end_block: 18601000
+    abi: ./abis/UniswapV2Pair.json
+    tables:
+      # Pool reserves - updated on every Sync event
+      - name: pool_state
+        global: true
+        columns:
+          - name: reserve0
+            type: uint256
+            default: "0"
+          - name: reserve1
+            type: uint256
+            default: "0"
+          - name: lp_total_supply
+            type: uint256
+            default: "0"
+        events:
+          - event: Sync
+            operations:
+              - type: upsert
+                set:
+                  - column: reserve0
+                    action: set
+                    value: $reserve0
+                  - column: reserve1
+                    action: set
+                    value: $reserve1
+          # Track LP supply via Transfer events (mint/burn)
+          - event: Transfer
+            operations:
+              # Mint (from zero address)
+              - type: upsert
+                if: "$from == 0x0000000000000000000000000000000000000000"
+                set:
+                  - column: lp_total_supply
+                    action: add
+                    value: $value
+              # Burn (to zero address)
+              - type: upsert
+                if: "$to == 0x0000000000000000000000000000000000000000"
+                set:
+                  - column: lp_total_supply
+                    action: subtract
+                    value: $value
+
+      # Trading metrics - cumulative volume and swap count
+      - name: trading_metrics
+        global: true
+        columns:
+          - name: swap_count
+            type: uint64
+            default: "0"
+          - name: volume0_in
+            type: uint256
+            default: "0"
+          - name: volume1_in
+            type: uint256
+            default: "0"
+          - name: volume0_out
+            type: uint256
+            default: "0"
+          - name: volume1_out
+            type: uint256
+            default: "0"
+        events:
+          - event: Swap
+            operations:
+              - type: upsert
+                set:
+                  - column: swap_count
+                    action: increment
+                  - column: volume0_in
+                    action: add
+                    value: $amount0In
+                  - column: volume1_in
+                    action: add
+                    value: $amount1In
+                  - column: volume0_out
+                    action: add
+                    value: $amount0Out
+                  - column: volume1_out
+                    action: add
+                    value: $amount1Out
+
+      # LP token balances per holder
+      - name: lp_positions
+        columns:
+          - name: holder
+          - name: balance
+            type: uint256
+            default: "0"
+        events:
+          - event: Transfer
+            operations:
+              # Credit recipient
+              - type: upsert
+                where:
+                  holder: $to
+                if: "$to != 0x0000000000000000000000000000000000000000"
+                set:
+                  - column: balance
+                    action: add
+                    value: $value
+              # Debit sender
+              - type: upsert
+                where:
+                  holder: $from
+                if: "$from != 0x0000000000000000000000000000000000000000"
+                set:
+                  - column: balance
+                    action: subtract
+                    value: $value
+
+      # Track unique traders
+      - name: traders
+        columns:
+          - name: address
+          - name: swap_count
+            type: uint64
+            default: "0"
+          - name: first_swap_block
+            type: uint64
+          - name: last_swap_block
+            type: uint64
+        events:
+          - event: Swap
+            operations:
+              - type: upsert
+                where:
+                  address: $sender
+                set:
+                  - column: swap_count
+                    action: increment
+                  - column: first_swap_block
+                    action: min
+                    value: $rindexer_block_number
+                  - column: last_swap_block
+                    action: max
+                    value: $rindexer_block_number

@@ -86,10 +86,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             load_env_from_project_path(&resolved_path);
             handle_codegen_command(resolved_path, subcommand).await
         }
-        Commands::Start { subcommand, path } => {
+        Commands::Start { subcommand, path, yes } => {
             let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;
             load_env_from_project_path(&resolved_path);
-            start(resolved_path, subcommand).await
+            start(resolved_path, subcommand, *yes).await
         }
         Commands::Delete { path } => {
             let resolved_path = resolve_path(path).inspect_err(|e| print_error_message(e))?;

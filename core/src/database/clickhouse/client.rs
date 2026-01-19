@@ -78,6 +78,24 @@ impl ClickhouseClient {
         Ok(data)
     }
 
+    pub async fn query_all<T>(&self, sql: &str) -> Result<Vec<T>, ClickhouseError>
+    where
+        T: Row + for<'b> Deserialize<'b>,
+    {
+        let data = self.conn.query(sql).fetch_all().await?;
+
+        Ok(data)
+    }
+
+    pub async fn query_optional<T>(&self, sql: &str) -> Result<Option<T>, ClickhouseError>
+    where
+        T: Row + for<'b> Deserialize<'b>,
+    {
+        let data = self.conn.query(sql).fetch_optional().await?;
+
+        Ok(data)
+    }
+
     pub async fn execute(&self, sql: &str) -> Result<(), ClickhouseError> {
         self.conn.query(sql).execute().await?;
 

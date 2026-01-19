@@ -27,6 +27,7 @@ bb8-redis = "0.24.0"
 bytes = "1.10.1"
 chrono = { version = "0.4", features = ["serde"] }
 colored = "3.0.0"
+croner = "2"
 csv = "1.4.0"
 clickhouse = { version = "0.13.3", features = ["rustls-tls"] }
 deadpool = { version = "0.12", features = ["rt_tokio_1"] }

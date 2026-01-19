@@ -1,3 +1,5 @@
+//! ClickHouse batch operation macro for efficient bulk database updates.
+
 /// Creates a batch operation function for ClickHouse database.
 ///
 /// # Example
@@ -121,10 +123,12 @@ macro_rules! create_batch_clickhouse_operation {
                 };
 
                 match $op_type {
-                    BatchOperationType::Update | BatchOperationType::Upsert => {
-                        // In ClickHouse, both Update and Upsert map to INSERT
+                    BatchOperationType::Update
+                    | BatchOperationType::Upsert
+                    | BatchOperationType::Insert => {
+                        // In ClickHouse, Update, Upsert, and Insert all map to INSERT
                         // ReplacingMergeTree automatically keeps the latest version
-                        // based on ORDER BY columns
+                        // based on ORDER BY columns for Update/Upsert
 
                         let formatted_columns = column_names
                             .iter()

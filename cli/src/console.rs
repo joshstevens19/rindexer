@@ -84,6 +84,31 @@ pub fn prompt_for_input_list(
     }
 }
 
+/// Prompts the user for a yes/no confirmation.
+/// Returns true for yes, false for no.
+pub fn prompt_yes_no(prompt: &str, default_yes: bool) -> bool {
+    let default_hint = if default_yes { "[Y/n]" } else { "[y/N]" };
+
+    loop {
+        print!("{} {}: ", prompt.yellow(), default_hint);
+        io::stdout().flush().expect("Failed to flush stdout");
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).expect("Failed to read line");
+        let trimmed = input.trim().to_lowercase();
+
+        if trimmed.is_empty() {
+            return default_yes;
+        }
+
+        match trimmed.as_str() {
+            "y" | "yes" => return true,
+            "n" | "no" => return false,
+            _ => println!("{}", "Please enter 'y' or 'n'.".red()),
+        }
+    }
+}
+
 pub fn prompt_for_input(
     field_name: &str,
     pattern: Option<&str>,

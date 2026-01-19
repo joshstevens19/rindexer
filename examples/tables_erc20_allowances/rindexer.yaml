@@ -1,0 +1,43 @@
+# ERC20 Allowances Example
+# Tracks approval allowances (owner, spender) -> amount
+name: ERC20AllowancesExample
+description: Track ERC20 token approval allowances
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+
+storage:
+  postgres:
+    enabled: true
+    drop_each_run: true
+
+contracts:
+  - name: USDC
+    details:
+      - network: ethereum
+        address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+        start_block: "18600000"
+        end_block: "18601000"  # ~1000 blocks for testing
+    abi: ./abis/ERC20.abi.json
+    tables:
+      - name: allowances
+        columns:
+          - name: owner
+          - name: spender
+          - name: amount
+            default: "0"
+        events:
+          - event: Approval
+            operations:
+              - type: upsert
+                where:
+                  owner: $owner
+                  spender: $spender
+                set:
+                  - column: amount
+                    action: set  # Approvals replace, not add
+                    value: $value

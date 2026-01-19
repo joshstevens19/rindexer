@@ -355,6 +355,39 @@ impl JsonRpcCachedProvider {
         Ok(traces)
     }
 
+    /// Makes an `eth_call` request at a specific block for view function calls.
+    ///
+    /// # Arguments
+    /// * `to` - The contract address to call
+    /// * `data` - The encoded calldata
+    /// * `block_number` - The block number at which to execute the call
+    ///
+    /// # Returns
+    /// The raw hex-encoded result bytes from the call
+    #[tracing::instrument(skip_all)]
+    pub async fn eth_call(
+        &self,
+        to: alloy::primitives::Address,
+        data: alloy::primitives::Bytes,
+        block_number: u64,
+    ) -> Result<String, ProviderError> {
+        let result: String = self
+            .provider
+            .raw_request(
+                "eth_call".into(),
+                (
+                    serde_json::json!({
+                        "to": format!("{:?}", to),
+                        "data": format!("0x{}", hex::encode(&data)),
+                    }),
+                    format!("0x{:x}", block_number),
+                ),
+            )
+            .await?;
+
+        Ok(result)
+    }
+
     /// Fetches blocks in concurrent rpc batches.
     #[tracing::instrument(skip_all, fields(len = block_numbers.len()))]
     pub async fn get_block_by_number_batch(

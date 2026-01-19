@@ -1,0 +1,138 @@
+name: ChainlinkCronExample
+description: Demonstrates cron-triggered tables to fetch Chainlink price data on a schedule
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+
+storage:
+  postgres:
+    enabled: true
+    drop_each_run: true
+
+contracts:
+  - name: ChainlinkETHUSD
+    details:
+      - network: ethereum
+        address: "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419"
+    abi: ./abis/ChainlinkAggregator.abi.json
+
+    tables:
+      # Cron-only table - fetches ETH price every 30 seconds
+      # No events, purely scheduled updates
+      - name: eth_price
+        global: true
+        columns:
+          - name: price
+            type: int256
+          - name: decimals
+            type: uint8
+          - name: feed_description
+            type: string
+          - name: updated_block
+            type: uint64
+
+        # Cron triggers - runs on a schedule
+        cron:
+          - interval: 2s
+            network: ethereum
+            operations:
+              - type: upsert
+                set:
+                  - column: price
+                    action: set
+                    value: $call($contract, "latestAnswer()")
+                  - column: decimals
+                    action: set
+                    value: $call($contract, "decimals()")
+                  - column: feed_description
+                    action: set
+                    value: $call($contract, "description()")
+                  - column: updated_block
+                    action: set
+                    value: $rindexer_block_number
+
+      - name: eth_price_history
+        columns:
+          - name: price
+            type: int256
+          - name: decimals
+            type: uint8
+          - name: feed_description
+            type: string
+          - name: updated_block
+            type: uint64
+
+        # Cron triggers - runs on a schedule
+        cron:
+          - interval: 2s
+            network: ethereum
+            operations:
+              - type: insert
+                set:
+                  - column: price
+                    action: set
+                    value: $call($contract, "latestAnswer()")
+                  - column: decimals
+                    action: set
+                    value: $call($contract, "decimals()")
+                  - column: feed_description
+                    action: set
+                    value: $call($contract, "description()")
+                  - column: updated_block
+                    action: set
+                    value: $rindexer_block_number
+
+      # Mixed table - both events AND cron
+      # Events capture AnswerUpdated when Chainlink updates
+      # Cron captures periodic snapshots regardless of events
+      - name: price_history
+        columns:
+          - name: record_id
+            type: string
+          - name: price
+            type: int256
+          - name: source
+            type: string
+          - name: block_number
+            type: uint64
+
+        # Event trigger - captures when Chainlink actually updates the price
+        events:
+          - event: AnswerUpdated
+            operations:
+              - type: upsert
+                where:
+                  record_id: "event-$rindexer_block_number-$rindexer_log_index"
+                set:
+                  - column: price
+                    action: set
+                    value: $current
+                  - column: source
+                    action: set
+                    value: "event"
+                  - column: block_number
+                    action: set
+                    value: $rindexer_block_number
+
+        # Cron trigger - captures periodic snapshots
+        cron:
+          - interval: 1m
+            network: ethereum
+            operations:
+              - type: upsert
+                where:
+                  record_id: "cron-$rindexer_block_number"
+                set:
+                  - column: price
+                    action: set
+                    value: $call($contract, "latestAnswer()")
+                  - column: source
+                    action: set
+                    value: "cron"
+                  - column: block_number
+                    action: set
+                    value: $rindexer_block_number

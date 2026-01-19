@@ -3,8 +3,8 @@
 //! The parser converts the input string into an abstract syntax tree (AST) representation of the expression.
 
 use super::ast::{
-    Accessor, ComparisonOperator, Condition, ConditionLeft, Expression, LiteralValue,
-    LogicalOperator, VariablePath,
+    Accessor, ArithmeticExpr, ArithmeticOperator, ComparisonOperator, Condition, ConditionLeft,
+    Expression, LiteralValue, LogicalOperator, VariablePath, VariableSource,
 };
 use winnow::{
     ascii::{digit1, space0, space1},
@@ -26,7 +26,8 @@ fn is_keyword(ident: &str) -> bool {
 }
 
 /// Common delimiters that can follow a literal value
-const COMMON_DELIMITERS: [char; 10] = [')', '(', ',', '=', '!', '>', '<', '&', '|', ']'];
+const COMMON_DELIMITERS: [char; 14] =
+    [')', '(', ',', '=', '!', '>', '<', '&', '|', ']', '+', '-', '*', '/'];
 
 /// --- Parser functions ---
 /// Parses boolean literals into `LiteralValue::Bool`
@@ -117,28 +118,6 @@ fn parse_quoted_string<'a>(input: &mut Input<'a>) -> ParserResult<LiteralValue<'
     Ok(LiteralValue::Str(string_content_slice))
 }
 
-/// Fallback parser for unquoted strings (applied last)
-fn parse_unquoted_string<'a>(input: &mut Input<'a>) -> ParserResult<LiteralValue<'a>> {
-    take_while(1.., |c: char| c.is_alphanum() || c == '_' || c == '-')
-        .take()
-        .verify(|s: &&str| {
-            let word = *s;
-            !is_keyword(word)
-					// Check if it's NOT an integer-like string
-					&& !(word
-						.chars()
-						.all(|c| c.is_ascii_digit() || c == '+' || c == '-'))
-					// Check if it's NOT a hex string
-					&& !((word.starts_with("0x") || word.starts_with("0X"))
-						&& word.chars().skip(2).all(|c| c.is_ascii_hexdigit()))
-					// Check if it's NOT a float-like string
-					&& !word.contains('.')
-        })
-        .map(|s: &str| LiteralValue::Str(s))
-        .context(StrContext::Expected(StrContextValue::Description("unquoted string literal")))
-        .parse_next(input)
-}
-
 /// Parses an accessor (either an index or a key) from the input
 fn parse_accessor<'a>(input: &mut Input<'a>) -> ParserResult<Accessor<'a>> {
     let index_parser = delimited(
@@ -180,71 +159,88 @@ fn parse_accessor<'a>(input: &mut Input<'a>) -> ParserResult<Accessor<'a>> {
     alt((index_parser, key_parser)).parse_next(input)
 }
 
-fn parse_base_variable_name<'a>(input: &mut Input<'a>) -> ParserResult<&'a str> {
-    alt((
-        // Standard identifier
-        (
-            one_of(|c: char| c.is_alpha() || c == '_'),
-            take_while(0.., |c: char| c.is_alphanum() || c == '_'),
-        )
-            .take(),
-        // Purely numeric identifier
-        (
-            digit1,
-            peek(alt((
-                // Peek ensures it's properly delimited for an LHS base
-                literal('['),
-                literal('.'),
-                space1,
-                eof,
-                literal("=="),
-                literal("!="),
-                literal(">="),
-                literal("<="),
-                literal(">"),
-                literal("<"),
-            ))),
-        )
-            .take(),
-    ))
-    .verify(|ident_slice: &&str| !is_keyword(ident_slice))
-    .map(|s: &str| s)
-    .context(StrContext::Expected(StrContextValue::Description(
-        "variable base name (e.g., 'request', '0')",
-    )))
-    .parse_next(input)
+/// Parses a variable name with optional prefix ($ for event, @ for table).
+/// Returns the variable name (without prefix) and its source.
+fn parse_base_variable_name<'a>(input: &mut Input<'a>) -> ParserResult<(&'a str, VariableSource)> {
+    (
+        // Check for @ (table) or $ (event) prefix
+        opt(alt((literal("@"), literal("$")))),
+        alt((
+            // Standard identifier
+            (
+                one_of(|c: char| c.is_alpha() || c == '_'),
+                take_while(0.., |c: char| c.is_alphanum() || c == '_'),
+            )
+                .take(),
+            // Purely numeric identifier
+            (
+                digit1,
+                peek(alt((
+                    // Peek ensures it's properly delimited for an LHS base
+                    literal('['),
+                    literal('.'),
+                    space1,
+                    eof,
+                    literal("=="),
+                    literal("!="),
+                    literal(">="),
+                    literal("<="),
+                    literal(">"),
+                    literal("<"),
+                    literal("+"),
+                    literal("-"),
+                    literal("*"),
+                    literal("/"),
+                    literal(")"),
+                ))),
+            )
+                .take(),
+        )),
+    )
+        .verify(|(_, ident_slice): &(_, &str)| !is_keyword(ident_slice))
+        .map(|(prefix, name): (Option<&str>, &str)| {
+            let source = match prefix {
+                Some("@") => VariableSource::Table,
+                _ => VariableSource::Event, // $ or no prefix = event
+            };
+            (name, source)
+        })
+        .context(StrContext::Expected(StrContextValue::Description(
+            "variable base name (e.g., 'request', '$value', or '@balance')",
+        )))
+        .parse_next(input)
 }
 
 fn parse_condition_lhs<'a>(input: &mut Input<'a>) -> ParserResult<ConditionLeft<'a>> {
-    // Parse the base variable name
-    let base = parse_base_variable_name.parse_next(input)?;
+    // Parse the base variable name and its source
+    let (base, source) = parse_base_variable_name.parse_next(input)?;
 
     // Parse any accessors (e.g., .key or [0])
     let accessors: Vec<Accessor> = repeat(0.., parse_accessor).parse_next(input)?;
 
     if accessors.is_empty() {
-        Ok(ConditionLeft::Simple(base))
+        Ok(ConditionLeft::Simple(base, source))
     } else {
-        Ok(ConditionLeft::Path(VariablePath { base, accessors }))
+        Ok(ConditionLeft::Path(VariablePath { base, accessors, source }))
     }
 }
 
-/// Parses any valid LiteralValue (boolean, number, string, or variable)
-/// Handles optional whitespace around the value
-fn parse_value<'a>(input: &mut Input<'a>) -> ParserResult<LiteralValue<'a>> {
+/// Parses a literal value without unquoted strings (for use in arithmetic expressions).
+/// This prevents variable names from being matched as literals.
+fn parse_numeric_or_quoted_literal<'a>(input: &mut Input<'a>) -> ParserResult<LiteralValue<'a>> {
     delimited(
         space0,
         alt((
-            parse_quoted_string,       // "'string'" or '"string"'
-            parse_boolean,             // "true" / "false"
-            parse_hex_string,          // "0x..."
+            parse_quoted_string, // "'string'" or '"string"'
+            parse_boolean,       // "true" / "false"
+            parse_hex_string,    // "0x..."
             parse_number_or_fixed_str, // "123" / "-123" / "123.456"
-            parse_unquoted_string,     // "unquoted_string"
+                                 // Note: parse_unquoted_string is intentionally excluded here
         )),
         space0,
     )
     .context(StrContext::Expected(StrContextValue::Description(
-        "boolean, number, hex string or string",
+        "boolean, number, hex string or quoted string",
     )))
     .parse_next(input)
 }
@@ -270,24 +266,121 @@ fn parse_comparison_operator(input: &mut Input<'_>) -> ParserResult<ComparisonOp
     .parse_next(input)
 }
 
-/// Parses a condition expression (e.g., "a == 1") into an `Expression::Condition`
+/// Parses an additive operator (+ or -)
+fn parse_additive_operator(input: &mut Input<'_>) -> ParserResult<ArithmeticOperator> {
+    delimited(
+        space0,
+        alt((
+            literal("+").map(|_| ArithmeticOperator::Add),
+            literal("-").map(|_| ArithmeticOperator::Subtract),
+        )),
+        space0,
+    )
+    .context(StrContext::Expected(StrContextValue::Description("additive operator (+ or -)")))
+    .parse_next(input)
+}
+
+/// Parses a multiplicative operator (* or /)
+fn parse_multiplicative_operator(input: &mut Input<'_>) -> ParserResult<ArithmeticOperator> {
+    delimited(
+        space0,
+        alt((
+            literal("*").map(|_| ArithmeticOperator::Multiply),
+            literal("/").map(|_| ArithmeticOperator::Divide),
+        )),
+        space0,
+    )
+    .context(StrContext::Expected(StrContextValue::Description("multiplicative operator (* or /)")))
+    .parse_next(input)
+}
+
+/// Parses a primary arithmetic operand: variable, literal, or parenthesized arithmetic expression
+fn parse_arithmetic_primary<'a>(input: &mut Input<'a>) -> ParserResult<ArithmeticExpr<'a>> {
+    delimited(
+        space0,
+        alt((
+            // Parenthesized arithmetic expression
+            delimited((literal("("), space0), parse_arithmetic_expr, (space0, literal(")"))),
+            // Numeric/quoted literals - try this first to match numbers like "25" before variable names
+            // Uses parse_numeric_or_quoted_literal to avoid matching identifiers as unquoted strings
+            parse_numeric_or_quoted_literal.map(ArithmeticExpr::Literal),
+            // Variable reference - try this after numeric literals
+            parse_condition_lhs.map(ArithmeticExpr::Variable),
+        )),
+        space0,
+    )
+    .context(StrContext::Expected(StrContextValue::Description(
+        "arithmetic operand (variable, number, or parenthesized expression)",
+    )))
+    .parse_next(input)
+}
+
+/// Parses multiplicative expressions (* and /) - higher precedence
+fn parse_multiplicative_expr<'a>(input: &mut Input<'a>) -> ParserResult<ArithmeticExpr<'a>> {
+    let left = parse_arithmetic_primary.parse_next(input)?;
+
+    let trailing_parser = (parse_multiplicative_operator, parse_arithmetic_primary);
+
+    let folded_parser = repeat(0.., trailing_parser).fold(
+        move || left.clone(),
+        |acc, (op, right)| ArithmeticExpr::Binary {
+            left: Box::new(acc),
+            operator: op,
+            right: Box::new(right),
+        },
+    );
+
+    folded_parser
+        .context(StrContext::Expected(StrContextValue::Description("multiplicative expression")))
+        .parse_next(input)
+}
+
+/// Parses additive expressions (+ and -) - lower precedence than multiplicative
+fn parse_additive_expr<'a>(input: &mut Input<'a>) -> ParserResult<ArithmeticExpr<'a>> {
+    let left = parse_multiplicative_expr.parse_next(input)?;
+
+    let trailing_parser = (parse_additive_operator, parse_multiplicative_expr);
+
+    let folded_parser = repeat(0.., trailing_parser).fold(
+        move || left.clone(),
+        |acc, (op, right)| ArithmeticExpr::Binary {
+            left: Box::new(acc),
+            operator: op,
+            right: Box::new(right),
+        },
+    );
+
+    folded_parser
+        .context(StrContext::Expected(StrContextValue::Description("additive expression")))
+        .parse_next(input)
+}
+
+/// Parses a complete arithmetic expression
+fn parse_arithmetic_expr<'a>(input: &mut Input<'a>) -> ParserResult<ArithmeticExpr<'a>> {
+    parse_additive_expr.parse_next(input)
+}
+
+/// Parses a condition expression (e.g., "a == 1" or "value + fee > balance * 2")
 fn parse_condition<'a>(input: &mut Input<'a>) -> ParserResult<Expression<'a>> {
-    let (left, operator, right) = (parse_condition_lhs, parse_comparison_operator, parse_value)
-        .context(StrContext::Expected(StrContextValue::Description(
-            "condition expression (e.g., variable == value)",
-        )))
-        .parse_next(input)?;
+    let (left, operator, right) =
+        (parse_arithmetic_expr, parse_comparison_operator, parse_arithmetic_expr)
+            .context(StrContext::Expected(StrContextValue::Description(
+                "condition expression (e.g., variable == value or value + 1 > 100)",
+            )))
+            .parse_next(input)?;
 
     let condition = Condition { left, operator, right };
 
     Ok(Expression::Condition(condition))
 }
 
-/// Parses the highest precedence components: conditions and parenthesized expressions
+/// Parses the highest precedence components: conditions, parenthesized expressions, and negations
 fn parse_term<'a>(input: &mut Input<'a>) -> ParserResult<Expression<'a>> {
     delimited(
         space0,
         alt((
+            // Parse negated expression: !(...) or !condition
+            (literal("!"), space0, parse_term).map(|(_, _, expr)| Expression::Not(Box::new(expr))),
             // Parse a parenthesized expression
             delimited(
                 (literal("("), space0),
@@ -302,7 +395,7 @@ fn parse_term<'a>(input: &mut Input<'a>) -> ParserResult<Expression<'a>> {
         space0,
     )
     .context(StrContext::Expected(StrContextValue::Description(
-        "condition or parenthesized expression",
+        "condition, parenthesized expression, or negation",
     )))
     .parse_next(input)
 }
@@ -362,6 +455,156 @@ pub fn parse(expression_str: &str) -> Result<Expression<'_>, ParseError<Input<'_
     let mut full_expression_parser = (parse_expression, eof).map(|(expr, _)| expr);
 
     full_expression_parser.parse(expression_str)
+}
+
+/// Parses a base variable name with optional $ prefix (for computed columns).
+/// Parses a variable name with optional prefix ($ for event, @ for table) for arithmetic expressions.
+/// Returns the variable name (without prefix) and its source.
+fn parse_base_variable_name_with_dollar<'a>(
+    input: &mut Input<'a>,
+) -> ParserResult<(&'a str, VariableSource)> {
+    (
+        // Check for @ (table) or $ (event) prefix
+        opt(alt((literal("@"), literal("$")))),
+        alt((
+            // Standard identifier
+            (
+                one_of(|c: char| c.is_alpha() || c == '_'),
+                take_while(0.., |c: char| c.is_alphanum() || c == '_'),
+            )
+                .take(),
+            // Purely numeric identifier
+            (
+                digit1,
+                peek(alt((
+                    literal('['),
+                    literal('.'),
+                    space1,
+                    eof,
+                    literal("+"),
+                    literal("-"),
+                    literal("*"),
+                    literal("/"),
+                    literal(")"),
+                ))),
+            )
+                .take(),
+        )),
+    )
+        .verify(|(_, ident_slice): &(_, &str)| !is_keyword(ident_slice))
+        .map(|(prefix, name): (Option<&str>, &str)| {
+            let source = match prefix {
+                Some("@") => VariableSource::Table,
+                _ => VariableSource::Event, // $ or no prefix = event
+            };
+            (name, source)
+        })
+        .context(StrContext::Expected(StrContextValue::Description(
+            "variable name (with $, @, or no prefix)",
+        )))
+        .parse_next(input)
+}
+
+/// Parses a condition LHS that allows optional $ or @ prefix on variable names.
+fn parse_condition_lhs_with_dollar<'a>(input: &mut Input<'a>) -> ParserResult<ConditionLeft<'a>> {
+    // Parse the base variable name and its source
+    let (base, source) = parse_base_variable_name_with_dollar.parse_next(input)?;
+
+    // Parse any accessors (e.g., .key or [0])
+    let accessors: Vec<Accessor> = repeat(0.., parse_accessor).parse_next(input)?;
+
+    if accessors.is_empty() {
+        Ok(ConditionLeft::Simple(base, source))
+    } else {
+        Ok(ConditionLeft::Path(VariablePath { base, accessors, source }))
+    }
+}
+
+/// Parses a primary arithmetic operand with $ prefix support: variable, literal, or parenthesized expression
+fn parse_arithmetic_primary_with_dollar<'a>(
+    input: &mut Input<'a>,
+) -> ParserResult<ArithmeticExpr<'a>> {
+    delimited(
+        space0,
+        alt((
+            // Parenthesized arithmetic expression
+            delimited(
+                (literal("("), space0),
+                parse_arithmetic_expr_with_dollar,
+                (space0, literal(")")),
+            ),
+            // Numeric/quoted literals - try this first to match numbers before variables
+            parse_numeric_or_quoted_literal.map(ArithmeticExpr::Literal),
+            // Variable reference (with optional $) - try after numeric literals
+            parse_condition_lhs_with_dollar.map(ArithmeticExpr::Variable),
+        )),
+        space0,
+    )
+    .context(StrContext::Expected(StrContextValue::Description(
+        "arithmetic operand (variable with optional $, number, or parenthesized expression)",
+    )))
+    .parse_next(input)
+}
+
+/// Parses multiplicative expressions with $ prefix support
+fn parse_multiplicative_expr_with_dollar<'a>(
+    input: &mut Input<'a>,
+) -> ParserResult<ArithmeticExpr<'a>> {
+    let left = parse_arithmetic_primary_with_dollar.parse_next(input)?;
+
+    let trailing_parser = (parse_multiplicative_operator, parse_arithmetic_primary_with_dollar);
+
+    let folded_parser = repeat(0.., trailing_parser).fold(
+        move || left.clone(),
+        |acc, (op, right)| ArithmeticExpr::Binary {
+            left: Box::new(acc),
+            operator: op,
+            right: Box::new(right),
+        },
+    );
+
+    folded_parser
+        .context(StrContext::Expected(StrContextValue::Description("multiplicative expression")))
+        .parse_next(input)
+}
+
+/// Parses additive expressions with $ prefix support
+fn parse_additive_expr_with_dollar<'a>(input: &mut Input<'a>) -> ParserResult<ArithmeticExpr<'a>> {
+    let left = parse_multiplicative_expr_with_dollar.parse_next(input)?;
+
+    let trailing_parser = (parse_additive_operator, parse_multiplicative_expr_with_dollar);
+
+    let folded_parser = repeat(0.., trailing_parser).fold(
+        move || left.clone(),
+        |acc, (op, right)| ArithmeticExpr::Binary {
+            left: Box::new(acc),
+            operator: op,
+            right: Box::new(right),
+        },
+    );
+
+    folded_parser
+        .context(StrContext::Expected(StrContextValue::Description("additive expression")))
+        .parse_next(input)
+}
+
+/// Parses a complete arithmetic expression with $ prefix support
+fn parse_arithmetic_expr_with_dollar<'a>(
+    input: &mut Input<'a>,
+) -> ParserResult<ArithmeticExpr<'a>> {
+    parse_additive_expr_with_dollar.parse_next(input)
+}
+
+/// Parses a standalone arithmetic expression (for computed columns).
+/// This parses expressions like "$value * 2", "$amount + $fee", or "$ratio / 100".
+///
+/// The input can contain variable references with $ prefix to reference event fields.
+/// For example: "$value", "$amount / $total", "$fee + $tip * 2"
+pub fn parse_arithmetic_expression(
+    expression_str: &str,
+) -> Result<ArithmeticExpr<'_>, ParseError<Input<'_>, ContextError>> {
+    let mut full_arith_parser = (parse_arithmetic_expr_with_dollar, eof).map(|(expr, _)| expr);
+    full_arith_parser.parse(expression_str)
 }
 
 #[cfg(test)]
@@ -485,24 +728,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_unquoted_string() {
-        // Success cases
-        assert_parses_ok(parse_unquoted_string, "foobar", LiteralValue::Str("foobar"), "");
-        assert_parses_ok(parse_unquoted_string, "foo_bar", LiteralValue::Str("foo_bar"), "");
-        assert_parses_ok(parse_unquoted_string, "foo-bar", LiteralValue::Str("foo-bar"), "");
-        assert_parses_ok(parse_unquoted_string, "a123", LiteralValue::Str("a123"), "");
-        assert_parses_ok(parse_unquoted_string, "unquoted ", LiteralValue::Str("unquoted"), " ");
-
-        // Failures
-        assert_parse_fails(parse_unquoted_string, "true"); // Keyword
-        assert_parse_fails(parse_unquoted_string, "123"); // Should be parsed as number
-        assert_parse_fails(parse_unquoted_string, "-45"); // Should be parsed as number
-        assert_parse_fails(parse_unquoted_string, "0xFA"); // Should be parsed as hex string
-        assert_parse_fails(parse_unquoted_string, "123.45"); // Should be parsed as number (float-like)
-        assert_parse_fails(parse_unquoted_string, ""); // Needs 1+ char
-    }
-
-    #[test]
     fn test_is_keyword() {
         // Success cases
         assert!(is_keyword("true"));
@@ -535,15 +760,71 @@ mod tests {
 
     #[test]
     fn test_parse_base_variable_name() {
-        assert_parses_ok(parse_base_variable_name, "request", "request", "");
-        assert_parses_ok(parse_base_variable_name, "_privateVar", "_privateVar", "");
-        assert_parses_ok(parse_base_variable_name, "var123", "var123", "");
-        assert_parses_ok(parse_base_variable_name, "response ", "response", " ");
-        assert_parses_ok(parse_base_variable_name, "0", "0", ""); // Numeric LHS base
-        assert_parses_ok(parse_base_variable_name, "123[", "123", "["); // Numeric LHS base, peek '['
-        assert_parses_ok(parse_base_variable_name, "45.field", "45", ".field"); // Numeric LHS base, peek '.'
-                                                                                // Peek should ensure '123' is taken if followed by space then op
-        assert_parses_ok(parse_base_variable_name, "123 ==", "123", " ==");
+        // Basic event variables (no prefix or $ prefix)
+        assert_parses_ok(
+            parse_base_variable_name,
+            "request",
+            ("request", VariableSource::Event),
+            "",
+        );
+        assert_parses_ok(
+            parse_base_variable_name,
+            "_privateVar",
+            ("_privateVar", VariableSource::Event),
+            "",
+        );
+        assert_parses_ok(parse_base_variable_name, "var123", ("var123", VariableSource::Event), "");
+        assert_parses_ok(
+            parse_base_variable_name,
+            "response ",
+            ("response", VariableSource::Event),
+            " ",
+        );
+        assert_parses_ok(parse_base_variable_name, "0", ("0", VariableSource::Event), ""); // Numeric LHS base
+        assert_parses_ok(parse_base_variable_name, "123[", ("123", VariableSource::Event), "["); // Numeric LHS base, peek '['
+        assert_parses_ok(
+            parse_base_variable_name,
+            "45.field",
+            ("45", VariableSource::Event),
+            ".field",
+        ); // Numeric LHS base, peek '.'
+        assert_parses_ok(parse_base_variable_name, "123 ==", ("123", VariableSource::Event), " ==");
+
+        // $ prefix support - the $ is consumed but not included in result, source is Event
+        assert_parses_ok(parse_base_variable_name, "$value", ("value", VariableSource::Event), "");
+        assert_parses_ok(parse_base_variable_name, "$from", ("from", VariableSource::Event), "");
+        assert_parses_ok(
+            parse_base_variable_name,
+            "$_private",
+            ("_private", VariableSource::Event),
+            "",
+        );
+        assert_parses_ok(
+            parse_base_variable_name,
+            "$var123 ==",
+            ("var123", VariableSource::Event),
+            " ==",
+        );
+
+        // @ prefix support - table references
+        assert_parses_ok(
+            parse_base_variable_name,
+            "@balance",
+            ("balance", VariableSource::Table),
+            "",
+        );
+        assert_parses_ok(
+            parse_base_variable_name,
+            "@last_updated",
+            ("last_updated", VariableSource::Table),
+            "",
+        );
+        assert_parses_ok(
+            parse_base_variable_name,
+            "@count ==",
+            ("count", VariableSource::Table),
+            " ==",
+        );
 
         assert_parse_fails(parse_base_variable_name, "true"); // Keyword
         assert_parse_fails(parse_base_variable_name, "123true"); // Invalid identifier
@@ -552,20 +833,30 @@ mod tests {
 
     #[test]
     fn test_parse_condition_lhs() {
-        assert_parses_ok(parse_condition_lhs, "var", ConditionLeft::Simple("var"), "");
+        assert_parses_ok(
+            parse_condition_lhs,
+            "var",
+            ConditionLeft::Simple("var", VariableSource::Event),
+            "",
+        );
         assert_parses_ok(
             parse_condition_lhs,
             "var.key",
             ConditionLeft::Path(VariablePath {
                 base: "var",
                 accessors: vec![Accessor::Key("key")],
+                source: VariableSource::Event,
             }),
             "",
         );
         assert_parses_ok(
             parse_condition_lhs,
             "arr[0]",
-            ConditionLeft::Path(VariablePath { base: "arr", accessors: vec![Accessor::Index(0)] }),
+            ConditionLeft::Path(VariablePath {
+                base: "arr",
+                accessors: vec![Accessor::Index(0)],
+                source: VariableSource::Event,
+            }),
             "",
         );
         assert_parses_ok(
@@ -574,6 +865,7 @@ mod tests {
             ConditionLeft::Path(VariablePath {
                 base: "obj",
                 accessors: vec![Accessor::Key("arr"), Accessor::Index(1), Accessor::Key("field")],
+                source: VariableSource::Event,
             }),
             "",
         );
@@ -583,19 +875,28 @@ mod tests {
             ConditionLeft::Path(VariablePath {
                 base: "0",
                 accessors: vec![Accessor::Key("field")],
+                source: VariableSource::Event,
             }),
             "",
         );
         assert_parses_ok(
             parse_condition_lhs,
             "obj.0",
-            ConditionLeft::Path(VariablePath { base: "obj", accessors: vec![Accessor::Key("0")] }),
+            ConditionLeft::Path(VariablePath {
+                base: "obj",
+                accessors: vec![Accessor::Key("0")],
+                source: VariableSource::Event,
+            }),
             "",
         );
         assert_parses_ok(
             parse_condition_lhs,
             "0.1", // e.g. base_param_named_0.field_named_1
-            ConditionLeft::Path(VariablePath { base: "0", accessors: vec![Accessor::Key("1")] }),
+            ConditionLeft::Path(VariablePath {
+                base: "0",
+                accessors: vec![Accessor::Key("1")],
+                source: VariableSource::Event,
+            }),
             "",
         );
         assert_parses_ok(
@@ -604,6 +905,7 @@ mod tests {
             ConditionLeft::Path(VariablePath {
                 base: "data",
                 accessors: vec![Accessor::Key("123"), Accessor::Key("field")],
+                source: VariableSource::Event,
             }),
             "",
         );
@@ -613,23 +915,10 @@ mod tests {
             ConditionLeft::Path(VariablePath {
                 base: "map",
                 accessors: vec![Accessor::Key("0"), Accessor::Index(1), Accessor::Key("name")],
+                source: VariableSource::Event,
             }),
             "",
         );
-    }
-
-    #[test]
-    fn test_parse_value_alt_order() {
-        // Order: quoted_string, boolean, hex_string, number_or_fixed, unquoted_string
-        assert_parses_ok(parse_value, " 'hello' ", LiteralValue::Str("hello"), "");
-        assert_parses_ok(parse_value, " true ", LiteralValue::Bool(true), "");
-        assert_parses_ok(parse_value, " 0xAB ", LiteralValue::Str("0xAB"), "");
-        assert_parses_ok(parse_value, " 123.45 ", LiteralValue::Number("123.45"), "");
-        assert_parses_ok(parse_value, " 123 ", LiteralValue::Number("123"), "");
-        assert_parses_ok(parse_value, " unquoted_val ", LiteralValue::Str("unquoted_val"), "");
-        assert_parses_ok(parse_value, " true_val ", LiteralValue::Str("true_val"), ""); // 'true' is prefix of 'true_val', boolean is tried, fails, then unquoted.
-        assert_parses_ok(parse_value, " 0xVal ", LiteralValue::Str("0xVal"), "");
-        // '0x' is prefix, hex is tried, fails on 'V', then unquoted.
     }
 
     #[test]
@@ -646,31 +935,69 @@ mod tests {
     fn test_parse_condition() {
         let expr = "var == 123";
         let expected = Expression::Condition(Condition {
-            left: ConditionLeft::Simple("var"),
+            left: ArithmeticExpr::Variable(ConditionLeft::Simple("var", VariableSource::Event)),
             operator: ComparisonOperator::Eq,
-            right: LiteralValue::Number("123"),
+            right: ArithmeticExpr::Literal(LiteralValue::Number("123")),
         });
         assert_parses_ok(parse_condition, expr, expected, "");
 
         let expr_path = "obj.count > 0.5";
         let expected_path = Expression::Condition(Condition {
-            left: ConditionLeft::Path(VariablePath {
+            left: ArithmeticExpr::Variable(ConditionLeft::Path(VariablePath {
                 base: "obj",
                 accessors: vec![Accessor::Key("count")],
-            }),
+                source: VariableSource::Event,
+            })),
             operator: ComparisonOperator::Gt,
-            right: LiteralValue::Number("0.5"),
+            right: ArithmeticExpr::Literal(LiteralValue::Number("0.5")),
         });
         assert_parses_ok(parse_condition, expr_path, expected_path, "");
+    }
+
+    #[test]
+    fn test_parse_condition_with_dollar_prefix() {
+        // $ prefix is stripped from variable names for consistent lookup
+        let expr = "$from != $to";
+        let expected = Expression::Condition(Condition {
+            left: ArithmeticExpr::Variable(ConditionLeft::Simple("from", VariableSource::Event)),
+            operator: ComparisonOperator::Ne,
+            right: ArithmeticExpr::Variable(ConditionLeft::Simple("to", VariableSource::Event)),
+        });
+        assert_parses_ok(parse_condition, expr, expected, "");
+
+        // $ with path access
+        let expr_path = "$data.amount > 0";
+        let expected_path = Expression::Condition(Condition {
+            left: ArithmeticExpr::Variable(ConditionLeft::Path(VariablePath {
+                base: "data",
+                accessors: vec![Accessor::Key("amount")],
+                source: VariableSource::Event,
+            })),
+            operator: ComparisonOperator::Gt,
+            right: ArithmeticExpr::Literal(LiteralValue::Number("0")),
+        });
+        assert_parses_ok(parse_condition, expr_path, expected_path, "");
+
+        // Mixed: with and without $ prefix
+        let expr_mixed = "$value > balance";
+        let expected_mixed = Expression::Condition(Condition {
+            left: ArithmeticExpr::Variable(ConditionLeft::Simple("value", VariableSource::Event)),
+            operator: ComparisonOperator::Gt,
+            right: ArithmeticExpr::Variable(ConditionLeft::Simple(
+                "balance",
+                VariableSource::Event,
+            )),
+        });
+        assert_parses_ok(parse_condition, expr_mixed, expected_mixed, "");
     }
 
     #[test]
     fn test_parse_term_parentheses() {
         let expr = "(var == 123)";
         let inner_cond = Condition {
-            left: ConditionLeft::Simple("var"),
+            left: ArithmeticExpr::Variable(ConditionLeft::Simple("var", VariableSource::Event)),
             operator: ComparisonOperator::Eq,
-            right: LiteralValue::Number("123"),
+            right: ArithmeticExpr::Literal(LiteralValue::Number("123")),
         };
         let expected = Expression::Condition(inner_cond.clone()); // The term itself is the condition
         assert_parses_ok(parse_term, expr, expected, "");
@@ -678,15 +1005,21 @@ mod tests {
         let expr_nested = "( var1 > 10 && var2 < 'abc' )";
         let expected_nested = Expression::Logical {
             left: Box::new(Expression::Condition(Condition {
-                left: ConditionLeft::Simple("var1"),
+                left: ArithmeticExpr::Variable(ConditionLeft::Simple(
+                    "var1",
+                    VariableSource::Event,
+                )),
                 operator: ComparisonOperator::Gt,
-                right: LiteralValue::Number("10"),
+                right: ArithmeticExpr::Literal(LiteralValue::Number("10")),
             })),
             operator: LogicalOperator::And,
             right: Box::new(Expression::Condition(Condition {
-                left: ConditionLeft::Simple("var2"),
+                left: ArithmeticExpr::Variable(ConditionLeft::Simple(
+                    "var2",
+                    VariableSource::Event,
+                )),
                 operator: ComparisonOperator::Lt,
-                right: LiteralValue::Str("abc"),
+                right: ArithmeticExpr::Literal(LiteralValue::Str("abc")),
             })),
         };
         // parse_term calls parse_expression for parentheses, parse_expression calls parse_or_expression...
@@ -698,15 +1031,15 @@ mod tests {
         let expr = "a == 1 && b < 2.0";
         let expected = Expression::Logical {
             left: Box::new(Expression::Condition(Condition {
-                left: ConditionLeft::Simple("a"),
+                left: ArithmeticExpr::Variable(ConditionLeft::Simple("a", VariableSource::Event)),
                 operator: ComparisonOperator::Eq,
-                right: LiteralValue::Number("1"),
+                right: ArithmeticExpr::Literal(LiteralValue::Number("1")),
             })),
             operator: LogicalOperator::And,
             right: Box::new(Expression::Condition(Condition {
-                left: ConditionLeft::Simple("b"),
+                left: ArithmeticExpr::Variable(ConditionLeft::Simple("b", VariableSource::Event)),
                 operator: ComparisonOperator::Lt,
-                right: LiteralValue::Number("2.0"),
+                right: ArithmeticExpr::Literal(LiteralValue::Number("2.0")),
             })),
         };
         // Test parse_and_expression directly or parse_expression for full precedence
@@ -717,15 +1050,15 @@ mod tests {
         let expr_or = "a == 1 || b < 'text'";
         let expected_or = Expression::Logical {
             left: Box::new(Expression::Condition(Condition {
-                left: ConditionLeft::Simple("a"),
+                left: ArithmeticExpr::Variable(ConditionLeft::Simple("a", VariableSource::Event)),
                 operator: ComparisonOperator::Eq,
-                right: LiteralValue::Number("1"),
+                right: ArithmeticExpr::Literal(LiteralValue::Number("1")),
             })),
             operator: LogicalOperator::Or,
             right: Box::new(Expression::Condition(Condition {
-                left: ConditionLeft::Simple("b"),
+                left: ArithmeticExpr::Variable(ConditionLeft::Simple("b", VariableSource::Event)),
                 operator: ComparisonOperator::Lt,
-                right: LiteralValue::Str("text"),
+                right: ArithmeticExpr::Literal(LiteralValue::Str("text")),
             })),
         };
         assert_eq!(parse(expr_or).unwrap(), expected_or);
@@ -734,22 +1067,28 @@ mod tests {
         let expr_mixed = "a == 1 || b < 2 && c > 3";
         let expected_mixed = Expression::Logical {
             left: Box::new(Expression::Condition(Condition {
-                left: ConditionLeft::Simple("a"),
+                left: ArithmeticExpr::Variable(ConditionLeft::Simple("a", VariableSource::Event)),
                 operator: ComparisonOperator::Eq,
-                right: LiteralValue::Number("1"),
+                right: ArithmeticExpr::Literal(LiteralValue::Number("1")),
             })),
             operator: LogicalOperator::Or,
             right: Box::new(Expression::Logical {
                 left: Box::new(Expression::Condition(Condition {
-                    left: ConditionLeft::Simple("b"),
+                    left: ArithmeticExpr::Variable(ConditionLeft::Simple(
+                        "b",
+                        VariableSource::Event,
+                    )),
                     operator: ComparisonOperator::Lt,
-                    right: LiteralValue::Number("2"),
+                    right: ArithmeticExpr::Literal(LiteralValue::Number("2")),
                 })),
                 operator: LogicalOperator::And,
                 right: Box::new(Expression::Condition(Condition {
-                    left: ConditionLeft::Simple("c"),
+                    left: ArithmeticExpr::Variable(ConditionLeft::Simple(
+                        "c",
+                        VariableSource::Event,
+                    )),
                     operator: ComparisonOperator::Gt,
-                    right: LiteralValue::Number("3"),
+                    right: ArithmeticExpr::Literal(LiteralValue::Number("3")),
                 })),
             }),
         };
@@ -760,22 +1099,28 @@ mod tests {
         let expected_parens = Expression::Logical {
             left: Box::new(Expression::Logical {
                 left: Box::new(Expression::Condition(Condition {
-                    left: ConditionLeft::Simple("a"),
+                    left: ArithmeticExpr::Variable(ConditionLeft::Simple(
+                        "a",
+                        VariableSource::Event,
+                    )),
                     operator: ComparisonOperator::Eq,
-                    right: LiteralValue::Number("1"),
+                    right: ArithmeticExpr::Literal(LiteralValue::Number("1")),
                 })),
                 operator: LogicalOperator::Or,
                 right: Box::new(Expression::Condition(Condition {
-                    left: ConditionLeft::Simple("b"),
+                    left: ArithmeticExpr::Variable(ConditionLeft::Simple(
+                        "b",
+                        VariableSource::Event,
+                    )),
                     operator: ComparisonOperator::Lt,
-                    right: LiteralValue::Number("2"),
+                    right: ArithmeticExpr::Literal(LiteralValue::Number("2")),
                 })),
             }),
             operator: LogicalOperator::And,
             right: Box::new(Expression::Condition(Condition {
-                left: ConditionLeft::Simple("c"),
+                left: ArithmeticExpr::Variable(ConditionLeft::Simple("c", VariableSource::Event)),
                 operator: ComparisonOperator::Gt,
-                right: LiteralValue::Number("3"),
+                right: ArithmeticExpr::Literal(LiteralValue::Number("3")),
             })),
         };
         assert_eq!(parse(expr_parens).unwrap(), expected_parens);
@@ -786,5 +1131,247 @@ mod tests {
         assert!(parse("var == 123").is_ok());
         assert!(parse("var == 123 && extra_stuff_not_parsed").is_err()); // Fails eof
         assert!(parse("(a == 1 || b < 2)&& c > 3").is_ok()); // No space around AND
+    }
+
+    #[test]
+    fn test_parse_table_reference_with_at_prefix() {
+        // @balance should parse as a table reference
+        let expr = "@balance > 0";
+        let parsed = parse(expr).unwrap();
+        assert!(matches!(
+            &parsed,
+            Expression::Condition(Condition {
+                left: ArithmeticExpr::Variable(ConditionLeft::Simple(
+                    "balance",
+                    VariableSource::Table
+                )),
+                ..
+            })
+        ));
+
+        // $value should parse as an event reference
+        let expr2 = "$value > 0";
+        let parsed2 = parse(expr2).unwrap();
+        assert!(matches!(
+            &parsed2,
+            Expression::Condition(Condition {
+                left: ArithmeticExpr::Variable(ConditionLeft::Simple(
+                    "value",
+                    VariableSource::Event
+                )),
+                ..
+            })
+        ));
+
+        // Mixed: event and table references
+        let expr3 = "$value > @balance";
+        let parsed3 = parse(expr3).unwrap();
+        assert!(matches!(
+            &parsed3,
+            Expression::Condition(Condition {
+                left: ArithmeticExpr::Variable(ConditionLeft::Simple(
+                    "value",
+                    VariableSource::Event
+                )),
+                right: ArithmeticExpr::Variable(ConditionLeft::Simple(
+                    "balance",
+                    VariableSource::Table
+                )),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn test_has_table_references() {
+        // Pure event condition - no table references
+        let expr1 = parse("$value > 100").unwrap();
+        assert!(!expr1.has_table_references());
+
+        // Table reference on right side
+        let expr2 = parse("$value > @balance").unwrap();
+        assert!(expr2.has_table_references());
+
+        // Table reference on left side
+        let expr3 = parse("@balance < 1000").unwrap();
+        assert!(expr3.has_table_references());
+
+        // Logical expression with table reference
+        let expr4 = parse("$value > 0 && $value > @balance").unwrap();
+        assert!(expr4.has_table_references());
+
+        // Logical expression without table reference
+        let expr5 = parse("$value > 0 && $from != $to").unwrap();
+        assert!(!expr5.has_table_references());
+    }
+
+    #[test]
+    fn test_to_sql_condition_simple() {
+        let table_name = "token_balances";
+
+        // Event variable becomes EXCLUDED."column" (quoted for safety)
+        let expr1 = parse("$value > 100").unwrap();
+        assert_eq!(expr1.to_sql_condition(table_name), "EXCLUDED.\"value\" > 100");
+
+        // Table variable becomes table_name."column"
+        let expr2 = parse("@balance < 1000").unwrap();
+        assert_eq!(expr2.to_sql_condition(table_name), "token_balances.\"balance\" < 1000");
+
+        // Mixed: event > table
+        let expr3 = parse("$value > @balance").unwrap();
+        assert_eq!(
+            expr3.to_sql_condition(table_name),
+            "EXCLUDED.\"value\" > token_balances.\"balance\""
+        );
+    }
+
+    #[test]
+    fn test_to_sql_condition_logical() {
+        let table_name = "token_balances";
+
+        // AND condition
+        let expr1 = parse("$value > 0 && $value > @balance").unwrap();
+        assert_eq!(
+            expr1.to_sql_condition(table_name),
+            "(EXCLUDED.\"value\" > 0 AND EXCLUDED.\"value\" > token_balances.\"balance\")"
+        );
+
+        // OR condition
+        let expr2 = parse("$value > @balance || $force == true").unwrap();
+        assert_eq!(
+            expr2.to_sql_condition(table_name),
+            "(EXCLUDED.\"value\" > token_balances.\"balance\" OR EXCLUDED.\"force\" = TRUE)"
+        );
+    }
+
+    #[test]
+    fn test_to_sql_condition_with_schema() {
+        // Table name with schema prefix
+        let table_name = "\"myschema\".\"token_balances\"";
+
+        let expr = parse("$value > @balance").unwrap();
+        assert_eq!(
+            expr.to_sql_condition(table_name),
+            "EXCLUDED.\"value\" > \"myschema\".\"token_balances\".\"balance\""
+        );
+    }
+
+    #[test]
+    fn test_to_sql_condition_reserved_keywords() {
+        // Test that reserved keywords like "order", "group" are safely quoted
+        let table_name = "my_table";
+
+        let expr = parse("$order > @group").unwrap();
+        assert_eq!(expr.to_sql_condition(table_name), "EXCLUDED.\"order\" > my_table.\"group\"");
+    }
+
+    #[test]
+    fn test_to_sql_condition_string_escaping() {
+        // Test that single quotes in strings are properly escaped
+        let table_name = "my_table";
+
+        // String with single quote should be escaped
+        let expr = parse("$name == \"O'Brien\"").unwrap();
+        assert_eq!(expr.to_sql_condition(table_name), "EXCLUDED.\"name\" = 'O''Brien'");
+
+        // Multiple quotes
+        let expr2 = parse("$desc == \"It's a 'test'\"").unwrap();
+        assert_eq!(expr2.to_sql_condition(table_name), "EXCLUDED.\"desc\" = 'It''s a ''test'''");
+    }
+
+    #[test]
+    fn test_parse_not_operator() {
+        // Simple negation of a condition
+        let expr1 = parse("!($value > 100)").unwrap();
+        let expected1 = Expression::Not(Box::new(Expression::Condition(Condition {
+            left: ArithmeticExpr::Variable(ConditionLeft::Simple("value", VariableSource::Event)),
+            operator: ComparisonOperator::Gt,
+            right: ArithmeticExpr::Literal(LiteralValue::Number("100")),
+        })));
+        assert_eq!(expr1, expected1);
+
+        // Negation of a logical AND expression
+        let expr2 = parse("!($a == 1 && $b == 2)").unwrap();
+        let expected2 = Expression::Not(Box::new(Expression::Logical {
+            left: Box::new(Expression::Condition(Condition {
+                left: ArithmeticExpr::Variable(ConditionLeft::Simple("a", VariableSource::Event)),
+                operator: ComparisonOperator::Eq,
+                right: ArithmeticExpr::Literal(LiteralValue::Number("1")),
+            })),
+            operator: LogicalOperator::And,
+            right: Box::new(Expression::Condition(Condition {
+                left: ArithmeticExpr::Variable(ConditionLeft::Simple("b", VariableSource::Event)),
+                operator: ComparisonOperator::Eq,
+                right: ArithmeticExpr::Literal(LiteralValue::Number("2")),
+            })),
+        }));
+        assert_eq!(expr2, expected2);
+
+        // Double negation
+        let expr3 = parse("!!($value > 0)").unwrap();
+        let inner = Expression::Condition(Condition {
+            left: ArithmeticExpr::Variable(ConditionLeft::Simple("value", VariableSource::Event)),
+            operator: ComparisonOperator::Gt,
+            right: ArithmeticExpr::Literal(LiteralValue::Number("0")),
+        });
+        let expected3 = Expression::Not(Box::new(Expression::Not(Box::new(inner))));
+        assert_eq!(expr3, expected3);
+
+        // Negation combined with AND
+        let expr4 = parse("!($paused == true) && $active == true").unwrap();
+        let expected4 = Expression::Logical {
+            left: Box::new(Expression::Not(Box::new(Expression::Condition(Condition {
+                left: ArithmeticExpr::Variable(ConditionLeft::Simple(
+                    "paused",
+                    VariableSource::Event,
+                )),
+                operator: ComparisonOperator::Eq,
+                right: ArithmeticExpr::Literal(LiteralValue::Bool(true)),
+            })))),
+            operator: LogicalOperator::And,
+            right: Box::new(Expression::Condition(Condition {
+                left: ArithmeticExpr::Variable(ConditionLeft::Simple(
+                    "active",
+                    VariableSource::Event,
+                )),
+                operator: ComparisonOperator::Eq,
+                right: ArithmeticExpr::Literal(LiteralValue::Bool(true)),
+            })),
+        };
+        assert_eq!(expr4, expected4);
+    }
+
+    #[test]
+    fn test_not_operator_to_sql() {
+        let table_name = "my_table";
+
+        // Simple NOT
+        let expr1 = parse("!($value > 100)").unwrap();
+        assert_eq!(expr1.to_sql_condition(table_name), "NOT (EXCLUDED.\"value\" > 100)");
+
+        // NOT with table reference
+        let expr2 = parse("!($value > @balance)").unwrap();
+        assert_eq!(
+            expr2.to_sql_condition(table_name),
+            "NOT (EXCLUDED.\"value\" > my_table.\"balance\")"
+        );
+
+        // NOT with AND inside
+        let expr3 = parse("!($a == 1 && $b == 2)").unwrap();
+        assert_eq!(
+            expr3.to_sql_condition(table_name),
+            "NOT ((EXCLUDED.\"a\" = 1 AND EXCLUDED.\"b\" = 2))"
+        );
+    }
+
+    #[test]
+    fn test_not_operator_has_table_references() {
+        // NOT with event variable only - no table references
+        let expr1 = parse("!($value > 100)").unwrap();
+        assert!(!expr1.has_table_references());
+
+        // NOT with table variable inside - has table references
+        let expr2 = parse("!($value > @balance)").unwrap();
+        assert!(expr2.has_table_references());
     }
 }

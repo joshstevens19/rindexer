@@ -2,15 +2,25 @@
 
 use super::{
     ast::{
-        Accessor, ComparisonOperator, Condition, ConditionLeft, Expression, LiteralValue,
-        LogicalOperator,
+        Accessor, ArithmeticExpr, ArithmeticOperator, ComparisonOperator, Condition, ConditionLeft,
+        Expression, LiteralValue, LogicalOperator, VariableSource,
     },
     helpers::{are_same_address, compare_ordered_values, string_to_i256, string_to_u256},
 };
+use alloy::primitives::U256;
 use rust_decimal::Decimal;
 use serde_json::Value as JsonValue;
 use std::str::FromStr;
 use thiserror::Error;
+
+/// The result of evaluating an arithmetic expression for computed columns.
+#[derive(Debug, Clone)]
+pub enum ComputedValue {
+    /// A U256 numeric result
+    U256(U256),
+    /// A string result
+    String(String),
+}
 
 /// Represents errors that can occur during expression evaluation.
 #[derive(Debug, Error, PartialEq)]
@@ -34,6 +44,14 @@ pub enum EvaluationError {
     /// An error indicating that an index was out of bounds for an array.
     #[error("Index out of bounds: {0}")]
     IndexOutOfBounds(String),
+
+    /// An error indicating division by zero.
+    #[error("Division by zero")]
+    DivisionByZero,
+
+    /// An error indicating arithmetic overflow.
+    #[error("Arithmetic overflow: {0}")]
+    ArithmeticOverflow(String),
 }
 
 const UNSIGNED_INTEGER_KINDS: &[&str] =
@@ -97,40 +115,335 @@ pub fn evaluate<'a>(
                 }
             }
         }
-        Expression::Condition(condition) => evaluate_condition(condition, data),
+        Expression::Not(inner) => {
+            let result = evaluate(inner, data)?;
+            Ok(!result)
+        }
+        Expression::Condition(condition) => evaluate_condition_with_table(condition, data, None),
     }
 }
 
-/// Evaluates a single condition.
+/// Evaluates an expression against event data and optional table data.
+/// Use this when your filter expression may contain @variable references to current table state.
+///
+/// # Arguments
+/// * `expression` - The parsed expression AST to evaluate.
+/// * `event_data` - The event data (JSON) against which $variables are resolved.
+/// * `table_data` - Optional current table row data against which @variables are resolved.
+///
+/// # Returns
+/// * `Ok(bool)` - The result of the evaluation.
+/// * `Err(EvaluationError)` - An error if evaluation fails.
+pub fn evaluate_with_table_data<'a>(
+    expression: &Expression<'a>,
+    event_data: &JsonValue,
+    table_data: Option<&JsonValue>,
+) -> Result<bool, EvaluationError> {
+    tracing::debug!(?expression, ?event_data, ?table_data, "Evaluating expression with table data");
+
+    match expression {
+        Expression::Logical { left, operator, right } => {
+            let left_val = evaluate_with_table_data(left, event_data, table_data)?;
+            match operator {
+                LogicalOperator::And => {
+                    if !left_val {
+                        Ok(false) // Short-circuit
+                    } else {
+                        evaluate_with_table_data(right, event_data, table_data)
+                    }
+                }
+                LogicalOperator::Or => {
+                    if left_val {
+                        Ok(true) // Short-circuit
+                    } else {
+                        evaluate_with_table_data(right, event_data, table_data)
+                    }
+                }
+            }
+        }
+        Expression::Not(inner) => {
+            let result = evaluate_with_table_data(inner, event_data, table_data)?;
+            Ok(!result)
+        }
+        Expression::Condition(condition) => {
+            evaluate_condition_with_table(condition, event_data, table_data)
+        }
+    }
+}
+
+/// Represents the result of evaluating an arithmetic expression.
+/// Can be either a numeric value or a non-numeric value (for comparisons).
+#[derive(Debug, Clone)]
+enum ArithmeticValue {
+    /// A numeric value (stored as U256 for precision)
+    Number(U256),
+    /// A non-numeric value with its kind and string representation
+    Other { kind: String, value: String },
+}
+
+/// Evaluates an arithmetic expression to a numeric value.
+/// # Arguments
+/// * `expr` - The arithmetic expression to evaluate.
+/// * `data` - The JSON data against which variables are resolved.
+/// # Returns
+/// * `Ok(ArithmeticValue)` - The computed value.
+/// * `Err(EvaluationError)` - An error if evaluation fails.
+fn evaluate_arithmetic_expr<'a>(
+    expr: &ArithmeticExpr<'a>,
+    data: &JsonValue,
+) -> Result<ArithmeticValue, EvaluationError> {
+    match expr {
+        ArithmeticExpr::Variable(path) => {
+            let resolved = resolve_path(path, data)?;
+            let kind = get_kind_from_json_value(resolved);
+            let value_str = match resolved {
+                JsonValue::String(s) => s.clone(),
+                JsonValue::Number(n) => n.to_string(),
+                JsonValue::Bool(b) => b.to_string(),
+                JsonValue::Null => "null".to_string(),
+                JsonValue::Array(_) | JsonValue::Object(_) => resolved.to_string(),
+            };
+
+            // Try to parse as number for arithmetic operations
+            if let Ok(num) = string_to_u256(&value_str) {
+                Ok(ArithmeticValue::Number(num))
+            } else {
+                Ok(ArithmeticValue::Other { kind, value: value_str })
+            }
+        }
+        ArithmeticExpr::Literal(lit) => match lit {
+            LiteralValue::Number(s) => {
+                // Try to parse as U256 first (for integers)
+                if let Ok(num) = string_to_u256(s) {
+                    Ok(ArithmeticValue::Number(num))
+                } else {
+                    // For decimals like "123.4", keep as non-numeric value
+                    let kind = if s.contains('.') { "fixed" } else { "number" };
+                    Ok(ArithmeticValue::Other { kind: kind.to_string(), value: s.to_string() })
+                }
+            }
+            LiteralValue::Bool(b) => {
+                Ok(ArithmeticValue::Other { kind: "bool".to_string(), value: b.to_string() })
+            }
+            LiteralValue::Str(s) => {
+                // Try to parse as number first
+                if let Ok(num) = string_to_u256(s) {
+                    Ok(ArithmeticValue::Number(num))
+                } else {
+                    let kind = get_kind_from_str(s);
+                    Ok(ArithmeticValue::Other { kind, value: s.to_string() })
+                }
+            }
+        },
+        ArithmeticExpr::Binary { left, operator, right } => {
+            let left_val = evaluate_arithmetic_expr(left, data)?;
+            let right_val = evaluate_arithmetic_expr(right, data)?;
+
+            // Both must be numbers for arithmetic
+            let (left_num, right_num) = match (left_val, right_val) {
+                (ArithmeticValue::Number(l), ArithmeticValue::Number(r)) => (l, r),
+                _ => {
+                    return Err(EvaluationError::TypeMismatch(
+                        "Arithmetic operations require numeric operands".to_string(),
+                    ))
+                }
+            };
+
+            let result = match operator {
+                ArithmeticOperator::Add => left_num.checked_add(right_num).ok_or_else(|| {
+                    EvaluationError::ArithmeticOverflow("addition overflow".to_string())
+                })?,
+                ArithmeticOperator::Subtract => {
+                    left_num.checked_sub(right_num).ok_or_else(|| {
+                        EvaluationError::ArithmeticOverflow("subtraction underflow".to_string())
+                    })?
+                }
+                ArithmeticOperator::Multiply => {
+                    left_num.checked_mul(right_num).ok_or_else(|| {
+                        EvaluationError::ArithmeticOverflow("multiplication overflow".to_string())
+                    })?
+                }
+                ArithmeticOperator::Divide => {
+                    if right_num.is_zero() {
+                        return Err(EvaluationError::DivisionByZero);
+                    }
+                    left_num.checked_div(right_num).ok_or_else(|| {
+                        EvaluationError::ArithmeticOverflow("division error".to_string())
+                    })?
+                }
+            };
+
+            Ok(ArithmeticValue::Number(result))
+        }
+    }
+}
+
+/// Evaluates an arithmetic expression with optional table data support.
+/// # Arguments
+/// * `expr` - The arithmetic expression to evaluate.
+/// * `event_data` - The event data against which $variables are resolved.
+/// * `table_data` - Optional table data against which @variables are resolved.
+/// # Returns
+/// * `Ok(ArithmeticValue)` - The computed value.
+/// * `Err(EvaluationError)` - An error if evaluation fails.
+fn evaluate_arithmetic_expr_with_table<'a>(
+    expr: &ArithmeticExpr<'a>,
+    event_data: &JsonValue,
+    table_data: Option<&JsonValue>,
+) -> Result<ArithmeticValue, EvaluationError> {
+    match expr {
+        ArithmeticExpr::Variable(path) => {
+            let resolved = resolve_path_with_table(path, event_data, table_data)?;
+            let kind = get_kind_from_json_value(resolved);
+            let value_str = match resolved {
+                JsonValue::String(s) => s.clone(),
+                JsonValue::Number(n) => n.to_string(),
+                JsonValue::Bool(b) => b.to_string(),
+                JsonValue::Null => "null".to_string(),
+                JsonValue::Array(_) | JsonValue::Object(_) => resolved.to_string(),
+            };
+
+            // Try to parse as number for arithmetic operations
+            if let Ok(num) = string_to_u256(&value_str) {
+                Ok(ArithmeticValue::Number(num))
+            } else {
+                Ok(ArithmeticValue::Other { kind, value: value_str })
+            }
+        }
+        ArithmeticExpr::Literal(lit) => match lit {
+            LiteralValue::Number(s) => {
+                if let Ok(num) = string_to_u256(s) {
+                    Ok(ArithmeticValue::Number(num))
+                } else {
+                    let kind = if s.contains('.') { "fixed" } else { "number" };
+                    Ok(ArithmeticValue::Other { kind: kind.to_string(), value: s.to_string() })
+                }
+            }
+            LiteralValue::Bool(b) => {
+                Ok(ArithmeticValue::Other { kind: "bool".to_string(), value: b.to_string() })
+            }
+            LiteralValue::Str(s) => {
+                if let Ok(num) = string_to_u256(s) {
+                    Ok(ArithmeticValue::Number(num))
+                } else {
+                    let kind = get_kind_from_str(s);
+                    Ok(ArithmeticValue::Other { kind, value: s.to_string() })
+                }
+            }
+        },
+        ArithmeticExpr::Binary { left, operator, right } => {
+            let left_val = evaluate_arithmetic_expr_with_table(left, event_data, table_data)?;
+            let right_val = evaluate_arithmetic_expr_with_table(right, event_data, table_data)?;
+
+            let (left_num, right_num) = match (left_val, right_val) {
+                (ArithmeticValue::Number(l), ArithmeticValue::Number(r)) => (l, r),
+                _ => {
+                    return Err(EvaluationError::TypeMismatch(
+                        "Arithmetic operations require numeric operands".to_string(),
+                    ))
+                }
+            };
+
+            let result = match operator {
+                ArithmeticOperator::Add => left_num.checked_add(right_num).ok_or_else(|| {
+                    EvaluationError::ArithmeticOverflow("addition overflow".to_string())
+                })?,
+                ArithmeticOperator::Subtract => {
+                    left_num.checked_sub(right_num).ok_or_else(|| {
+                        EvaluationError::ArithmeticOverflow("subtraction underflow".to_string())
+                    })?
+                }
+                ArithmeticOperator::Multiply => {
+                    left_num.checked_mul(right_num).ok_or_else(|| {
+                        EvaluationError::ArithmeticOverflow("multiplication overflow".to_string())
+                    })?
+                }
+                ArithmeticOperator::Divide => {
+                    if right_num.is_zero() {
+                        return Err(EvaluationError::DivisionByZero);
+                    }
+                    left_num.checked_div(right_num).ok_or_else(|| {
+                        EvaluationError::ArithmeticOverflow("division error".to_string())
+                    })?
+                }
+            };
+
+            Ok(ArithmeticValue::Number(result))
+        }
+    }
+}
+
+/// Helper to get kind from a string value (for literals)
+fn get_kind_from_str(s: &str) -> String {
+    // Check if it looks like an address
+    if s.starts_with("0x") || s.starts_with("0X") {
+        if s.len() == 42 {
+            return "address".to_string();
+        } else if s.len() == 66 {
+            return "bytes32".to_string();
+        }
+    }
+    "string".to_string()
+}
+
+/// Evaluates a single condition with optional table data support.
 /// # Arguments
 /// * `condition` - The condition to evaluate.
-/// * `data` - The JSON data against which the condition is evaluated.
+/// * `event_data` - The event data against which $variables are resolved.
+/// * `table_data` - Optional table data against which @variables are resolved.
 /// # Returns
-/// * `Ok(bool)` - The result of the condition evaluation, true if the condition is satisfied, false otherwise.
-/// * `Err(EvaluationError)` - An error if the evaluation fails due to type mismatches, unsupported operators, parsing errors, or missing variables.
-fn evaluate_condition<'a>(
+/// * `Ok(bool)` - The result of the condition evaluation.
+/// * `Err(EvaluationError)` - An error if the evaluation fails.
+fn evaluate_condition_with_table<'a>(
     condition: &Condition<'a>,
-    data: &JsonValue,
+    event_data: &JsonValue,
+    table_data: Option<&JsonValue>,
 ) -> Result<bool, EvaluationError> {
-    tracing::debug!(?condition, ?data, "Evaluating condition");
+    tracing::debug!(?condition, ?event_data, ?table_data, "Evaluating condition with table data");
 
-    let resolved_value = resolve_path(&condition.left, data)?;
+    let left_val = evaluate_arithmetic_expr_with_table(&condition.left, event_data, table_data)?;
+    let right_val = evaluate_arithmetic_expr_with_table(&condition.right, event_data, table_data)?;
 
-    let final_left_kind = get_kind_from_json_value(resolved_value);
-    let final_left_value_str = match resolved_value {
-        JsonValue::String(s) => s.clone(),
-        JsonValue::Number(n) => n.to_string(),
-        JsonValue::Bool(b) => b.to_string(),
-        JsonValue::Null => "null".to_string(),
-        JsonValue::Array(_) | JsonValue::Object(_) => resolved_value.to_string(),
-    };
-
-    compare_final_values(
-        &final_left_kind,
-        &final_left_value_str,
-        &condition.operator,
-        &condition.right,
-    )
+    // If both are numbers, do numeric comparison
+    match (&left_val, &right_val) {
+        (ArithmeticValue::Number(l), ArithmeticValue::Number(r)) => {
+            let result = match condition.operator {
+                ComparisonOperator::Eq => l == r,
+                ComparisonOperator::Ne => l != r,
+                ComparisonOperator::Gt => l > r,
+                ComparisonOperator::Gte => l >= r,
+                ComparisonOperator::Lt => l < r,
+                ComparisonOperator::Lte => l <= r,
+            };
+            Ok(result)
+        }
+        (ArithmeticValue::Other { kind: lk, value: lv }, ArithmeticValue::Number(r)) => {
+            // Left is non-numeric, right is numeric - compare as before
+            compare_final_values(lk, lv, &condition.operator, &LiteralValue::Number(&r.to_string()))
+        }
+        (ArithmeticValue::Number(l), ArithmeticValue::Other { kind: _rk, value: rv }) => {
+            // Left is numeric, right is non-numeric
+            compare_final_values(
+                "uint256",
+                &l.to_string(),
+                &condition.operator,
+                &LiteralValue::Str(rv),
+            )
+        }
+        (
+            ArithmeticValue::Other { kind: lk, value: lv },
+            ArithmeticValue::Other { value: rv, .. },
+        ) => {
+            // Both non-numeric - use original comparison logic
+            // Determine the right literal type
+            let rhs_literal = if rv == "true" || rv == "false" {
+                LiteralValue::Bool(rv == "true")
+            } else {
+                LiteralValue::Str(rv)
+            };
+            compare_final_values(lk, lv, &condition.operator, &rhs_literal)
+        }
+    }
 }
 
 /// Resolves a path from the AST against the JSON data.
@@ -150,6 +463,59 @@ fn resolve_path<'a>(
     let mut current = data
         .get(base_name)
         .ok_or_else(|| EvaluationError::VariableNotFound(base_name.to_string()))?;
+
+    for accessor in path.accessors() {
+        current = match (accessor, current) {
+            (Accessor::Key(key), JsonValue::Object(map)) => map
+                .get(*key)
+                .ok_or_else(|| EvaluationError::VariableNotFound((*key).to_string()))?,
+            (Accessor::Index(index), JsonValue::Array(arr)) => arr
+                .get(*index)
+                .ok_or_else(|| EvaluationError::IndexOutOfBounds(index.to_string()))?,
+            _ => {
+                return Err(EvaluationError::TypeMismatch(format!(
+                    "Cannot apply accessor {accessor:?} to value {current:?}"
+                )));
+            }
+        };
+    }
+    Ok(current)
+}
+
+/// Resolves a path from the AST against event data or table data based on VariableSource.
+/// # Arguments
+/// * `path` - The path to resolve, which may include base names and accessors.
+/// * `event_data` - The event data for $variables (VariableSource::Event).
+/// * `table_data` - Optional table data for @variables (VariableSource::Table).
+/// # Returns
+/// * `Ok(&JsonValue)` - The resolved value.
+/// * `Err(EvaluationError)` - An error if resolution fails.
+fn resolve_path_with_table<'a>(
+    path: &ConditionLeft<'a>,
+    event_data: &'a JsonValue,
+    table_data: Option<&'a JsonValue>,
+) -> Result<&'a JsonValue, EvaluationError> {
+    tracing::debug!(?path, ?event_data, ?table_data, "Resolving path with table data");
+
+    // Select the data source based on VariableSource
+    let data = match path.source() {
+        VariableSource::Event => event_data,
+        VariableSource::Table => table_data.ok_or_else(|| {
+            EvaluationError::VariableNotFound(format!(
+                "@{} (table data not available - row may not exist yet)",
+                path.base_name()
+            ))
+        })?,
+    };
+
+    let base_name = path.base_name();
+    let mut current = data.get(base_name).ok_or_else(|| {
+        let prefix = match path.source() {
+            VariableSource::Event => "$",
+            VariableSource::Table => "@",
+        };
+        EvaluationError::VariableNotFound(format!("{}{}", prefix, base_name))
+    })?;
 
     for accessor in path.accessors() {
         current = match (accessor, current) {
@@ -469,6 +835,34 @@ fn compare_boolean(
     }
 }
 
+/// Evaluates an arithmetic expression string against the provided data.
+/// This is used for computed columns where the value is a formula like "$amount / $total".
+///
+/// # Arguments
+/// * `expr_str` - The arithmetic expression string to evaluate (e.g., "$value * 2", "$amount + $fee").
+/// * `data` - The JSON data containing variable values.
+///
+/// # Returns
+/// * `Ok(ComputedValue)` - The computed result (U256 for numeric, String for non-numeric).
+/// * `Err(EvaluationError)` - An error if parsing or evaluation fails.
+pub fn evaluate_arithmetic(
+    expr_str: &str,
+    data: &JsonValue,
+) -> Result<ComputedValue, EvaluationError> {
+    use super::parsing::parse_arithmetic_expression;
+
+    let expr = parse_arithmetic_expression(expr_str).map_err(|e| {
+        EvaluationError::ParseError(format!("Failed to parse expression '{}': {}", expr_str, e))
+    })?;
+
+    let result = evaluate_arithmetic_expr(&expr, data)?;
+
+    match result {
+        ArithmeticValue::Number(n) => Ok(ComputedValue::U256(n)),
+        ArithmeticValue::Other { value, .. } => Ok(ComputedValue::String(value)),
+    }
+}
+
 /// Determines the kind of a JSON value based on its content.
 /// # Arguments
 /// * `value` - The JSON value to analyze.
@@ -723,7 +1117,8 @@ mod tests {
         let data = json!({});
         let expr = parse("non_existent_var == 1").unwrap();
         let err = evaluate(&expr, &data).unwrap_err();
-        assert_eq!(err.to_string(), "Variable not found: non_existent_var");
+        // Error message includes $ prefix for event variables
+        assert_eq!(err.to_string(), "Variable not found: $non_existent_var");
     }
 
     #[test]
@@ -764,5 +1159,137 @@ mod tests {
         assert!(err
             .to_string()
             .contains("Parse error: Failed to parse RHS 'not-a-number' as U256"));
+    }
+
+    // --- Tests for Arithmetic Expressions ---
+
+    #[test]
+    fn test_arithmetic_addition() {
+        let data = json!({"a": 10, "b": 20});
+        // 10 + 20 > 25 = 30 > 25 = true
+        let expr = parse("a + b > 25").unwrap();
+        assert!(evaluate(&expr, &data).unwrap());
+
+        // 10 + 20 > 35 = 30 > 35 = false
+        let expr_fail = parse("a + b > 35").unwrap();
+        assert!(!evaluate(&expr_fail, &data).unwrap());
+    }
+
+    #[test]
+    fn test_arithmetic_subtraction() {
+        let data = json!({"total": 100, "discount": 20});
+        // 100 - 20 == 80 = true
+        let expr = parse("total - discount == 80").unwrap();
+        assert!(evaluate(&expr, &data).unwrap());
+    }
+
+    #[test]
+    fn test_arithmetic_multiplication() {
+        let data = json!({"price": 10, "quantity": 5});
+        // 10 * 5 >= 50 = true
+        let expr = parse("price * quantity >= 50").unwrap();
+        assert!(evaluate(&expr, &data).unwrap());
+    }
+
+    #[test]
+    fn test_arithmetic_division() {
+        let data = json!({"total": 100, "count": 4});
+        // 100 / 4 == 25 = true
+        let expr = parse("total / count == 25").unwrap();
+        assert!(evaluate(&expr, &data).unwrap());
+    }
+
+    #[test]
+    fn test_arithmetic_precedence() {
+        let data = json!({"a": 10, "b": 5, "c": 2});
+        // 10 + 5 * 2 = 10 + 10 = 20 (multiplication before addition)
+        let expr = parse("a + b * c == 20").unwrap();
+        assert!(evaluate(&expr, &data).unwrap());
+
+        // (10 + 5) * 2 = 15 * 2 = 30 (parentheses override precedence)
+        let expr_parens = parse("(a + b) * c == 30").unwrap();
+        assert!(evaluate(&expr_parens, &data).unwrap());
+    }
+
+    #[test]
+    fn test_arithmetic_with_literals() {
+        let data = json!({"value": 100});
+        // 100 * 2 > 150 = 200 > 150 = true
+        let expr = parse("value * 2 > 150").unwrap();
+        assert!(evaluate(&expr, &data).unwrap());
+
+        // 100 + 50 < 200 = 150 < 200 = true
+        let expr2 = parse("value + 50 < 200").unwrap();
+        assert!(evaluate(&expr2, &data).unwrap());
+    }
+
+    #[test]
+    fn test_arithmetic_both_sides() {
+        let data = json!({"a": 10, "b": 5, "c": 3, "d": 6});
+        // a + b > c * d = 15 > 18 = false
+        let expr = parse("a + b > c * d").unwrap();
+        assert!(!evaluate(&expr, &data).unwrap());
+
+        // a * b == c * d + 32 = 50 == 18 + 32 = 50 == 50 = true
+        let expr2 = parse("a * b == c * d + 32").unwrap();
+        assert!(evaluate(&expr2, &data).unwrap());
+    }
+
+    #[test]
+    fn test_arithmetic_with_logical() {
+        let data = json!({"value": 100, "threshold": 50, "active": true});
+        // (value > threshold * 1) && active == true = (100 > 50) && true = true
+        let expr = parse("value > threshold * 1 && active == true").unwrap();
+        assert!(evaluate(&expr, &data).unwrap());
+    }
+
+    // --- Tests for NOT Operator ---
+
+    #[test]
+    fn test_not_operator_simple() {
+        let data = json!({"value": 100});
+
+        // !(100 > 50) = !true = false
+        let expr1 = parse("!($value > 50)").unwrap();
+        assert!(!evaluate(&expr1, &data).unwrap());
+
+        // !(100 < 50) = !false = true
+        let expr2 = parse("!($value < 50)").unwrap();
+        assert!(evaluate(&expr2, &data).unwrap());
+    }
+
+    #[test]
+    fn test_not_operator_with_logical() {
+        let data = json!({"a": 10, "b": 20});
+
+        // !(10 > 5 && 20 > 15) = !(true && true) = !true = false
+        let expr1 = parse("!($a > 5 && $b > 15)").unwrap();
+        assert!(!evaluate(&expr1, &data).unwrap());
+
+        // !(10 > 15 && 20 > 15) = !(false && true) = !false = true
+        let expr2 = parse("!($a > 15 && $b > 15)").unwrap();
+        assert!(evaluate(&expr2, &data).unwrap());
+
+        // !(10 > 15 || 20 > 25) = !(false || false) = !false = true
+        let expr3 = parse("!($a > 15 || $b > 25)").unwrap();
+        assert!(evaluate(&expr3, &data).unwrap());
+    }
+
+    #[test]
+    fn test_not_operator_double_negation() {
+        let data = json!({"value": 100});
+
+        // !!(100 > 50) = !!true = true
+        let expr = parse("!!($value > 50)").unwrap();
+        assert!(evaluate(&expr, &data).unwrap());
+    }
+
+    #[test]
+    fn test_not_operator_combined_with_and() {
+        let data = json!({"paused": false, "active": true});
+
+        // !(paused == true) && active == true = !false && true = true && true = true
+        let expr = parse("!($paused == true) && $active == true").unwrap();
+        assert!(evaluate(&expr, &data).unwrap());
     }
 }

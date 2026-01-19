@@ -18,6 +18,8 @@ cli/rindexer.yaml
 cli/.env
 examples/*
 !examples/rindexer_demo_cli
+!examples/rindexer_demo_custom_indexing
+!examples/tables*
 !examples/nocode_clickhouse
 !examples/rindexer_native_transfers
 !examples/rindexer_factory_indexing

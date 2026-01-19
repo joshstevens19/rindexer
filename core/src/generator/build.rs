@@ -434,6 +434,7 @@ pub enum GenerateError {
 }
 
 /// Generates all the rindexer project typings and handlers
+#[allow(clippy::result_large_err)]
 pub fn generate_rindexer_typings_and_handlers(
     manifest_location: &PathBuf,
 ) -> Result<(), GenerateError> {
@@ -475,6 +476,7 @@ pub enum GenerateRustProjectError {
     GenerateError(#[from] GenerateError),
 }
 
+#[allow(clippy::result_large_err)]
 pub fn generate_rust_project(
     project_path: &Path,
     is_reth_project: bool,
