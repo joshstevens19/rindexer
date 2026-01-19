@@ -176,13 +176,25 @@ fn generate_tables_sql(tables: &[Table], schema_name: &str) -> String {
                 injected_columns::RINDEXER_SEQUENCE_ID
             ));
 
+            // For insert-only tables, add auto-incrementing ID column
+            if table.is_insert_only() {
+                columns.push(format!("\"{}\" BIGSERIAL", injected_columns::RINDEXER_ID));
+            }
+
             // Build primary key constraint
             let mut primary_keys: Vec<String> = vec![];
             if !table.cross_chain {
                 primary_keys.push("network".to_string());
             }
-            for pk_col in table.primary_key_columns() {
-                primary_keys.push(format!("\"{}\"", pk_col));
+
+            // For insert-only tables, use auto-incrementing rindexer_id as PK
+            // For other tables, use the where clause columns as PK
+            if table.is_insert_only() {
+                primary_keys.push(format!("\"{}\"", injected_columns::RINDEXER_ID));
+            } else {
+                for pk_col in table.primary_key_columns() {
+                    primary_keys.push(format!("\"{}\"", pk_col));
+                }
             }
             let primary_key_constraint = format!("PRIMARY KEY ({})", primary_keys.join(", "));
 

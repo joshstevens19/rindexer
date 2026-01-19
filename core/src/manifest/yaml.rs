@@ -119,6 +119,45 @@ fn extract_arithmetic_variables(expr: &str) -> Vec<String> {
     variables
 }
 
+/// Checks if a value string references an event field (which is not available in cron context).
+/// Returns Some(field_name) if it's an invalid event field reference, None otherwise.
+///
+/// Allowed in cron:
+/// - $call(...) - view function calls
+/// - $contract - contract address
+/// - $rindexer_* - built-in metadata (block_number, timestamp, etc.)
+/// - Literals (no $ prefix)
+///
+/// Not allowed in cron:
+/// - $fieldName - event field references
+fn is_event_field_reference_for_cron(value: &str) -> Option<String> {
+    // No $ prefix = literal value, allowed
+    if !value.starts_with('$') {
+        return None;
+    }
+
+    // $call(...) = view function call, allowed
+    if value.starts_with("$call(") {
+        return None;
+    }
+
+    // $contract = contract address, allowed
+    if value == "$contract" {
+        return None;
+    }
+
+    // $rindexer_* = built-in metadata, allowed
+    if value.starts_with("$rindexer_") {
+        return None;
+    }
+
+    // Anything else starting with $ is an event field reference - extract the field name
+    let field_name = value.strip_prefix('$').unwrap_or(value);
+    // Extract root field name (before any dots or brackets)
+    let root_field = field_name.split(['.', '[']).next().unwrap_or(field_name);
+    Some(root_field.to_string())
+}
+
 fn substitute_env_variables(contents: &str) -> Result<String, regex::Error> {
     let re = Regex::new(r"\$\{([^}]+)\}")?;
     let result = re.replace_all(contents, |caps: &Captures| {
@@ -196,6 +235,30 @@ pub enum ValidateManifestError {
 
     #[error("Tables are defined in contract '{0}' but project_type is not 'no-code'. Tables only work with 'project_type: no-code'. Either change project_type to 'no-code' or remove the tables configuration.")]
     TablesRequireNoCodeProjectType(String),
+
+    // Cron validation errors
+    #[error("Table '{0}' in contract '{1}' has no triggers. Must have at least one 'events' or 'cron' entry.")]
+    TableNoTriggers(String, String),
+
+    #[error("Invalid interval format '{0}' in cron for table '{1}': {2}")]
+    InvalidCronInterval(String, String, String),
+
+    #[error("Invalid cron schedule '{0}' in table '{1}': {2}")]
+    InvalidCronSchedule(String, String, String),
+
+    #[error("Cron operation in table '{0}' references event field '{1}' which is not available in cron context. Only $call(...), $contract, $rindexer_* built-ins, and literals are allowed.")]
+    CronReferencesEventField(String, String),
+
+    #[error(
+        "Cron entry in table '{0}' must have either 'interval' or 'schedule', not both or neither."
+    )]
+    CronMissingSchedule(String),
+
+    #[error("Cron network '{0}' in table '{1}' for contract '{2}' not found in contract details.")]
+    CronNetworkNotFound(String, String, String),
+
+    #[error("Cron field '{0}' referenced in cron operation for table '{1}' in contract '{2}' not found in table columns.")]
+    CronFieldNotFound(String, String, String),
 }
 
 fn validate_manifest(
@@ -555,6 +618,111 @@ fn validate_manifest(
                                             contract.name.clone(),
                                         ),
                                     );
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Validate table has at least one trigger (event or cron)
+                if !table.has_triggers() {
+                    return Err(ValidateManifestError::TableNoTriggers(
+                        table.name.clone(),
+                        contract.name.clone(),
+                    ));
+                }
+
+                // Validate cron entries
+                if let Some(cron_entries) = &table.cron {
+                    use crate::manifest::contract::parse_interval;
+
+                    // Collect contract network names for validation
+                    let contract_networks: std::collections::HashSet<&str> =
+                        contract.details.iter().map(|d| d.network.as_str()).collect();
+
+                    for cron in cron_entries {
+                        // Must have interval OR schedule (not both, not neither)
+                        match (&cron.interval, &cron.schedule) {
+                            (None, None) | (Some(_), Some(_)) => {
+                                return Err(ValidateManifestError::CronMissingSchedule(
+                                    table.name.clone(),
+                                ));
+                            }
+                            (Some(interval), None) => {
+                                // Validate interval format
+                                if let Err(e) = parse_interval(interval) {
+                                    return Err(ValidateManifestError::InvalidCronInterval(
+                                        interval.clone(),
+                                        table.name.clone(),
+                                        e,
+                                    ));
+                                }
+                            }
+                            (None, Some(schedule)) => {
+                                // Validate cron expression using croner crate
+                                if let Err(e) = croner::Cron::new(schedule).parse() {
+                                    return Err(ValidateManifestError::InvalidCronSchedule(
+                                        schedule.clone(),
+                                        table.name.clone(),
+                                        e.to_string(),
+                                    ));
+                                }
+                            }
+                        }
+
+                        // Validate network if specified
+                        if let Some(network) = &cron.network {
+                            if !contract_networks.contains(network.as_str()) {
+                                return Err(ValidateManifestError::CronNetworkNotFound(
+                                    network.clone(),
+                                    table.name.clone(),
+                                    contract.name.clone(),
+                                ));
+                            }
+                        }
+
+                        // Validate operations don't reference event fields
+                        for operation in &cron.operations {
+                            // Check where clause values
+                            for (column_name, value) in &operation.where_clause {
+                                // Check table column exists
+                                if !table_column_names.contains(column_name.as_str()) {
+                                    return Err(ValidateManifestError::CronFieldNotFound(
+                                        column_name.clone(),
+                                        table.name.clone(),
+                                        contract.name.clone(),
+                                    ));
+                                }
+
+                                // Check for event field references (not allowed in cron)
+                                if let Some(field_name) = is_event_field_reference_for_cron(value) {
+                                    return Err(ValidateManifestError::CronReferencesEventField(
+                                        table.name.clone(),
+                                        format!("${}", field_name),
+                                    ));
+                                }
+                            }
+
+                            // Check set column values
+                            for set_col in &operation.set {
+                                // Check table column exists
+                                if !table_column_names.contains(set_col.column.as_str()) {
+                                    return Err(ValidateManifestError::CronFieldNotFound(
+                                        set_col.column.clone(),
+                                        table.name.clone(),
+                                        contract.name.clone(),
+                                    ));
+                                }
+
+                                // Check for event field references (not allowed in cron)
+                                let effective_value = set_col.effective_value();
+                                if let Some(field_name) =
+                                    is_event_field_reference_for_cron(effective_value)
+                                {
+                                    return Err(ValidateManifestError::CronReferencesEventField(
+                                        table.name.clone(),
+                                        format!("${}", field_name),
+                                    ));
                                 }
                             }
                         }

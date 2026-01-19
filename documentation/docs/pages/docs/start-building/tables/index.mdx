@@ -14,6 +14,7 @@ NFT ownership, and protocol metrics - all through simple YAML configuration. No 
 - **Array Iteration** - Process batch events (ERC1155 `TransferBatch`) with [`iterate`](#array-iteration-batch-events)
 - **Array Indexing** - Access specific elements with `$ids[0]` or struct fields with `$transfers[0].amount`
 - **View Calls** - Fetch on-chain data with `$call($contract, "balanceOf(address)", $holder)`, access tuple returns with `[0]` or `.fieldName`
+- **Cron Triggers** - [Schedule operations](#cron-triggers-scheduled-operations) with `interval: 5m` or cron expressions for periodic updates
 - **Global Tables** - Single-row aggregates (total supply, TVL)
 - **Cross-Chain** - Aggregate data across multiple networks
 - **Transaction Metadata** - Access `$rindexer_block_number`, `$rindexer_tx_hash`, `$rindexer_contract_address`, etc.
@@ -786,8 +787,14 @@ Each operation defines what happens when an event is received.
 | Type | Description | Use Case |
 |------|-------------|----------|
 | `upsert` | Insert new row or update existing | Most common - balances, ownership |
+| `insert` | Insert a new row (no conflict handling) | Time-series data, price history, logs |
 | `update` | Update existing row only (no insert) | Modify existing records |
 | `delete` | Remove the row | Clean up data |
+
+:::tip[Insert vs Upsert]
+Use `insert` for time-series or history data where you want a new row each time (no `where` clause needed).
+Use `upsert` when you want to update existing rows based on a key.
+:::
 
 #### where
 
@@ -866,6 +873,293 @@ set:
     action: add
     value: $value
 ```
+
+---
+
+## Cron Triggers (Scheduled Operations)
+
+In addition to event-driven operations, you can trigger table operations on a **schedule** using cron.
+This is perfect for:
+
+- **Periodic data fetching** - Poll on-chain state at regular intervals
+- **Price feeds** - Update prices from oracles every few seconds/minutes
+- **Snapshots** - Record state at fixed intervals
+- **Heartbeat data** - Maintain up-to-date records even when no events occur
+
+Tables can have `events`, `cron`, or **both** - giving you maximum flexibility.
+
+### Basic Cron Configuration
+
+```yaml
+tables:
+  - name: eth_price
+    columns:
+      - name: id
+        type: string
+      - name: price
+        type: int256
+      - name: updated_block
+        type: uint64
+    cron:  // [!code focus]
+      - interval: 5s  # Run every 5 seconds // [!code focus]
+        network: ethereum  # Optional: defaults to all networks // [!code focus]
+        operations:  // [!code focus]
+          - type: upsert // [!code focus]
+            where: // [!code focus]
+              id: "eth-usd" // [!code focus]
+            set: // [!code focus]
+              - column: price // [!code focus]
+                action: set // [!code focus]
+                value: $call($contract, "latestAnswer()") // [!code focus]
+              - column: updated_block // [!code focus]
+                action: set // [!code focus]
+                value: $rindexer_block_number // [!code focus]
+```
+
+### Schedule Formats
+
+| Format | Example | Description |
+|--------|---------|-------------|
+| Simple interval | `5s`, `30s`, `5m`, `1h`, `1d` | Fixed time intervals |
+| Cron expression | `"*/5 * * * *"` | Standard cron syntax (every 5 minutes) |
+
+**Simple Intervals:**
+- `s` = seconds (e.g., `30s` = every 30 seconds)
+- `m` = minutes (e.g., `5m` = every 5 minutes)
+- `h` = hours (e.g., `1h` = every hour)
+- `d` = days (e.g., `1d` = every day)
+
+**Cron Expressions** follow standard cron syntax:
+```
+┌───────────── minute (0-59)
+│ ┌───────────── hour (0-23)
+│ │ ┌───────────── day of month (1-31)
+│ │ │ ┌───────────── month (1-12)
+│ │ │ │ ┌───────────── day of week (0-6, Sunday=0)
+│ │ │ │ │
+* * * * *
+```
+
+Use `interval` **or** `schedule`, not both:
+
+```yaml
+cron:
+  # Option 1: Simple interval
+  - interval: 5m
+    operations: [...]
+
+  # Option 2: Cron expression
+  - schedule: "0 * * * *"  # Every hour at minute 0
+    operations: [...]
+```
+
+### Available Variables in Cron Operations
+
+Since cron operations don't have event context, only these variables are available:
+
+| Variable | Description |
+|----------|-------------|
+| `$call(...)` | View function calls (same syntax as events) |
+| `$contract` | Contract address from contract details |
+| `$rindexer_block_number` | Latest block number at execution time |
+| `$rindexer_timestamp` | Current timestamp |
+| Literals | String/number values (e.g., `"eth-usd"`, `100`) |
+
+:::warning[No Event Fields in Cron]
+Event fields like `$from`, `$to`, `$value`, etc. are **NOT available** in cron operations.
+Cron runs on a schedule, not in response to events, so there's no event data to reference.
+:::
+
+### Example: Chainlink Price Oracle
+
+Track ETH/USD price from Chainlink with periodic updates. This example shows two patterns:
+- **Global table with upsert**: Single row that gets updated (current price)
+- **Insert table for history**: New row added each time (price history)
+
+```yaml [rindexer.yaml]
+contracts:
+  - name: ChainlinkETHUSD
+    details:
+      - network: ethereum
+        address: "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419"
+    abi: ./abis/ChainlinkAggregator.abi.json
+
+    tables:
+      # Global table - single row updated via upsert // [!code focus]
+      - name: eth_price // [!code focus]
+        global: true // [!code focus]
+        columns: // [!code focus]
+          - name: price // [!code focus]
+            type: int256 // [!code focus]
+          - name: decimals // [!code focus]
+            type: uint8 // [!code focus]
+          - name: feed_description // [!code focus]
+            type: string // [!code focus]
+          - name: updated_block // [!code focus]
+            type: uint64 // [!code focus]
+        cron: // [!code focus]
+          - interval: 2s // [!code focus]
+            network: ethereum // [!code focus]
+            operations: // [!code focus]
+              - type: upsert  # Global tables use upsert // [!code focus]
+                set: // [!code focus]
+                  - column: price // [!code focus]
+                    action: set // [!code focus]
+                    value: $call($contract, "latestAnswer()") // [!code focus]
+                  - column: decimals // [!code focus]
+                    action: set // [!code focus]
+                    value: $call($contract, "decimals()") // [!code focus]
+                  - column: feed_description // [!code focus]
+                    action: set // [!code focus]
+                    value: $call($contract, "description()") // [!code focus]
+                  - column: updated_block // [!code focus]
+                    action: set // [!code focus]
+                    value: $rindexer_block_number // [!code focus]
+
+      # History table - new row inserted each time // [!code focus]
+      - name: eth_price_history // [!code focus]
+        columns: // [!code focus]
+          - name: price // [!code focus]
+            type: int256 // [!code focus]
+          - name: decimals // [!code focus]
+            type: uint8 // [!code focus]
+          - name: feed_description // [!code focus]
+            type: string // [!code focus]
+          - name: updated_block // [!code focus]
+            type: uint64 // [!code focus]
+        cron: // [!code focus]
+          - interval: 2s // [!code focus]
+            network: ethereum // [!code focus]
+            operations: // [!code focus]
+              - type: insert  # Insert creates new rows - no where clause // [!code focus]
+                set: // [!code focus]
+                  - column: price // [!code focus]
+                    action: set // [!code focus]
+                    value: $call($contract, "latestAnswer()") // [!code focus]
+                  - column: decimals // [!code focus]
+                    action: set // [!code focus]
+                    value: $call($contract, "decimals()") // [!code focus]
+                  - column: feed_description // [!code focus]
+                    action: set // [!code focus]
+                    value: $call($contract, "description()") // [!code focus]
+                  - column: updated_block // [!code focus]
+                    action: set // [!code focus]
+                    value: $rindexer_block_number // [!code focus]
+```
+
+:::tip[Insert vs Upsert for Cron]
+- Use `global: true` with `upsert` for single-row tables (current state)
+- Use `insert` without `global` for time-series/history tables (new row each time)
+- Insert tables automatically get an auto-incrementing `rindexer_id` as primary key
+:::
+
+### Combining Events and Cron
+
+Tables can have both event triggers and cron triggers. This is useful when you want to:
+- Update on events (immediate reaction)
+- Also update periodically (ensure freshness)
+
+```yaml
+tables:
+  - name: token_state
+    columns:
+      - name: holder
+      - name: balance
+        type: uint256
+        default: "0"
+      - name: last_checked_balance
+        type: uint256
+        default: "0"
+
+    # Update balance on Transfer events // [!code focus]
+    events: // [!code focus]
+      - event: Transfer // [!code focus]
+        operations: // [!code focus]
+          - type: upsert // [!code focus]
+            where: // [!code focus]
+              holder: $to // [!code focus]
+            set: // [!code focus]
+              - column: balance // [!code focus]
+                action: add // [!code focus]
+                value: $value // [!code focus]
+
+    # Also periodically verify balance via view call // [!code focus]
+    cron: // [!code focus]
+      - interval: 1h // [!code focus]
+        operations: // [!code focus]
+          - type: upsert // [!code focus]
+            where: // [!code focus]
+              holder: "0xKnownWhaleAddress" // [!code focus]
+            set: // [!code focus]
+              - column: last_checked_balance // [!code focus]
+                action: set // [!code focus]
+                value: $call($contract, "balanceOf(address)", "0xKnownWhaleAddress") // [!code focus]
+```
+
+### Multiple Cron Schedules
+
+A table can have multiple cron entries with different schedules:
+
+```yaml
+tables:
+  - name: metrics
+    global: true
+    columns:
+      - name: fast_metric
+        type: uint256
+      - name: slow_metric
+        type: uint256
+
+    cron:
+      # Fast updates every 10 seconds
+      - interval: 10s
+        operations:
+          - type: upsert
+            set:
+              - column: fast_metric
+                action: set
+                value: $call($contract, "getFastMetric()")
+
+      # Slow updates every hour
+      - interval: 1h
+        operations:
+          - type: upsert
+            set:
+              - column: slow_metric
+                action: set
+                value: $call($contract, "getSlowMetric()")
+```
+
+### Network Filtering
+
+By default, cron tasks run on **all networks** defined in the contract's `details`. Use the `network` field to restrict to specific networks:
+
+```yaml
+contracts:
+  - name: Oracle
+    details:
+      - network: ethereum
+        address: "0x..."
+      - network: arbitrum
+        address: "0x..."
+    tables:
+      - name: prices
+        cron:
+          # Only run on ethereum, not arbitrum
+          - interval: 30s
+            network: ethereum  # Optional filter
+            operations: [...]
+```
+
+:::tip[When to Use Cron vs Events]
+| Use Case | Recommendation |
+|----------|----------------|
+| Token balances, ownership | **Events** - Transfer events capture all changes |
+| Price feeds from oracles | **Cron** - Poll at regular intervals |
+| Protocol state snapshots | **Cron** - Periodic recording |
+| Real-time metrics | **Both** - Events for immediate updates, cron for periodic verification |
+| Data that changes without events | **Cron** - Only way to capture non-event state changes |
+:::
 
 ---
 

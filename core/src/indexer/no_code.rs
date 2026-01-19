@@ -12,6 +12,7 @@ use serde_json::Value;
 use tokio_postgres::types::Type as PgType;
 use tracing::{debug, error, info, warn};
 
+use super::cron_scheduler::{manifest_has_cron_tables, CronScheduler};
 use super::native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME};
 use super::tables::{process_table_operations, TableRuntime, TxMetadata};
 use crate::database::clickhouse::client::ClickhouseClient;
@@ -206,8 +207,8 @@ pub async fn setup_no_code(
             let trace_events = process_trace_events(
                 project_path,
                 &mut manifest,
-                postgres,
-                clickhouse,
+                postgres.clone(),
+                clickhouse.clone(),
                 &network_providers,
             )
             .await?;
@@ -219,12 +220,39 @@ pub async fn setup_no_code(
                     manifest
                         .native_transfers
                         .networks
+                        .as_ref()
+                        .map(|nets| nets.iter().map(|n| n.network.clone()).collect::<Vec<_>>())
                         .unwrap_or_default()
-                        .iter()
-                        .map(|network| network.network.clone())
-                        .collect::<Vec<String>>()
                         .join(", ")
                 );
+            }
+
+            // Start cron scheduler if any tables have cron triggers
+            if manifest_has_cron_tables(&manifest) {
+                let providers_map: Arc<
+                    std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>,
+                > = Arc::new(
+                    network_providers
+                        .iter()
+                        .map(|p| (p.network_name.clone(), p.client.clone()))
+                        .collect(),
+                );
+
+                let scheduler = CronScheduler::new(
+                    &manifest,
+                    postgres.clone(),
+                    clickhouse.clone(),
+                    providers_map,
+                );
+
+                if scheduler.has_tasks() {
+                    info!("Starting cron scheduler with {} tasks", scheduler.tasks.len());
+                    tokio::spawn(async move {
+                        if let Err(e) = scheduler.run().await {
+                            error!("Cron scheduler error: {}", e);
+                        }
+                    });
+                }
             }
 
             Ok(StartDetails {

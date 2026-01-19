@@ -257,6 +257,10 @@ pub mod injected_columns {
     /// Used for deterministic ordering and deduplication in ReplacingMergeTree.
     pub const RINDEXER_SEQUENCE_ID: &str = "rindexer_sequence_id";
 
+    /// Auto-incrementing ID for insert-only tables (BIGSERIAL in PostgreSQL).
+    /// Used as primary key for tables that only use INSERT operations.
+    pub const RINDEXER_ID: &str = "rindexer_id";
+
     /// The block number when this row was last updated.
     pub const LAST_UPDATED_BLOCK: &str = "rindexer_last_updated_block";
 
@@ -307,21 +311,50 @@ pub struct Table {
     /// Column definitions for the table
     pub columns: Vec<TableColumn>,
 
-    /// Event-to-table mappings
+    /// Event-to-table mappings. Optional if using cron triggers only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<TableEventMapping>,
+
+    /// Cron-triggered operations. Optional if using event triggers only.
+    /// Tables can have events, cron, or both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cron: Option<Vec<TableCronMapping>>,
 }
 
 impl Table {
+    /// Returns true if this table has at least one trigger (event or cron).
+    pub fn has_triggers(&self) -> bool {
+        !self.events.is_empty() || self.has_cron()
+    }
+
+    /// Returns true if this table has cron triggers.
+    pub fn has_cron(&self) -> bool {
+        self.cron.as_ref().is_some_and(|c| !c.is_empty())
+    }
+
+    /// Returns true if all operations in this table are Insert type.
+    /// Insert-only tables use rindexer_sequence_id as primary key.
+    pub fn is_insert_only(&self) -> bool {
+        let ops: Vec<_> = self.all_operations().collect();
+        !ops.is_empty() && ops.iter().all(|op| op.operation_type == OperationType::Insert)
+    }
+
+    /// Get all operations (from both events and cron).
+    pub fn all_operations(&self) -> impl Iterator<Item = &TableOperation> {
+        let event_ops = self.events.iter().flat_map(|e| e.operations.iter());
+        let cron_ops =
+            self.cron.iter().flat_map(|crons| crons.iter().flat_map(|c| c.operations.iter()));
+        event_ops.chain(cron_ops)
+    }
+
     /// Get all primary key column names derived from `where` clauses.
     /// Primary key = all unique column names used in `where` across all operations.
     pub fn primary_key_columns(&self) -> Vec<&str> {
         let mut pk_columns: Vec<&str> = Vec::new();
-        for event_mapping in &self.events {
-            for operation in &event_mapping.operations {
-                for column_name in operation.where_clause.keys() {
-                    if !pk_columns.contains(&column_name.as_str()) {
-                        pk_columns.push(column_name.as_str());
-                    }
+        for operation in self.all_operations() {
+            for column_name in operation.where_clause.keys() {
+                if !pk_columns.contains(&column_name.as_str()) {
+                    pk_columns.push(column_name.as_str());
                 }
             }
         }
@@ -330,60 +363,83 @@ impl Table {
 
     /// Check if a column is part of the primary key (used in any where clause)
     pub fn is_primary_key_column(&self, column_name: &str) -> bool {
-        self.events
-            .iter()
-            .any(|em| em.operations.iter().any(|op| op.where_clause.contains_key(column_name)))
+        self.all_operations().any(|op| op.where_clause.contains_key(column_name))
     }
 
     /// Validate that all operations use the same where clause columns.
     /// Returns an error message if inconsistent.
     /// For global tables, where clause is optional (primary key is just network).
+    /// For Insert operations, where clause is optional (uses rindexer_sequence_id).
     pub fn validate_where_columns(&self) -> Result<(), String> {
         // Global tables don't need where clauses - they have one row per network
         if self.global {
             // Verify all operations have empty where clauses for global tables
-            for event_mapping in &self.events {
-                for operation in &event_mapping.operations {
-                    if !operation.where_clause.is_empty() {
-                        return Err(format!(
-                            "Global table '{}' should not have 'where' clauses. \
-                             Global tables have a single row per network.",
-                            self.name
-                        ));
-                    }
+            for operation in self.all_operations() {
+                if !operation.where_clause.is_empty() {
+                    return Err(format!(
+                        "Global table '{}' should not have 'where' clauses. \
+                         Global tables have a single row per network.",
+                        self.name
+                    ));
+                }
+                // Global tables should not use insert - they're single-row aggregates
+                if operation.operation_type == OperationType::Insert {
+                    return Err(format!(
+                        "Global table '{}' cannot use 'insert' operation type. \
+                         Global tables maintain a single row per network - use 'upsert' instead. \
+                         For time-series data that inserts new rows, remove 'global: true'.",
+                        self.name
+                    ));
                 }
             }
             return Ok(());
         }
 
         let mut expected_columns: Option<Vec<String>> = None;
+        let mut has_non_insert_operations = false;
 
-        for event_mapping in &self.events {
-            for operation in &event_mapping.operations {
-                let mut op_columns: Vec<String> = operation.where_clause.keys().cloned().collect();
-                op_columns.sort();
+        for operation in self.all_operations() {
+            // Insert operations don't require where clauses - each row is unique via sequence_id
+            if operation.operation_type == OperationType::Insert {
+                // Insert operations should NOT have where clauses
+                if !operation.where_clause.is_empty() {
+                    return Err(format!(
+                        "Insert operation in table '{}' should not have a 'where' clause. \
+                         Insert always creates new rows (identified by rindexer_sequence_id).",
+                        self.name
+                    ));
+                }
+                continue;
+            }
 
-                match &expected_columns {
-                    None => expected_columns = Some(op_columns),
-                    Some(expected) => {
-                        if &op_columns != expected {
-                            return Err(format!(
-                                "Inconsistent 'where' columns in table '{}'. \
-                                 Expected {:?} but found {:?}. \
-                                 All operations must use the same where columns.",
-                                self.name, expected, op_columns
-                            ));
-                        }
+            has_non_insert_operations = true;
+            let mut op_columns: Vec<String> = operation.where_clause.keys().cloned().collect();
+            op_columns.sort();
+
+            match &expected_columns {
+                None => expected_columns = Some(op_columns),
+                Some(expected) => {
+                    if &op_columns != expected {
+                        return Err(format!(
+                            "Inconsistent 'where' columns in table '{}'. \
+                             Expected {:?} but found {:?}. \
+                             All operations must use the same where columns.",
+                            self.name, expected, op_columns
+                        ));
                     }
                 }
             }
         }
 
-        if expected_columns.is_none() || expected_columns.as_ref().unwrap().is_empty() {
+        // Only require where columns if there are non-insert operations
+        if has_non_insert_operations
+            && (expected_columns.is_none() || expected_columns.as_ref().unwrap().is_empty())
+        {
             return Err(format!(
-                "Table '{}' has no 'where' clause in any operation. \
+                "Table '{}' has no 'where' clause in upsert/update/delete operations. \
                  At least one column must be specified in 'where' to identify rows. \
-                 For single-row aggregate tables, use 'global: true' instead.",
+                 For single-row aggregate tables, use 'global: true' instead. \
+                 For time-series data, use 'type: insert' which doesn't require 'where'.",
                 self.name
             ));
         }
@@ -823,6 +879,67 @@ pub struct TableEventMapping {
     pub operations: Vec<TableOperation>,
 }
 
+/// Cron-triggered operations for a table.
+/// Allows operations to run on a time-based schedule instead of (or in addition to) events.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TableCronMapping {
+    /// Simple interval like "5m", "1h", "30s", "1d".
+    /// Either `interval` or `schedule` must be specified, but not both.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interval: Option<String>,
+
+    /// Cron expression like "*/5 * * * *".
+    /// Either `interval` or `schedule` must be specified, but not both.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<String>,
+
+    /// Optional network filter - if omitted, runs on all networks defined in contract details.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network: Option<String>,
+
+    /// Operations to perform on each cron tick.
+    /// Note: Event fields ($from, $to, etc.) are NOT available in cron operations.
+    /// Available: $call(...), $contract, $rindexer_block_number, $rindexer_timestamp, literals.
+    pub operations: Vec<TableOperation>,
+}
+
+/// Parse interval string like "5m", "1h", "30s", "1d" into Duration.
+///
+/// Supported units:
+/// - `s` - seconds (e.g., "30s" = 30 seconds)
+/// - `m` - minutes (e.g., "5m" = 5 minutes)
+/// - `h` - hours (e.g., "1h" = 1 hour)
+/// - `d` - days (e.g., "1d" = 1 day)
+pub fn parse_interval(interval: &str) -> Result<std::time::Duration, String> {
+    let interval = interval.trim();
+    if interval.is_empty() {
+        return Err("Interval cannot be empty".to_string());
+    }
+
+    // Find where the numeric part ends
+    let split_idx = interval.chars().position(|c| !c.is_ascii_digit()).ok_or_else(|| {
+        format!("Invalid interval '{}': no unit specified. Use s/m/h/d", interval)
+    })?;
+
+    let (num_str, unit) = interval.split_at(split_idx);
+    let num: u64 = num_str.parse().map_err(|_| format!("Invalid interval number: {}", num_str))?;
+
+    if num == 0 {
+        return Err("Interval must be greater than 0".to_string());
+    }
+
+    match unit {
+        "s" => Ok(std::time::Duration::from_secs(num)),
+        "m" => Ok(std::time::Duration::from_secs(num * 60)),
+        "h" => Ok(std::time::Duration::from_secs(num * 60 * 60)),
+        "d" => Ok(std::time::Duration::from_secs(num * 60 * 60 * 24)),
+        _ => Err(format!(
+            "Invalid interval unit: '{}'. Use s (seconds), m (minutes), h (hours), or d (days)",
+            unit
+        )),
+    }
+}
+
 /// A single operation to perform when an event is received.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TableOperation {
@@ -870,6 +987,8 @@ impl TableOperation {
 pub enum OperationType {
     /// Insert or update row (creates if not exists)
     Upsert,
+    /// Insert a new row (for time-series/history data)
+    Insert,
     /// Update existing row only
     Update,
     /// Delete row

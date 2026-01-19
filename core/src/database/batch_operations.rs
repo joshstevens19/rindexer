@@ -8,6 +8,8 @@ pub enum BatchOperationType {
     Update,
     Delete,
     Upsert,
+    /// Plain insert without conflict handling (for time-series/history data)
+    Insert,
 }
 
 /// Column behavior determines how columns are used in deduplication and ordering.

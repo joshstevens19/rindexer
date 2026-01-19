@@ -65,9 +65,10 @@ async fn execute_batch(
         .collect();
 
     match op_type {
-        BatchOperationType::Update | BatchOperationType::Upsert => {
-            // In ClickHouse, both Update and Upsert map to INSERT
-            // ReplacingMergeTree automatically keeps the latest version
+        BatchOperationType::Update | BatchOperationType::Upsert | BatchOperationType::Insert => {
+            // In ClickHouse, Update, Upsert, and Insert all map to INSERT
+            // ReplacingMergeTree automatically keeps the latest version for Update/Upsert
+            // Insert just adds rows without deduplication logic
             let formatted_columns =
                 column_names.iter().map(|col| quote_identifier(col)).collect::<Vec<_>>().join(", ");
 

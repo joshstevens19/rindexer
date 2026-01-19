@@ -186,6 +186,28 @@ pub fn build_upsert_body(
     query
 }
 
+/// Builds a plain INSERT body (no conflict handling).
+/// Used for time-series/history data where we always want to insert new rows.
+///
+/// # Arguments
+/// * `formatted_table_name` - The fully qualified table name
+/// * `all_columns` - All columns to insert
+pub fn build_insert_body(formatted_table_name: &str, all_columns: &[&str]) -> String {
+    let formatted_columns =
+        all_columns.iter().map(|col| quote_identifier(col)).collect::<Vec<_>>().join(", ");
+
+    let tp_columns = all_columns
+        .iter()
+        .map(|col| format!("tp.{}", quote_identifier(col)))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        "\nINSERT INTO {} ({})\nSELECT {}\nFROM to_process tp",
+        formatted_table_name, formatted_columns, tp_columns
+    )
+}
+
 /// Builds an upsert SET clause (uses EXCLUDED instead of tp).
 pub fn build_upsert_set_clause(
     col: &str,
@@ -251,7 +273,7 @@ pub fn build_sequence_condition(seq_col: &str, op_type: BatchOperationType) -> O
     match op_type {
         BatchOperationType::Update => Some(format!("tp.{} > am.{}", seq_col_name, seq_col_name)),
         BatchOperationType::Delete => Some(format!("tp.{} >= am.{}", seq_col_name, seq_col_name)),
-        BatchOperationType::Upsert => None,
+        BatchOperationType::Upsert | BatchOperationType::Insert => None,
     }
 }
 

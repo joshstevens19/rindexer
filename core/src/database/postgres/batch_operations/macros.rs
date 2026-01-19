@@ -65,8 +65,8 @@ macro_rules! create_batch_postgres_operation {
                 BatchOperationAction, BatchOperationColumnBehavior, BatchOperationType,
             };
             use $crate::database::postgres::batch_operations::{
-                build_cte_header, build_delete_body, build_sequence_condition, build_set_clause,
-                build_to_process_cte, build_update_body, build_upsert_body,
+                build_cte_header, build_delete_body, build_insert_body, build_sequence_condition,
+                build_set_clause, build_to_process_cte, build_update_body, build_upsert_body,
                 build_upsert_set_clause, build_where_clause, build_where_condition,
                 format_table_name, ColumnInfo, SetClauseType, UpsertClauseType,
             };
@@ -196,6 +196,20 @@ macro_rules! create_batch_postgres_operation {
                     }
                     BatchOperationType::Delete => {
                         query.push_str(&build_delete_body(&formatted_table_name));
+                    }
+                    BatchOperationType::Insert => {
+                        // Plain INSERT - no conflict handling, just insert all rows
+                        query.push_str(&build_insert_body(&formatted_table_name, &column_names));
+
+                        let params: Vec<&(dyn ToSql + Sync)> =
+                            owned_params.iter().map(|param| param as &(dyn ToSql + Sync)).collect();
+
+                        database
+                            .with_transaction(&query, &params, |_| async move { Ok(()) })
+                            .await
+                            .map_err(|e| e.to_string())?;
+
+                        return Ok(());
                     }
                     BatchOperationType::Upsert => {
                         let conflict_columns: Vec<&str> = if !where_columns.is_empty() {

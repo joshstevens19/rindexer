@@ -244,14 +244,22 @@ fn get_expected_columns(table: &Table) -> HashMap<String, String> {
 
 /// Get expected primary key columns for a table.
 fn get_expected_pk_columns(table: &Table) -> Vec<String> {
+    use crate::manifest::contract::injected_columns;
+
     let mut pk_columns: Vec<String> = vec![];
 
     if !table.cross_chain {
         pk_columns.push("network".to_string());
     }
 
-    for pk_col in table.primary_key_columns() {
-        pk_columns.push(pk_col.to_string());
+    // For insert-only tables, use auto-incrementing rindexer_id as PK
+    // For other tables, use the where clause columns as PK
+    if table.is_insert_only() {
+        pk_columns.push(injected_columns::RINDEXER_ID.to_string());
+    } else {
+        for pk_col in table.primary_key_columns() {
+            pk_columns.push(pk_col.to_string());
+        }
     }
 
     pk_columns

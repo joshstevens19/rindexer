@@ -160,8 +160,15 @@ fn generate_tables_clickhouse(tables: &[Table], schema_name: &str) -> String {
             if !table.cross_chain {
                 order_by.push("`network`".to_string());
             }
-            for pk_col in table.primary_key_columns() {
-                order_by.push(format!("`{}`", pk_col));
+
+            // For insert-only tables, use rindexer_sequence_id in ORDER BY (each row is unique)
+            // For other tables, use the where clause columns
+            if table.is_insert_only() {
+                order_by.push(format!("`{}`", injected_columns::RINDEXER_SEQUENCE_ID));
+            } else {
+                for pk_col in table.primary_key_columns() {
+                    order_by.push(format!("`{}`", pk_col));
+                }
             }
 
             // Use ReplacingMergeTree with rindexer_sequence_id as version column

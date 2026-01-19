@@ -775,13 +775,14 @@ async fn execute_view_call(
     // Decode the result
     let result_bytes = hex::decode(result_bytes.trim_start_matches("0x")).ok()?;
 
-    // Determine return type - use explicit return_fields if provided, otherwise infer
-    let return_type = if !view_call.return_fields.is_empty() {
-        build_return_type_from_fields(&view_call.return_fields)
+    // Determine return type - use explicit return_fields if provided, otherwise auto-detect
+    let decoded = if !view_call.return_fields.is_empty() {
+        let return_type = build_return_type_from_fields(&view_call.return_fields);
+        return_type.abi_decode(&result_bytes).ok()?
     } else {
-        infer_return_type(&view_call.function_sig)
+        // Auto-detect the return type from the raw bytes
+        try_decode_return_value(&result_bytes)?
     };
-    let decoded = return_type.abi_decode(&result_bytes).ok()?;
 
     // Cache the full result (before accessor is applied)
     {
@@ -894,26 +895,53 @@ fn parse_literal_as_type(value: &str, sol_type: &DynSolType) -> Option<DynSolVal
     }
 }
 
-/// Infers the return type from a function signature.
-/// Defaults to uint256 for common functions, otherwise uses the ABI convention.
-fn infer_return_type(sig: &str) -> DynSolType {
-    // Common functions with known return types
-    let sig_lower = sig.to_lowercase();
-    if sig_lower.starts_with("balanceof")
-        || sig_lower.starts_with("totalsupply")
-        || sig_lower.starts_with("allowance")
-    {
-        DynSolType::Uint(256)
-    } else if sig_lower.starts_with("decimals") {
-        DynSolType::Uint(8)
-    } else if sig_lower.starts_with("symbol") || sig_lower.starts_with("name") {
-        DynSolType::String
-    } else if sig_lower.starts_with("owner") || sig_lower.ends_with("address") {
-        DynSolType::Address
-    } else {
-        // Default to uint256
-        DynSolType::Uint(256)
+/// Try to decode return value bytes with intelligent type detection.
+/// Tries multiple ABI decodings and returns the first successful one.
+fn try_decode_return_value(bytes: &[u8]) -> Option<DynSolValue> {
+    // Empty or too short - can't decode
+    if bytes.is_empty() {
+        return None;
     }
+
+    // Try to detect ABI-encoded string/bytes (dynamic types)
+    // Dynamic types have: [offset (32 bytes)][length (32 bytes)][data...]
+    // The offset for a single return value is typically 0x20 (32)
+    if bytes.len() >= 64 {
+        let offset = U256::from_be_slice(&bytes[0..32]);
+        if offset == U256::from(32) && bytes.len() >= 64 {
+            let length = U256::from_be_slice(&bytes[32..64]);
+            let length_usize = length.to::<usize>();
+
+            // Sanity check: length should be reasonable and data should exist
+            if length_usize < 10000 && bytes.len() >= 64 + length_usize {
+                // Try decoding as string
+                if let Ok(decoded) = DynSolType::String.abi_decode(bytes) {
+                    if let DynSolValue::String(s) = &decoded {
+                        // Validate it's actually valid UTF-8 text (not random bytes)
+                        if s.chars()
+                            .all(|c| c.is_ascii_graphic() || c.is_ascii_whitespace() || c == '/')
+                        {
+                            return Some(decoded);
+                        }
+                    }
+                }
+
+                // Try decoding as bytes
+                if let Ok(decoded) = DynSolType::Bytes.abi_decode(bytes) {
+                    return Some(decoded);
+                }
+            }
+        }
+    }
+
+    // NOTE: We intentionally do NOT auto-detect addresses or bools here because:
+    // - Any uint256 value < 2^160 has 12+ leading zeros (same as address encoding)
+    // - Values 0 and 1 are common numeric returns (like balanceOf returning 0)
+    // - The caller's column_type will guide proper conversion in dyn_sol_value_to_wrapper
+    // - When column is bool, uint 0/1 will be converted appropriately
+
+    // Default: decode as uint256
+    DynSolType::Uint(256).abi_decode(bytes).ok()
 }
 
 /// Async version of extract_value_from_event that supports view calls.
@@ -1206,7 +1234,15 @@ fn dyn_sol_value_to_wrapper(
             EthereumSqlTypeWrapper::I256Numeric(*val)
         }
         (DynSolValue::Bool(b), ColumnType::Bool) => EthereumSqlTypeWrapper::Bool(*b),
-        (DynSolValue::String(s), ColumnType::String) => EthereumSqlTypeWrapper::String(s.clone()),
+        // Uint to Bool conversion (for when view call returns 0/1 but column is bool)
+        (DynSolValue::Uint(val, _), ColumnType::Bool) => {
+            EthereumSqlTypeWrapper::Bool(!val.is_zero())
+        }
+        (DynSolValue::String(s), ColumnType::String) => {
+            // Sanitize string: remove null bytes which PostgreSQL doesn't accept in VARCHAR
+            let sanitized = s.replace('\0', "");
+            EthereumSqlTypeWrapper::String(sanitized)
+        }
         (DynSolValue::FixedBytes(bytes, _), ColumnType::Bytes32) => {
             if bytes.len() == 32 {
                 EthereumSqlTypeWrapper::B256(alloy::primitives::B256::from_slice(bytes.as_slice()))
@@ -1260,9 +1296,79 @@ fn dyn_sol_value_to_wrapper(
         (DynSolValue::Int(val, _), ColumnType::Int16) => EthereumSqlTypeWrapper::I16(val.as_i16()),
         (DynSolValue::Int(val, _), ColumnType::Int32) => EthereumSqlTypeWrapper::I32(val.as_i32()),
         (DynSolValue::Int(val, _), ColumnType::Int64) => EthereumSqlTypeWrapper::I64(val.as_i64()),
+        // Cross-type conversions: when auto-detected type differs from column type
+        // This happens because try_decode_return_value defaults to uint256 for unknown types
+        (DynSolValue::Uint(val, _), ColumnType::Int256) => {
+            // Reinterpret uint256 as int256 (same byte representation, different sign interpretation)
+            let i256 = alloy::primitives::I256::from_raw(*val);
+            EthereumSqlTypeWrapper::I256Numeric(i256)
+        }
+        (DynSolValue::Uint(val, _), ColumnType::Int128) => {
+            let i256 = alloy::primitives::I256::from_raw(*val);
+            EthereumSqlTypeWrapper::I256Numeric(i256)
+        }
+        (DynSolValue::Uint(val, _), ColumnType::Int64) => {
+            // For smaller signed types, convert via i256 to handle potential negative values
+            let i256 = alloy::primitives::I256::from_raw(*val);
+            EthereumSqlTypeWrapper::I64(i256.as_i64())
+        }
+        (DynSolValue::Uint(val, _), ColumnType::Int32) => {
+            let i256 = alloy::primitives::I256::from_raw(*val);
+            EthereumSqlTypeWrapper::I32(i256.as_i32())
+        }
+        (DynSolValue::Uint(val, _), ColumnType::Int16) => {
+            let i256 = alloy::primitives::I256::from_raw(*val);
+            EthereumSqlTypeWrapper::I16(i256.as_i16())
+        }
+        (DynSolValue::Uint(val, _), ColumnType::Int8) => {
+            let i256 = alloy::primitives::I256::from_raw(*val);
+            EthereumSqlTypeWrapper::I8(i256.as_i8())
+        }
+        // Address conversion: uint256 values can be converted to addresses (lower 20 bytes)
+        (DynSolValue::Uint(val, _), ColumnType::Address) => {
+            // Take lower 20 bytes of uint256 as address
+            let bytes: [u8; 32] = val.to_be_bytes();
+            let addr = Address::from_slice(&bytes[12..32]);
+            EthereumSqlTypeWrapper::Address(addr)
+        }
         // Fallback conversions - use PostgreSQL-compatible types
         (DynSolValue::Uint(val, _), _) => EthereumSqlTypeWrapper::U256Numeric(*val),
         (DynSolValue::Int(val, _), _) => EthereumSqlTypeWrapper::I256Numeric(*val),
+        // Bool to numeric conversions (true=1, false=0)
+        (DynSolValue::Bool(b), ColumnType::Uint256 | ColumnType::Uint128) => {
+            EthereumSqlTypeWrapper::U256Numeric(if *b { U256::from(1) } else { U256::ZERO })
+        }
+        (DynSolValue::Bool(b), ColumnType::Uint64) => {
+            EthereumSqlTypeWrapper::U64BigInt(if *b { 1 } else { 0 })
+        }
+        (DynSolValue::Bool(b), ColumnType::Uint32) => {
+            EthereumSqlTypeWrapper::U32(if *b { 1 } else { 0 })
+        }
+        (DynSolValue::Bool(b), ColumnType::Uint16) => {
+            EthereumSqlTypeWrapper::U16(if *b { 1 } else { 0 })
+        }
+        (DynSolValue::Bool(b), ColumnType::Uint8) => {
+            EthereumSqlTypeWrapper::U8(if *b { 1 } else { 0 })
+        }
+        (DynSolValue::Bool(b), ColumnType::Int256 | ColumnType::Int128) => {
+            EthereumSqlTypeWrapper::I256Numeric(if *b {
+                alloy::primitives::I256::try_from(1).unwrap()
+            } else {
+                alloy::primitives::I256::ZERO
+            })
+        }
+        (DynSolValue::Bool(b), ColumnType::Int64) => {
+            EthereumSqlTypeWrapper::I64(if *b { 1 } else { 0 })
+        }
+        (DynSolValue::Bool(b), ColumnType::Int32) => {
+            EthereumSqlTypeWrapper::I32(if *b { 1 } else { 0 })
+        }
+        (DynSolValue::Bool(b), ColumnType::Int16) => {
+            EthereumSqlTypeWrapper::I16(if *b { 1 } else { 0 })
+        }
+        (DynSolValue::Bool(b), ColumnType::Int8) => {
+            EthereumSqlTypeWrapper::I8(if *b { 1 } else { 0 })
+        }
         (DynSolValue::Address(addr), _) => EthereumSqlTypeWrapper::Address(*addr),
         (DynSolValue::Bool(b), _) => EthereumSqlTypeWrapper::Bool(*b),
         (DynSolValue::String(s), _) => EthereumSqlTypeWrapper::String(s.clone()),
@@ -1769,6 +1875,7 @@ fn set_action_to_batch_action(action: &SetAction) -> BatchOperationAction {
 fn operation_type_to_batch_type(op_type: &OperationType) -> BatchOperationType {
     match op_type {
         OperationType::Upsert => BatchOperationType::Upsert,
+        OperationType::Insert => BatchOperationType::Insert,
         OperationType::Update => BatchOperationType::Update,
         OperationType::Delete => BatchOperationType::Delete,
     }
@@ -1795,15 +1902,24 @@ async fn execute_postgres_operation(
     // Build rows of DynamicColumnDefinition for the batch operation
     let mut batch_rows: Vec<Vec<DynamicColumnDefinition>> = Vec::with_capacity(rows.len());
 
+    // For Insert operations, don't use Distinct behavior (no deduplication)
+    let is_insert = operation.operation_type == OperationType::Insert;
+
     for row in rows {
         let mut columns: Vec<DynamicColumnDefinition> = Vec::new();
 
         if !table_def.cross_chain {
+            // For Insert, network is just a normal column (no dedup)
+            let network_behavior = if is_insert {
+                BatchOperationColumnBehavior::Normal
+            } else {
+                BatchOperationColumnBehavior::Distinct
+            };
             columns.push(DynamicColumnDefinition::new(
                 "network".to_string(),
                 EthereumSqlTypeWrapper::String(row.network.clone()),
                 BatchOperationSqlType::Varchar,
-                BatchOperationColumnBehavior::Distinct,
+                network_behavior,
                 BatchOperationAction::Where,
             ));
         }
@@ -1827,15 +1943,18 @@ async fn execute_postgres_operation(
             };
 
             // Determine behavior - primary key columns come from where clauses
+            // For Insert, no columns should be Distinct (no deduplication)
             let is_pk = table_def.is_primary_key_column(&column.name);
-            let behavior = if is_pk {
+            let behavior = if is_insert {
+                BatchOperationColumnBehavior::Normal
+            } else if is_pk {
                 BatchOperationColumnBehavior::Distinct
             } else {
                 BatchOperationColumnBehavior::Normal
             };
 
             // Determine action
-            let action = if is_pk {
+            let action = if is_pk && !is_insert {
                 BatchOperationAction::Where
             } else if let Some(set_col) = operation.set.iter().find(|s| s.column == column.name) {
                 set_action_to_batch_action(&set_col.action)
@@ -1928,6 +2047,7 @@ async fn execute_postgres_operation(
 
     let op_label = match operation.operation_type {
         OperationType::Upsert => "UPSERT",
+        OperationType::Insert => "INSERT",
         OperationType::Update => "UPDATE",
         OperationType::Delete => "DELETE",
     };
@@ -1951,15 +2071,24 @@ async fn execute_clickhouse_operation(
 
     let mut batch_rows: Vec<Vec<DynamicColumnDefinition>> = Vec::with_capacity(rows.len());
 
+    // For Insert operations, don't use Distinct behavior (no deduplication)
+    let is_insert = operation.operation_type == OperationType::Insert;
+
     for row in rows {
         let mut columns: Vec<DynamicColumnDefinition> = Vec::new();
 
         if !table_def.cross_chain {
+            // For Insert, network is just a normal column (no dedup)
+            let network_behavior = if is_insert {
+                BatchOperationColumnBehavior::Normal
+            } else {
+                BatchOperationColumnBehavior::Distinct
+            };
             columns.push(DynamicColumnDefinition::new(
                 "network".to_string(),
                 EthereumSqlTypeWrapper::String(row.network.clone()),
                 BatchOperationSqlType::Varchar,
-                BatchOperationColumnBehavior::Distinct,
+                network_behavior,
                 BatchOperationAction::Where,
             ));
         }
@@ -1981,14 +2110,18 @@ async fn execute_clickhouse_operation(
                 }
             };
 
+            // Determine behavior - primary key columns come from where clauses
+            // For Insert, no columns should be Distinct (no deduplication)
             let is_pk = table_def.is_primary_key_column(&column.name);
-            let behavior = if is_pk {
+            let behavior = if is_insert {
+                BatchOperationColumnBehavior::Normal
+            } else if is_pk {
                 BatchOperationColumnBehavior::Distinct
             } else {
                 BatchOperationColumnBehavior::Normal
             };
 
-            let action = if is_pk {
+            let action = if is_pk && !is_insert {
                 BatchOperationAction::Where
             } else if let Some(set_col) = operation.set.iter().find(|s| s.column == column.name) {
                 set_action_to_batch_action(&set_col.action)
@@ -2092,6 +2225,7 @@ async fn execute_clickhouse_operation(
 
     let op_label = match operation.operation_type {
         OperationType::Upsert => "UPSERT",
+        OperationType::Insert => "INSERT",
         OperationType::Update => "UPDATE",
         OperationType::Delete => "DELETE",
     };
@@ -2099,6 +2233,234 @@ async fn execute_clickhouse_operation(
     info!("Tables::{} - {} - {} rows", short_table_name, op_label, rows.len());
 
     Ok(())
+}
+
+// =============================================================================
+// Public helper functions for cron scheduler
+// =============================================================================
+
+/// Internal PostgreSQL operation execution - used by cron scheduler.
+/// This is a public wrapper around `execute_postgres_operation`.
+pub async fn execute_postgres_operation_internal(
+    postgres: &PostgresClient,
+    table_name: &str,
+    table_def: &Table,
+    operation: &TableOperation,
+    rows: &[TableRowData],
+    sql_where: Option<&str>,
+) -> Result<(), String> {
+    execute_postgres_operation(postgres, table_name, table_def, operation, rows, sql_where).await
+}
+
+/// Internal ClickHouse operation execution - used by cron scheduler.
+/// This is a public wrapper around `execute_clickhouse_operation`.
+pub async fn execute_clickhouse_operation_internal(
+    clickhouse: &ClickhouseClient,
+    table_name: &str,
+    table_def: &Table,
+    operation: &TableOperation,
+    rows: &[TableRowData],
+) -> Result<(), String> {
+    execute_clickhouse_operation(clickhouse, table_name, table_def, operation, rows).await
+}
+
+/// Execute a view call for cron operations (no event data available).
+///
+/// This function parses and executes view calls like `$call($contract, "balanceOf(address)", "0x...")`.
+/// It's similar to `execute_view_call` but uses contract_address instead of event data.
+pub async fn execute_view_call_for_cron(
+    value_ref: &str,
+    tx_metadata: &TxMetadata,
+    contract_address: &Address,
+    column_type: &ColumnType,
+    provider: &JsonRpcCachedProvider,
+    network: &str,
+) -> Option<EthereumSqlTypeWrapper> {
+    // Parse the view call
+    let view_call = parse_view_call(value_ref)?;
+
+    // Execute the view call with empty log_params (cron has no event data)
+    // We need to modify arg resolution to handle $contract and other cron-specific values
+    let result = execute_view_call_for_cron_internal(
+        &view_call,
+        tx_metadata,
+        contract_address,
+        provider,
+        network,
+    )
+    .await?;
+
+    Some(dyn_sol_value_to_wrapper(&result, column_type))
+}
+
+/// Internal function to execute a view call for cron operations.
+async fn execute_view_call_for_cron_internal(
+    view_call: &ViewCall,
+    tx_metadata: &TxMetadata,
+    contract_address: &Address,
+    provider: &JsonRpcCachedProvider,
+    network: &str,
+) -> Option<DynSolValue> {
+    use alloy::primitives::keccak256;
+
+    // Resolve contract address
+    let resolved_address: Address = if view_call.contract_address.starts_with('$') {
+        let field_name = &view_call.contract_address[1..];
+        match field_name {
+            "contract" | "rindexer_contract_address" => *contract_address,
+            _ => {
+                warn!("Unknown contract reference in cron view call: {}", field_name);
+                return None;
+            }
+        }
+    } else {
+        view_call.contract_address.parse().ok()?
+    };
+
+    // Parse function signature to get types
+    let (func_name, param_types) = parse_function_signature(&view_call.function_sig)?;
+
+    // Build function selector (first 4 bytes of keccak256 of signature)
+    let selector = &keccak256(view_call.function_sig.as_bytes())[..4];
+
+    // Encode arguments (for cron, we only support literals and $contract)
+    let mut encoded_args = Vec::new();
+    for (i, arg_str) in view_call.args.iter().enumerate() {
+        let param_type = param_types.get(i)?;
+        let value = resolve_cron_arg_value(arg_str.trim(), contract_address, param_type)?;
+        encoded_args.push(value);
+    }
+
+    // Build calldata: selector + encoded args
+    let calldata = if encoded_args.is_empty() {
+        Bytes::copy_from_slice(selector)
+    } else {
+        let encoded = DynSolValue::Tuple(encoded_args).abi_encode_params();
+        let mut data = selector.to_vec();
+        data.extend(encoded);
+        Bytes::from(data)
+    };
+
+    // Check cache first
+    let cache_key =
+        (network.to_string(), resolved_address, calldata.clone(), tx_metadata.block_number);
+    {
+        let cache = VIEW_CALL_CACHE.read().await;
+        if let Some(cached) = cache.get(&cache_key) {
+            debug!("View call cache hit for {}::{}", resolved_address, func_name);
+            return apply_accessor_if_present(cached.clone(), view_call);
+        }
+    }
+
+    // Acquire semaphore permit to limit concurrent RPC calls
+    let semaphore = VIEW_CALL_SEMAPHORE.read().await.clone();
+    let _permit = semaphore.acquire().await.ok()?;
+
+    // Double-check cache after acquiring permit
+    {
+        let cache = VIEW_CALL_CACHE.read().await;
+        if let Some(cached) = cache.get(&cache_key) {
+            return apply_accessor_if_present(cached.clone(), view_call);
+        }
+    }
+
+    // Execute the call
+    let result_bytes: String =
+        match provider.eth_call(resolved_address, calldata.clone(), tx_metadata.block_number).await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("View call failed for {}::{}: {}", resolved_address, func_name, e);
+                return None;
+            }
+        };
+
+    // Decode the result
+    let result_bytes = hex::decode(result_bytes.trim_start_matches("0x")).ok()?;
+
+    // Determine return type - use explicit return_fields if provided, otherwise auto-detect
+    let decoded = if !view_call.return_fields.is_empty() {
+        let return_type = build_return_type_from_fields(&view_call.return_fields);
+        return_type.abi_decode(&result_bytes).ok()?
+    } else {
+        // Auto-detect the return type from the raw bytes
+        try_decode_return_value(&result_bytes)?
+    };
+
+    // Cache the result
+    {
+        let mut cache = VIEW_CALL_CACHE.write().await;
+        cache.insert(cache_key, decoded.clone());
+    }
+
+    apply_accessor_if_present(decoded, view_call)
+}
+
+/// Resolves an argument value for cron operations (no event data).
+/// Only supports literals and $contract.
+fn resolve_cron_arg_value(
+    arg_str: &str,
+    contract_address: &Address,
+    expected_type: &DynSolType,
+) -> Option<DynSolValue> {
+    if let Some(field_name) = arg_str.strip_prefix('$') {
+        match field_name {
+            "contract" | "rindexer_contract_address" => {
+                return Some(DynSolValue::Address(*contract_address));
+            }
+            _ => {
+                warn!("Unknown cron argument reference: {}", arg_str);
+                return None;
+            }
+        }
+    }
+
+    // Parse literal value
+    parse_literal_to_dyn_sol_value(arg_str, expected_type)
+}
+
+/// Parse a literal value to a DynSolValue based on expected type.
+fn parse_literal_to_dyn_sol_value(value: &str, expected_type: &DynSolType) -> Option<DynSolValue> {
+    match expected_type {
+        DynSolType::Address => {
+            let addr: Address = value.trim_matches('"').parse().ok()?;
+            Some(DynSolValue::Address(addr))
+        }
+        DynSolType::Uint(bits) => {
+            let num: U256 = value.parse().ok()?;
+            Some(DynSolValue::Uint(num, *bits))
+        }
+        DynSolType::Int(bits) => {
+            let num: alloy::primitives::I256 = value.parse().ok()?;
+            Some(DynSolValue::Int(num, *bits))
+        }
+        DynSolType::Bool => {
+            let b: bool = value.parse().ok()?;
+            Some(DynSolValue::Bool(b))
+        }
+        DynSolType::String => Some(DynSolValue::String(value.trim_matches('"').to_string())),
+        DynSolType::Bytes => {
+            let bytes = hex::decode(value.trim_start_matches("0x")).ok()?;
+            Some(DynSolValue::Bytes(bytes))
+        }
+        DynSolType::FixedBytes(size) => {
+            let bytes = hex::decode(value.trim_start_matches("0x")).ok()?;
+            if bytes.len() != *size {
+                return None;
+            }
+            Some(DynSolValue::FixedBytes(alloy::primitives::FixedBytes::from_slice(&bytes), *size))
+        }
+        _ => None,
+    }
+}
+
+/// Parse a literal value for a column type.
+/// This is used by the cron scheduler to convert literal values to EthereumSqlTypeWrapper.
+pub fn parse_literal_value_for_column(
+    value: &str,
+    column_type: &ColumnType,
+) -> Option<EthereumSqlTypeWrapper> {
+    Some(literal_to_wrapper(value, column_type))
 }
 
 #[cfg(test)]
@@ -2401,17 +2763,35 @@ mod tests {
     }
 
     #[test]
-    fn test_infer_return_type() {
-        // Known function patterns
-        assert_eq!(infer_return_type("balanceOf(address)"), DynSolType::Uint(256));
-        assert_eq!(infer_return_type("totalSupply()"), DynSolType::Uint(256));
-        assert_eq!(infer_return_type("allowance(address,address)"), DynSolType::Uint(256));
-        assert_eq!(infer_return_type("decimals()"), DynSolType::Uint(8));
-        assert_eq!(infer_return_type("symbol()"), DynSolType::String);
-        assert_eq!(infer_return_type("name()"), DynSolType::String);
-        assert_eq!(infer_return_type("owner()"), DynSolType::Address);
+    fn test_try_decode_return_value() {
+        // Empty bytes returns None
+        assert!(try_decode_return_value(&[]).is_none());
 
-        // Unknown functions default to uint256
-        assert_eq!(infer_return_type("unknownFunction()"), DynSolType::Uint(256));
+        // uint256 value (32 bytes, big-endian)
+        let mut uint_bytes = [0u8; 32];
+        uint_bytes[31] = 42; // value = 42
+        let result = try_decode_return_value(&uint_bytes);
+        assert!(result.is_some());
+        if let Some(DynSolValue::Uint(val, 256)) = result {
+            assert_eq!(val, alloy::primitives::U256::from(42));
+        } else {
+            panic!("Expected Uint(256)");
+        }
+
+        // ABI-encoded string "ETH"
+        // Format: [offset=32][length=3]["ETH" + padding]
+        let string_bytes = hex::decode(
+            "0000000000000000000000000000000000000000000000000000000000000020\
+             0000000000000000000000000000000000000000000000000000000000000003\
+             4554480000000000000000000000000000000000000000000000000000000000",
+        )
+        .unwrap();
+        let result = try_decode_return_value(&string_bytes);
+        assert!(result.is_some());
+        if let Some(DynSolValue::String(s)) = result {
+            assert_eq!(s, "ETH");
+        } else {
+            panic!("Expected String");
+        }
     }
 }
