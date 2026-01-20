@@ -29,6 +29,7 @@ use rindexer::{
     },
     write_file, StringOrArray, WriteFileError,
 };
+use std::collections::HashMap;
 
 #[cfg(not(feature = "reth"))]
 type RethConfig = ();
@@ -219,6 +220,7 @@ pub fn handle_new_command(
             timestamp_sample_rate: None,
             max_concurrent_view_calls: None,
         },
+        constants: HashMap::new(),
         timestamps: None,
         networks: vec![Network {
             name: "ethereum".to_string(),

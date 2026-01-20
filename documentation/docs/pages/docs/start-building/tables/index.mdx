@@ -18,6 +18,7 @@ NFT ownership, and protocol metrics - all through simple YAML configuration. No 
 - **Global Tables** - Single-row aggregates (total supply, TVL)
 - **Cross-Chain** - Aggregate data across multiple networks
 - **Transaction Metadata** - Access `$rindexer_block_number`, `$rindexer_tx_hash`, `$rindexer_contract_address`, etc.
+- **Constants** - Define reusable values with `$constant(name)`, including [network-scoped constants](#constants) for cross-chain configurations
 - **Schema Migration** - [Auto-detect and apply](#schema-migration) column changes when your YAML evolves
 
 ---
@@ -699,6 +700,93 @@ String templates are useful for:
 - **Human-readable labels**: `"Transfer from $from to $to"`
 - **Unique identifiers**: `"$rindexer_contract_address:$tokenId"`
 - **Combining metadata**: `"Block $rindexer_block_number"`
+:::
+
+### Constants
+
+Define reusable values at the manifest level and reference them with `$constant(name)`. Constants are especially powerful for **network-scoped configurations** where you need different values per network (like oracle addresses, protocol contracts, or fee recipients).
+
+#### Defining Constants
+
+Add constants at the root level of your `rindexer.yaml`:
+
+```yaml
+name: MyIndexer
+project_type: no-code
+
+constants:
+  # Simple constant - same value for all networks
+  fee_recipient: "0x1234567890123456789012345678901234567890"
+
+  # Network-scoped constant - different value per network
+  oracle:
+    ethereum: "0x54586bE62E3c3580375aE3723C145253060Ca0C2"
+    arbitrum: "0xbDdE4E4429c6Ef916d2633A2c80E0F6D0F893C44"
+    optimism: "0x3C19d4C5E0D43d1f7a0f4c8E8d5f6b3a2b1c0d9e"
+    base: "0x8B4d3e5F6A7c8D9E0F1a2B3c4D5e6F7a8B9c0D1e"
+
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+  - name: arbitrum
+    chain_id: 42161
+    rpc: https://arbitrum.gateway.tenderly.co
+  # ... more networks
+
+contracts:
+  # ...
+```
+
+#### Using Constants
+
+Reference constants with `$constant(name)` anywhere you'd use a value:
+
+```yaml
+tables:
+  - name: prices
+    columns:
+      - name: asset
+      - name: price_usd
+        type: int256
+    events:
+      - event: CollateralDeposited
+        operations:
+          - type: upsert
+            where:
+              asset: $collateralAsset
+            set:
+              - column: price_usd
+                action: set
+                # $constant(oracle) resolves to the network-specific oracle address
+                value: $call($constant(oracle), "getAssetPrice(address)", $collateralAsset)
+```
+
+**How it works:**
+- When the event is processed on Ethereum, `$constant(oracle)` resolves to `0x54586bE62E3c3580375aE3723C145253060Ca0C2`
+- When processed on Arbitrum, it resolves to `0xbDdE4E4429c6Ef916d2633A2c80E0F6D0F893C44`
+- Simple constants (like `fee_recipient`) resolve to the same value on all networks
+
+#### Where Constants Can Be Used
+
+Constants work in:
+- **View call contract addresses**: `$call($constant(oracle), "getPrice()")`
+- **View call arguments**: `$call($contract, "allowance(address)", $constant(fee_recipient))`
+- **Direct values**: `value: $constant(default_amount)`
+- **Where clauses**: `where: { recipient: $constant(fee_recipient) }`
+
+:::tip[When to Use Constants]
+Constants are ideal for:
+- **Oracle addresses** that differ per network
+- **Protocol contract addresses** (e.g., Uniswap router, Aave pool)
+- **Fee recipients** or treasury addresses
+- **Configuration values** shared across multiple tables
+- **Eliminating duplicate contract definitions** - define one contract with network-scoped constants instead of duplicating for each network
+:::
+
+:::warning[Constant Resolution]
+If a network-scoped constant doesn't have a value for a specific network, the operation will fail.
+Always ensure you define values for all networks you're indexing.
 :::
 
 ---

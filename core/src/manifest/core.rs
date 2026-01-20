@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{collections::HashMap, str::FromStr};
 
 use alloy::{primitives::U64, transports::http::reqwest::header::HeaderMap};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -23,6 +23,46 @@ use crate::{
         storage::Storage,
     },
 };
+
+/// A constant value that can be either a simple string or network-scoped.
+///
+/// # Examples
+///
+/// Simple constant (same value for all networks):
+/// ```yaml
+/// constants:
+///   my_address: "0x1234..."
+/// ```
+///
+/// Network-scoped constant (different value per network):
+/// ```yaml
+/// constants:
+///   oracle:
+///     ethereum: "0x1234..."
+///     polygon: "0x5678..."
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ConstantValue {
+    /// A simple string constant (same for all networks)
+    Simple(String),
+    /// A map of network name -> value (different per network)
+    NetworkScoped(HashMap<String, String>),
+}
+
+impl ConstantValue {
+    /// Resolve the constant value for a given network.
+    /// Returns the value if it's a simple constant, or looks up the network-specific value.
+    pub fn resolve(&self, network: &str) -> Option<&str> {
+        match self {
+            ConstantValue::Simple(value) => Some(value.as_str()),
+            ConstantValue::NetworkScoped(map) => map.get(network).map(|s| s.as_str()),
+        }
+    }
+}
+
+/// Type alias for the constants map
+pub type Constants = HashMap<String, ConstantValue>;
 
 fn deserialize_project_type<'de, D>(deserializer: D) -> Result<ProjectType, D::Error>
 where
@@ -77,6 +117,11 @@ pub struct Manifest {
 
     #[serde(default)]
     pub config: Config,
+
+    /// User-defined constants that can be referenced in table operations using `$constant(name)`.
+    /// Constants can be simple values or network-scoped (different value per network).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub constants: Constants,
 
     #[serde(default)]
     pub timestamps: Option<bool>,

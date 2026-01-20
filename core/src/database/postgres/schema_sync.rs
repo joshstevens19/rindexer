@@ -202,6 +202,12 @@ fn get_expected_columns(table: &Table) -> HashMap<String, String> {
         columns.insert("network".to_string(), "character varying".to_string());
     }
 
+    // For insert-only tables, add auto-incrementing ID column
+    if table.is_insert_only() {
+        // BIGSERIAL shows up as "bigint" in information_schema
+        columns.insert(injected_columns::RINDEXER_ID.to_string(), "bigint".to_string());
+    }
+
     // User-defined columns
     for column in &table.columns {
         // Use column_type if available, otherwise skip type comparison for this column
@@ -433,16 +439,60 @@ pub async fn apply_schema_change(
 ) -> Result<(), String> {
     match change {
         SchemaChange::AddColumn { table_full_name, column_name, column_type, default_value } => {
-            let default_clause = match default_value {
-                Some(val) => format!("DEFAULT {}", val),
-                None => "DEFAULT NULL".to_string(),
-            };
-            let sql = format!(
-                "ALTER TABLE {} ADD COLUMN \"{}\" {} {}",
-                table_full_name, column_name, column_type, default_clause
-            );
+            // Special handling for rindexer_id - needs to be BIGSERIAL for auto-increment
+            // and existing rows need to be populated with generated IDs
+            if column_name == injected_columns::RINDEXER_ID {
+                // Create sequence for the column
+                let seq_name = format!("{}_rindexer_id_seq", table_full_name.replace('.', "_"));
+                let create_seq_sql = format!("CREATE SEQUENCE IF NOT EXISTS {}", seq_name);
+                client
+                    .batch_execute(&create_seq_sql)
+                    .await
+                    .map_err(|e| format!("Failed to create sequence: {}", e))?;
 
-            client.batch_execute(&sql).await.map_err(|e| format!("Failed to add column: {}", e))?;
+                // Add column with default from sequence
+                let add_col_sql = format!(
+                    "ALTER TABLE {} ADD COLUMN \"{}\" BIGINT DEFAULT nextval('{}')",
+                    table_full_name, column_name, seq_name
+                );
+                client
+                    .batch_execute(&add_col_sql)
+                    .await
+                    .map_err(|e| format!("Failed to add column: {}", e))?;
+
+                // Populate existing NULL rows with generated IDs
+                let update_sql = format!(
+                    "UPDATE {} SET \"{}\" = nextval('{}') WHERE \"{}\" IS NULL",
+                    table_full_name, column_name, seq_name, column_name
+                );
+                client
+                    .batch_execute(&update_sql)
+                    .await
+                    .map_err(|e| format!("Failed to populate existing rows: {}", e))?;
+
+                // Set column to NOT NULL now that all rows have values
+                let not_null_sql = format!(
+                    "ALTER TABLE {} ALTER COLUMN \"{}\" SET NOT NULL",
+                    table_full_name, column_name
+                );
+                client
+                    .batch_execute(&not_null_sql)
+                    .await
+                    .map_err(|e| format!("Failed to set NOT NULL: {}", e))?;
+            } else {
+                let default_clause = match default_value {
+                    Some(val) => format!("DEFAULT {}", val),
+                    None => "DEFAULT NULL".to_string(),
+                };
+                let sql = format!(
+                    "ALTER TABLE {} ADD COLUMN \"{}\" {} {}",
+                    table_full_name, column_name, column_type, default_clause
+                );
+                client
+                    .batch_execute(&sql)
+                    .await
+                    .map_err(|e| format!("Failed to add column: {}", e))?;
+            }
         }
         SchemaChange::RemoveColumn { table_full_name, column_name } => {
             let sql = format!("ALTER TABLE {} DROP COLUMN \"{}\"", table_full_name, column_name);

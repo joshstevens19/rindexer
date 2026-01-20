@@ -32,6 +32,9 @@
 //!   - **Position-based access**: `$call($addr, "getReserves()")[0]` - access tuple/array elements by index
 //!   - **Named field access**: `$call($addr, "getReserves() returns (uint112 reserve0, uint112 reserve1)").reserve0`
 //!   - **Chained access**: `$call($addr, "getData() returns ((uint256 x, uint256 y) point)").point.x`
+//! - **Constants**: `$constant(name)` - Reference user-defined constants from the YAML config
+//!   - **Simple constants**: Same value for all networks
+//!   - **Network-scoped constants**: Different value per network (auto-resolved based on current network)
 //! - **Transaction metadata** (all prefixed with `rindexer_` to avoid conflicts with event fields):
 //!   - `$rindexer_block_number` - The block number
 //!   - `$rindexer_block_timestamp` - The block timestamp (as TIMESTAMPTZ)
@@ -161,6 +164,7 @@ use crate::manifest::contract::{
     compute_sequence_id, injected_columns, ColumnType, IterateBinding, OperationType, SetAction,
     Table, TableOperation,
 };
+use crate::manifest::core::Constants;
 use crate::provider::JsonRpcCachedProvider;
 use crate::types::core::LogParam;
 
@@ -370,6 +374,53 @@ fn dyn_sol_value_to_string(value: &DynSolValue) -> String {
 fn is_view_call(value: &str) -> bool {
     // Must start with $call( and have at least one closing paren
     value.starts_with("$call(") && value.contains(')')
+}
+
+/// Checks if a value string is a constant reference like `$constant(name)`.
+fn is_constant_ref(value: &str) -> bool {
+    value.starts_with("$constant(") && value.ends_with(')')
+}
+
+/// Parses a `$constant(name)` expression and returns the constant name.
+fn parse_constant_ref(value: &str) -> Option<&str> {
+    if !is_constant_ref(value) {
+        return None;
+    }
+    // Extract the constant name between $constant( and )
+    let start = "$constant(".len();
+    let end = value.len() - 1; // Exclude the closing )
+    if start >= end {
+        return None;
+    }
+    Some(value[start..end].trim())
+}
+
+/// Resolves a constant reference to its value for the given network.
+/// Returns the resolved string value, or None if the constant doesn't exist
+/// or isn't defined for this network.
+fn resolve_constant<'a>(
+    constant_name: &str,
+    constants: &'a Constants,
+    network: &str,
+) -> Option<&'a str> {
+    constants.get(constant_name).and_then(|c| c.resolve(network))
+}
+
+/// Resolves all `$constant(name)` references in a string value.
+/// If the entire value is a constant reference, returns the resolved value.
+/// This does NOT do string interpolation - constants must be the entire value.
+fn resolve_constants_in_value<'a>(
+    value: &'a str,
+    constants: &'a Constants,
+    network: &str,
+) -> Option<String> {
+    if is_constant_ref(value) {
+        let name = parse_constant_ref(value)?;
+        resolve_constant(name, constants, network).map(|s| s.to_string())
+    } else {
+        // Not a constant reference, return as-is
+        Some(value.to_string())
+    }
 }
 
 /// Parsed view call expression.
@@ -692,11 +743,16 @@ async fn execute_view_call(
     tx_metadata: &TxMetadata,
     provider: &JsonRpcCachedProvider,
     network: &str,
+    constants: &Constants,
 ) -> Option<DynSolValue> {
     use alloy::primitives::keccak256;
 
-    // Resolve contract address
-    let contract_address: Address = if view_call.contract_address.starts_with('$') {
+    // Resolve contract address - may be a constant, field reference, or literal
+    let contract_address: Address = if view_call.contract_address.starts_with("$constant(") {
+        // Resolve constant reference
+        let resolved = resolve_constants_in_value(&view_call.contract_address, constants, network)?;
+        resolved.parse().ok()?
+    } else if view_call.contract_address.starts_with('$') {
         let field_name = &view_call.contract_address[1..];
         if field_name == "rindexer_contract_address" {
             tx_metadata.contract_address
@@ -722,7 +778,8 @@ async fn execute_view_call(
     let mut encoded_args = Vec::new();
     for (i, arg_str) in view_call.args.iter().enumerate() {
         let param_type = param_types.get(i)?;
-        let value = resolve_arg_value(arg_str, log_params, tx_metadata, param_type)?;
+        let value =
+            resolve_arg_value(arg_str, log_params, tx_metadata, param_type, constants, network)?;
         encoded_args.push(value);
     }
 
@@ -842,14 +899,22 @@ fn parse_function_signature(sig: &str) -> Option<(String, Vec<DynSolType>)> {
     Some((name, param_types))
 }
 
-/// Resolves an argument value from a string (literal or $field reference).
+/// Resolves an argument value from a string (literal, $field reference, or $constant).
 fn resolve_arg_value(
     arg_str: &str,
     log_params: &[LogParam],
     tx_metadata: &TxMetadata,
     expected_type: &DynSolType,
+    constants: &Constants,
+    network: &str,
 ) -> Option<DynSolValue> {
     let arg_str = arg_str.trim();
+
+    // Check for constant reference first
+    if is_constant_ref(arg_str) {
+        let resolved = resolve_constants_in_value(arg_str, constants, network)?;
+        return parse_literal_as_type(&resolved, expected_type);
+    }
 
     if let Some(field_name) = arg_str.strip_prefix('$') {
         // Check tx metadata (all prefixed with rindexer_)
@@ -944,7 +1009,7 @@ fn try_decode_return_value(bytes: &[u8]) -> Option<DynSolValue> {
     DynSolType::Uint(256).abi_decode(bytes).ok()
 }
 
-/// Async version of extract_value_from_event that supports view calls.
+/// Async version of extract_value_from_event that supports view calls and constants.
 /// Falls back to sync extraction for non-view-call values.
 async fn extract_value_from_event_async(
     value_ref: &str,
@@ -953,18 +1018,29 @@ async fn extract_value_from_event_async(
     column_type: &ColumnType,
     provider: Option<&JsonRpcCachedProvider>,
     network: &str,
+    constants: &Constants,
 ) -> Option<EthereumSqlTypeWrapper> {
-    // Check for view call first
-    if is_view_call(value_ref) {
+    // Check for constant reference first - resolve it and continue processing
+    let resolved_value: String;
+    let effective_value_ref = if is_constant_ref(value_ref) {
+        resolved_value = resolve_constants_in_value(value_ref, constants, network)?;
+        resolved_value.as_str()
+    } else {
+        value_ref
+    };
+
+    // Check for view call
+    if is_view_call(effective_value_ref) {
         let provider = provider?;
-        let view_call = parse_view_call(value_ref)?;
+        let view_call = parse_view_call(effective_value_ref)?;
         let result =
-            execute_view_call(&view_call, log_params, tx_metadata, provider, network).await?;
+            execute_view_call(&view_call, log_params, tx_metadata, provider, network, constants)
+                .await?;
         return Some(dyn_sol_value_to_wrapper(&result, column_type));
     }
 
     // Fall back to sync extraction for everything else
-    extract_value_from_event(value_ref, log_params, tx_metadata, column_type)
+    extract_value_from_event(effective_value_ref, log_params, tx_metadata, column_type)
 }
 
 /// Resolves a field path from event log parameters, supporting:
@@ -1649,6 +1725,7 @@ fn expand_iterate_bindings(
 /// * `postgres` - Optional PostgreSQL client
 /// * `clickhouse` - Optional ClickHouse client
 /// * `providers` - RPC providers for view calls (keyed by network name)
+/// * `constants` - User-defined constants from the manifest (can be network-scoped)
 pub async fn process_table_operations(
     tables: &[TableRuntime],
     event_name: &str,
@@ -1656,6 +1733,7 @@ pub async fn process_table_operations(
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
     providers: Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>>,
+    constants: &Constants,
 ) -> Result<(), String> {
     for table_runtime in tables {
         // Find operations for this event
@@ -1728,6 +1806,7 @@ pub async fn process_table_operations(
                                 column_def.resolved_type(),
                                 provider,
                                 network,
+                                constants,
                             )
                             .await
                             {
@@ -1749,6 +1828,7 @@ pub async fn process_table_operations(
                                 column_def.resolved_type(),
                                 provider,
                                 network,
+                                constants,
                             )
                             .await
                             {

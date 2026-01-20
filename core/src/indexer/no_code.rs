@@ -22,6 +22,7 @@ use crate::database::sql_type_wrapper::{
     map_ethereum_wrapper_to_json, map_log_params_to_ethereum_wrapper, EthereumSqlTypeWrapper,
 };
 use crate::manifest::contract::Contract;
+use crate::manifest::core::Constants;
 use crate::{
     abi::{ABIItem, CreateCsvFileForEvent, EventInfo, ParamTypeError, ReadAbiError},
     chat::ChatClients,
@@ -290,6 +291,8 @@ struct NoCodeCallbackParams {
     store_raw_events: bool,
     /// RPC providers for view calls in custom tables (keyed by network name)
     providers: Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>>,
+    /// User-defined constants from the manifest (can be network-scoped)
+    constants: Arc<Constants>,
 }
 
 struct EventCallbacks {
@@ -636,6 +639,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                     params.postgres.clone(),
                     params.clickhouse.clone(),
                     params.providers.clone(),
+                    &params.constants,
                 )
                 .await
                 {
@@ -949,6 +953,7 @@ async fn process_contract(
                 tables: Arc::new(contract_tables),
                 store_raw_events,
                 providers: providers.clone(),
+                constants: Arc::new(manifest.constants.clone()),
             }))
             .event_callback,
         };
@@ -1065,6 +1070,7 @@ pub async fn process_trace_events(
             tables: Arc::new(Vec::new()), // Native transfers don't support custom tables
             store_raw_events: true,       // Native transfers always store raw events
             providers,
+            constants: Arc::new(manifest.constants.clone()),
         });
 
         let event = TraceCallbackRegistryInformation {
