@@ -50,10 +50,11 @@ fn generate_event_table_sql_with_comments(
                 return create_table_sql;
             }
 
-            // smart comments needed to avoid clashing of order by graphql names
+            // smart comments needed to avoid clashing of graphql type names
+            let graphql_name = format!("{}{}", contract_name, event_info.name);
             let table_comment = format!(
-                "COMMENT ON TABLE {} IS E'@name {}{}';",
-                table_name, contract_name, event_info.name
+                "COMMENT ON TABLE {} IS E'@name {}';",
+                table_name, graphql_name
             );
 
             format!("{create_table_sql}\n{table_comment}")
@@ -126,7 +127,12 @@ pub enum GenerateTablesForIndexerSqlError {
 }
 
 /// Generate SQL for custom tables
-fn generate_tables_sql(tables: &[Table], schema_name: &str) -> String {
+fn generate_tables_sql(
+    tables: &[Table],
+    contract_name: &str,
+    schema_name: &str,
+    clashing_table_names: &[String],
+) -> String {
     tables
         .iter()
         .map(|table| {
@@ -203,10 +209,15 @@ fn generate_tables_sql(tables: &[Table], schema_name: &str) -> String {
             let create_table_sql =
                 format!("CREATE TABLE IF NOT EXISTS {} ({});", table_name, columns.join(", "));
 
-            // Add table comment for GraphQL naming - allows querying by table name in camelCase
-            let graphql_name = snake_to_camel(&table.name);
-            let table_comment =
-                format!("COMMENT ON TABLE {} IS E'@name {}';", table_name, graphql_name);
+            // Add table comment for GraphQL naming
+            // If table name clashes with another contract's table, prefix with contract name
+            let table_comment = if clashing_table_names.contains(&table.name) {
+                let graphql_name = format!("{}{}", contract_name, snake_to_camel(&table.name));
+                format!("COMMENT ON TABLE {} IS E'@name {}';", table_name, graphql_name)
+            } else {
+                let graphql_name = snake_to_camel(&table.name);
+                format!("COMMENT ON TABLE {} IS E'@name {}';", table_name, graphql_name)
+            };
 
             format!("{}\n{}", create_table_sql, table_comment)
         })
@@ -255,6 +266,34 @@ pub fn find_clashing_event_names(
     Ok(clashing_events)
 }
 
+/// Find custom table names that clash across different contracts
+/// to avoid GraphQL type naming conflicts
+pub fn find_clashing_table_names(
+    current_contract_name: &str,
+    current_tables: &[Table],
+    all_contracts: &[Contract],
+) -> Vec<String> {
+    let mut clashing_tables = Vec::new();
+
+    for other_contract in all_contracts {
+        if other_contract.name == current_contract_name {
+            continue;
+        }
+
+        if let Some(other_tables) = &other_contract.tables {
+            for current_table in current_tables {
+                if other_tables.iter().any(|t| t.name == current_table.name)
+                    && !clashing_tables.contains(&current_table.name)
+                {
+                    clashing_tables.push(current_table.name.clone());
+                }
+            }
+        }
+    }
+
+    clashing_tables
+}
+
 pub fn generate_tables_for_indexer_sql(
     project_path: &Path,
     indexer: &Indexer,
@@ -299,7 +338,14 @@ pub fn generate_tables_for_indexer_sql(
 
             // Generate custom tables if defined
             if let Some(tables) = &contract.tables {
-                sql.push_str(&generate_tables_sql(tables, &schema_name));
+                let clashing_table_names =
+                    find_clashing_table_names(&contract_name, tables, &indexer.contracts);
+                sql.push_str(&generate_tables_sql(
+                    tables,
+                    &contract.name,
+                    &schema_name,
+                    &clashing_table_names,
+                ));
             }
         }
 

@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     env, fs,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -22,6 +23,25 @@ use crate::{
     indexer::Indexer,
     manifest::graphql::GraphQLSettings,
 };
+
+/// Check if there are any table name conflicts across contracts.
+/// Returns true if any two contracts have tables with the same name.
+fn has_table_name_conflicts(indexer: &Indexer) -> bool {
+    let mut seen_table_names: HashSet<String> = HashSet::new();
+
+    for contract in &indexer.contracts {
+        if let Some(tables) = &contract.tables {
+            for table in tables {
+                if !seen_table_names.insert(table.name.clone()) {
+                    // Table name already seen in another contract
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
 
 pub struct GraphqlOverrideSettings {
     pub enabled: bool,
@@ -104,6 +124,14 @@ pub async fn start_graphql_server(
     // kill any existing process on the port
     kill_process_on_port(port).map_err(StartGraphqlServerError::GraphQLServerStartupError)?;
 
+    // Check if there are table name conflicts - if so, skip node alias plugin
+    let skip_node_alias_plugin = has_table_name_conflicts(indexer);
+    if skip_node_alias_plugin {
+        info!(
+            "Detected table name conflicts across contracts - disabling node alias plugin to avoid GraphQL type conflicts"
+        );
+    }
+
     let (tx, rx) = oneshot::channel();
     let tx_arc = Arc::new(Mutex::new(Some(tx)));
 
@@ -115,10 +143,8 @@ pub async fn start_graphql_server(
         Arc::new(port),
         settings.filter_only_on_indexed_columns,
         settings.disable_advanced_filters,
+        skip_node_alias_plugin,
     );
-
-    // Do not need now with the main shutdown keeping around in-case
-    // setup_ctrlc_handler(Arc::new(Mutex::new(None::<Child>)));
 
     // Wait for the initial server startup
     let pid = rx.await.map_err(|e| {
@@ -142,6 +168,7 @@ fn spawn_start_server(
     port: Arc<u16>,
     filter_only_on_indexed_columns: bool,
     disable_advanced_filters: bool,
+    skip_node_alias_plugin: bool,
 ) {
     tokio::spawn(async move {
         loop {
@@ -156,6 +183,7 @@ fn spawn_start_server(
                 &port,
                 filter_only_on_indexed_columns,
                 disable_advanced_filters,
+                skip_node_alias_plugin,
             )
             .await
             {
@@ -232,6 +260,7 @@ async fn start_server(
     port: &u16,
     filter_only_on_indexed_columns: bool,
     disable_advanced_filters: bool,
+    skip_node_alias_plugin: bool,
 ) -> Result<Child, String> {
     Command::new(rindexer_graphql_exe)
         .arg(connection_string)
@@ -243,8 +272,9 @@ async fn start_server(
         .arg("10000")
         .arg(filter_only_on_indexed_columns.to_string())
         .arg(disable_advanced_filters.to_string())
+        .arg(skip_node_alias_plugin.to_string())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::inherit()) // Show errors from GraphQL server
         .spawn()
         .map_err(|e| e.to_string())
 }
@@ -269,30 +299,40 @@ async fn perform_health_check(
                                 "🦀 GraphQL API ready at {} Playground - {} 🦀",
                                 graphql_endpoint, graphql_playground
                             );
-                            break;
+                            return Ok(());
+                        } else {
+                            error!(
+                                "GraphQL health check returned errors: {:?}",
+                                response_json.get("errors")
+                            );
                         }
                     }
-                    Err(_) => {
-                        // try again
-                        info!("🦀 GraphQL API not healthy yet...");
-                        continue;
+                    Err(e) => {
+                        error!("GraphQL health check JSON parse error: {}", e);
                     }
                 }
             }
-            _ => {}
+            Ok(response) => {
+                error!(
+                    "GraphQL health check failed with status: {}",
+                    response.status()
+                );
+            }
+            Err(_) => {
+                // Connection error - server might not be ready yet
+                if health_check_attempts == 0 {
+                    info!("Waiting for GraphQL server to start...");
+                }
+            }
         }
         health_check_attempts += 1;
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 
-    if health_check_attempts >= 40 {
-        error!("GraphQL API did not become ready in time");
-        return Err(StartGraphqlServerError::GraphQLServerStartupError(
-            "GraphQL API did not become ready in time".to_string(),
-        ));
-    }
-
-    Ok(())
+    error!("GraphQL API did not become ready in time after {} attempts", health_check_attempts);
+    Err(StartGraphqlServerError::GraphQLServerStartupError(
+        "GraphQL API did not become ready in time".to_string(),
+    ))
 }
 
 // Do not need now with the main shutdown keeping around in-case
