@@ -313,10 +313,7 @@ async fn perform_health_check(
                 }
             }
             Ok(response) => {
-                error!(
-                    "GraphQL health check failed with status: {}",
-                    response.status()
-                );
+                error!("GraphQL health check failed with status: {}", response.status());
             }
             Err(_) => {
                 // Connection error - server might not be ready yet

@@ -52,10 +52,8 @@ fn generate_event_table_sql_with_comments(
 
             // smart comments needed to avoid clashing of graphql type names
             let graphql_name = format!("{}{}", contract_name, event_info.name);
-            let table_comment = format!(
-                "COMMENT ON TABLE {} IS E'@name {}';",
-                table_name, graphql_name
-            );
+            let table_comment =
+                format!("COMMENT ON TABLE {} IS E'@name {}';", table_name, graphql_name);
 
             format!("{create_table_sql}\n{table_comment}")
         })
