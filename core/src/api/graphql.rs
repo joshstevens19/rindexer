@@ -160,6 +160,7 @@ pub async fn start_graphql_server(
 
 static MANUAL_STOP: AtomicBool = AtomicBool::new(false);
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_start_server(
     tx_arc: Arc<Mutex<Option<Sender<u32>>>>,
     rindexer_graphql_exe: PathBuf,
