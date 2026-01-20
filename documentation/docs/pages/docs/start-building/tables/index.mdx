@@ -8,7 +8,8 @@ NFT ownership, and protocol metrics - all through simple YAML configuration. No 
 ## Key Features
 
 - **Upsert, Insert, Update, Delete** - Full CRUD operations on your custom tables
-- **Computed Values** - Arithmetic expressions like `$amount * 2` or `$price / $quantity`
+- **Computed Values** - Arithmetic expressions like `$amount * 2`, `$price / $quantity`, or `10 ^ $decimals`
+- **Arithmetic with View Calls** - Combine math with on-chain data: `($amount * $call($oracle, "getPrice()")) / (10 ^ $call($token, "decimals()"))`
 - **String Templates** - Concatenate fields with `"$from-$to"` or `"Pool: $token0/$token1"`
 - **Conditional Logic** - Filter with `if: "$value > 0 && $from != 0x000..."`, negate with `!($condition)`
 - **Array Iteration** - Process batch events (ERC1155 `TransferBatch`) with [`iterate`](#array-iteration-batch-events)
@@ -211,7 +212,8 @@ You **must specify `type:`** in these cases:
 | Value Source | Example | Why |
 |--------------|---------|-----|
 | View calls | `$call($addr, "balanceOf(address)", $holder)` | Return type unknown |
-| Computed/arithmetic | `$amount * 2`, `$a + $b` | Result type ambiguous |
+| Computed/arithmetic | `$amount * 2`, `$a + $b`, `10 ^ $decimals` | Result type ambiguous |
+| Arithmetic + view calls | `($amount * $call(...)) / (10 ^ $call(...))` | Complex expression |
 | String templates | `"$from-$to"` | Always produces string |
 | Literal values | `"global"`, `"1000"` | No type context |
 | No value reference | Column not used in `set` or `where` | Nothing to infer from |
@@ -671,9 +673,20 @@ value: $amount + $fee          # Add two event fields
 value: $amount0 - $amount1     # Subtract fields
 value: $ratio / 100            # Divide by constant
 value: $amount * $price        # Multiply two fields
+value: 10 ^ $decimals          # Exponentiation (10 to the power of decimals)
+value: $base ^ 18              # Raise field to a power
 ```
 
-**Supported operators:** `+`, `-`, `*`, `/`
+**Supported operators:** `+`, `-`, `*`, `/`, `^` (exponentiation)
+
+:::tip[Operator Precedence]
+Operators follow standard mathematical precedence:
+1. `^` (exponentiation) - highest
+2. `*`, `/` (multiplication, division)
+3. `+`, `-` (addition, subtraction) - lowest
+
+Use parentheses to control order: `($a + $b) * $c`
+:::
 
 :::tip[When to Use Arithmetic]
 Arithmetic is useful for:
@@ -681,6 +694,101 @@ Arithmetic is useful for:
 - **Fee calculations**: `$amount - $fee` or `$gross * $feePercent / 10000`
 - **Combining amounts**: `$amount0 + $amount1`
 - **Scaling values**: `$value / 1000000` (e.g., converting from wei)
+- **Decimal normalization**: `$amount / (10 ^ $decimals)`
+:::
+
+---
+
+### Arithmetic with View Calls
+
+You can combine arithmetic expressions with `$call()` to compute values that depend on on-chain data.
+This is powerful for computing USD values, normalized amounts, and other derived metrics.
+
+```yaml
+# Compute USD value: (amount * oracle_price) / 10^decimals
+value: ($amount * $call($constant(oracle), "getAssetPrice(address)", $token)) / (10 ^ $call($token, "decimals()"))
+
+# Normalize amount by fetching decimals on-chain
+value: $rawAmount / (10 ^ $call($tokenAddress, "decimals()"))
+
+# Compute with multiple view calls
+value: $call($pool, "getReserves()")[0] * $call($oracle, "getPrice()")
+```
+
+**How it works:**
+1. All `$call()` expressions in the arithmetic are resolved first (fetched from the blockchain)
+2. The returned values replace the `$call()` placeholders
+3. The arithmetic expression is then evaluated with the resolved values
+
+#### Real-World Example: Liquidation USD Value
+
+Here's a complete example from an Aave liquidation indexer that computes the USD value of liquidated collateral:
+
+```yaml
+constants:
+  oracle:
+    ethereum: "0x54586bE62E3c3580375aE3723C145253060Ca0C2"
+    arbitrum: "0xb56c2F0B653B2e0b10C9b928C8580Ac5Df02C7C7"
+
+contracts:
+  - name: AaveV3Pool
+    abi: ./abis/aave-pool.json
+    details:
+      - network: ethereum
+        address: "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2"
+        start_block: 24263944
+    tables:
+      - name: liquidations
+        columns:
+          - name: borrower
+          - name: collateral_asset
+          - name: collateral_amount_raw
+          - name: total_usd_value
+            type: uint256  # Result has 8 decimal precision from oracle
+        events:
+          - event: LiquidationCall
+            operations:
+              - type: insert
+                set:
+                  - column: borrower
+                    action: set
+                    value: $user
+                  - column: collateral_asset
+                    action: set
+                    value: $collateralAsset
+                  - column: collateral_amount_raw
+                    action: set
+                    value: $liquidatedCollateralAmount
+                  - column: total_usd_value
+                    action: set
+                    # Formula: (amount * price) / 10^decimals
+                    # - $liquidatedCollateralAmount: raw amount from event
+                    # - getAssetPrice(): returns price with 8 decimals
+                    # - decimals(): returns token decimals (e.g., 18 for WETH)
+                    # Result: USD value with 8 decimal precision
+                    value: ($liquidatedCollateralAmount * $call($constant(oracle), "getAssetPrice(address)", $collateralAsset)) / (10 ^ $call($collateralAsset, "decimals()"))
+```
+
+**Formula breakdown:**
+- `$liquidatedCollateralAmount` - raw collateral amount from the event (e.g., 1000000000000000000 for 1 WETH)
+- `$call($constant(oracle), "getAssetPrice(address)", $collateralAsset)` - USD price from Aave oracle (8 decimals, e.g., 200000000000 for $2000)
+- `$call($collateralAsset, "decimals()")` - token decimals (e.g., 18 for WETH)
+- `10 ^ decimals` - the divisor to normalize the amount
+
+**Result:** `(1e18 * 2000e8) / 10^18 = 2000e8` = $2000 with 8 decimal precision
+
+:::tip[When to Use Arithmetic + View Calls]
+This pattern is ideal for:
+- **USD value calculations** - Normalize token amounts and multiply by oracle prices
+- **Percentage calculations** - Fetch basis points or rates and compute percentages
+- **Cross-token metrics** - Compare values across tokens with different decimals
+- **Protocol-specific formulas** - Compute health factors, liquidation thresholds, etc.
+:::
+
+:::warning[Performance Consideration]
+Each `$call()` in an arithmetic expression requires an RPC call. If your expression has multiple calls,
+they're all executed for every event. Consider caching static values (like `decimals()`) in a separate
+table if you're processing high-volume events.
 :::
 
 ### String Templates

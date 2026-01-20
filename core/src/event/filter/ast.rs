@@ -48,6 +48,8 @@ pub enum ArithmeticOperator {
     Multiply,
     /// Division operator (/)
     Divide,
+    /// Exponentiation operator (^)
+    Power,
 }
 
 /// Represents the possible logical operators that can be used in filter expressions.
@@ -264,13 +266,22 @@ impl<'a> ArithmeticExpr<'a> {
             ArithmeticExpr::Binary { left, operator, right } => {
                 let left_sql = left.to_sql(table_name);
                 let right_sql = right.to_sql(table_name);
-                let op_sql = match operator {
-                    ArithmeticOperator::Add => "+",
-                    ArithmeticOperator::Subtract => "-",
-                    ArithmeticOperator::Multiply => "*",
-                    ArithmeticOperator::Divide => "/",
-                };
-                format!("({} {} {})", left_sql, op_sql, right_sql)
+                match operator {
+                    ArithmeticOperator::Power => {
+                        // Use PostgreSQL POWER() function for exponentiation
+                        format!("POWER({}, {})", left_sql, right_sql)
+                    }
+                    _ => {
+                        let op_sql = match operator {
+                            ArithmeticOperator::Add => "+",
+                            ArithmeticOperator::Subtract => "-",
+                            ArithmeticOperator::Multiply => "*",
+                            ArithmeticOperator::Divide => "/",
+                            ArithmeticOperator::Power => unreachable!(),
+                        };
+                        format!("({} {} {})", left_sql, op_sql, right_sql)
+                    }
+                }
             }
         }
     }
