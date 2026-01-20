@@ -4,11 +4,12 @@ const { postgraphile } = require("postgraphile");
 const { makeWrapResolversPlugin } = require("graphile-utils");
 const PgSimplifyInflectorPlugin = require("@graphile-contrib/pg-simplify-inflector");
 const ConnectionFilterPlugin = require("postgraphile-plugin-connection-filter");
+const { PgNodeAliasPostGraphile } = require("graphile-build-pg");
 
 const args = process.argv.slice(2);
 
 if (args.length < 5) {
-    console.error("Usage: postgraphile <connectionString> <schemas> <port> <page_limit> <timeout> <filterOnlyOnIndexedColumns> <disableAdvancedFilters>");
+    console.error("Usage: postgraphile <connectionString> <schemas> <port> <page_limit> <timeout> <filterOnlyOnIndexedColumns> <disableAdvancedFilters> <skipNodeAliasPlugin>");
     process.exit(1);
 }
 
@@ -19,6 +20,7 @@ let graphqlPageLimit = parseInt(args[3]);
 let graphqlTimeout = parseInt(args[4]);
 let filterOnlyOnIndexedColumns = args[5] === "true";
 let disableAdvancedFilters = args[6] === "true";
+let skipNodeAliasPlugin = args[7] === "true";
 
 const byteaToHex = makeWrapResolversPlugin(
     (context) => {
@@ -76,6 +78,9 @@ const options = {
     },
     simpleCollections: 'omit',
     appendPlugins,
+    // Only skip PgNodeAliasPostGraphile when there are table name conflicts across schemas
+    // This avoids node alias conflicts but changes nodeId format
+    ...(skipNodeAliasPlugin ? { skipPlugins: [PgNodeAliasPostGraphile] } : {}),
     graphileBuildOptions: {
         pgOmitListSuffix: false,
         pgSimplifyAllRows: false,

@@ -294,6 +294,13 @@ fn parse_multiplicative_operator(input: &mut Input<'_>) -> ParserResult<Arithmet
     .parse_next(input)
 }
 
+/// Parses an exponentiation operator (^)
+fn parse_power_operator(input: &mut Input<'_>) -> ParserResult<ArithmeticOperator> {
+    delimited(space0, literal("^").map(|_| ArithmeticOperator::Power), space0)
+        .context(StrContext::Expected(StrContextValue::Description("exponentiation operator (^)")))
+        .parse_next(input)
+}
+
 /// Parses a primary arithmetic operand: variable, literal, or parenthesized arithmetic expression
 fn parse_arithmetic_primary<'a>(input: &mut Input<'a>) -> ParserResult<ArithmeticExpr<'a>> {
     delimited(
@@ -315,11 +322,31 @@ fn parse_arithmetic_primary<'a>(input: &mut Input<'a>) -> ParserResult<Arithmeti
     .parse_next(input)
 }
 
-/// Parses multiplicative expressions (* and /) - higher precedence
-fn parse_multiplicative_expr<'a>(input: &mut Input<'a>) -> ParserResult<ArithmeticExpr<'a>> {
+/// Parses exponentiation expressions (^) - highest precedence among binary operators
+fn parse_power_expr<'a>(input: &mut Input<'a>) -> ParserResult<ArithmeticExpr<'a>> {
     let left = parse_arithmetic_primary.parse_next(input)?;
 
-    let trailing_parser = (parse_multiplicative_operator, parse_arithmetic_primary);
+    let trailing_parser = (parse_power_operator, parse_arithmetic_primary);
+
+    let folded_parser = repeat(0.., trailing_parser).fold(
+        move || left.clone(),
+        |acc, (op, right)| ArithmeticExpr::Binary {
+            left: Box::new(acc),
+            operator: op,
+            right: Box::new(right),
+        },
+    );
+
+    folded_parser
+        .context(StrContext::Expected(StrContextValue::Description("power expression")))
+        .parse_next(input)
+}
+
+/// Parses multiplicative expressions (* and /) - lower precedence than power
+fn parse_multiplicative_expr<'a>(input: &mut Input<'a>) -> ParserResult<ArithmeticExpr<'a>> {
+    let left = parse_power_expr.parse_next(input)?;
+
+    let trailing_parser = (parse_multiplicative_operator, parse_power_expr);
 
     let folded_parser = repeat(0.., trailing_parser).fold(
         move || left.clone(),
@@ -546,13 +573,33 @@ fn parse_arithmetic_primary_with_dollar<'a>(
     .parse_next(input)
 }
 
+/// Parses power expressions (^) with $ prefix support - highest precedence among binary operators
+fn parse_power_expr_with_dollar<'a>(input: &mut Input<'a>) -> ParserResult<ArithmeticExpr<'a>> {
+    let left = parse_arithmetic_primary_with_dollar.parse_next(input)?;
+
+    let trailing_parser = (parse_power_operator, parse_arithmetic_primary_with_dollar);
+
+    let folded_parser = repeat(0.., trailing_parser).fold(
+        move || left.clone(),
+        |acc, (op, right)| ArithmeticExpr::Binary {
+            left: Box::new(acc),
+            operator: op,
+            right: Box::new(right),
+        },
+    );
+
+    folded_parser
+        .context(StrContext::Expected(StrContextValue::Description("power expression")))
+        .parse_next(input)
+}
+
 /// Parses multiplicative expressions with $ prefix support
 fn parse_multiplicative_expr_with_dollar<'a>(
     input: &mut Input<'a>,
 ) -> ParserResult<ArithmeticExpr<'a>> {
-    let left = parse_arithmetic_primary_with_dollar.parse_next(input)?;
+    let left = parse_power_expr_with_dollar.parse_next(input)?;
 
-    let trailing_parser = (parse_multiplicative_operator, parse_arithmetic_primary_with_dollar);
+    let trailing_parser = (parse_multiplicative_operator, parse_power_expr_with_dollar);
 
     let folded_parser = repeat(0.., trailing_parser).fold(
         move || left.clone(),

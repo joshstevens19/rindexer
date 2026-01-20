@@ -6,8 +6,18 @@
 ### Features
 -------------------------------------------------
 
+- feat: Add exponentiation operator and $call() support in arithmetic expressions
+  - Add ^ operator for exponentiation (e.g., 10 ^ $decimals)
+  - Support $call() view calls inside arithmetic expressions
+  - Support $constant() references in $call() arguments
+  - Use PostgreSQL POWER() for SQL generation, U256::checked_pow for evaluation
+  - Parser precedence: additive → multiplicative → power → primary
+  - Add documentation and liquidation bot example with total_usd_value
+
 ### Bug fixes
 -------------------------------------------------
+
+- fix: postgres graphql comments clash fails to start graphql
 
 ### Breaking changes
 -------------------------------------------------

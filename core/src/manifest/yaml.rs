@@ -28,7 +28,7 @@ pub const YAML_CONFIG_NAME: &str = "rindexer.yaml";
 fn is_arithmetic_expression(value: &str) -> bool {
     // Must contain at least one arithmetic operator
     let has_operator = value.chars().enumerate().any(|(i, c)| {
-        if c == '*' || c == '/' {
+        if c == '*' || c == '/' || c == '^' {
             true
         } else if c == '+' || c == '-' {
             // Check it's not a unary operator at the start
@@ -39,6 +39,11 @@ fn is_arithmetic_expression(value: &str) -> bool {
     });
 
     has_operator && value.contains('$')
+}
+
+/// Checks if a value contains $call() patterns that need runtime resolution.
+fn contains_call_pattern(value: &str) -> bool {
+    value.contains("$call(")
 }
 
 /// Extracts variable names from a filter/condition expression string.
@@ -554,22 +559,31 @@ fn validate_manifest(
 
                             // Check for arithmetic expression (e.g., "$value * 2", "$amount + $fee")
                             if is_arithmetic_expression(effective_value) {
-                                // Validate the expression parses correctly
-                                if let Err(e) = parse_arithmetic_expression(effective_value) {
-                                    return Err(
-                                        ValidateManifestError::CustomIndexingInvalidArithmeticExpression(
-                                            effective_value.to_string(),
-                                            event_mapping.event.clone(),
-                                            table.name.clone(),
-                                            contract.name.clone(),
-                                            e.to_string(),
-                                        ),
-                                    );
+                                // If expression contains $call(), skip parse validation
+                                // ($call() patterns are resolved at runtime before arithmetic evaluation)
+                                if !contains_call_pattern(effective_value) {
+                                    // Validate the expression parses correctly
+                                    if let Err(e) = parse_arithmetic_expression(effective_value) {
+                                        return Err(
+                                            ValidateManifestError::CustomIndexingInvalidArithmeticExpression(
+                                                effective_value.to_string(),
+                                                event_mapping.event.clone(),
+                                                table.name.clone(),
+                                                contract.name.clone(),
+                                                e.to_string(),
+                                            ),
+                                        );
+                                    }
                                 }
 
                                 // Extract and validate all variable references
+                                // (skip variables inside $call() as they're validated separately)
                                 let variables = extract_arithmetic_variables(effective_value);
                                 for var_name in variables {
+                                    // Skip 'call' and 'constant' which are function names
+                                    if var_name == "call" || var_name == "constant" {
+                                        continue;
+                                    }
                                     // Strip array indices like ids[0] -> ids
                                     let root_field =
                                         var_name.split(&['.', '['][..]).next().unwrap_or(&var_name);
@@ -592,7 +606,9 @@ fn validate_manifest(
                                         );
                                     }
                                 }
-                            } else if effective_value.starts_with("$call(") {
+                            } else if effective_value.starts_with("$call(")
+                                || contains_call_pattern(effective_value)
+                            {
                                 // Skip validation for view calls
                                 continue;
                             } else if let Some(event_field) = effective_value.strip_prefix('$') {

@@ -271,6 +271,12 @@ fn evaluate_arithmetic_expr<'a>(
                         EvaluationError::ArithmeticOverflow("division error".to_string())
                     })?
                 }
+                ArithmeticOperator::Power => {
+                    // For exponentiation, use checked_pow which handles overflow
+                    left_num.checked_pow(right_num).ok_or_else(|| {
+                        EvaluationError::ArithmeticOverflow("exponentiation overflow".to_string())
+                    })?
+                }
             };
 
             Ok(ArithmeticValue::Number(result))
@@ -364,6 +370,12 @@ fn evaluate_arithmetic_expr_with_table<'a>(
                     }
                     left_num.checked_div(right_num).ok_or_else(|| {
                         EvaluationError::ArithmeticOverflow("division error".to_string())
+                    })?
+                }
+                ArithmeticOperator::Power => {
+                    // For exponentiation, use checked_pow which handles overflow
+                    left_num.checked_pow(right_num).ok_or_else(|| {
+                        EvaluationError::ArithmeticOverflow("exponentiation overflow".to_string())
                     })?
                 }
             };

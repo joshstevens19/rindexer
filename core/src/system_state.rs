@@ -12,6 +12,7 @@ static IS_RUNNING: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(true));
 
 pub async fn initiate_shutdown() {
     IS_RUNNING.store(false, Ordering::SeqCst);
+
     let mut active = active_indexing_count();
 
     info!("Starting shutdown with {} active tasks", active);

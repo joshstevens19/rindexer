@@ -240,12 +240,13 @@ pub struct TableRowData {
 }
 
 /// Checks if a value string contains arithmetic operators indicating it's a computed expression.
-/// Computed expressions like "$value * 2", "$amount + $fee", "$ratio / 100" will return true.
+/// Computed expressions like "$value * 2", "$amount + $fee", "$ratio / 100", "10 ^ $decimals" will return true.
+/// Also supports $call() in arithmetic: "$amount / (10 ^ $call($asset, \"decimals()\"))"
 fn is_arithmetic_expression(value: &str) -> bool {
     // Must contain at least one arithmetic operator
     // Check for operators that are not part of comparison (==, !=, >=, <=)
     let has_operator = value.chars().enumerate().any(|(i, c)| {
-        if c == '*' || c == '/' {
+        if c == '*' || c == '/' || c == '^' {
             true
         } else if c == '+' || c == '-' {
             // Check it's not a unary operator at the start
@@ -255,7 +256,54 @@ fn is_arithmetic_expression(value: &str) -> bool {
         }
     });
 
-    has_operator && value.contains('$')
+    // Must have operators AND contain either $field or $call references
+    has_operator && (value.contains('$'))
+}
+
+/// Checks if an arithmetic expression contains $call() patterns that need async resolution.
+fn arithmetic_has_calls(value: &str) -> bool {
+    value.contains("$call(")
+}
+
+/// Finds all $call(...) patterns in a string, handling nested parentheses.
+/// Returns a vector of (start_index, end_index, call_expression) for each match.
+fn find_call_patterns(value: &str) -> Vec<(usize, usize, String)> {
+    let mut results = Vec::new();
+    let mut search_start = 0;
+
+    while let Some(start) = value[search_start..].find("$call(") {
+        let absolute_start = search_start + start;
+        let call_start = absolute_start + 6; // Skip "$call("
+
+        // Find matching closing paren, handling nested parens
+        let mut depth = 1;
+        let mut end_pos = None;
+
+        for (i, c) in value[call_start..].char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end_pos = Some(call_start + i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(end) = end_pos {
+            let call_expr = value[absolute_start..=end].to_string();
+            results.push((absolute_start, end + 1, call_expr));
+            search_start = end + 1;
+        } else {
+            // Malformed - no closing paren, skip this match
+            search_start = absolute_start + 6;
+        }
+    }
+
+    results
 }
 
 /// Checks if a value string is a string template with embedded field references.
@@ -421,6 +469,45 @@ fn resolve_constants_in_value<'a>(
         // Not a constant reference, return as-is
         Some(value.to_string())
     }
+}
+
+/// Resolves all `$constant(name)` references embedded anywhere in a string value.
+/// Unlike `resolve_constants_in_value`, this handles constants inside larger expressions.
+/// e.g., "$call($constant(oracle), \"getPrice()\")" -> "$call(0x1234..., \"getPrice()\")"
+fn resolve_all_constants_in_value(
+    value: &str,
+    constants: &Constants,
+    network: &str,
+) -> Option<String> {
+    let mut result = value.to_string();
+    let mut search_start = 0;
+
+    while let Some(start) = result[search_start..].find("$constant(") {
+        let absolute_start = search_start + start;
+        let const_start = absolute_start + 10; // Skip "$constant("
+
+        // Find closing paren
+        if let Some(end_offset) = result[const_start..].find(')') {
+            let end = const_start + end_offset;
+            let const_name = &result[const_start..end];
+
+            // Resolve the constant
+            if let Some(resolved) = resolve_constant(const_name, constants, network) {
+                // Replace $constant(name) with the resolved value
+                result.replace_range(absolute_start..=end, resolved);
+                // Continue searching from after the replacement
+                search_start = absolute_start + resolved.len();
+            } else {
+                // Constant not found, skip this one
+                search_start = end + 1;
+            }
+        } else {
+            // Malformed - no closing paren
+            break;
+        }
+    }
+
+    Some(result)
 }
 
 /// Parsed view call expression.
@@ -851,6 +938,52 @@ async fn execute_view_call(
     apply_accessor_if_present(decoded, view_call)
 }
 
+/// Resolves all $call(...) patterns in an arithmetic expression, replacing them with their values.
+/// Returns the modified expression string with calls replaced by their numeric values.
+async fn resolve_calls_in_arithmetic_expression(
+    expression: &str,
+    log_params: &[LogParam],
+    tx_metadata: &TxMetadata,
+    provider: &JsonRpcCachedProvider,
+    network: &str,
+    constants: &Constants,
+) -> Option<String> {
+    let call_patterns = find_call_patterns(expression);
+    if call_patterns.is_empty() {
+        return Some(expression.to_string());
+    }
+
+    let mut result = expression.to_string();
+
+    // Process calls in reverse order so indices remain valid after replacements
+    for (start, end, call_expr) in call_patterns.into_iter().rev() {
+        // Parse and execute the view call
+        let view_call = parse_view_call(&call_expr)?;
+        let call_result =
+            execute_view_call(&view_call, log_params, tx_metadata, provider, network, constants)
+                .await?;
+
+        // Convert result to string for substitution
+        let value_str = match call_result {
+            DynSolValue::Uint(val, _) => val.to_string(),
+            DynSolValue::Int(val, _) => val.to_string(),
+            DynSolValue::Bool(b) => if b { "1" } else { "0" }.to_string(),
+            _ => {
+                tracing::warn!(
+                    "View call in arithmetic returned non-numeric value: {:?}",
+                    call_result
+                );
+                return None;
+            }
+        };
+
+        // Replace the call expression with the value
+        result.replace_range(start..end, &value_str);
+    }
+
+    Some(result)
+}
+
 /// Applies accessor to a view call result if one is specified.
 fn apply_accessor_if_present(value: DynSolValue, view_call: &ViewCall) -> Option<DynSolValue> {
     match &view_call.accessor {
@@ -1020,19 +1153,54 @@ async fn extract_value_from_event_async(
     network: &str,
     constants: &Constants,
 ) -> Option<EthereumSqlTypeWrapper> {
-    // Check for constant reference first - resolve it and continue processing
-    let resolved_value: String;
-    let effective_value_ref = if is_constant_ref(value_ref) {
-        resolved_value = resolve_constants_in_value(value_ref, constants, network)?;
-        resolved_value.as_str()
+    // First resolve any constants in the value (handles $constant(...) anywhere in string)
+    let resolved_constants: String;
+    let after_constants = if value_ref.contains("$constant(") {
+        resolved_constants = resolve_all_constants_in_value(value_ref, constants, network)?;
+        resolved_constants.as_str()
     } else {
         value_ref
     };
 
-    // Check for view call
-    if is_view_call(effective_value_ref) {
+    // Check for arithmetic expression with $call() patterns
+    // e.g., "$amount / (10 ^ $call($asset, \"decimals()\")) * $call($oracle, \"getAssetPrice(address)\", $asset)"
+    if is_arithmetic_expression(after_constants) && arithmetic_has_calls(after_constants) {
         let provider = provider?;
-        let view_call = parse_view_call(effective_value_ref)?;
+        // Resolve all $call() patterns first, then evaluate arithmetic
+        let resolved_expr = resolve_calls_in_arithmetic_expression(
+            after_constants,
+            log_params,
+            tx_metadata,
+            provider,
+            network,
+            constants,
+        )
+        .await?;
+
+        // Now evaluate the arithmetic with calls resolved to values
+        let json_data = log_params_to_json(log_params);
+        return match evaluate_arithmetic(&resolved_expr, &json_data) {
+            Ok(ComputedValue::U256(val)) => match column_type {
+                ColumnType::Uint64 => Some(EthereumSqlTypeWrapper::U64BigInt(val.to::<u64>())),
+                ColumnType::Uint128 => Some(EthereumSqlTypeWrapper::U256Numeric(val)),
+                _ => Some(EthereumSqlTypeWrapper::U256Numeric(val)),
+            },
+            Ok(ComputedValue::String(s)) => Some(EthereumSqlTypeWrapper::String(s)),
+            Err(e) => {
+                tracing::debug!(
+                    "Arithmetic expression with calls evaluation failed: {}. Expression: {}",
+                    e,
+                    resolved_expr
+                );
+                None
+            }
+        };
+    }
+
+    // Check for standalone view call (not in arithmetic)
+    if is_view_call(after_constants) {
+        let provider = provider?;
+        let view_call = parse_view_call(after_constants)?;
         let result =
             execute_view_call(&view_call, log_params, tx_metadata, provider, network, constants)
                 .await?;
@@ -1040,7 +1208,7 @@ async fn extract_value_from_event_async(
     }
 
     // Fall back to sync extraction for everything else
-    extract_value_from_event(effective_value_ref, log_params, tx_metadata, column_type)
+    extract_value_from_event(after_constants, log_params, tx_metadata, column_type)
 }
 
 /// Resolves a field path from event log parameters, supporting:
