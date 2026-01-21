@@ -148,8 +148,10 @@ fn generate_tables_clickhouse(tables: &[Table], schema_name: &str) -> String {
 
             // Auto-injected metadata columns (always populated by rindexer, no defaults needed)
             columns.push(format!("`{}` UInt64", injected_columns::BLOCK_NUMBER));
-            columns
-                .push(format!("`{}` Nullable(DateTime('UTC'))", injected_columns::BLOCK_TIMESTAMP));
+            // Only add block timestamp column if table.timestamp is true
+            if table.timestamp {
+                columns.push(format!("`{}` DateTime('UTC')", injected_columns::BLOCK_TIMESTAMP));
+            }
             columns.push(format!("`{}` FixedString(66)", injected_columns::TX_HASH));
             columns.push(format!("`{}` FixedString(66)", injected_columns::BLOCK_HASH));
             columns.push(format!("`{}` FixedString(42)", injected_columns::CONTRACT_ADDRESS));

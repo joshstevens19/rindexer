@@ -10,11 +10,13 @@
 //!
 //! - `rindexer_sequence_id` (NUMERIC) - Unique ID for deterministic ordering
 //!   computed as: `block_number * 100_000_000 + tx_index * 100_000 + log_index`
-//! - `rindexer_block_number` (BIGINT) - The block number of the event
-//! - `rindexer_block_timestamp` (TIMESTAMPTZ) - The block timestamp of the event
-//! - `rindexer_tx_hash` (CHAR(66)) - The transaction hash of the event
-//! - `rindexer_block_hash` (CHAR(66)) - The block hash of the event
-//! - `rindexer_contract_address` (CHAR(42)) - The contract address that emitted the event
+//! - `rindexer_block_number` (BIGINT NOT NULL) - The block number of the event
+//! - `rindexer_block_timestamp` (TIMESTAMPTZ NOT NULL) - The block timestamp of the event
+//!   **Only added when `timestamp: true` is set on the table.**
+//!   When enabled but metadata lacks the timestamp, it's batch-fetched from RPC and cached.
+//! - `rindexer_tx_hash` (CHAR(66) NOT NULL) - The transaction hash of the event
+//! - `rindexer_block_hash` (CHAR(66) NOT NULL) - The block hash of the event
+//! - `rindexer_contract_address` (CHAR(42) NOT NULL) - The contract address that emitted the event
 //!
 //! These columns are automatically set by rindexer and do NOT need to be defined
 //! in your YAML configuration.
@@ -144,7 +146,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use alloy::dyn_abi::{DynSolType, DynSolValue};
-use alloy::primitives::{Address, Bytes, B256, U256};
+use alloy::primitives::{Address, Bytes, B256, U256, U64};
 use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
@@ -180,6 +182,14 @@ type ViewCallCacheKey = (String, Address, Bytes, u64);
 static VIEW_CALL_CACHE: Lazy<RwLock<HashMap<ViewCallCacheKey, DynSolValue>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
+/// Cache key type for block timestamps: (network, block_number).
+type BlockTimestampCacheKey = (String, u64);
+
+/// Global cache for block timestamps. Key is (network, block_number).
+/// Block timestamps are immutable, so this cache never needs invalidation.
+static BLOCK_TIMESTAMP_CACHE: Lazy<RwLock<HashMap<BlockTimestampCacheKey, u64>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+
 /// Default limit for concurrent view calls.
 const DEFAULT_MAX_CONCURRENT_VIEW_CALLS: usize = 10;
 
@@ -199,6 +209,87 @@ pub async fn configure_view_call_limit(limit: usize) {
     let mut semaphore = VIEW_CALL_SEMAPHORE.write().await;
     *semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(limit));
     info!("View call concurrency limit set to {}", limit);
+}
+
+/// Prefetches block timestamps for a batch of events that need them.
+/// This is called once at the start of table processing to batch all RPC calls together.
+/// Results are stored in the global BLOCK_TIMESTAMP_CACHE.
+async fn prefetch_block_timestamps(
+    events_data: &[(Vec<LogParam>, String, TxMetadata)],
+    providers: &std::collections::HashMap<String, Arc<JsonRpcCachedProvider>>,
+    needs_timestamp: bool,
+) {
+    if !needs_timestamp {
+        return;
+    }
+
+    // Collect unique (network, block_number) pairs that need fetching
+    let mut blocks_to_fetch: HashMap<String, Vec<u64>> = HashMap::new();
+
+    {
+        let cache = BLOCK_TIMESTAMP_CACHE.read().await;
+        for (_, network, tx_metadata) in events_data {
+            // Skip if we already have the timestamp in metadata
+            if tx_metadata.block_timestamp.is_some() {
+                continue;
+            }
+
+            // Skip if already cached
+            let cache_key = (network.clone(), tx_metadata.block_number);
+            if cache.contains_key(&cache_key) {
+                continue;
+            }
+
+            // Add to fetch list
+            blocks_to_fetch.entry(network.clone()).or_default().push(tx_metadata.block_number);
+        }
+    }
+
+    // Deduplicate block numbers per network
+    for blocks in blocks_to_fetch.values_mut() {
+        blocks.sort_unstable();
+        blocks.dedup();
+    }
+
+    // Batch fetch blocks for each network
+    for (network, block_numbers) in blocks_to_fetch {
+        if block_numbers.is_empty() {
+            continue;
+        }
+
+        let Some(provider) = providers.get(&network) else {
+            warn!("No provider for network {} to fetch block timestamps", network);
+            continue;
+        };
+
+        let block_numbers_u64: Vec<U64> = block_numbers.iter().map(|&n| U64::from(n)).collect();
+
+        match provider.get_block_by_number_batch(&block_numbers_u64, false).await {
+            Ok(blocks) => {
+                let mut cache = BLOCK_TIMESTAMP_CACHE.write().await;
+                for block in blocks {
+                    let block_num = block.header.number;
+                    let timestamp = block.header.timestamp;
+                    cache.insert((network.clone(), block_num), timestamp);
+                }
+                debug!(
+                    "Prefetched {} block timestamps for network {}",
+                    block_numbers.len(),
+                    network
+                );
+            }
+            Err(e) => {
+                warn!("Failed to batch fetch block timestamps for {}: {}", network, e);
+            }
+        }
+    }
+}
+
+/// Gets a block timestamp from the cache, or returns None if not cached.
+/// Should be called after prefetch_block_timestamps has populated the cache.
+async fn get_cached_block_timestamp(network: &str, block_number: u64) -> Option<u64> {
+    let cache = BLOCK_TIMESTAMP_CACHE.read().await;
+    cache.get(&(network.to_string(), block_number)).copied()
 }
 
 /// Transaction metadata available for table value references.
@@ -2053,6 +2144,15 @@ pub async fn process_table_operations(
     providers: Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>>,
     constants: &Constants,
 ) -> Result<(), String> {
+    // Check if any table needs timestamps and prefetch them in batch
+    let any_table_needs_timestamp = tables
+        .iter()
+        .any(|t| t.table.timestamp && t.table.events.iter().any(|e| e.event == event_name));
+
+    if any_table_needs_timestamp {
+        prefetch_block_timestamps(events_data, &providers, true).await;
+    }
+
     for table_runtime in tables {
         // Find operations for this event
         let event_mapping = table_runtime.table.events.iter().find(|e| e.event == event_name);
@@ -2170,12 +2270,23 @@ pub async fn process_table_operations(
                             injected_columns::BLOCK_NUMBER.to_string(),
                             EthereumSqlTypeWrapper::U64BigInt(tx_metadata.block_number),
                         );
-                        if let Some(ts) = tx_metadata.block_timestamp {
-                            if let Some(dt) = DateTime::from_timestamp(ts.to::<i64>(), 0) {
-                                columns.insert(
-                                    injected_columns::BLOCK_TIMESTAMP.to_string(),
-                                    EthereumSqlTypeWrapper::DateTime(dt.with_timezone(&Utc)),
-                                );
+                        // Only insert block_timestamp if table.timestamp is true
+                        if table_runtime.table.timestamp {
+                            let block_timestamp = if let Some(ts) = tx_metadata.block_timestamp {
+                                // Use timestamp from metadata if available
+                                Some(ts.to::<u64>())
+                            } else {
+                                // Look up from cache (prefetched at start of processing)
+                                get_cached_block_timestamp(network, tx_metadata.block_number).await
+                            };
+
+                            if let Some(ts) = block_timestamp {
+                                if let Some(dt) = DateTime::from_timestamp(ts as i64, 0) {
+                                    columns.insert(
+                                        injected_columns::BLOCK_TIMESTAMP.to_string(),
+                                        EthereumSqlTypeWrapper::DateTime(dt.with_timezone(&Utc)),
+                                    );
+                                }
                             }
                         }
                         columns.insert(

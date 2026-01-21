@@ -203,10 +203,11 @@ fn get_expected_columns(table: &Table) -> HashMap<String, String> {
 
     // Injected columns
     columns.insert(injected_columns::BLOCK_NUMBER.to_string(), "UInt64".to_string());
-    columns.insert(
-        injected_columns::BLOCK_TIMESTAMP.to_string(),
-        "Nullable(DateTime('UTC'))".to_string(),
-    );
+    // Only add block timestamp column if table.timestamp is true
+    if table.timestamp {
+        columns
+            .insert(injected_columns::BLOCK_TIMESTAMP.to_string(), "DateTime('UTC')".to_string());
+    }
     columns.insert(injected_columns::TX_HASH.to_string(), "FixedString(66)".to_string());
     columns.insert(injected_columns::BLOCK_HASH.to_string(), "FixedString(66)".to_string());
     columns.insert(injected_columns::CONTRACT_ADDRESS.to_string(), "FixedString(42)".to_string());
@@ -298,9 +299,8 @@ pub async fn detect_schema_changes(
             }
 
             // Find removed columns (in DB but not in YAML)
-            // Exclude internal columns that might have been added by migrations
-            let internal_columns: HashSet<&str> =
-                ["rindexer_id", "block_timestamp"].into_iter().collect();
+            // Exclude internal columns that are auto-managed
+            let internal_columns: HashSet<&str> = ["rindexer_id"].into_iter().collect();
 
             for col_name in existing_col_names.difference(&expected_col_names) {
                 if !internal_columns.contains(col_name.as_str()) {

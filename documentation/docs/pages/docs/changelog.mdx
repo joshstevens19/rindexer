@@ -5,6 +5,7 @@
 
 - breaking: Rename `rindexer_last_updated_block` to `rindexer_block_number`
 - breaking: Rename `rindexer_last_updated_at` to `rindexer_block_timestamp`
+- breaking: need to have timestamp: true to get timestamps in the database
 
 ### Bug fixes
 -------------------------------------------------
@@ -12,6 +13,8 @@
 - fix: tx hash + block hash to not parse into char(42)
 - fix: Injected columns rindexer_tx_hash, rindexer_block_hash, rindexer_contract_address now NOT NULL
 - fix: Remove unnecessary DEFAULT 0 from rindexer_block_number and rindexer_sequence_id
+- fix: Remove legacy block_timestamp from schema sync exclusion - Cleaned up old migration exclusion for both PostgreSQL and 
+  ClickHouse schema sync. The new rindexer_block_timestamp column is now fully managed by the timestamp flag.
 
 ### Features
 -------------------------------------------------
@@ -19,6 +22,11 @@
 - feat: Add nullable: bool option to table columns (columns are NOT NULL by default)
 - feat: Add $null value support to explicitly set columns to SQL NULL
 - feat: Add $if(condition, trueValue, falseValue) for conditional value assignment
+- feat: Add timestamp: bool option to tables - Opt-in rindexer_block_timestamp column. When true, 
+  creates the column as TIMESTAMPTZ NOT NULL. When false (default), the column is not created, saving storage and avoiding RPC overhead.
+- feat: Batch fetch and cache block timestamps - When timestamp: true and RPC metadata lacks timestamps, rindexer batch-fetches all unique 
+  blocks in a single RPC call per network and caches them globally for the entire indexing run. Deduplicates across events in the same block.
+- feat: Schema sync support for timestamp column - Adding/removing timestamp: true triggers appropriate schema migrations (add column or prompt for deletion).
 
 ## Releases
 -------------------------------------------------

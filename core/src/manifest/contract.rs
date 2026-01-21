@@ -319,6 +319,14 @@ pub struct Table {
     /// Tables can have events, cron, or both.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cron: Option<Vec<TableCronMapping>>,
+
+    /// Whether to include the `rindexer_block_timestamp` column.
+    /// Default is false - the column will not be created.
+    /// When true, the column is created as `TIMESTAMPTZ NOT NULL` and rindexer will
+    /// fetch the block timestamp from the RPC if not available in the event metadata.
+    /// Note: This may impact indexing performance as it requires additional RPC calls.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub timestamp: bool,
 }
 
 impl Table {

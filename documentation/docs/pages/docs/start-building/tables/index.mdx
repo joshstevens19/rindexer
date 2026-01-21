@@ -174,6 +174,40 @@ tables:
 
 ---
 
+### timestamp
+
+When `true`, adds the `rindexer_block_timestamp` column to the table. By default, this column
+is **not created** to optimize performance.
+
+```yaml
+tables:
+  - name: balances
+    timestamp: true  // [!code focus]
+    columns:
+      - name: holder
+      - name: balance
+        default: "0"
+```
+
+**Why is this opt-in?**
+
+Some RPC nodes don't include block timestamps in event metadata, requiring an additional
+RPC call to fetch the block and extract its timestamp. This can significantly impact
+indexing performance, especially for high-volume indexers.
+
+:::info[Performance Optimization]
+When `timestamp: true` is set and your RPC node doesn't include timestamps in event metadata,
+rindexer will batch-fetch blocks to get timestamps. The optimization includes:
+- **Batch fetching** - All unique blocks in an event batch are fetched in a single RPC call
+- **Global caching** - Block timestamps are cached for the entire indexing run, so each block is only fetched once
+- **Deduplication** - Multiple events in the same block share one fetch
+
+This minimizes the performance impact, but if you don't need timestamps, leaving the option off avoids the overhead entirely.
+Only enable this if you actually need block timestamps in your queries.
+:::
+
+---
+
 ### columns
 
 Define the columns in your table.
@@ -215,7 +249,7 @@ Column types are **automatically inferred** in these cases - no `type:` needed:
 | Transaction metadata | `$rindexer_block_number` | `uint64` |
 | Transaction metadata | `$rindexer_tx_hash`, `$rindexer_block_hash` | `string` |
 | Transaction metadata | `$rindexer_contract_address` | `address` |
-| Transaction metadata | `$rindexer_block_timestamp` | `timestamp` |
+| Transaction metadata | `$rindexer_block_timestamp` | `timestamp` (requires `timestamp: true`) |
 | Default value `"0"` | `default: "0"` | `uint256` |
 | Default value boolean | `default: "true"` | `bool` |
 | Default value address | `default: "0x000..."` | `address` |
@@ -568,13 +602,18 @@ Access transaction and block information:
 
 ```yaml
 value: $rindexer_block_number      # Block number
-value: $rindexer_block_timestamp   # Block timestamp
+value: $rindexer_block_timestamp   # Block timestamp (requires timestamp: true on table)
 value: $rindexer_tx_hash           # Transaction hash
 value: $rindexer_block_hash        # Block hash
 value: $rindexer_contract_address  # Contract that emitted the event
 value: $rindexer_log_index         # Log index in transaction
 value: $rindexer_tx_index          # Transaction index in block
 ```
+
+:::info[Block Timestamp]
+The `$rindexer_block_timestamp` reference only works if you have `timestamp: true` set on the table.
+Without it, the column won't exist. See [timestamp](#timestamp) for details.
+:::
 
 ### View Calls (On-Chain Data)
 
@@ -1253,12 +1292,17 @@ Every custom table automatically includes these columns - you don't need to defi
 | `network` | VARCHAR | Network name (omitted if `cross_chain: true`) |
 | `rindexer_sequence_id` | NUMERIC NOT NULL | Unique ID for deterministic ordering |
 | `rindexer_block_number` | BIGINT NOT NULL | Block number of the event |
-| `rindexer_block_timestamp` | TIMESTAMPTZ | Block timestamp of the event |
+| `rindexer_block_timestamp` | TIMESTAMPTZ NOT NULL | Block timestamp of the event (**only if `timestamp: true`**) |
 | `rindexer_tx_hash` | CHAR(66) NOT NULL | Transaction hash of the event |
 | `rindexer_block_hash` | CHAR(66) NOT NULL | Block hash of the event |
 | `rindexer_contract_address` | CHAR(42) NOT NULL | Contract that emitted the event |
 
 These let you track when and where each event originated.
+
+:::info[Optional Block Timestamp]
+The `rindexer_block_timestamp` column is only created when you set `timestamp: true` on the table.
+See [timestamp](#timestamp) for details on when to enable this and its performance implications.
+:::
 
 :::tip[Why the `rindexer_` prefix?]
 All auto-injected columns are prefixed with `rindexer_` to avoid conflicts with your own column names.
