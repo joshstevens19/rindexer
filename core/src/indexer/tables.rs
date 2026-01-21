@@ -287,7 +287,7 @@ async fn prefetch_view_calls(
             // Collect value refs that might contain $call
             let mut value_refs: Vec<&str> = Vec::new();
 
-            for (_, value_ref) in &operation.where_clause {
+            for value_ref in operation.where_clause.values() {
                 value_refs.push(value_ref.as_str());
             }
             for set_col in &operation.set {
@@ -2531,6 +2531,7 @@ fn expand_iterate_bindings(
 /// * `providers` - RPC providers for view calls (keyed by network name)
 /// * `constants` - User-defined constants from the manifest (can be network-scoped)
 /// * `multicall_addresses` - Custom Multicall3 addresses per network (None = use default address)
+#[allow(clippy::too_many_arguments)]
 pub async fn process_table_operations(
     tables: &[TableRuntime],
     event_name: &str,
