@@ -950,6 +950,39 @@ pub struct TableCronMapping {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<String>,
 
+    /// Starting block for historical sync.
+    /// If specified, the cron will replay operations from this block forward
+    /// before running live. Similar to event indexing start_block.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_option_u64_from_string",
+        serialize_with = "serialize_option_u64_as_string"
+    )]
+    pub start_block: Option<U64>,
+
+    /// Ending block for historical sync.
+    /// If specified, the cron will stop after reaching this block and will NOT
+    /// continue with live cron execution. Use "latest" or a block number.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_option_u64_from_string",
+        serialize_with = "serialize_option_u64_as_string"
+    )]
+    pub end_block: Option<U64>,
+
+    /// Block interval for historical sync.
+    /// How many blocks between each cron execution during historical sync.
+    /// If not specified, the cron will run at every block.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_option_u64_from_string",
+        serialize_with = "serialize_option_u64_as_string"
+    )]
+    pub block_interval: Option<U64>,
+
     /// Operations to perform on each cron tick.
     /// Note: Event fields ($from, $to, etc.) are NOT available in cron operations.
     /// Available: $call(...), $contract, $rindexer_block_number, $rindexer_timestamp, literals.

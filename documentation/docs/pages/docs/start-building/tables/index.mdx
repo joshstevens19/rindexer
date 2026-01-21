@@ -1151,8 +1151,6 @@ tables:
         type: string
       - name: price
         type: int256
-      - name: updated_block
-        type: uint64
     cron:  // [!code focus]
       - interval: 5s  # Run every 5 seconds // [!code focus]
         operations:  // [!code focus]
@@ -1163,9 +1161,6 @@ tables:
               - column: price // [!code focus]
                 action: set // [!code focus]
                 value: $call($contract, "latestAnswer()") // [!code focus]
-              - column: updated_block // [!code focus]
-                action: set // [!code focus]
-                value: $rindexer_block_number // [!code focus]
 ```
 
 ### Schedule Formats
@@ -1269,6 +1264,175 @@ tables:
 - Use `global: true` with `upsert` for single-row tables (current state)
 - Use `insert` without `global` for time-series/history tables (new row each time)
 - Insert tables automatically get an auto-incrementing `rindexer_id` as primary key
+:::
+
+### Historical Cron Sync
+
+Just like event indexing supports replaying historical blocks, cron triggers can also sync historical data.
+This is useful for:
+
+- **Building historical price snapshots** - Replay oracle prices at past blocks
+- **Backfilling time-series data** - Generate data points at regular block intervals from the past
+- **Reconstructing historical state** - Capture on-chain state at specific historical moments
+
+:::warning[Paid RPC Node Strongly Recommended]
+Historical cron sync is **very RPC-intensive** - it makes one or more view calls **per block** in the range.
+For example, syncing 100,000 blocks with `block_interval: 1` means 100,000+ RPC calls.
+
+**Free public nodes will be extremely slow** due to rate limiting. rindexer includes adaptive rate limiting
+that scales down for free nodes, but expect significantly reduced throughput.
+
+For production historical cron sync, use a **paid RPC provider** (Alchemy, QuickNode, Infura, etc.) to achieve
+~300+ blocks/second instead of ~20 blocks/second on free nodes.
+:::
+
+#### Configuration
+
+Add `start_block`, `end_block`, and optionally `block_interval` to your cron configuration:
+
+```yaml
+tables:
+  - name: eth_price_history
+    columns:
+      - name: price
+        type: int256
+    cron:
+      - schedule: "*/5 * * * *"        # Live schedule (used after historical sync)
+        start_block: 18000000          # Start historical sync from this block // [!code focus]
+        end_block: 19000000            # Stop at this block (optional) // [!code focus]
+        block_interval: 100            # Execute every 100 blocks (optional) // [!code focus]
+        operations:
+          - type: insert
+            set:
+              - column: price
+                action: set
+                value: $call($contract, "latestAnswer()")
+```
+
+#### Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `start_block` | Yes (for historical) | Block number to begin historical sync from |
+| `end_block` | No | Block number to stop at. If omitted, syncs to latest then continues live |
+| `block_interval` | No | How many blocks between each execution. Default: `1` (every block) |
+
+#### Behavior
+
+1. **Historical sync first**: If `start_block` is specified, rindexer replays the cron operations from `start_block` forward, executing at each `block_interval` step.
+
+2. **Database state tracking**: Progress is saved to the database, so if you restart, it resumes from where it left off (just like event indexing).
+
+3. **After historical sync completes**:
+   - If `end_block` is specified → The cron **stops completely** (no live mode)
+   - If `end_block` is omitted → Switches to **live mode** using the `interval` or `schedule`
+
+#### Example: Backfill Oracle Prices Every 100 Blocks
+
+```yaml
+cron:
+  - interval: 15s                   # Live: poll every 15 seconds
+    start_block: 24184625           # Historical: start from this block
+    block_interval: 100             # Historical: snapshot every 100 blocks
+    network: ethereum
+    operations:
+      - type: insert
+        set:
+          - column: price
+            action: set
+            value: $call($contract, "latestAnswer()")
+```
+
+This will:
+1. Insert a price snapshot at blocks 24184625, 24184725, 24184825, ... up to the latest block
+2. Then switch to live mode, inserting every 15 seconds
+
+Full example:
+
+```yaml
+name: Historic
+description: Demonstrates cron historical sync - replaying cron operations at past blocks
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: 'RPC'
+
+storage:
+  postgres:
+    enabled: true
+    drop_each_run: true
+
+contracts:
+  - name: ChainlinkETHUSD
+    details:
+      - network: ethereum
+        address: "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419"
+    abi: ./abis/ChainlinkAggregator.abi.json
+
+    tables:
+      - name: eth_price_historical_only
+        columns:
+          - name: price
+            type: int256
+
+        cron:
+          - interval: 15s # Live mode: poll every 15 seconds
+            start_block: 24184625
+            block_interval: 100 # Execute every 100 blocks
+            network: ethereum
+            operations:
+              - type: insert
+                set:
+                  - column: price
+                    action: set
+                    value: $call($contract, "latestAnswer()")
+```
+
+#### Example: Historical-Only Sync (No Live Mode)
+
+For one-time backfills that shouldn't continue running:
+
+```yaml
+cron:
+  - start_block: 24184625           # Start block
+    end_block: 24284625             # Stop at this block (required for historical-only) // [!code focus]
+    block_interval: 100             # Every 100 blocks
+    network: ethereum
+    operations:
+      - type: insert
+        set:
+          - column: price
+            action: set
+            value: $call($contract, "latestAnswer()")
+```
+
+When `end_block` is specified, the cron task stops after reaching that block and does **not** continue with live polling.
+
+:::warning[No Schedule Required for Historical-Only]
+If you specify `start_block` with `end_block` (historical-only mode), you don't need `interval` or `schedule`.
+The cron will run through the block range and then stop.
+:::
+
+#### Performance: Adaptive Rate Limiting
+
+rindexer automatically adapts to your RPC node's capabilities:
+
+| Node Type | Expected Speed | Behavior |
+|-----------|----------------|----------|
+| **Paid/Enterprise** | ~300 blocks/sec | Scales up to 100 concurrent requests, 1000-block batches |
+| **Free Public** | ~20 blocks/sec | Automatically scales down when rate limited |
+
+The system starts conservatively and scales up aggressively when the RPC responds quickly.
+If rate limiting is detected (slow responses), it scales back down and waits before retrying.
+
+:::tip[block_interval for Large Ranges]
+For very large historical ranges, use `block_interval` to reduce RPC calls:
+- `block_interval: 1` = Every block (most data, slowest)
+- `block_interval: 100` = Every 100 blocks (good balance)
+- `block_interval: 1000` = Every 1000 blocks (fastest, less granular)
 :::
 
 :::tip[When to Use Cron vs Events]
@@ -1762,8 +1926,6 @@ contracts:
             type: int256
           - name: decimals
             type: uint8
-          - name: updated_block
-            type: uint64
         cron:
           - interval: 5s
             network: ethereum
@@ -1776,17 +1938,12 @@ contracts:
                   - column: decimals
                     action: set
                     value: $call($contract, "decimals()")
-                  - column: updated_block
-                    action: set
-                    value: $rindexer_block_number
 
       # History table - new row inserted each time
       - name: eth_price_history
         columns:
           - name: price
             type: int256
-          - name: updated_block
-            type: uint64
         cron:
           - interval: 5s
             network: ethereum
@@ -1796,9 +1953,6 @@ contracts:
                   - column: price
                     action: set
                     value: $call($contract, "latestAnswer()")
-                  - column: updated_block
-                    action: set
-                    value: $rindexer_block_number
 ```
 
 ---
@@ -1814,8 +1968,6 @@ tables:
       - name: token_address
       - name: name
       - name: symbol
-      - name: added_at
-        type: uint64
     events:
       - event: TokenAdded
         operations:
@@ -1829,9 +1981,6 @@ tables:
               - column: symbol
                 action: set
                 value: $symbol
-              - column: added_at
-                action: set
-                value: $rindexer_block_number
       - event: TokenRemoved
         operations:
           - type: delete  # Remove from registry entirely

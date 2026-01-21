@@ -1,8 +1,8 @@
 use crate::abi::{EventInfo, ParamTypeError, ReadAbiError};
 use crate::database::postgres::client::PostgresError;
 use crate::database::postgres::generate::{
-    generate_columns_with_data_types, generate_internal_event_table_name,
-    GenerateInternalFactoryEventTableNameParams,
+    generate_columns_with_data_types, generate_internal_cron_table_name,
+    generate_internal_event_table_name, GenerateInternalFactoryEventTableNameParams,
 };
 use crate::helpers::{camel_to_snake, snake_to_camel};
 use crate::indexer::native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME};
@@ -110,6 +110,55 @@ fn generate_internal_event_table_sql(
 
         format!("{create_table_query}\n{insert_queries}\n{create_latest_block_query}\n{latest_block_insert_queries}")
     }).collect::<Vec<_>>().join("\n")
+}
+
+/// Generate SQL for internal cron sync state tracking tables.
+/// Creates a table per cron entry in each table to track the last synced block.
+fn generate_internal_cron_table_sql(
+    tables: &[Table],
+    schema_name: &str,
+    networks: Vec<&str>,
+) -> String {
+    let mut sql_statements = Vec::new();
+
+    for table in tables.iter().filter(|t| t.has_cron()) {
+        let cron_entries = table.cron.as_ref().unwrap();
+
+        for (cron_index, cron) in cron_entries.iter().enumerate() {
+            // Only generate for cron entries with start_block (historical sync)
+            if cron.start_block.is_none() {
+                continue;
+            }
+
+            let internal_table_name =
+                generate_internal_cron_table_name(schema_name, &table.name, cron_index);
+
+            let create_table_query = format!(
+                r#"CREATE TABLE IF NOT EXISTS rindexer_internal.{internal_table_name} ("network" TEXT PRIMARY KEY, "last_synced_block" NUMERIC);"#
+            );
+
+            // Determine which networks this cron runs on
+            let cron_networks: Vec<&str> = if let Some(network) = &cron.network {
+                vec![network.as_str()]
+            } else {
+                networks.clone()
+            };
+
+            let insert_queries = cron_networks
+                .iter()
+                .map(|network| {
+                    format!(
+                        r#"INSERT INTO rindexer_internal.{internal_table_name} ("network", "last_synced_block") VALUES ('{network}', 0) ON CONFLICT ("network") DO NOTHING;"#
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            sql_statements.push(format!("{create_table_query}\n{insert_queries}"));
+        }
+    }
+
+    sql_statements.join("\n")
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -354,10 +403,15 @@ pub fn generate_tables_for_indexer_sql(
         }
 
         // we still need to create the internal tables for the contract
-        sql.push_str(&generate_internal_event_table_sql(&events, &schema_name, networks));
+        sql.push_str(&generate_internal_event_table_sql(&events, &schema_name, networks.clone()));
 
         // generate internal tables for contract factories indexing
         sql.push_str(&generate_internal_factory_event_table_sql(&indexer.name, &factories));
+
+        // generate internal tables for cron sync state tracking
+        if let Some(tables) = &contract.tables {
+            sql.push_str(&generate_internal_cron_table_sql(tables, &schema_name, networks));
+        }
     }
 
     if indexer.native_transfers.enabled {
@@ -528,6 +582,30 @@ pub fn drop_tables_for_indexer_sql(project_path: &Path, indexer: &Indexer) -> Co
             sql.push_str(
                 format!("DROP TABLE IF EXISTS rindexer_internal.{table_name} CASCADE;").as_str(),
             )
+        }
+
+        // drop cron internal tables
+        if let Some(tables) = &contract.tables {
+            for table in tables {
+                if let Some(cron_entries) = &table.cron {
+                    for (cron_index, cron) in cron_entries.iter().enumerate() {
+                        // Only drop tables for crons that have historical sync (start_block)
+                        if cron.start_block.is_some() {
+                            let table_name = generate_internal_cron_table_name(
+                                &schema_name,
+                                &table.name,
+                                cron_index,
+                            );
+                            sql.push_str(
+                                format!(
+                                    "DROP TABLE IF EXISTS rindexer_internal.{table_name} CASCADE;"
+                                )
+                                .as_str(),
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 

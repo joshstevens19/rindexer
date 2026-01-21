@@ -48,6 +48,26 @@ pub fn generate_internal_event_table_name_no_shorten(
     format!("{}_{}", schema_name, camel_to_snake(event_name))
 }
 
+/// Generate internal table name for tracking cron sync state.
+/// Format: {schema_name}_{table_name}_cron_{cron_index}
+pub fn generate_internal_cron_table_name(
+    schema_name: &str,
+    table_name: &str,
+    cron_index: usize,
+) -> String {
+    let table_name = format!("{}_{}_cron_{}", schema_name, camel_to_snake(table_name), cron_index);
+    compact_table_name_if_needed(table_name)
+}
+
+/// Generate internal table name for tracking cron sync state (without shortening).
+pub fn generate_internal_cron_table_name_no_shorten(
+    schema_name: &str,
+    table_name: &str,
+    cron_index: usize,
+) -> String {
+    format!("{}_{}_cron_{}", schema_name, camel_to_snake(table_name), cron_index)
+}
+
 pub struct GenerateInternalFactoryEventTableNameParams {
     pub indexer_name: String,
     pub contract_name: String,

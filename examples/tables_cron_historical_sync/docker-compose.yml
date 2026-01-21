@@ -1,0 +1,9 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: rindexer
+      POSTGRES_DB: postgres
+    ports:
+      - "5441:5432"

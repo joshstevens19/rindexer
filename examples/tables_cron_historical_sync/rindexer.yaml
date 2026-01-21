@@ -1,0 +1,39 @@
+name: Historic
+description: Demonstrates cron historical sync - replaying cron operations at past blocks
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: ${ETHEREUM_RPC_URL}
+
+storage:
+  postgres:
+    enabled: true
+    drop_each_run: true
+
+contracts:
+  - name: ChainlinkETHUSD
+    details:
+      - network: ethereum
+        address: "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419"
+    abi: ./abis/ChainlinkAggregator.abi.json
+
+    tables:
+      - name: eth_price_historical_only
+        columns:
+          - name: price
+            type: int256
+
+        cron:
+          - interval: 15s # Live mode: poll every 15 seconds
+            start_block: 24184625
+            block_interval: 100 # Execute every 100 blocks
+            network: ethereum
+            operations:
+              - type: insert
+                set:
+                  - column: price
+                    action: set
+                    value: $call($contract, "latestAnswer()")

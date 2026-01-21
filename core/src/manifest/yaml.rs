@@ -684,8 +684,20 @@ fn validate_manifest(
 
                     for cron in cron_entries {
                         // Must have interval OR schedule (not both, not neither)
+                        // Exception: historical-only mode (start_block + end_block) doesn't need a schedule
+                        let is_historical_only =
+                            cron.start_block.is_some() && cron.end_block.is_some();
+
                         match (&cron.interval, &cron.schedule) {
-                            (None, None) | (Some(_), Some(_)) => {
+                            (None, None) => {
+                                // Allow (None, None) only for historical-only mode
+                                if !is_historical_only {
+                                    return Err(ValidateManifestError::CronMissingSchedule(
+                                        table.name.clone(),
+                                    ));
+                                }
+                            }
+                            (Some(_), Some(_)) => {
                                 return Err(ValidateManifestError::CronMissingSchedule(
                                     table.name.clone(),
                                 ));

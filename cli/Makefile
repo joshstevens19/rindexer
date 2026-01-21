@@ -105,3 +105,5 @@ start_tables_cron_chainlink_price_all:
 	RUSTFLAGS='-C target-cpu=native' RUST_BACKTRACE='full' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/tables_cron_chainlink_price all
 start_rindexer_liquidation_bot:
 	RUSTFLAGS='-C target-cpu=native' RUST_BACKTRACE='full' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/rindexer_liquidation_bot all
+start_tables_cron_historical_sync:
+	RUSTFLAGS='-C target-cpu=native' RUST_BACKTRACE='full' cargo run --release --features jemalloc -- start --path $(CURDIR)/../examples/tables_cron_historical_sync all
