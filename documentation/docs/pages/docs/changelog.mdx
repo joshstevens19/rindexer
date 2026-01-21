@@ -4,9 +4,15 @@
 -------------------------------------------------
 
 - fix: tx hash + block hash to not parse into char(42) 
+- fix: Injected columns rindexer_tx_hash, rindexer_block_hash, rindexer_contract_address now NOT NULL
+- fix: Remove unnecessary DEFAULT 0 from rindexer_last_updated_block and rindexer_sequence_id
 
 ### Features
 -------------------------------------------------
+
+- feat: Add nullable: bool option to table columns (columns are NOT NULL by default)
+- feat: Add $null value support to explicitly set columns to SQL NULL
+- feat: Add $if(condition, trueValue, falseValue) for conditional value assignment
 
 ## Changes Not Deployed
 -------------------------------------------------

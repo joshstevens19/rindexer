@@ -146,14 +146,14 @@ fn generate_tables_clickhouse(tables: &[Table], schema_name: &str) -> String {
                 columns.push(column_def);
             }
 
-            // Auto-injected metadata columns
-            columns.push(format!("`{}` UInt64 DEFAULT 0", injected_columns::LAST_UPDATED_BLOCK));
+            // Auto-injected metadata columns (always populated by rindexer, no defaults needed)
+            columns.push(format!("`{}` UInt64", injected_columns::LAST_UPDATED_BLOCK));
             columns
                 .push(format!("`{}` Nullable(DateTime('UTC'))", injected_columns::LAST_UPDATED_AT));
             columns.push(format!("`{}` FixedString(66)", injected_columns::TX_HASH));
             columns.push(format!("`{}` FixedString(66)", injected_columns::BLOCK_HASH));
             columns.push(format!("`{}` FixedString(42)", injected_columns::CONTRACT_ADDRESS));
-            columns.push(format!("`{}` UInt128 DEFAULT 0", injected_columns::RINDEXER_SEQUENCE_ID));
+            columns.push(format!("`{}` UInt128", injected_columns::RINDEXER_SEQUENCE_ID));
 
             // Build ORDER BY clause
             let mut order_by: Vec<String> = vec![];

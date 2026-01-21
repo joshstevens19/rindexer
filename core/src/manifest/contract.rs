@@ -447,6 +447,45 @@ impl Table {
         Ok(())
     }
 
+    /// Validates that `$null` values are only used on columns marked as `nullable: true`.
+    ///
+    /// # Returns
+    /// Ok(()) if all `$null` usages are valid, Err with description otherwise.
+    pub fn validate_null_values(&self) -> Result<(), String> {
+        // Build a set of nullable column names for quick lookup
+        let nullable_columns: std::collections::HashSet<&str> =
+            self.columns.iter().filter(|c| c.nullable).map(|c| c.name.as_str()).collect();
+
+        // Check all operations for $null values
+        for operation in self.all_operations() {
+            // Check where clause values
+            for (column_name, value) in &operation.where_clause {
+                if value == "$null" && !nullable_columns.contains(column_name.as_str()) {
+                    return Err(format!(
+                        "Cannot use '$null' for column '{}' in table '{}' because it is not nullable. \
+                         Add 'nullable: true' to the column definition to allow NULL values.",
+                        column_name, self.name
+                    ));
+                }
+            }
+
+            // Check set clause values
+            for set_col in &operation.set {
+                let effective_value = set_col.effective_value();
+                if effective_value == "$null" && !nullable_columns.contains(set_col.column.as_str())
+                {
+                    return Err(format!(
+                        "Cannot use '$null' for column '{}' in table '{}' because it is not nullable. \
+                         Add 'nullable: true' to the column definition to allow NULL values.",
+                        set_col.column, self.name
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Resolve column types from the event ABI.
     ///
     /// This method looks at all operations to find value sources for each column and
@@ -563,6 +602,12 @@ pub struct TableColumn {
     /// Required for literal values.
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub column_type: Option<ColumnType>,
+
+    /// Whether this column allows NULL values.
+    /// Default is false (NOT NULL) for data integrity.
+    /// Set to true to allow NULL values.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub nullable: bool,
 
     /// Default value for new rows (as a string)
     #[serde(default, skip_serializing_if = "Option::is_none")]

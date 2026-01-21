@@ -403,6 +403,14 @@ fn validate_manifest(
                     ));
                 }
 
+                // Validate that $null is only used on nullable columns
+                if let Err(e) = table.validate_null_values() {
+                    return Err(ValidateManifestError::CustomIndexingValidationError(
+                        e,
+                        contract.name.clone(),
+                    ));
+                }
+
                 // Collect table column names for validation
                 let table_column_names: std::collections::HashSet<&str> =
                     table.columns.iter().map(|c| c.name.as_str()).collect();
@@ -471,6 +479,14 @@ fn validate_manifest(
                             // Check event field reference if starts with $
                             // Skip validation for view calls ($call(...))
                             if value.starts_with("$call(") {
+                                continue;
+                            }
+                            // Skip validation for explicit null values ($null)
+                            if value == "$null" {
+                                continue;
+                            }
+                            // Skip validation for conditional expressions ($if(...))
+                            if value.starts_with("$if(") {
                                 continue;
                             }
                             if let Some(event_field) = value.strip_prefix('$') {
@@ -580,8 +596,12 @@ fn validate_manifest(
                                 // (skip variables inside $call() as they're validated separately)
                                 let variables = extract_arithmetic_variables(effective_value);
                                 for var_name in variables {
-                                    // Skip 'call' and 'constant' which are function names
-                                    if var_name == "call" || var_name == "constant" {
+                                    // Skip 'call', 'constant', 'null', and 'if' which are special keywords
+                                    if var_name == "call"
+                                        || var_name == "constant"
+                                        || var_name == "null"
+                                        || var_name == "if"
+                                    {
                                         continue;
                                     }
                                     // Strip array indices like ids[0] -> ids
@@ -610,6 +630,12 @@ fn validate_manifest(
                                 || contains_call_pattern(effective_value)
                             {
                                 // Skip validation for view calls
+                                continue;
+                            } else if effective_value == "$null" {
+                                // Skip validation for explicit null values
+                                continue;
+                            } else if effective_value.starts_with("$if(") {
+                                // Skip validation for conditional expressions
                                 continue;
                             } else if let Some(event_field) = effective_value.strip_prefix('$') {
                                 // Simple event field reference

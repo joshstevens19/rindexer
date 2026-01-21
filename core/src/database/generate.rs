@@ -150,6 +150,11 @@ fn generate_tables_sql(
                 let column_type = column.resolved_type().to_postgres_type();
                 let mut column_def = format!("\"{}\" {}", column.name, column_type);
 
+                // Add NOT NULL constraint by default (unless nullable: true is set)
+                if !column.nullable {
+                    column_def.push_str(" NOT NULL");
+                }
+
                 if let Some(default) = &column.default {
                     // Handle default values - numeric values don't need quotes
                     let default_value = if column_type == "NUMERIC"
@@ -166,19 +171,14 @@ fn generate_tables_sql(
                 columns.push(column_def);
             }
 
-            // Auto-injected metadata columns
-            columns.push(format!(
-                "\"{}\" BIGINT NOT NULL DEFAULT 0",
-                injected_columns::LAST_UPDATED_BLOCK
-            ));
+            // Auto-injected metadata columns (always populated by rindexer, no defaults needed)
+            columns.push(format!("\"{}\" BIGINT NOT NULL", injected_columns::LAST_UPDATED_BLOCK));
             columns.push(format!("\"{}\" TIMESTAMPTZ", injected_columns::LAST_UPDATED_AT));
-            columns.push(format!("\"{}\" CHAR(66)", injected_columns::TX_HASH));
-            columns.push(format!("\"{}\" CHAR(66)", injected_columns::BLOCK_HASH));
-            columns.push(format!("\"{}\" CHAR(42)", injected_columns::CONTRACT_ADDRESS));
-            columns.push(format!(
-                "\"{}\" NUMERIC NOT NULL DEFAULT 0",
-                injected_columns::RINDEXER_SEQUENCE_ID
-            ));
+            columns.push(format!("\"{}\" CHAR(66) NOT NULL", injected_columns::TX_HASH));
+            columns.push(format!("\"{}\" CHAR(66) NOT NULL", injected_columns::BLOCK_HASH));
+            columns.push(format!("\"{}\" CHAR(42) NOT NULL", injected_columns::CONTRACT_ADDRESS));
+            columns
+                .push(format!("\"{}\" NUMERIC NOT NULL", injected_columns::RINDEXER_SEQUENCE_ID));
 
             // For insert-only tables, add auto-incrementing ID column
             if table.is_insert_only() {

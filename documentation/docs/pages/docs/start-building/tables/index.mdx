@@ -183,6 +183,19 @@ Define the columns in your table.
 | `name` | Yes | Column name |
 | `type` | No | Data type (auto-inferred from event ABI if not specified) |
 | `default` | No | Default value for new rows |
+| `nullable` | No | Whether column allows NULL values (default: `false` = NOT NULL) |
+
+:::tip[Nullable Columns]
+By default, all columns are `NOT NULL` for data integrity. If you need to allow NULL values
+(e.g., for optional fields or using `$null`), set `nullable: true`:
+
+```yaml
+columns:
+  - name: optional_field
+    type: string
+    nullable: true  # Allows NULL values
+```
+:::
 
 :::tip[Primary Keys]
 Primary keys are automatically derived from columns used in `where` clauses. Any column that appears
@@ -662,6 +675,110 @@ value: "0"                                              # Number as string
 value: "default"                                        # String identifier
 value: 0x0000000000000000000000000000000000000000       # Address
 ```
+
+### Null Values
+
+Set a column to SQL NULL using `$null`:
+
+```yaml
+value: $null                                            # Explicit SQL NULL
+```
+
+:::warning[Requires Nullable Column]
+You can only use `$null` on columns defined with `nullable: true`. rindexer validates
+this at startup and will show an error if you try to use `$null` on a non-nullable column:
+
+```
+Cannot use '$null' for column 'my_column' in table 'my_table' because it is not nullable.
+Add 'nullable: true' to the column definition to allow NULL values.
+```
+
+**Correct usage:**
+```yaml
+columns:
+  - name: optional_data
+    type: string
+    nullable: true  # Required for $null
+
+events:
+  - event: SomeEvent
+    operations:
+      - type: upsert
+        where:
+          id: $id
+        set:
+          - column: optional_data
+            action: set
+            value: $null  # Sets column to NULL
+```
+:::
+
+### Conditional Values
+
+Use `$if(condition, trueValue, falseValue)` to conditionally set a value based on an expression:
+
+```yaml
+value: $if($amount > 0, $amount, $null)           # Use amount if positive, else null
+value: $if($from == 0x0000000000000000000000000000000000000000, "mint", "transfer")
+value: $if($value >= 1000000, $value, $null)      # Only store if value >= 1M
+```
+
+**Syntax:** `$if(condition, valueIfTrue, valueIfFalse)`
+
+- **condition**: A boolean expression using the same syntax as `if:` filters
+- **valueIfTrue**: Value to use when condition is true (can be `$field`, `$null`, literal, etc.)
+- **valueIfFalse**: Value to use when condition is false
+
+**Supported operators in conditions:**
+| Operator | Meaning |
+|----------|---------|
+| `==` | Equal |
+| `!=` | Not equal |
+| `>` | Greater than |
+| `>=` | Greater or equal |
+| `<` | Less than |
+| `<=` | Less or equal |
+| `&&` | Logical AND |
+| `\|\|` | Logical OR |
+
+**Examples:**
+
+```yaml
+columns:
+  - name: holder
+  - name: transfer_type
+    type: string
+  - name: significant_amount
+    type: uint256
+    nullable: true  # Allows $null
+
+events:
+  - event: Transfer
+    operations:
+      - type: upsert
+        where:
+          holder: $to
+        set:
+          # Classify transfer type based on addresses
+          - column: transfer_type
+            action: set
+            value: $if($from == 0x0000000000000000000000000000000000000000, "mint", $if($to == 0x0000000000000000000000000000000000000000, "burn", "transfer"))
+
+          # Only store amount if it's significant (>= 1000), else null
+          - column: significant_amount
+            action: set
+            value: $if($value >= 1000, $value, $null)
+```
+
+:::tip[Nested $if()]
+You can nest `$if()` expressions for multiple conditions, as shown in the `transfer_type` example above.
+This is equivalent to if-else-if chains.
+:::
+
+:::tip[$if() vs Multiple Operations]
+Use `$if()` when you want to set **different values** for the same column based on conditions.
+Use multiple operations with `if:` filters when you want to perform **different actions** (e.g., different tables, different columns).
+:::
 
 ### Arithmetic Expressions
 

@@ -23,6 +23,10 @@
 //!
 //! In the YAML config, you can reference values using the `$` prefix:
 //!
+//! - **Explicit NULL**: `$null` - Set a column to SQL NULL (only works if column is nullable)
+//! - **Conditional values**: `$if(condition, trueValue, falseValue)` - Conditionally set value
+//!   - Example: `$if($amount > 0, $amount, $null)` - Use amount if positive, else null
+//!   - Supports all condition operators: `==`, `!=`, `>`, `<`, `>=`, `<=`, `&&`, `||`
 //! - **Event fields**: `$from`, `$to`, `$value`, etc. (any field from the event)
 //! - **Nested tuple fields**: `$data.amount`, `$info.token.address` (for events with tuples/structs)
 //! - **Array indexing**: `$ids[0]`, `$data.tokens[1]` (access specific array elements)
@@ -263,6 +267,54 @@ fn is_arithmetic_expression(value: &str) -> bool {
 /// Checks if an arithmetic expression contains $call() patterns that need async resolution.
 fn arithmetic_has_calls(value: &str) -> bool {
     value.contains("$call(")
+}
+
+/// Checks if a value string is a conditional expression like `$if(condition, trueValue, falseValue)`.
+fn is_conditional_value(value: &str) -> bool {
+    value.starts_with("$if(") && value.ends_with(')')
+}
+
+/// Parses a conditional expression `$if(condition, trueValue, falseValue)`.
+/// Returns (condition, true_value, false_value) or an error.
+fn parse_conditional_value(value: &str) -> Result<(String, String, String), String> {
+    // Strip "$if(" prefix and ")" suffix
+    let inner = value
+        .strip_prefix("$if(")
+        .and_then(|s| s.strip_suffix(')'))
+        .ok_or_else(|| "Invalid $if() syntax".to_string())?;
+
+    // Split by commas, but respect nested parentheses
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0;
+
+    for c in inner.chars() {
+        match c {
+            '(' => {
+                depth += 1;
+                current.push(c);
+            }
+            ')' => {
+                depth -= 1;
+                current.push(c);
+            }
+            ',' if depth == 0 => {
+                parts.push(current.trim().to_string());
+                current = String::new();
+            }
+            _ => current.push(c),
+        }
+    }
+    parts.push(current.trim().to_string());
+
+    if parts.len() != 3 {
+        return Err(format!(
+            "Invalid $if() syntax: expected 3 arguments (condition, trueValue, falseValue), got {}",
+            parts.len()
+        ));
+    }
+
+    Ok((parts[0].clone(), parts[1].clone(), parts[2].clone()))
 }
 
 /// Finds all $call(...) patterns in a string, handling nested parentheses.
@@ -1153,6 +1205,57 @@ async fn extract_value_from_event_async(
     network: &str,
     constants: &Constants,
 ) -> Option<EthereumSqlTypeWrapper> {
+    // Check for explicit null value first
+    if value_ref == "$null" {
+        return Some(EthereumSqlTypeWrapper::Null);
+    }
+
+    // Check for conditional expression: $if(condition, trueValue, falseValue)
+    if is_conditional_value(value_ref) {
+        match parse_conditional_value(value_ref) {
+            Ok((condition, true_value, false_value)) => {
+                // Evaluate the condition against event data
+                let json_data = log_params_to_json(log_params);
+                match filter_by_expression(&condition, &json_data) {
+                    Ok(true) => {
+                        // Condition is true, evaluate true_value (async for potential $call)
+                        return Box::pin(extract_value_from_event_async(
+                            &true_value,
+                            log_params,
+                            tx_metadata,
+                            column_type,
+                            provider,
+                            network,
+                            constants,
+                        ))
+                        .await;
+                    }
+                    Ok(false) => {
+                        // Condition is false, evaluate false_value (async for potential $call)
+                        return Box::pin(extract_value_from_event_async(
+                            &false_value,
+                            log_params,
+                            tx_metadata,
+                            column_type,
+                            provider,
+                            network,
+                            constants,
+                        ))
+                        .await;
+                    }
+                    Err(e) => {
+                        debug!("$if condition evaluation failed: {}. Condition: {}", e, condition);
+                        return None;
+                    }
+                }
+            }
+            Err(e) => {
+                debug!("Failed to parse $if expression: {}. Expression: {}", e, value_ref);
+                return None;
+            }
+        }
+    }
+
     // First resolve any constants in the value (handles $constant(...) anywhere in string)
     let resolved_constants: String;
     let after_constants = if value_ref.contains("$constant(") {
@@ -1361,6 +1464,7 @@ fn parse_path_segments(path: &str) -> Vec<String> {
 /// Extracts a value from event log parameters, transaction metadata, or returns a literal value.
 ///
 /// Supported `$` references:
+/// - `$null` - Explicit SQL NULL value (for nullable columns)
 /// - `$block_number` - Block number (uint64)
 /// - `$block_timestamp` - Block timestamp as TIMESTAMPTZ (may be None if not available)
 /// - `$tx_hash` - Transaction hash (bytes32)
@@ -1383,6 +1487,49 @@ fn extract_value_from_event(
     tx_metadata: &TxMetadata,
     column_type: &ColumnType,
 ) -> Option<EthereumSqlTypeWrapper> {
+    // Check for explicit null value first
+    if value_ref == "$null" {
+        return Some(EthereumSqlTypeWrapper::Null);
+    }
+
+    // Check for conditional expression: $if(condition, trueValue, falseValue)
+    if is_conditional_value(value_ref) {
+        match parse_conditional_value(value_ref) {
+            Ok((condition, true_value, false_value)) => {
+                // Evaluate the condition against event data
+                let json_data = log_params_to_json(log_params);
+                match filter_by_expression(&condition, &json_data) {
+                    Ok(true) => {
+                        // Condition is true, evaluate true_value
+                        return extract_value_from_event(
+                            &true_value,
+                            log_params,
+                            tx_metadata,
+                            column_type,
+                        );
+                    }
+                    Ok(false) => {
+                        // Condition is false, evaluate false_value
+                        return extract_value_from_event(
+                            &false_value,
+                            log_params,
+                            tx_metadata,
+                            column_type,
+                        );
+                    }
+                    Err(e) => {
+                        debug!("$if condition evaluation failed: {}. Condition: {}", e, condition);
+                        return None;
+                    }
+                }
+            }
+            Err(e) => {
+                debug!("Failed to parse $if expression: {}. Expression: {}", e, value_ref);
+                return None;
+            }
+        }
+    }
+
     // Check for arithmetic expression first (e.g., "$value * 2", "$amount + $fee")
     if is_arithmetic_expression(value_ref) {
         let json_data = log_params_to_json(log_params);

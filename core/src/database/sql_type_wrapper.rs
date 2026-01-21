@@ -118,6 +118,9 @@ pub enum EthereumSqlTypeWrapper {
     DateTimeNullable(Option<DateTime<Utc>>),
 
     JSONB(Value),
+
+    /// Explicit SQL NULL value - for use with $null in table value expressions
+    Null,
 }
 
 impl EthereumSqlTypeWrapper {
@@ -222,6 +225,8 @@ impl EthereumSqlTypeWrapper {
             EthereumSqlTypeWrapper::DateTimeNullable(_) => "DateTimeNullable",
 
             EthereumSqlTypeWrapper::JSONB(_) => "JSONB",
+
+            EthereumSqlTypeWrapper::Null => "Null",
         }
     }
 
@@ -338,6 +343,9 @@ impl EthereumSqlTypeWrapper {
             }
 
             EthereumSqlTypeWrapper::JSONB(_) => PgType::JSONB,
+
+            // Null can be any type - it's always serialized as SQL NULL
+            EthereumSqlTypeWrapper::Null => PgType::TEXT,
         }
     }
 
@@ -527,6 +535,9 @@ impl EthereumSqlTypeWrapper {
                     self.raw_name()
                 )
             }
+
+            // Explicit NULL value
+            EthereumSqlTypeWrapper::Null => "NULL".to_string(),
         }
     }
 
@@ -1137,6 +1148,8 @@ impl ToSql for EthereumSqlTypeWrapper {
             }
             EthereumSqlTypeWrapper::JSONB(value) => value.to_sql(ty, out),
             EthereumSqlTypeWrapper::Uuid(value) => value.to_sql(ty, out),
+            // Explicit NULL value - always return IsNull::Yes
+            EthereumSqlTypeWrapper::Null => Ok(IsNull::Yes),
         }
     }
 
@@ -1917,6 +1930,7 @@ pub fn map_ethereum_wrapper_to_json(
                     }
                     EthereumSqlTypeWrapper::JSONB(json) => json.clone(),
                     EthereumSqlTypeWrapper::Uuid(uuid) => json!(uuid.to_string()),
+                    EthereumSqlTypeWrapper::Null => Value::Null,
                 };
                 result.insert(abi_input.name.clone(), value);
                 wrappers_index_processed.push(current_wrapper_index);
