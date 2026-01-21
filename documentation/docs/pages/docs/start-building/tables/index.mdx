@@ -1251,14 +1251,14 @@ Every custom table automatically includes these columns - you don't need to defi
 | Column | Type | Description |
 |--------|------|-------------|
 | `network` | VARCHAR | Network name (omitted if `cross_chain: true`) |
-| `rindexer_sequence_id` | NUMERIC | Unique ID for deterministic ordering |
-| `rindexer_last_updated_block` | BIGINT | Block number when row was last updated |
-| `rindexer_last_updated_at` | TIMESTAMP | Timestamp when row was last updated |
-| `rindexer_tx_hash` | CHAR(66) | Transaction hash of last update |
-| `rindexer_block_hash` | CHAR(66) | Block hash of last update |
-| `rindexer_contract_address` | CHAR(42) | Contract that emitted the event |
+| `rindexer_sequence_id` | NUMERIC NOT NULL | Unique ID for deterministic ordering |
+| `rindexer_block_number` | BIGINT NOT NULL | Block number of the event |
+| `rindexer_block_timestamp` | TIMESTAMPTZ | Block timestamp of the event |
+| `rindexer_tx_hash` | CHAR(66) NOT NULL | Transaction hash of the event |
+| `rindexer_block_hash` | CHAR(66) NOT NULL | Block hash of the event |
+| `rindexer_contract_address` | CHAR(42) NOT NULL | Contract that emitted the event |
 
-These let you track when and how each row was last modified.
+These let you track when and where each event originated.
 
 :::tip[Why the `rindexer_` prefix?]
 All auto-injected columns are prefixed with `rindexer_` to avoid conflicts with your own column names.

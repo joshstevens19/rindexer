@@ -439,11 +439,11 @@ async fn execute_cron_operations(
             EthereumSqlTypeWrapper::U128(sequence_id),
         );
         columns.insert(
-            crate::manifest::contract::injected_columns::LAST_UPDATED_BLOCK.to_string(),
+            crate::manifest::contract::injected_columns::BLOCK_NUMBER.to_string(),
             EthereumSqlTypeWrapper::U64BigInt(latest_block),
         );
         columns.insert(
-            crate::manifest::contract::injected_columns::LAST_UPDATED_AT.to_string(),
+            crate::manifest::contract::injected_columns::BLOCK_TIMESTAMP.to_string(),
             EthereumSqlTypeWrapper::DateTime(now),
         );
         columns.insert(

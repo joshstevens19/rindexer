@@ -235,9 +235,9 @@ fn get_expected_columns(table: &Table) -> HashMap<String, String> {
     }
 
     // Injected columns
-    columns.insert(injected_columns::LAST_UPDATED_BLOCK.to_string(), "bigint".to_string());
+    columns.insert(injected_columns::BLOCK_NUMBER.to_string(), "bigint".to_string());
     columns.insert(
-        injected_columns::LAST_UPDATED_AT.to_string(),
+        injected_columns::BLOCK_TIMESTAMP.to_string(),
         "timestamp with time zone".to_string(),
     );
     columns.insert(injected_columns::TX_HASH.to_string(), "character".to_string());

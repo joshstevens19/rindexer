@@ -10,10 +10,10 @@
 //!
 //! - `rindexer_sequence_id` (NUMERIC) - Unique ID for deterministic ordering
 //!   computed as: `block_number * 100_000_000 + tx_index * 100_000 + log_index`
-//! - `rindexer_last_updated_block` (BIGINT) - The block number when the row was last updated
-//! - `rindexer_last_updated_at` (TIMESTAMPTZ) - The timestamp when the row was last updated
-//! - `rindexer_tx_hash` (CHAR(66)) - The transaction hash of the event that last updated this row
-//! - `rindexer_block_hash` (CHAR(66)) - The block hash of the event that last updated this row
+//! - `rindexer_block_number` (BIGINT) - The block number of the event
+//! - `rindexer_block_timestamp` (TIMESTAMPTZ) - The block timestamp of the event
+//! - `rindexer_tx_hash` (CHAR(66)) - The transaction hash of the event
+//! - `rindexer_block_hash` (CHAR(66)) - The block hash of the event
 //! - `rindexer_contract_address` (CHAR(42)) - The contract address that emitted the event
 //!
 //! These columns are automatically set by rindexer and do NOT need to be defined
@@ -2167,13 +2167,13 @@ pub async fn process_table_operations(
                             EthereumSqlTypeWrapper::U128(sequence_id),
                         );
                         columns.insert(
-                            injected_columns::LAST_UPDATED_BLOCK.to_string(),
+                            injected_columns::BLOCK_NUMBER.to_string(),
                             EthereumSqlTypeWrapper::U64BigInt(tx_metadata.block_number),
                         );
                         if let Some(ts) = tx_metadata.block_timestamp {
                             if let Some(dt) = DateTime::from_timestamp(ts.to::<i64>(), 0) {
                                 columns.insert(
-                                    injected_columns::LAST_UPDATED_AT.to_string(),
+                                    injected_columns::BLOCK_TIMESTAMP.to_string(),
                                     EthereumSqlTypeWrapper::DateTime(dt.with_timezone(&Utc)),
                                 );
                             }
@@ -2385,18 +2385,18 @@ async fn execute_postgres_operation(
                 BatchOperationAction::Set,
             ));
         }
-        if let Some(block) = row.columns.get(injected_columns::LAST_UPDATED_BLOCK) {
+        if let Some(block) = row.columns.get(injected_columns::BLOCK_NUMBER) {
             columns.push(DynamicColumnDefinition::new(
-                injected_columns::LAST_UPDATED_BLOCK.to_string(),
+                injected_columns::BLOCK_NUMBER.to_string(),
                 block.clone(),
                 BatchOperationSqlType::Bigint,
                 BatchOperationColumnBehavior::Normal,
                 BatchOperationAction::Set,
             ));
         }
-        if let Some(ts) = row.columns.get(injected_columns::LAST_UPDATED_AT) {
+        if let Some(ts) = row.columns.get(injected_columns::BLOCK_TIMESTAMP) {
             columns.push(DynamicColumnDefinition::new(
-                injected_columns::LAST_UPDATED_AT.to_string(),
+                injected_columns::BLOCK_TIMESTAMP.to_string(),
                 ts.clone(),
                 BatchOperationSqlType::DateTime,
                 BatchOperationColumnBehavior::Normal,
@@ -2556,9 +2556,9 @@ async fn execute_clickhouse_operation(
         }
 
         // last_updated_block
-        if let Some(block) = row.columns.get(injected_columns::LAST_UPDATED_BLOCK) {
+        if let Some(block) = row.columns.get(injected_columns::BLOCK_NUMBER) {
             columns.push(DynamicColumnDefinition::new(
-                injected_columns::LAST_UPDATED_BLOCK.to_string(),
+                injected_columns::BLOCK_NUMBER.to_string(),
                 block.clone(),
                 BatchOperationSqlType::Bigint,
                 BatchOperationColumnBehavior::Normal,
@@ -2567,9 +2567,9 @@ async fn execute_clickhouse_operation(
         }
 
         // last_updated_at
-        if let Some(ts) = row.columns.get(injected_columns::LAST_UPDATED_AT) {
+        if let Some(ts) = row.columns.get(injected_columns::BLOCK_TIMESTAMP) {
             columns.push(DynamicColumnDefinition::new(
-                injected_columns::LAST_UPDATED_AT.to_string(),
+                injected_columns::BLOCK_TIMESTAMP.to_string(),
                 ts.clone(),
                 BatchOperationSqlType::DateTime,
                 BatchOperationColumnBehavior::Normal,

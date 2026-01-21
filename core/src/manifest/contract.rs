@@ -261,11 +261,11 @@ pub mod injected_columns {
     /// Used as primary key for tables that only use INSERT operations.
     pub const RINDEXER_ID: &str = "rindexer_id";
 
-    /// The block number when this row was last updated.
-    pub const LAST_UPDATED_BLOCK: &str = "rindexer_last_updated_block";
+    /// The block number of the event that last updated this row.
+    pub const BLOCK_NUMBER: &str = "rindexer_block_number";
 
-    /// The timestamp when this row was last updated.
-    pub const LAST_UPDATED_AT: &str = "rindexer_last_updated_at";
+    /// The block timestamp of the event that last updated this row.
+    pub const BLOCK_TIMESTAMP: &str = "rindexer_block_timestamp";
 
     /// The transaction hash of the event that last updated this row.
     pub const TX_HASH: &str = "rindexer_tx_hash";

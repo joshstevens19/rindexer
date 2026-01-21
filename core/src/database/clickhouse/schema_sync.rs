@@ -202,9 +202,9 @@ fn get_expected_columns(table: &Table) -> HashMap<String, String> {
     }
 
     // Injected columns
-    columns.insert(injected_columns::LAST_UPDATED_BLOCK.to_string(), "UInt64".to_string());
+    columns.insert(injected_columns::BLOCK_NUMBER.to_string(), "UInt64".to_string());
     columns.insert(
-        injected_columns::LAST_UPDATED_AT.to_string(),
+        injected_columns::BLOCK_TIMESTAMP.to_string(),
         "Nullable(DateTime('UTC'))".to_string(),
     );
     columns.insert(injected_columns::TX_HASH.to_string(), "FixedString(66)".to_string());

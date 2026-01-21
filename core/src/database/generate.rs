@@ -172,8 +172,8 @@ fn generate_tables_sql(
             }
 
             // Auto-injected metadata columns (always populated by rindexer, no defaults needed)
-            columns.push(format!("\"{}\" BIGINT NOT NULL", injected_columns::LAST_UPDATED_BLOCK));
-            columns.push(format!("\"{}\" TIMESTAMPTZ", injected_columns::LAST_UPDATED_AT));
+            columns.push(format!("\"{}\" BIGINT NOT NULL", injected_columns::BLOCK_NUMBER));
+            columns.push(format!("\"{}\" TIMESTAMPTZ", injected_columns::BLOCK_TIMESTAMP));
             columns.push(format!("\"{}\" CHAR(66) NOT NULL", injected_columns::TX_HASH));
             columns.push(format!("\"{}\" CHAR(66) NOT NULL", injected_columns::BLOCK_HASH));
             columns.push(format!("\"{}\" CHAR(42) NOT NULL", injected_columns::CONTRACT_ADDRESS));
