@@ -448,11 +448,11 @@ async fn execute_cron_operations(
         );
         columns.insert(
             crate::manifest::contract::injected_columns::TX_HASH.to_string(),
-            EthereumSqlTypeWrapper::String(format!("{:?}", B256::ZERO)),
+            EthereumSqlTypeWrapper::StringChar(format!("{:?}", B256::ZERO)),
         );
         columns.insert(
             crate::manifest::contract::injected_columns::BLOCK_HASH.to_string(),
-            EthereumSqlTypeWrapper::String(format!("{:?}", B256::ZERO)),
+            EthereumSqlTypeWrapper::StringChar(format!("{:?}", B256::ZERO)),
         );
         columns.insert(
             crate::manifest::contract::injected_columns::CONTRACT_ADDRESS.to_string(),
@@ -544,10 +544,13 @@ async fn extract_cron_value(
                 return None;
             }
             "rindexer_tx_hash" => {
-                return Some(EthereumSqlTypeWrapper::String(format!("{:?}", tx_metadata.tx_hash)));
+                return Some(EthereumSqlTypeWrapper::StringChar(format!(
+                    "{:?}",
+                    tx_metadata.tx_hash
+                )));
             }
             "rindexer_block_hash" => {
-                return Some(EthereumSqlTypeWrapper::String(format!(
+                return Some(EthereumSqlTypeWrapper::StringChar(format!(
                     "{:?}",
                     tx_metadata.block_hash
                 )));

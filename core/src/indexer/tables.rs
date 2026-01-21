@@ -1423,12 +1423,15 @@ fn extract_value_from_event(
                 });
             }
             "rindexer_tx_hash" => {
-                // Store as hex string for readability (e.g., "0x...")
-                return Some(EthereumSqlTypeWrapper::String(format!("{:?}", tx_metadata.tx_hash)));
+                // Store as hex string in CHAR(66) column
+                return Some(EthereumSqlTypeWrapper::StringChar(format!(
+                    "{:?}",
+                    tx_metadata.tx_hash
+                )));
             }
             "rindexer_block_hash" => {
-                // Store as hex string for readability (e.g., "0x...")
-                return Some(EthereumSqlTypeWrapper::String(format!(
+                // Store as hex string in CHAR(66) column
+                return Some(EthereumSqlTypeWrapper::StringChar(format!(
                     "{:?}",
                     tx_metadata.block_hash
                 )));
@@ -2030,11 +2033,17 @@ pub async fn process_table_operations(
                         }
                         columns.insert(
                             injected_columns::TX_HASH.to_string(),
-                            EthereumSqlTypeWrapper::String(format!("{:?}", tx_metadata.tx_hash)),
+                            EthereumSqlTypeWrapper::StringChar(format!(
+                                "{:?}",
+                                tx_metadata.tx_hash
+                            )),
                         );
                         columns.insert(
                             injected_columns::BLOCK_HASH.to_string(),
-                            EthereumSqlTypeWrapper::String(format!("{:?}", tx_metadata.block_hash)),
+                            EthereumSqlTypeWrapper::StringChar(format!(
+                                "{:?}",
+                                tx_metadata.block_hash
+                            )),
                         );
                         columns.insert(
                             injected_columns::CONTRACT_ADDRESS.to_string(),
@@ -2082,7 +2091,7 @@ pub async fn process_table_operations(
 /// Maps ColumnType to BatchOperationSqlType.
 fn column_type_to_batch_sql_type(column_type: &ColumnType) -> BatchOperationSqlType {
     match column_type {
-        ColumnType::Address => BatchOperationSqlType::Char,
+        ColumnType::Address => BatchOperationSqlType::Address,
         // 8-bit and 16-bit integers -> SMALLINT (INT2)
         ColumnType::Uint8 | ColumnType::Uint16 | ColumnType::Int8 | ColumnType::Int16 => {
             BatchOperationSqlType::Smallint
@@ -2251,7 +2260,7 @@ async fn execute_postgres_operation(
             columns.push(DynamicColumnDefinition::new(
                 injected_columns::TX_HASH.to_string(),
                 hash.clone(),
-                BatchOperationSqlType::Char,
+                BatchOperationSqlType::Custom("CHAR(66)"),
                 BatchOperationColumnBehavior::Normal,
                 BatchOperationAction::Set,
             ));
@@ -2260,7 +2269,7 @@ async fn execute_postgres_operation(
             columns.push(DynamicColumnDefinition::new(
                 injected_columns::BLOCK_HASH.to_string(),
                 hash.clone(),
-                BatchOperationSqlType::Char,
+                BatchOperationSqlType::Custom("CHAR(66)"),
                 BatchOperationColumnBehavior::Normal,
                 BatchOperationAction::Set,
             ));
@@ -2269,7 +2278,7 @@ async fn execute_postgres_operation(
             columns.push(DynamicColumnDefinition::new(
                 injected_columns::CONTRACT_ADDRESS.to_string(),
                 addr.clone(),
-                BatchOperationSqlType::Char,
+                BatchOperationSqlType::Address,
                 BatchOperationColumnBehavior::Normal,
                 BatchOperationAction::Set,
             ));
@@ -2426,7 +2435,7 @@ async fn execute_clickhouse_operation(
             columns.push(DynamicColumnDefinition::new(
                 injected_columns::TX_HASH.to_string(),
                 hash.clone(),
-                BatchOperationSqlType::Char,
+                BatchOperationSqlType::Custom("CHAR(66)"),
                 BatchOperationColumnBehavior::Normal,
                 BatchOperationAction::Set,
             ));
@@ -2437,7 +2446,7 @@ async fn execute_clickhouse_operation(
             columns.push(DynamicColumnDefinition::new(
                 injected_columns::BLOCK_HASH.to_string(),
                 hash.clone(),
-                BatchOperationSqlType::Char,
+                BatchOperationSqlType::Custom("CHAR(66)"),
                 BatchOperationColumnBehavior::Normal,
                 BatchOperationAction::Set,
             ));
@@ -2448,7 +2457,7 @@ async fn execute_clickhouse_operation(
             columns.push(DynamicColumnDefinition::new(
                 injected_columns::CONTRACT_ADDRESS.to_string(),
                 addr.clone(),
-                BatchOperationSqlType::Char,
+                BatchOperationSqlType::Address,
                 BatchOperationColumnBehavior::Normal,
                 BatchOperationAction::Set,
             ));
