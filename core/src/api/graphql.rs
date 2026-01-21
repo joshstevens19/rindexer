@@ -169,6 +169,11 @@ pub async fn start_graphql_server(
 
 static MANUAL_STOP: AtomicBool = AtomicBool::new(false);
 
+/// Signal the GraphQL server to stop its restart loop
+pub fn stop_graphql_server() {
+    MANUAL_STOP.store(true, Ordering::SeqCst);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn spawn_start_server(
     tx_arc: Arc<Mutex<Option<Sender<u32>>>>,

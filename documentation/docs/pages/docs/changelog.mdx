@@ -28,6 +28,7 @@
 - feat: Batch fetch and cache block timestamps - When timestamp: true and RPC metadata lacks timestamps, rindexer batch-fetches all unique 
   blocks in a single RPC call per network and caches them globally for the entire indexing run. Deduplicates across events in the same block.
 - feat: Schema sync support for timestamp column - Adding/removing timestamp: true triggers appropriate schema migrations (add column or prompt for deletion).
+- feat: better logs when shutting down
 
 ## Releases
 -------------------------------------------------

@@ -8,7 +8,9 @@ use crate::database::clickhouse::setup::SetupClickhouseError;
 use crate::events::RindexerEventEmitter;
 use crate::indexer::start::{start_historical_indexing, start_live_indexing};
 use crate::{
-    api::{start_graphql_server, GraphqlOverrideSettings, StartGraphqlServerError},
+    api::{
+        start_graphql_server, stop_graphql_server, GraphqlOverrideSettings, StartGraphqlServerError,
+    },
     database::postgres::{
         client::PostgresConnectionError,
         indexes::{ApplyPostgresIndexesError, PostgresIndexResult},
@@ -101,6 +103,8 @@ async fn handle_shutdown(signal: &str) {
     // Mark shutdown state only once, at the very beginning of the shutdown process
     mark_shutdown_started();
     info!("Received {} signal gracefully shutting down...", signal);
+    // Signal GraphQL server to stop its restart loop
+    stop_graphql_server();
     initiate_shutdown().await;
     // These info! calls work because they're before/after the shutdown process
     info!("Graceful shutdown completed for {}", signal);
