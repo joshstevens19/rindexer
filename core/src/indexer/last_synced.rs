@@ -535,6 +535,7 @@ pub async fn get_last_synced_cron_block(config: CronSyncConfig<'_>) -> Option<U6
 }
 
 /// Update the last synced block for a cron entry in the database.
+#[allow(clippy::too_many_arguments)]
 pub async fn update_last_synced_cron_block(
     postgres: &Option<Arc<PostgresClient>>,
     clickhouse: &Option<Arc<ClickhouseClient>>,
