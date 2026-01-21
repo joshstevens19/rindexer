@@ -55,6 +55,13 @@ pub struct Network {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disable_logs_bloom_checks: Option<bool>,
 
+    /// Custom Multicall3 contract address for this network.
+    /// If not specified, uses the standard address 0xcA11bde05977b3631167028862bE2a173976CA11.
+    /// Set to "disabled" to disable Multicall3 batching for this network.
+    /// See https://www.multicall3.com/deployments for supported chains.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multicall3_address: Option<String>,
+
     /// Reth configuration for this network
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg(feature = "reth")]

@@ -293,6 +293,8 @@ struct NoCodeCallbackParams {
     providers: Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>>,
     /// User-defined constants from the manifest (can be network-scoped)
     constants: Arc<Constants>,
+    /// Custom Multicall3 addresses per network (keyed by network name)
+    multicall_addresses: Arc<std::collections::HashMap<String, Option<String>>>,
 }
 
 struct EventCallbacks {
@@ -640,6 +642,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                     params.clickhouse.clone(),
                     params.providers.clone(),
                     &params.constants,
+                    &params.multicall_addresses,
                 )
                 .await
                 {
@@ -843,6 +846,11 @@ async fn process_contract(
         network_providers.iter().map(|p| (p.network_name.clone(), p.client.clone())).collect(),
     );
 
+    // Build multicall3 addresses map from network configs
+    let multicall_addresses: Arc<std::collections::HashMap<String, Option<String>>> = Arc::new(
+        manifest.networks.iter().map(|n| (n.name.clone(), n.multicall3_address.clone())).collect(),
+    );
+
     // TODO - this could be shared with `get_abi_items`
     let abi_str = contract.parse_abi(project_path)?;
     let abi: JsonAbi = serde_json::from_str(&abi_str)?;
@@ -954,6 +962,7 @@ async fn process_contract(
                 store_raw_events,
                 providers: providers.clone(),
                 constants: Arc::new(manifest.constants.clone()),
+                multicall_addresses: multicall_addresses.clone(),
             }))
             .event_callback,
         };
@@ -1054,6 +1063,15 @@ pub async fn process_trace_events(
             network_providers.iter().map(|p| (p.network_name.clone(), p.client.clone())).collect(),
         );
 
+        // Build multicall3 addresses map from network configs
+        let multicall_addresses: Arc<std::collections::HashMap<String, Option<String>>> = Arc::new(
+            manifest
+                .networks
+                .iter()
+                .map(|n| (n.name.clone(), n.multicall3_address.clone()))
+                .collect(),
+        );
+
         let callback_params = Arc::new(NoCodeCallbackParams {
             event_info: event_info.clone(),
             indexer_name: manifest.name.clone(),
@@ -1071,6 +1089,7 @@ pub async fn process_trace_events(
             store_raw_events: true,       // Native transfers always store raw events
             providers,
             constants: Arc::new(manifest.constants.clone()),
+            multicall_addresses,
         });
 
         let event = TraceCallbackRegistryInformation {

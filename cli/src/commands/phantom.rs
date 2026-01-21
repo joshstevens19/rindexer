@@ -548,6 +548,7 @@ async fn handle_phantom_deploy(
                         disable_logs_bloom_checks: None,
                         get_logs_settings: None,
                         reth: None,
+                        multicall3_address: None,
                     });
                 }
 

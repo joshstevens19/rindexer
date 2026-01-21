@@ -232,6 +232,7 @@ pub fn handle_new_command(
             disable_logs_bloom_checks: None,
             get_logs_settings: None,
             reth: final_reth_config,
+            multicall3_address: None,
         }],
         contracts: vec![Contract {
             name: "RocketPoolETH".to_string(),

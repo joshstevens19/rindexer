@@ -211,6 +211,401 @@ pub async fn configure_view_call_limit(limit: usize) {
     info!("View call concurrency limit set to {}", limit);
 }
 
+/// Default Multicall3 contract address - same on almost all EVM chains
+/// See: https://www.multicall3.com/deployments
+const DEFAULT_MULTICALL3_ADDRESS: &str = "0xcA11bde05977b3631167028862bE2a173976CA11";
+
+/// Maximum calls per Multicall3 batch to avoid gas limits
+const MULTICALL3_BATCH_SIZE: usize = 100;
+
+/// Networks where Multicall3 is known to not be available.
+/// This is populated at runtime when a Multicall3 call fails.
+static NETWORKS_WITHOUT_MULTICALL3: Lazy<RwLock<std::collections::HashSet<String>>> =
+    Lazy::new(|| RwLock::new(std::collections::HashSet::new()));
+
+/// Represents a pending view call to be batched
+#[derive(Debug, Clone)]
+struct PendingViewCall {
+    target: Address,
+    calldata: Bytes,
+    block_number: u64,
+    network: String,
+}
+
+/// Gets the Multicall3 address for a network.
+/// Uses custom address if provided, otherwise returns default.
+fn get_multicall3_address(network_config: Option<&str>) -> Address {
+    match network_config {
+        Some(addr) if !addr.is_empty() => {
+            addr.parse().unwrap_or_else(|_| DEFAULT_MULTICALL3_ADDRESS.parse().unwrap())
+        }
+        _ => DEFAULT_MULTICALL3_ADDRESS.parse().unwrap(),
+    }
+}
+
+/// Helper to detect if an error looks like the Multicall3 contract isn't deployed.
+fn result_hex_looks_like_no_contract(error: &str) -> bool {
+    // Empty result often means no contract at that address
+    error == "0x" || error.is_empty() || error.contains("0x0")
+}
+
+/// Prefetches view calls for a batch of events using Multicall3.
+/// This batches multiple eth_call requests into a single RPC call per network/block.
+/// Results are stored in the global VIEW_CALL_CACHE.
+/// Falls back to individual calls if Multicall3 is not available on a network.
+async fn prefetch_view_calls(
+    tables: &[TableRuntime],
+    event_name: &str,
+    events_data: &[(Vec<LogParam>, String, TxMetadata)],
+    providers: &std::collections::HashMap<String, Arc<JsonRpcCachedProvider>>,
+    constants: &Constants,
+    multicall_addresses: &std::collections::HashMap<String, Option<String>>,
+) {
+    use std::collections::HashSet;
+
+    // Collect all unique view calls needed
+    let mut pending_calls: Vec<PendingViewCall> = Vec::new();
+    let mut seen_cache_keys: HashSet<ViewCallCacheKey> = HashSet::new();
+
+    // Check what's already in cache
+    {
+        let cache = VIEW_CALL_CACHE.read().await;
+        for key in cache.keys() {
+            seen_cache_keys.insert(key.clone());
+        }
+    }
+
+    // Scan all table operations for $call patterns
+    for table_runtime in tables {
+        let event_mapping = match table_runtime.table.events.iter().find(|e| e.event == event_name)
+        {
+            Some(em) => em,
+            None => continue,
+        };
+
+        for operation in &event_mapping.operations {
+            // Collect value refs that might contain $call
+            let mut value_refs: Vec<&str> = Vec::new();
+
+            for (_, value_ref) in &operation.where_clause {
+                value_refs.push(value_ref.as_str());
+            }
+            for set_col in &operation.set {
+                value_refs.push(set_col.effective_value());
+            }
+
+            // For each event, try to resolve calls
+            for (log_params, network, tx_metadata) in events_data {
+                // Expand iterate bindings
+                let expanded_params_list =
+                    match expand_iterate_bindings(&event_mapping.iterate, log_params) {
+                        Some(params) => params,
+                        None => continue,
+                    };
+
+                for expanded_log_params in &expanded_params_list {
+                    for value_ref in &value_refs {
+                        // Find all $call patterns in this value
+                        let call_patterns = find_call_patterns(value_ref);
+                        for (_, _, call_expr) in call_patterns {
+                            if let Some(view_call) = parse_view_call(&call_expr) {
+                                // Try to resolve the call to concrete values
+                                if let Some(pending) = resolve_view_call_to_pending(
+                                    &view_call,
+                                    expanded_log_params,
+                                    tx_metadata,
+                                    network,
+                                    constants,
+                                ) {
+                                    let cache_key = (
+                                        pending.network.clone(),
+                                        pending.target,
+                                        pending.calldata.clone(),
+                                        pending.block_number,
+                                    );
+
+                                    // Only add if not already in cache or pending
+                                    if !seen_cache_keys.contains(&cache_key) {
+                                        seen_cache_keys.insert(cache_key);
+                                        pending_calls.push(pending);
+                                    }
+                                }
+                            }
+                        }
+
+                        // Also check if the value itself is a direct $call
+                        if is_view_call(value_ref) {
+                            if let Some(view_call) = parse_view_call(value_ref) {
+                                if let Some(pending) = resolve_view_call_to_pending(
+                                    &view_call,
+                                    expanded_log_params,
+                                    tx_metadata,
+                                    network,
+                                    constants,
+                                ) {
+                                    let cache_key = (
+                                        pending.network.clone(),
+                                        pending.target,
+                                        pending.calldata.clone(),
+                                        pending.block_number,
+                                    );
+
+                                    if !seen_cache_keys.contains(&cache_key) {
+                                        seen_cache_keys.insert(cache_key);
+                                        pending_calls.push(pending);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if pending_calls.is_empty() {
+        return;
+    }
+
+    debug!("Prefetching {} view calls via Multicall3", pending_calls.len());
+
+    // Check which networks have multicall disabled at runtime
+    let networks_without_multicall = NETWORKS_WITHOUT_MULTICALL3.read().await;
+
+    // Group calls by (network, block_number) for batching
+    let mut grouped: std::collections::HashMap<(String, u64), Vec<PendingViewCall>> =
+        std::collections::HashMap::new();
+    for call in pending_calls {
+        grouped.entry((call.network.clone(), call.block_number)).or_default().push(call);
+    }
+
+    // Execute batches in parallel per network/block
+    let mut batch_futures = Vec::new();
+
+    for ((network, block_number), calls) in grouped {
+        // Check if this network has multicall disabled (detected at runtime)
+        if networks_without_multicall.contains(&network) {
+            debug!("Skipping Multicall3 for {} (not available)", network);
+            continue;
+        }
+
+        // Get multicall address for this network (custom or default)
+        let multicall_config = multicall_addresses.get(&network).and_then(|v| v.as_deref());
+        let multicall_address = get_multicall3_address(multicall_config);
+
+        let provider = match providers.get(&network) {
+            Some(p) => Arc::clone(p),
+            None => continue,
+        };
+
+        // Split into smaller batches if needed
+        for chunk in calls.chunks(MULTICALL3_BATCH_SIZE) {
+            let chunk_vec: Vec<PendingViewCall> = chunk.to_vec();
+            let network_clone = network.clone();
+            let provider_clone = Arc::clone(&provider);
+
+            batch_futures.push(tokio::spawn(async move {
+                execute_multicall3_batch(
+                    &provider_clone,
+                    &network_clone,
+                    block_number,
+                    &chunk_vec,
+                    multicall_address,
+                )
+                .await
+            }));
+        }
+    }
+
+    // Release the read lock before awaiting
+    drop(networks_without_multicall);
+
+    // Wait for all batches to complete
+    let results = futures::future::join_all(batch_futures).await;
+
+    // Log any errors but don't fail - individual calls will fall back to regular eth_call
+    for result in results {
+        if let Err(e) = result {
+            debug!("Multicall3 batch failed (will fallback to individual calls): {}", e);
+        }
+    }
+}
+
+/// Resolves a ViewCall to a PendingViewCall with concrete address and calldata.
+fn resolve_view_call_to_pending(
+    view_call: &ViewCall,
+    log_params: &[LogParam],
+    tx_metadata: &TxMetadata,
+    network: &str,
+    constants: &Constants,
+) -> Option<PendingViewCall> {
+    use alloy::primitives::keccak256;
+
+    // Resolve contract address
+    let contract_address: Address = if view_call.contract_address.starts_with("$constant(") {
+        let resolved = resolve_constants_in_value(&view_call.contract_address, constants, network)?;
+        resolved.parse().ok()?
+    } else if view_call.contract_address.starts_with('$') {
+        let field_name = &view_call.contract_address[1..];
+        if field_name == "rindexer_contract_address" {
+            tx_metadata.contract_address
+        } else {
+            let value = resolve_field_path(field_name, log_params)?;
+            match value {
+                DynSolValue::Address(addr) => addr,
+                _ => return None,
+            }
+        }
+    } else {
+        view_call.contract_address.parse().ok()?
+    };
+
+    // Parse function signature
+    let (_, param_types) = parse_function_signature(&view_call.function_sig)?;
+
+    // Build function selector
+    let selector = &keccak256(view_call.function_sig.as_bytes())[..4];
+
+    // Encode arguments
+    let mut encoded_args = Vec::new();
+    for (i, arg_str) in view_call.args.iter().enumerate() {
+        let param_type = param_types.get(i)?;
+        let value =
+            resolve_arg_value(arg_str, log_params, tx_metadata, param_type, constants, network)?;
+        encoded_args.push(value);
+    }
+
+    // Build calldata
+    let calldata = if encoded_args.is_empty() {
+        Bytes::copy_from_slice(selector)
+    } else {
+        let encoded = DynSolValue::Tuple(encoded_args).abi_encode_params();
+        let mut data = selector.to_vec();
+        data.extend(encoded);
+        Bytes::from(data)
+    };
+
+    Some(PendingViewCall {
+        target: contract_address,
+        calldata,
+        block_number: tx_metadata.block_number,
+        network: network.to_string(),
+    })
+}
+
+/// Executes a batch of view calls using Multicall3's aggregate3 function.
+/// Results are stored in the VIEW_CALL_CACHE.
+/// If the call fails (e.g., Multicall3 not deployed), marks the network as not having Multicall3.
+async fn execute_multicall3_batch(
+    provider: &JsonRpcCachedProvider,
+    network: &str,
+    block_number: u64,
+    calls: &[PendingViewCall],
+    multicall_address: Address,
+) -> Result<(), String> {
+    if calls.is_empty() {
+        return Ok(());
+    }
+
+    debug!(
+        "Executing Multicall3 batch: {} calls on {} at block {}",
+        calls.len(),
+        network,
+        block_number
+    );
+
+    // Build aggregate3 calldata
+    // aggregate3((address,bool,bytes)[]) selector = 0x82ad56cb
+    let selector = hex::decode("82ad56cb").unwrap();
+
+    // Encode Call3 array: [(address target, bool allowFailure, bytes callData), ...]
+    let call3_tuples: Vec<DynSolValue> = calls
+        .iter()
+        .map(|c| {
+            DynSolValue::Tuple(vec![
+                DynSolValue::Address(c.target),
+                DynSolValue::Bool(true), // allowFailure = true so one failure doesn't fail all
+                DynSolValue::Bytes(c.calldata.to_vec()),
+            ])
+        })
+        .collect();
+
+    let encoded_calls = DynSolValue::Array(call3_tuples).abi_encode_params();
+    let mut calldata = selector;
+    calldata.extend(encoded_calls);
+
+    // Execute the multicall
+    let result_hex = match provider
+        .eth_call(multicall_address, Bytes::from(calldata), block_number)
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            let error_str = e.to_string();
+            // Check if this looks like a "contract not found" error
+            // Common error messages: "execution reverted", "contract not deployed", empty response
+            if error_str.contains("execution reverted")
+                || error_str.contains("contract")
+                || error_str.is_empty()
+                || result_hex_looks_like_no_contract(&error_str)
+            {
+                warn!("Multicall3 not available on {} - falling back to individual calls", network);
+                // Mark this network as not having Multicall3
+                let mut no_multicall = NETWORKS_WITHOUT_MULTICALL3.write().await;
+                no_multicall.insert(network.to_string());
+            }
+            return Err(format!("Multicall3 failed on {}: {}", network, e));
+        }
+    };
+
+    // Decode the results: Result[] = [(bool success, bytes returnData), ...]
+    let result_bytes = hex::decode(result_hex.trim_start_matches("0x"))
+        .map_err(|e| format!("Hex decode: {}", e))?;
+
+    // The result is ABI encoded as: bytes[] (dynamic array of bytes)
+    // aggregate3 returns (Result[] memory returnData) where Result = (bool success, bytes returnData)
+    let result_type =
+        DynSolType::Array(Box::new(DynSolType::Tuple(vec![DynSolType::Bool, DynSolType::Bytes])));
+
+    let decoded =
+        result_type.abi_decode(&result_bytes).map_err(|e| format!("ABI decode failed: {}", e))?;
+
+    let results = match decoded {
+        DynSolValue::Array(arr) => arr,
+        _ => return Err("Unexpected result type".to_string()),
+    };
+
+    // Store results in cache
+    let mut cache = VIEW_CALL_CACHE.write().await;
+
+    for (i, result) in results.into_iter().enumerate() {
+        if i >= calls.len() {
+            break;
+        }
+
+        let call = &calls[i];
+        let cache_key =
+            (call.network.clone(), call.target, call.calldata.clone(), call.block_number);
+
+        // Extract (success, returnData) from the tuple
+        if let DynSolValue::Tuple(fields) = result {
+            if fields.len() >= 2 {
+                let success = matches!(fields[0], DynSolValue::Bool(true));
+                if success {
+                    if let DynSolValue::Bytes(return_data) = &fields[1] {
+                        // Try to decode the return value
+                        if let Some(decoded_value) = try_decode_return_value(return_data) {
+                            cache.insert(cache_key, decoded_value);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Prefetches block timestamps for a batch of events that need them.
 /// This is called once at the start of table processing to batch all RPC calls together.
 /// Results are stored in the global BLOCK_TIMESTAMP_CACHE.
@@ -2135,6 +2530,7 @@ fn expand_iterate_bindings(
 /// * `clickhouse` - Optional ClickHouse client
 /// * `providers` - RPC providers for view calls (keyed by network name)
 /// * `constants` - User-defined constants from the manifest (can be network-scoped)
+/// * `multicall_addresses` - Custom Multicall3 addresses per network (None = use default address)
 pub async fn process_table_operations(
     tables: &[TableRuntime],
     event_name: &str,
@@ -2143,6 +2539,7 @@ pub async fn process_table_operations(
     clickhouse: Option<Arc<ClickhouseClient>>,
     providers: Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>>,
     constants: &Constants,
+    multicall_addresses: &std::collections::HashMap<String, Option<String>>,
 ) -> Result<(), String> {
     // Check if any table needs timestamps and prefetch them in batch
     let any_table_needs_timestamp = tables
@@ -2151,6 +2548,29 @@ pub async fn process_table_operations(
 
     if any_table_needs_timestamp {
         prefetch_block_timestamps(events_data, &providers, true).await;
+    }
+
+    // Check if any table has $call patterns and prefetch using Multicall3
+    let any_table_has_calls = tables.iter().any(|t| {
+        t.table.events.iter().any(|e| {
+            e.event == event_name
+                && e.operations.iter().any(|op| {
+                    op.where_clause.values().any(|v| v.contains("$call("))
+                        || op.set.iter().any(|s| s.effective_value().contains("$call("))
+                })
+        })
+    });
+
+    if any_table_has_calls {
+        prefetch_view_calls(
+            tables,
+            event_name,
+            events_data,
+            &providers,
+            constants,
+            multicall_addresses,
+        )
+        .await;
     }
 
     for table_runtime in tables {
