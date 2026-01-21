@@ -19,7 +19,7 @@ use crate::{
     database::{
         generate::generate_indexer_contract_schema_name, postgres::client::connection_string,
     },
-    helpers::{kill_process_on_port, set_thread_no_logging},
+    helpers::set_thread_no_logging,
     indexer::Indexer,
     manifest::graphql::GraphQLSettings,
 };
@@ -121,8 +121,17 @@ pub async fn start_graphql_server(
         )
     })?;
 
-    // kill any existing process on the port
-    kill_process_on_port(port).map_err(StartGraphqlServerError::GraphQLServerStartupError)?;
+    // Check if port is available
+    if std::net::TcpListener::bind(format!("0.0.0.0:{}", port)).is_err() {
+        error!(
+            "Could not start GraphQL API - port {} is already in use. To kill: `kill $(lsof -t -i:{})` or set a different port in graphql.port YAML",
+            port, port
+        );
+        return Err(StartGraphqlServerError::GraphQLServerStartupError(format!(
+            "Port {} in use",
+            port
+        )));
+    }
 
     // Check if there are table name conflicts - if so, skip node alias plugin
     let skip_node_alias_plugin = has_table_name_conflicts(indexer);

@@ -169,10 +169,6 @@ pub fn get_full_path(project_path: &Path, file_path: &str) -> Result<PathBuf, st
     }
 }
 
-pub fn kill_process_on_port(port: u16) -> Result<(), String> {
-    port_killer::kill(port).map(|_| ()).map_err(|e| e.to_string())
-}
-
 pub fn public_read_env_value(var_name: &str) -> Result<String, VarError> {
     dotenv().ok();
     env::var(var_name)

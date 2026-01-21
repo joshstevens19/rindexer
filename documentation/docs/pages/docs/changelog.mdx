@@ -15,6 +15,7 @@
 - fix: Remove unnecessary DEFAULT 0 from rindexer_block_number and rindexer_sequence_id
 - fix: Remove legacy block_timestamp from schema sync exclusion - Cleaned up old migration exclusion for both PostgreSQL and 
   ClickHouse schema sync. The new rindexer_block_timestamp column is now fully managed by the timestamp flag.
+- fix: when graphql port is in use show error message and dont startup graphql
 
 ### Features
 -------------------------------------------------
