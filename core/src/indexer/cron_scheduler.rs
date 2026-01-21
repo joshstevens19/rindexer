@@ -644,6 +644,7 @@ async fn execute_cron_operations_batch(
 
     // Step 2: Execute all RPC calls in parallel for all blocks
     // Key: (block_number, call_pattern) -> Result
+    #[allow(clippy::type_complexity)]
     let call_cache: Arc<
         tokio::sync::RwLock<HashMap<(u64, String), Option<EthereumSqlTypeWrapper>>>,
     > = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
