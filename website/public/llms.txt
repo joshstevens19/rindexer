@@ -1,0 +1,69 @@
+# rindexer
+
+> High-performance EVM blockchain indexing tool built in Rust. A no-code or framework solution to build blazing fast EVM indexers with instant GraphQL APIs.
+
+## Overview
+
+rindexer is an open-source, high-speed indexing toolset developed in Rust, designed for compatibility with any EVM chain. It allows you to index blockchain events using a simple YAML file with no coding required, or use the Rust framework for advanced customization.
+
+## Key Features
+
+- **No-Code Configuration**: Define indexing logic with YAML
+- **Built in Rust**: Maximum performance and reliability
+- **Any EVM Chain**: Ethereum, Polygon, Arbitrum, Optimism, Base, and more
+- **Instant GraphQL API**: Auto-generated API for indexed data
+- **Real-time Streaming**: Kafka, Redis, RabbitMQ, AWS SNS/SQS, webhooks
+- **Flexible Storage**: PostgreSQL, ClickHouse, CSV
+- **Notifications**: Telegram, Discord, Slack integrations
+
+## Installation
+
+```bash
+curl -L https://rindexer.xyz/install.sh | bash
+```
+
+## Documentation
+
+- [Installation Guide](https://rindexer.xyz/docs/introduction/installation)
+- [Quick Start - No Code](https://rindexer.xyz/docs/start-building/no-code)
+- [Quick Start - Rust Framework](https://rindexer.xyz/docs/start-building/project)
+- [YAML Configuration Reference](https://rindexer.xyz/docs/references/yaml-config)
+- [CLI Commands Reference](https://rindexer.xyz/docs/references/cli-commands)
+- [GraphQL API Reference](https://rindexer.xyz/docs/references/graphql)
+
+## Quick Start
+
+1. Install: `curl -L https://rindexer.xyz/install.sh | bash`
+2. Create project: `rindexer new my-indexer --type no-code`
+3. Start indexing: `rindexer start all`
+
+## Deployment
+
+- [Railway Deployment](https://rindexer.xyz/docs/deploying/railway)
+- [AWS Deployment](https://rindexer.xyz/docs/deploying/aws)
+- [GCP Deployment](https://rindexer.xyz/docs/deploying/gcp)
+- [Docker Deployment](https://rindexer.xyz/docs/deploying/docker)
+
+## Use Cases
+
+- Hackathons: Quick indexer setup with GraphQL API
+- Data Reporting: Build analytics dashboards
+- dApp Development: Power applications with indexed data
+- Enterprise: Production-grade indexing infrastructure
+- Prototyping: Rapid idea validation
+
+## Links
+
+- GitHub: https://github.com/joshstevens19/rindexer
+- Documentation: https://rindexer.xyz/docs
+- Examples: https://github.com/joshstevens19/rindexer/tree/master/examples
+
+## Optional
+
+- [Changelog](https://rindexer.xyz/docs/changelog)
+- [GitHub Issues](https://github.com/joshstevens19/rindexer/issues)
+- [crates.io](https://crates.io/crates/rindexer)
+
+## License
+
+MIT License
