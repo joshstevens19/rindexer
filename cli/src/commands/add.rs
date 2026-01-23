@@ -124,13 +124,15 @@ pub async fn handle_add_contract_command(
         }
 
         let item = &metadata.items[0];
-        if item.proxy == 1 && item.implementation.is_some() {
-            abi_lookup_address = item.implementation.unwrap().to_string().parse().unwrap();
-            println!(
-                "This contract is a proxy contract. Loading the implementation contract {abi_lookup_address}"
-            );
-            tokio::time::sleep(Duration::from_millis(1000)).await;
-            continue;
+        if item.proxy == 1 {
+            if let Some(implementation) = &item.implementation {
+                abi_lookup_address = implementation.to_string().parse().unwrap();
+                println!(
+                    "This contract is a proxy contract. Loading the implementation contract {abi_lookup_address}"
+                );
+                tokio::time::sleep(Duration::from_millis(1000)).await;
+                continue;
+            }
         }
 
         let contract_name = manifest.contracts.iter().find(|c| c.name == item.contract_name);

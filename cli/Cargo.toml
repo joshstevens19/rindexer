@@ -1,6 +1,6 @@
 [package]
 name = "rindexer_cli"
-version = "0.33.0"
+version = "0.34.0"
 edition = "2021"
 description = "A no-code or framework to build blazing fast EVM indexers - built in rust."
 license = "MIT"

@@ -3,6 +3,29 @@
 ### Breaking changes
 -------------------------------------------------
 
+### Bug fixes
+-------------------------------------------------
+
+### Features
+-------------------------------------------------
+
+## Releases
+-------------------------------------------------
+
+all release branches are deployed through `release/VERSION_NUMBER` branches
+
+# 0.34.0-beta - 23rd Janurary 2026
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.34.0
+
+- linux binary - https://github.com/joshstevens19/rindexer/releases/download/v0.34.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://github.com/joshstevens19/rindexer/releases/download/v0.34.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://github.com/joshstevens19/rindexer/releases/download/v0.34.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://github.com/joshstevens19/rindexer/releases/download/v0.34.0/rindexer_win32-amd64.zip
+
+### Breaking changes
+-------------------------------------------------
+
 - StartDetails now has a cron_scheduler_handle set it to None if upgrading rust projects
 
 ### Bug fixes
@@ -15,6 +38,7 @@
 - fix: checkpoint progress mid-batch when shutdown detected during event processing
 - fix: skip cache eviction during shutdown to exit faster
 
+
 ### Features
 -------------------------------------------------
 
@@ -23,12 +47,14 @@
 - feat: adaptive concurrency for block timestamp fetches using same capacity tracking
 - feat: cache eviction for VIEW_CALL_CACHE and BLOCK_TIMESTAMP_CACHE at 10k entrie
 
-## Releases
--------------------------------------------------
-
-all release branches are deployed through `release/VERSION_NUMBER` branches
-
 # 0.33.0-beta - 21st Janurary 2026
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.33.0
+
+- linux binary - https://github.com/joshstevens19/rindexer/releases/download/v0.33.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://github.com/joshstevens19/rindexer/releases/download/v0.33.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://github.com/joshstevens19/rindexer/releases/download/v0.33.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://github.com/joshstevens19/rindexer/releases/download/v0.33.0/rindexer_win32-amd64.zip
 
 ### Breaking changes
 -------------------------------------------------
