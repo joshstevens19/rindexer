@@ -7,47 +7,103 @@ NFT ownership, and protocol metrics - all through simple YAML configuration. No 
 
 ## Key Features
 
-- **Upsert, Insert, Update, Delete** - Full CRUD operations on your custom tables
-- **Computed Values** - Arithmetic expressions like `$amount * 2`, `$price / $quantity`, or `10 ^ $decimals`
-- **Arithmetic with View Calls** - Combine math with on-chain data: `($amount * $call($oracle, "getPrice()")) / (10 ^ $call($token, "decimals()"))`
-- **String Templates** - Concatenate fields with `"$from-$to"` or `"Pool: $token0/$token1"`
-- **Conditional Logic** - Filter with `if: "$value > 0 && $from != 0x000..."`, negate with `!($condition)`
-- **Array Iteration** - Process batch events (ERC1155 `TransferBatch`) with [`iterate`](#array-iteration-batch-events)
-- **Array Indexing** - Access specific elements with `$ids[0]` or struct fields with `$transfers[0].amount`
-- **View Calls** - Fetch on-chain data with `$call($contract, "balanceOf(address)", $holder)`, access tuple returns with `[0]` or `.fieldName`
-- **Cron Triggers** - [Schedule operations](#cron-triggers-scheduled-operations) with `interval: 5m` or cron expressions for periodic updates
+### Zero Code Required
+
+Define your entire indexing logic in YAML - rindexer automatically generates the database schema, handles all SQL operations, and manages state updates. You never write a single line of Rust, TypeScript, or SQL.
+
+### Automatic Database Operations
+
+- **Insert** - Add new rows when events occur
+- **Upsert** - Insert or update based on a unique key (perfect for balances, ownership)
+- **Update** - Modify existing rows with `add`, `subtract`, `multiply`, `divide`, or `replace` actions
+- **Delete** - Remove rows when conditions are met (e.g., NFT transfers, position closures)
+
+rindexer handles batching, transactions, and error recovery automatically.
+
+### Powerful Expressions
+
+- **Computed Values** - Arithmetic like `$amount * 2`, `$price / $quantity`, `10 ^ $decimals`
+- **String Templates** - Concatenate with `"$from-$to"` or `"Pool: $token0/$token1"`
+- **Conditional Logic** - Filter with `if: "$value > 0 && $from != 0x000..."`
+- **Array Iteration** - Process batch events (ERC1155 `TransferBatch`) automatically
+- **Array Indexing** - Access `$ids[0]` or struct fields `$transfers[0].amount`
+
+### Onchain Data Integration
+
+- **View Calls** - Fetch live data with `$call($contract, "balanceOf(address)", $holder)`
+- **Tuple Returns** - Access by index `[0]` or field name `.fieldName`
+- **Cron Triggers** - Schedule periodic updates with `interval: 5m` or cron expressions
+
+### Advanced Features
+
 - **Global Tables** - Single-row aggregates (total supply, TVL)
 - **Cross-Chain** - Aggregate data across multiple networks
-- **Transaction Metadata** - Access `$rindexer_block_number`, `$rindexer_tx_hash`, `$rindexer_contract_address`, etc.
-- **Constants** - Define reusable values with `$constant(name)`, including [network-scoped constants](#constants) for cross-chain configurations
-- **Schema Migration** - [Auto-detect and apply](#schema-migration) column changes when your YAML evolves
+- **Transaction Metadata** - Access `$rindexer_block_number`, `$rindexer_tx_hash`, etc.
+- **Constants** - Reusable values with network-scoped overrides
+- **Schema Migration** - Auto-detect and apply column changes
 
 ---
 
 ## The Problem
 
-Traditional indexing logs every event as a new database row:
+Building indexers traditionally requires significant engineering effort:
 
+**1. Manual Code for Every Operation**
+```rust
+// You write handlers for every event
+async fn handle_transfer(event: Transfer, db: &Database) {
+    // Fetch existing balance
+    let balance = db.get_balance(&event.to).await?;
+    // Calculate new balance
+    let new_balance = balance + event.value;
+    // Update database
+    db.upsert_balance(&event.to, new_balance).await?;
+    // Don't forget the sender...
+}
+```
+
+**2. Raw Event Logs Don't Give You State**
 ```
 Transfer: Alice → Bob, 100 USDC  →  Row 1
 Transfer: Bob → Carol, 50 USDC   →  Row 2
 Transfer: Carol → Alice, 25 USDC →  Row 3
 ```
+To get Alice's balance, you query millions of rows and aggregate them at read time.
 
-To get Alice's current balance, you need to query and aggregate all these rows.
-For popular tokens, that's millions of rows to process.
+**3. Complex State Management**
+Tracking derived state (balances, ownership, positions) means writing upsert logic, handling edge cases, managing database transactions, and testing everything.
 
 ## The Solution
 
-With Custom Tables, you maintain the **current state** directly:
+Custom Tables let you declare **what** you want, and rindexer handles **how**:
 
-```
-Transfer: Alice → Bob, 100 USDC  →  Alice: 900, Bob: 100
-Transfer: Bob → Carol, 50 USDC   →  Bob: 50, Carol: 50
-Transfer: Carol → Alice, 25 USDC →  Alice: 925, Carol: 25
+```yaml
+tables:
+  - name: balances
+    columns:
+      - name: holder
+      - name: balance
+        default: "0"
+    events:
+      - event: Transfer
+        operations:
+          - type: upsert
+            where:
+              holder: $to
+            set:
+              - column: balance
+                action: add
+                value: $value
 ```
 
-One row per address. Instant balance lookups. No aggregation needed.
+**What rindexer does automatically:**
+- Creates the `balances` table with proper types and indexes
+- Generates efficient SQL upsert statements
+- Batches operations for performance
+- Handles database transactions and retries
+- Maintains current state as events stream in
+
+**Result:** One row per address. Instant lookups. No aggregation. No code.
 
 ---
 
@@ -887,8 +943,8 @@ constants:
     arbitrum: "0xb56c2F0B653B2e0b10C9b928C8580Ac5Df02C7C7"
 
 contracts:
-  - name: AaveV3Pool
-    abi: ./abis/aave-pool.json
+  - name: Pool
+    abi: ./abis/AaveV3Pool.json
     details:
       - network: ethereum
         address: "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2"
@@ -1350,7 +1406,7 @@ This will:
 Full example:
 
 ```yaml
-name: Historic
+name: Chainlink
 description: Demonstrates cron historical sync - replaying cron operations at past blocks
 repository: https://github.com/joshstevens19/rindexer
 project_type: no-code
@@ -1366,11 +1422,11 @@ storage:
     drop_each_run: true
 
 contracts:
-  - name: ChainlinkETHUSD
+  - name: ETHUSDFeed
     details:
       - network: ethereum
         address: "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419"
-    abi: ./abis/ChainlinkAggregator.abi.json
+    abi: ./abis/ChainlinkAggregator.json
 
     tables:
       - name: eth_price_historical_only
@@ -1911,11 +1967,11 @@ Track ETH/USD price from Chainlink with periodic updates:
 
 ```yaml
 contracts:
-  - name: ChainlinkETHUSD
+  - name: ETHUSDFeed
     details:
       - network: ethereum
         address: "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419"
-    abi: ./abis/ChainlinkAggregator.abi.json
+    abi: ./abis/ChainlinkAggregator.json
 
     tables:
       # Global table - single row updated via upsert
@@ -2007,7 +2063,7 @@ Many protocols deploy contracts dynamically - Uniswap creates pools, Aave deploy
 **Factory indexing** discovers these contracts automatically, and **Tables** can aggregate their data.
 
 ```yaml
-name: UniswapPoolMetrics
+name: Uniswap
 project_type: no-code
 networks:
   - name: ethereum
@@ -2018,27 +2074,27 @@ storage:
     enabled: true
 contracts:
   # The factory contract - discovers pool addresses
-  - name: UniswapV3Factory
+  - name: Factory
     details:
       - network: ethereum
         address: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
         start_block: 21000000
-    abi: ./abis/uniswap-v3-factory-abi.json
+    abi: ./abis/UniswapV3Factory.json
     include_events:
       - PoolCreated
 
   # Factory-indexed pools with custom tables
-  - name: UniswapV3Pool
+  - name: Pool
     details:
       - network: ethereum
         start_block: 21000000
         factory:
-          name: UniswapV3Factory
+          name: Factory
           address: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
-          abi: ./abis/uniswap-v3-factory-abi.json
+          abi: ./abis/UniswapV3Factory.json
           event_name: PoolCreated
           input_name: "pool"  # Field containing the new pool address
-    abi: ./abis/uniswap-v3-pool-abi.json
+    abi: ./abis/UniswapV3Pool.json
     tables:
       # Aggregate metrics per pool
       - name: pool_metrics
@@ -2071,7 +2127,7 @@ contracts:
 ```
 
 **How it works:**
-1. The factory contract (`UniswapV3Factory`) is indexed first
+1. The factory contract (`Factory`) is indexed first
 2. When `PoolCreated` events are found, rindexer automatically starts indexing those pool addresses
 3. `Swap` events from all discovered pools update the custom tables
 4. `$rindexer_contract_address` references the specific pool that emitted each event
@@ -2081,6 +2137,101 @@ contracts:
 :::info[Factory Indexing Details]
 For full factory indexing configuration options (multiple input fields, token indexing, etc.),
 see the [Factory Indexing documentation](/docs/start-building/yaml-config/contracts#factory-indexing).
+:::
+
+---
+
+### Factory Cron Operations
+
+Cron operations also work with factory-indexed contracts. This is powerful for periodically polling state from all discovered contracts - like getting liquidity from all Uniswap pools or prices from all oracle instances.
+
+```yaml
+name: Uniswap
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://mainnet.gateway.tenderly.co
+storage:
+  postgres:
+    enabled: true
+contracts:
+  # Factory-indexed pools with cron to poll liquidity
+  - name: Pool
+    details:
+      - network: ethereum
+        start_block: 24152749
+        end_block: 24153452
+        factory:
+          name: Factory
+          address: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
+          abi: ./abis/UniswapV3Factory.json
+          event_name: PoolCreated
+          input_name: "pool"
+    abi: ./abis/UniswapV3Pool.json
+    # Factory contracts require at least one event for the dependency system // [!code focus]
+    # (even for cron-only tables). This event doesn't need to be used. // [!code focus]
+    include_events: // [!code focus]
+      - Swap // [!code focus]
+
+    tables:
+      # Track liquidity for each discovered pool using cron
+      - name: pool_liquidity
+        columns:
+          - name: pool_address
+            type: address
+          - name: liquidity
+            type: uint128
+          - name: tick
+            type: int32
+        cron:
+          - interval: 30s
+            start_block: 24152749
+            end_block: 24153452
+            network: ethereum
+            operations:
+              - type: upsert
+                where:
+                  pool_address: $contract  # $contract iterates over ALL discovered pools // [!code focus]
+                set:
+                  - column: liquidity
+                    action: set
+                    value: $call($contract, "liquidity()")
+                  - column: tick
+                    action: set
+                    value: $call($contract, "slot0()")[1]  # Access tuple element by index // [!code focus]
+```
+
+**How factory cron works:**
+1. Factory event indexing discovers pool addresses first (from `PoolCreated` events)
+2. Cron scheduler waits until addresses are discovered before starting
+3. On each cron tick, `$contract` iterates over **all** discovered addresses
+4. View calls are made to each pool, and results are stored per pool
+5. **Birth block optimization**: Pools are only queried for blocks >= their creation block
+6. New pools discovered later are automatically included on subsequent ticks
+
+**Accessing tuple return values:**
+
+Many Solidity functions return multiple values. Use `[index]` to access specific elements:
+
+```yaml
+# slot0() returns (sqrtPriceX96, tick, observationIndex, ...)
+value: $call($contract, "slot0()")[0]   # Get sqrtPriceX96 (position 0)
+value: $call($contract, "slot0()")[1]   # Get tick (position 1)
+
+# getReserves() returns (reserve0, reserve1, blockTimestampLast)
+value: $call($contract, "getReserves()")[0]   # Get reserve0
+value: $call($contract, "getReserves()")[1]   # Get reserve1
+```
+
+:::warning[Factory Contracts Require include_events]
+Even for cron-only tables, factory contracts must specify at least one event in `include_events`.
+This is required by the dependency system that ensures factory events are processed before child contract operations.
+The event doesn't need to be used in your tables - it just needs to exist.
+:::
+
+:::warning[RPC Intensive]
+Factory cron with many discovered addresses (e.g., 1000+ pools) makes many RPC calls per tick. Use a paid RPC node and consider using `block_interval` to reduce frequency for historical sync.
 :::
 
 ---

@@ -44,6 +44,7 @@ pub struct StartDetails<'a> {
     pub manifest_path: &'a PathBuf,
     pub indexing_details: Option<IndexingDetails>,
     pub graphql_details: GraphqlOverrideSettings,
+    pub cron_scheduler_handle: Option<tokio::task::JoinHandle<Result<(), String>>>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -167,7 +168,11 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     Some(tokio::spawn(async move {
                         if let Err(e) = start_graphql_server(&indexer, &graphql_settings).await {
                             error!("Failed to start GraphQL server: {:?}", e);
+                            return;
                         }
+                        // Keep the task alive - GraphQL server runs in a separate spawned task
+                        // We wait here so the select! doesn't complete and exit the process
+                        std::future::pending::<()>().await;
                     }))
                 } else {
                     None
@@ -307,6 +312,14 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
             }
 
             if graphql_server_handle.is_none() && !manifest.has_any_contracts_live_indexing() {
+                // Wait for cron scheduler to complete if it's running
+                if let Some(cron_handle) = details.cron_scheduler_handle {
+                    info!("Waiting for cron scheduler to complete...");
+                    if let Err(e) = cron_handle.await {
+                        error!("Cron scheduler task failed: {:?}", e);
+                    }
+                    info!("Cron scheduler completed");
+                }
                 return Ok(());
             }
 

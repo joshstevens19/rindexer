@@ -7251,12 +7251,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "port-killer"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f8f8abaf06419461fc718f5a0929c18d06dd825f26c066e376f365f2d8c2ec2"
-
-[[package]]
 name = "portable-atomic"
 version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10829,7 +10823,7 @@ dependencies = [
 
 [[package]]
 name = "rindexer"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "alloy",
  "alloy-chains",
@@ -10863,7 +10857,6 @@ dependencies = [
  "mockito",
  "native-tls",
  "once_cell",
- "port-killer",
  "postgres-native-tls",
  "rand 0.9.2",
  "rdkafka",
@@ -10900,7 +10893,7 @@ dependencies = [
 
 [[package]]
 name = "rindexer_cli"
-version = "0.32.0"
+version = "0.33.0"
 dependencies = [
  "alloy",
  "alloy-chains",

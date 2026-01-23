@@ -1,0 +1,63 @@
+name: Uniswap
+description: Demonstrates cron operations on factory-indexed contracts
+repository: https://github.com/joshstevens19/rindexer
+project_type: no-code
+
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: ${ETHEREUM_RPC_URL}
+
+storage:
+  postgres:
+    enabled: true
+    drop_each_run: true
+
+graphql:
+  enabled: true
+
+contracts:
+  # Factory-indexed pools with cron to poll liquidity
+  - name: Pool
+    details:
+      - network: ethereum
+        start_block: 24152749
+        end_block: 24153452
+        factory:
+          name: Factory
+          address: "0x1F98431c8aD98523631AE4a59f267346ea31F984"
+          abi: ./abis/UniswapV3Factory.json
+          event_name: PoolCreated
+          input_name: "pool"
+    abi: ./abis/UniswapV3Pool.json
+    # Factory contracts require at least one event for the dependency system
+    # (even for cron-only tables). This event doesn't need to be used.
+    include_events:
+      - Swap
+
+    tables:
+      # Track liquidity for each discovered pool using cron
+      - name: pool_liquidity
+        columns:
+          - name: pool_address
+            type: address
+          - name: liquidity
+            type: uint128
+          - name: tick
+            type: int32
+        cron:
+          - interval: 30s
+            start_block: 24152749
+            end_block: 24153452
+            network: ethereum
+            operations:
+              - type: upsert
+                where:
+                  pool_address: $contract
+                set:
+                  - column: liquidity
+                    action: set
+                    value: $call($contract, "liquidity()")
+                  - column: tick
+                    action: set
+                    value: $call($contract, "slot0()")[1]

@@ -1,7 +1,3 @@
-mod thread;
-
-pub use thread::set_thread_no_logging;
-
 mod array;
 mod evm_log;
 mod file;

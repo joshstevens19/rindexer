@@ -1670,6 +1670,18 @@ fn try_decode_return_value(bytes: &[u8]) -> Option<DynSolValue> {
         }
     }
 
+    // Handle multi-slot returns (e.g., slot0() returns 7 values)
+    // When bytes are a multiple of 32 and contain more than one slot,
+    // decode as a tuple of uint256 values to support accessor like [1]
+    if bytes.len() > 32 && bytes.len().is_multiple_of(32) {
+        let num_slots = bytes.len() / 32;
+        let tuple_types: Vec<DynSolType> = vec![DynSolType::Uint(256); num_slots];
+        let tuple_type = DynSolType::Tuple(tuple_types);
+        if let Ok(decoded) = tuple_type.abi_decode(bytes) {
+            return Some(decoded);
+        }
+    }
+
     // NOTE: We intentionally do NOT auto-detect addresses or bools here because:
     // - Any uint256 value < 2^160 has 12+ leading zeros (same as address encoding)
     // - Values 0 and 1 are common numeric returns (like balanceOf returning 0)

@@ -172,6 +172,7 @@ pub async fn setup_no_code(
                     manifest_path: details.manifest_path,
                     indexing_details: None,
                     graphql_details: details.graphql_details,
+                    cron_scheduler_handle: None,
                 });
             }
 
@@ -246,14 +247,28 @@ pub async fn setup_no_code(
                     providers_map,
                 );
 
-                if scheduler.has_tasks() {
+                let cron_scheduler_handle = if scheduler.has_tasks() {
                     info!("Starting cron scheduler with {} tasks", scheduler.tasks.len());
-                    tokio::spawn(async move {
-                        if let Err(e) = scheduler.run().await {
+                    Some(tokio::spawn(async move {
+                        scheduler.run().await.map_err(|e| {
                             error!("Cron scheduler error: {}", e);
-                        }
-                    });
-                }
+                            e.to_string()
+                        })
+                    }))
+                } else {
+                    None
+                };
+
+                return Ok(StartDetails {
+                    manifest_path: details.manifest_path,
+                    indexing_details: Some(IndexingDetails {
+                        registry,
+                        trace_registry,
+                        event_stream: None,
+                    }),
+                    graphql_details: details.graphql_details,
+                    cron_scheduler_handle,
+                });
             }
 
             Ok(StartDetails {
@@ -264,6 +279,7 @@ pub async fn setup_no_code(
                     event_stream: None,
                 }),
                 graphql_details: details.graphql_details,
+                cron_scheduler_handle: None,
             })
         }
         None => Err(SetupNoCodeError::NoProjectPathFoundUsingParentOfManifestPath),

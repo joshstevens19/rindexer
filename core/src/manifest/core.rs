@@ -207,7 +207,10 @@ impl Manifest {
                             // Fall back to events from tables
                             let table_events = contract.get_table_event_names();
                             if table_events.is_empty() {
-                                panic!("Contract using factory must specify `include_events` or `tables` with events.");
+                                // Note: Even for cron-only tables, factory contracts require at least one event
+                                // because the dependency system uses events to coordinate indexing order.
+                                // Use `include_events` with any event from the contract's ABI.
+                                panic!("Contract using factory must specify `include_events` or `tables` with events. Even for cron-only tables, at least one event is required for the dependency system.");
                             }
                             table_events
                         };

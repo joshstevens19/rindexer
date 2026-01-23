@@ -4,7 +4,7 @@
 //! allowing operations to run on a time-based schedule instead of
 //! (or in addition to) event triggers.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,6 +16,10 @@ use tracing::{debug, error, info, warn};
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::postgres::client::PostgresClient;
 use crate::database::sql_type_wrapper::EthereumSqlTypeWrapper;
+use crate::event::{
+    get_factory_addresses_with_birth_blocks, GetFactoryAddressesWithBirthBlocksParams,
+};
+use crate::helpers::to_pascal_case;
 use crate::indexer::last_synced::{
     get_last_synced_cron_block, update_last_synced_cron_block, CronSyncConfig,
 };
@@ -205,6 +209,17 @@ pub enum CronSchedule {
     Cron(Box<croner::Cron>),
 }
 
+/// Factory configuration for cron tasks that operate on factory-indexed contracts.
+#[derive(Debug, Clone)]
+pub struct FactoryCronConfig {
+    /// The factory contract name (e.g., "UniswapV3Factory")
+    pub factory_name: String,
+    /// The factory event name (e.g., "PoolCreated")
+    pub event_name: String,
+    /// The input names from the factory event (e.g., ["pool"] or ["token0", "token1"])
+    pub input_names: Vec<String>,
+}
+
 /// A single cron task configuration
 #[derive(Debug, Clone)]
 pub struct CronTask {
@@ -214,9 +229,12 @@ pub struct CronTask {
     pub cron_entry: TableCronMapping,
     pub cron_index: usize,
     pub network: String,
+    /// Static contract address (Address::ZERO if using factory)
     pub contract_address: Address,
     pub schedule: CronSchedule,
     pub indexer_name: String,
+    /// Factory configuration (if contract uses factory indexing)
+    pub factory_config: Option<FactoryCronConfig>,
 }
 
 /// The cron scheduler manages and executes scheduled table operations.
@@ -225,6 +243,8 @@ pub struct CronScheduler {
     pub postgres: Option<Arc<PostgresClient>>,
     pub clickhouse: Option<Arc<ClickhouseClient>>,
     pub providers: Arc<HashMap<String, Arc<JsonRpcCachedProvider>>>,
+    /// Indexer name for factory address lookup
+    pub indexer_name: String,
 }
 
 impl CronScheduler {
@@ -297,23 +317,45 @@ impl CronScheduler {
                     };
 
                     for network in networks {
-                        // Get contract address for this network
-                        let contract_address = contract
-                            .details
-                            .iter()
-                            .find(|d| d.network == network)
-                            .and_then(|d| d.address.as_ref())
-                            .and_then(|addr| match addr {
-                                alloy::rpc::types::ValueOrArray::Value(a) => Some(*a),
-                                alloy::rpc::types::ValueOrArray::Array(arr) => arr.first().copied(),
-                            })
-                            .unwrap_or_default();
+                        // Find the contract details for this network
+                        let detail = contract.details.iter().find(|d| d.network == network);
+
+                        // Check if this is a factory-indexed contract
+                        let (contract_address, factory_config) =
+                            if let Some(factory) = detail.and_then(|d| d.factory.as_ref()) {
+                                // Factory contract - use Address::ZERO as sentinel
+                                let config = FactoryCronConfig {
+                                    factory_name: factory.name.clone(),
+                                    event_name: factory.event_name.clone(),
+                                    input_names: factory.input_names(),
+                                };
+                                (Address::ZERO, Some(config))
+                            } else {
+                                // Static address contract
+                                let addr = detail
+                                    .and_then(|d| d.address.as_ref())
+                                    .and_then(|addr| match addr {
+                                        alloy::rpc::types::ValueOrArray::Value(a) => Some(*a),
+                                        alloy::rpc::types::ValueOrArray::Array(arr) => {
+                                            arr.first().copied()
+                                        }
+                                    })
+                                    .unwrap_or_default();
+                                (addr, None)
+                            };
 
                         let full_table_name = crate::database::generate::generate_table_full_name(
                             &manifest.name,
                             &contract.name,
                             &table.name,
                         );
+
+                        if factory_config.is_some() {
+                            info!(
+                                "Cron task for table '{}' on network '{}' uses factory indexing",
+                                table.name, network
+                            );
+                        }
 
                         tasks.push(CronTask {
                             contract_name: contract.name.clone(),
@@ -325,6 +367,7 @@ impl CronScheduler {
                             contract_address,
                             schedule: schedule.clone(),
                             indexer_name: manifest.name.clone(),
+                            factory_config,
                         });
                     }
                 }
@@ -333,7 +376,7 @@ impl CronScheduler {
 
         info!("Cron scheduler initialized with {} tasks", tasks.len());
 
-        Self { tasks, postgres, clickhouse, providers }
+        Self { tasks, postgres, clickhouse, providers, indexer_name: manifest.name.clone() }
     }
 
     /// Check if there are any cron tasks to run.
@@ -354,15 +397,19 @@ impl CronScheduler {
         let clickhouse = self.clickhouse;
         let providers = self.providers;
 
+        // Create shared context for factory address lookup
+        let context = CronContext { indexer_name: self.indexer_name };
+
         let mut handles = Vec::new();
 
         for task in self.tasks {
             let postgres = postgres.clone();
             let clickhouse = clickhouse.clone();
             let providers = providers.clone();
+            let context = context.clone();
 
             let handle = tokio::spawn(async move {
-                run_cron_task(task, postgres, clickhouse, providers).await;
+                run_cron_task(task, postgres, clickhouse, providers, context).await;
             });
 
             handles.push(handle);
@@ -382,6 +429,155 @@ const MAX_RETRIES: u32 = 3;
 /// Initial backoff delay for retries (doubles each attempt).
 const INITIAL_BACKOFF_SECS: u64 = 2;
 
+/// Shared context for cron task execution (needed for factory address lookup).
+#[derive(Clone)]
+struct CronContext {
+    indexer_name: String,
+}
+
+/// Get all discovered factory addresses with their birth blocks for a factory-indexed contract.
+/// Returns HashMap<Address, u64> where the value is the birth block (0 for static contracts).
+async fn get_factory_addresses_with_blocks(
+    task: &CronTask,
+    postgres: &Option<Arc<PostgresClient>>,
+    clickhouse: &Option<Arc<ClickhouseClient>>,
+    context: &CronContext,
+) -> Result<HashMap<Address, u64>, Box<dyn std::error::Error + Send + Sync>> {
+    let Some(factory_config) = &task.factory_config else {
+        // Not a factory contract - return the static address with birth block 0
+        let mut result = HashMap::new();
+        result.insert(task.contract_address, 0);
+        return Ok(result);
+    };
+
+    // Generate the wrapper contract name used by the factory indexing system
+    // Pattern: {factory_name}{event_name_pascal}{input_names_pascal_joined}
+    // e.g., "UniswapV3Factory" + "PoolCreated" + "Pool" = "UniswapV3FactoryPoolCreatedPool"
+    let wrapper_contract_name = format!(
+        "{}{}{}",
+        factory_config.factory_name,
+        to_pascal_case(&factory_config.event_name),
+        factory_config.input_names.iter().map(|v| to_pascal_case(v)).collect::<Vec<_>>().join("")
+    );
+
+    let params = GetFactoryAddressesWithBirthBlocksParams {
+        indexer_name: context.indexer_name.clone(),
+        contract_name: wrapper_contract_name.clone(),
+        event_name: factory_config.event_name.clone(),
+        input_names: factory_config.input_names.clone(),
+        network: task.network.clone(),
+        postgres: postgres.clone(),
+        clickhouse: clickhouse.clone(),
+    };
+
+    match get_factory_addresses_with_birth_blocks(&params).await {
+        Ok(addresses) => {
+            if addresses.is_empty() {
+                warn!(
+                    "No factory addresses discovered yet for {}.{} - cron will wait for addresses",
+                    task.contract_name, task.network
+                );
+            } else {
+                info!(
+                    "Found {} factory addresses for {}.{}",
+                    addresses.len(),
+                    task.contract_name,
+                    task.network
+                );
+            }
+            Ok(addresses)
+        }
+        Err(e) => {
+            error!(
+                "Failed to get factory addresses for {}.{}: {}",
+                task.contract_name, task.network, e
+            );
+            Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+        }
+    }
+}
+
+/// Get factory addresses as a simple Vec (for compatibility with wait_for_factory_sync).
+async fn get_factory_addresses(
+    task: &CronTask,
+    postgres: &Option<Arc<PostgresClient>>,
+    clickhouse: &Option<Arc<ClickhouseClient>>,
+    context: &CronContext,
+) -> Result<Vec<Address>, Box<dyn std::error::Error + Send + Sync>> {
+    let addresses_with_blocks =
+        get_factory_addresses_with_blocks(task, postgres, clickhouse, context).await?;
+    Ok(addresses_with_blocks.keys().copied().collect())
+}
+
+/// Wait for factory event indexing to discover addresses.
+///
+/// For factory contracts, the cron historical sync depends on the factory
+/// event indexing to discover addresses first. This waits until at least
+/// one factory address is available before proceeding.
+async fn wait_for_factory_sync(
+    task: &CronTask,
+    postgres: &Option<Arc<PostgresClient>>,
+    clickhouse: &Option<Arc<ClickhouseClient>>,
+    context: &CronContext,
+    _start_block: u64,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if task.factory_config.is_none() {
+        // Not a factory contract - no waiting needed
+        return Ok(());
+    }
+
+    info!(
+        "Waiting for factory event indexing to discover addresses for {}.{}...",
+        task.contract_name, task.network
+    );
+
+    let mut logged_waiting = false;
+    let mut logged_db_error = false;
+    loop {
+        if !is_running() {
+            return Err("Shutdown requested".into());
+        }
+
+        // Check if any factory addresses have been discovered
+        // DB errors are expected early on (tables may not exist yet), so treat them as "not ready"
+        let addresses = match get_factory_addresses(task, postgres, clickhouse, context).await {
+            Ok(addrs) => addrs,
+            Err(e) => {
+                if !logged_db_error {
+                    debug!(
+                        "Factory addresses table not ready yet for {}.{}: {} - will retry",
+                        task.contract_name, task.network, e
+                    );
+                    logged_db_error = true;
+                }
+                // Treat DB errors as "no addresses yet" - the table may not exist
+                vec![]
+            }
+        };
+
+        if !addresses.is_empty() {
+            info!(
+                "Factory indexing discovered {} addresses for {}.{}, proceeding with cron",
+                addresses.len(),
+                task.contract_name,
+                task.network
+            );
+            return Ok(());
+        }
+
+        if !logged_waiting {
+            info!(
+                "No factory addresses discovered yet for {}.{}, waiting for factory event indexing...",
+                task.contract_name, task.network
+            );
+            logged_waiting = true;
+        }
+
+        // Wait before checking again (short interval for responsiveness)
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
 /// Run a single cron task until shutdown.
 ///
 /// If the cron has `start_block` configured, historical sync runs first,
@@ -394,19 +590,42 @@ async fn run_cron_task(
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
     providers: Arc<HashMap<String, Arc<JsonRpcCachedProvider>>>,
+    context: CronContext,
 ) {
+    let is_factory = task.factory_config.is_some();
+
     info!(
-        "Starting cron task for table '{}' on network '{}' with schedule {:?}",
+        "Starting cron task for table '{}' on network '{}' with schedule {:?}{}",
         task.table.name,
         task.network,
-        task.cron_entry.interval.as_ref().or(task.cron_entry.schedule.as_ref())
+        task.cron_entry.interval.as_ref().or(task.cron_entry.schedule.as_ref()),
+        if is_factory { " (factory-indexed)" } else { "" }
     );
 
     // Check if historical sync is needed
     if task.cron_entry.start_block.is_some() {
-        let historical_completed =
-            run_historical_sync(&task, postgres.clone(), clickhouse.clone(), providers.clone())
-                .await;
+        // For factory contracts, wait for factory event indexing to discover addresses
+        if is_factory {
+            let start_block = task.cron_entry.start_block.unwrap().to::<u64>();
+            if let Err(e) =
+                wait_for_factory_sync(&task, &postgres, &clickhouse, &context, start_block).await
+            {
+                error!(
+                    "Failed waiting for factory sync for table '{}' on network '{}': {}",
+                    task.table.name, task.network, e
+                );
+                return;
+            }
+        }
+
+        let historical_completed = run_historical_sync(
+            &task,
+            postgres.clone(),
+            clickhouse.clone(),
+            providers.clone(),
+            &context,
+        )
+        .await;
 
         if !historical_completed {
             debug!(
@@ -432,7 +651,7 @@ async fn run_cron_task(
     }
 
     // Live cron mode
-    run_live_cron_loop(&task, postgres, clickhouse, providers).await;
+    run_live_cron_loop(&task, postgres, clickhouse, providers, &context).await;
 }
 
 /// Run historical sync for a cron task using batched operations.
@@ -444,9 +663,40 @@ async fn run_historical_sync(
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
     providers: Arc<HashMap<String, Arc<JsonRpcCachedProvider>>>,
+    context: &CronContext,
 ) -> bool {
     let start_block = task.cron_entry.start_block.unwrap().to::<u64>();
     let block_interval = task.cron_entry.block_interval.map(|b| b.to::<u64>()).unwrap_or(1); // Default to every block
+
+    // Get contract addresses (1 for static, N for factory)
+    // Get addresses with their birth blocks (for factory contracts, only process blocks >= birth)
+    let addresses_with_blocks =
+        match get_factory_addresses_with_blocks(task, &postgres, &clickhouse, context).await {
+            Ok(addrs) => addrs,
+            Err(e) => {
+                error!(
+                    "Failed to get contract addresses for table '{}' on network '{}': {}",
+                    task.table.name, task.network, e
+                );
+                return false;
+            }
+        };
+
+    if addresses_with_blocks.is_empty() {
+        warn!(
+            "No contract addresses for table '{}' on network '{}', skipping historical sync",
+            task.table.name, task.network
+        );
+        return true; // Not a failure, just nothing to do yet
+    }
+
+    let is_factory = task.factory_config.is_some();
+    if is_factory {
+        info!("Historical sync for {} discovered factory addresses", addresses_with_blocks.len());
+        for (addr, birth_block) in &addresses_with_blocks {
+            info!("  Address {:?} birth_block={}", addr, birth_block);
+        }
+    }
 
     // Get end block (either specified or latest)
     let provider = providers.get(&task.network);
@@ -530,6 +780,7 @@ async fn run_historical_sync(
             clickhouse.clone(),
             providers.clone(),
             &batch_blocks,
+            &addresses_with_blocks,
             rate_limiter.clone(),
         )
         .await;
@@ -542,9 +793,14 @@ async fn run_historical_sync(
                 if let Some(b) = last_block {
                     let concurrency = rate_limiter.concurrency();
                     let batch_sz = rate_limiter.batch_size();
+                    let addr_info = if is_factory {
+                        format!(", {} addresses", addresses_with_blocks.len())
+                    } else {
+                        String::new()
+                    };
                     info!(
-                        "Cron batch complete: table='{}', blocks {}-{} ({} ops), concurrency={}, batch_size={}, {:.1}s, saved at block {}",
-                        task.table.name, batch_start, batch_end, batch_blocks.len(), concurrency, batch_sz, batch_duration.as_secs_f64(), b
+                        "Cron batch complete: table='{}', blocks {}-{} ({} ops{}), concurrency={}, batch_size={}, {:.1}s, saved at block {}",
+                        task.table.name, batch_start, batch_end, batch_blocks.len(), addr_info, concurrency, batch_sz, batch_duration.as_secs_f64(), b
                     );
                     update_last_synced_cron_block(
                         &postgres,
@@ -590,18 +846,22 @@ async fn run_historical_sync(
 ///
 /// This executes all $call operations in parallel, then writes results to the
 /// database in a batch. Returns the last successful block number.
+///
+/// For factory-indexed contracts, `addresses_with_blocks` maps each address to its birth block.
+/// Only (block, address) pairs where block >= birth_block are processed.
+/// For static contracts, birth_block is 0.
 async fn execute_cron_operations_batch(
     task: &CronTask,
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
     providers: Arc<HashMap<String, Arc<JsonRpcCachedProvider>>>,
     blocks: &[u64],
+    addresses_with_blocks: &HashMap<Address, u64>,
     rate_limiter: Arc<AdaptiveRateLimiter>,
 ) -> Result<Option<u64>, String> {
     use futures::stream::{FuturesUnordered, StreamExt};
-    use std::collections::HashSet;
 
-    if blocks.is_empty() {
+    if blocks.is_empty() || addresses_with_blocks.is_empty() {
         return Ok(None);
     }
 
@@ -642,11 +902,35 @@ async fn execute_cron_operations_batch(
     // Deduplicate call patterns (same call might be used for multiple columns)
     let unique_calls: HashSet<String> = call_patterns.iter().map(|(v, _, _)| v.clone()).collect();
 
-    // Step 2: Execute all RPC calls in parallel for all blocks
-    // Key: (block_number, call_pattern) -> Result
+    // Count valid (block, address) pairs after birth block filtering
+    let mut valid_pairs = 0;
+    for &block_number in blocks {
+        for (&_addr, &birth_block) in addresses_with_blocks {
+            if block_number >= birth_block {
+                valid_pairs += 1;
+            }
+        }
+    }
+
+    info!(
+        "Cron batch: {} blocks, {} addresses, {} valid pairs (after birth filter), {} call patterns, {} unique calls",
+        blocks.len(),
+        addresses_with_blocks.len(),
+        valid_pairs,
+        call_patterns.len(),
+        unique_calls.len()
+    );
+
+    if unique_calls.is_empty() {
+        debug!("No $call patterns found in cron operations - only non-RPC values");
+    }
+
+    // Step 2: Execute all RPC calls in parallel for all (block, address) combinations
+    // Only process (block, address) pairs where block >= birth_block
+    // Key: (block_number, address, call_pattern) -> Result
     #[allow(clippy::type_complexity)]
     let call_cache: Arc<
-        tokio::sync::RwLock<HashMap<(u64, String), Option<EthereumSqlTypeWrapper>>>,
+        tokio::sync::RwLock<HashMap<(u64, Address, String), Option<EthereumSqlTypeWrapper>>>,
     > = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
 
     // Use adaptive concurrency from rate limiter
@@ -654,62 +938,97 @@ async fn execute_cron_operations_batch(
     let semaphore = Arc::new(tokio::sync::Semaphore::new(current_concurrency));
     let mut futures = FuturesUnordered::new();
 
+    // Iterate over all (block, address, call_pattern) combinations
+    // Skip blocks before the address's birth block (contract didn't exist yet)
     for &block_number in blocks {
-        for call_pattern in &unique_calls {
-            let provider = provider.clone();
-            let contract_address = task.contract_address;
-            let network = task.network.clone();
-            let call_pattern = call_pattern.clone();
-            let cache = call_cache.clone();
-            let sem = semaphore.clone();
+        for (&contract_address, &birth_block) in addresses_with_blocks {
+            // Skip if this block is before the contract was created
+            if block_number < birth_block {
+                continue;
+            }
 
-            // Find the column type for this call pattern
-            let column_type = call_patterns
-                .iter()
-                .find(|(v, _, _)| v == &call_pattern)
-                .map(|(_, _, t)| t.clone())
-                .unwrap_or(ColumnType::String);
+            for call_pattern in &unique_calls {
+                let provider = provider.clone();
+                let network = task.network.clone();
+                let call_pattern = call_pattern.clone();
+                let cache = call_cache.clone();
+                let sem = semaphore.clone();
 
-            futures.push(async move {
-                let _permit = sem.acquire().await.unwrap();
+                // Find the column type for this call pattern
+                let column_type = call_patterns
+                    .iter()
+                    .find(|(v, _, _)| v == &call_pattern)
+                    .map(|(_, _, t)| t.clone())
+                    .unwrap_or(ColumnType::String);
 
-                let timestamp = U256::from(chrono::Utc::now().timestamp() as u64);
-                let tx_metadata = TxMetadata {
-                    block_number,
-                    block_timestamp: Some(timestamp),
-                    tx_hash: B256::ZERO,
-                    block_hash: B256::ZERO,
-                    contract_address,
-                    log_index: U256::ZERO,
-                    tx_index: 0,
-                };
+                futures.push(async move {
+                    let _permit = sem.acquire().await.unwrap();
 
-                let result = extract_cron_value(
-                    &call_pattern,
-                    &tx_metadata,
-                    &contract_address,
-                    &column_type,
-                    Some(provider.as_ref()),
-                    &network,
-                )
-                .await;
+                    let timestamp = U256::from(chrono::Utc::now().timestamp() as u64);
+                    let tx_metadata = TxMetadata {
+                        block_number,
+                        block_timestamp: Some(timestamp),
+                        tx_hash: B256::ZERO,
+                        block_hash: B256::ZERO,
+                        contract_address,
+                        log_index: U256::ZERO,
+                        tx_index: 0,
+                    };
 
-                let mut cache_guard = cache.write().await;
-                cache_guard.insert((block_number, call_pattern), result);
-            });
+                    let result = extract_cron_value(
+                        &call_pattern,
+                        &tx_metadata,
+                        &contract_address,
+                        &column_type,
+                        Some(provider.as_ref()),
+                        &network,
+                    )
+                    .await;
+
+                    let mut cache_guard = cache.write().await;
+                    cache_guard
+                        .insert((block_number, contract_address, call_pattern.clone()), result);
+                    debug!(
+                        "RPC call done: block={}, addr={:?}, pattern={}",
+                        block_number,
+                        contract_address,
+                        call_pattern.chars().take(30).collect::<String>()
+                    );
+                });
+            }
         }
     }
 
     // Wait for all RPC calls to complete
+    let mut completed_calls = 0;
+    let total_expected_calls = valid_pairs * unique_calls.len();
+    info!("Queued {} RPC call futures, waiting for completion...", total_expected_calls);
     while futures.next().await.is_some() {
+        completed_calls += 1;
         if !is_running() {
+            info!(
+                "RPC calls interrupted by shutdown after {}/{} calls",
+                completed_calls, total_expected_calls
+            );
             return Ok(None);
         }
     }
+    info!("All RPC calls completed: {}", completed_calls);
 
-    // Step 3: Build all rows using cached results
+    // Step 3: Build all rows using cached results (one row per block per address)
     let cache = call_cache.read().await;
-    let mut all_rows: Vec<TableRowData> = Vec::with_capacity(blocks.len());
+
+    // Log cache stats for debugging
+    let total_calls = cache.len();
+    let successful_calls = cache.values().filter(|v| v.is_some()).count();
+    debug!(
+        "RPC calls completed: {}/{} successful ({}%)",
+        successful_calls,
+        total_calls,
+        if total_calls > 0 { (successful_calls * 100) / total_calls } else { 0 }
+    );
+    let mut all_rows: Vec<TableRowData> =
+        Vec::with_capacity(blocks.len() * addresses_with_blocks.len());
     let mut last_successful_block: Option<u64> = None;
 
     for &block_number in blocks {
@@ -717,110 +1036,145 @@ async fn execute_cron_operations_batch(
             break;
         }
 
-        let timestamp = U256::from(chrono::Utc::now().timestamp() as u64);
-        let tx_metadata = TxMetadata {
-            block_number,
-            block_timestamp: Some(timestamp),
-            tx_hash: B256::ZERO,
-            block_hash: B256::ZERO,
-            contract_address: task.contract_address,
-            log_index: U256::ZERO,
-            tx_index: 0,
-        };
-
-        for operation in &task.cron_entry.operations {
-            let mut columns: HashMap<String, EthereumSqlTypeWrapper> = HashMap::new();
-
-            // Add where clause columns
-            for (column_name, value_ref) in &operation.where_clause {
-                if value_ref.starts_with("$call(") {
-                    if let Some(value) =
-                        cache.get(&(block_number, value_ref.clone())).and_then(|v| v.clone())
-                    {
-                        columns.insert(column_name.clone(), value);
-                    }
-                } else {
-                    // Handle non-$call values
-                    let column_def = task.table.columns.iter().find(|c| &c.name == column_name);
-                    if let Some(column_def) = column_def {
-                        if let Some(value) = extract_cron_value_sync(
-                            value_ref,
-                            &tx_metadata,
-                            &task.contract_address,
-                            column_def.resolved_type(),
-                        ) {
-                            columns.insert(column_name.clone(), value);
-                        }
-                    }
-                }
-            }
-
-            // Add set columns
-            for set_col in &operation.set {
-                let val = set_col.effective_value();
-                if val.starts_with("$call(") {
-                    if let Some(value) =
-                        cache.get(&(block_number, val.to_string())).and_then(|v| v.clone())
-                    {
-                        columns.insert(set_col.column.clone(), value);
-                    }
-                } else {
-                    // Handle non-$call values
-                    let column_def = task.table.columns.iter().find(|c| c.name == set_col.column);
-                    if let Some(column_def) = column_def {
-                        if let Some(value) = extract_cron_value_sync(
-                            val,
-                            &tx_metadata,
-                            &task.contract_address,
-                            column_def.resolved_type(),
-                        ) {
-                            columns.insert(set_col.column.clone(), value);
-                        }
-                    }
-                }
-            }
-
-            if columns.is_empty() {
+        for (&contract_address, &birth_block) in addresses_with_blocks {
+            // Skip if this block is before the contract was created
+            if block_number < birth_block {
                 continue;
             }
+            let timestamp = U256::from(chrono::Utc::now().timestamp() as u64);
+            let tx_metadata = TxMetadata {
+                block_number,
+                block_timestamp: Some(timestamp),
+                tx_hash: B256::ZERO,
+                block_hash: B256::ZERO,
+                contract_address,
+                log_index: U256::ZERO,
+                tx_index: 0,
+            };
 
-            // Add auto-injected metadata columns
-            let sequence_id = crate::manifest::contract::compute_sequence_id(block_number, 0, 0);
-            columns.insert(
-                crate::manifest::contract::injected_columns::RINDEXER_SEQUENCE_ID.to_string(),
-                EthereumSqlTypeWrapper::U128(sequence_id),
-            );
-            columns.insert(
-                crate::manifest::contract::injected_columns::BLOCK_NUMBER.to_string(),
-                EthereumSqlTypeWrapper::U64BigInt(block_number),
-            );
+            for operation in &task.cron_entry.operations {
+                let mut columns: HashMap<String, EthereumSqlTypeWrapper> = HashMap::new();
 
-            if task.table.timestamp {
-                if let Some(ts) = tx_metadata.block_timestamp {
-                    if let Some(dt) = DateTime::from_timestamp(ts.to::<i64>(), 0) {
-                        columns.insert(
-                            crate::manifest::contract::injected_columns::BLOCK_TIMESTAMP
-                                .to_string(),
-                            EthereumSqlTypeWrapper::DateTime(dt.with_timezone(&Utc)),
-                        );
+                // Add where clause columns
+                for (column_name, value_ref) in &operation.where_clause {
+                    if value_ref.starts_with("$call(") {
+                        if let Some(value) = cache
+                            .get(&(block_number, contract_address, value_ref.clone()))
+                            .and_then(|v| v.clone())
+                        {
+                            columns.insert(column_name.clone(), value);
+                        }
+                    } else {
+                        // Handle non-$call values
+                        let column_def = task.table.columns.iter().find(|c| &c.name == column_name);
+                        if let Some(column_def) = column_def {
+                            if let Some(value) = extract_cron_value_sync(
+                                value_ref,
+                                &tx_metadata,
+                                &contract_address,
+                                column_def.resolved_type(),
+                            ) {
+                                columns.insert(column_name.clone(), value);
+                            }
+                        }
                     }
                 }
+
+                // Add set columns
+                for set_col in &operation.set {
+                    let val = set_col.effective_value();
+                    if val.starts_with("$call(") {
+                        if let Some(value) = cache
+                            .get(&(block_number, contract_address, val.to_string()))
+                            .and_then(|v| v.clone())
+                        {
+                            columns.insert(set_col.column.clone(), value);
+                        }
+                    } else {
+                        // Handle non-$call values
+                        let column_def =
+                            task.table.columns.iter().find(|c| c.name == set_col.column);
+                        if let Some(column_def) = column_def {
+                            if let Some(value) = extract_cron_value_sync(
+                                val,
+                                &tx_metadata,
+                                &contract_address,
+                                column_def.resolved_type(),
+                            ) {
+                                columns.insert(set_col.column.clone(), value);
+                            }
+                        }
+                    }
+                }
+
+                if columns.is_empty() {
+                    debug!(
+                        "No columns extracted for block {} address {:?} - skipping row",
+                        block_number, contract_address
+                    );
+                    continue;
+                }
+
+                // Check that all required user columns are present (where clause + set columns)
+                let mut required_columns: Vec<String> = operation
+                    .where_clause
+                    .keys()
+                    .cloned()
+                    .chain(operation.set.iter().map(|s| s.column.clone()))
+                    .collect();
+                required_columns.sort();
+                required_columns.dedup();
+
+                let missing_columns: Vec<&String> =
+                    required_columns.iter().filter(|col| !columns.contains_key(*col)).collect();
+
+                if !missing_columns.is_empty() {
+                    warn!(
+                        "Skipping row for block {} address {:?} - missing columns: {:?} (have: {:?})",
+                        block_number, contract_address, missing_columns, columns.keys().collect::<Vec<_>>()
+                    );
+                    continue;
+                }
+
+                // Add auto-injected metadata columns
+                let sequence_id =
+                    crate::manifest::contract::compute_sequence_id(block_number, 0, 0);
+                columns.insert(
+                    crate::manifest::contract::injected_columns::RINDEXER_SEQUENCE_ID.to_string(),
+                    EthereumSqlTypeWrapper::U128(sequence_id),
+                );
+                columns.insert(
+                    crate::manifest::contract::injected_columns::BLOCK_NUMBER.to_string(),
+                    EthereumSqlTypeWrapper::U64BigInt(block_number),
+                );
+
+                if task.table.timestamp {
+                    if let Some(ts) = tx_metadata.block_timestamp {
+                        if let Some(dt) = DateTime::from_timestamp(ts.to::<i64>(), 0) {
+                            columns.insert(
+                                crate::manifest::contract::injected_columns::BLOCK_TIMESTAMP
+                                    .to_string(),
+                                EthereumSqlTypeWrapper::DateTime(dt.with_timezone(&Utc)),
+                            );
+                        }
+                    }
+                }
+
+                columns.insert(
+                    crate::manifest::contract::injected_columns::TX_HASH.to_string(),
+                    EthereumSqlTypeWrapper::StringChar(format!("{:?}", B256::ZERO)),
+                );
+                columns.insert(
+                    crate::manifest::contract::injected_columns::BLOCK_HASH.to_string(),
+                    EthereumSqlTypeWrapper::StringChar(format!("{:?}", B256::ZERO)),
+                );
+                columns.insert(
+                    crate::manifest::contract::injected_columns::CONTRACT_ADDRESS.to_string(),
+                    EthereumSqlTypeWrapper::Address(contract_address),
+                );
+
+                all_rows.push(TableRowData { columns, network: task.network.clone() });
             }
-
-            columns.insert(
-                crate::manifest::contract::injected_columns::TX_HASH.to_string(),
-                EthereumSqlTypeWrapper::StringChar(format!("{:?}", B256::ZERO)),
-            );
-            columns.insert(
-                crate::manifest::contract::injected_columns::BLOCK_HASH.to_string(),
-                EthereumSqlTypeWrapper::StringChar(format!("{:?}", B256::ZERO)),
-            );
-            columns.insert(
-                crate::manifest::contract::injected_columns::CONTRACT_ADDRESS.to_string(),
-                EthereumSqlTypeWrapper::Address(task.contract_address),
-            );
-
-            all_rows.push(TableRowData { columns, network: task.network.clone() });
         }
 
         last_successful_block = Some(block_number);
@@ -872,6 +1226,7 @@ async fn run_live_cron_loop(
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
     providers: Arc<HashMap<String, Arc<JsonRpcCachedProvider>>>,
+    context: &CronContext,
 ) {
     loop {
         if !is_running() {
@@ -925,6 +1280,29 @@ async fn run_live_cron_loop(
             break;
         }
 
+        // Get factory addresses (refreshed on each tick to pick up new contracts)
+        // For live cron, birth blocks don't matter (latest block >= all birth blocks)
+        let addresses_with_blocks =
+            match get_factory_addresses_with_blocks(task, &postgres, &clickhouse, context).await {
+                Ok(addrs) => addrs,
+                Err(e) => {
+                    error!(
+                        "Failed to get contract addresses for table '{}' on network '{}': {}",
+                        task.table.name, task.network, e
+                    );
+                    continue; // Skip this tick, try again next time
+                }
+            };
+        let addresses: Vec<Address> = addresses_with_blocks.keys().copied().collect();
+
+        if addresses.is_empty() {
+            debug!(
+                "No contract addresses for table '{}' on network '{}', skipping this tick",
+                task.table.name, task.network
+            );
+            continue;
+        }
+
         // Execute the cron operations with retry and exponential backoff
         let mut retry_count = 0;
         let mut last_error: Option<String> = None;
@@ -939,6 +1317,7 @@ async fn run_live_cron_loop(
                 postgres.clone(),
                 clickhouse.clone(),
                 providers.clone(),
+                &addresses,
             )
             .await
             {
@@ -993,12 +1372,13 @@ async fn run_live_cron_loop(
     }
 }
 
-/// Execute the cron operations for a task.
+/// Execute the cron operations for a task (for all addresses).
 async fn execute_cron_operations(
     task: &CronTask,
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
     providers: Arc<HashMap<String, Arc<JsonRpcCachedProvider>>>,
+    addresses: &[Address],
 ) -> Result<(), String> {
     let provider = providers.get(&task.network);
 
@@ -1015,123 +1395,144 @@ async fn execute_cron_operations(
 
     let now = chrono::Utc::now();
 
-    // Create synthetic metadata (no event data)
-    let tx_metadata = TxMetadata {
-        block_number: latest_block,
-        block_timestamp: Some(U256::from(now.timestamp() as u64)),
-        tx_hash: B256::ZERO,
-        block_hash: B256::ZERO,
-        contract_address: task.contract_address,
-        log_index: U256::ZERO,
-        tx_index: 0,
-    };
-
-    debug!(
-        "Executing cron operations for table '{}' on network '{}' at block {}",
-        task.table.name, task.network, latest_block
-    );
+    let is_factory = task.factory_config.is_some();
+    if is_factory {
+        debug!(
+            "Executing cron operations for table '{}' on network '{}' at block {} for {} addresses",
+            task.table.name,
+            task.network,
+            latest_block,
+            addresses.len()
+        );
+    } else {
+        debug!(
+            "Executing cron operations for table '{}' on network '{}' at block {}",
+            task.table.name, task.network, latest_block
+        );
+    }
 
     // Process each operation
     for operation in &task.cron_entry.operations {
-        let mut columns: HashMap<String, EthereumSqlTypeWrapper> = HashMap::new();
+        let mut all_rows: Vec<TableRowData> = Vec::with_capacity(addresses.len());
 
         // Get provider for view calls
         let provider_ref = provider.map(|p| p.as_ref());
 
-        // Add where clause columns
-        for (column_name, value_ref) in &operation.where_clause {
-            let column_def = task.table.columns.iter().find(|c| &c.name == column_name);
+        // Process each address
+        for (addr_idx, &contract_address) in addresses.iter().enumerate() {
+            // Create synthetic metadata for this address
+            let tx_metadata = TxMetadata {
+                block_number: latest_block,
+                block_timestamp: Some(U256::from(now.timestamp() as u64)),
+                tx_hash: B256::ZERO,
+                block_hash: B256::ZERO,
+                contract_address,
+                log_index: U256::ZERO,
+                tx_index: 0,
+            };
 
-            if let Some(column_def) = column_def {
-                if let Some(value) = extract_cron_value(
-                    value_ref,
-                    &tx_metadata,
-                    &task.contract_address,
-                    column_def.resolved_type(),
-                    provider_ref,
-                    &task.network,
-                )
-                .await
-                {
-                    columns.insert(column_name.clone(), value);
+            let mut columns: HashMap<String, EthereumSqlTypeWrapper> = HashMap::new();
+
+            // Add where clause columns
+            for (column_name, value_ref) in &operation.where_clause {
+                let column_def = task.table.columns.iter().find(|c| &c.name == column_name);
+
+                if let Some(column_def) = column_def {
+                    if let Some(value) = extract_cron_value(
+                        value_ref,
+                        &tx_metadata,
+                        &contract_address,
+                        column_def.resolved_type(),
+                        provider_ref,
+                        &task.network,
+                    )
+                    .await
+                    {
+                        columns.insert(column_name.clone(), value);
+                    }
                 }
             }
-        }
 
-        // Add set columns with their values
-        for set_col in &operation.set {
-            let column_def = task.table.columns.iter().find(|c| c.name == set_col.column);
+            // Add set columns with their values
+            for set_col in &operation.set {
+                let column_def = task.table.columns.iter().find(|c| c.name == set_col.column);
 
-            if let Some(column_def) = column_def {
-                if let Some(value) = extract_cron_value(
-                    set_col.effective_value(),
-                    &tx_metadata,
-                    &task.contract_address,
-                    column_def.resolved_type(),
-                    provider_ref,
-                    &task.network,
-                )
-                .await
-                {
-                    columns.insert(set_col.column.clone(), value);
+                if let Some(column_def) = column_def {
+                    if let Some(value) = extract_cron_value(
+                        set_col.effective_value(),
+                        &tx_metadata,
+                        &contract_address,
+                        column_def.resolved_type(),
+                        provider_ref,
+                        &task.network,
+                    )
+                    .await
+                    {
+                        columns.insert(set_col.column.clone(), value);
+                    }
                 }
             }
-        }
 
-        if columns.is_empty() {
-            debug!(
-                "No columns extracted for cron operation on table '{}', skipping",
-                task.table.name
+            if columns.is_empty() {
+                debug!(
+                    "No columns extracted for cron operation on table '{}' address {}, skipping",
+                    task.table.name, contract_address
+                );
+                continue;
+            }
+
+            // Add auto-injected metadata columns
+            // For cron with multiple addresses, include addr_idx to ensure unique sequence_id
+            let sequence_id = crate::manifest::contract::compute_sequence_id(
+                latest_block,
+                addr_idx as u64, // Use address index for uniqueness
+                0,
             );
+
+            columns.insert(
+                crate::manifest::contract::injected_columns::RINDEXER_SEQUENCE_ID.to_string(),
+                EthereumSqlTypeWrapper::U128(sequence_id),
+            );
+            columns.insert(
+                crate::manifest::contract::injected_columns::BLOCK_NUMBER.to_string(),
+                EthereumSqlTypeWrapper::U64BigInt(latest_block),
+            );
+            // Only add timestamp if table has timestamp: true
+            if task.table.timestamp {
+                columns.insert(
+                    crate::manifest::contract::injected_columns::BLOCK_TIMESTAMP.to_string(),
+                    EthereumSqlTypeWrapper::DateTime(now),
+                );
+            }
+            columns.insert(
+                crate::manifest::contract::injected_columns::TX_HASH.to_string(),
+                EthereumSqlTypeWrapper::StringChar(format!("{:?}", B256::ZERO)),
+            );
+            columns.insert(
+                crate::manifest::contract::injected_columns::BLOCK_HASH.to_string(),
+                EthereumSqlTypeWrapper::StringChar(format!("{:?}", B256::ZERO)),
+            );
+            columns.insert(
+                crate::manifest::contract::injected_columns::CONTRACT_ADDRESS.to_string(),
+                EthereumSqlTypeWrapper::Address(contract_address),
+            );
+
+            all_rows.push(TableRowData { columns, network: task.network.clone() });
+        }
+
+        if all_rows.is_empty() {
+            debug!("No rows extracted for cron operation on table '{}', skipping", task.table.name);
             continue;
         }
 
-        // Add auto-injected metadata columns
-        // For cron, we use a synthetic sequence_id based on timestamp to ensure uniqueness
-        let sequence_id = crate::manifest::contract::compute_sequence_id(
-            latest_block,
-            0, // no tx_index for cron
-            0, // no log_index for cron
-        );
-
-        columns.insert(
-            crate::manifest::contract::injected_columns::RINDEXER_SEQUENCE_ID.to_string(),
-            EthereumSqlTypeWrapper::U128(sequence_id),
-        );
-        columns.insert(
-            crate::manifest::contract::injected_columns::BLOCK_NUMBER.to_string(),
-            EthereumSqlTypeWrapper::U64BigInt(latest_block),
-        );
-        // Only add timestamp if table has timestamp: true
-        if task.table.timestamp {
-            columns.insert(
-                crate::manifest::contract::injected_columns::BLOCK_TIMESTAMP.to_string(),
-                EthereumSqlTypeWrapper::DateTime(now),
-            );
-        }
-        columns.insert(
-            crate::manifest::contract::injected_columns::TX_HASH.to_string(),
-            EthereumSqlTypeWrapper::StringChar(format!("{:?}", B256::ZERO)),
-        );
-        columns.insert(
-            crate::manifest::contract::injected_columns::BLOCK_HASH.to_string(),
-            EthereumSqlTypeWrapper::StringChar(format!("{:?}", B256::ZERO)),
-        );
-        columns.insert(
-            crate::manifest::contract::injected_columns::CONTRACT_ADDRESS.to_string(),
-            EthereumSqlTypeWrapper::Address(task.contract_address),
-        );
-
-        let rows = vec![TableRowData { columns, network: task.network.clone() }];
-
-        // Execute the operation
+        // Execute the operation for all rows
         if let Some(postgres) = &postgres {
             super::tables::execute_postgres_operation_internal(
                 postgres,
                 &task.full_table_name,
                 &task.table,
                 operation,
-                &rows,
+                &all_rows,
                 None, // No SQL condition for cron
             )
             .await?;
@@ -1143,15 +1544,20 @@ async fn execute_cron_operations(
                 &task.full_table_name,
                 &task.table,
                 operation,
-                &rows,
+                &all_rows,
             )
             .await?;
         }
     }
 
+    let addr_info = if task.factory_config.is_some() {
+        format!(" ({} addresses)", addresses.len())
+    } else {
+        String::new()
+    };
     info!(
-        "Cron operations completed for table '{}' on network '{}' at block {}",
-        task.table.name, task.network, latest_block
+        "Cron operations completed for table '{}' on network '{}' at block {}{}",
+        task.table.name, task.network, latest_block, addr_info
     );
 
     Ok(())

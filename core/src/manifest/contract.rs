@@ -1320,6 +1320,11 @@ impl Contract {
             .unwrap_or_default()
     }
 
+    /// Check if any table has cron triggers.
+    pub fn has_any_table_cron(&self) -> bool {
+        self.tables.as_ref().is_some_and(|tables| tables.iter().any(|table| table.has_cron()))
+    }
+
     /// Check if an event name is in include_events.
     /// Returns true if include_events is None (meaning all events are included for raw storage).
     pub fn is_event_in_include_events(&self, event_name: &str) -> bool {

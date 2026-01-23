@@ -64,6 +64,7 @@ async fn main() {
                     enabled: enable_graphql,
                     override_port: graphql_port,
                 },
+                cron_scheduler_handle: None,
             })
             .await;
 

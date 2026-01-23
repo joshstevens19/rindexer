@@ -576,7 +576,8 @@ serde = {{ version = "1.0", features = ["derive"] }}
                             graphql_details: GraphqlOverrideSettings {
                                 enabled: enable_graphql,
                                 override_port: port,
-                            }
+                            },
+                            cron_scheduler_handle: None,
                         })
                         .await;
 

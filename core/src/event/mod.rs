@@ -10,6 +10,10 @@ mod message;
 pub use message::EventMessage;
 
 mod factory_event_filter_sync;
+pub use factory_event_filter_sync::{
+    get_factory_addresses_with_birth_blocks, get_known_factory_deployed_addresses,
+    GetFactoryAddressesWithBirthBlocksParams, GetKnownFactoryDeployedAddressesParams,
+};
 mod filter;
 
 pub use filter::ast::VariableSource;
