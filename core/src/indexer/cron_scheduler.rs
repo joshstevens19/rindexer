@@ -603,10 +603,10 @@ async fn run_cron_task(
     );
 
     // Check if historical sync is needed
-    if task.cron_entry.start_block.is_some() {
+    if let Some(start_block_value) = &task.cron_entry.start_block {
         // For factory contracts, wait for factory event indexing to discover addresses
         if is_factory {
-            let start_block = task.cron_entry.start_block.unwrap().to::<u64>();
+            let start_block = start_block_value.to::<u64>();
             if let Err(e) =
                 wait_for_factory_sync(&task, &postgres, &clickhouse, &context, start_block).await
             {

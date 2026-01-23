@@ -402,10 +402,15 @@ impl DeltaEncoder {
                 }
             }
 
-            tracing::info!(
-                "Fetched genesis timestamp: {}",
-                self.encoded_deltas.genesis_timestamp.unwrap()
-            );
+            if let Some(ts) = self.encoded_deltas.genesis_timestamp {
+                tracing::info!("Fetched genesis timestamp: {}", ts);
+            } else {
+                anyhow::bail!(
+                    "Failed to fetch genesis timestamp for network {}. Please add it to the list \
+                    of manually defined genesis timestamps.",
+                    self.network
+                );
+            }
         }
 
         let next_block = self.encoded_deltas.max_block + 1;
