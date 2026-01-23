@@ -1460,7 +1460,22 @@ async fn execute_view_call(
     // Determine return type - use explicit return_fields if provided, otherwise auto-detect
     let decoded = if !view_call.return_fields.is_empty() {
         let return_type = build_return_type_from_fields(&view_call.return_fields);
-        return_type.abi_decode(&result_bytes).ok()?
+        match return_type.abi_decode(&result_bytes) {
+            Ok(decoded) => decoded,
+            Err(_) => {
+                // Fallback for string type: some tokens (MKR) return bytes32 for symbol()/name()
+                // Try to decode as bytes32 and convert to string
+                if result_bytes.len() == 32 {
+                    if let Some(s) = try_bytes32_as_string(&result_bytes) {
+                        DynSolValue::String(s)
+                    } else {
+                        return None;
+                    }
+                } else {
+                    return None;
+                }
+            }
+        }
     } else {
         // Auto-detect the return type from the raw bytes
         try_decode_return_value(&result_bytes)?
@@ -1670,6 +1685,14 @@ fn try_decode_return_value(bytes: &[u8]) -> Option<DynSolValue> {
         }
     }
 
+    // Handle bytes32 as string fallback (for tokens like MKR that return bytes32 for symbol/name)
+    // bytes32 is encoded as exactly 32 bytes, right-padded with zeros
+    if bytes.len() == 32 {
+        if let Some(string_value) = try_bytes32_as_string(bytes) {
+            return Some(DynSolValue::String(string_value));
+        }
+    }
+
     // Handle multi-slot returns (e.g., slot0() returns 7 values)
     // When bytes are a multiple of 32 and contain more than one slot,
     // decode as a tuple of uint256 values to support accessor like [1]
@@ -1690,6 +1713,29 @@ fn try_decode_return_value(bytes: &[u8]) -> Option<DynSolValue> {
 
     // Default: decode as uint256
     DynSolType::Uint(256).abi_decode(bytes).ok()
+}
+
+/// Try to interpret bytes32 as a string.
+/// Some older tokens (like MKR) return bytes32 for symbol() and name() instead of string.
+/// The bytes are left-aligned and right-padded with zeros.
+fn try_bytes32_as_string(bytes: &[u8]) -> Option<String> {
+    if bytes.len() != 32 {
+        return None;
+    }
+
+    // Find the end of the string (first zero byte or end of array)
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    let trimmed = &bytes[..end];
+
+    // Try to convert to UTF-8 string
+    if let Ok(s) = String::from_utf8(trimmed.to_vec()) {
+        // Validate it looks like a reasonable string (letters, numbers, common symbols)
+        if !s.is_empty() && s.chars().all(|c| c.is_ascii_graphic() || c.is_ascii_whitespace()) {
+            return Some(s);
+        }
+    }
+
+    None
 }
 
 /// Async version of extract_value_from_event that supports view calls and constants.
@@ -3329,7 +3375,22 @@ async fn execute_view_call_for_cron_internal(
     // Determine return type - use explicit return_fields if provided, otherwise auto-detect
     let decoded = if !view_call.return_fields.is_empty() {
         let return_type = build_return_type_from_fields(&view_call.return_fields);
-        return_type.abi_decode(&result_bytes).ok()?
+        match return_type.abi_decode(&result_bytes) {
+            Ok(decoded) => decoded,
+            Err(_) => {
+                // Fallback for string type: some tokens (MKR) return bytes32 for symbol()/name()
+                // Try to decode as bytes32 and convert to string
+                if result_bytes.len() == 32 {
+                    if let Some(s) = try_bytes32_as_string(&result_bytes) {
+                        DynSolValue::String(s)
+                    } else {
+                        return None;
+                    }
+                } else {
+                    return None;
+                }
+            }
+        }
     } else {
         // Auto-detect the return type from the raw bytes
         try_decode_return_value(&result_bytes)?

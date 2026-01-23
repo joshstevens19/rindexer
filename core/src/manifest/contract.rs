@@ -494,6 +494,72 @@ impl Table {
         Ok(())
     }
 
+    /// Validates that all non-nullable columns without defaults are set in operations.
+    ///
+    /// For insert operations, every non-nullable column must either:
+    /// - Be set in the operation
+    /// - Have a default value
+    /// - Be nullable
+    /// - Be an auto-generated column (rindexer_sequence_id, network, timestamp columns)
+    ///
+    /// # Returns
+    /// Ok(()) if all required columns are set, Err with description otherwise.
+    pub fn validate_required_columns(&self) -> Result<(), String> {
+        // Auto-generated columns that don't need to be set
+        let auto_columns: std::collections::HashSet<&str> = [
+            "rindexer_sequence_id",
+            "network",
+            "rindexer_block_number",
+            "rindexer_block_hash",
+            "rindexer_tx_hash",
+            "rindexer_tx_index",
+            "rindexer_log_index",
+            "rindexer_contract_address",
+            "rindexer_block_timestamp",
+        ]
+        .into_iter()
+        .collect();
+
+        // Columns that have defaults or are nullable don't need to be set
+        let optional_columns: std::collections::HashSet<&str> = self
+            .columns
+            .iter()
+            .filter(|c| c.nullable || c.default.is_some())
+            .map(|c| c.name.as_str())
+            .collect();
+
+        // For each insert operation, check that all required columns are set
+        for event_mapping in &self.events {
+            for operation in &event_mapping.operations {
+                if operation.operation_type == OperationType::Insert {
+                    let set_columns: std::collections::HashSet<&str> =
+                        operation.set.iter().map(|s| s.column.as_str()).collect();
+
+                    for column in &self.columns {
+                        let col_name = column.name.as_str();
+
+                        // Skip if it's auto-generated, optional, or already set
+                        if auto_columns.contains(col_name)
+                            || optional_columns.contains(col_name)
+                            || set_columns.contains(col_name)
+                        {
+                            continue;
+                        }
+
+                        return Err(format!(
+                            "Column '{}' in table '{}' is not nullable and has no default value, \
+                             but is not set in the insert operation for event '{}'. \
+                             Either set the column, add a default value, or mark it as nullable.",
+                            col_name, self.name, event_mapping.event
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Resolve column types from the event ABI.
     ///
     /// This method looks at all operations to find value sources for each column and

@@ -411,6 +411,14 @@ fn validate_manifest(
                     ));
                 }
 
+                // Validate that all required columns are set in insert operations
+                if let Err(e) = table.validate_required_columns() {
+                    return Err(ValidateManifestError::CustomIndexingValidationError(
+                        e,
+                        contract.name.clone(),
+                    ));
+                }
+
                 // Collect table column names for validation
                 let table_column_names: std::collections::HashSet<&str> =
                     table.columns.iter().map(|c| c.name.as_str()).collect();
