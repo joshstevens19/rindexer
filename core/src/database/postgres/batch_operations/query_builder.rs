@@ -188,10 +188,13 @@ pub fn build_upsert_body(
 
 /// Builds a plain INSERT body (no conflict handling).
 /// Used for time-series/history data where we always want to insert new rows.
+/// Note: Dynamic batch operations now use binary COPY for inserts, but this
+/// function is kept for potential use by macros or future SQL-based inserts.
 ///
 /// # Arguments
 /// * `formatted_table_name` - The fully qualified table name
 /// * `all_columns` - All columns to insert
+#[allow(dead_code)]
 pub fn build_insert_body(formatted_table_name: &str, all_columns: &[&str]) -> String {
     let formatted_columns =
         all_columns.iter().map(|col| quote_identifier(col)).collect::<Vec<_>>().join(", ");

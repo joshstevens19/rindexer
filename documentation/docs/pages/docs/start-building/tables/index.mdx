@@ -31,6 +31,7 @@ rindexer handles batching, transactions, and error recovery automatically.
 ### Onchain Data Integration
 
 - **View Calls** - Fetch live data with `$call($contract, "balanceOf(address)", $holder)`
+- **Static View Calls** - Fetch immutable data with `$call_static($token, "symbol()")` - cached forever, no repeated RPC calls
 - **Tuple Returns** - Access by index `[0]` or field name `.fieldName`
 - **Cron Triggers** - Schedule periodic updates with `interval: 5m` or cron expressions
 
@@ -260,6 +261,14 @@ rindexer will batch-fetch blocks to get timestamps. The optimization includes:
 
 This minimizes the performance impact, but if you don't need timestamps, leaving the option off avoids the overhead entirely.
 Only enable this if you actually need block timestamps in your queries.
+:::
+
+:::warning[Free/Public RPC Nodes]
+Using `timestamp: true` with free or public RPC nodes (like public Infura, Alchemy free tier, or other rate-limited endpoints)
+will result in **very slow indexing**. Free nodes aggressively rate limit requests, and rindexer will automatically
+throttle to respect these limits - but this can make indexing take hours instead of minutes.
+
+**For production use with `timestamp: true`, use a paid RPC provider or run your own node.**
 :::
 
 ---
@@ -752,13 +761,89 @@ during re-indexing. The same event will always produce the same view call result
 :::
 
 :::warning[Performance & Rate Limiting]
-View calls add RPC load. rindexer automatically limits concurrent view calls to avoid overwhelming
-your RPC node (default: 10 concurrent calls). Failed calls are retried with exponential backoff.
+View calls add significant RPC load. rindexer automatically limits concurrent view calls and adapts
+to rate limits with exponential backoff.
 
 **Best Practices:**
-- Use **global tables** for static data (symbol, decimals, name) - fetched once, cached forever
-- Reserve per-event view calls for truly dynamic data (balances, allowances)
-- Use a paid RPC for heavy view call workloads
+- Use `$call_static()` for immutable data (symbol, decimals, name) - fetched once, cached forever
+- Reserve `$call()` for truly dynamic data (balances, allowances, prices)
+- **Use a paid/unthrottled RPC for heavy view call workloads**
+:::
+
+:::danger[Free/Public RPC Nodes]
+Using `$call()` extensively with free or public RPC nodes will result in **extremely slow indexing**.
+Free nodes impose strict rate limits, and when these are hit, rindexer automatically throttles requests
+(adding delays up to 30 seconds between batches). What takes minutes with a paid node can take hours with a free node.
+
+For any indexer that makes heavy use of view calls, **you must use a paid RPC provider or run your own node**.
+:::
+
+---
+
+### Static View Calls (Immutable Data)
+
+For onchain data that never changes (like token `symbol()`, `decimals()`, `name()`), use `$call_static()` instead of `$call()`:
+
+```yaml
+value: $call_static($token, "symbol()")
+value: $call_static($token, "decimals()")
+value: $call_static($token, "name()")
+```
+
+**How it differs from `$call()`:**
+
+| Feature | `$call()` | `$call_static()` |
+|---------|-----------|------------------|
+| Block number | Event's block (historical) | Latest block |
+| Caching | Per-block (cleared between blocks) | Forever (persists across entire indexing) |
+| Use case | Dynamic data (balances, prices) | Immutable data (symbol, decimals, name) |
+| Archive node | Required for historical blocks | Not required |
+
+**Example: Token metadata with static calls**
+
+```yaml
+tables:
+  - name: liquidations
+    columns:
+      - name: token
+      - name: symbol
+        type: string
+      - name: decimals
+        type: uint8
+      - name: amount_usd
+        type: uint256
+    events:
+      - event: Liquidation
+        operations:
+          - type: insert
+            set:
+              - column: token
+                value: $collateralAsset
+              - column: symbol
+                value: $call_static($collateralAsset, "symbol()")  # Cached forever
+              - column: decimals
+                value: $call_static($collateralAsset, "decimals()")  # Cached forever
+              - column: amount_usd
+                # Price is dynamic, decimals is static
+                value: ($amount * $call($oracle, "getPrice()")) / (10 ^ $call_static($collateralAsset, "decimals()"))
+```
+
+**Benefits:**
+- **First call**: RPC request at latest block, result cached permanently
+- **All subsequent calls**: Instant cache hit, zero RPC overhead
+- **No archive node needed**: Uses latest block, not historical blocks
+- **Perfect for high-volume indexing**: Token metadata fetched once per unique address
+
+:::tip[When to use $call_static()]
+Use `$call_static()` for any onchain data that is set once and never changes:
+- Token metadata: `symbol()`, `decimals()`, `name()`
+- Contract configuration: `owner()`, `factory()`, `WETH()`
+- Immutable parameters: `fee()` (if constant), `version()`
+
+Use regular `$call()` for data that can change:
+- Balances: `balanceOf()`
+- Prices: `getPrice()`, `latestAnswer()`
+- State: `totalSupply()`, `getReserves()`
 :::
 
 ### Literal Values
@@ -913,15 +998,16 @@ Arithmetic is useful for:
 
 ### Arithmetic with View Calls
 
-You can combine arithmetic expressions with `$call()` to compute values that depend on on-chain data.
+You can combine arithmetic expressions with `$call()` and `$call_static()` to compute values that depend on onchain data.
 This is powerful for computing USD values, normalized amounts, and other derived metrics.
 
 ```yaml
 # Compute USD value: (amount * oracle_price) / 10^decimals
-value: ($amount * $call($constant(oracle), "getAssetPrice(address)", $token)) / (10 ^ $call($token, "decimals()"))
+# Use $call_static for decimals (immutable), $call for price (dynamic)
+value: ($amount * $call($constant(oracle), "getAssetPrice(address)", $token)) / (10 ^ $call_static($token, "decimals()"))
 
 # Normalize amount by fetching decimals on-chain
-value: $rawAmount / (10 ^ $call($tokenAddress, "decimals()"))
+value: $rawAmount / (10 ^ $call_static($tokenAddress, "decimals()"))
 
 # Compute with multiple view calls
 value: $call($pool, "getReserves()")[0] * $call($oracle, "getPrice()")
@@ -998,9 +1084,9 @@ This pattern is ideal for:
 :::
 
 :::warning[Performance Consideration]
-Each `$call()` in an arithmetic expression requires an RPC call. If your expression has multiple calls,
-they're all executed for every event. Consider caching static values (like `decimals()`) in a separate
-table if you're processing high-volume events.
+Each `$call()` in an arithmetic expression requires an RPC call per event. Use `$call_static()` for
+immutable values like `decimals()` - they're cached forever after the first call, eliminating repeated
+RPC requests for high-volume indexing.
 :::
 
 ### String Templates

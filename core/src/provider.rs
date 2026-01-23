@@ -1,3 +1,4 @@
+use crate::adaptive_concurrency::ADAPTIVE_CONCURRENCY;
 use crate::notifications::ChainStateNotification;
 use alloy::network::{AnyNetwork, AnyRpcBlock, AnyTransactionReceipt};
 use alloy::rpc::types::{Filter, ValueOrArray};
@@ -388,6 +389,31 @@ impl JsonRpcCachedProvider {
         Ok(result)
     }
 
+    /// Executes eth_call at the "latest" block.
+    /// Use this for immutable data (symbol, decimals, name) that doesn't change.
+    #[tracing::instrument(skip_all)]
+    pub async fn eth_call_latest(
+        &self,
+        to: alloy::primitives::Address,
+        data: alloy::primitives::Bytes,
+    ) -> Result<String, ProviderError> {
+        let result: String = self
+            .provider
+            .raw_request(
+                "eth_call".into(),
+                (
+                    serde_json::json!({
+                        "to": format!("{:?}", to),
+                        "data": format!("0x{}", hex::encode(&data)),
+                    }),
+                    "latest",
+                ),
+            )
+            .await?;
+
+        Ok(result)
+    }
+
     /// Fetches blocks in concurrent rpc batches.
     #[tracing::instrument(skip_all, fields(len = block_numbers.len()))]
     pub async fn get_block_by_number_batch(
@@ -395,7 +421,21 @@ impl JsonRpcCachedProvider {
         block_numbers: &[U64],
         include_txs: bool,
     ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
+        self.get_block_by_number_batch_with_size(block_numbers, include_txs, None).await
+    }
+
+    /// Fetch blocks by number in a batch RPC call with configurable batch size.
+    /// If `rpc_batch_size` is None, uses the adaptive batch size (auto-scales on rate limits).
+    pub async fn get_block_by_number_batch_with_size(
+        &self,
+        block_numbers: &[U64],
+        include_txs: bool,
+        rpc_batch_size: Option<usize>,
+    ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
         let chain_id = self.chain.id();
+        // Use adaptive batch size (auto-scales down on rate limits for free nodes)
+        let batch_size =
+            rpc_batch_size.unwrap_or_else(|| ADAPTIVE_CONCURRENCY.current_batch_size());
 
         if block_numbers.is_empty() {
             return Ok(Vec::new());
@@ -408,7 +448,7 @@ impl JsonRpcCachedProvider {
         let semaphore = Arc::new(Semaphore::new(2));
 
         let futures = block_numbers
-            .chunks(RECOMMENDED_RPC_CHUNK_SIZE)
+            .chunks(batch_size)
             .map(|chunk| {
                 let client = self.client.clone();
                 let owned_chunk = chunk.to_vec();
@@ -435,17 +475,20 @@ impl JsonRpcCachedProvider {
                         return Err(e);
                     }
 
-                    try_join_all(request_futures).await
+                    // Use Option<AnyRpcBlock> to handle null responses (node doesn't have block)
+                    let results: Vec<Option<AnyRpcBlock>> = try_join_all(request_futures).await?;
+                    Ok(results)
                 })
             })
             .collect::<Vec<_>>();
 
-        let chunk_results: Vec<Result<Vec<AnyRpcBlock>, _>> = try_join_all(futures).await?;
+        let chunk_results: Vec<Result<Vec<Option<AnyRpcBlock>>, _>> = try_join_all(futures).await?;
         let results = chunk_results
             .into_iter()
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .flatten()
+            .flatten() // Filter out None values (blocks the node doesn't have)
             .collect();
 
         Ok(results)
@@ -461,8 +504,12 @@ impl JsonRpcCachedProvider {
             return Ok(Vec::new());
         }
 
+        // Use adaptive batch size (scales down on rate limits for free nodes)
+        // Cap at RPC_CHUNK_SIZE for efficiency on paid nodes
+        let batch_size =
+            std::cmp::min(RPC_CHUNK_SIZE, ADAPTIVE_CONCURRENCY.current_batch_size() * 10);
         let futures = hashes
-            .chunks(RPC_CHUNK_SIZE)
+            .chunks(batch_size)
             .map(|chunk| {
                 let client = self.client.clone();
                 let owned_chunk = chunk.to_vec();

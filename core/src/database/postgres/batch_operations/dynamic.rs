@@ -3,10 +3,10 @@
 use tokio_postgres::types::ToSql;
 
 use super::query_builder::{
-    build_cte_header, build_delete_body, build_insert_body, build_sequence_condition,
-    build_set_clause, build_to_process_cte, build_update_body, build_upsert_body,
-    build_upsert_set_clause, build_where_clause, build_where_condition, format_table_name,
-    ColumnInfo, SetClauseType, UpsertClauseType,
+    build_cte_header, build_delete_body, build_sequence_condition, build_set_clause,
+    build_to_process_cte, build_update_body, build_upsert_body, build_upsert_set_clause,
+    build_where_clause, build_where_condition, format_table_name, ColumnInfo, SetClauseType,
+    UpsertClauseType,
 };
 use crate::database::batch_operations::{
     BatchOperationAction, BatchOperationColumnBehavior, BatchOperationType, DynamicColumnDefinition,
@@ -197,21 +197,32 @@ async fn execute_batch(
             query.push_str(&build_delete_body(&formatted_table_name));
         }
         BatchOperationType::Insert => {
-            // Plain INSERT - no conflict handling, just insert all rows
-            query.push_str(&build_insert_body(&formatted_table_name, &column_names));
+            // Use binary COPY for INSERT operations - much faster than SQL INSERT
+            let column_names_owned: Vec<String> =
+                columns.iter().map(|col| col.name.clone()).collect();
 
-            let params: Vec<&(dyn ToSql + Sync)> =
-                owned_params.iter().map(|param| param as &(dyn ToSql + Sync)).collect();
+            // Get column types from the schema definition (not the values)
+            // This ensures correct types even when values are null
+            let column_types: Vec<tokio_postgres::types::Type> =
+                columns.iter().map(|col| col.sql_type.to_pg_type()).collect();
 
-            tracing::debug!("Custom indexing INSERT query: {}", query);
+            // Collect data rows
+            let data: Vec<Vec<EthereumSqlTypeWrapper>> =
+                batch.iter().map(|row| row.iter().map(|col| col.value.clone()).collect()).collect();
 
-            database.with_transaction(&query, &params, |_| async move { Ok(()) }).await.map_err(
-                |e| {
-                    tracing::error!("PostgreSQL error: {:?}", e);
-                    tracing::error!("Failed query:\n{}", query);
+            tracing::debug!(
+                "Custom indexing INSERT via binary COPY: {} rows into {}",
+                data.len(),
+                table_name
+            );
+
+            database
+                .bulk_insert_via_copy(table_name, &column_names_owned, &column_types, &data)
+                .await
+                .map_err(|e| {
+                    tracing::error!("PostgreSQL COPY error: {:?}", e);
                     e.to_string()
-                },
-            )?;
+                })?;
 
             return Ok(());
         }

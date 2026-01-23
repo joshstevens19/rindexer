@@ -1,4 +1,5 @@
 // public
+pub mod adaptive_concurrency;
 pub mod generator;
 pub mod indexer;
 pub mod layer_extensions;

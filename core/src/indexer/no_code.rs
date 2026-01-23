@@ -14,7 +14,7 @@ use tracing::{debug, error, info, warn};
 
 use super::cron_scheduler::{manifest_has_cron_tables, CronScheduler};
 use super::native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME};
-use super::tables::{process_table_operations, TableRuntime, TxMetadata};
+use super::tables::{process_table_operations, ProgressCheckpointConfig, TableRuntime, TxMetadata};
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::clickhouse::setup::{setup_clickhouse, SetupClickhouseError};
 use crate::database::generate::generate_event_table_full_name;
@@ -650,6 +650,13 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
 
             // Process table operations
             if !params.tables.is_empty() && !table_events_data.is_empty() {
+                // Create checkpoint config for saving progress on shutdown
+                let checkpoint_config = ProgressCheckpointConfig::new(
+                    params.indexer_name.clone(),
+                    params.contract_name.clone(),
+                    params.event_info.name.clone(),
+                    params.postgres.clone(),
+                );
                 if let Err(e) = process_table_operations(
                     &params.tables,
                     &params.event_info.name,
@@ -659,13 +666,22 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                     params.providers.clone(),
                     &params.constants,
                     &params.multicall_addresses,
+                    Some(&checkpoint_config),
                 )
                 .await
                 {
-                    error!(
-                        "{}::{} - Error processing table operations: {}",
-                        params.contract_name, params.event_info.name, e
-                    );
+                    // Don't log as error if it's a graceful shutdown
+                    if e.contains("Shutdown") {
+                        info!(
+                            "{}::{} - Graceful shutdown during table processing",
+                            params.contract_name, params.event_info.name
+                        );
+                    } else {
+                        error!(
+                            "{}::{} - Error processing table operations: {}",
+                            params.contract_name, params.event_info.name, e
+                        );
+                    }
                     return Err(e);
                 }
             }

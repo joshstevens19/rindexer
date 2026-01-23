@@ -21,7 +21,7 @@ contracts:
       - network: ethereum
         address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
         start_block: "24250761"
-        end_block: "24250773"
+        end_block: "24280773"
     abi: ./abis/ERC20.abi.json
     tables:
       - name: balances

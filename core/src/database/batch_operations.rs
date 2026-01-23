@@ -1,6 +1,7 @@
 // Types are used by exported macros, not internally
 #![allow(dead_code)]
 use crate::EthereumSqlTypeWrapper;
+use tokio_postgres::types::Type as PgType;
 
 /// The type of batch operation to perform.
 #[derive(Clone, Copy)]
@@ -30,6 +31,7 @@ pub enum BatchOperationSqlType {
     Numeric,
     Bool,
     Jsonb,
+    Text,
     Varchar,
     /// Ethereum address - CHAR(42) in Postgres, String in ClickHouse
     Address,
@@ -49,6 +51,7 @@ impl BatchOperationSqlType {
             BatchOperationSqlType::Numeric => "NUMERIC",
             BatchOperationSqlType::Bool => "BOOL",
             BatchOperationSqlType::Jsonb => "JSONB",
+            BatchOperationSqlType::Text => "TEXT",
             BatchOperationSqlType::Varchar => "VARCHAR",
             BatchOperationSqlType::Address => "CHAR(42)",
             BatchOperationSqlType::Smallint => "SMALLINT",
@@ -67,6 +70,7 @@ impl BatchOperationSqlType {
             BatchOperationSqlType::Numeric => "String",
             BatchOperationSqlType::Bool => "Bool",
             BatchOperationSqlType::Jsonb => "String",
+            BatchOperationSqlType::Text => "String",
             BatchOperationSqlType::Varchar => "String",
             BatchOperationSqlType::Address => "String",
             BatchOperationSqlType::Smallint => "Int16",
@@ -75,6 +79,26 @@ impl BatchOperationSqlType {
             BatchOperationSqlType::DateTime => "DateTime('UTC')",
             BatchOperationSqlType::TextArray => "Array(String)",
             BatchOperationSqlType::Custom(type_name) => type_name,
+        }
+    }
+
+    /// Returns the PostgreSQL type for binary COPY operations.
+    pub fn to_pg_type(self) -> PgType {
+        match self {
+            BatchOperationSqlType::Bytea => PgType::BYTEA,
+            BatchOperationSqlType::Numeric => PgType::NUMERIC,
+            BatchOperationSqlType::Bool => PgType::BOOL,
+            BatchOperationSqlType::Jsonb => PgType::JSONB,
+            BatchOperationSqlType::Text => PgType::TEXT,
+            BatchOperationSqlType::Varchar => PgType::VARCHAR,
+            BatchOperationSqlType::Address => PgType::BPCHAR,
+            BatchOperationSqlType::Smallint => PgType::INT2,
+            BatchOperationSqlType::Integer => PgType::INT4,
+            BatchOperationSqlType::Bigint => PgType::INT8,
+            BatchOperationSqlType::DateTime => PgType::TIMESTAMPTZ,
+            BatchOperationSqlType::TextArray => PgType::TEXT_ARRAY,
+            // For custom types, default to TEXT - the value's to_type() will be used
+            BatchOperationSqlType::Custom(_) => PgType::TEXT,
         }
     }
 }

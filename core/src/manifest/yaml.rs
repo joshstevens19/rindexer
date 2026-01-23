@@ -43,7 +43,7 @@ fn is_arithmetic_expression(value: &str) -> bool {
 
 /// Checks if a value contains $call() patterns that need runtime resolution.
 fn contains_call_pattern(value: &str) -> bool {
-    value.contains("$call(")
+    value.contains("$call(") || value.contains("$call_static(")
 }
 
 /// Extracts variable names from a filter/condition expression string.
@@ -141,8 +141,8 @@ fn is_event_field_reference_for_cron(value: &str) -> Option<String> {
         return None;
     }
 
-    // $call(...) = view function call, allowed
-    if value.starts_with("$call(") {
+    // $call(...) or $call_static(...) = view function call, allowed
+    if value.starts_with("$call(") || value.starts_with("$call_static(") {
         return None;
     }
 
@@ -604,8 +604,9 @@ fn validate_manifest(
                                 // (skip variables inside $call() as they're validated separately)
                                 let variables = extract_arithmetic_variables(effective_value);
                                 for var_name in variables {
-                                    // Skip 'call', 'constant', 'null', and 'if' which are special keywords
+                                    // Skip 'call', 'call_static', 'constant', 'null', and 'if' which are special keywords
                                     if var_name == "call"
+                                        || var_name == "call_static"
                                         || var_name == "constant"
                                         || var_name == "null"
                                         || var_name == "if"
@@ -635,6 +636,7 @@ fn validate_manifest(
                                     }
                                 }
                             } else if effective_value.starts_with("$call(")
+                                || effective_value.starts_with("$call_static(")
                                 || contains_call_pattern(effective_value)
                             {
                                 // Skip validation for view calls

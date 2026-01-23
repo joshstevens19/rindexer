@@ -1,4 +1,4 @@
-use crate::{rindexer_error, rindexer_info};
+use crate::{adaptive_concurrency::ADAPTIVE_CONCURRENCY, rindexer_error, rindexer_info};
 use alloy::{
     rpc::json_rpc::{RequestPacket, ResponsePacket},
     transports::TransportError,
@@ -9,6 +9,7 @@ use std::{
     task::{Context, Poll},
     time::Instant,
 };
+use tokio::time::Duration;
 use tower::{Layer, Service};
 
 #[derive(Clone)]
@@ -72,6 +73,15 @@ where
         let fut = self.inner.call(req);
 
         Box::pin(async move {
+            // Enforce global backoff BEFORE making request (for rate-limited free nodes)
+            // Add jitter to prevent thundering herd (all tasks waking at once)
+            let backoff_ms = ADAPTIVE_CONCURRENCY.current_backoff_ms();
+            if backoff_ms > 0 {
+                // Add 0-50% random jitter to spread out requests
+                let jitter = (backoff_ms as f64 * rand::random::<f64>() * 0.5) as u64;
+                tokio::time::sleep(Duration::from_millis(backoff_ms + jitter)).await;
+            }
+
             match fut.await {
                 Ok(response) => {
                     let duration = start_time.elapsed();
@@ -96,19 +106,24 @@ where
 
                     if !is_known_error {
                         if error_str.contains("timeout") || error_str.contains("timed out") {
-                            rindexer_error!("RPC TIMEOUT (free public nodes do this a lot consider a using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, error: {}",
+                            rindexer_error!("RPC TIMEOUT (free public nodes do this a lot consider a using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, error: {:?}",
                                            chain_id, method_name, duration, rpc_url, err);
                         } else if error_str.contains("429") || error_str.contains("rate limit") {
-                            // TODO: Sampling this would be nice since this is actually an expected
-                            //       part of the flow for many high-throughput applications.
-                            rindexer_info!("RPC RATE LIMITED (free public nodes do this a lot consider a using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, error: {}",
-                                          chain_id, method_name, duration, rpc_url, err);
-                        } else if error_str.contains("connection") || error_str.contains("network")
+                            // Notify adaptive concurrency to scale down
+                            ADAPTIVE_CONCURRENCY.record_rate_limit();
+                            rindexer_info!("RPC RATE LIMITED (free public nodes do this a lot consider using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, backoff: {}ms, batch_size: {}, rate_limit_count: {}",
+                                          chain_id, method_name, duration, rpc_url,
+                                          ADAPTIVE_CONCURRENCY.current_backoff_ms(),
+                                          ADAPTIVE_CONCURRENCY.current_batch_size(),
+                                          ADAPTIVE_CONCURRENCY.rate_limit_count());
+                        } else if error_str.contains("connection")
+                            || error_str.contains("network")
+                            || error_str.contains("sending request")
                         {
-                            rindexer_error!("RPC CONNECTION ERROR (free public nodes do this a lot consider a using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, error: {}",
+                            rindexer_error!("RPC CONNECTION ERROR (free public nodes do this a lot consider a using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, error: {:?}",
                                            chain_id, method_name, duration, rpc_url, err);
                         } else {
-                            rindexer_error!("RPC ERROR (free public nodes do this a lot consider a using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, error: {}",
+                            rindexer_error!("RPC ERROR (free public nodes do this a lot consider a using a paid node) - chain_id: {}, method: {}, duration: {:?}, url: {}, error: {:?}",
                                            chain_id, method_name, duration, rpc_url, err);
                         }
                     }

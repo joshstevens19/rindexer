@@ -10,11 +10,18 @@
 
 - fix: validation if cols and sets are not aligned in tables
 - fix: add edge case for bytes32 for name and symbol to solve issues like MKR metadata
+- fix: graceful shutdown now aborts RPC batches immediately instead of waiting
+- fix: reduced shutdown timeout from 60s to instant exit when tasks complete
+- fix: checkpoint progress mid-batch when shutdown detected during event processing
+- fix: skip cache eviction during shutdown to exit faster
 
 ### Features
 -------------------------------------------------
 
-- feature: factory cron indexing
+- feat: factory cron indexing
+- feat: adaptive concurrency for RPC batches - scales up to 200 on success, backs off 50% on rate limits
+- feat: adaptive concurrency for block timestamp fetches using same capacity tracking
+- feat: cache eviction for VIEW_CALL_CACHE and BLOCK_TIMESTAMP_CACHE at 10k entrie
 
 ## Releases
 -------------------------------------------------

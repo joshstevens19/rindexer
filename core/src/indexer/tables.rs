@@ -153,15 +153,18 @@ use serde_json::{json, Value};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
+use crate::adaptive_concurrency::ADAPTIVE_CONCURRENCY;
 use crate::database::batch_operations::{
     BatchOperationAction, BatchOperationColumnBehavior, BatchOperationSqlType, BatchOperationType,
     DynamicColumnDefinition,
 };
 use crate::database::clickhouse::batch_operations::execute_dynamic_batch_operation as execute_clickhouse_dynamic_batch_operation;
 use crate::database::clickhouse::client::ClickhouseClient;
+use crate::database::generate::generate_indexer_contract_schema_name;
 use crate::database::generate::generate_table_full_name;
 use crate::database::postgres::batch_operations::execute_dynamic_batch_operation;
 use crate::database::postgres::client::PostgresClient;
+use crate::database::postgres::generate::generate_internal_event_table_name;
 use crate::database::sql_type_wrapper::EthereumSqlTypeWrapper;
 use crate::event::{
     evaluate_arithmetic, filter_by_expression, parse_filter_expression, ComputedValue,
@@ -172,29 +175,194 @@ use crate::manifest::contract::{
 };
 use crate::manifest::core::Constants;
 use crate::provider::JsonRpcCachedProvider;
+use crate::system_state::is_running;
 use crate::types::core::LogParam;
+
+/// Configuration for tracking and checkpointing progress during table operations.
+#[derive(Clone)]
+pub struct ProgressCheckpointConfig {
+    pub indexer_name: String,
+    pub contract_name: String,
+    pub event_name: String,
+    pub postgres: Option<Arc<PostgresClient>>,
+}
+
+impl ProgressCheckpointConfig {
+    pub fn new(
+        indexer_name: String,
+        contract_name: String,
+        event_name: String,
+        postgres: Option<Arc<PostgresClient>>,
+    ) -> Self {
+        Self { indexer_name, contract_name, event_name, postgres }
+    }
+
+    /// Save the last synced block for a specific network.
+    /// Only updates if the new block is higher than the current value.
+    pub async fn checkpoint(&self, network: &str, block_number: u64) {
+        if let Some(postgres) = &self.postgres {
+            let schema =
+                generate_indexer_contract_schema_name(&self.indexer_name, &self.contract_name);
+            let table_name = generate_internal_event_table_name(&schema, &self.event_name);
+            let query = format!(
+                "UPDATE rindexer_internal.{table_name} SET last_synced_block = {block_number} WHERE network = '{network}' AND {block_number} > last_synced_block"
+            );
+            if let Err(e) = postgres.batch_execute(&query).await {
+                tracing::warn!("Failed to checkpoint progress at block {}: {:?}", block_number, e);
+            } else {
+                tracing::info!(
+                    "Checkpointed {}::{} at block {}",
+                    self.event_name,
+                    network,
+                    block_number
+                );
+            }
+        }
+    }
+}
 
 /// Cache key type for view calls: (network, contract_address, calldata, block_number).
 type ViewCallCacheKey = (String, Address, Bytes, u64);
 
+/// Maximum entries in VIEW_CALL_CACHE before eviction.
+/// Old block entries are removed since they won't be needed again.
+const VIEW_CALL_CACHE_MAX_SIZE: usize = 10_000;
+
 /// Global cache for view call results. Key is (network, contract, calldata, block_number).
 /// Uses block_number for determinism - same call at same block always returns same result.
+/// Evicts oldest block entries when exceeding VIEW_CALL_CACHE_MAX_SIZE.
 static VIEW_CALL_CACHE: Lazy<RwLock<HashMap<ViewCallCacheKey, DynSolValue>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+
+/// Cache key type for static view calls: (network, contract_address, calldata).
+/// No block_number - static calls are for immutable data like token symbol/decimals.
+type StaticCallCacheKey = (String, Address, Bytes);
+
+/// Global cache for static view call results. Key is (network, contract, calldata).
+/// For immutable onchain data (symbol, decimals, name) - cached forever, called at latest block.
+static STATIC_CALL_CACHE: Lazy<RwLock<HashMap<StaticCallCacheKey, DynSolValue>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
 /// Cache key type for block timestamps: (network, block_number).
 type BlockTimestampCacheKey = (String, u64);
 
+/// Maximum entries in BLOCK_TIMESTAMP_CACHE before eviction.
+const BLOCK_TIMESTAMP_CACHE_MAX_SIZE: usize = 10_000;
+
 /// Global cache for block timestamps. Key is (network, block_number).
-/// Block timestamps are immutable, so this cache never needs invalidation.
+/// Block timestamps are immutable. Evicts oldest block entries when full.
 static BLOCK_TIMESTAMP_CACHE: Lazy<RwLock<HashMap<BlockTimestampCacheKey, u64>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
-/// Default limit for concurrent view calls.
+/// Evicts oldest entries from VIEW_CALL_CACHE when it exceeds max size.
+/// Removes entries with the lowest block numbers since they won't be needed again.
+async fn evict_old_view_call_cache_entries() {
+    let mut cache = VIEW_CALL_CACHE.write().await;
+    if cache.len() <= VIEW_CALL_CACHE_MAX_SIZE {
+        return;
+    }
+
+    // Find the median block number and remove everything below it
+    let mut block_numbers: Vec<u64> = cache.keys().map(|(_, _, _, block)| *block).collect();
+    block_numbers.sort_unstable();
+
+    if let Some(&cutoff_block) = block_numbers.get(block_numbers.len() / 2) {
+        let before_len = cache.len();
+        cache.retain(|(_, _, _, block), _| *block > cutoff_block);
+        let removed = before_len - cache.len();
+        if removed > 0 {
+            info!(
+                "VIEW_CALL_CACHE eviction: removed {} entries (blocks <= {}), {} remaining",
+                removed,
+                cutoff_block,
+                cache.len()
+            );
+        }
+    }
+}
+
+/// Evicts oldest entries from BLOCK_TIMESTAMP_CACHE when it exceeds max size.
+async fn evict_old_block_timestamp_cache_entries() {
+    let mut cache = BLOCK_TIMESTAMP_CACHE.write().await;
+    if cache.len() <= BLOCK_TIMESTAMP_CACHE_MAX_SIZE {
+        return;
+    }
+
+    let mut block_numbers: Vec<u64> = cache.keys().map(|(_, block)| *block).collect();
+    block_numbers.sort_unstable();
+
+    if let Some(&cutoff_block) = block_numbers.get(block_numbers.len() / 2) {
+        let before_len = cache.len();
+        cache.retain(|(_, block), _| *block > cutoff_block);
+        let removed = before_len - cache.len();
+        if removed > 0 {
+            info!(
+                "BLOCK_TIMESTAMP_CACHE eviction: removed {} entries (blocks <= {}), {} remaining",
+                removed,
+                cutoff_block,
+                cache.len()
+            );
+        }
+    }
+}
+
+/// Progress tracking key: (event_name, network)
+type ProgressKey = (String, String);
+
+/// Global counter for events fetched per (event_name, network).
+/// Incremented when eth_getLogs returns events.
+static EVENTS_FETCHED: Lazy<RwLock<HashMap<ProgressKey, std::sync::atomic::AtomicUsize>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+
+/// Global counter for events processed per (event_name, network).
+/// Incremented when view calls are resolved and event is ready for DB insert.
+static EVENTS_PROCESSED: Lazy<RwLock<HashMap<ProgressKey, std::sync::atomic::AtomicUsize>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+
+/// Resets progress counters for a fresh indexing run.
+pub async fn reset_progress_counters() {
+    EVENTS_FETCHED.write().await.clear();
+    EVENTS_PROCESSED.write().await.clear();
+}
+
+/// Increments the fetched events counter for a (event_name, network) pair.
+pub async fn increment_events_fetched(event_name: &str, network: &str, count: usize) {
+    let key = (event_name.to_string(), network.to_string());
+    let mut counters = EVENTS_FETCHED.write().await;
+    counters
+        .entry(key)
+        .or_insert_with(|| std::sync::atomic::AtomicUsize::new(0))
+        .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Gets the current fetched count for a (event_name, network) pair.
+async fn get_events_fetched(event_name: &str, network: &str) -> usize {
+    let key = (event_name.to_string(), network.to_string());
+    let counters = EVENTS_FETCHED.read().await;
+    counters.get(&key).map(|c| c.load(std::sync::atomic::Ordering::Relaxed)).unwrap_or(0)
+}
+
+/// Increments the processed events counter for a (event_name, network) pair.
+async fn increment_events_processed(event_name: &str, network: &str, count: usize) {
+    let key = (event_name.to_string(), network.to_string());
+    let mut counters = EVENTS_PROCESSED.write().await;
+    counters
+        .entry(key)
+        .or_insert_with(|| std::sync::atomic::AtomicUsize::new(0))
+        .fetch_add(count, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Gets the current processed count for a (event_name, network) pair.
+async fn get_events_processed(event_name: &str, network: &str) -> usize {
+    let key = (event_name.to_string(), network.to_string());
+    let counters = EVENTS_PROCESSED.read().await;
+    counters.get(&key).map(|c| c.load(std::sync::atomic::Ordering::Relaxed)).unwrap_or(0)
+}
+
+/// Default limit for concurrent individual eth_call requests.
 const DEFAULT_MAX_CONCURRENT_VIEW_CALLS: usize = 10;
 
-/// Semaphore to limit concurrent view calls and avoid overwhelming RPC nodes.
-/// Initialized with default, can be reconfigured via `configure_view_call_limit`.
+/// Semaphore to limit concurrent individual view calls.
 static VIEW_CALL_SEMAPHORE: Lazy<RwLock<std::sync::Arc<tokio::sync::Semaphore>>> =
     Lazy::new(|| {
         RwLock::new(std::sync::Arc::new(tokio::sync::Semaphore::new(
@@ -215,8 +383,8 @@ pub async fn configure_view_call_limit(limit: usize) {
 /// See: https://www.multicall3.com/deployments
 const DEFAULT_MULTICALL3_ADDRESS: &str = "0xcA11bde05977b3631167028862bE2a173976CA11";
 
-/// Maximum calls per Multicall3 batch to avoid gas limits
-const MULTICALL3_BATCH_SIZE: usize = 100;
+// Note: Batch size is now adaptive (5-100) via ADAPTIVE_CONCURRENCY.current_batch_size()
+// It starts at 50 and scales down to 5 on rate limits, back up to 100 on consecutive successes.
 
 /// Networks where Multicall3 is known to not be available.
 /// This is populated at runtime when a Multicall3 call fails.
@@ -251,7 +419,7 @@ fn result_hex_looks_like_no_contract(error: &str) -> bool {
 
 /// Prefetches view calls for a batch of events using Multicall3.
 /// This batches multiple eth_call requests into a single RPC call per network/block.
-/// Results are stored in the global VIEW_CALL_CACHE.
+/// Results are stored in VIEW_CALL_CACHE (for regular calls) or STATIC_CALL_CACHE (for static calls).
 /// Falls back to individual calls if Multicall3 is not available on a network.
 async fn prefetch_view_calls(
     tables: &[TableRuntime],
@@ -263,15 +431,53 @@ async fn prefetch_view_calls(
 ) {
     use std::collections::HashSet;
 
-    // Collect all unique view calls needed
+    // Exit early if shutdown requested
+    if !is_running() {
+        return;
+    }
+
+    // Count events per network and track block ranges for progress tracking
+    let mut events_per_network: HashMap<String, usize> = HashMap::new();
+    let mut block_range_per_network: HashMap<String, (u64, u64)> = HashMap::new(); // (min, max)
+    for (_, network, tx_metadata) in events_data {
+        *events_per_network.entry(network.clone()).or_default() += 1;
+        let block = tx_metadata.block_number;
+        block_range_per_network
+            .entry(network.clone())
+            .and_modify(|(min, max)| {
+                if block < *min {
+                    *min = block;
+                }
+                if block > *max {
+                    *max = block;
+                }
+            })
+            .or_insert((block, block));
+    }
+
+    // Collect all unique view calls needed - separate regular and static calls
     let mut pending_calls: Vec<PendingViewCall> = Vec::new();
+    let mut pending_static_calls: Vec<PendingViewCall> = Vec::new();
     let mut seen_cache_keys: HashSet<ViewCallCacheKey> = HashSet::new();
+    let mut seen_static_keys: HashSet<StaticCallCacheKey> = HashSet::new();
+
+    // Track how many events are at each (network, block) for progress
+    let mut events_per_block: HashMap<(String, u64), usize> = HashMap::new();
+    for (_, network, tx_metadata) in events_data {
+        *events_per_block.entry((network.clone(), tx_metadata.block_number)).or_default() += 1;
+    }
 
     // Check what's already in cache
     {
         let cache = VIEW_CALL_CACHE.read().await;
         for key in cache.keys() {
             seen_cache_keys.insert(key.clone());
+        }
+    }
+    {
+        let cache = STATIC_CALL_CACHE.read().await;
+        for key in cache.keys() {
+            seen_static_keys.insert(key.clone());
         }
     }
 
@@ -317,17 +523,29 @@ async fn prefetch_view_calls(
                                     network,
                                     constants,
                                 ) {
-                                    let cache_key = (
-                                        pending.network.clone(),
-                                        pending.target,
-                                        pending.calldata.clone(),
-                                        pending.block_number,
-                                    );
-
-                                    // Only add if not already in cache or pending
-                                    if !seen_cache_keys.contains(&cache_key) {
-                                        seen_cache_keys.insert(cache_key);
-                                        pending_calls.push(pending);
+                                    if view_call.is_static {
+                                        // Static calls use (network, target, calldata) as key - no block
+                                        let static_key = (
+                                            pending.network.clone(),
+                                            pending.target,
+                                            pending.calldata.clone(),
+                                        );
+                                        if !seen_static_keys.contains(&static_key) {
+                                            seen_static_keys.insert(static_key);
+                                            pending_static_calls.push(pending);
+                                        }
+                                    } else {
+                                        // Regular calls include block in the key
+                                        let cache_key = (
+                                            pending.network.clone(),
+                                            pending.target,
+                                            pending.calldata.clone(),
+                                            pending.block_number,
+                                        );
+                                        if !seen_cache_keys.contains(&cache_key) {
+                                            seen_cache_keys.insert(cache_key);
+                                            pending_calls.push(pending);
+                                        }
                                     }
                                 }
                             }
@@ -343,16 +561,27 @@ async fn prefetch_view_calls(
                                     network,
                                     constants,
                                 ) {
-                                    let cache_key = (
-                                        pending.network.clone(),
-                                        pending.target,
-                                        pending.calldata.clone(),
-                                        pending.block_number,
-                                    );
-
-                                    if !seen_cache_keys.contains(&cache_key) {
-                                        seen_cache_keys.insert(cache_key);
-                                        pending_calls.push(pending);
+                                    if view_call.is_static {
+                                        let static_key = (
+                                            pending.network.clone(),
+                                            pending.target,
+                                            pending.calldata.clone(),
+                                        );
+                                        if !seen_static_keys.contains(&static_key) {
+                                            seen_static_keys.insert(static_key);
+                                            pending_static_calls.push(pending);
+                                        }
+                                    } else {
+                                        let cache_key = (
+                                            pending.network.clone(),
+                                            pending.target,
+                                            pending.calldata.clone(),
+                                            pending.block_number,
+                                        );
+                                        if !seen_cache_keys.contains(&cache_key) {
+                                            seen_cache_keys.insert(cache_key);
+                                            pending_calls.push(pending);
+                                        }
                                     }
                                 }
                             }
@@ -363,11 +592,24 @@ async fn prefetch_view_calls(
         }
     }
 
-    if pending_calls.is_empty() {
+    let total_calls = pending_calls.len() + pending_static_calls.len();
+    if total_calls == 0 {
         return;
     }
 
-    debug!("Prefetching {} view calls via Multicall3", pending_calls.len());
+    let start = std::time::Instant::now();
+    let total_events: usize = events_per_network.values().sum();
+
+    // Execute static calls first (grouped by network only, use latest block)
+    if !pending_static_calls.is_empty() {
+        prefetch_static_calls_via_multicall(pending_static_calls, providers, multicall_addresses)
+            .await;
+    }
+
+    // Then execute regular calls (grouped by network+block)
+    if pending_calls.is_empty() {
+        return;
+    }
 
     // Check which networks have multicall disabled at runtime
     let networks_without_multicall = NETWORKS_WITHOUT_MULTICALL3.read().await;
@@ -375,21 +617,34 @@ async fn prefetch_view_calls(
     // Group calls by (network, block_number) for batching
     let mut grouped: std::collections::HashMap<(String, u64), Vec<PendingViewCall>> =
         std::collections::HashMap::new();
-    for call in pending_calls {
-        grouped.entry((call.network.clone(), call.block_number)).or_default().push(call);
+    for call in &pending_calls {
+        grouped.entry((call.network.clone(), call.block_number)).or_default().push(call.clone());
     }
 
-    // Execute batches in parallel per network/block
+    // Create atomic counters for events processed per network
+    let processed_per_network: HashMap<String, Arc<std::sync::atomic::AtomicUsize>> =
+        events_per_network
+            .keys()
+            .map(|net| (net.clone(), Arc::new(std::sync::atomic::AtomicUsize::new(0))))
+            .collect();
+
+    // Execute batches in parallel with adaptive concurrency
     let mut batch_futures = Vec::new();
 
+    // Create a shared semaphore based on initial adaptive limit
+    let initial_limit = ADAPTIVE_CONCURRENCY.current();
+    let initial_batch_size = ADAPTIVE_CONCURRENCY.current_batch_size();
+    let adaptive_semaphore = Arc::new(tokio::sync::Semaphore::new(initial_limit));
+    info!(
+        "Starting $call resolution: {} concurrent batches, {} calls/batch (adaptive)",
+        initial_limit, initial_batch_size
+    );
+
     for ((network, block_number), calls) in grouped {
-        // Check if this network has multicall disabled (detected at runtime)
         if networks_without_multicall.contains(&network) {
-            debug!("Skipping Multicall3 for {} (not available)", network);
             continue;
         }
 
-        // Get multicall address for this network (custom or default)
         let multicall_config = multicall_addresses.get(&network).and_then(|v| v.as_deref());
         let multicall_address = get_multicall3_address(multicall_config);
 
@@ -398,37 +653,411 @@ async fn prefetch_view_calls(
             None => continue,
         };
 
-        // Split into smaller batches if needed
-        for chunk in calls.chunks(MULTICALL3_BATCH_SIZE) {
+        // Get event count for this (network, block)
+        let events_at_block = *events_per_block.get(&(network.clone(), block_number)).unwrap_or(&0);
+        let processed_counter = processed_per_network.get(&network).cloned();
+
+        // Use adaptive batch size
+        let batch_size = ADAPTIVE_CONCURRENCY.current_batch_size();
+        for chunk in calls.chunks(batch_size) {
             let chunk_vec: Vec<PendingViewCall> = chunk.to_vec();
             let network_clone = network.clone();
             let provider_clone = Arc::clone(&provider);
+            let semaphore = adaptive_semaphore.clone();
+            let counter = processed_counter.clone();
+            let block_num = block_number;
 
             batch_futures.push(tokio::spawn(async move {
-                execute_multicall3_batch(
+                let _permit = semaphore.acquire().await.ok()?;
+                // Wait for backoff if rate limited (for free nodes)
+                ADAPTIVE_CONCURRENCY.wait_for_backoff().await;
+                let result = execute_multicall3_batch(
                     &provider_clone,
                     &network_clone,
-                    block_number,
+                    block_num,
                     &chunk_vec,
                     multicall_address,
                 )
-                .await
+                .await;
+
+                // Report to adaptive concurrency controller
+                match &result {
+                    Ok(_) => {
+                        ADAPTIVE_CONCURRENCY.record_success();
+                    }
+                    Err(e) => {
+                        let err_str = e.to_string().to_lowercase();
+                        if err_str.contains("429")
+                            || err_str.contains("rate limit")
+                            || err_str.contains("too many")
+                        {
+                            ADAPTIVE_CONCURRENCY.record_rate_limit();
+                        } else {
+                            ADAPTIVE_CONCURRENCY.record_error();
+                        }
+                    }
+                }
+
+                // Add events for this block to processed count
+                if let Some(c) = counter {
+                    c.fetch_add(events_at_block, std::sync::atomic::Ordering::Relaxed);
+                }
+                result.ok()
             }));
         }
     }
 
-    // Release the read lock before awaiting
     drop(networks_without_multicall);
 
-    // Wait for all batches to complete
-    let results = futures::future::join_all(batch_futures).await;
+    // Increment global fetched counters for this batch
+    for (network, count) in &events_per_network {
+        increment_events_fetched(event_name, network, *count).await;
+    }
 
-    // Log any errors but don't fail - individual calls will fall back to regular eth_call
-    for result in results {
-        if let Err(e) = result {
-            debug!("Multicall3 batch failed (will fallback to individual calls): {}", e);
+    // Spawn progress reporter (logs every 2 seconds per network, sorted alphabetically)
+    let mut networks: Vec<String> = events_per_network.keys().cloned().collect();
+    networks.sort();
+    let processed_for_reporter: HashMap<String, Arc<std::sync::atomic::AtomicUsize>> =
+        processed_per_network.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let event_name_clone = event_name.to_string();
+    let block_ranges = block_range_per_network.clone();
+    let stop_signal = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop_signal_clone = stop_signal.clone();
+
+    let progress_handle = tokio::spawn(async move {
+        loop {
+            // Sleep in small intervals, checking stop signal and global shutdown frequently
+            for _ in 0..20 {
+                if stop_signal_clone.load(std::sync::atomic::Ordering::Relaxed) || !is_running() {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+
+            let mut all_done = true;
+            let mut total_processed: usize = 0;
+
+            for network in &networks {
+                let fetched = get_events_fetched(&event_name_clone, network).await;
+
+                if let Some(batch_counter) = processed_for_reporter.get(network) {
+                    let batch_done = batch_counter.load(std::sync::atomic::Ordering::Relaxed);
+                    let global_processed =
+                        get_events_processed(&event_name_clone, network).await + batch_done;
+                    total_processed += global_processed;
+
+                    if global_processed < fetched {
+                        all_done = false;
+                        let block_range = block_ranges
+                            .get(network)
+                            .map(|(min, max)| format!("blocks {}-{}", min, max))
+                            .unwrap_or_default();
+                        info!(
+                            "{}::{} - IN-PROGRESS - {} - {} events - $call {}/{} ({:.0}%) - (total: {})",
+                            event_name_clone,
+                            network,
+                            block_range,
+                            fetched,
+                            global_processed,
+                            fetched,
+                            (global_processed as f64 / fetched as f64) * 100.0,
+                            total_processed
+                        );
+                    }
+                }
+            }
+            if all_done {
+                break;
+            }
+        }
+    });
+
+    // Wait for batches with shutdown check - abort immediately if shutdown requested
+    // Convert to JoinHandles we can abort
+    let handles: Vec<_> = batch_futures;
+
+    // Poll for completion while checking shutdown signal
+    let mut completed = 0;
+    let total_batches = handles.len();
+
+    loop {
+        // Check for shutdown - abort all remaining tasks immediately
+        if !is_running() {
+            info!(
+                "Shutdown requested - aborting {} remaining RPC batches",
+                total_batches - completed
+            );
+            for handle in &handles {
+                handle.abort();
+            }
+            stop_signal.store(true, std::sync::atomic::Ordering::Relaxed);
+            progress_handle.abort();
+            // Don't update progress counters - this batch wasn't completed
+            return;
+        }
+
+        // Check if all done
+        let all_done = handles.iter().all(|h| h.is_finished());
+        if all_done {
+            break;
+        }
+
+        // Count completed for logging
+        completed = handles.iter().filter(|h| h.is_finished()).count();
+
+        // Brief sleep to avoid busy-waiting
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    stop_signal.store(true, std::sync::atomic::Ordering::Relaxed);
+    progress_handle.abort();
+
+    // Collect results from completed handles
+    let mut failed_count = 0;
+    for handle in handles {
+        if handle.await.is_err() {
+            failed_count += 1;
         }
     }
+    if failed_count > 0 {
+        warn!("{} RPC batches failed (will fallback to individual calls)", failed_count);
+    }
+
+    // Increment global processed counters for this batch
+    for (network, count) in &events_per_network {
+        increment_events_processed(event_name, network, *count).await;
+    }
+
+    info!("{} - {} events resolved in {:?}", event_name, total_events, start.elapsed());
+}
+
+/// Prefetches static view calls (symbol, decimals, etc.) using Multicall3.
+/// Groups ALL static calls by network and executes in large batches.
+/// Uses "latest" block since static data doesn't change.
+/// Results are stored in STATIC_CALL_CACHE.
+async fn prefetch_static_calls_via_multicall(
+    pending_calls: Vec<PendingViewCall>,
+    providers: &std::collections::HashMap<String, Arc<JsonRpcCachedProvider>>,
+    multicall_addresses: &std::collections::HashMap<String, Option<String>>,
+) {
+    if pending_calls.is_empty() {
+        return;
+    }
+
+    // Check which networks have multicall disabled
+    let networks_without_multicall = NETWORKS_WITHOUT_MULTICALL3.read().await;
+
+    // Group ALL calls by network only (not by block - static calls use latest)
+    let mut grouped: std::collections::HashMap<String, Vec<PendingViewCall>> =
+        std::collections::HashMap::new();
+    for call in pending_calls {
+        grouped.entry(call.network.clone()).or_default().push(call);
+    }
+
+    let mut batch_futures = Vec::new();
+
+    // Create a shared semaphore based on adaptive limit
+    let adaptive_semaphore = Arc::new(tokio::sync::Semaphore::new(ADAPTIVE_CONCURRENCY.current()));
+
+    for (network, calls) in grouped {
+        if networks_without_multicall.contains(&network) {
+            debug!("Skipping static Multicall3 for {} (not available)", network);
+            continue;
+        }
+
+        let multicall_config = multicall_addresses.get(&network).and_then(|v| v.as_deref());
+        let multicall_address = get_multicall3_address(multicall_config);
+
+        let provider = match providers.get(&network) {
+            Some(p) => Arc::clone(p),
+            None => continue,
+        };
+
+        // Batch ALL calls for this network together (using adaptive batch size)
+        let batch_size = ADAPTIVE_CONCURRENCY.current_batch_size();
+        for chunk in calls.chunks(batch_size) {
+            let chunk_vec: Vec<PendingViewCall> = chunk.to_vec();
+            let network_clone = network.clone();
+            let provider_clone = Arc::clone(&provider);
+            let semaphore = adaptive_semaphore.clone();
+
+            batch_futures.push(tokio::spawn(async move {
+                let _permit = semaphore.acquire().await.ok()?;
+                // Wait for backoff if rate limited (for free nodes)
+                ADAPTIVE_CONCURRENCY.wait_for_backoff().await;
+                let result = execute_static_multicall3_batch(
+                    &provider_clone,
+                    &network_clone,
+                    &chunk_vec,
+                    multicall_address,
+                )
+                .await;
+
+                // Report to adaptive concurrency controller
+                match &result {
+                    Ok(_) => {
+                        ADAPTIVE_CONCURRENCY.record_success();
+                    }
+                    Err(e) => {
+                        let err_str = e.to_string().to_lowercase();
+                        if err_str.contains("429")
+                            || err_str.contains("rate limit")
+                            || err_str.contains("too many")
+                        {
+                            ADAPTIVE_CONCURRENCY.record_rate_limit();
+                        } else {
+                            ADAPTIVE_CONCURRENCY.record_error();
+                        }
+                    }
+                }
+
+                result.ok()
+            }));
+        }
+    }
+
+    drop(networks_without_multicall);
+
+    if batch_futures.is_empty() {
+        return;
+    }
+
+    // Wait for batches with shutdown check - abort immediately if shutdown requested
+    let handles: Vec<_> = batch_futures;
+
+    loop {
+        // Check for shutdown - abort all remaining tasks immediately
+        if !is_running() {
+            info!("Shutdown requested - aborting {} static RPC batches", handles.len());
+            for handle in &handles {
+                handle.abort();
+            }
+            return;
+        }
+
+        // Check if all done
+        if handles.iter().all(|h| h.is_finished()) {
+            break;
+        }
+
+        // Brief sleep to avoid busy-waiting
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    // Collect results
+    let mut failed = 0;
+    for handle in handles {
+        if handle.await.is_err() {
+            failed += 1;
+        }
+    }
+    if failed > 0 {
+        warn!("Static batches: {} failed (will fallback to individual calls)", failed);
+    }
+}
+
+/// Executes a batch of STATIC view calls using Multicall3 at "latest" block.
+/// Results are stored in STATIC_CALL_CACHE (no block number in key).
+async fn execute_static_multicall3_batch(
+    provider: &JsonRpcCachedProvider,
+    network: &str,
+    calls: &[PendingViewCall],
+    multicall_address: Address,
+) -> Result<(), String> {
+    if calls.is_empty() {
+        return Ok(());
+    }
+
+    debug!("Multicall3::{} - static batch of {} calls", network, calls.len());
+
+    // Build aggregate3 calldata
+    let selector = hex::decode("82ad56cb").unwrap();
+
+    let call3_tuples: Vec<DynSolValue> = calls
+        .iter()
+        .map(|c| {
+            DynSolValue::Tuple(vec![
+                DynSolValue::Address(c.target),
+                DynSolValue::Bool(true),
+                DynSolValue::Bytes(c.calldata.to_vec()),
+            ])
+        })
+        .collect();
+
+    let encoded_calls = DynSolValue::Array(call3_tuples).abi_encode_params();
+    let mut calldata = selector;
+    calldata.extend(encoded_calls);
+
+    // Execute at LATEST block using eth_call_latest
+    let result_hex = match provider.eth_call_latest(multicall_address, Bytes::from(calldata)).await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            let error_str = e.to_string();
+            if error_str.contains("execution reverted")
+                || error_str.contains("contract")
+                || error_str.is_empty()
+                || result_hex_looks_like_no_contract(&error_str)
+            {
+                warn!("Multicall3 not available on {} - falling back to individual calls", network);
+                let mut no_multicall = NETWORKS_WITHOUT_MULTICALL3.write().await;
+                no_multicall.insert(network.to_string());
+            }
+            return Err(format!("Static Multicall3 failed on {}: {}", network, e));
+        }
+    };
+
+    // Skip cache work if shutdown requested - RPC completed but we're exiting
+    if !is_running() {
+        return Ok(());
+    }
+
+    // Decode results
+    let result_bytes = hex::decode(result_hex.trim_start_matches("0x"))
+        .map_err(|e| format!("Hex decode: {}", e))?;
+
+    let result_type =
+        DynSolType::Array(Box::new(DynSolType::Tuple(vec![DynSolType::Bool, DynSolType::Bytes])));
+
+    let decoded =
+        result_type.abi_decode(&result_bytes).map_err(|e| format!("ABI decode failed: {}", e))?;
+
+    let results = match decoded {
+        DynSolValue::Array(arr) => arr,
+        _ => return Err("Unexpected result type".to_string()),
+    };
+
+    // Store results in STATIC cache (no block number in key)
+    let mut cache = STATIC_CALL_CACHE.write().await;
+    let mut cached_count = 0;
+
+    for (i, result) in results.into_iter().enumerate() {
+        if i >= calls.len() {
+            break;
+        }
+
+        let call = &calls[i];
+        // Static cache key: (network, target, calldata) - NO block number
+        let cache_key = (call.network.clone(), call.target, call.calldata.clone());
+
+        if let DynSolValue::Tuple(fields) = result {
+            if fields.len() >= 2 {
+                let success = matches!(fields[0], DynSolValue::Bool(true));
+                if success {
+                    if let DynSolValue::Bytes(return_data) = &fields[1] {
+                        if let Some(decoded_value) = try_decode_return_value(return_data) {
+                            cache.insert(cache_key, decoded_value);
+                            cached_count += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    debug!("Multicall3::{} - cached {}/{} static results", network, cached_count, calls.len());
+
+    Ok(())
 }
 
 /// Resolves a ViewCall to a PendingViewCall with concrete address and calldata.
@@ -507,12 +1136,7 @@ async fn execute_multicall3_batch(
         return Ok(());
     }
 
-    debug!(
-        "Executing Multicall3 batch: {} calls on {} at block {}",
-        calls.len(),
-        network,
-        block_number
-    );
+    debug!("Multicall3::{} - batch of {} calls at block {}", network, calls.len(), block_number);
 
     // Build aggregate3 calldata
     // aggregate3((address,bool,bytes)[]) selector = 0x82ad56cb
@@ -567,6 +1191,11 @@ async fn execute_multicall3_batch(
     let result_type =
         DynSolType::Array(Box::new(DynSolType::Tuple(vec![DynSolType::Bool, DynSolType::Bytes])));
 
+    // Skip cache work if shutdown requested - RPC completed but we're exiting
+    if !is_running() {
+        return Ok(());
+    }
+
     let decoded =
         result_type.abi_decode(&result_bytes).map_err(|e| format!("ABI decode failed: {}", e))?;
 
@@ -577,6 +1206,7 @@ async fn execute_multicall3_batch(
 
     // Store results in cache
     let mut cache = VIEW_CALL_CACHE.write().await;
+    let mut cached_count = 0;
 
     for (i, result) in results.into_iter().enumerate() {
         if i >= calls.len() {
@@ -596,12 +1226,25 @@ async fn execute_multicall3_batch(
                         // Try to decode the return value
                         if let Some(decoded_value) = try_decode_return_value(return_data) {
                             cache.insert(cache_key, decoded_value);
+                            cached_count += 1;
                         }
                     }
                 }
             }
         }
     }
+
+    drop(cache);
+
+    debug!("Multicall3::{} - cached {}/{} results", network, cached_count, calls.len());
+
+    // Skip eviction if shutdown requested
+    if !is_running() {
+        return Ok(());
+    }
+
+    // Evict old entries if cache is getting large
+    evict_old_view_call_cache_entries().await;
 
     Ok(())
 }
@@ -615,6 +1258,11 @@ async fn prefetch_block_timestamps(
     needs_timestamp: bool,
 ) {
     if !needs_timestamp {
+        return;
+    }
+
+    // Exit early if shutdown requested
+    if !is_running() {
         return;
     }
 
@@ -646,35 +1294,108 @@ async fn prefetch_block_timestamps(
         blocks.dedup();
     }
 
-    // Batch fetch blocks for each network
+    // Spawn tasks for parallel fetching with adaptive concurrency
+    let mut handles = Vec::new();
+
+    // Create adaptive semaphore based on current concurrency level
+    let adaptive_semaphore = Arc::new(tokio::sync::Semaphore::new(ADAPTIVE_CONCURRENCY.current()));
+
     for (network, block_numbers) in blocks_to_fetch {
         if block_numbers.is_empty() {
             continue;
         }
 
-        let Some(provider) = providers.get(&network) else {
+        let Some(provider) = providers.get(&network).cloned() else {
             warn!("No provider for network {} to fetch block timestamps", network);
             continue;
         };
 
-        let block_numbers_u64: Vec<U64> = block_numbers.iter().map(|&n| U64::from(n)).collect();
+        // Split into batches using adaptive batch size
+        let batch_size = ADAPTIVE_CONCURRENCY.current_batch_size();
+        for chunk in block_numbers.chunks(batch_size) {
+            let network_clone = network.clone();
+            let provider_clone = Arc::clone(&provider);
+            let block_numbers_u64: Vec<U64> = chunk.iter().map(|&n| U64::from(n)).collect();
+            let semaphore = adaptive_semaphore.clone();
 
-        match provider.get_block_by_number_batch(&block_numbers_u64, false).await {
-            Ok(blocks) => {
+            let rpc_batch_size = batch_size;
+            handles.push(tokio::spawn(async move {
+                let _permit = semaphore.acquire().await.ok()?;
+                // Wait for backoff if rate limited (for free nodes)
+                ADAPTIVE_CONCURRENCY.wait_for_backoff().await;
+
+                match provider_clone
+                    .get_block_by_number_batch_with_size(
+                        &block_numbers_u64,
+                        false,
+                        Some(rpc_batch_size),
+                    )
+                    .await
+                {
+                    Ok(blocks) => {
+                        ADAPTIVE_CONCURRENCY.record_success();
+                        Some((network_clone, blocks))
+                    }
+                    Err(e) => {
+                        let err_str = e.to_string().to_lowercase();
+                        if err_str.contains("429")
+                            || err_str.contains("rate limit")
+                            || err_str.contains("too many")
+                        {
+                            ADAPTIVE_CONCURRENCY.record_rate_limit();
+                        } else {
+                            ADAPTIVE_CONCURRENCY.record_error();
+                        }
+                        warn!(
+                            "Failed to batch fetch block timestamps for {}: {}",
+                            network_clone, e
+                        );
+                        None
+                    }
+                }
+            }));
+        }
+    }
+
+    if handles.is_empty() {
+        return;
+    }
+
+    // Wait for completion with shutdown check - abort immediately if requested
+    loop {
+        if !is_running() {
+            info!("Shutdown requested - aborting {} timestamp fetch tasks", handles.len());
+            for handle in &handles {
+                handle.abort();
+            }
+            return;
+        }
+
+        if handles.iter().all(|h| h.is_finished()) {
+            break;
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    // Collect results and insert into cache (skip eviction if shutdown)
+    for handle in handles {
+        if let Ok(Some((network, blocks))) = handle.await {
+            // Skip cache work if shutdown requested
+            if !is_running() {
+                continue;
+            }
+            {
                 let mut cache = BLOCK_TIMESTAMP_CACHE.write().await;
                 for block in blocks {
                     let block_num = block.header.number;
                     let timestamp = block.header.timestamp;
                     cache.insert((network.clone(), block_num), timestamp);
                 }
-                debug!(
-                    "Prefetched {} block timestamps for network {}",
-                    block_numbers.len(),
-                    network
-                );
             }
-            Err(e) => {
-                warn!("Failed to batch fetch block timestamps for {}: {}", network, e);
+            // Evict old entries if cache is getting large (skip during shutdown)
+            if is_running() {
+                evict_old_block_timestamp_cache_entries().await;
             }
         }
     }
@@ -750,9 +1471,9 @@ fn is_arithmetic_expression(value: &str) -> bool {
     has_operator && (value.contains('$'))
 }
 
-/// Checks if an arithmetic expression contains $call() patterns that need async resolution.
+/// Checks if an arithmetic expression contains $call() or $call_static() patterns that need async resolution.
 fn arithmetic_has_calls(value: &str) -> bool {
-    value.contains("$call(")
+    value.contains("$call(") || value.contains("$call_static(")
 }
 
 /// Checks if a value string is a conditional expression like `$if(condition, trueValue, falseValue)`.
@@ -803,15 +1524,36 @@ fn parse_conditional_value(value: &str) -> Result<(String, String, String), Stri
     Ok((parts[0].clone(), parts[1].clone(), parts[2].clone()))
 }
 
-/// Finds all $call(...) patterns in a string, handling nested parentheses.
+/// Finds all $call(...) and $call_static(...) patterns in a string, handling nested parentheses.
 /// Returns a vector of (start_index, end_index, call_expression) for each match.
 fn find_call_patterns(value: &str) -> Vec<(usize, usize, String)> {
     let mut results = Vec::new();
     let mut search_start = 0;
 
-    while let Some(start) = value[search_start..].find("$call(") {
-        let absolute_start = search_start + start;
-        let call_start = absolute_start + 6; // Skip "$call("
+    while search_start < value.len() {
+        // Find the next $call( or $call_static( pattern
+        let remaining = &value[search_start..];
+        let (absolute_start, prefix_len) =
+            match (remaining.find("$call_static("), remaining.find("$call(")) {
+                (Some(static_pos), Some(regular_pos)) => {
+                    // Check if $call( is actually part of $call_static(
+                    if regular_pos < static_pos {
+                        // Make sure this isn't a prefix of $call_static
+                        if remaining[regular_pos..].starts_with("$call_static(") {
+                            (search_start + static_pos, 13) // "$call_static("
+                        } else {
+                            (search_start + regular_pos, 6) // "$call("
+                        }
+                    } else {
+                        (search_start + static_pos, 13) // "$call_static("
+                    }
+                }
+                (Some(static_pos), None) => (search_start + static_pos, 13),
+                (None, Some(regular_pos)) => (search_start + regular_pos, 6),
+                (None, None) => break,
+            };
+
+        let call_start = absolute_start + prefix_len;
 
         // Find matching closing paren, handling nested parens
         let mut depth = 1;
@@ -837,7 +1579,7 @@ fn find_call_patterns(value: &str) -> Vec<(usize, usize, String)> {
             search_start = end + 1;
         } else {
             // Malformed - no closing paren, skip this match
-            search_start = absolute_start + 6;
+            search_start = call_start;
         }
     }
 
@@ -957,9 +1699,10 @@ fn dyn_sol_value_to_string(value: &DynSolValue) -> String {
 
 /// Checks if a value string is a view call expression like `$call(address, "signature", args...)`.
 /// May have accessor after: `$call(...)[0]` or `$call(...).fieldName`
+/// Also supports `$call_static(...)` for static data cached forever.
 fn is_view_call(value: &str) -> bool {
-    // Must start with $call( and have at least one closing paren
-    value.starts_with("$call(") && value.contains(')')
+    // Must start with $call( or $call_static( and have at least one closing paren
+    (value.starts_with("$call(") || value.starts_with("$call_static(")) && value.contains(')')
 }
 
 /// Checks if a value string is a constant reference like `$constant(name)`.
@@ -1056,6 +1799,7 @@ struct ViewCall {
     args: Vec<String>,        // Argument values (can be $field references)
     accessor: Option<String>, // Optional accessor like "[0]" or ".fieldName" or ".field[0].nested"
     return_fields: Vec<ReturnField>, // Parsed from "returns (type name, ...)" if present
+    is_static: bool, // If true, use latest block and cache forever (for immutable data like symbol/decimals)
 }
 
 /// A parsed return field from "returns (type name, ...)" syntax.
@@ -1066,14 +1810,19 @@ struct ReturnField {
     children: Vec<ReturnField>, // For nested tuples like "(uint256 x, uint256 y) coords"
 }
 
-/// Parses a `$call(address, "signature", args...)` expression with optional accessor.
+/// Parses a `$call(address, "signature", args...)` or `$call_static(...)` expression with optional accessor.
 /// Supports:
 /// - `$call($addr, "totalSupply()")` - simple, returns value directly
 /// - `$call($addr, "getReserves()")[0]` - position-based access
 /// - `$call($addr, "getReserves() returns (uint112 reserve0, uint112 reserve1)").reserve0` - named access
+/// - `$call_static($addr, "symbol()")` - static call, uses latest block and caches forever
 fn parse_view_call(value: &str) -> Option<ViewCall> {
-    // Find the matching closing paren for $call(
-    let start = "$call(".len();
+    // Determine if this is a static call
+    let is_static = value.starts_with("$call_static(");
+    let prefix = if is_static { "$call_static(" } else { "$call(" };
+    let start = prefix.len();
+
+    // Find the matching closing paren
     let mut paren_depth = 1;
     let mut call_end = None;
 
@@ -1119,7 +1868,7 @@ fn parse_view_call(value: &str) -> Option<ViewCall> {
     // Parse "returns (...)" if present
     let (function_sig, return_fields) = parse_function_sig_with_returns(&full_sig);
 
-    Some(ViewCall { contract_address, function_sig, args, accessor, return_fields })
+    Some(ViewCall { contract_address, function_sig, args, accessor, return_fields, is_static })
 }
 
 /// Parses a function signature that may include "returns (type name, ...)".
@@ -1362,6 +2111,10 @@ fn split_call_args(s: &str) -> Vec<String> {
 }
 
 /// Executes a view call against the blockchain and applies any accessor.
+/// For static calls ($call_static), uses latest block and caches forever.
+/// For regular calls ($call), uses the event's block number and caches per-block.
+/// Note: Does NOT check is_running() - individual fallback calls should complete
+/// to avoid partial data. Shutdown is handled at the batch level.
 async fn execute_view_call(
     view_call: &ViewCall,
     log_params: &[LogParam],
@@ -1418,24 +2171,67 @@ async fn execute_view_call(
         Bytes::from(data)
     };
 
-    // Check cache first (no semaphore needed for cache lookups)
+    // For static calls, check the static cache first (no block number in key)
+    if view_call.is_static {
+        let static_cache_key = (network.to_string(), contract_address, calldata.clone());
+        {
+            let cache = STATIC_CALL_CACHE.read().await;
+            if let Some(cached) = cache.get(&static_cache_key) {
+                debug!("Static call cache hit for {}::{}", contract_address, func_name);
+                return apply_accessor_if_present(cached.clone(), view_call);
+            }
+        }
+
+        // Acquire semaphore permit
+        let semaphore = VIEW_CALL_SEMAPHORE.read().await.clone();
+        let _permit = semaphore.acquire().await.ok()?;
+
+        // Double-check cache after acquiring permit
+        {
+            let cache = STATIC_CALL_CACHE.read().await;
+            if let Some(cached) = cache.get(&static_cache_key) {
+                return apply_accessor_if_present(cached.clone(), view_call);
+            }
+        }
+
+        // Execute static call at latest block
+        let result_bytes: String =
+            match provider.eth_call_latest(contract_address, calldata.clone()).await {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!("Static view call failed for {}::{}: {}", contract_address, func_name, e);
+                    return None;
+                }
+            };
+
+        let result_bytes = hex::decode(result_bytes.trim_start_matches("0x")).ok()?;
+        let decoded = decode_view_call_result(&result_bytes, view_call)?;
+
+        // Cache in static cache (forever)
+        {
+            let mut cache = STATIC_CALL_CACHE.write().await;
+            cache.insert(static_cache_key, decoded.clone());
+        }
+
+        return apply_accessor_if_present(decoded, view_call);
+    }
+
+    // Regular call - check block-specific cache
     let cache_key =
         (network.to_string(), contract_address, calldata.clone(), tx_metadata.block_number);
     {
         let cache = VIEW_CALL_CACHE.read().await;
         if let Some(cached) = cache.get(&cache_key) {
             debug!("View call cache hit for {}::{}", contract_address, func_name);
-            // Apply accessor to cached result
             return apply_accessor_if_present(cached.clone(), view_call);
         }
     }
 
     // Acquire semaphore permit to limit concurrent RPC calls
-    // This prevents overwhelming the RPC node while maintaining good throughput
     let semaphore = VIEW_CALL_SEMAPHORE.read().await.clone();
     let _permit = semaphore.acquire().await.ok()?;
 
-    // Double-check cache after acquiring permit (another task may have populated it)
+    // Double-check cache after acquiring permit
     {
         let cache = VIEW_CALL_CACHE.read().await;
         if let Some(cached) = cache.get(&cache_key) {
@@ -1443,7 +2239,7 @@ async fn execute_view_call(
         }
     }
 
-    // Execute the call using the provider's eth_call method
+    // Execute the call at the event's block number
     let result_bytes: String =
         match provider.eth_call(contract_address, calldata.clone(), tx_metadata.block_number).await
         {
@@ -1454,32 +2250,8 @@ async fn execute_view_call(
             }
         };
 
-    // Decode the result
     let result_bytes = hex::decode(result_bytes.trim_start_matches("0x")).ok()?;
-
-    // Determine return type - use explicit return_fields if provided, otherwise auto-detect
-    let decoded = if !view_call.return_fields.is_empty() {
-        let return_type = build_return_type_from_fields(&view_call.return_fields);
-        match return_type.abi_decode(&result_bytes) {
-            Ok(decoded) => decoded,
-            Err(_) => {
-                // Fallback for string type: some tokens (MKR) return bytes32 for symbol()/name()
-                // Try to decode as bytes32 and convert to string
-                if result_bytes.len() == 32 {
-                    if let Some(s) = try_bytes32_as_string(&result_bytes) {
-                        DynSolValue::String(s)
-                    } else {
-                        return None;
-                    }
-                } else {
-                    return None;
-                }
-            }
-        }
-    } else {
-        // Auto-detect the return type from the raw bytes
-        try_decode_return_value(&result_bytes)?
-    };
+    let decoded = decode_view_call_result(&result_bytes, view_call)?;
 
     // Cache the full result (before accessor is applied)
     {
@@ -1487,8 +2259,33 @@ async fn execute_view_call(
         cache.insert(cache_key, decoded.clone());
     }
 
-    // Apply accessor if present
+    // Evict old entries if cache is getting large (skip during shutdown)
+    if is_running() {
+        evict_old_view_call_cache_entries().await;
+    }
+
     apply_accessor_if_present(decoded, view_call)
+}
+
+/// Decodes the raw bytes from a view call result.
+fn decode_view_call_result(result_bytes: &[u8], view_call: &ViewCall) -> Option<DynSolValue> {
+    if !view_call.return_fields.is_empty() {
+        let return_type = build_return_type_from_fields(&view_call.return_fields);
+        match return_type.abi_decode(result_bytes) {
+            Ok(decoded) => Some(decoded),
+            Err(_) => {
+                // Fallback for string type: some tokens (MKR) return bytes32 for symbol()/name()
+                if result_bytes.len() == 32 {
+                    try_bytes32_as_string(result_bytes).map(DynSolValue::String)
+                } else {
+                    None
+                }
+            }
+        }
+    } else {
+        // Auto-detect the return type from the raw bytes
+        try_decode_return_value(result_bytes)
+    }
 }
 
 /// Resolves all $call(...) patterns in an arithmetic expression, replacing them with their values.
@@ -2589,6 +3386,7 @@ fn expand_iterate_bindings(
 /// * `providers` - RPC providers for view calls (keyed by network name)
 /// * `constants` - User-defined constants from the manifest (can be network-scoped)
 /// * `multicall_addresses` - Custom Multicall3 addresses per network (None = use default address)
+/// * `checkpoint_config` - Optional config for checkpointing progress on shutdown
 #[allow(clippy::too_many_arguments)]
 pub async fn process_table_operations(
     tables: &[TableRuntime],
@@ -2599,7 +3397,14 @@ pub async fn process_table_operations(
     providers: Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>>,
     constants: &Constants,
     multicall_addresses: &std::collections::HashMap<String, Option<String>>,
+    checkpoint_config: Option<&ProgressCheckpointConfig>,
 ) -> Result<(), String> {
+    // Exit early if shutdown requested before we start - no progress to save
+    if !is_running() {
+        info!("Shutdown requested - skipping table processing");
+        return Err("Shutdown requested".to_string());
+    }
+
     // Check if any table needs timestamps and prefetch them in batch
     let any_table_needs_timestamp = tables
         .iter()
@@ -2609,13 +3414,14 @@ pub async fn process_table_operations(
         prefetch_block_timestamps(events_data, &providers, true).await;
     }
 
-    // Check if any table has $call patterns and prefetch using Multicall3
+    // Check if any table has $call or $call_static patterns and prefetch using Multicall3
     let any_table_has_calls = tables.iter().any(|t| {
         t.table.events.iter().any(|e| {
             e.event == event_name
                 && e.operations.iter().any(|op| {
-                    op.where_clause.values().any(|v| v.contains("$call("))
-                        || op.set.iter().any(|s| s.effective_value().contains("$call("))
+                    let has_call = |v: &str| v.contains("$call(") || v.contains("$call_static(");
+                    op.where_clause.values().any(|v| has_call(v))
+                        || op.set.iter().any(|s| has_call(s.effective_value()))
                 })
         })
     });
@@ -2630,9 +3436,48 @@ pub async fn process_table_operations(
             multicall_addresses,
         )
         .await;
+
+        // Check if shutdown happened during prefetch - no DB writes yet, nothing to checkpoint
+        if !is_running() {
+            info!("Shutdown during $call resolution - no data written, skipping checkpoint");
+            return Err("Shutdown requested".to_string());
+        }
+    } else if !events_data.is_empty() {
+        // No $call patterns - just log that we're processing tables (this is fast)
+        let mut events_per_network: HashMap<String, usize> = HashMap::new();
+        for (_, network, _) in events_data {
+            *events_per_network.entry(network.clone()).or_default() += 1;
+        }
+        for (network, count) in &events_per_network {
+            info!("{}::{} - {} events - resolving tables", event_name, network, count);
+        }
     }
 
+    // Track the max block number written per network - used for checkpointing on shutdown
+    let mut max_block_written_per_network: HashMap<String, u64> = HashMap::new();
+
     for table_runtime in tables {
+        // Check for shutdown before processing each table
+        if !is_running() {
+            // Only checkpoint if we've actually written data to the database
+            if !max_block_written_per_network.is_empty() {
+                if let Some(checkpoint) = checkpoint_config {
+                    for (network, max_block) in &max_block_written_per_network {
+                        info!(
+                            "Shutdown - checkpointing block {} for {} (last block written)",
+                            max_block, network
+                        );
+                        checkpoint.checkpoint(network, *max_block).await;
+                    }
+                }
+            } else {
+                info!(
+                    "Shutdown during table processing - no data written yet, skipping checkpoint"
+                );
+            }
+            return Err("Shutdown requested".to_string());
+        }
+
         // Find operations for this event
         let event_mapping = table_runtime.table.events.iter().find(|e| e.event == event_name);
 
@@ -2643,6 +3488,8 @@ pub async fn process_table_operations(
 
         for operation in &event_mapping.operations {
             let mut rows_to_process: Vec<TableRowData> = Vec::new();
+            // Track max block per network for this batch of rows
+            let mut batch_max_blocks: HashMap<String, u64> = HashMap::new();
 
             // Check if condition has @table references - push to SQL instead of Rust evaluation
             let (should_filter_in_rust, sql_condition) =
@@ -2666,6 +3513,23 @@ pub async fn process_table_operations(
                 };
 
             for (log_params, network, tx_metadata) in events_data {
+                // Check for shutdown before processing each event - exit quickly
+                if !is_running() {
+                    // Checkpoint what we've written so far
+                    if !max_block_written_per_network.is_empty() {
+                        if let Some(checkpoint) = checkpoint_config {
+                            for (net, max_block) in &max_block_written_per_network {
+                                info!(
+                                    "Shutdown - checkpointing block {} for {} (mid-batch)",
+                                    max_block, net
+                                );
+                                checkpoint.checkpoint(net, *max_block).await;
+                            }
+                        }
+                    }
+                    return Err("Shutdown requested".to_string());
+                }
+
                 // Expand iterate bindings - creates multiple virtual events from array fields
                 let expanded_params_list =
                     match expand_iterate_bindings(&event_mapping.iterate, log_params) {
@@ -2788,6 +3652,15 @@ pub async fn process_table_operations(
                         );
 
                         rows_to_process.push(TableRowData { columns, network: network.clone() });
+                        // Track max block for this batch
+                        batch_max_blocks
+                            .entry(network.clone())
+                            .and_modify(|max| {
+                                if tx_metadata.block_number > *max {
+                                    *max = tx_metadata.block_number;
+                                }
+                            })
+                            .or_insert(tx_metadata.block_number);
                     }
                 } // end for expanded_log_params
             }
@@ -2819,6 +3692,18 @@ pub async fn process_table_operations(
                 )
                 .await?;
             }
+
+            // DB write succeeded - update max blocks written tracker
+            for (network, block) in &batch_max_blocks {
+                max_block_written_per_network
+                    .entry(network.clone())
+                    .and_modify(|max| {
+                        if *block > *max {
+                            *max = *block;
+                        }
+                    })
+                    .or_insert(*block);
+            }
         }
     }
 
@@ -2843,7 +3728,7 @@ fn column_type_to_batch_sql_type(column_type: &ColumnType) -> BatchOperationSqlT
         }
         // Bytes types
         ColumnType::Bytes | ColumnType::Bytes32 => BatchOperationSqlType::Bytea,
-        ColumnType::String => BatchOperationSqlType::Varchar,
+        ColumnType::String => BatchOperationSqlType::Text,
         ColumnType::Bool => BatchOperationSqlType::Bool,
         ColumnType::Timestamp => BatchOperationSqlType::DateTime,
         // All array types use TEXT[] for simplicity
@@ -2925,15 +3810,9 @@ async fn execute_postgres_operation(
             } else if let Some(default) = &column.default {
                 literal_to_wrapper(default, column_type)
             } else {
-                // Use zero/empty defaults - use PostgreSQL-compatible types
-                match column_type {
-                    ColumnType::Uint256 => EthereumSqlTypeWrapper::U256Numeric(U256::ZERO),
-                    ColumnType::Int256 => {
-                        EthereumSqlTypeWrapper::I256Numeric(alloy::primitives::I256::ZERO)
-                    }
-                    ColumnType::Uint64 => EthereumSqlTypeWrapper::U64BigInt(0),
-                    _ => EthereumSqlTypeWrapper::String(String::new()),
-                }
+                // No value and no default - use NULL
+                // This handles cases like failed view calls where we don't have a value
+                EthereumSqlTypeWrapper::Null
             };
 
             // Determine behavior - primary key columns come from where clauses
@@ -3094,14 +3973,9 @@ async fn execute_clickhouse_operation(
             } else if let Some(default) = &column.default {
                 literal_to_wrapper(default, column_type)
             } else {
-                match column_type {
-                    ColumnType::Uint256 => EthereumSqlTypeWrapper::U256Numeric(U256::ZERO),
-                    ColumnType::Int256 => {
-                        EthereumSqlTypeWrapper::I256Numeric(alloy::primitives::I256::ZERO)
-                    }
-                    ColumnType::Uint64 => EthereumSqlTypeWrapper::U64BigInt(0),
-                    _ => EthereumSqlTypeWrapper::String(String::new()),
-                }
+                // No value and no default - use NULL
+                // This handles cases like failed view calls where we don't have a value
+                EthereumSqlTypeWrapper::Null
             };
 
             // Determine behavior - primary key columns come from where clauses
@@ -3288,6 +4162,8 @@ pub async fn execute_view_call_for_cron(
 }
 
 /// Internal function to execute a view call for cron operations.
+/// Note: Does NOT check is_running() - individual calls should complete
+/// to avoid partial data. Shutdown is handled at higher levels.
 async fn execute_view_call_for_cron_internal(
     view_call: &ViewCall,
     tx_metadata: &TxMetadata,
@@ -3400,6 +4276,11 @@ async fn execute_view_call_for_cron_internal(
     {
         let mut cache = VIEW_CALL_CACHE.write().await;
         cache.insert(cache_key, decoded.clone());
+    }
+
+    // Evict old entries if cache is getting large (skip during shutdown)
+    if is_running() {
+        evict_old_view_call_cache_entries().await;
     }
 
     apply_accessor_if_present(decoded, view_call)
