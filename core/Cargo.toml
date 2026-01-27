@@ -80,6 +80,7 @@ anyhow = "1.0.100"
 winnow = "0.7.13"
 tower = "0.5.2"
 axum = "0.8"
+prometheus = "0.13"
 
 # build
 jemallocator = { version = "0.6.1", package = "tikv-jemallocator", optional = true }

@@ -6,8 +6,11 @@ use tokio::net::TcpListener;
 use tracing::{error, info};
 
 use crate::{
-    database::postgres::client::PostgresClient, indexer::task_tracker::active_indexing_count,
-    manifest::core::Manifest, system_state::is_running,
+    database::postgres::client::PostgresClient,
+    indexer::task_tracker::active_indexing_count,
+    manifest::core::Manifest,
+    metrics::metrics_handler,
+    system_state::is_running,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,12 +67,16 @@ impl HealthServer {
     }
 
     pub async fn start(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let app = Router::new().route("/health", get(health_handler)).with_state(self.state);
+        let app = Router::new()
+            .route("/health", get(health_handler))
+            .route("/metrics", get(metrics_handler))
+            .with_state(self.state);
 
         let addr = SocketAddr::from(([0, 0, 0, 0], self.port));
         let listener = TcpListener::bind(addr).await?;
 
         info!("🩺 Health server started on http://0.0.0.0:{}/health", self.port);
+        info!("📊 Metrics available at http://0.0.0.0:{}/metrics", self.port);
 
         axum::serve(listener, app).await?;
         Ok(())
