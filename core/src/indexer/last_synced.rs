@@ -24,6 +24,7 @@ use crate::{
     event::config::{EventProcessingConfig, TraceProcessingConfig},
     helpers::get_full_path,
     manifest::{storage::CsvDetails, stream::StreamsConfig},
+    metrics::indexing as metrics,
     EthereumSqlTypeWrapper, PostgresClient,
 };
 
@@ -292,6 +293,18 @@ pub async fn update_progress_and_last_synced_task(
         .flatten()
         .map(|b| b.header.number)
         .unwrap_or(0);
+
+    // Record block progress metrics
+    let network = &config.network_contract().network;
+    let contract = &config.contract_name();
+    let event = &config.event_name();
+    let to_block_u64 = to_block.to::<u64>();
+
+    metrics::set_last_synced_block(network, contract, event, to_block_u64);
+    if latest > 0 {
+        metrics::set_latest_chain_block(network, latest);
+        metrics::set_blocks_behind(network, contract, event, to_block_u64, latest);
+    }
 
     if let Some(postgres) = &config.postgres() {
         let schema =

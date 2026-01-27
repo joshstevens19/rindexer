@@ -35,6 +35,7 @@ pub mod database;
 pub mod definitions;
 pub mod indexing;
 pub mod rpc;
+pub mod streams;
 pub mod timer;
 
 // Re-export commonly used items

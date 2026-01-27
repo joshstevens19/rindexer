@@ -1,10 +1,15 @@
 use alloy::primitives::U64;
 use tracing::{debug, warn};
 
+use crate::metrics::indexing as metrics;
 use crate::notifications::ChainStateNotification;
 
 /// Handles chain state notifications (reorgs, reverts, commits)
-pub fn handle_chain_notification(notification: ChainStateNotification, info_log_name: &str) {
+pub fn handle_chain_notification(
+    notification: ChainStateNotification,
+    info_log_name: &str,
+    network: &str,
+) {
     match notification {
         ChainStateNotification::Reorged {
             revert_from_block,
@@ -13,6 +18,9 @@ pub fn handle_chain_notification(notification: ChainStateNotification, info_log_
             new_to_block,
             new_tip_hash,
         } => {
+            let depth = revert_from_block.saturating_sub(revert_to_block);
+            metrics::record_reorg(network, depth);
+
             warn!(
                 "{} - REORG DETECTED! Need to revert blocks {} to {} and re-index {} to {} (new tip: {})",
                 info_log_name,
@@ -23,6 +31,9 @@ pub fn handle_chain_notification(notification: ChainStateNotification, info_log_
             // TODO: In future PR, actually handle the reorg by reverting and re-indexing
         }
         ChainStateNotification::Reverted { from_block, to_block } => {
+            let depth = from_block.saturating_sub(to_block);
+            metrics::record_reorg(network, depth);
+
             warn!(
                 "{} - CHAIN REVERTED! Blocks {} to {} have been reverted",
                 info_log_name, from_block, to_block

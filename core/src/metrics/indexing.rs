@@ -59,6 +59,14 @@ pub fn set_latest_chain_block(network: &str, block: u64) {
         .set(block as f64);
 }
 
+/// Update the blocks behind gauge.
+pub fn set_blocks_behind(network: &str, contract: &str, event: &str, last_synced: u64, latest: u64) {
+    let behind = latest.saturating_sub(last_synced);
+    BLOCKS_BEHIND
+        .with_label_values(&[network, contract, event])
+        .set(behind as f64);
+}
+
 /// Update active indexing task count.
 pub fn set_active_tasks(count: usize) {
     ACTIVE_INDEXING_TASKS.set(count as f64);
