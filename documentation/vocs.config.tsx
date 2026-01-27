@@ -174,6 +174,10 @@ export default defineConfig({
           link: "/docs/start-building/health-monitoring",
         },
         {
+          text: "Prometheus Metrics",
+          link: "/docs/start-building/metrics",
+        },
+        {
           text: "Phantom Events",
           link: "/docs/start-building/phantom",
         },
