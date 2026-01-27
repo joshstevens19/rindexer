@@ -13,6 +13,7 @@ use tracing::{debug, error, info};
 
 use crate::helpers::is_relevant_block;
 use crate::indexer::reorg::reorg_safe_distance_for_chain;
+use crate::metrics::indexing as metrics;
 use crate::provider::JsonRpcCachedProvider;
 use crate::{
     event::{
@@ -596,6 +597,19 @@ async fn trigger_event(
     to_block: U64,
 ) {
     indexing_event_processing();
+
+    // Record events processed metric
+    let event_count = fn_data.len() as u64;
+    if event_count > 0 {
+        metrics::record_events_indexed(
+            &config.network_contract().network,
+            &config.contract_name(),
+            &config.event_name(),
+            event_count,
+            to_block.to::<u64>(),
+            None, // Latest chain block updated elsewhere
+        );
+    }
 
     let should_update_progress = if fn_data.is_empty() {
         #[allow(clippy::needless_bool)]
