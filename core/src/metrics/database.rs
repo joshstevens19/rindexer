@@ -18,13 +18,9 @@ pub mod ops {
 pub fn record_db_operation(operation: &str, success: bool, duration_secs: f64) {
     let status = if success { "success" } else { "error" };
 
-    DB_OPERATIONS_TOTAL
-        .with_label_values(&[operation, status])
-        .inc();
+    DB_OPERATIONS_TOTAL.with_label_values(&[operation, status]).inc();
 
-    DB_OPERATION_DURATION
-        .with_label_values(&[operation])
-        .observe(duration_secs);
+    DB_OPERATION_DURATION.with_label_values(&[operation]).observe(duration_secs);
 }
 
 /// Record a successful database operation.
@@ -44,10 +40,6 @@ pub fn time_db_operation<'a>(operation: &str) -> TimerGuard<'a> {
 
 /// Update connection pool metrics.
 pub fn set_pool_connections(database: &str, active: usize, idle: usize) {
-    DB_POOL_CONNECTIONS
-        .with_label_values(&[database, "active"])
-        .set(active as f64);
-    DB_POOL_CONNECTIONS
-        .with_label_values(&[database, "idle"])
-        .set(idle as f64);
+    DB_POOL_CONNECTIONS.with_label_values(&[database, "active"]).set(active as f64);
+    DB_POOL_CONNECTIONS.with_label_values(&[database, "idle"]).set(idle as f64);
 }

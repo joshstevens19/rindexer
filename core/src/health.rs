@@ -6,11 +6,8 @@ use tokio::net::TcpListener;
 use tracing::{error, info};
 
 use crate::{
-    database::postgres::client::PostgresClient,
-    indexer::task_tracker::active_indexing_count,
-    manifest::core::Manifest,
-    metrics::metrics_handler,
-    system_state::is_running,
+    database::postgres::client::PostgresClient, indexer::task_tracker::active_indexing_count,
+    manifest::core::Manifest, metrics::metrics_handler, system_state::is_running,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

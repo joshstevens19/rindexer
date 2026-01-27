@@ -16,24 +16,16 @@ pub mod stream_type {
 
 /// Record a successful stream message send.
 pub fn record_stream_success(stream_type: &str, duration_secs: f64, message_count: usize) {
-    STREAM_MESSAGES_TOTAL
-        .with_label_values(&[stream_type, "success"])
-        .inc_by(message_count as f64);
+    STREAM_MESSAGES_TOTAL.with_label_values(&[stream_type, "success"]).inc_by(message_count as f64);
 
-    STREAM_MESSAGE_DURATION
-        .with_label_values(&[stream_type])
-        .observe(duration_secs);
+    STREAM_MESSAGE_DURATION.with_label_values(&[stream_type]).observe(duration_secs);
 }
 
 /// Record a failed stream message send.
 pub fn record_stream_error(stream_type: &str, duration_secs: f64) {
-    STREAM_MESSAGES_TOTAL
-        .with_label_values(&[stream_type, "error"])
-        .inc();
+    STREAM_MESSAGES_TOTAL.with_label_values(&[stream_type, "error"]).inc();
 
-    STREAM_MESSAGE_DURATION
-        .with_label_values(&[stream_type])
-        .observe(duration_secs);
+    STREAM_MESSAGE_DURATION.with_label_values(&[stream_type]).observe(duration_secs);
 }
 
 /// Record a stream operation with automatic success/error handling.
@@ -58,10 +50,7 @@ pub struct StreamTimer {
 
 impl StreamTimer {
     pub fn new(stream_type: &'static str) -> Self {
-        Self {
-            stream_type,
-            start: Instant::now(),
-        }
+        Self { stream_type, start: Instant::now() }
     }
 
     /// Finish timing and record success with message count.

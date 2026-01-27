@@ -154,12 +154,8 @@ impl ClickhouseClient {
             .collect::<Vec<_>>()
             .join(", ");
 
-        let sql = format!(
-            "INSERT INTO {} ({}) VALUES {}",
-            table_name,
-            column_names.join(", "),
-            values
-        );
+        let sql =
+            format!("INSERT INTO {} ({}) VALUES {}", table_name, column_names.join(", "), values);
 
         let result = self.conn.query(&sql).execute().await;
         db_metrics::record_db_operation(

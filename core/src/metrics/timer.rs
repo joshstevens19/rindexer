@@ -60,10 +60,7 @@ pub struct CallbackTimer<F: FnOnce(f64)> {
 
 impl<F: FnOnce(f64)> CallbackTimer<F> {
     pub fn new(callback: F) -> Self {
-        Self {
-            start: Instant::now(),
-            callback: Some(callback),
-        }
+        Self { start: Instant::now(), callback: Some(callback) }
     }
 
     pub fn elapsed_secs(&self) -> f64 {

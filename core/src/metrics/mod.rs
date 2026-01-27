@@ -56,11 +56,7 @@ pub async fn metrics_handler() -> impl IntoResponse {
     match encoder.encode(&metric_families, &mut buffer) {
         Ok(()) => {
             let body = String::from_utf8(buffer).unwrap_or_default();
-            (
-                StatusCode::OK,
-                [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
-                body,
-            )
+            (StatusCode::OK, [("content-type", "text/plain; version=0.0.4; charset=utf-8")], body)
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -94,7 +90,14 @@ mod tests {
 
     #[test]
     fn test_indexing_metrics() {
-        indexing::record_events_indexed("ethereum", "test_contract", "Transfer", 10, 100, Some(110));
+        indexing::record_events_indexed(
+            "ethereum",
+            "test_contract",
+            "Transfer",
+            10,
+            100,
+            Some(110),
+        );
 
         let output = encode_metrics().expect("should encode metrics");
         assert!(output.contains("rindexer_events_processed_total"));

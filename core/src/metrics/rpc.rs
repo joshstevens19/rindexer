@@ -7,13 +7,9 @@ use super::timer::TimerGuard;
 pub fn record_rpc_request(network: &str, method: &str, success: bool, duration_secs: f64) {
     let status = if success { "success" } else { "error" };
 
-    RPC_REQUESTS_TOTAL
-        .with_label_values(&[network, method, status])
-        .inc();
+    RPC_REQUESTS_TOTAL.with_label_values(&[network, method, status]).inc();
 
-    RPC_REQUEST_DURATION
-        .with_label_values(&[network, method])
-        .observe(duration_secs);
+    RPC_REQUEST_DURATION.with_label_values(&[network, method]).observe(duration_secs);
 }
 
 /// Record a successful RPC request.
@@ -49,9 +45,7 @@ pub struct InFlightGuard {
 impl InFlightGuard {
     pub fn new(network: &str) -> Self {
         inc_in_flight(network);
-        Self {
-            network: network.to_string(),
-        }
+        Self { network: network.to_string() }
     }
 }
 

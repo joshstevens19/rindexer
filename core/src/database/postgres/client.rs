@@ -1,4 +1,8 @@
-use std::{env, future::Future, time::{Duration, Instant}};
+use std::{
+    env,
+    future::Future,
+    time::{Duration, Instant},
+};
 
 use bb8::{Pool, PooledConnection, RunError};
 use bb8_postgres::PostgresConnectionManager;
@@ -173,7 +177,11 @@ impl PostgresClient {
         let start = Instant::now();
         let conn = self.pool.get().await?;
         let result = conn.batch_execute(sql).await.map_err(PostgresError::PgError);
-        db_metrics::record_db_operation(ops::BATCH_EXECUTE, result.is_ok(), start.elapsed().as_secs_f64());
+        db_metrics::record_db_operation(
+            ops::BATCH_EXECUTE,
+            result.is_ok(),
+            start.elapsed().as_secs_f64(),
+        );
         result
     }
 

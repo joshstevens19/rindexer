@@ -49,12 +49,8 @@ pub static LAST_SYNCED_BLOCK: Lazy<GaugeVec> = Lazy::new(|| {
 /// Latest block number observed on chain.
 /// Labels: network
 pub static LATEST_CHAIN_BLOCK: Lazy<GaugeVec> = Lazy::new(|| {
-    register_gauge_vec!(
-        "rindexer_latest_chain_block",
-        "Latest block number on chain",
-        &["network"]
-    )
-    .expect("failed to register LATEST_CHAIN_BLOCK")
+    register_gauge_vec!("rindexer_latest_chain_block", "Latest block number on chain", &["network"])
+        .expect("failed to register LATEST_CHAIN_BLOCK")
 });
 
 /// Number of blocks behind chain head.
@@ -70,11 +66,8 @@ pub static BLOCKS_BEHIND: Lazy<GaugeVec> = Lazy::new(|| {
 
 /// Currently active indexing tasks (global gauge).
 pub static ACTIVE_INDEXING_TASKS: Lazy<Gauge> = Lazy::new(|| {
-    register_gauge!(
-        "rindexer_active_indexing_tasks",
-        "Number of currently active indexing tasks"
-    )
-    .expect("failed to register ACTIVE_INDEXING_TASKS")
+    register_gauge!("rindexer_active_indexing_tasks", "Number of currently active indexing tasks")
+        .expect("failed to register ACTIVE_INDEXING_TASKS")
 });
 
 // =============================================================================
@@ -215,12 +208,8 @@ pub static STREAM_MESSAGE_DURATION: Lazy<HistogramVec> = Lazy::new(|| {
 /// Build information gauge (always 1, labels carry metadata).
 /// Labels: version, commit, rust_version
 pub static BUILD_INFO: Lazy<GaugeVec> = Lazy::new(|| {
-    register_gauge_vec!(
-        "rindexer_build_info",
-        "Build information",
-        &["version"]
-    )
-    .expect("failed to register BUILD_INFO")
+    register_gauge_vec!("rindexer_build_info", "Build information", &["version"])
+        .expect("failed to register BUILD_INFO")
 });
 
 /// Initialize build info metric with current version.
