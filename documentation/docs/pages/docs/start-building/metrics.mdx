@@ -149,7 +149,7 @@ services:
 
 ### Indexing Progress
 
-```promql
+```txt
 # Events per second (rate over 5 minutes)
 rate(rindexer_events_processed_total[5m])
 
@@ -162,7 +162,7 @@ rindexer_blocks_behind
 
 ### RPC Health
 
-```promql
+```txt
 # RPC error rate
 rate(rindexer_rpc_requests_total{status="error"}[5m])
   / rate(rindexer_rpc_requests_total[5m])
@@ -176,7 +176,7 @@ rate(rindexer_rpc_requests_total[5m])
 
 ### Database Performance
 
-```promql
+```txt
 # Database operation latency (P95)
 histogram_quantile(0.95, rate(rindexer_db_operation_duration_seconds_bucket[5m]))
 
@@ -186,7 +186,7 @@ rate(rindexer_db_operations_total{status="error"}[5m])
 
 ### Stream Delivery
 
-```promql
+```txt
 # Stream delivery rate by type
 rate(rindexer_stream_messages_total{status="success"}[5m])
 
