@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use aws_sdk_sns::{config::http::HttpResponse, error::SdkError, operation::publish::PublishError};
 use futures::future::join_all;
@@ -17,6 +17,7 @@ use crate::{
         RabbitMQStreamQueueConfig, RedisStreamConfig, RedisStreamStreamConfig,
         SNSStreamTopicConfig, StreamEvent, StreamsConfig, WebhookStreamConfig,
     },
+    metrics::streams::{self as stream_metrics, stream_type},
     streams::{
         CloudflareQueues, CloudflareQueuesError, RabbitMQ, RabbitMQError, Redis, RedisError,
         Webhook, WebhookError, SNS,
@@ -346,10 +347,21 @@ impl StreamsClients {
                 let publish_message =
                     self.create_chunk_message_raw(&config.events, event_message, &filtered_chunk);
                 task::spawn(async move {
-                    let _ =
-                        client.publish(&publish_message_id, &topic_arn, &publish_message).await?;
+                    let start = Instant::now();
+                    let result =
+                        client.publish(&publish_message_id, &topic_arn, &publish_message).await;
+                    let duration = start.elapsed().as_secs_f64();
+                    let count = filtered_chunk.len();
 
-                    Ok(filtered_chunk.len())
+                    stream_metrics::record_stream_operation(
+                        stream_type::SNS,
+                        result.is_ok(),
+                        duration,
+                        count,
+                    );
+
+                    result?;
+                    Ok(count)
                 })
             })
             .collect();
@@ -382,11 +394,22 @@ impl StreamsClients {
                 let publish_message =
                     self.create_chunk_message_json(&config.events, event_message, &filtered_chunk);
                 task::spawn(async move {
-                    client
+                    let start = Instant::now();
+                    let result = client
                         .publish(&publish_message_id, &endpoint, &shared_secret, &publish_message)
-                        .await?;
+                        .await;
+                    let duration = start.elapsed().as_secs_f64();
+                    let count = filtered_chunk.len();
 
-                    Ok(filtered_chunk.len())
+                    stream_metrics::record_stream_operation(
+                        stream_type::WEBHOOK,
+                        result.is_ok(),
+                        duration,
+                        count,
+                    );
+
+                    result?;
+                    Ok(count)
                 })
             })
             .collect();
@@ -421,7 +444,8 @@ impl StreamsClients {
                     self.create_chunk_message_json(&config.events, event_message, &filtered_chunk);
 
                 task::spawn(async move {
-                    client
+                    let start = Instant::now();
+                    let result = client
                         .publish(
                             &publish_message_id,
                             &exchange,
@@ -429,8 +453,19 @@ impl StreamsClients {
                             &routing_key,
                             &publish_message,
                         )
-                        .await?;
-                    Ok(filtered_chunk.len())
+                        .await;
+                    let duration = start.elapsed().as_secs_f64();
+                    let count = filtered_chunk.len();
+
+                    stream_metrics::record_stream_operation(
+                        stream_type::RABBITMQ,
+                        result.is_ok(),
+                        duration,
+                        count,
+                    );
+
+                    result?;
+                    Ok(count)
                 })
             })
             .collect();
@@ -463,10 +498,22 @@ impl StreamsClients {
                 let publish_message =
                     self.create_chunk_message_json(&config.events, event_message, &filtered_chunk);
                 task::spawn(async move {
-                    client
+                    let start = Instant::now();
+                    let result = client
                         .publish(&publish_message_id, &exchange, &routing_key, &publish_message)
-                        .await?;
-                    Ok(filtered_chunk.len())
+                        .await;
+                    let duration = start.elapsed().as_secs_f64();
+                    let count = filtered_chunk.len();
+
+                    stream_metrics::record_stream_operation(
+                        stream_type::KAFKA,
+                        result.is_ok(),
+                        duration,
+                        count,
+                    );
+
+                    result?;
+                    Ok(count)
                 })
             })
             .collect();
@@ -498,8 +545,21 @@ impl StreamsClients {
                     self.create_chunk_message_json(&config.events, event_message, &filtered_chunk);
 
                 task::spawn(async move {
-                    client.publish(&publish_message_id, &stream_name, &publish_message).await?;
-                    Ok(filtered_chunk.len())
+                    let start = Instant::now();
+                    let result =
+                        client.publish(&publish_message_id, &stream_name, &publish_message).await;
+                    let duration = start.elapsed().as_secs_f64();
+                    let count = filtered_chunk.len();
+
+                    stream_metrics::record_stream_operation(
+                        stream_type::REDIS,
+                        result.is_ok(),
+                        duration,
+                        count,
+                    );
+
+                    result?;
+                    Ok(count)
                 })
             })
             .collect();
@@ -531,8 +591,21 @@ impl StreamsClients {
                     self.create_chunk_message_json(&config.events, event_message, &filtered_chunk);
 
                 task::spawn(async move {
-                    client.publish(&publish_message_id, &queue_id, &publish_message).await?;
-                    Ok(filtered_chunk.len())
+                    let start = Instant::now();
+                    let result =
+                        client.publish(&publish_message_id, &queue_id, &publish_message).await;
+                    let duration = start.elapsed().as_secs_f64();
+                    let count = filtered_chunk.len();
+
+                    stream_metrics::record_stream_operation(
+                        stream_type::CLOUDFLARE_QUEUES,
+                        result.is_ok(),
+                        duration,
+                        count,
+                    );
+
+                    result?;
+                    Ok(count)
                 })
             })
             .collect();

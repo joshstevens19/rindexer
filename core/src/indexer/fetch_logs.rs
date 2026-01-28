@@ -135,6 +135,7 @@ pub fn fetch_logs_stream(
                 &config.indexing_distance_from_head(),
                 current_filter,
                 &config.info_log_name(),
+                &config.network_contract().network,
                 config.network_contract().disable_logs_bloom_checks,
                 original_max_limit,
             )
@@ -395,6 +396,7 @@ async fn live_indexing_stream(
     reorg_safe_distance: &U64,
     mut current_filter: RindexerEventFilter,
     info_log_name: &str,
+    network: &str,
     disable_logs_bloom_checks: bool,
     original_max_limit: Option<U64>,
 ) {
@@ -409,10 +411,11 @@ async fn live_indexing_stream(
     // Spawn a separate task to handle notifications
     if let Some(notifications) = chain_state_notification {
         let info_log_name = info_log_name.to_string();
+        let network = network.to_string();
         tokio::spawn(async move {
             let mut notifications_clone = notifications.subscribe();
             while let Ok(notification) = notifications_clone.recv().await {
-                handle_chain_notification(notification, &info_log_name);
+                handle_chain_notification(notification, &info_log_name, &network);
             }
         });
     }

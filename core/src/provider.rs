@@ -47,6 +47,7 @@ use url::Url;
 use crate::helpers::chunk_hashset;
 use crate::layer_extensions::RpcLoggingLayer;
 use crate::manifest::network::{AddressFiltering, BlockPollFrequency};
+use crate::metrics::rpc as rpc_metrics;
 use crate::{event::RindexerEventFilter, manifest::core::Manifest};
 
 /// An alias type for a complex alloy Provider
@@ -220,12 +221,22 @@ impl JsonRpcCachedProvider {
             }
         }
 
-        let latest_block = self
+        let start = Instant::now();
+        let network = self.chain.to_string();
+
+        let result = self
             .provider
             .get_block(BlockId::Number(BlockNumberOrTag::Latest))
             .into_future()
             .instrument(debug_span!("fetching latest block", name = ?self.chain.named()))
-            .await?;
+            .await;
+
+        // Record RPC metrics for both success and failure (only when we actually call RPC, not from cache)
+        let duration = start.elapsed().as_secs_f64();
+        rpc_metrics::record_rpc_request(&network, "eth_getBlockByNumber", result.is_ok(), duration);
+
+        // Now propagate the error if any
+        let latest_block = result?;
 
         if let Some(block) = latest_block {
             let arc_block = Arc::new(block);
@@ -556,6 +567,9 @@ impl JsonRpcCachedProvider {
         &self,
         event_filter: &RindexerEventFilter,
     ) -> Result<Vec<Log>, ProviderError> {
+        let start = Instant::now();
+        let network = self.chain.to_string();
+
         let addresses = event_filter.contract_addresses().await;
 
         let base_filter = Filter::new()
@@ -596,6 +610,10 @@ impl JsonRpcCachedProvider {
             },
             None => Ok(self.provider.get_logs(&base_filter).await?),
         };
+
+        // Record RPC metrics
+        let duration = start.elapsed().as_secs_f64();
+        rpc_metrics::record_rpc_request(&network, "eth_getLogs", logs.is_ok(), duration);
 
         logs
     }

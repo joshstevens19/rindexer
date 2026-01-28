@@ -1,0 +1,246 @@
+# Prometheus Metrics
+
+Rindexer exposes Prometheus metrics for production observability. These metrics help you monitor indexing performance, RPC health, database operations, and stream delivery in real-time.
+
+## Overview
+
+The metrics endpoint provides insight into:
+
+- **Indexing progress** - Events processed, blocks indexed, sync status
+- **RPC performance** - Request latencies, success/error rates, in-flight requests
+- **Database operations** - Query durations, operation counts, connection pool status
+- **Stream delivery** - Message counts, delivery latencies by stream type
+- **Chain state** - Reorg detection, block lag behind chain head
+
+## Metrics Endpoint
+
+Metrics are served on the same port as the health server (default `8080`) at the `/metrics` path.
+
+```bash
+# Metrics available when indexer is running
+curl http://localhost:8080/metrics
+```
+
+The endpoint returns metrics in [Prometheus text exposition format](https://prometheus.io/docs/instrumenting/exposition_formats/), compatible with Prometheus, Grafana, Datadog, and other monitoring tools.
+
+## Configuration
+
+Configure the metrics port using `health_port` in your `rindexer.yaml`:
+
+```yaml
+global:
+  health_port: 9090  # Metrics available at http://localhost:9090/metrics
+```
+
+## Available Metrics
+
+### Indexing Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `rindexer_events_processed_total` | Counter | `network`, `contract`, `event` | Total events processed |
+| `rindexer_blocks_indexed_total` | Counter | `network`, `contract`, `event` | Total blocks indexed |
+| `rindexer_last_synced_block` | Gauge | `network`, `contract`, `event` | Last synced block number |
+| `rindexer_latest_chain_block` | Gauge | `network` | Latest block on chain |
+| `rindexer_blocks_behind` | Gauge | `network`, `contract`, `event` | Blocks behind chain head |
+| `rindexer_active_indexing_tasks` | Gauge | - | Currently active indexing tasks |
+
+**Example output:**
+
+```
+rindexer_events_processed_total{contract="USDC",event="Transfer",network="ethereum"} 19971
+rindexer_last_synced_block{contract="USDC",event="Transfer",network="ethereum"} 21901064
+rindexer_blocks_behind{contract="USDC",event="Transfer",network="ethereum"} 2425731
+```
+
+### RPC Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `rindexer_rpc_requests_total` | Counter | `network`, `method`, `status` | Total RPC requests (success/error) |
+| `rindexer_rpc_request_duration_seconds` | Histogram | `network`, `method` | RPC request latency |
+| `rindexer_rpc_requests_in_flight` | Gauge | `network` | Currently pending RPC requests |
+
+**Histogram buckets:** 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s, 10s
+
+**Example output:**
+
+```
+rindexer_rpc_requests_total{method="eth_getLogs",network="mainnet",status="success"} 156
+rindexer_rpc_requests_total{method="eth_getLogs",network="mainnet",status="error"} 2
+rindexer_rpc_request_duration_seconds_sum{method="eth_getLogs",network="mainnet"} 45.23
+rindexer_rpc_request_duration_seconds_count{method="eth_getLogs",network="mainnet"} 156
+```
+
+### Database Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `rindexer_db_operations_total` | Counter | `operation`, `status` | Total database operations |
+| `rindexer_db_operation_duration_seconds` | Histogram | `operation` | Database operation latency |
+| `rindexer_db_pool_connections` | Gauge | `database`, `state` | Connection pool size (active/idle) |
+
+**Operation types:** `query`, `insert`, `update`, `delete`, `batch_insert`, `batch_execute`
+
+**Histogram buckets:** 1ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s
+
+### Stream Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `rindexer_stream_messages_total` | Counter | `stream_type`, `status` | Total messages sent |
+| `rindexer_stream_message_duration_seconds` | Histogram | `stream_type` | Message delivery latency |
+
+**Stream types:** `sns`, `webhook`, `rabbitmq`, `kafka`, `redis`, `cloudflare_queues`
+
+### Chain State Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `rindexer_reorgs_detected_total` | Counter | `network` | Chain reorganizations detected |
+| `rindexer_reorg_depth` | Gauge | `network` | Depth of last detected reorg |
+
+### Build Info
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `rindexer_build_info` | Gauge | `version` | Build information (always 1) |
+
+## Prometheus Integration
+
+### Basic Prometheus Config
+
+Add rindexer to your `prometheus.yml`:
+
+```yaml
+scrape_configs:
+  - job_name: 'rindexer'
+    static_configs:
+      - targets: ['localhost:8080']
+    scrape_interval: 15s
+    metrics_path: /metrics
+```
+
+### Docker Compose Example
+
+```yaml
+services:
+  rindexer:
+    image: your-rindexer-image
+    ports:
+      - "8080:8080"
+
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+```
+
+## Useful PromQL Queries
+
+### Indexing Progress
+
+```txt
+# Events per second (rate over 5 minutes)
+rate(rindexer_events_processed_total[5m])
+
+# Blocks behind chain head
+rindexer_blocks_behind
+
+# Sync progress percentage
+(rindexer_last_synced_block / rindexer_latest_chain_block) * 100
+```
+
+### RPC Health
+
+```txt
+# RPC error rate
+rate(rindexer_rpc_requests_total{status="error"}[5m])
+  / rate(rindexer_rpc_requests_total[5m])
+
+# P99 RPC latency
+histogram_quantile(0.99, rate(rindexer_rpc_request_duration_seconds_bucket[5m]))
+
+# RPC requests per second by method
+rate(rindexer_rpc_requests_total[5m])
+```
+
+### Database Performance
+
+```txt
+# Database operation latency (P95)
+histogram_quantile(0.95, rate(rindexer_db_operation_duration_seconds_bucket[5m]))
+
+# Database error rate
+rate(rindexer_db_operations_total{status="error"}[5m])
+```
+
+### Stream Delivery
+
+```txt
+# Stream delivery rate by type
+rate(rindexer_stream_messages_total{status="success"}[5m])
+
+# Stream error rate
+rate(rindexer_stream_messages_total{status="error"}[5m])
+```
+
+## Alerting Examples
+
+### Prometheus Alerting Rules
+
+```yaml
+groups:
+  - name: rindexer
+    rules:
+      - alert: RindexerHighBlockLag
+        expr: rindexer_blocks_behind > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Rindexer falling behind chain head"
+          description: "{{ $labels.contract }} is {{ $value }} blocks behind"
+
+      - alert: RindexerHighRPCErrorRate
+        expr: rate(rindexer_rpc_requests_total{status="error"}[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High RPC error rate detected"
+
+      - alert: RindexerReorgDetected
+        expr: increase(rindexer_reorgs_detected_total[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Chain reorg detected on {{ $labels.network }}"
+```
+
+## Grafana Dashboard
+
+Import these panels for a basic rindexer dashboard:
+
+1. **Sync Progress** - Gauge showing `rindexer_blocks_behind`
+2. **Events/sec** - Graph of `rate(rindexer_events_processed_total[1m])`
+3. **RPC Latency** - Heatmap of `rindexer_rpc_request_duration_seconds`
+4. **Error Rates** - Graph of error rates for RPC, DB, and streams
+5. **Active Tasks** - Stat panel for `rindexer_active_indexing_tasks`
+
+## Best Practices
+
+- **Set appropriate scrape intervals** - 15-30 seconds is typical for indexer metrics
+- **Monitor block lag** - Alert when `rindexer_blocks_behind` exceeds acceptable thresholds
+- **Track RPC errors** - High error rates may indicate provider issues or rate limiting
+- **Watch reorg metrics** - Frequent reorgs may indicate network instability
+- **Use labels wisely** - Filter by `network`, `contract`, `event` for granular insights

@@ -1,4 +1,8 @@
-use std::{env, future::Future, time::Duration};
+use std::{
+    env,
+    future::Future,
+    time::{Duration, Instant},
+};
 
 use bb8::{Pool, PooledConnection, RunError};
 use bb8_postgres::PostgresConnectionManager;
@@ -17,6 +21,7 @@ use tracing::error;
 
 use crate::database::generate::generate_event_table_columns_names_sql;
 use crate::database::sql_type_wrapper::EthereumSqlTypeWrapper;
+use crate::metrics::database::{self as db_metrics, ops};
 
 pub fn connection_string() -> Result<String, env::VarError> {
     dotenv().ok();
@@ -169,8 +174,15 @@ impl PostgresClient {
     }
 
     pub async fn batch_execute(&self, sql: &str) -> Result<(), PostgresError> {
+        let start = Instant::now();
         let conn = self.pool.get().await?;
-        conn.batch_execute(sql).await.map_err(PostgresError::PgError)
+        let result = conn.batch_execute(sql).await.map_err(PostgresError::PgError);
+        db_metrics::record_db_operation(
+            ops::BATCH_EXECUTE,
+            result.is_ok(),
+            start.elapsed().as_secs_f64(),
+        );
+        result
     }
 
     pub async fn execute<T>(
@@ -181,8 +193,11 @@ impl PostgresClient {
     where
         T: ?Sized + ToStatement,
     {
+        let start = Instant::now();
         let conn = self.pool.get().await?;
-        conn.execute(query, params).await.map_err(PostgresError::PgError)
+        let result = conn.execute(query, params).await.map_err(PostgresError::PgError);
+        db_metrics::record_db_operation(ops::QUERY, result.is_ok(), start.elapsed().as_secs_f64());
+        result
     }
 
     pub async fn prepare(
@@ -225,9 +240,11 @@ impl PostgresClient {
     where
         T: ?Sized + ToStatement,
     {
+        let start = Instant::now();
         let conn = self.pool.get().await?;
-        let rows = conn.query(query, params).await.map_err(PostgresError::PgError)?;
-        Ok(rows)
+        let result = conn.query(query, params).await.map_err(PostgresError::PgError);
+        db_metrics::record_db_operation(ops::QUERY, result.is_ok(), start.elapsed().as_secs_f64());
+        result
     }
 
     pub async fn query_one<T>(
