@@ -191,15 +191,18 @@ pub async fn native_transfer_block_processor(
         }
 
         // Fetch more only if buffer was processed ok last time and cleared.
-        let recv = if buffer.is_empty() {
+        let was_empty = buffer.is_empty();
+        let recv = if was_empty {
             block_rx.recv_many(&mut buffer, concurrent_requests).await
         } else {
             buffer.len()
         };
 
-        if recv == 0 {
-            sleep(Duration::from_secs(1)).await;
-            continue;
+        // When recv_many returns 0 and buffer was empty, it means the channel is closed
+        // (all senders have been dropped). Exit the loop to complete historical indexing.
+        if recv == 0 && was_empty {
+            info!("Native transfer block processor completed - channel closed");
+            break Ok(());
         }
 
         let processed_block = native_transfer_block_consumer(
