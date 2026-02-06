@@ -11,6 +11,8 @@ use serde::Serialize;
 use tokio::{sync::mpsc, time::sleep};
 use tracing::{debug, error, info, warn};
 
+use tokio_util::sync::CancellationToken;
+
 use crate::is_running;
 use crate::provider::RECOMMENDED_RPC_CHUNK_SIZE;
 use crate::{
@@ -111,6 +113,7 @@ pub async fn native_transfer_block_fetch(
     end_block: Option<U64>,
     indexing_distance_from_head: U64,
     network: String,
+    cancel_token: CancellationToken,
 ) -> Result<(), ProcessEventError> {
     let mut last_seen_block = start_block;
 
@@ -129,7 +132,7 @@ pub async fn native_transfer_block_fetch(
     }
 
     loop {
-        if !is_running() {
+        if !is_running() || cancel_token.is_cancelled() {
             info!("Exiting native transfer indexing block processor!");
             break Ok(());
         }
@@ -185,7 +188,7 @@ pub async fn native_transfer_block_processor(
     let mut buffer: Vec<U64> = Vec::with_capacity(limit_concurrent_requests);
 
     loop {
-        if !is_running() {
+        if !is_running() || config.cancel_token.is_cancelled() {
             info!("Exiting native transfer indexing block processor!");
             break Ok(());
         }

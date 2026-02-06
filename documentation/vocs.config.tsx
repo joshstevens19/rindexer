@@ -135,6 +135,10 @@ export default defineConfig({
           link: "/docs/start-building/running",
         },
         {
+          text: "Hot Reload",
+          link: "/docs/start-building/hot-reload",
+        },
+        {
           text: "Delete",
           link: "/docs/start-building/delete",
         },

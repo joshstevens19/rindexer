@@ -10844,7 +10844,7 @@ dependencies = [
 
 [[package]]
 name = "rindexer"
-version = "0.34.0"
+version = "0.35.0"
 dependencies = [
  "alloy",
  "alloy-chains",
@@ -10877,6 +10877,7 @@ dependencies = [
  "mini-moka",
  "mockito",
  "native-tls",
+ "notify",
  "once_cell",
  "postgres-native-tls",
  "prometheus",
@@ -10904,6 +10905,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tokio-stream",
+ "tokio-util",
  "tower",
  "tracing",
  "tracing-subscriber 0.3.20",
@@ -10915,7 +10917,7 @@ dependencies = [
 
 [[package]]
 name = "rindexer_cli"
-version = "0.34.0"
+version = "0.35.0"
 dependencies = [
  "alloy",
  "alloy-chains",
@@ -12963,6 +12965,7 @@ dependencies = [
  "futures-core",
  "futures-io",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "slab",
  "tokio",

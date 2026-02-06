@@ -57,6 +57,8 @@ tempfile = "3.23.0"
 thiserror = "2.0.17"
 thread_local = "1.1"
 tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+notify = "8.2"
 tokio-postgres = { version = "0.7", features = [
     "with-uuid-1",
     "with-chrono-0_4",
