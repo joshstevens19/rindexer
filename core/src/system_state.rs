@@ -1,5 +1,8 @@
 use std::{
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
     time::Duration,
 };
 
@@ -32,4 +35,29 @@ pub async fn initiate_shutdown() {
 
 pub fn is_running() -> bool {
     IS_RUNNING.load(Ordering::SeqCst)
+}
+
+// --- Hot-reload state ---
+
+/// Tracks the current reload state for the health endpoint and orchestrator.
+#[derive(Debug, Clone)]
+pub enum ReloadState {
+    /// Normal operation.
+    Running,
+    /// A reload is in progress.
+    Reloading,
+    /// The last reload attempt failed. Contains the error message.
+    ReloadFailed(String),
+}
+
+static RELOAD_STATE: Lazy<Mutex<ReloadState>> = Lazy::new(|| Mutex::new(ReloadState::Running));
+
+pub fn set_reload_state(state: ReloadState) {
+    if let Ok(mut s) = RELOAD_STATE.lock() {
+        *s = state;
+    }
+}
+
+pub fn get_reload_state() -> ReloadState {
+    RELOAD_STATE.lock().map(|s| s.clone()).unwrap_or(ReloadState::Running)
 }

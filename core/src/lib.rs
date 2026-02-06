@@ -9,7 +9,7 @@ pub mod metrics;
 pub mod reth;
 
 mod system_state;
-pub use system_state::{initiate_shutdown, is_running};
+pub use system_state::{get_reload_state, initiate_shutdown, is_running, set_reload_state, ReloadState};
 
 mod health;
 pub use health::{start_health_server, HealthServer, HealthServerState, HealthStatus};

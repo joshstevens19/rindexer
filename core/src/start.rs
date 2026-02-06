@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::signal;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use crate::database::clickhouse::setup::SetupClickhouseError;
@@ -262,6 +263,11 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                 let mut dependencies: Vec<ContractEventDependencies> =
                     ContractEventDependencies::parse(&manifest);
 
+                // CancellationToken for this indexing generation.
+                // When --watch mode is enabled, the orchestrator will cancel this token
+                // to trigger a graceful reload. Without --watch, this token is never cancelled.
+                let cancel_token = CancellationToken::new();
+
                 let processed_network_contracts = start_historical_indexing(
                     &manifest,
                     project_path,
@@ -269,6 +275,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     indexing_details.registry.complete(),
                     indexing_details.trace_registry.complete(),
                     indexing_details.event_stream.map(RindexerEventEmitter::from_stream),
+                    cancel_token.clone(),
                 )
                 .await?;
 
@@ -298,6 +305,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                             .registry
                             .reapply_after_historic(processed_network_contracts),
                         indexing_details.trace_registry.complete(),
+                        cancel_token.clone(),
                     )
                     .await
                     .map_err(StartRindexerError::CouldNotStartIndexing)?;

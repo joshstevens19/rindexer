@@ -18,6 +18,7 @@ use std::num::NonZeroUsize;
 use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
 use tokio::{sync::mpsc, time::Instant};
 use tokio_stream::wrappers::ReceiverStream;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 pub struct FetchLogsResult {
@@ -72,7 +73,7 @@ pub fn fetch_logs_stream(
         }
 
         while current_filter.from_block() <= snapshot_to_block {
-            if !is_running() {
+            if !is_running() || config.cancel_token().is_cancelled() {
                 break;
             }
 
@@ -138,6 +139,7 @@ pub fn fetch_logs_stream(
                 &config.network_contract().network,
                 config.network_contract().disable_logs_bloom_checks,
                 original_max_limit,
+                config.cancel_token().clone(),
             )
             .await;
         }
@@ -399,6 +401,7 @@ async fn live_indexing_stream(
     network: &str,
     disable_logs_bloom_checks: bool,
     original_max_limit: Option<U64>,
+    cancel_token: CancellationToken,
 ) {
     let mut last_seen_block_number = last_seen_block_number;
     let mut log_response_to_large_to_block: Option<U64> = None;
@@ -431,7 +434,7 @@ async fn live_indexing_stream(
     loop {
         let iteration_start = Instant::now();
 
-        if !is_running() {
+        if !is_running() || cancel_token.is_cancelled() {
             break;
         }
 
