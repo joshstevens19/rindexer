@@ -85,11 +85,9 @@ impl ManifestWatcher {
                                 .unwrap_or(false)
                         });
 
-                        if is_relevant {
-                            if notify_tx.blocking_send(()).is_err() {
-                                // Receiver dropped, stop watching
-                                break;
-                            }
+                        if is_relevant && notify_tx.blocking_send(()).is_err() {
+                            // Receiver dropped, stop watching
+                            break;
                         }
                     }
                     Ok(Err(e)) => {

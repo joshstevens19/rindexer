@@ -346,18 +346,31 @@ storage:
     #[test]
     fn test_contract_added() {
         let old = manifest_from_yaml(BASE_MANIFEST);
-        let new_yaml = format!(
-            r#"{}
+        let new_yaml = r#"
+name: test-indexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://eth.rpc.example.com
+contracts:
+  - name: USDC
+    details:
+      - network: ethereum
+        address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+        start_block: "1000000"
+    abi: ./abis/erc20.json
   - name: WETH
     details:
       - network: ethereum
         address: "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
         start_block: "2000000"
     abi: ./abis/erc20.json
-"#,
-            BASE_MANIFEST
-        );
-        let new = manifest_from_yaml(&new_yaml);
+storage:
+  postgres:
+    enabled: true
+"#;
+        let new = manifest_from_yaml(new_yaml);
         let diff = compute_diff(&old, &new);
 
         assert!(matches!(diff.action, ReloadAction::SelectiveRestart(_)));
@@ -370,18 +383,31 @@ storage:
 
     #[test]
     fn test_contract_removed() {
-        let old_yaml = format!(
-            r#"{}
+        let old_yaml = r#"
+name: test-indexer
+project_type: no-code
+networks:
+  - name: ethereum
+    chain_id: 1
+    rpc: https://eth.rpc.example.com
+contracts:
+  - name: USDC
+    details:
+      - network: ethereum
+        address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+        start_block: "1000000"
+    abi: ./abis/erc20.json
   - name: WETH
     details:
       - network: ethereum
         address: "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
         start_block: "2000000"
     abi: ./abis/erc20.json
-"#,
-            BASE_MANIFEST
-        );
-        let old = manifest_from_yaml(&old_yaml);
+storage:
+  postgres:
+    enabled: true
+"#;
+        let old = manifest_from_yaml(old_yaml);
         let new = manifest_from_yaml(BASE_MANIFEST);
         let diff = compute_diff(&old, &new);
 
