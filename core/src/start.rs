@@ -292,29 +292,8 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     Relationship::apply_all(&relationships).await?;
                 }
 
-                if manifest.has_any_contracts_live_indexing() {
-                    if dependencies.is_empty() {
-                        dependencies =
-                            ContractEventDependencies::map_from_relationships(&relationships)?;
-                    } else {
-                        info!("Manual dependency_events found, skipping auto-applying the dependency_events with the relationships");
-                    }
-
-                    start_live_indexing(
-                        &manifest,
-                        project_path,
-                        &dependencies,
-                        indexing_details
-                            .registry
-                            .reapply_after_historic(processed_network_contracts),
-                        indexing_details.trace_registry.complete(),
-                        cancel_token.clone(),
-                    )
-                    .await
-                    .map_err(StartRindexerError::CouldNotStartIndexing)?;
-                }
-
-                // Spawn hot-reload watcher and orchestrator when --watch is enabled
+                // Spawn hot-reload watcher and orchestrator BEFORE live indexing
+                // (live indexing blocks forever, so anything after it won't execute)
                 if details.watch {
                     let manifest_path_owned = details.manifest_path.clone();
                     let (reload_tx, reload_rx) = tokio::sync::mpsc::channel::<PathBuf>(4);
@@ -342,6 +321,28 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     });
 
                     info!("Hot-reload: watching rindexer.yaml for changes");
+                }
+
+                if manifest.has_any_contracts_live_indexing() {
+                    if dependencies.is_empty() {
+                        dependencies =
+                            ContractEventDependencies::map_from_relationships(&relationships)?;
+                    } else {
+                        info!("Manual dependency_events found, skipping auto-applying the dependency_events with the relationships");
+                    }
+
+                    start_live_indexing(
+                        &manifest,
+                        project_path,
+                        &dependencies,
+                        indexing_details
+                            .registry
+                            .reapply_after_historic(processed_network_contracts),
+                        indexing_details.trace_registry.complete(),
+                        cancel_token.clone(),
+                    )
+                    .await
+                    .map_err(StartRindexerError::CouldNotStartIndexing)?;
                 }
             }
 

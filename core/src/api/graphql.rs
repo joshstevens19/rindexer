@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         Arc, Mutex,
     },
     time::Duration,
@@ -192,6 +192,7 @@ pub async fn start_graphql_server(
             "Failed to receive initial PID: {e}"
         ))
     })?;
+    GRAPHQL_PID.store(pid, Ordering::SeqCst);
 
     perform_health_check(&graphql_endpoint, &graphql_playground).await?;
 
@@ -199,10 +200,22 @@ pub async fn start_graphql_server(
 }
 
 static MANUAL_STOP: AtomicBool = AtomicBool::new(false);
+static GRAPHQL_PID: AtomicU32 = AtomicU32::new(0);
 
-/// Signal the GraphQL server to stop its restart loop
+/// Signal the GraphQL server to stop its restart loop and kill the child process.
 pub fn stop_graphql_server() {
     MANUAL_STOP.store(true, Ordering::SeqCst);
+
+    let pid = GRAPHQL_PID.load(Ordering::SeqCst);
+    if pid != 0 {
+        #[cfg(unix)]
+        let _ = Command::new("kill").args(["-TERM", &pid.to_string()]).output();
+
+        #[cfg(windows)]
+        let _ = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .output();
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

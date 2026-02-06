@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Debounce window: after detecting a file change, wait this long before triggering reload.
 /// This prevents rapid successive saves from causing multiple reloads.
@@ -76,14 +76,22 @@ impl ManifestWatcher {
             loop {
                 match std_rx.recv() {
                     Ok(Ok(event)) => {
-                        let is_relevant = matches!(
-                            event.kind,
-                            EventKind::Modify(_) | EventKind::Create(_)
-                        ) && event.paths.iter().any(|p| {
+                        let matches_file = event.paths.iter().any(|p| {
                             p.file_name()
                                 .map(|f| f == manifest_filename_clone)
                                 .unwrap_or(false)
                         });
+
+                        if matches_file {
+                            debug!("Hot-reload: file event {:?} for {:?}", event.kind, event.paths);
+                        }
+
+                        let is_relevant = matches!(
+                            event.kind,
+                            EventKind::Modify(_)
+                                | EventKind::Create(_)
+                                | EventKind::Remove(_)
+                        ) && matches_file;
 
                         if is_relevant && notify_tx.blocking_send(()).is_err() {
                             // Receiver dropped, stop watching

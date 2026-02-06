@@ -1,66 +1,49 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use tokio::sync::{mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
+use crate::api::stop_graphql_server;
 use crate::hot_reload::diff::{compute_diff, ReloadAction};
-use crate::indexer::task_tracker::active_indexing_count;
+use crate::logger::mark_shutdown_started;
 use crate::manifest::core::Manifest;
 use crate::manifest::yaml::read_manifest;
-use crate::system_state::{set_reload_state, ReloadState};
+use crate::system_state::{initiate_shutdown, set_reload_state, ReloadState};
 
-/// Timeout for draining active indexing tasks during a reload.
-const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Drain poll interval.
-const DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// Exit code used to signal the process manager that a restart is needed.
+/// 75 = EX_TEMPFAIL (sysexits.h), conventionally means "try again later".
+pub const RELOAD_EXIT_CODE: i32 = 75;
 
 /// Coordinates hot-reload of the rindexer manifest.
 ///
 /// Listens for reload signals from `ManifestWatcher`, validates the new manifest,
-/// computes a diff, and orchestrates selective restart of affected components.
+/// computes a diff, and triggers a graceful process restart when changes are detected.
 ///
-/// The orchestrator guarantees that the system is never left with nothing running:
-/// - Validates the new manifest BEFORE stopping anything
-/// - Falls back to the old config if the new one fails to start
+/// The orchestrator validates the new YAML before taking any action — invalid configs
+/// are rejected and the current process keeps running.
 pub struct ReloadOrchestrator {
     manifest_path: PathBuf,
-    /// Stored for future use when full indexing restart is implemented.
-    #[allow(dead_code)]
-    project_path: PathBuf,
     current_manifest: Arc<RwLock<Arc<Manifest>>>,
     reload_rx: mpsc::Receiver<PathBuf>,
-    generation_token: CancellationToken,
-    reload_count: u64,
 }
 
 impl ReloadOrchestrator {
     pub fn new(
         manifest_path: PathBuf,
-        project_path: PathBuf,
+        _project_path: PathBuf,
         initial_manifest: Arc<Manifest>,
         reload_rx: mpsc::Receiver<PathBuf>,
-        generation_token: CancellationToken,
+        _generation_token: CancellationToken,
     ) -> Self {
         Self {
             manifest_path,
-            project_path,
             current_manifest: Arc::new(RwLock::new(initial_manifest)),
             reload_rx,
-            generation_token,
-            reload_count: 0,
         }
     }
 
-    /// Returns a shared reference to the current manifest.
-    pub fn current_manifest(&self) -> Arc<RwLock<Arc<Manifest>>> {
-        Arc::clone(&self.current_manifest)
-    }
-
-    /// Run the orchestrator loop. Exits when the reload channel closes or global shutdown occurs.
     pub async fn run(&mut self, shutdown_token: CancellationToken) {
         info!("Hot-reload: orchestrator started");
 
@@ -81,7 +64,7 @@ impl ReloadOrchestrator {
         info!("Hot-reload: processing config change...");
         set_reload_state(ReloadState::Reloading);
 
-        // Step 1: Validate the new manifest BEFORE stopping anything
+        // Step 1: Validate the new manifest BEFORE doing anything
         let new_manifest = match read_manifest(&self.manifest_path) {
             Ok(m) => m,
             Err(e) => {
@@ -124,83 +107,21 @@ impl ReloadOrchestrator {
                     reason
                 )));
             }
-            ReloadAction::HotApply => {
-                info!("Hot-reload: applying config-only changes without restart");
-                *self.current_manifest.write().await = Arc::new(new_manifest);
-                self.reload_count += 1;
-                info!("Hot-reload: config updated (reload #{})", self.reload_count);
-                set_reload_state(ReloadState::Running);
-            }
-            ReloadAction::SelectiveRestart(plan) => {
+            ReloadAction::HotApply | ReloadAction::SelectiveRestart(_) => {
+                info!("Hot-reload: valid config change detected, restarting process...");
+                set_reload_state(ReloadState::Reloading);
+
+                // Graceful shutdown: release ports and stop active tasks before exiting
+                mark_shutdown_started();
+                stop_graphql_server();
+                initiate_shutdown().await;
+
                 info!(
-                    "Hot-reload: selective restart needed - add: {:?}, remove: {:?}, restart: {:?}, reconnect: {:?}",
-                    plan.contracts_to_add,
-                    plan.contracts_to_remove,
-                    plan.contracts_to_restart,
-                    plan.networks_to_reconnect,
+                    "Hot-reload: exiting with code {} for process manager to restart",
+                    RELOAD_EXIT_CODE
                 );
-
-                // Step 4: Cancel current generation
-                info!("Hot-reload: cancelling current indexing generation...");
-                self.generation_token.cancel();
-
-                // Step 5: Wait for active tasks to drain
-                if let Err(e) = drain_active_tasks().await {
-                    warn!("Hot-reload: {}", e);
-                }
-
-                // Step 6: Create fresh generation token for new indexers
-                self.generation_token = CancellationToken::new();
-
-                // Step 7: Update manifest
-                *self.current_manifest.write().await = Arc::new(new_manifest);
-                self.reload_count += 1;
-
-                // Step 8: Signal that new generation should start.
-                // The actual restart of indexing is handled by the caller (start.rs) which
-                // monitors the generation token and restarts when it sees cancellation.
-                // Here we just update state and let the main loop handle restart.
-                info!(
-                    "Hot-reload: manifest updated, new generation ready (reload #{})",
-                    self.reload_count
-                );
-                set_reload_state(ReloadState::Running);
+                std::process::exit(RELOAD_EXIT_CODE);
             }
         }
-    }
-
-    /// Returns the current generation's cancellation token.
-    pub fn generation_token(&self) -> CancellationToken {
-        self.generation_token.clone()
-    }
-
-    pub fn reload_count(&self) -> u64 {
-        self.reload_count
-    }
-}
-
-/// Wait for all active indexing tasks to finish, with a timeout.
-async fn drain_active_tasks() -> Result<(), String> {
-    let start = tokio::time::Instant::now();
-    let mut active = active_indexing_count();
-
-    info!("Hot-reload: draining {} active indexing tasks...", active);
-
-    loop {
-        if active == 0 {
-            info!("Hot-reload: all indexing tasks drained successfully");
-            return Ok(());
-        }
-
-        if start.elapsed() > DRAIN_TIMEOUT {
-            return Err(format!(
-                "Hot-reload: drain timeout after {}s with {} tasks still active. Proceeding anyway.",
-                DRAIN_TIMEOUT.as_secs(),
-                active
-            ));
-        }
-
-        tokio::time::sleep(DRAIN_POLL_INTERVAL).await;
-        active = active_indexing_count();
     }
 }

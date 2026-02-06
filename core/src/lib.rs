@@ -2,6 +2,7 @@
 pub mod adaptive_concurrency;
 pub mod generator;
 pub mod hot_reload;
+pub use hot_reload::RELOAD_EXIT_CODE;
 pub mod indexer;
 pub mod layer_extensions;
 pub mod manifest;
