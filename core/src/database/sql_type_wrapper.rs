@@ -1323,6 +1323,60 @@ fn process_tuple(abi_inputs: &[ABIInput], tokens: &[DynSolValue]) -> Vec<Ethereu
     wrappers
 }
 
+/// Converts a tuple (struct) to a JSON object for JSONB storage.
+/// Used when serializing arrays of tuples (tuple[]) which cannot be flattened into columns.
+fn tuple_to_json_value(components: &[ABIInput], values: &[DynSolValue]) -> Value {
+    let mut map = serde_json::Map::new();
+    for (component, value) in components.iter().zip(values.iter()) {
+        let json_value = match value {
+            DynSolValue::String(s) => Value::String(s.clone()),
+            DynSolValue::Uint(u, _) => json!(u.to_string()),
+            DynSolValue::Int(i, _) => json!(i.to_string()),
+            DynSolValue::Bool(b) => Value::Bool(*b),
+            DynSolValue::Address(a) => Value::String(format!("{:?}", a)),
+            DynSolValue::Bytes(b) => Value::String(format!("0x{}", hex::encode(b))),
+            DynSolValue::FixedBytes(b, _) => Value::String(format!("0x{}", hex::encode(b))),
+            DynSolValue::Tuple(nested) => {
+                // Handle nested tuples recursively
+                if let Some(nested_components) = &component.components {
+                    tuple_to_json_value(nested_components, nested)
+                } else {
+                    Value::Null
+                }
+            }
+            DynSolValue::Array(arr) | DynSolValue::FixedArray(arr) => {
+                // Handle nested arrays within tuple
+                let json_arr: Vec<Value> = arr
+                    .iter()
+                    .map(|v| match v {
+                        DynSolValue::String(s) => Value::String(s.clone()),
+                        DynSolValue::Uint(u, _) => json!(u.to_string()),
+                        DynSolValue::Int(i, _) => json!(i.to_string()),
+                        DynSolValue::Bool(b) => Value::Bool(*b),
+                        DynSolValue::Address(a) => Value::String(format!("{:?}", a)),
+                        DynSolValue::Bytes(b) => Value::String(format!("0x{}", hex::encode(b))),
+                        DynSolValue::FixedBytes(b, _) => {
+                            Value::String(format!("0x{}", hex::encode(b)))
+                        }
+                        DynSolValue::Tuple(nested_tuple) => {
+                            if let Some(nested_components) = &component.components {
+                                tuple_to_json_value(nested_components, nested_tuple)
+                            } else {
+                                Value::Null
+                            }
+                        }
+                        _ => Value::Null,
+                    })
+                    .collect();
+                Value::Array(json_arr)
+            }
+            _ => Value::Null,
+        };
+        map.insert(component.name.clone(), json_value);
+    }
+    Value::Object(map)
+}
+
 fn tuple_solidity_type_to_ethereum_sql_type_wrapper(
     abi_inputs: &[ABIInput],
 ) -> Option<Vec<EthereumSqlTypeWrapper>> {
@@ -1746,13 +1800,25 @@ fn map_log_token_to_ethereum_wrapper(
                         DynSolValue::FixedArray(_) | DynSolValue::Array(_) => {
                             unreachable!("Nested arrays are not supported by the EVM")
                         }
-                        DynSolValue::Tuple(tuple) => process_tuple(
-                            abi_input
+                        DynSolValue::Tuple(_) => {
+                            // Array of tuples - serialize entire array as JSONB
+                            // We cannot flatten tuple arrays into separate columns since array length varies
+                            let components = abi_input
                                 .components
                                 .as_ref()
-                                .expect("Tuple should have a component ABI on"),
-                            tuple,
-                        ),
+                                .expect("Tuple array should have components");
+                            let json_array: Vec<Value> = tokens
+                                .iter()
+                                .filter_map(|token| {
+                                    if let DynSolValue::Tuple(tuple_values) = token {
+                                        Some(tuple_to_json_value(components, tuple_values))
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+                            vec![EthereumSqlTypeWrapper::JSONB(Value::Array(json_array))]
+                        }
                         _ => {
                             unimplemented!("CustomStruct and Function are not supported yet - please raise issue in github with ABI to recreate")
                         }
