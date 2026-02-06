@@ -1,6 +1,7 @@
 // public
 pub mod adaptive_concurrency;
 pub mod generator;
+pub mod hot_reload;
 pub mod indexer;
 pub mod layer_extensions;
 pub mod manifest;
