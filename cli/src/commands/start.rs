@@ -404,6 +404,7 @@ pub async fn start(
     project_path: PathBuf,
     command: &StartSubcommands,
     auto_yes: bool,
+    watch: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     setup_info_logger();
 
@@ -481,6 +482,15 @@ pub async fn start(
                 return Err(e.into());
             }
         }
+    }
+
+    if watch && manifest.project_type == ProjectType::Rust {
+        print_warn_message(
+            "Hot-reload (--watch) is only supported for no-code projects. Flag will be ignored.",
+        );
+    }
+    if watch && manifest.project_type == ProjectType::NoCode {
+        rindexer_info!("Hot-reload mode enabled: watching rindexer.yaml for changes");
     }
 
     match manifest.project_type {
