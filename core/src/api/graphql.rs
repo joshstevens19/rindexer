@@ -212,9 +212,7 @@ pub fn stop_graphql_server() {
         let _ = Command::new("kill").args(["-TERM", &pid.to_string()]).output();
 
         #[cfg(windows)]
-        let _ = Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .output();
+        let _ = Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).output();
     }
 }
 

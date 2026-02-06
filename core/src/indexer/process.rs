@@ -328,9 +328,7 @@ async fn live_indexing_for_contract_event_dependencies(
     let callback_permits = Arc::new(Semaphore::new(1));
 
     // Use the first event's cancel_token -- all events in this generation share the same token.
-    let generation_cancel = events
-        .first()
-        .map(|(config, _)| config.cancel_token().clone());
+    let generation_cancel = events.first().map(|(config, _)| config.cancel_token().clone());
 
     loop {
         if !is_running() {

@@ -29,17 +29,11 @@ impl ManifestWatcher {
     /// This function runs indefinitely. It spawns a blocking thread for the `notify` watcher
     /// and a tokio task for debouncing. Cancel the parent task to stop watching.
     pub async fn run(self) -> Result<(), ManifestWatchError> {
-        let watch_path = self
-            .manifest_path
-            .parent()
-            .ok_or(ManifestWatchError::NoParentDirectory)?
-            .to_path_buf();
+        let watch_path =
+            self.manifest_path.parent().ok_or(ManifestWatchError::NoParentDirectory)?.to_path_buf();
 
-        let manifest_filename = self
-            .manifest_path
-            .file_name()
-            .ok_or(ManifestWatchError::NoFileName)?
-            .to_os_string();
+        let manifest_filename =
+            self.manifest_path.file_name().ok_or(ManifestWatchError::NoFileName)?.to_os_string();
 
         // Channel from the notify watcher (sync) to our async debounce loop
         let (notify_tx, mut notify_rx) = mpsc::channel::<()>(16);
@@ -77,9 +71,7 @@ impl ManifestWatcher {
                 match std_rx.recv() {
                     Ok(Ok(event)) => {
                         let matches_file = event.paths.iter().any(|p| {
-                            p.file_name()
-                                .map(|f| f == manifest_filename_clone)
-                                .unwrap_or(false)
+                            p.file_name().map(|f| f == manifest_filename_clone).unwrap_or(false)
                         });
 
                         if matches_file {
@@ -88,9 +80,7 @@ impl ManifestWatcher {
 
                         let is_relevant = matches!(
                             event.kind,
-                            EventKind::Modify(_)
-                                | EventKind::Create(_)
-                                | EventKind::Remove(_)
+                            EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
                         ) && matches_file;
 
                         if is_relevant && notify_tx.blocking_send(()).is_err() {

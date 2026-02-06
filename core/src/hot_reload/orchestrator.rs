@@ -37,11 +37,7 @@ impl ReloadOrchestrator {
         reload_rx: mpsc::Receiver<PathBuf>,
         _generation_token: CancellationToken,
     ) -> Self {
-        Self {
-            manifest_path,
-            current_manifest: Arc::new(RwLock::new(initial_manifest)),
-            reload_rx,
-        }
+        Self { manifest_path, current_manifest: Arc::new(RwLock::new(initial_manifest)), reload_rx }
     }
 
     pub async fn run(&mut self, shutdown_token: CancellationToken) {
@@ -69,10 +65,7 @@ impl ReloadOrchestrator {
             Ok(m) => m,
             Err(e) => {
                 error!("Hot-reload: new manifest is invalid, keeping current config: {}", e);
-                set_reload_state(ReloadState::ReloadFailed(format!(
-                    "Invalid manifest: {}",
-                    e
-                )));
+                set_reload_state(ReloadState::ReloadFailed(format!("Invalid manifest: {}", e)));
                 return;
             }
         };
@@ -84,11 +77,7 @@ impl ReloadOrchestrator {
         info!(
             "Hot-reload: detected {} change(s): {:?}",
             diff.changes.len(),
-            diff.changes
-                .iter()
-                .map(|c| format!("{:?}", c))
-                .collect::<Vec<_>>()
-                .join(", ")
+            diff.changes.iter().map(|c| format!("{:?}", c)).collect::<Vec<_>>().join(", ")
         );
 
         // Step 3: Act on the diff

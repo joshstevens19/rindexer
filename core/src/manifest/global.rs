@@ -20,10 +20,6 @@ pub struct Global {
 
 impl Default for Global {
     fn default() -> Self {
-        Self {
-            contracts: None,
-            etherscan_api_key: None,
-            health_port: default_health_port(),
-        }
+        Self { contracts: None, etherscan_api_key: None, health_port: default_health_port() }
     }
 }

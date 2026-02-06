@@ -374,7 +374,10 @@ storage:
         let diff = compute_diff(&old, &new);
 
         assert!(matches!(diff.action, ReloadAction::SelectiveRestart(_)));
-        assert!(diff.changes.iter().any(|c| matches!(c, ManifestChange::ContractAdded(name) if name == "WETH")));
+        assert!(diff
+            .changes
+            .iter()
+            .any(|c| matches!(c, ManifestChange::ContractAdded(name) if name == "WETH")));
 
         if let ReloadAction::SelectiveRestart(plan) = &diff.action {
             assert!(plan.contracts_to_add.contains(&"WETH".to_string()));
@@ -412,7 +415,10 @@ storage:
         let diff = compute_diff(&old, &new);
 
         assert!(matches!(diff.action, ReloadAction::SelectiveRestart(_)));
-        assert!(diff.changes.iter().any(|c| matches!(c, ManifestChange::ContractRemoved(name) if name == "WETH")));
+        assert!(diff
+            .changes
+            .iter()
+            .any(|c| matches!(c, ManifestChange::ContractRemoved(name) if name == "WETH")));
 
         if let ReloadAction::SelectiveRestart(plan) = &diff.action {
             assert!(plan.contracts_to_remove.contains(&"WETH".to_string()));
@@ -428,9 +434,10 @@ storage:
         let diff = compute_diff(&old, &new);
 
         assert!(matches!(diff.action, ReloadAction::SelectiveRestart(_)));
-        assert!(diff.changes.iter().any(
-            |c| matches!(c, ManifestChange::NetworkRpcChanged(name) if name == "ethereum")
-        ));
+        assert!(diff
+            .changes
+            .iter()
+            .any(|c| matches!(c, ManifestChange::NetworkRpcChanged(name) if name == "ethereum")));
 
         if let ReloadAction::SelectiveRestart(plan) = &diff.action {
             assert!(plan.networks_to_reconnect.contains(&"ethereum".to_string()));
