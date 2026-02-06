@@ -1820,7 +1820,10 @@ fn map_log_token_to_ethereum_wrapper(
                             vec![EthereumSqlTypeWrapper::JSONB(Value::Array(json_array))]
                         }
                         _ => {
-                            unimplemented!("CustomStruct and Function are not supported yet - please raise issue in github with ABI to recreate")
+                            // Debug: print what token type we actually received
+                            eprintln!("DEBUG: Unhandled token type in array processing: {:?}", token_type);
+                            eprintln!("DEBUG: ABI input: {:?}", abi_input);
+                            unimplemented!("Unhandled token type in array - first_token: {:?}, abi_input.type_: {}", token_type, abi_input.type_)
                         }
                     }
                 }
