@@ -83,13 +83,23 @@ Options:
   -p, --path <PATH>
           optional - The path to run the command in, default will be where the command is run
 
+  -y, --yes
+          Auto-confirm all schema migration prompts. Useful for CI/CD pipelines.
+
+  -w, --watch
+          Watch rindexer.yaml for changes and hot-reload (no-code projects only).
+
   -h, --help
           Print help (see a summary with '-h')
+```
+
+:::info
+The `--watch` flag must come **before** the subcommand: `rindexer start --watch all`, not `rindexer start all --watch`. See the [Hot Reload](/docs/start-building/hot-reload) documentation for details.
+:::
 
 :::info
 The health monitoring server runs on port 8080 by default. You can configure it in your `rindexer.yaml` file using the `health_port` setting. See the [Running](/docs/start-building/running#health-monitoring) documentation for more details.
 :::
-```
 
 ## add
 
