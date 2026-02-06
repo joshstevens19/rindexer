@@ -243,13 +243,32 @@ where
             + Clone,
         Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
     {
-        let csv = AsyncCsvAppender::new(
-            r"/Users/pawellula/RustroverProjects/rindexer/cli/../examples/rindexer_factory_indexing/generated_csv/UniswapV3Pool/uniswapv3pool-swap.csv",
-        );
-        if !Path::new(r"/Users/pawellula/RustroverProjects/rindexer/cli/../examples/rindexer_factory_indexing/generated_csv/UniswapV3Pool/uniswapv3pool-swap.csv").exists() {
-            csv.append_header(vec!["contract_address".into(), "sender".into(), "recipient".into(), "amount_0".into(), "amount_1".into(), "sqrt_price_x96".into(), "liquidity".into(), "tick".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()])
-                .await
-                .expect("Failed to write CSV header");
+        let csv_path = std::env::current_dir()
+            .expect("Failed to get current directory")
+            .join(r"generated_csv/UniswapV3Pool/uniswapv3pool-swap.csv");
+        let csv = AsyncCsvAppender::new(csv_path.to_str().expect("Failed to convert csv path"));
+        if !csv_path.exists() {
+            csv.append_header(
+                vec![
+                    "contract_address".into(),
+                    "sender".into(),
+                    "recipient".into(),
+                    "amount_0".into(),
+                    "amount_1".into(),
+                    "sqrt_price_x96".into(),
+                    "liquidity".into(),
+                    "tick".into(),
+                    "tx_hash".into(),
+                    "block_number".into(),
+                    "block_hash".into(),
+                    "network".into(),
+                    "tx_index".into(),
+                    "log_index".into(),
+                ]
+                .into(),
+            )
+            .await
+            .expect("Failed to write CSV header");
         }
 
         Self {
@@ -397,7 +416,7 @@ where
         let index_event_in_order = contract_details
             .index_event_in_order
             .as_ref()
-            .is_some_and(|vec| vec.contains(&event_name.to_string()));
+            .map_or(false, |vec| vec.contains(&event_name.to_string()));
 
         // Expect providers to have been initialized, but it's an async init so this should
         // be fast but for correctness we must await each future.
@@ -432,7 +451,7 @@ where
                             .networks
                             .iter()
                             .find(|n| n.name == c.network)
-                            .is_some_and(|n| n.disable_logs_bloom_checks.unwrap_or_default()),
+                            .map_or(false, |n| n.disable_logs_bloom_checks.unwrap_or_default()),
                     }
                 })
                 .collect(),
