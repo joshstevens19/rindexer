@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -28,6 +28,8 @@ const DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// - Falls back to the old config if the new one fails to start
 pub struct ReloadOrchestrator {
     manifest_path: PathBuf,
+    /// Stored for future use when full indexing restart is implemented.
+    #[allow(dead_code)]
     project_path: PathBuf,
     current_manifest: Arc<RwLock<Arc<Manifest>>>,
     reload_rx: mpsc::Receiver<PathBuf>,
@@ -75,12 +77,12 @@ impl ReloadOrchestrator {
         }
     }
 
-    async fn handle_reload(&mut self, path: PathBuf) {
+    async fn handle_reload(&mut self, _path: PathBuf) {
         info!("Hot-reload: processing config change...");
         set_reload_state(ReloadState::Reloading);
 
         // Step 1: Validate the new manifest BEFORE stopping anything
-        let new_manifest = match read_manifest(&path) {
+        let new_manifest = match read_manifest(&self.manifest_path) {
             Ok(m) => m,
             Err(e) => {
                 error!("Hot-reload: new manifest is invalid, keeping current config: {}", e);

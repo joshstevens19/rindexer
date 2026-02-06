@@ -269,6 +269,7 @@ async fn start_indexing_traces(
             network_details.end_block,
             indexing_distance_from_head,
             network_name.clone(),
+            cancel_token.clone(),
         ));
 
         non_blocking_process_events.push(block_fetch_handle);
@@ -335,7 +336,6 @@ async fn start_indexing_contract_events(
             let registry = Arc::clone(&registry);
             let event_progress_state = Arc::clone(&event_progress_state);
             let dependencies = dependencies.to_vec();
-            let cancel_token = cancel_token.clone();
 
             block_tasks.push(async move {
                 let config = SyncConfig {

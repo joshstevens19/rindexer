@@ -274,7 +274,7 @@ fn diff_native_transfers(
     old: &Manifest,
     new: &Manifest,
     changes: &mut Vec<ManifestChange>,
-    plan: &mut RestartPlan,
+    _plan: &mut RestartPlan,
     config_only: &mut bool,
 ) {
     let old_yaml = serde_yaml::to_string(&old.native_transfers).unwrap_or_default();

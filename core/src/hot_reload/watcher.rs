@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc as std_mpsc;
 use std::time::Duration;
 
@@ -51,7 +51,7 @@ impl ManifestWatcher {
             let notify_tx = notify_tx;
             let (std_tx, std_rx) = std_mpsc::channel();
 
-            let mut watcher = RecommendedWatcher::new(
+            let watcher = RecommendedWatcher::new(
                 move |result: Result<Event, notify::Error>| {
                     let _ = std_tx.send(result);
                 },

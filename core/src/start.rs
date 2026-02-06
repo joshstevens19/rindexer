@@ -7,6 +7,8 @@ use tracing::{error, info};
 
 use crate::database::clickhouse::setup::SetupClickhouseError;
 use crate::events::RindexerEventEmitter;
+use crate::hot_reload::orchestrator::ReloadOrchestrator;
+use crate::hot_reload::watcher::ManifestWatcher;
 use crate::indexer::start::{start_historical_indexing, start_live_indexing};
 use crate::{
     api::{
@@ -46,6 +48,7 @@ pub struct StartDetails<'a> {
     pub indexing_details: Option<IndexingDetails>,
     pub graphql_details: GraphqlOverrideSettings,
     pub cron_scheduler_handle: Option<tokio::task::JoinHandle<Result<(), String>>>,
+    pub watch: bool,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -311,12 +314,35 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                     .map_err(StartRindexerError::CouldNotStartIndexing)?;
                 }
 
-                // Do not need now with the main shutdown keeping around in-case
-                // if details.graphql_details.enabled {
-                //     signal::ctrl_c()
-                //         .await
-                //         .map_err(|_| StartRindexerError::FailedToListenToGraphqlSocket)?;
-                // }
+                // Spawn hot-reload watcher and orchestrator when --watch is enabled
+                if details.watch {
+                    let manifest_path_owned = details.manifest_path.clone();
+                    let (reload_tx, reload_rx) = tokio::sync::mpsc::channel::<PathBuf>(4);
+
+                    // Spawn the file watcher
+                    let watcher = ManifestWatcher::new(manifest_path_owned.clone(), reload_tx);
+                    tokio::spawn(async move {
+                        if let Err(e) = watcher.run().await {
+                            error!("Hot-reload: file watcher error: {}", e);
+                        }
+                    });
+
+                    // Spawn the reload orchestrator
+                    let orchestrator_shutdown = CancellationToken::new();
+                    let mut orchestrator = ReloadOrchestrator::new(
+                        manifest_path_owned,
+                        project_path.to_path_buf(),
+                        Arc::clone(&manifest),
+                        reload_rx,
+                        cancel_token.clone(),
+                    );
+                    let shutdown_token = orchestrator_shutdown.clone();
+                    tokio::spawn(async move {
+                        orchestrator.run(shutdown_token).await;
+                    });
+
+                    info!("Hot-reload: watching rindexer.yaml for changes");
+                }
             }
 
             if graphql_server_handle.is_none() && !manifest.has_any_contracts_live_indexing() {
@@ -408,6 +434,7 @@ pub struct StartNoCodeDetails<'a> {
     pub manifest_path: &'a PathBuf,
     pub indexing_details: IndexerNoCodeDetails,
     pub graphql_details: GraphqlOverrideSettings,
+    pub watch: bool,
 }
 
 #[derive(thiserror::Error, Debug)]
