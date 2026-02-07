@@ -116,21 +116,33 @@ impl ABIInput {
         inputs
             .iter()
             .flat_map(|input| {
-                if let Some(components) = &input.components {
-                    let new_path = path.clone().map_or_else(
-                        || vec![AbiNamePropertiesPath::new(&input.name, &input.type_)],
-                        |mut p| {
-                            p.push(AbiNamePropertiesPath::new(&input.name, &input.type_));
-                            p
-                        },
-                    );
+                // For tuple[] (array of structs), don't flatten - store as JSONB
+                // Array length varies so we can't pre-determine column count
+                let is_tuple_array = input.type_ == "tuple[]";
 
-                    ABIInput::generate_abi_name_properties(
-                        components,
-                        properties_type,
-                        Some(new_path),
-                    )
-                } else {
+                if let Some(components) = &input.components {
+                    if is_tuple_array {
+                        // Treat tuple[] as a leaf node - will be stored as JSONB
+                        // Fall through to the else branch below
+                    } else {
+                        let new_path = path.clone().map_or_else(
+                            || vec![AbiNamePropertiesPath::new(&input.name, &input.type_)],
+                            |mut p| {
+                                p.push(AbiNamePropertiesPath::new(&input.name, &input.type_));
+                                p
+                            },
+                        );
+
+                        return ABIInput::generate_abi_name_properties(
+                            components,
+                            properties_type,
+                            Some(new_path),
+                        );
+                    }
+                }
+
+                // Leaf node (primitive type, or tuple[] which is stored as JSONB)
+                {
                     let prefix = path.as_ref().map(|p| {
                         p.iter()
                             .map(|pp| camel_to_snake(&pp.abi_name))
