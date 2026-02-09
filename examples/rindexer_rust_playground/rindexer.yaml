@@ -32,8 +32,6 @@ contracts:
           - event_name: Approval
         network: ethereum
     abi: ./abis/erc20-abi.json
-    include_events:
-      - Transfer
     generate_csv: true
   - name: UniswapV3Pool
     details:
