@@ -147,19 +147,63 @@ tool to build documentation. Big shout out to `wevm` team for all the work they 
 
 Example projects showing different ways to use rindexer. There are three types: **no-code** (YAML-only, no Rust project), **table** (data transformations before storage), and **rust** (full Rust projects with custom handlers).
 
+#### No-code examples
+
+- **[rindexer_demo_cli](examples/rindexer_demo_cli/)** — Basic PostgreSQL indexing example for RocketPool ETH transfers.
+- **[nocode_clickhouse](examples/nocode_clickhouse/)** — Basic ClickHouse indexing example for RocketPool ETH transfers.
+- **[rindexer_demo_custom_indexing](examples/rindexer_demo_custom_indexing/)** — Custom indexing patterns demonstration.
+- **[rindexer_native_transfers](examples/rindexer_native_transfers/)** — Index native ETH transfers using trace_block (requires specific RPC support).
+- **[streams_playground](examples/streams_playground/)** — Stream integrations: Kafka, RabbitMQ, Redis, and Webhook examples.
+
 #### Rust examples
 
-- **[rindexer_rust_playground](examples/rindexer_rust_playground/)** — Kitchen-sink demo: multi-contract, multi-network, dual storage (PostgreSQL + CSV), event filtering, and global contracts.
+- **[rindexer_rust_playground](examples/rindexer_rust_playground/)** — Multi-contract, multi-network, dual storage (PostgreSQL + CSV), event filtering, and global contracts.
 - **[rindexer_factory_indexing](examples/rindexer_factory_indexing/)** — Factory pattern indexing: dynamically discovers and indexes contracts created by Uniswap V3 factory events.
 - **[clickhouse_factory_indexing](examples/clickhouse_factory_indexing/)** — Same factory pattern as above, but using ClickHouse as the storage backend.
 - **[rust_clickhouse](examples/rust_clickhouse/)** — Minimal "hello world" for rindexer with ClickHouse: single contract, single network.
 
+#### Table examples
+
+- **[tables_erc20_balances](examples/tables_erc20_balances/)** — Track ERC20 token balances per holder with add/subtract operations.
+- **[tables_erc20_allowances](examples/tables_erc20_allowances/)** — Track ERC20 approval allowances (owner → spender).
+- **[tables_erc721_ownership](examples/tables_erc721_ownership/)** — Track NFT ownership per token ID.
+- **[tables_erc1155_balances](examples/tables_erc1155_balances/)** — Track ERC1155 balances with TransferBatch iteration support.
+- **[tables_dex_pool](examples/tables_dex_pool/)** — Track Uniswap V2 pool state: reserves, volume, and LP positions.
+- **[tables_factory_uniswap](examples/tables_factory_uniswap/)** — Factory indexing with tables: track Uniswap V3 pool swap metrics.
+- **[tables_governance](examples/tables_governance/)** — Track governance votes with compound primary keys.
+- **[tables_token_supply](examples/tables_token_supply/)** — Track token supply with mints/burns using global tables.
+- **[tables_registry_delete](examples/tables_registry_delete/)** — Demonstrates delete operations for maintaining active sender registry.
+- **[tables_view_calls](examples/tables_view_calls/)** — Enrich events with on-chain view call data.
+- **[tables_cron_chainlink_price](examples/tables_cron_chainlink_price/)** — Cron-triggered tables to fetch Chainlink prices on schedule.
+- **[tables_cron_historical_sync](examples/tables_cron_historical_sync/)** — Cron historical sync: replay cron operations at past blocks.
+- **[tables_factory_cron](examples/tables_factory_cron/)** — Combine factory indexing with cron operations.
+
+#### Summary table
+
 | Example | Type | Key differentiator | Storage | Complexity |
 |---|---|---|---|---|
-| `rindexer_rust_playground` | Rust | Multi-contract, multi-network, dual storage | PG + CSV | High |
+| `rindexer_demo_cli` | No-code | Basic PostgreSQL indexing | PostgreSQL | Low |
+| `nocode_clickhouse` | No-code | Basic ClickHouse indexing | ClickHouse | Low |
+| `rindexer_demo_custom_indexing` | No-code | Custom indexing patterns | PostgreSQL | Low |
+| `rindexer_native_transfers` | No-code | Native ETH transfer indexing | Streams | Medium |
+| `streams_playground` | No-code | Stream integrations (Kafka, RabbitMQ, etc.) | Streams | Medium |
+| `rust_clickhouse` | Rust | Minimal starter example | ClickHouse | Low |
 | `rindexer_factory_indexing` | Rust | Factory pattern (dynamic contract discovery) | PG + CSV | Medium |
 | `clickhouse_factory_indexing` | Rust | Factory pattern on ClickHouse | ClickHouse | Medium |
-| `rust_clickhouse` | Rust | Minimal starter example | ClickHouse | Low |
+| `rindexer_rust_playground` | Rust | Multi-contract, multi-network, dual storage | PG + CSV | High |
+| `tables_erc20_balances` | Table | Balance tracking with add/subtract | PostgreSQL | Medium |
+| `tables_erc20_allowances` | Table | Approval allowances tracking | PostgreSQL | Medium |
+| `tables_erc721_ownership` | Table | NFT ownership tracking | PostgreSQL | Medium |
+| `tables_erc1155_balances` | Table | Multi-token balance tracking | PostgreSQL | Medium |
+| `tables_dex_pool` | Table | DEX pool state tracking | PostgreSQL | Medium |
+| `tables_factory_uniswap` | Table | Factory + tables pattern | PostgreSQL | High |
+| `tables_governance` | Table | Compound primary keys demo | PostgreSQL | Medium |
+| `tables_token_supply` | Table | Global tables for supply tracking | PostgreSQL | Medium |
+| `tables_registry_delete` | Table | Delete operations demo | PostgreSQL | Medium |
+| `tables_view_calls` | Table | On-chain view call enrichment | PostgreSQL | Medium |
+| `tables_cron_chainlink_price` | Table | Cron-triggered data fetching | PostgreSQL | Medium |
+| `tables_cron_historical_sync` | Table | Historical cron replay | PostgreSQL | Medium |
+| `tables_factory_cron` | Table | Factory + cron pattern | PostgreSQL | High |
 
 ## Building
 
