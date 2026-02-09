@@ -1,0 +1,149 @@
+# Hot Reload
+
+Rindexer supports hot-reloading your `rindexer.yaml` configuration without manually stopping and restarting the process. When enabled with the `--watch` flag, rindexer monitors your YAML file for changes, validates the new configuration, and automatically restarts with the updated settings.
+
+:::info
+Hot reload is only available for **no-code** projects. Rust projects will show a warning if `--watch` is used.
+:::
+
+## Quick Start
+
+Add the `--watch` flag (or `-w`) before the subcommand:
+
+:::code-group
+
+```bash [indexer and graphql]
+rindexer start --watch all
+```
+
+```bash [indexer]
+rindexer start --watch indexer
+```
+
+```bash [graphql]
+rindexer start --watch graphql
+```
+
+:::
+
+Now edit your `rindexer.yaml` — rindexer will automatically detect the change, validate the new config, and restart.
+
+## How It Works
+
+When `--watch` is enabled, rindexer runs as two processes:
+
+1. **Outer process** — A lightweight restart loop that spawns and monitors the indexer
+2. **Inner process** — The actual indexer with a file watcher attached
+
+The inner process watches `rindexer.yaml` using OS-native file events (FSEvents on macOS, inotify on Linux). When a change is detected:
+
+1. **Debounce** — Waits 500ms for rapid successive saves to settle
+2. **Validate** — Parses the new YAML. If invalid, the change is rejected and the current config keeps running
+3. **Diff** — Compares old and new manifests to classify the change
+4. **Graceful shutdown** — Stops the GraphQL server, health server, and active indexing tasks
+5. **Restart** — The process exits with code `75`, the outer loop catches it and spawns a fresh process
+
+### Change Classification
+
+Not all changes are treated equally. Rindexer computes a diff to determine the appropriate action:
+
+| Change Type | Action |
+|---|---|
+| Contract added, removed, or modified | Restart |
+| Network RPC URL changed | Restart |
+| Storage configuration changed | Restart |
+| Config tuning (buffer, concurrency) | Restart |
+| Global settings changed | Restart |
+| Invalid YAML | **Rejected** — current config keeps running |
+| Project name changed | **Rejected** — requires manual restart |
+| Project type changed (rust / no-code) | **Rejected** — requires manual restart |
+| No meaningful change | Skipped |
+
+:::warn
+Project name changes are rejected because the name affects database schema naming. Changing it while running could cause data inconsistency. Stop the indexer, make the change, and restart manually.
+:::
+
+## Error Handling
+
+If you save an invalid `rindexer.yaml`, rindexer will log an error and keep the current configuration running:
+
+```
+ERROR Hot-reload: new manifest is invalid, keeping current config: ...
+```
+
+Fix the YAML error and save again — rindexer will pick up the corrected file.
+
+## Production Deployment
+
+The `--watch` flag includes a built-in restart loop that works out of the box for local development. For production, you can either use the built-in loop or rely on your process manager to handle restarts.
+
+### Docker
+
+```yaml
+services:
+  rindexer:
+    image: your-rindexer-image
+    command: rindexer start --watch all
+    restart: unless-stopped
+```
+
+The container will restart automatically when rindexer exits with code `75` on config change. It will stay stopped on clean shutdown (exit code `0`) or if you run `docker compose down`.
+
+### systemd
+
+```ini
+[Unit]
+Description=rindexer indexer
+After=network.target postgresql.service
+
+[Service]
+ExecStart=/usr/local/bin/rindexer start --watch all
+WorkingDirectory=/path/to/your/project
+Restart=on-failure
+RestartSec=1
+Environment=DATABASE_URL=postgresql://user:pass@localhost/db
+
+[Install]
+WantedBy=multi-user.target
+```
+
+With `Restart=on-failure`, systemd treats exit code `75` as a failure and restarts the service. Exit code `0` (clean shutdown via Ctrl+C or SIGTERM) is treated as success and stops the service.
+
+### Kubernetes
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+spec:
+  template:
+    spec:
+      containers:
+        - name: rindexer
+          command: ["rindexer", "start", "--watch", "all"]
+          # Kubernetes restarts containers automatically on non-zero exit
+          # Mount your rindexer.yaml via ConfigMap for easy updates
+          volumeMounts:
+            - name: config
+              mountPath: /app/rindexer.yaml
+              subPath: rindexer.yaml
+      volumes:
+        - name: config
+          configMap:
+            name: rindexer-config
+```
+
+Update the ConfigMap and rindexer will detect the change and restart:
+
+```bash
+kubectl create configmap rindexer-config --from-file=rindexer.yaml -o yaml --dry-run=client | kubectl apply -f -
+```
+
+:::warn
+Make sure `drop_each_run` is set to `false` in production. With `drop_each_run: true`, every restart drops and recreates your database tables.
+:::
+
+## Limitations
+
+- **No-code projects only** — Rust projects require recompilation, which is outside the scope of hot reload
+- **Full process restart** — Each reload restarts the entire indexer process. This means historical indexing re-runs from the last checkpoint (no data is lost, but there is a brief pause in live indexing)
+- **Exit code 75** — The process exits with code `75` (EX_TEMPFAIL) to signal a restart. Make sure your monitoring does not treat this as a crash

@@ -371,6 +371,11 @@ pub fn solidity_type_to_clickhouse_type(abi_type: &str) -> String {
                 int
             }
         }
+        "tuple" => panic!(
+            "Tuple arrays (tuple[]) are not yet supported for ClickHouse storage. \
+             This feature is only available for PostgreSQL. \
+             Consider using PostgreSQL or excluding events with tuple[] fields."
+        ),
         _ => panic!("Unsupported type: {}", base_type),
     };
 

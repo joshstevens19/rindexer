@@ -400,11 +400,52 @@ fn start_docker_compose(project_path: &PathBuf) -> Result<(), String> {
     check_docker_compose_status(project_path, 200)
 }
 
+/// When `--watch` is enabled, the outer process acts as a restart loop.
+/// The actual indexing runs in a child process that exits with code 75
+/// when a config change requires a restart.
+fn run_restart_loop() -> Result<(), Box<dyn std::error::Error>> {
+    let exe = env::current_exe()?;
+    let args: Vec<String> = env::args().skip(1).collect();
+
+    loop {
+        rindexer_info!("Hot-reload: starting rindexer process...");
+
+        let status = Command::new(&exe)
+            .args(&args)
+            .env("_RINDEXER_RESTART_LOOP", "1")
+            .status()
+            .map_err(|e| format!("Failed to start rindexer process: {}", e))?;
+
+        match status.code() {
+            Some(code) if code == rindexer::RELOAD_EXIT_CODE => {
+                rindexer_info!("Hot-reload: config change detected, restarting...");
+                thread::sleep(Duration::from_millis(200));
+                continue;
+            }
+            Some(0) => return Ok(()),
+            Some(code) => {
+                return Err(format!("rindexer exited with code {}", code).into());
+            }
+            None => {
+                // Terminated by signal (e.g., SIGKILL)
+                return Ok(());
+            }
+        }
+    }
+}
+
 pub async fn start(
     project_path: PathBuf,
     command: &StartSubcommands,
     auto_yes: bool,
+    watch: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // When --watch is enabled and we're the outer process, enter the restart loop.
+    // The child process does the actual indexing and exits with code 75 on config change.
+    if watch && env::var("_RINDEXER_RESTART_LOOP").is_err() {
+        return run_restart_loop();
+    }
+
     setup_info_logger();
 
     validate_rindexer_yaml_exist(&project_path);
@@ -483,6 +524,15 @@ pub async fn start(
         }
     }
 
+    if watch && manifest.project_type == ProjectType::Rust {
+        print_warn_message(
+            "Hot-reload (--watch) is only supported for no-code projects. Flag will be ignored.",
+        );
+    }
+    if watch && manifest.project_type == ProjectType::NoCode {
+        rindexer_info!("Hot-reload mode enabled: watching rindexer.yaml for changes");
+    }
+
     match manifest.project_type {
         ProjectType::Rust => {
             let project_cargo_manifest_path = project_path.join("Cargo.toml");
@@ -517,6 +567,7 @@ pub async fn start(
                         enabled: false,
                         override_port: None,
                     },
+                    watch,
                 };
 
                 start_rindexer_no_code(details).await.map_err(|e| {
@@ -532,6 +583,7 @@ pub async fn start(
                         enabled: true,
                         override_port: port.as_ref().and_then(|port| port.parse().ok()),
                     },
+                    watch,
                 };
 
                 start_rindexer_no_code(details).await.map_err(|e| {
@@ -547,6 +599,7 @@ pub async fn start(
                         enabled: true,
                         override_port: port.as_ref().and_then(|port| port.parse().ok()),
                     },
+                    watch,
                 };
 
                 let _ = start_rindexer_no_code(details).await.map_err(|e| {
