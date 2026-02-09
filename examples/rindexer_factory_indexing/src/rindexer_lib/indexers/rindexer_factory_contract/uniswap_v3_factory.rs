@@ -5,7 +5,7 @@ use super::super::super::typings::rindexer_factory_contract::events::uniswap_v3_
 use alloy::primitives::{I256, U256, U64};
 use rindexer::{
     event::callback_registry::EventCallbackRegistry, rindexer_error, rindexer_info,
-    EthereumSqlTypeWrapper, PgType, RindexerColorize,
+    EthereumSqlTypeWrapper, PgType,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -93,11 +93,7 @@ async fn owner_changed_handler(manifest_path: &PathBuf, registry: &mut EventCall
                 return Err(e.to_string());
             }
 
-            rindexer_info!(
-                "UniswapV3Factory::OwnerChanged - {} - {} events",
-                "INDEXED".green(),
-                results.len(),
-            );
+            rindexer_info!("UniswapV3Factory::OwnerChanged - INDEXED - {} events", results.len(),);
 
             Ok(())
         },

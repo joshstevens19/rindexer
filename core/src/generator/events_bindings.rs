@@ -187,22 +187,27 @@ fn generate_csv_instance(
     event_info: &EventInfo,
     csv: &Option<CsvDetails>,
 ) -> Result<Code, CreateCsvFileForEvent> {
-    let mut csv_path = csv.as_ref().map_or(PathBuf::from("generated_csv"), |c| {
+    let csv_relative = csv.as_ref().map_or(PathBuf::from("generated_csv"), |c| {
         PathBuf::from(c.path.strip_prefix("./").unwrap())
     });
 
-    csv_path = project_path.join(csv_path);
+    let csv_path = project_path.join(&csv_relative);
 
     if !contract.generate_csv.unwrap_or(true) {
         return Ok(Code::new(format!(
-            r#"let csv = AsyncCsvAppender::new(r"{}");"#,
-            csv_path.display(),
+            r#"let csv_path = std::env::current_dir().expect("Failed to get current directory").join(r"{}");
+            let csv = AsyncCsvAppender::new(csv_path.to_str().expect("Failed to convert csv path"));"#,
+            csv_relative.display(),
         )));
     }
 
     let csv_path_str = csv_path.to_str().expect("Failed to convert csv path to string");
-    let csv_path =
-        event_info.create_csv_file_for_event(project_path, &contract.name, csv_path_str)?;
+    // create_csv_file_for_event creates directories at code-gen time as a convenience
+    event_info.create_csv_file_for_event(project_path, &contract.name, csv_path_str)?;
+
+    let csv_file_name = format!("{}-{}.csv", &contract.name, event_info.name).to_lowercase();
+    let relative_csv_file = csv_relative.join(&contract.name).join(&csv_file_name);
+
     let headers: Vec<String> =
         event_info.csv_headers_for_event().iter().map(|h| format!("\"{h}\"")).collect();
 
@@ -210,16 +215,16 @@ fn generate_csv_instance(
 
     Ok(Code::new(format!(
         r#"
-        let csv = AsyncCsvAppender::new(r"{}");
-        if !Path::new(r"{}").exists() {{
-            csv.append_header(vec![{}].into())
+        let csv_path = std::env::current_dir().expect("Failed to get current directory").join(r"{relative_path}");
+        let csv = AsyncCsvAppender::new(csv_path.to_str().expect("Failed to convert csv path"));
+        if !csv_path.exists() {{
+            csv.append_header(vec![{headers}].into())
                 .await
                 .expect("Failed to write CSV header");
         }}
     "#,
-        csv_path,
-        csv_path,
-        headers_with_into.join(", ")
+        relative_path = relative_csv_file.display(),
+        headers = headers_with_into.join(", ")
     )))
 }
 
