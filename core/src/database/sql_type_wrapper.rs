@@ -1365,6 +1365,14 @@ fn tuple_to_json_value(components: &[ABIInput], values: &[DynSolValue]) -> Value
                                 Value::Null
                             }
                         }
+                        DynSolValue::CustomStruct { tuple, .. } => {
+                            // CustomStruct is used when alloy's eip712 feature is enabled
+                            if let Some(nested_components) = &component.components {
+                                tuple_to_json_value(nested_components, tuple)
+                            } else {
+                                Value::Null
+                            }
+                        }
                         _ => Value::Null,
                     })
                     .collect();
@@ -1560,27 +1568,37 @@ fn map_log_token_to_ethereum_wrapper(
             vec![EthereumSqlTypeWrapper::Bytes(Bytes::from(bytes.clone()))]
         }
         DynSolValue::FixedArray(tokens) | DynSolValue::Array(tokens) => {
+            // Check if this is a tuple array (dynamic or fixed-size like tuple[3])
+            let is_tuple_array = abi_input.type_.starts_with("tuple[");
+
             match tokens.first() {
-                None => match &abi_input.components {
-                    Some(components) => tuple_solidity_type_to_ethereum_sql_type_wrapper(
-                        components,
-                    )
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "map_log_token_to_ethereum_wrapper:: Unknown type: {}",
-                            abi_input.type_
-                        )
-                    }),
-                    None => {
-                        vec![solidity_type_to_ethereum_sql_type_wrapper(&abi_input.type_)
-                            .unwrap_or_else(|| {
-                                panic!(
-                                    "map_log_token_to_ethereum_wrapper:: Unknown type: {}",
-                                    abi_input.type_
-                                )
-                            })]
+                None => {
+                    // Empty array - for tuple arrays, return empty JSONB array
+                    // to maintain consistent column count (single JSONB column)
+                    if is_tuple_array {
+                        return vec![EthereumSqlTypeWrapper::JSONB(Value::Array(vec![]))];
                     }
-                },
+                    match &abi_input.components {
+                        Some(components) => tuple_solidity_type_to_ethereum_sql_type_wrapper(
+                            components,
+                        )
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "map_log_token_to_ethereum_wrapper:: Unknown type: {}",
+                                abi_input.type_
+                            )
+                        }),
+                        None => {
+                            vec![solidity_type_to_ethereum_sql_type_wrapper(&abi_input.type_)
+                                .unwrap_or_else(|| {
+                                    panic!(
+                                        "map_log_token_to_ethereum_wrapper:: Unknown type: {}",
+                                        abi_input.type_
+                                    )
+                                })]
+                        }
+                    }
+                }
                 Some(first_token) => {
                     // events arrays can only be one type so get it from the first one
                     let token_type = first_token;
@@ -2205,6 +2223,7 @@ mod tests {
     #[test]
     fn test_map_log_token_for_empty_tuple_array() {
         // Test handling of empty tuple array
+        // Must return a single JSONB([]) wrapper to maintain consistent column count
         let components = vec![
             make_abi_input("accountAddress", "string", None),
             make_abi_input("childContractScope", "uint8", None),
@@ -2215,7 +2234,53 @@ mod tests {
 
         let result = map_log_token_to_ethereum_wrapper(&abi_input, &token);
 
-        // Empty arrays have special handling - check that it doesn't panic
-        assert!(!result.is_empty());
+        // Must return exactly one JSONB wrapper with empty array
+        // This ensures column count matches non-empty tuple[] (which also returns 1 JSONB column)
+        assert_eq!(result.len(), 1, "Empty tuple[] should return single JSONB wrapper");
+        match &result[0] {
+            EthereumSqlTypeWrapper::JSONB(value) => {
+                assert!(value.is_array(), "JSONB wrapper should contain an array");
+                assert!(value.as_array().unwrap().is_empty(), "JSONB array should be empty");
+            }
+            other => panic!("Expected JSONB wrapper, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_map_log_token_for_fixed_size_tuple_array() {
+        // Test handling of fixed-size tuple array like tuple[2]
+        // Should be treated the same as dynamic tuple[] - stored as JSONB
+        let components = vec![
+            make_abi_input("accountAddress", "string", None),
+            make_abi_input("childContractScope", "uint8", None),
+        ];
+
+        // Note: type is "tuple[2]" not "tuple[]"
+        let abi_input = make_abi_input("accounts", "tuple[2]", Some(components));
+
+        let token = DynSolValue::FixedArray(vec![
+            DynSolValue::Tuple(vec![
+                DynSolValue::String("0xABC123".to_string()),
+                DynSolValue::Uint(U256::from(1), 8),
+            ]),
+            DynSolValue::Tuple(vec![
+                DynSolValue::String("0xDEF456".to_string()),
+                DynSolValue::Uint(U256::from(2), 8),
+            ]),
+        ]);
+
+        let result = map_log_token_to_ethereum_wrapper(&abi_input, &token);
+
+        // Must return exactly one JSONB wrapper (not flattened into multiple columns)
+        assert_eq!(result.len(), 1, "Fixed-size tuple[2] should return single JSONB wrapper");
+        match &result[0] {
+            EthereumSqlTypeWrapper::JSONB(value) => {
+                let arr = value.as_array().expect("Should be a JSON array");
+                assert_eq!(arr.len(), 2, "Should have 2 elements");
+                assert_eq!(arr[0]["accountAddress"], "0xABC123");
+                assert_eq!(arr[1]["accountAddress"], "0xDEF456");
+            }
+            other => panic!("Expected JSONB wrapper, got {:?}", other),
+        }
     }
 }

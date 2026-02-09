@@ -116,15 +116,14 @@ impl ABIInput {
         inputs
             .iter()
             .flat_map(|input| {
-                // For tuple[] (array of structs), don't flatten - store as JSONB
-                // Array length varies so we can't pre-determine column count
-                let is_tuple_array = input.type_ == "tuple[]";
+                // For tuple arrays (both dynamic tuple[] and fixed-size tuple[N]),
+                // don't flatten - store as JSONB since array length varies
+                let is_tuple_array = input.type_.starts_with("tuple[");
 
+                // Regular tuples with components get flattened into columns via recursion
+                // Tuple arrays skip this and are treated as leaf nodes for JSONB storage
                 if let Some(components) = &input.components {
-                    if is_tuple_array {
-                        // Treat tuple[] as a leaf node - will be stored as JSONB
-                        // Fall through to the else branch below
-                    } else {
+                    if !is_tuple_array {
                         let new_path = path.clone().map_or_else(
                             || vec![AbiNamePropertiesPath::new(&input.name, &input.type_)],
                             |mut p| {
