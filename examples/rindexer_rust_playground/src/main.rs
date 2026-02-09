@@ -67,6 +67,7 @@ async fn main() {
                     override_port: port,
                 },
                 cron_scheduler_handle: None,
+                watch: false,
             })
             .await;
 

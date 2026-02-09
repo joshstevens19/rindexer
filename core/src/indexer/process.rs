@@ -327,8 +327,15 @@ async fn live_indexing_for_contract_event_dependencies(
     let target_iteration_duration = Duration::from_millis(200);
     let callback_permits = Arc::new(Semaphore::new(1));
 
+    // Use the first event's cancel_token -- all events in this generation share the same token.
+    let generation_cancel = events.first().map(|(config, _)| config.cancel_token().clone());
+
     loop {
         if !is_running() {
+            break;
+        }
+        if generation_cancel.as_ref().is_some_and(|t| t.is_cancelled()) {
+            info!("Hot-reload: generation cancelled, stopping live indexing for {}", network);
             break;
         }
 
@@ -613,7 +620,7 @@ async fn trigger_event(
 
     let should_update_progress = if fn_data.is_empty() {
         #[allow(clippy::needless_bool)]
-        if !is_running() {
+        if !is_running() || config.cancel_token().is_cancelled() {
             false
         } else {
             true

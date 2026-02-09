@@ -1,6 +1,8 @@
 // public
 pub mod adaptive_concurrency;
 pub mod generator;
+pub mod hot_reload;
+pub use hot_reload::RELOAD_EXIT_CODE;
 pub mod indexer;
 pub mod layer_extensions;
 pub mod manifest;
@@ -8,7 +10,9 @@ pub mod metrics;
 pub mod reth;
 
 mod system_state;
-pub use system_state::{initiate_shutdown, is_running};
+pub use system_state::{
+    get_reload_state, initiate_shutdown, is_running, set_reload_state, ReloadState,
+};
 
 mod health;
 pub use health::{start_health_server, HealthServer, HealthServerState, HealthStatus};

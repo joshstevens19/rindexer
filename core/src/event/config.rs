@@ -3,6 +3,7 @@ use alloy::primitives::{keccak256, Address, B256, U64};
 use alloy::rpc::types::ValueOrArray;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::event::contract_setup::{AddressDetails, IndexingContractSetup};
@@ -44,6 +45,8 @@ pub struct ContractEventProcessingConfig {
     pub index_event_in_order: bool,
     pub live_indexing: bool,
     pub indexing_distance_from_head: U64,
+    /// Per-generation cancellation token for hot-reload support.
+    pub cancel_token: CancellationToken,
 }
 
 impl ContractEventProcessingConfig {
@@ -120,6 +123,8 @@ pub struct FactoryEventProcessingConfig {
     pub index_event_in_order: bool,
     pub live_indexing: bool,
     pub indexing_distance_from_head: U64,
+    /// Per-generation cancellation token for hot-reload support.
+    pub cancel_token: CancellationToken,
 }
 
 impl FactoryEventProcessingConfig {
@@ -321,6 +326,13 @@ impl EventProcessingConfig {
         }
     }
 
+    pub fn cancel_token(&self) -> &CancellationToken {
+        match self {
+            Self::ContractEventProcessing(config) => &config.cancel_token,
+            Self::FactoryEventProcessing(config) => &config.cancel_token,
+        }
+    }
+
     pub fn to_event_filter(&self) -> Result<RindexerEventFilter, BuildRindexerFilterError> {
         match self {
             Self::ContractEventProcessing(config) => config.to_event_filter(),
@@ -352,6 +364,8 @@ pub struct TraceProcessingConfig {
     pub registry: Arc<TraceCallbackRegistry>,
     pub method: TraceProcessingMethod,
     pub stream_last_synced_block_file_path: Option<String>,
+    /// Per-generation cancellation token for hot-reload support.
+    pub cancel_token: CancellationToken,
 }
 
 impl TraceProcessingConfig {

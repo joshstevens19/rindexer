@@ -73,6 +73,10 @@ pub enum Commands {
         /// Auto-confirm all schema migration prompts. Useful for CI/CD pipelines.
         #[clap(long, short)]
         yes: bool,
+
+        /// Watch rindexer.yaml for changes and hot-reload (no-code projects only).
+        #[clap(long, short = 'w')]
+        watch: bool,
     },
 
     /// Add elements such as contracts to the rindexer.yaml file.

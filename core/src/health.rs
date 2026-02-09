@@ -6,8 +6,11 @@ use tokio::net::TcpListener;
 use tracing::{error, info};
 
 use crate::{
-    database::postgres::client::PostgresClient, indexer::task_tracker::active_indexing_count,
-    manifest::core::Manifest, metrics::metrics_handler, system_state::is_running,
+    database::postgres::client::PostgresClient,
+    indexer::task_tracker::active_indexing_count,
+    manifest::core::Manifest,
+    metrics::metrics_handler,
+    system_state::{get_reload_state, is_running, ReloadState},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +44,7 @@ pub enum HealthStatusType {
     Disabled,
     NoData,
     Stopped,
+    Reloading,
 }
 
 #[derive(Clone)]
@@ -140,6 +144,9 @@ async fn check_database_health(state: &HealthServerState) -> HealthStatusType {
 }
 
 fn check_indexing_health() -> HealthStatusType {
+    if matches!(get_reload_state(), ReloadState::Reloading) {
+        return HealthStatusType::Reloading;
+    }
     if is_running() {
         HealthStatusType::Healthy
     } else {

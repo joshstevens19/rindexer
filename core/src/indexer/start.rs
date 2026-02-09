@@ -9,6 +9,7 @@ use tokio::{
     task::{JoinError, JoinHandle},
     time::Instant,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use crate::database::clickhouse::client::{ClickhouseClient, ClickhouseConnectionError};
@@ -173,6 +174,7 @@ async fn start_indexing_traces(
     clickhouse: Option<Arc<ClickhouseClient>>,
     indexer: &Indexer,
     trace_registry: Arc<TraceCallbackRegistry>,
+    cancel_token: CancellationToken,
 ) -> Result<Vec<JoinHandle<Result<(), ProcessEventError>>>, StartIndexingError> {
     if !manifest.native_transfers.enabled {
         info!("Native transfer indexing disabled!");
@@ -257,6 +259,7 @@ async fn start_indexing_traces(
             registry: network_registry,
             method: network_details.method,
             stream_last_synced_block_file_path: None,
+            cancel_token: cancel_token.clone(),
         });
 
         let block_fetch_handle = tokio::spawn(native_transfer_block_fetch(
@@ -266,6 +269,7 @@ async fn start_indexing_traces(
             network_details.end_block,
             indexing_distance_from_head,
             network_name.clone(),
+            cancel_token.clone(),
         ));
 
         non_blocking_process_events.push(block_fetch_handle);
@@ -292,6 +296,7 @@ async fn start_indexing_contract_events(
     registry: Arc<EventCallbackRegistry>,
     dependencies: &[ContractEventDependencies],
     no_live_indexing_forced: bool,
+    cancel_token: CancellationToken,
 ) -> Result<
     (
         Vec<JoinHandle<Result<(), ProcessEventError>>>,
@@ -458,6 +463,7 @@ async fn start_indexing_contract_events(
                     },
                     index_event_in_order: event.index_event_in_order,
                     indexing_distance_from_head,
+                    cancel_token: cancel_token.clone(),
                 }
                 .into()
             }
@@ -490,6 +496,7 @@ async fn start_indexing_contract_events(
                 },
                 index_event_in_order: event.index_event_in_order,
                 indexing_distance_from_head,
+                cancel_token: cancel_token.clone(),
             }
             .into(),
         };
@@ -540,14 +547,22 @@ pub async fn start_historical_indexing(
     registry: Arc<EventCallbackRegistry>,
     trace_registry: Arc<TraceCallbackRegistry>,
     event_emitter: Option<RindexerEventEmitter>,
+    cancel_token: CancellationToken,
 ) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
     info!("Historical indexing started");
 
     let start = Instant::now();
 
-    let result =
-        start_indexing(manifest, project_path, dependencies, true, registry, trace_registry)
-            .await?;
+    let result = start_indexing(
+        manifest,
+        project_path,
+        dependencies,
+        true,
+        registry,
+        trace_registry,
+        cancel_token,
+    )
+    .await?;
 
     let duration = start.elapsed();
 
@@ -566,10 +581,20 @@ pub async fn start_live_indexing(
     dependencies: &[ContractEventDependencies],
     registry: Arc<EventCallbackRegistry>,
     trace_registry: Arc<TraceCallbackRegistry>,
+    cancel_token: CancellationToken,
 ) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
     info!("Live indexing started");
 
-    start_indexing(manifest, project_path, dependencies, false, registry, trace_registry).await
+    start_indexing(
+        manifest,
+        project_path,
+        dependencies,
+        false,
+        registry,
+        trace_registry,
+        cancel_token,
+    )
+    .await
 }
 
 async fn start_indexing(
@@ -579,6 +604,7 @@ async fn start_indexing(
     no_live_indexing_forced: bool,
     registry: Arc<EventCallbackRegistry>,
     trace_registry: Arc<TraceCallbackRegistry>,
+    cancel_token: CancellationToken,
 ) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
     let database = initialize_database(manifest).await?;
     let clickhouse = initialize_clickhouse(manifest).await?;
@@ -596,7 +622,8 @@ async fn start_indexing(
             database.clone(),
             clickhouse.clone(),
             &indexer,
-            trace_registry.clone()
+            trace_registry.clone(),
+            cancel_token.clone(),
         ),
         start_indexing_contract_events(
             manifest,
@@ -607,6 +634,7 @@ async fn start_indexing(
             registry.clone(),
             dependencies,
             no_live_indexing_forced,
+            cancel_token.clone(),
         )
     );
 
