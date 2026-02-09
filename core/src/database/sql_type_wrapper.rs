@@ -1323,6 +1323,68 @@ fn process_tuple(abi_inputs: &[ABIInput], tokens: &[DynSolValue]) -> Vec<Ethereu
     wrappers
 }
 
+/// Converts a tuple (struct) to a JSON object for JSONB storage.
+/// Used when serializing arrays of tuples (tuple[]) which cannot be flattened into columns.
+fn tuple_to_json_value(components: &[ABIInput], values: &[DynSolValue]) -> Value {
+    let mut map = serde_json::Map::new();
+    for (component, value) in components.iter().zip(values.iter()) {
+        let json_value = match value {
+            DynSolValue::String(s) => Value::String(s.clone()),
+            DynSolValue::Uint(u, _) => json!(u.to_string()),
+            DynSolValue::Int(i, _) => json!(i.to_string()),
+            DynSolValue::Bool(b) => Value::Bool(*b),
+            DynSolValue::Address(a) => Value::String(format!("{:?}", a)),
+            DynSolValue::Bytes(b) => Value::String(format!("0x{}", hex::encode(b))),
+            DynSolValue::FixedBytes(b, _) => Value::String(format!("0x{}", hex::encode(b))),
+            DynSolValue::Tuple(nested) => {
+                // Handle nested tuples recursively
+                if let Some(nested_components) = &component.components {
+                    tuple_to_json_value(nested_components, nested)
+                } else {
+                    Value::Null
+                }
+            }
+            DynSolValue::Array(arr) | DynSolValue::FixedArray(arr) => {
+                // Handle nested arrays within tuple
+                let json_arr: Vec<Value> = arr
+                    .iter()
+                    .map(|v| match v {
+                        DynSolValue::String(s) => Value::String(s.clone()),
+                        DynSolValue::Uint(u, _) => json!(u.to_string()),
+                        DynSolValue::Int(i, _) => json!(i.to_string()),
+                        DynSolValue::Bool(b) => Value::Bool(*b),
+                        DynSolValue::Address(a) => Value::String(format!("{:?}", a)),
+                        DynSolValue::Bytes(b) => Value::String(format!("0x{}", hex::encode(b))),
+                        DynSolValue::FixedBytes(b, _) => {
+                            Value::String(format!("0x{}", hex::encode(b)))
+                        }
+                        DynSolValue::Tuple(nested_tuple) => {
+                            if let Some(nested_components) = &component.components {
+                                tuple_to_json_value(nested_components, nested_tuple)
+                            } else {
+                                Value::Null
+                            }
+                        }
+                        DynSolValue::CustomStruct { tuple, .. } => {
+                            // CustomStruct is used when alloy's eip712 feature is enabled
+                            if let Some(nested_components) = &component.components {
+                                tuple_to_json_value(nested_components, tuple)
+                            } else {
+                                Value::Null
+                            }
+                        }
+                        _ => Value::Null,
+                    })
+                    .collect();
+                Value::Array(json_arr)
+            }
+            _ => Value::Null,
+        };
+        map.insert(component.name.clone(), json_value);
+    }
+    Value::Object(map)
+}
+
 fn tuple_solidity_type_to_ethereum_sql_type_wrapper(
     abi_inputs: &[ABIInput],
 ) -> Option<Vec<EthereumSqlTypeWrapper>> {
@@ -1506,27 +1568,37 @@ fn map_log_token_to_ethereum_wrapper(
             vec![EthereumSqlTypeWrapper::Bytes(Bytes::from(bytes.clone()))]
         }
         DynSolValue::FixedArray(tokens) | DynSolValue::Array(tokens) => {
+            // Check if this is a tuple array (dynamic or fixed-size like tuple[3])
+            let is_tuple_array = abi_input.type_.starts_with("tuple[");
+
             match tokens.first() {
-                None => match &abi_input.components {
-                    Some(components) => tuple_solidity_type_to_ethereum_sql_type_wrapper(
-                        components,
-                    )
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "map_log_token_to_ethereum_wrapper:: Unknown type: {}",
-                            abi_input.type_
-                        )
-                    }),
-                    None => {
-                        vec![solidity_type_to_ethereum_sql_type_wrapper(&abi_input.type_)
-                            .unwrap_or_else(|| {
-                                panic!(
-                                    "map_log_token_to_ethereum_wrapper:: Unknown type: {}",
-                                    abi_input.type_
-                                )
-                            })]
+                None => {
+                    // Empty array - for tuple arrays, return empty JSONB array
+                    // to maintain consistent column count (single JSONB column)
+                    if is_tuple_array {
+                        return vec![EthereumSqlTypeWrapper::JSONB(Value::Array(vec![]))];
                     }
-                },
+                    match &abi_input.components {
+                        Some(components) => {
+                            tuple_solidity_type_to_ethereum_sql_type_wrapper(components)
+                                .unwrap_or_else(|| {
+                                    panic!(
+                                        "map_log_token_to_ethereum_wrapper:: Unknown type: {}",
+                                        abi_input.type_
+                                    )
+                                })
+                        }
+                        None => {
+                            vec![solidity_type_to_ethereum_sql_type_wrapper(&abi_input.type_)
+                                .unwrap_or_else(|| {
+                                    panic!(
+                                        "map_log_token_to_ethereum_wrapper:: Unknown type: {}",
+                                        abi_input.type_
+                                    )
+                                })]
+                        }
+                    }
+                }
                 Some(first_token) => {
                     // events arrays can only be one type so get it from the first one
                     let token_type = first_token;
@@ -1746,15 +1818,37 @@ fn map_log_token_to_ethereum_wrapper(
                         DynSolValue::FixedArray(_) | DynSolValue::Array(_) => {
                             unreachable!("Nested arrays are not supported by the EVM")
                         }
-                        DynSolValue::Tuple(tuple) => process_tuple(
-                            abi_input
+                        DynSolValue::Tuple(_) | DynSolValue::CustomStruct { .. } => {
+                            // Array of tuples/structs - serialize entire array as JSONB
+                            // We cannot flatten tuple arrays into separate columns since array length varies
+                            // CustomStruct is used when alloy's eip712 feature is enabled (via "full" feature)
+                            let components = abi_input
                                 .components
                                 .as_ref()
-                                .expect("Tuple should have a component ABI on"),
-                            tuple,
-                        ),
+                                .expect("Tuple/struct array should have components");
+                            let json_array: Vec<Value> = tokens
+                                .iter()
+                                .filter_map(|token| {
+                                    match token {
+                                        DynSolValue::Tuple(tuple_values) => {
+                                            Some(tuple_to_json_value(components, tuple_values))
+                                        }
+                                        DynSolValue::CustomStruct { tuple, .. } => {
+                                            // CustomStruct contains a tuple field with the actual values
+                                            Some(tuple_to_json_value(components, tuple))
+                                        }
+                                        _ => None,
+                                    }
+                                })
+                                .collect();
+                            vec![EthereumSqlTypeWrapper::JSONB(Value::Array(json_array))]
+                        }
                         _ => {
-                            unimplemented!("CustomStruct and Function are not supported yet - please raise issue in github with ABI to recreate")
+                            unimplemented!(
+                                "Unsupported array element type: {:?}, abi_input.type_: {}",
+                                token_type,
+                                abi_input.type_
+                            )
                         }
                     }
                 }
@@ -1949,4 +2043,240 @@ pub fn map_ethereum_wrapper_to_json(
     }
 
     Value::Object(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::primitives::U256;
+
+    /// Helper to create an ABIInput for testing
+    fn make_abi_input(name: &str, type_: &str, components: Option<Vec<ABIInput>>) -> ABIInput {
+        ABIInput {
+            indexed: Some(false),
+            name: name.to_string(),
+            type_: type_.to_string(),
+            components,
+        }
+    }
+
+    #[test]
+    fn test_tuple_to_json_value_simple_struct() {
+        // Test a simple struct like: struct Account { string accountAddress; uint8 childContractScope; }
+        let components = vec![
+            make_abi_input("accountAddress", "string", None),
+            make_abi_input("childContractScope", "uint8", None),
+        ];
+
+        let values = vec![
+            DynSolValue::String("0x1234567890123456789012345678901234567890".to_string()),
+            DynSolValue::Uint(U256::from(1), 8),
+        ];
+
+        let result = tuple_to_json_value(&components, &values);
+
+        assert!(result.is_object());
+        let obj = result.as_object().unwrap();
+        assert_eq!(
+            obj.get("accountAddress").unwrap(),
+            "0x1234567890123456789012345678901234567890"
+        );
+        assert_eq!(obj.get("childContractScope").unwrap(), "1");
+    }
+
+    #[test]
+    fn test_tuple_to_json_value_with_address() {
+        let components = vec![
+            make_abi_input("owner", "address", None),
+            make_abi_input("value", "uint256", None),
+        ];
+
+        let addr = Address::from_str("0x1234567890123456789012345678901234567890").unwrap();
+        let values = vec![DynSolValue::Address(addr), DynSolValue::Uint(U256::from(1000), 256)];
+
+        let result = tuple_to_json_value(&components, &values);
+
+        assert!(result.is_object());
+        let obj = result.as_object().unwrap();
+        // Address is formatted with {:?} which gives checksummed format
+        assert!(obj.get("owner").unwrap().as_str().unwrap().starts_with("0x"));
+        assert_eq!(obj.get("value").unwrap(), "1000");
+    }
+
+    #[test]
+    fn test_tuple_to_json_value_with_bool() {
+        let components =
+            vec![make_abi_input("active", "bool", None), make_abi_input("name", "string", None)];
+
+        let values = vec![DynSolValue::Bool(true), DynSolValue::String("test".to_string())];
+
+        let result = tuple_to_json_value(&components, &values);
+
+        assert!(result.is_object());
+        let obj = result.as_object().unwrap();
+        assert_eq!(obj.get("active").unwrap(), true);
+        assert_eq!(obj.get("name").unwrap(), "test");
+    }
+
+    #[test]
+    fn test_map_log_token_for_tuple_array() {
+        // Test processing an array of tuples (tuple[])
+        // This mimics the ChainAddedOrSet event's accounts parameter
+        let components = vec![
+            make_abi_input("accountAddress", "string", None),
+            make_abi_input("childContractScope", "uint8", None),
+        ];
+
+        let abi_input = make_abi_input("accounts", "tuple[]", Some(components));
+
+        // Create array of tuples
+        let tuple1 = DynSolValue::Tuple(vec![
+            DynSolValue::String("0xAAAA".to_string()),
+            DynSolValue::Uint(U256::from(0), 8),
+        ]);
+        let tuple2 = DynSolValue::Tuple(vec![
+            DynSolValue::String("0xBBBB".to_string()),
+            DynSolValue::Uint(U256::from(1), 8),
+        ]);
+        let token = DynSolValue::Array(vec![tuple1, tuple2]);
+
+        let result = map_log_token_to_ethereum_wrapper(&abi_input, &token);
+
+        assert_eq!(result.len(), 1);
+        match &result[0] {
+            EthereumSqlTypeWrapper::JSONB(json) => {
+                assert!(json.is_array());
+                let arr = json.as_array().unwrap();
+                assert_eq!(arr.len(), 2);
+
+                // Check first element
+                let first = arr[0].as_object().unwrap();
+                assert_eq!(first.get("accountAddress").unwrap(), "0xAAAA");
+                assert_eq!(first.get("childContractScope").unwrap(), "0");
+
+                // Check second element
+                let second = arr[1].as_object().unwrap();
+                assert_eq!(second.get("accountAddress").unwrap(), "0xBBBB");
+                assert_eq!(second.get("childContractScope").unwrap(), "1");
+            }
+            _ => panic!("Expected JSONB wrapper"),
+        }
+    }
+
+    #[test]
+    fn test_map_log_token_for_custom_struct_array() {
+        // Test processing an array of CustomStruct (what alloy returns with eip712 feature)
+        // This is the actual type we receive from alloy when processing tuple[] events
+        let components = vec![
+            make_abi_input("accountAddress", "string", None),
+            make_abi_input("childContractScope", "uint8", None),
+        ];
+
+        let abi_input = make_abi_input("accounts", "tuple[]", Some(components));
+
+        // Create array of CustomStruct (simulating what alloy returns)
+        let struct1 = DynSolValue::CustomStruct {
+            name: "Account".to_string(),
+            prop_names: vec!["accountAddress".to_string(), "childContractScope".to_string()],
+            tuple: vec![
+                DynSolValue::String("0xAAAA".to_string()),
+                DynSolValue::Uint(U256::from(0), 8),
+            ],
+        };
+        let struct2 = DynSolValue::CustomStruct {
+            name: "Account".to_string(),
+            prop_names: vec!["accountAddress".to_string(), "childContractScope".to_string()],
+            tuple: vec![
+                DynSolValue::String("0xBBBB".to_string()),
+                DynSolValue::Uint(U256::from(2), 8),
+            ],
+        };
+        let token = DynSolValue::Array(vec![struct1, struct2]);
+
+        let result = map_log_token_to_ethereum_wrapper(&abi_input, &token);
+
+        assert_eq!(result.len(), 1);
+        match &result[0] {
+            EthereumSqlTypeWrapper::JSONB(json) => {
+                assert!(json.is_array());
+                let arr = json.as_array().unwrap();
+                assert_eq!(arr.len(), 2);
+
+                // Check first element
+                let first = arr[0].as_object().unwrap();
+                assert_eq!(first.get("accountAddress").unwrap(), "0xAAAA");
+                assert_eq!(first.get("childContractScope").unwrap(), "0");
+
+                // Check second element
+                let second = arr[1].as_object().unwrap();
+                assert_eq!(second.get("accountAddress").unwrap(), "0xBBBB");
+                assert_eq!(second.get("childContractScope").unwrap(), "2");
+            }
+            _ => panic!("Expected JSONB wrapper"),
+        }
+    }
+
+    #[test]
+    fn test_map_log_token_for_empty_tuple_array() {
+        // Test handling of empty tuple array
+        // Must return a single JSONB([]) wrapper to maintain consistent column count
+        let components = vec![
+            make_abi_input("accountAddress", "string", None),
+            make_abi_input("childContractScope", "uint8", None),
+        ];
+
+        let abi_input = make_abi_input("accounts", "tuple[]", Some(components));
+        let token = DynSolValue::Array(vec![]);
+
+        let result = map_log_token_to_ethereum_wrapper(&abi_input, &token);
+
+        // Must return exactly one JSONB wrapper with empty array
+        // This ensures column count matches non-empty tuple[] (which also returns 1 JSONB column)
+        assert_eq!(result.len(), 1, "Empty tuple[] should return single JSONB wrapper");
+        match &result[0] {
+            EthereumSqlTypeWrapper::JSONB(value) => {
+                assert!(value.is_array(), "JSONB wrapper should contain an array");
+                assert!(value.as_array().unwrap().is_empty(), "JSONB array should be empty");
+            }
+            other => panic!("Expected JSONB wrapper, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_map_log_token_for_fixed_size_tuple_array() {
+        // Test handling of fixed-size tuple array like tuple[2]
+        // Should be treated the same as dynamic tuple[] - stored as JSONB
+        let components = vec![
+            make_abi_input("accountAddress", "string", None),
+            make_abi_input("childContractScope", "uint8", None),
+        ];
+
+        // Note: type is "tuple[2]" not "tuple[]"
+        let abi_input = make_abi_input("accounts", "tuple[2]", Some(components));
+
+        let token = DynSolValue::FixedArray(vec![
+            DynSolValue::Tuple(vec![
+                DynSolValue::String("0xABC123".to_string()),
+                DynSolValue::Uint(U256::from(1), 8),
+            ]),
+            DynSolValue::Tuple(vec![
+                DynSolValue::String("0xDEF456".to_string()),
+                DynSolValue::Uint(U256::from(2), 8),
+            ]),
+        ]);
+
+        let result = map_log_token_to_ethereum_wrapper(&abi_input, &token);
+
+        // Must return exactly one JSONB wrapper (not flattened into multiple columns)
+        assert_eq!(result.len(), 1, "Fixed-size tuple[2] should return single JSONB wrapper");
+        match &result[0] {
+            EthereumSqlTypeWrapper::JSONB(value) => {
+                let arr = value.as_array().expect("Should be a JSON array");
+                assert_eq!(arr.len(), 2, "Should have 2 elements");
+                assert_eq!(arr[0]["accountAddress"], "0xABC123");
+                assert_eq!(arr[1]["accountAddress"], "0xDEF456");
+            }
+            other => panic!("Expected JSONB wrapper, got {:?}", other),
+        }
+    }
 }

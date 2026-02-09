@@ -80,6 +80,12 @@ pub fn solidity_type_to_db_type(abi_type: &str) -> String {
     let is_array = abi_type.ends_with("[]");
     let base_type = abi_type.trim_end_matches("[]");
 
+    // Handle tuple arrays as JSONB (both dynamic tuple[] and fixed-size tuple[N])
+    // Arrays of tuples cannot be flattened into columns since array length varies
+    if abi_type.starts_with("tuple[") {
+        return "JSONB".to_string();
+    }
+
     let sql_type = match base_type {
         "address" => "CHAR(42)",
         "bool" => "BOOLEAN",
