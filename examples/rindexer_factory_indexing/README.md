@@ -26,8 +26,8 @@ PostgreSQL + CSV
 1. Copy `.env.example` to `.env` and configure your `DATABASE_URL`
 2. Run `docker-compose up -d` to start the Postgress instance in the `docker-compose.yml` file
 3. Run `cargo run` (defaults to starting both the indexer and GraphQL API), optionally you can add the flags: `--indexer`, to only index the data or `--graphql`, `--port=<PORT>` to start the GraphQL API.
-4. You can access the GraphQL playground with your created data at http://localhost:3001. Run the query in the UI:
-    ```
+4. You can access the GraphQL playground with your created data at http://localhost:3001/playground. Run the query in the UI:
+    ```GRAPHQL
     query SwapsQuery {
       allSwaps(first: 10) {
         nodes {
