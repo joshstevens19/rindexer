@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 use rindexer::{
                 event::callback_registry::EventCallbackRegistry,
-                EthereumSqlTypeWrapper, PgType, RindexerColorize, rindexer_error, rindexer_info
+                EthereumSqlTypeWrapper, PgType, rindexer_error, rindexer_info
             };
         use std::sync::Arc;
 use std::path::PathBuf;
@@ -62,8 +62,7 @@ EthereumSqlTypeWrapper::U256(result.tx_information.log_index)
 
 
                                 rindexer_info!(
-                                    "UniswapV3FactoryPoolCreatedPool::PoolCreated - {} - {} events",
-                                    "INDEXED".green(),
+                                    "UniswapV3FactoryPoolCreatedPool::PoolCreated - INDEXED - {} events",
                                     results.len(),
                                 );
 

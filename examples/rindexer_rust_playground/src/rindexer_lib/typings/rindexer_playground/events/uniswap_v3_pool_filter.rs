@@ -242,13 +242,32 @@ where
             + Clone,
         Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
     {
-        let csv = AsyncCsvAppender::new(
-            r"/Users/josh/code/rindexer/examples/rindexer_rust_playground/generated_csv/UniswapV3PoolFilter/uniswapv3poolfilter-swap.csv",
-        );
-        if !Path::new(r"/Users/josh/code/rindexer/examples/rindexer_rust_playground/generated_csv/UniswapV3PoolFilter/uniswapv3poolfilter-swap.csv").exists() {
-            csv.append_header(vec!["contract_address".into(), "sender".into(), "recipient".into(), "amount_0".into(), "amount_1".into(), "sqrt_price_x96".into(), "liquidity".into(), "tick".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()].into())
-                .await
-                .expect("Failed to write CSV header");
+        let csv_path = std::env::current_dir()
+            .expect("Failed to get current directory")
+            .join(r"generated_csv/UniswapV3PoolFilter/uniswapv3poolfilter-swap.csv");
+        let csv = AsyncCsvAppender::new(csv_path.to_str().expect("Failed to convert csv path"));
+        if !csv_path.exists() {
+            csv.append_header(
+                vec![
+                    "contract_address".into(),
+                    "sender".into(),
+                    "recipient".into(),
+                    "amount_0".into(),
+                    "amount_1".into(),
+                    "sqrt_price_x96".into(),
+                    "liquidity".into(),
+                    "tick".into(),
+                    "tx_hash".into(),
+                    "block_number".into(),
+                    "block_hash".into(),
+                    "network".into(),
+                    "tx_index".into(),
+                    "log_index".into(),
+                ]
+                .into(),
+            )
+            .await
+            .expect("Failed to write CSV header");
         }
 
         Self {

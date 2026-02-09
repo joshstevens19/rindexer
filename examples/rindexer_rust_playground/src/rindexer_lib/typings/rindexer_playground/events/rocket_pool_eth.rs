@@ -145,13 +145,28 @@ where
             + Clone,
         Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
     {
-        let csv = AsyncCsvAppender::new(
-            r"/Users/josh/code/rindexer/examples/rindexer_rust_playground/generated_csv/RocketPoolETH/rocketpooleth-approval.csv",
-        );
-        if !Path::new(r"/Users/josh/code/rindexer/examples/rindexer_rust_playground/generated_csv/RocketPoolETH/rocketpooleth-approval.csv").exists() {
-            csv.append_header(vec!["contract_address".into(), "owner".into(), "spender".into(), "value".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()].into())
-                .await
-                .expect("Failed to write CSV header");
+        let csv_path = std::env::current_dir()
+            .expect("Failed to get current directory")
+            .join(r"generated_csv/RocketPoolETH/rocketpooleth-approval.csv");
+        let csv = AsyncCsvAppender::new(csv_path.to_str().expect("Failed to convert csv path"));
+        if !csv_path.exists() {
+            csv.append_header(
+                vec![
+                    "contract_address".into(),
+                    "owner".into(),
+                    "spender".into(),
+                    "value".into(),
+                    "tx_hash".into(),
+                    "block_number".into(),
+                    "block_hash".into(),
+                    "network".into(),
+                    "tx_index".into(),
+                    "log_index".into(),
+                ]
+                .into(),
+            )
+            .await
+            .expect("Failed to write CSV header");
         }
 
         Self {
@@ -248,13 +263,28 @@ where
             + Clone,
         Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
     {
-        let csv = AsyncCsvAppender::new(
-            r"/Users/josh/code/rindexer/examples/rindexer_rust_playground/generated_csv/RocketPoolETH/rocketpooleth-transfer.csv",
-        );
-        if !Path::new(r"/Users/josh/code/rindexer/examples/rindexer_rust_playground/generated_csv/RocketPoolETH/rocketpooleth-transfer.csv").exists() {
-            csv.append_header(vec!["contract_address".into(), "from".into(), "to".into(), "value".into(), "tx_hash".into(), "block_number".into(), "block_hash".into(), "network".into(), "tx_index".into(), "log_index".into()].into())
-                .await
-                .expect("Failed to write CSV header");
+        let csv_path = std::env::current_dir()
+            .expect("Failed to get current directory")
+            .join(r"generated_csv/RocketPoolETH/rocketpooleth-transfer.csv");
+        let csv = AsyncCsvAppender::new(csv_path.to_str().expect("Failed to convert csv path"));
+        if !csv_path.exists() {
+            csv.append_header(
+                vec![
+                    "contract_address".into(),
+                    "from".into(),
+                    "to".into(),
+                    "value".into(),
+                    "tx_hash".into(),
+                    "block_number".into(),
+                    "block_hash".into(),
+                    "network".into(),
+                    "tx_index".into(),
+                    "log_index".into(),
+                ]
+                .into(),
+            )
+            .await
+            .expect("Failed to write CSV header");
         }
 
         Self {

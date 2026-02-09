@@ -52,13 +52,8 @@ pub async fn get_ethereum_provider_cache() -> Arc<JsonRpcCachedProvider> {
             let chain_state_notification = None;
 
             create_client(
-                &public_read_env_value(
-                    "https://eth-mainnet.g.alchemy.com/v2/8MK-cIOhcdlVH6z13k0RG928Iieg71fl",
-                )
-                .unwrap_or(
-                    "https://eth-mainnet.g.alchemy.com/v2/8MK-cIOhcdlVH6z13k0RG928Iieg71fl"
-                        .to_string(),
-                ),
+                &public_read_env_value("https://mainnet.gateway.tenderly.co")
+                    .unwrap_or("https://mainnet.gateway.tenderly.co".to_string()),
                 1,
                 None,
                 None,
@@ -84,13 +79,8 @@ pub async fn get_base_provider_cache() -> Arc<JsonRpcCachedProvider> {
             let chain_state_notification = None;
 
             create_client(
-                &public_read_env_value(
-                    "https://base-mainnet.g.alchemy.com/v2/8MK-cIOhcdlVH6z13k0RG928Iieg71fl",
-                )
-                .unwrap_or(
-                    "https://base-mainnet.g.alchemy.com/v2/8MK-cIOhcdlVH6z13k0RG928Iieg71fl"
-                        .to_string(),
-                ),
+                &public_read_env_value("https://base.llamarpc.com")
+                    .unwrap_or("https://base.llamarpc.com".to_string()),
                 8453,
                 None,
                 None,
