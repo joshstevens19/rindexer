@@ -205,8 +205,7 @@ fn generate_csv_instance(
     // create_csv_file_for_event creates directories at code-gen time as a convenience
     event_info.create_csv_file_for_event(project_path, &contract.name, csv_path_str)?;
 
-    let csv_file_name =
-        format!("{}-{}.csv", &contract.name, event_info.name).to_lowercase();
+    let csv_file_name = format!("{}-{}.csv", &contract.name, event_info.name).to_lowercase();
     let relative_csv_file = csv_relative.join(&contract.name).join(&csv_file_name);
 
     let headers: Vec<String> =
