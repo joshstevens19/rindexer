@@ -1579,15 +1579,15 @@ fn map_log_token_to_ethereum_wrapper(
                         return vec![EthereumSqlTypeWrapper::JSONB(Value::Array(vec![]))];
                     }
                     match &abi_input.components {
-                        Some(components) => tuple_solidity_type_to_ethereum_sql_type_wrapper(
-                            components,
-                        )
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "map_log_token_to_ethereum_wrapper:: Unknown type: {}",
-                                abi_input.type_
-                            )
-                        }),
+                        Some(components) => {
+                            tuple_solidity_type_to_ethereum_sql_type_wrapper(components)
+                                .unwrap_or_else(|| {
+                                    panic!(
+                                        "map_log_token_to_ethereum_wrapper:: Unknown type: {}",
+                                        abi_input.type_
+                                    )
+                                })
+                        }
                         None => {
                             vec![solidity_type_to_ethereum_sql_type_wrapper(&abi_input.type_)
                                 .unwrap_or_else(|| {
@@ -1844,7 +1844,11 @@ fn map_log_token_to_ethereum_wrapper(
                             vec![EthereumSqlTypeWrapper::JSONB(Value::Array(json_array))]
                         }
                         _ => {
-                            unimplemented!("Unsupported array element type: {:?}, abi_input.type_: {}", token_type, abi_input.type_)
+                            unimplemented!(
+                                "Unsupported array element type: {:?}, abi_input.type_: {}",
+                                token_type,
+                                abi_input.type_
+                            )
                         }
                     }
                 }
@@ -2088,10 +2092,7 @@ mod tests {
         ];
 
         let addr = Address::from_str("0x1234567890123456789012345678901234567890").unwrap();
-        let values = vec![
-            DynSolValue::Address(addr),
-            DynSolValue::Uint(U256::from(1000), 256),
-        ];
+        let values = vec![DynSolValue::Address(addr), DynSolValue::Uint(U256::from(1000), 256)];
 
         let result = tuple_to_json_value(&components, &values);
 
@@ -2104,15 +2105,10 @@ mod tests {
 
     #[test]
     fn test_tuple_to_json_value_with_bool() {
-        let components = vec![
-            make_abi_input("active", "bool", None),
-            make_abi_input("name", "string", None),
-        ];
+        let components =
+            vec![make_abi_input("active", "bool", None), make_abi_input("name", "string", None)];
 
-        let values = vec![
-            DynSolValue::Bool(true),
-            DynSolValue::String("test".to_string()),
-        ];
+        let values = vec![DynSolValue::Bool(true), DynSolValue::String("test".to_string())];
 
         let result = tuple_to_json_value(&components, &values);
 
