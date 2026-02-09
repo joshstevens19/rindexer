@@ -145,8 +145,21 @@ tool to build documentation. Big shout out to `wevm` team for all the work they 
 
 ### examples
 
-This just holds some no-code examples for rindexer which is referenced in the docs or used for new users to see
-how a project is setup.
+Example projects showing different ways to use rindexer. There are three types: **no-code** (YAML-only, no Rust project), **table** (data transformations before storage), and **rust** (full Rust projects with custom handlers).
+
+#### Rust examples
+
+- **[rindexer_rust_playground](examples/rindexer_rust_playground/)** — Kitchen-sink demo: multi-contract, multi-network, dual storage (PostgreSQL + CSV), event filtering, and global contracts.
+- **[rindexer_factory_indexing](examples/rindexer_factory_indexing/)** — Factory pattern indexing: dynamically discovers and indexes contracts created by Uniswap V3 factory events.
+- **[clickhouse_factory_indexing](examples/clickhouse_factory_indexing/)** — Same factory pattern as above, but using ClickHouse as the storage backend.
+- **[rust_clickhouse](examples/rust_clickhouse/)** — Minimal "hello world" for rindexer with ClickHouse: single contract, single network.
+
+| Example | Type | Key differentiator | Storage | Complexity |
+|---|---|---|---|---|
+| `rindexer_rust_playground` | Rust | Multi-contract, multi-network, dual storage | PG + CSV | High |
+| `rindexer_factory_indexing` | Rust | Factory pattern (dynamic contract discovery) | PG + CSV | Medium |
+| `clickhouse_factory_indexing` | Rust | Factory pattern on ClickHouse | ClickHouse | Medium |
+| `rust_clickhouse` | Rust | Minimal starter example | ClickHouse | Low |
 
 ## Building
 
