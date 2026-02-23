@@ -640,7 +640,8 @@ async fn live_indexing_stream(
                             last_seen_block_number
                         );
 
-                        let safe_block_number = latest_block_number.saturating_sub(*reorg_safe_distance);
+                        let safe_block_number =
+                            latest_block_number.saturating_sub(*reorg_safe_distance);
                         let from_block = current_filter.from_block();
                         if from_block > safe_block_number {
                             if reorg_safe_distance.is_zero() {

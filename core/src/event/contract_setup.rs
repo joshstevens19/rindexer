@@ -109,7 +109,7 @@ impl ContractInformation {
             name: contract.name.clone(),
             details,
             abi: contract.abi.clone(),
-            reorg_safe_distance: contract.reorg_safe_distance.clone(),
+            reorg_safe_distance: contract.reorg_safe_distance,
         })
     }
 }
@@ -175,7 +175,7 @@ impl TraceInformation {
         Ok(TraceInformation {
             name: EVENT_NAME.to_string(),
             details,
-            reorg_safe_distance: native_transfers.reorg_safe_distance.clone(),
+            reorg_safe_distance: native_transfers.reorg_safe_distance,
         })
     }
 }
