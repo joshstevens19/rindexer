@@ -465,6 +465,7 @@ async fn start_indexing_contract_events(
                     index_event_in_order: event.index_event_in_order,
                     indexing_distance_from_head,
                     cancel_token: cancel_token.clone(),
+                    tables: event.tables.clone(),
                 }
                 .into()
             }
@@ -498,6 +499,7 @@ async fn start_indexing_contract_events(
                 index_event_in_order: event.index_event_in_order,
                 indexing_distance_from_head,
                 cancel_token: cancel_token.clone(),
+                tables: event.tables.clone(),
             }
             .into(),
         };

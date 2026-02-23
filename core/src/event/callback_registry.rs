@@ -132,6 +132,8 @@ pub struct EventCallbackRegistryInformation {
     pub index_event_in_order: bool,
     pub contract: ContractInformation,
     pub callback: EventCallbackType,
+    /// Derived/custom tables for this event (for reorg cleanup).
+    pub tables: Arc<Vec<crate::indexer::tables::TableRuntime>>,
 }
 
 impl EventCallbackRegistryInformation {

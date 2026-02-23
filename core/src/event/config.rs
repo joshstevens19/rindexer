@@ -306,6 +306,13 @@ impl EventProcessingConfig {
         }
     }
 
+    pub fn tables(&self) -> Arc<Vec<TableRuntime>> {
+        match self {
+            Self::ContractEventProcessing(config) => config.tables.clone(),
+            Self::FactoryEventProcessing(config) => config.tables.clone(),
+        }
+    }
+
     pub fn csv_details(&self) -> Option<CsvDetails> {
         match self {
             Self::ContractEventProcessing(config) => config.csv_details.clone(),
