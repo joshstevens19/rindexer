@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::event::contract_setup::{AddressDetails, IndexingContractSetup};
+use crate::indexer::tables::TableRuntime;
 use crate::event::factory_event_filter_sync::update_known_factory_deployed_addresses;
 use crate::event::rindexer_event_filter::FactoryFilter;
 use crate::manifest::config::Config;
@@ -47,6 +48,8 @@ pub struct ContractEventProcessingConfig {
     pub indexing_distance_from_head: U64,
     /// Per-generation cancellation token for hot-reload support.
     pub cancel_token: CancellationToken,
+    /// Derived/custom tables associated with this event (for reorg cleanup).
+    pub tables: Arc<Vec<TableRuntime>>,
 }
 
 impl ContractEventProcessingConfig {
@@ -125,6 +128,8 @@ pub struct FactoryEventProcessingConfig {
     pub indexing_distance_from_head: U64,
     /// Per-generation cancellation token for hot-reload support.
     pub cancel_token: CancellationToken,
+    /// Derived/custom tables associated with this event (for reorg cleanup).
+    pub tables: Arc<Vec<TableRuntime>>,
 }
 
 impl FactoryEventProcessingConfig {

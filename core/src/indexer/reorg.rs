@@ -1,4 +1,4 @@
-use alloy::primitives::U64;
+use alloy::primitives::{B256, U64};
 use lru::LruCache;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
@@ -46,7 +46,7 @@ pub fn handle_chain_notification(
                 new_tip_hash
             );
 
-            Some(ReorgInfo { fork_block: U64::from(revert_to_block), depth })
+            Some(ReorgInfo { fork_block: U64::from(revert_to_block), depth, affected_tx_hashes: vec![] })
         }
         ChainStateNotification::Reverted { from_block, to_block } => {
             let depth = from_block.saturating_sub(to_block);
@@ -57,7 +57,7 @@ pub fn handle_chain_notification(
                 info_log_name, from_block, to_block
             );
 
-            Some(ReorgInfo { fork_block: U64::from(to_block), depth })
+            Some(ReorgInfo { fork_block: U64::from(to_block), depth, affected_tx_hashes: vec![] })
         }
         ChainStateNotification::Committed { from_block, to_block, tip_hash } => {
             debug!(
@@ -69,11 +69,28 @@ pub fn handle_chain_notification(
     }
 }
 
-pub fn reorg_safe_distance_for_chain(chain_id: u64) -> U64 {
-    if chain_id == 1 {
-        U64::from(12)
-    } else {
-        U64::from(64)
+/// Returns the default safe reorg distance (in blocks) for a given chain.
+/// Used when `reorg_safe_distance: true` in YAML (no custom override).
+pub fn reorg_safe_distance_for_chain(chain_id: u64) -> u64 {
+    match chain_id {
+        // Ethereum mainnet — Casper FFG finality (~13 min, 2 epochs)
+        1 => 20,
+        // Polygon PoS — historically deep reorgs (157-block in Feb 2023)
+        137 => 200,
+        // Arbitrum One — sequencer-ordered, no observed reorgs
+        42161 => 24,
+        // Optimism — sequencer-ordered, no observed reorgs
+        10 => 24,
+        // Base — sequencer-ordered (Coinbase), no observed reorgs
+        8453 => 24,
+        // BNB Smart Chain — 3s blocks, DPoS
+        56 => 24,
+        // Avalanche C-Chain — sub-second finality with Snowman consensus
+        43114 => 12,
+        // Gnosis Chain (xDai) — POSDAO/AuRa consensus
+        100 => 24,
+        // All other chains — conservative default
+        _ => 64,
     }
 }
 
@@ -140,8 +157,9 @@ pub async fn find_fork_point(
     }
 }
 
-/// Handles reorg recovery: deletes orphaned events from storage and rewinds the checkpoint.
-pub async fn handle_reorg_recovery(config: &Arc<EventProcessingConfig>, reorg: &ReorgInfo) {
+/// Handles reorg recovery: collects affected tx hashes, deletes orphaned events, and rewinds
+/// the checkpoint. Returns the union of tx hashes from the reorg signal and from storage.
+pub async fn handle_reorg_recovery(config: &Arc<EventProcessingConfig>, reorg: &ReorgInfo) -> Vec<B256> {
     let fork_block = reorg.fork_block.to::<u64>();
     let network = &config.network_contract().network;
     let indexer_name = config.indexer_name();
@@ -156,7 +174,13 @@ pub async fn handle_reorg_recovery(config: &Arc<EventProcessingConfig>, reorg: &
         fork_block, schema, event_table_name, network, reorg.depth
     );
 
+    // Collect tx hashes from storage before deletion
+    let mut all_tx_hashes: std::collections::HashSet<B256> =
+        reorg.affected_tx_hashes.iter().copied().collect();
+
     if let Some(postgres) = &config.postgres() {
+        let db_hashes = collect_affected_tx_hashes_postgres(postgres, &schema, &event_table_name, fork_block, network).await;
+        all_tx_hashes.extend(db_hashes);
         delete_events_postgres(postgres, &schema, &event_table_name, fork_block, network).await;
         rewind_checkpoint_postgres(postgres, &schema, &event_name, rewind_block, network).await;
     }
@@ -167,9 +191,44 @@ pub async fn handle_reorg_recovery(config: &Arc<EventProcessingConfig>, reorg: &
     }
 
     info!(
-        "Reorg recovery complete: checkpoint rewound to block {} for {}.{}",
-        rewind_block, schema, event_table_name
+        "Reorg recovery complete: checkpoint rewound to block {} for {}.{} ({} affected txs)",
+        rewind_block, schema, event_table_name, all_tx_hashes.len()
     );
+
+    all_tx_hashes.into_iter().collect()
+}
+
+/// Queries PostgreSQL for distinct tx hashes in blocks >= fork_block.
+async fn collect_affected_tx_hashes_postgres(
+    postgres: &Arc<PostgresClient>,
+    schema: &str,
+    event_table: &str,
+    fork_block: u64,
+    network: &str,
+) -> Vec<B256> {
+    let full_table = format!("{}.{}", schema, event_table);
+    let query = format!(
+        "SELECT DISTINCT tx_hash FROM {} WHERE block_number >= {} AND network = '{}'",
+        full_table, fork_block, network
+    );
+
+    match postgres.query(&query, &[]).await {
+        Ok(rows) => {
+            let hashes: Vec<B256> = rows
+                .iter()
+                .filter_map(|row| {
+                    let hex_str: String = row.get(0);
+                    hex_str.parse::<B256>().ok()
+                })
+                .collect();
+            debug!("PostgreSQL: found {} affected tx hashes in {}", hashes.len(), full_table);
+            hashes
+        }
+        Err(e) => {
+            warn!("PostgreSQL: failed to collect affected tx hashes: {:?}", e);
+            vec![]
+        }
+    }
 }
 
 async fn delete_events_postgres(
@@ -257,6 +316,71 @@ async fn rewind_checkpoint_clickhouse(
     }
 }
 
+/// Deletes rows from derived/custom tables where `rindexer_block_number >= fork_block`.
+/// For `cross_chain` tables, no network filter is applied.
+pub async fn delete_derived_table_rows(
+    tables: &[super::tables::TableRuntime],
+    postgres: &Option<Arc<PostgresClient>>,
+    clickhouse: &Option<Arc<ClickhouseClient>>,
+    fork_block: u64,
+    network: &str,
+) {
+    for table_rt in tables {
+        let full_table = &table_rt.full_table_name;
+        let is_cross_chain = table_rt.table.cross_chain;
+
+        if let Some(pg) = postgres {
+            let query = if is_cross_chain {
+                format!(
+                    "DELETE FROM {} WHERE rindexer_block_number >= {}",
+                    full_table, fork_block
+                )
+            } else {
+                format!(
+                    "DELETE FROM {} WHERE rindexer_block_number >= {} AND network = '{}'",
+                    full_table, fork_block, network
+                )
+            };
+
+            match pg.batch_execute(&query).await {
+                Ok(_) => info!(
+                    "PostgreSQL: deleted derived table rows from block >= {} in {}",
+                    fork_block, full_table
+                ),
+                Err(e) => error!(
+                    "PostgreSQL: failed to delete derived table rows in {}: {:?}",
+                    full_table, e
+                ),
+            }
+        }
+
+        if let Some(ch) = clickhouse {
+            let query = if is_cross_chain {
+                format!(
+                    "ALTER TABLE {} DELETE WHERE rindexer_block_number >= {} SETTINGS mutations_sync = 1",
+                    full_table, fork_block
+                )
+            } else {
+                format!(
+                    "ALTER TABLE {} DELETE WHERE rindexer_block_number >= {} AND network = '{}' SETTINGS mutations_sync = 1",
+                    full_table, fork_block, network
+                )
+            };
+
+            match ch.execute(&query).await {
+                Ok(_) => info!(
+                    "ClickHouse: deleted derived table rows from block >= {} in {}",
+                    fork_block, full_table
+                ),
+                Err(e) => error!(
+                    "ClickHouse: failed to delete derived table rows in {}: {:?}",
+                    full_table, e
+                ),
+            }
+        }
+    }
+}
+
 /// Handles reorg recovery for native transfer indexing (PostgreSQL only, no ClickHouse for traces).
 pub async fn handle_native_transfer_reorg_recovery(
     postgres: &Option<Arc<PostgresClient>>,
@@ -290,13 +414,14 @@ mod tests {
 
     #[test]
     fn test_reorg_safe_distance_for_chain() {
-        let mainnet_chain_id = 1;
-        assert_eq!(reorg_safe_distance_for_chain(mainnet_chain_id), U64::from(12));
-
-        let testnet_chain_id = 3;
-        assert_eq!(reorg_safe_distance_for_chain(testnet_chain_id), U64::from(64));
-
-        let other_chain_id = 42;
-        assert_eq!(reorg_safe_distance_for_chain(other_chain_id), U64::from(64));
+        assert_eq!(reorg_safe_distance_for_chain(1), 20); // Ethereum
+        assert_eq!(reorg_safe_distance_for_chain(137), 200); // Polygon
+        assert_eq!(reorg_safe_distance_for_chain(42161), 24); // Arbitrum
+        assert_eq!(reorg_safe_distance_for_chain(10), 24); // Optimism
+        assert_eq!(reorg_safe_distance_for_chain(8453), 24); // Base
+        assert_eq!(reorg_safe_distance_for_chain(56), 24); // BNB
+        assert_eq!(reorg_safe_distance_for_chain(43114), 12); // Avalanche
+        assert_eq!(reorg_safe_distance_for_chain(100), 24); // Gnosis
+        assert_eq!(reorg_safe_distance_for_chain(999), 64); // Unknown chain
     }
 }

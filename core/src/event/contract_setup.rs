@@ -50,12 +50,14 @@ impl NetworkContract {
     }
 }
 
+use crate::manifest::contract::ReorgSafeDistance;
+
 #[derive(Clone)]
 pub struct ContractInformation {
     pub name: String,
     pub details: Vec<NetworkContract>,
     pub abi: StringOrArray,
-    pub reorg_safe_distance: bool,
+    pub reorg_safe_distance: Option<ReorgSafeDistance>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -107,7 +109,7 @@ impl ContractInformation {
             name: contract.name.clone(),
             details,
             abi: contract.abi.clone(),
-            reorg_safe_distance: contract.reorg_safe_distance.unwrap_or_default(),
+            reorg_safe_distance: contract.reorg_safe_distance.clone(),
         })
     }
 }
@@ -136,7 +138,7 @@ impl NetworkTrace {
 pub struct TraceInformation {
     pub name: String,
     pub details: Vec<NetworkTrace>,
-    pub reorg_safe_distance: bool,
+    pub reorg_safe_distance: Option<ReorgSafeDistance>,
 }
 
 impl TraceInformation {
@@ -173,7 +175,7 @@ impl TraceInformation {
         Ok(TraceInformation {
             name: EVENT_NAME.to_string(),
             details,
-            reorg_safe_distance: native_transfers.reorg_safe_distance.unwrap_or_default(),
+            reorg_safe_distance: native_transfers.reorg_safe_distance.clone(),
         })
     }
 }

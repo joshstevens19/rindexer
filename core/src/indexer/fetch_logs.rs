@@ -35,6 +35,9 @@ pub struct ReorgInfo {
     pub fork_block: U64,
     /// Number of blocks affected by the reorg.
     pub depth: u64,
+    /// Transaction hashes from blocks that were reorged out.
+    /// Populated when available (e.g. from removed logs); empty otherwise.
+    pub affected_tx_hashes: Vec<B256>,
 }
 
 pub struct FetchLogsResult {
@@ -548,7 +551,7 @@ async fn live_indexing_stream(
                                 logs: vec![],
                                 from_block: U64::from(fork_block),
                                 to_block: U64::from(fork_block),
-                                reorg: Some(ReorgInfo { fork_block: U64::from(fork_block), depth }),
+                                reorg: Some(ReorgInfo { fork_block: U64::from(fork_block), depth, affected_tx_hashes: vec![] }),
                             }))
                             .await;
 
@@ -709,6 +712,7 @@ async fn live_indexing_stream(
                                                     reorg: Some(ReorgInfo {
                                                         fork_block: U64::from(min_removed_block),
                                                         depth,
+                                                        affected_tx_hashes: vec![],
                                                     }),
                                                 }))
                                                 .await;

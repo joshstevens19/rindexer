@@ -413,9 +413,9 @@ async fn live_indexing_for_contract_event_dependencies(
             }
 
             // Recovery: delete reorged events and rewind checkpoints for all events
-            let reorg_info = ReorgInfo { fork_block: U64::from(fork_block), depth };
+            let reorg_info = ReorgInfo { fork_block: U64::from(fork_block), depth, affected_tx_hashes: vec![] };
             for (config, _) in events.iter() {
-                handle_reorg_recovery(config, &reorg_info).await;
+                let _affected_hashes = handle_reorg_recovery(config, &reorg_info).await;
                 let mut details = ordering_live_indexing_details_map
                     .get(&config.id())
                     .expect("ordering_live_indexing_details_map")
@@ -593,9 +593,16 @@ async fn live_indexing_for_contract_event_dependencies(
                             depth
                         );
 
+                        let affected_tx_hashes: Vec<B256> = logs
+                            .iter()
+                            .filter(|l| l.removed)
+                            .filter_map(|l| l.transaction_hash)
+                            .collect::<std::collections::HashSet<_>>()
+                            .into_iter()
+                            .collect();
                         let reorg_info =
-                            ReorgInfo { fork_block: U64::from(min_removed_block), depth };
-                        handle_reorg_recovery(config, &reorg_info).await;
+                            ReorgInfo { fork_block: U64::from(min_removed_block), depth, affected_tx_hashes };
+                        let _affected_hashes = handle_reorg_recovery(config, &reorg_info).await;
 
                         // Rewind cursor for this event
                         ordering_live_indexing_details.filter = ordering_live_indexing_details
@@ -746,7 +753,7 @@ async fn handle_logs_result(
         Ok(result) => {
             // Handle reorg recovery before processing logs
             if let Some(reorg) = &result.reorg {
-                handle_reorg_recovery(&config, reorg).await;
+                let _affected_hashes = handle_reorg_recovery(&config, reorg).await;
                 return Ok(tokio::spawn(async {}));
             }
 

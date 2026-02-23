@@ -33,10 +33,9 @@ use crate::{
             ProcessContractsEventsWithDependenciesError, ProcessEventError,
         },
         progress::IndexingEventsProgressState,
-        reorg::reorg_safe_distance_for_chain,
         ContractEventDependencies,
     },
-    manifest::core::Manifest,
+    manifest::{contract::ReorgSafeDistance, core::Manifest},
     provider::{JsonRpcCachedProvider, ProviderError},
     PostgresClient, RindexerEvent,
 };
@@ -100,7 +99,7 @@ async fn get_start_end_block(
     config: SyncConfig<'_>,
     event_name: &str,
     network: &str,
-    reorg_safe_distance: bool,
+    reorg_safe_distance: Option<ReorgSafeDistance>,
 ) -> Result<(U64, U64, U64), StartIndexingError> {
     let latest_block = provider.get_block_number().await?;
 
@@ -235,7 +234,7 @@ async fn start_indexing_traces(
             sync_config,
             &format!("TraceEvents[{}]", network_name),
             &network_name,
-            first_event.trace_information.reorg_safe_distance,
+            first_event.trace_information.reorg_safe_distance.clone(),
         )
         .await?;
 
@@ -360,7 +359,7 @@ async fn start_indexing_contract_events(
                     config,
                     &event.info_log_name(),
                     &network_contract.network,
-                    event.contract.reorg_safe_distance,
+                    event.contract.reorg_safe_distance.clone(),
                 )
                 .await;
 
@@ -728,20 +727,22 @@ pub async fn initialize_clickhouse(
 }
 
 pub fn calculate_safe_block_number(
-    reorg_safe_distance: bool,
+    reorg_safe_distance: Option<ReorgSafeDistance>,
     provider: &Arc<JsonRpcCachedProvider>,
     latest_block: U64,
     mut end_block: U64,
 ) -> (U64, U64) {
     let mut indexing_distance_from_head = U64::ZERO;
-    if reorg_safe_distance {
+    if let Some(ref config) = reorg_safe_distance {
         let chain_id = provider.chain.id();
-        let reorg_safe_distance = reorg_safe_distance_for_chain(chain_id);
-        let safe_block_number = latest_block - reorg_safe_distance;
-        if end_block > safe_block_number {
-            end_block = safe_block_number;
+        if let Some(distance) = config.resolve(chain_id) {
+            let safe_distance = U64::from(distance);
+            let safe_block_number = latest_block - safe_distance;
+            if end_block > safe_block_number {
+                end_block = safe_block_number;
+            }
+            indexing_distance_from_head = safe_distance;
         }
-        indexing_distance_from_head = reorg_safe_distance;
     }
     (end_block, indexing_distance_from_head)
 }
