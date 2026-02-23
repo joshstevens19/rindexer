@@ -134,6 +134,8 @@ pub struct EventCallbackRegistryInformation {
     pub callback: EventCallbackType,
     /// Derived/custom tables for this event (for reorg cleanup).
     pub tables: Arc<Vec<crate::indexer::tables::TableRuntime>>,
+    /// Streams clients for reorg retraction.
+    pub streams_clients: Arc<Option<crate::streams::StreamsClients>>,
 }
 
 impl EventCallbackRegistryInformation {
@@ -162,6 +164,8 @@ impl Clone for EventCallbackRegistryInformation {
             index_event_in_order: self.index_event_in_order,
             contract: self.contract.clone(),
             callback: Arc::clone(&self.callback),
+            tables: self.tables.clone(),
+            streams_clients: self.streams_clients.clone(),
         }
     }
 }

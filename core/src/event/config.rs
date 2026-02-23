@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::event::contract_setup::{AddressDetails, IndexingContractSetup};
+use crate::indexer::reorg::ReorgEvent;
 use crate::indexer::tables::TableRuntime;
 use crate::event::factory_event_filter_sync::update_known_factory_deployed_addresses;
 use crate::event::rindexer_event_filter::FactoryFilter;
@@ -50,6 +51,10 @@ pub struct ContractEventProcessingConfig {
     pub cancel_token: CancellationToken,
     /// Derived/custom tables associated with this event (for reorg cleanup).
     pub tables: Arc<Vec<TableRuntime>>,
+    /// Broadcast sender for reorg events (code-gen mode).
+    pub reorg_sender: Option<tokio::sync::broadcast::Sender<ReorgEvent>>,
+    /// Streams clients for reorg retraction (no-code mode).
+    pub streams_clients: Arc<Option<crate::streams::StreamsClients>>,
 }
 
 impl ContractEventProcessingConfig {
@@ -130,6 +135,10 @@ pub struct FactoryEventProcessingConfig {
     pub cancel_token: CancellationToken,
     /// Derived/custom tables associated with this event (for reorg cleanup).
     pub tables: Arc<Vec<TableRuntime>>,
+    /// Broadcast sender for reorg events (code-gen mode).
+    pub reorg_sender: Option<tokio::sync::broadcast::Sender<ReorgEvent>>,
+    /// Streams clients for reorg retraction (no-code mode).
+    pub streams_clients: Arc<Option<crate::streams::StreamsClients>>,
 }
 
 impl FactoryEventProcessingConfig {
@@ -310,6 +319,20 @@ impl EventProcessingConfig {
         match self {
             Self::ContractEventProcessing(config) => config.tables.clone(),
             Self::FactoryEventProcessing(config) => config.tables.clone(),
+        }
+    }
+
+    pub fn reorg_sender(&self) -> Option<tokio::sync::broadcast::Sender<ReorgEvent>> {
+        match self {
+            Self::ContractEventProcessing(config) => config.reorg_sender.clone(),
+            Self::FactoryEventProcessing(config) => config.reorg_sender.clone(),
+        }
+    }
+
+    pub fn streams_clients(&self) -> Arc<Option<crate::streams::StreamsClients>> {
+        match self {
+            Self::ContractEventProcessing(config) => config.streams_clients.clone(),
+            Self::FactoryEventProcessing(config) => config.streams_clients.clone(),
         }
     }
 

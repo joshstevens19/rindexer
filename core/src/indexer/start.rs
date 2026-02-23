@@ -466,6 +466,8 @@ async fn start_indexing_contract_events(
                     indexing_distance_from_head,
                     cancel_token: cancel_token.clone(),
                     tables: event.tables.clone(),
+                    reorg_sender: None,
+                    streams_clients: event.streams_clients.clone(),
                 }
                 .into()
             }
@@ -500,6 +502,8 @@ async fn start_indexing_contract_events(
                 indexing_distance_from_head,
                 cancel_token: cancel_token.clone(),
                 tables: event.tables.clone(),
+                reorg_sender: None,
+                streams_clients: event.streams_clients.clone(),
             }
             .into(),
         };

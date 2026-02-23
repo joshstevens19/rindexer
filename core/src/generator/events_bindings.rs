@@ -299,12 +299,14 @@ fn generate_event_callback_structs_code(
                 {{
                     {csv_generator}
 
+                    let (reorg_tx, _) = tokio::sync::broadcast::channel(16);
                     Self {{
                         callback: {lower_name}_handler(closure),
                         context: Arc::new(EventContext {{
                             {database}
                             {csv}
                             extensions: Arc::new(extensions),
+                            reorg_tx,
                         }}),
                     }}
                 }}
@@ -541,6 +543,15 @@ fn generate_event_bindings_code(
             {event_context_database}
             {event_context_csv}
             pub extensions: Arc<TExtensions>,
+            reorg_tx: tokio::sync::broadcast::Sender<rindexer::ReorgEvent>,
+        }}
+
+        impl<TExtensions> EventContext<TExtensions> where TExtensions: Send + Sync {{
+            /// Subscribe to reorg events. Returns a receiver that will get notified
+            /// whenever a reorg is detected and recovery is complete.
+            pub fn reorg_receiver(&self) -> tokio::sync::broadcast::Receiver<rindexer::ReorgEvent> {{
+                self.reorg_tx.subscribe()
+            }}
         }}
 
         // didn't want to use option or none made harder DX
@@ -661,6 +672,8 @@ fn generate_event_bindings_code(
                     topic_id: topic_id.parse::<B256>().unwrap(),
                     contract,
                     callback,
+                    tables: Arc::new(vec![]),
+                    streams_clients: Arc::new(None),
                 }});
             }}
         }}

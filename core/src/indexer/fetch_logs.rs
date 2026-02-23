@@ -456,6 +456,20 @@ async fn live_indexing_stream(
     // for rollups having long-mechanisms like Polygon 1 epoch.
     let mut block_cache: LruCache<u64, BlockMeta> = LruCache::new(NonZeroUsize::new(1024).unwrap());
 
+    // Shadow cache + post-confirmation verifier: catches silent reorgs that
+    // the real-time detection might miss (e.g., when we were between polls).
+    let shadow_cache = crate::indexer::reorg::new_shadow_cache();
+    let (verifier_reorg_tx, mut verifier_reorg_rx) =
+        tokio::sync::mpsc::unbounded_channel::<ReorgInfo>();
+    let _verifier_handle = crate::indexer::reorg::spawn_post_confirmation_verifier(
+        Arc::clone(&shadow_cache),
+        Arc::clone(cached_provider),
+        64, // confirmations before verification
+        verifier_reorg_tx,
+        cancel_token.clone(),
+        network.to_string(),
+    );
+
     loop {
         let iteration_start = Instant::now();
 
@@ -490,6 +504,33 @@ async fn live_indexing_stream(
             continue;
         }
 
+        // Post-confirmation verifier signal — detected a reorg via background hash checks.
+        if let Ok(verifier_reorg) = verifier_reorg_rx.try_recv() {
+            let fork_block = verifier_reorg.fork_block.to::<u64>();
+            warn!(
+                "{} - REORG (post-confirmation verifier): depth={}, fork_block={}",
+                info_log_name, verifier_reorg.depth, fork_block
+            );
+
+            for b in fork_block..=(fork_block + verifier_reorg.depth) {
+                block_cache.pop(&b);
+            }
+
+            let _ = tx
+                .send(Ok(FetchLogsResult {
+                    logs: vec![],
+                    from_block: U64::from(fork_block),
+                    to_block: U64::from(fork_block),
+                    reorg: Some(verifier_reorg),
+                }))
+                .await;
+
+            current_filter = current_filter.set_from_block(U64::from(fork_block));
+            last_seen_block_number = U64::from(fork_block.saturating_sub(1));
+            while reth_reorg_rx.try_recv().is_ok() {}
+            continue;
+        }
+
         let latest_block = cached_provider.get_latest_block().await;
         match latest_block {
             Ok(latest_block) => {
@@ -511,6 +552,11 @@ async fn live_indexing_stream(
                             timestamp: latest_block.header.timestamp,
                         },
                     );
+
+                    // Mirror to shadow cache for post-confirmation verification
+                    if let Ok(mut sc) = shadow_cache.try_lock() {
+                        sc.insert(latest_block.header.number, latest_block.header.hash);
+                    }
 
                     // Reorg detection #2: parent hash chain discontinuity.
                     // The next block's parent_hash doesn't match our cached hash for

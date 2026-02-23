@@ -55,6 +55,7 @@ mod chat;
 pub mod event;
 pub mod notifications;
 pub use notifications::ChainStateNotification;
+pub use indexer::reorg::ReorgEvent;
 pub mod blockclock;
 pub mod phantom;
 pub mod provider;

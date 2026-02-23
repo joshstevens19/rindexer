@@ -1,5 +1,6 @@
 use alloy::primitives::{B256, U64};
 use lru::LruCache;
+use serde::Serialize;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
@@ -15,6 +16,19 @@ use crate::metrics::indexing as metrics;
 use crate::notifications::ChainStateNotification;
 use crate::provider::JsonRpcCachedProvider;
 use crate::PostgresClient;
+
+/// Broadcast event sent when a reorg is detected and recovery is complete.
+/// Available in code-gen mode via `EventContext::reorg_receiver()`.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReorgEvent {
+    pub network: String,
+    pub fork_block: u64,
+    pub depth: u64,
+    pub affected_tx_hashes: Vec<B256>,
+    pub indexer_name: String,
+    pub contract_name: String,
+    pub event_name: String,
+}
 
 /// Handles chain state notifications (reorgs, reverts, commits).
 /// Used by reth feature-gated providers that emit chain state events.
@@ -190,12 +204,47 @@ pub async fn handle_reorg_recovery(config: &Arc<EventProcessingConfig>, reorg: &
         rewind_checkpoint_clickhouse(clickhouse, &schema, &event_name, rewind_block, network).await;
     }
 
+    // Delete derived/custom table rows affected by the reorg
+    let tables = config.tables();
+    if !tables.is_empty() {
+        delete_derived_table_rows(
+            &tables,
+            &config.postgres(),
+            &config.clickhouse(),
+            fork_block,
+            network,
+        )
+        .await;
+    }
+
+    let result: Vec<B256> = all_tx_hashes.into_iter().collect();
+
+    // Broadcast reorg event (for code-gen mode subscribers)
+    if let Some(sender) = config.reorg_sender() {
+        let _ = sender.send(ReorgEvent {
+            network: network.to_string(),
+            fork_block,
+            depth: reorg.depth,
+            affected_tx_hashes: result.clone(),
+            indexer_name: indexer_name.clone(),
+            contract_name: contract_name.clone(),
+            event_name: event_name.clone(),
+        });
+    }
+
+    // Stream retraction event (for no-code mode streams: webhooks, Kafka, etc.)
+    if let Some(streams) = config.streams_clients().as_ref() {
+        if let Err(e) = streams.stream_reorg(network, fork_block, reorg.depth, &result).await {
+            error!("Failed to stream reorg retraction: {:?}", e);
+        }
+    }
+
     info!(
         "Reorg recovery complete: checkpoint rewound to block {} for {}.{} ({} affected txs)",
-        rewind_block, schema, event_table_name, all_tx_hashes.len()
+        rewind_block, schema, event_table_name, result.len()
     );
 
-    all_tx_hashes.into_iter().collect()
+    result
 }
 
 /// Queries PostgreSQL for distinct tx hashes in blocks >= fork_block.
@@ -387,6 +436,8 @@ pub async fn handle_native_transfer_reorg_recovery(
     indexer_name: &str,
     network: &str,
     fork_block: u64,
+    depth: u64,
+    streams_clients: &Option<Arc<Option<crate::streams::StreamsClients>>>,
 ) {
     let schema = generate_indexer_contract_schema_name(indexer_name, "EvmTraces");
     let event_table_name = "native_transfer";
@@ -397,15 +448,151 @@ pub async fn handle_native_transfer_reorg_recovery(
         fork_block, schema, event_table_name, network
     );
 
+    let mut affected_tx_hashes = Vec::new();
+
     if let Some(pg) = postgres {
+        affected_tx_hashes = collect_affected_tx_hashes_postgres(pg, &schema, event_table_name, fork_block, network).await;
         delete_events_postgres(pg, &schema, event_table_name, fork_block, network).await;
-        // Checkpoint uses "native_transfer" as event name (hardcoded in last_synced.rs)
         rewind_checkpoint_postgres(pg, &schema, "native_transfer", rewind_block, network).await;
         info!(
             "Native transfer reorg recovery complete: checkpoint rewound to block {} for {}.{}",
             rewind_block, schema, event_table_name
         );
     }
+
+    // Stream retraction for native transfer reorgs
+    if let Some(sc) = streams_clients {
+        if let Some(streams) = sc.as_ref() {
+            if let Err(e) = streams.stream_reorg(network, fork_block, depth, &affected_tx_hashes).await {
+                error!("Failed to stream native transfer reorg retraction: {:?}", e);
+            }
+        }
+    }
+}
+
+/// Shadow cache entry: just the block hash, kept separately from the main LRU cache.
+/// The verifier reads from this after blocks have been confirmed.
+pub type ShadowCache = Arc<std::sync::Mutex<std::collections::HashMap<u64, B256>>>;
+
+/// Creates a new empty shadow cache for post-confirmation verification.
+pub fn new_shadow_cache() -> ShadowCache {
+    Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Spawns a background task that periodically verifies block hashes after N confirmations.
+///
+/// Compares cached hashes against the canonical chain from RPC. If a mismatch is found,
+/// sends a `ReorgInfo` through the provided channel for the main loop to handle.
+///
+/// The task runs until the `cancel_token` is cancelled.
+pub fn spawn_post_confirmation_verifier(
+    shadow_cache: ShadowCache,
+    provider: Arc<JsonRpcCachedProvider>,
+    confirmations: u64,
+    reorg_signal_tx: tokio::sync::mpsc::UnboundedSender<ReorgInfo>,
+    cancel_token: tokio_util::sync::CancellationToken,
+    network: String,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let check_interval = std::time::Duration::from_secs(30);
+        loop {
+            tokio::select! {
+                _ = cancel_token.cancelled() => {
+                    debug!("Post-confirmation verifier stopped for {}", network);
+                    return;
+                }
+                _ = tokio::time::sleep(check_interval) => {}
+            }
+
+            // Get current chain tip
+            let latest_block = match provider.get_block_number().await {
+                Ok(block) => block.to::<u64>(),
+                Err(e) => {
+                    warn!("Verifier: failed to get latest block for {}: {:?}", network, e);
+                    continue;
+                }
+            };
+
+            // Only verify blocks that have enough confirmations
+            let verify_up_to = latest_block.saturating_sub(confirmations);
+
+            // Collect blocks to verify from shadow cache
+            let blocks_to_verify: Vec<(u64, B256)> = {
+                let cache = match shadow_cache.try_lock() {
+                    Ok(c) => c,
+                    Err(_) => continue, // Skip if locked
+                };
+                cache
+                    .iter()
+                    .filter(|(block_num, _)| **block_num <= verify_up_to)
+                    .map(|(k, v)| (*k, *v))
+                    .collect()
+            };
+
+            if blocks_to_verify.is_empty() {
+                continue;
+            }
+
+            // Batch-fetch canonical hashes from RPC
+            let block_numbers: Vec<U64> =
+                blocks_to_verify.iter().map(|(num, _)| U64::from(*num)).collect();
+
+            let canonical_blocks = match provider
+                .get_block_by_number_batch(&block_numbers, false)
+                .await
+            {
+                Ok(blocks) => blocks,
+                Err(e) => {
+                    warn!("Verifier: failed to fetch blocks for {}: {:?}", network, e);
+                    continue;
+                }
+            };
+
+            // Compare hashes
+            let mut mismatch_block: Option<u64> = None;
+            for block in &canonical_blocks {
+                let block_num = block.header.number;
+                if let Some((_, cached_hash)) =
+                    blocks_to_verify.iter().find(|(num, _)| *num == block_num)
+                {
+                    if block.header.hash != *cached_hash {
+                        warn!(
+                            "Verifier: hash mismatch at block {} on {} (cached: {}, canonical: {})",
+                            block_num, network, cached_hash, block.header.hash
+                        );
+                        mismatch_block = Some(match mismatch_block {
+                            Some(existing) => existing.min(block_num),
+                            None => block_num,
+                        });
+                    }
+                }
+            }
+
+            // Remove verified blocks from shadow cache
+            {
+                if let Ok(mut cache) = shadow_cache.try_lock() {
+                    for (block_num, _) in &blocks_to_verify {
+                        cache.remove(block_num);
+                    }
+                }
+            }
+
+            // Signal reorg if mismatch detected
+            if let Some(fork_block) = mismatch_block {
+                let depth = latest_block.saturating_sub(fork_block);
+                warn!(
+                    "Verifier: post-confirmation reorg detected on {} at block {} (depth: {})",
+                    network, fork_block, depth
+                );
+                metrics::record_reorg(&network, depth);
+                let _ = reorg_signal_tx.send(ReorgInfo {
+                    fork_block: U64::from(fork_block),
+                    depth,
+                    affected_tx_hashes: vec![],
+                });
+            }
+        }
+    })
 }
 
 #[cfg(test)]

@@ -1,8 +1,9 @@
 use std::{sync::Arc, time::Instant};
 
+use alloy::primitives::B256;
 use aws_sdk_sns::{config::http::HttpResponse, error::SdkError, operation::publish::PublishError};
 use futures::future::join_all;
-use serde_json::Value;
+use serde_json::{json, Value};
 use thiserror::Error;
 use tokio::{
     task,
@@ -760,5 +761,41 @@ impl StreamsClients {
         } else {
             unreachable!("Event data should be an array");
         }
+    }
+
+    /// Publishes a `__rindexer_reorg` retraction event to all configured streams.
+    pub async fn stream_reorg(
+        &self,
+        network: &str,
+        fork_block: u64,
+        depth: u64,
+        affected_tx_hashes: &[B256],
+    ) -> Result<usize, StreamError> {
+        if !self.has_any_streams() {
+            return Ok(0);
+        }
+
+        let reorg_payload = json!({
+            "type": "reorg",
+            "network": network,
+            "fork_block": fork_block,
+            "depth": depth,
+            "affected_tx_hashes": affected_tx_hashes.iter().map(|h| format!("{:#x}", h)).collect::<Vec<_>>(),
+        });
+
+        let event_message = EventMessage {
+            event_name: "__rindexer_reorg".to_string(),
+            event_data: Value::Array(vec![reorg_payload]),
+            event_signature_hash: B256::ZERO,
+            network: network.to_string(),
+        };
+
+        self.stream(
+            format!("reorg_{}_{}", network, fork_block),
+            &event_message,
+            false,
+            false,
+        )
+        .await
     }
 }
