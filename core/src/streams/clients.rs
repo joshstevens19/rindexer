@@ -790,12 +790,6 @@ impl StreamsClients {
             network: network.to_string(),
         };
 
-        self.stream(
-            format!("reorg_{}_{}", network, fork_block),
-            &event_message,
-            false,
-            false,
-        )
-        .await
+        self.stream(format!("reorg_{}_{}", network, fork_block), &event_message, false, false).await
     }
 }

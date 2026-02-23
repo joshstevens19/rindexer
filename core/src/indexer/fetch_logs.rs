@@ -597,7 +597,11 @@ async fn live_indexing_stream(
                                 logs: vec![],
                                 from_block: U64::from(fork_block),
                                 to_block: U64::from(fork_block),
-                                reorg: Some(ReorgInfo { fork_block: U64::from(fork_block), depth, affected_tx_hashes: vec![] }),
+                                reorg: Some(ReorgInfo {
+                                    fork_block: U64::from(fork_block),
+                                    depth,
+                                    affected_tx_hashes: vec![],
+                                }),
                             }))
                             .await;
 

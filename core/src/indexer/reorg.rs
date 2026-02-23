@@ -60,7 +60,11 @@ pub fn handle_chain_notification(
                 new_tip_hash
             );
 
-            Some(ReorgInfo { fork_block: U64::from(revert_to_block), depth, affected_tx_hashes: vec![] })
+            Some(ReorgInfo {
+                fork_block: U64::from(revert_to_block),
+                depth,
+                affected_tx_hashes: vec![],
+            })
         }
         ChainStateNotification::Reverted { from_block, to_block } => {
             let depth = from_block.saturating_sub(to_block);
@@ -173,7 +177,10 @@ pub async fn find_fork_point(
 
 /// Handles reorg recovery: collects affected tx hashes, deletes orphaned events, and rewinds
 /// the checkpoint. Returns the union of tx hashes from the reorg signal and from storage.
-pub async fn handle_reorg_recovery(config: &Arc<EventProcessingConfig>, reorg: &ReorgInfo) -> Vec<B256> {
+pub async fn handle_reorg_recovery(
+    config: &Arc<EventProcessingConfig>,
+    reorg: &ReorgInfo,
+) -> Vec<B256> {
     let fork_block = reorg.fork_block.to::<u64>();
     let network = &config.network_contract().network;
     let indexer_name = config.indexer_name();
@@ -193,7 +200,14 @@ pub async fn handle_reorg_recovery(config: &Arc<EventProcessingConfig>, reorg: &
         reorg.affected_tx_hashes.iter().copied().collect();
 
     if let Some(postgres) = &config.postgres() {
-        let db_hashes = collect_affected_tx_hashes_postgres(postgres, &schema, &event_table_name, fork_block, network).await;
+        let db_hashes = collect_affected_tx_hashes_postgres(
+            postgres,
+            &schema,
+            &event_table_name,
+            fork_block,
+            network,
+        )
+        .await;
         all_tx_hashes.extend(db_hashes);
         delete_events_postgres(postgres, &schema, &event_table_name, fork_block, network).await;
         rewind_checkpoint_postgres(postgres, &schema, &event_name, rewind_block, network).await;
@@ -241,7 +255,10 @@ pub async fn handle_reorg_recovery(config: &Arc<EventProcessingConfig>, reorg: &
 
     info!(
         "Reorg recovery complete: checkpoint rewound to block {} for {}.{} ({} affected txs)",
-        rewind_block, schema, event_table_name, result.len()
+        rewind_block,
+        schema,
+        event_table_name,
+        result.len()
     );
 
     result
@@ -380,10 +397,7 @@ pub async fn delete_derived_table_rows(
 
         if let Some(pg) = postgres {
             let query = if is_cross_chain {
-                format!(
-                    "DELETE FROM {} WHERE rindexer_block_number >= {}",
-                    full_table, fork_block
-                )
+                format!("DELETE FROM {} WHERE rindexer_block_number >= {}", full_table, fork_block)
             } else {
                 format!(
                     "DELETE FROM {} WHERE rindexer_block_number >= {} AND network = '{}'",
@@ -451,7 +465,9 @@ pub async fn handle_native_transfer_reorg_recovery(
     let mut affected_tx_hashes = Vec::new();
 
     if let Some(pg) = postgres {
-        affected_tx_hashes = collect_affected_tx_hashes_postgres(pg, &schema, event_table_name, fork_block, network).await;
+        affected_tx_hashes =
+            collect_affected_tx_hashes_postgres(pg, &schema, event_table_name, fork_block, network)
+                .await;
         delete_events_postgres(pg, &schema, event_table_name, fork_block, network).await;
         rewind_checkpoint_postgres(pg, &schema, "native_transfer", rewind_block, network).await;
         info!(
@@ -463,7 +479,9 @@ pub async fn handle_native_transfer_reorg_recovery(
     // Stream retraction for native transfer reorgs
     if let Some(sc) = streams_clients {
         if let Some(streams) = sc.as_ref() {
-            if let Err(e) = streams.stream_reorg(network, fork_block, depth, &affected_tx_hashes).await {
+            if let Err(e) =
+                streams.stream_reorg(network, fork_block, depth, &affected_tx_hashes).await
+            {
                 error!("Failed to stream native transfer reorg retraction: {:?}", e);
             }
         }
@@ -537,16 +555,14 @@ pub fn spawn_post_confirmation_verifier(
             let block_numbers: Vec<U64> =
                 blocks_to_verify.iter().map(|(num, _)| U64::from(*num)).collect();
 
-            let canonical_blocks = match provider
-                .get_block_by_number_batch(&block_numbers, false)
-                .await
-            {
-                Ok(blocks) => blocks,
-                Err(e) => {
-                    warn!("Verifier: failed to fetch blocks for {}: {:?}", network, e);
-                    continue;
-                }
-            };
+            let canonical_blocks =
+                match provider.get_block_by_number_batch(&block_numbers, false).await {
+                    Ok(blocks) => blocks,
+                    Err(e) => {
+                        warn!("Verifier: failed to fetch blocks for {}: {:?}", network, e);
+                        continue;
+                    }
+                };
 
             // Compare hashes
             let mut mismatch_block: Option<u64> = None;
@@ -705,10 +721,7 @@ mod tests {
 
     #[test]
     fn test_handle_chain_notification_reverted() {
-        let notification = ChainStateNotification::Reverted {
-            from_block: 200,
-            to_block: 195,
-        };
+        let notification = ChainStateNotification::Reverted { from_block: 200, to_block: 195 };
         let result = handle_chain_notification(notification, "test", "ethereum");
         assert!(result.is_some());
         let reorg = result.unwrap();

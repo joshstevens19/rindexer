@@ -413,7 +413,8 @@ async fn live_indexing_for_contract_event_dependencies(
             }
 
             // Recovery: delete reorged events and rewind checkpoints for all events
-            let reorg_info = ReorgInfo { fork_block: U64::from(fork_block), depth, affected_tx_hashes: vec![] };
+            let reorg_info =
+                ReorgInfo { fork_block: U64::from(fork_block), depth, affected_tx_hashes: vec![] };
             for (config, _) in events.iter() {
                 let _affected_hashes = handle_reorg_recovery(config, &reorg_info).await;
                 let mut details = ordering_live_indexing_details_map
@@ -600,8 +601,11 @@ async fn live_indexing_for_contract_event_dependencies(
                             .collect::<std::collections::HashSet<_>>()
                             .into_iter()
                             .collect();
-                        let reorg_info =
-                            ReorgInfo { fork_block: U64::from(min_removed_block), depth, affected_tx_hashes };
+                        let reorg_info = ReorgInfo {
+                            fork_block: U64::from(min_removed_block),
+                            depth,
+                            affected_tx_hashes,
+                        };
                         let _affected_hashes = handle_reorg_recovery(config, &reorg_info).await;
 
                         // Rewind cursor for this event

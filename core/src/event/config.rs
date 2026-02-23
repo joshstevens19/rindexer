@@ -7,10 +7,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::event::contract_setup::{AddressDetails, IndexingContractSetup};
-use crate::indexer::reorg::ReorgEvent;
-use crate::indexer::tables::TableRuntime;
 use crate::event::factory_event_filter_sync::update_known_factory_deployed_addresses;
 use crate::event::rindexer_event_filter::FactoryFilter;
+use crate::indexer::reorg::ReorgEvent;
+use crate::indexer::tables::TableRuntime;
 use crate::manifest::config::Config;
 use crate::manifest::contract::EventInputIndexedFilters;
 use crate::{

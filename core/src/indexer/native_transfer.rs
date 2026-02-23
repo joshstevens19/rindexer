@@ -164,8 +164,15 @@ pub async fn native_transfer_block_fetch(
                 block_cache.pop(&b);
             }
 
-            handle_native_transfer_reorg_recovery(&postgres, &indexer_name, &network, fork_block, reth_reorg.depth, &None)
-                .await;
+            handle_native_transfer_reorg_recovery(
+                &postgres,
+                &indexer_name,
+                &network,
+                fork_block,
+                reth_reorg.depth,
+                &None,
+            )
+            .await;
 
             last_seen_block = U64::from(fork_block.saturating_sub(1));
             continue;
