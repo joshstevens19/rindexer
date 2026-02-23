@@ -697,7 +697,7 @@ fn generate_trace_bindings_code(
                         }})
                         .collect(),
                     reorg_safe_distance: rindexer_yaml
-                        .native_transfers.reorg_safe_distance.clone(),
+                        .native_transfers.reorg_safe_distance,
                 }};
 
                 let callback: Arc<dyn Fn(Vec<TraceResult>) -> BoxFuture<'static, TraceCallbackResult<()>> + Send + Sync> = match self {{

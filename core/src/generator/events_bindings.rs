@@ -657,7 +657,7 @@ fn generate_event_bindings_code(
                         }})
                         .collect(),
                     abi: contract_details.abi,
-                    reorg_safe_distance: contract_details.reorg_safe_distance.clone(),
+                    reorg_safe_distance: contract_details.reorg_safe_distance,
                 }};
 
                 let callback: Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync> = match self {{

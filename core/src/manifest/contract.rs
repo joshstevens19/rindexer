@@ -1227,6 +1227,12 @@ pub enum ReorgSafeDistance {
     Custom(u64),
 }
 
+impl Default for ReorgSafeDistance {
+    fn default() -> Self {
+        ReorgSafeDistance::Enabled(false)
+    }
+}
+
 impl ReorgSafeDistance {
     /// Resolve to a concrete block distance, or None if disabled.
     pub fn resolve(&self, chain_id: u64) -> Option<u64> {
