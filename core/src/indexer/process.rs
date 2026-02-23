@@ -468,7 +468,7 @@ async fn live_indexing_for_contract_event_dependencies(
                 ordering_live_indexing_details.last_seen_block_number
             );
             let reorg_safe_distance = &config.indexing_distance_from_head();
-            let safe_block_number = latest_block_number - reorg_safe_distance;
+            let safe_block_number = latest_block_number.saturating_sub(*reorg_safe_distance);
             let from_block = ordering_live_indexing_details.filter.from_block();
 
             // check reorg distance and skip if not safe

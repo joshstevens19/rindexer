@@ -743,7 +743,7 @@ pub fn calculate_safe_block_number(
         let chain_id = provider.chain.id();
         if let Some(distance) = config.resolve(chain_id) {
             let safe_distance = U64::from(distance);
-            let safe_block_number = latest_block - safe_distance;
+            let safe_block_number = latest_block.saturating_sub(safe_distance);
             if end_block > safe_block_number {
                 end_block = safe_block_number;
             }
