@@ -598,6 +598,7 @@ pub fn spawn_post_confirmation_verifier(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::manifest::contract::ReorgSafeDistance;
 
     #[test]
     fn test_reorg_safe_distance_for_chain() {
@@ -610,5 +611,200 @@ mod tests {
         assert_eq!(reorg_safe_distance_for_chain(43114), 12); // Avalanche
         assert_eq!(reorg_safe_distance_for_chain(100), 24); // Gnosis
         assert_eq!(reorg_safe_distance_for_chain(999), 64); // Unknown chain
+    }
+
+    // ======================================================================
+    // ReorgSafeDistance serde (untagged enum: bool | u64)
+    // ======================================================================
+
+    #[test]
+    fn test_reorg_safe_distance_serde_true() {
+        let yaml = "true";
+        let val: ReorgSafeDistance = serde_yaml::from_str(yaml).unwrap();
+        assert!(matches!(val, ReorgSafeDistance::Enabled(true)));
+    }
+
+    #[test]
+    fn test_reorg_safe_distance_serde_false() {
+        let yaml = "false";
+        let val: ReorgSafeDistance = serde_yaml::from_str(yaml).unwrap();
+        assert!(matches!(val, ReorgSafeDistance::Enabled(false)));
+    }
+
+    #[test]
+    fn test_reorg_safe_distance_serde_custom_u64() {
+        let yaml = "200";
+        let val: ReorgSafeDistance = serde_yaml::from_str(yaml).unwrap();
+        assert!(matches!(val, ReorgSafeDistance::Custom(200)));
+    }
+
+    #[test]
+    fn test_reorg_safe_distance_serde_roundtrip() {
+        // Test that serialization + deserialization roundtrips correctly
+        let variants = vec![
+            ReorgSafeDistance::Enabled(true),
+            ReorgSafeDistance::Enabled(false),
+            ReorgSafeDistance::Custom(42),
+        ];
+        for original in variants {
+            let yaml = serde_yaml::to_string(&original).unwrap();
+            let parsed: ReorgSafeDistance = serde_yaml::from_str(&yaml).unwrap();
+            // Compare resolved values on Ethereum (chain_id=1)
+            assert_eq!(original.resolve(1), parsed.resolve(1));
+        }
+    }
+
+    // ======================================================================
+    // ReorgSafeDistance::resolve()
+    // ======================================================================
+
+    #[test]
+    fn test_resolve_enabled_true_uses_chain_default() {
+        let rsd = ReorgSafeDistance::Enabled(true);
+        assert_eq!(rsd.resolve(137), Some(200)); // Polygon default
+        assert_eq!(rsd.resolve(1), Some(20)); // Ethereum default
+        assert_eq!(rsd.resolve(999), Some(64)); // Unknown chain fallback
+    }
+
+    #[test]
+    fn test_resolve_enabled_false_returns_none() {
+        let rsd = ReorgSafeDistance::Enabled(false);
+        assert_eq!(rsd.resolve(137), None);
+        assert_eq!(rsd.resolve(1), None);
+    }
+
+    #[test]
+    fn test_resolve_custom_overrides_chain_default() {
+        let rsd = ReorgSafeDistance::Custom(500);
+        // Custom value should override regardless of chain
+        assert_eq!(rsd.resolve(137), Some(500));
+        assert_eq!(rsd.resolve(1), Some(500));
+        assert_eq!(rsd.resolve(999), Some(500));
+    }
+
+    // ======================================================================
+    // handle_chain_notification()
+    // ======================================================================
+
+    #[test]
+    fn test_handle_chain_notification_reorged() {
+        let notification = ChainStateNotification::Reorged {
+            revert_from_block: 110,
+            revert_to_block: 100,
+            new_from_block: 100,
+            new_to_block: 112,
+            new_tip_hash: B256::from([0xab; 32]),
+        };
+        let result = handle_chain_notification(notification, "test", "polygon");
+        assert!(result.is_some());
+        let reorg = result.unwrap();
+        assert_eq!(reorg.fork_block, U64::from(100));
+        assert_eq!(reorg.depth, 10); // 110 - 100
+        assert!(reorg.affected_tx_hashes.is_empty());
+    }
+
+    #[test]
+    fn test_handle_chain_notification_reverted() {
+        let notification = ChainStateNotification::Reverted {
+            from_block: 200,
+            to_block: 195,
+        };
+        let result = handle_chain_notification(notification, "test", "ethereum");
+        assert!(result.is_some());
+        let reorg = result.unwrap();
+        assert_eq!(reorg.fork_block, U64::from(195));
+        assert_eq!(reorg.depth, 5); // 200 - 195
+    }
+
+    #[test]
+    fn test_handle_chain_notification_committed_returns_none() {
+        let notification = ChainStateNotification::Committed {
+            from_block: 100,
+            to_block: 200,
+            tip_hash: B256::ZERO,
+        };
+        let result = handle_chain_notification(notification, "test", "polygon");
+        assert!(result.is_none());
+    }
+
+    // ======================================================================
+    // ReorgEvent serialization
+    // ======================================================================
+
+    #[test]
+    fn test_reorg_event_serialization() {
+        let tx_hash = B256::from([0xde; 32]);
+        let event = ReorgEvent {
+            network: "polygon".to_string(),
+            fork_block: 1000,
+            depth: 3,
+            affected_tx_hashes: vec![tx_hash],
+            indexer_name: "TestIndexer".to_string(),
+            contract_name: "USDC".to_string(),
+            event_name: "Transfer".to_string(),
+        };
+
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["network"], "polygon");
+        assert_eq!(json["fork_block"], 1000);
+        assert_eq!(json["depth"], 3);
+        assert_eq!(json["indexer_name"], "TestIndexer");
+        assert_eq!(json["contract_name"], "USDC");
+        assert_eq!(json["event_name"], "Transfer");
+
+        // tx hashes should serialize as hex strings
+        let hashes = json["affected_tx_hashes"].as_array().unwrap();
+        assert_eq!(hashes.len(), 1);
+        let hash_str = hashes[0].as_str().unwrap();
+        assert!(hash_str.starts_with("0x"));
+        assert_eq!(hash_str.len(), 66); // "0x" + 64 hex chars
+    }
+
+    #[test]
+    fn test_reorg_event_empty_tx_hashes() {
+        let event = ReorgEvent {
+            network: "ethereum".to_string(),
+            fork_block: 5000,
+            depth: 1,
+            affected_tx_hashes: vec![],
+            indexer_name: "Idx".to_string(),
+            contract_name: "DAI".to_string(),
+            event_name: "Approval".to_string(),
+        };
+
+        let json = serde_json::to_value(&event).unwrap();
+        assert!(json["affected_tx_hashes"].as_array().unwrap().is_empty());
+    }
+
+    // ======================================================================
+    // ShadowCache
+    // ======================================================================
+
+    #[test]
+    fn test_shadow_cache_basic_operations() {
+        let cache = new_shadow_cache();
+
+        // Insert
+        {
+            let mut c = cache.lock().unwrap();
+            c.insert(100, B256::from([1u8; 32]));
+            c.insert(101, B256::from([2u8; 32]));
+        }
+
+        // Read
+        {
+            let c = cache.lock().unwrap();
+            assert_eq!(c.len(), 2);
+            assert_eq!(c.get(&100), Some(&B256::from([1u8; 32])));
+            assert_eq!(c.get(&101), Some(&B256::from([2u8; 32])));
+            assert_eq!(c.get(&102), None);
+        }
+
+        // Remove
+        {
+            let mut c = cache.lock().unwrap();
+            c.remove(&100);
+            assert_eq!(c.len(), 1);
+        }
     }
 }
