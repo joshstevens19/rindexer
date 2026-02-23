@@ -486,7 +486,7 @@ where
                 })
                 .collect(),
             abi: contract_details.abi,
-            reorg_safe_distance: contract_details.reorg_safe_distance.unwrap_or_default(),
+            reorg_safe_distance: contract_details.reorg_safe_distance,
         };
 
         let callback: Arc<
@@ -517,6 +517,8 @@ where
             topic_id: topic_id.parse::<B256>().unwrap(),
             contract,
             callback,
+            tables: Arc::new(vec![]),
+            streams_clients: Arc::new(None),
         });
     }
 }
