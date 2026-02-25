@@ -4,7 +4,7 @@ use alloy::{
     primitives::{Address, B256, I256, U256, U64},
 };
 use lru::LruCache;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
@@ -13,6 +13,7 @@ use crate::abi::{ABIInput, ABIItem};
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::generate::generate_indexer_contract_schema_name;
 use crate::database::postgres::generate::{
+    generate_column_names_only_with_base_properties,
     generate_internal_event_table_name, generate_internal_event_table_name_no_shorten,
 };
 use crate::event::config::EventProcessingConfig;
@@ -537,7 +538,7 @@ pub async fn recompute_derived_tables(
             ReplayStrategy::DeletionOnly => continue,
         };
 
-        replay_table_from_postgres(
+        replay_table_from_storage(
             config,
             &table_runtime,
             &abi_inputs,
@@ -549,6 +550,41 @@ pub async fn recompute_derived_tables(
     }
 
     Ok(())
+}
+
+async fn replay_table_from_storage(
+    config: &Arc<EventProcessingConfig>,
+    table_runtime: &TableRuntime,
+    abi_inputs: &[ABIInput],
+    network_filter: Option<&str>,
+    from_block: u64,
+    event_name: &str,
+) -> Result<(), String> {
+    if config.postgres().is_some() {
+        return replay_table_from_postgres(
+            config,
+            table_runtime,
+            abi_inputs,
+            network_filter,
+            from_block,
+            event_name,
+        )
+        .await;
+    }
+
+    if config.clickhouse().is_some() {
+        return replay_table_from_clickhouse(
+            config,
+            table_runtime,
+            abi_inputs,
+            network_filter,
+            from_block,
+            event_name,
+        )
+        .await;
+    }
+
+    Err("replay requires either PostgreSQL or ClickHouse raw event storage".to_string())
 }
 
 fn load_event_abi_inputs(config: &EventProcessingConfig) -> Result<Vec<ABIInput>, String> {
@@ -755,6 +791,142 @@ async fn replay_table_from_postgres(
     Ok(())
 }
 
+#[derive(Debug, clickhouse::Row, Deserialize)]
+struct ClickhouseReplayRow {
+    row_data: String,
+}
+
+async fn replay_table_from_clickhouse(
+    config: &Arc<EventProcessingConfig>,
+    table_runtime: &TableRuntime,
+    abi_inputs: &[ABIInput],
+    network_filter: Option<&str>,
+    from_block: u64,
+    event_name: &str,
+) -> Result<(), String> {
+    let Some(clickhouse) = config.clickhouse() else {
+        return Err("replay requires ClickHouse raw event storage".to_string());
+    };
+
+    let schema = generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
+    let event_table = camel_to_snake(event_name);
+    let full_event_table = format!("{}.{}", schema, event_table);
+    let batch_size = 2_000_u64;
+    let mut last_cursor: Option<(u64, u64, u64)> = None;
+
+    let providers = config.providers();
+    let constants = config.constants();
+    let multicall_addresses = config.multicall_addresses();
+
+    let row_columns = generate_column_names_only_with_base_properties(abi_inputs);
+    let select_columns = row_columns
+        .iter()
+        .map(|column| format!("`{}`", column))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    loop {
+        let cursor_condition = if let Some((last_block, last_tx_index, last_log_index)) = last_cursor
+        {
+            format!(
+                " AND (block_number > {} OR (block_number = {} AND tx_index > {}) OR (block_number = {} AND tx_index = {} AND log_index > {}))",
+                last_block, last_block, last_tx_index, last_block, last_tx_index, last_log_index
+            )
+        } else {
+            String::new()
+        };
+
+        let network_predicate = network_filter
+            .map(|network| format!("network = '{}' AND ", network))
+            .unwrap_or_default();
+
+        let query = format!(
+            "SELECT toJSONString(({})) AS row_data \
+             FROM {} \
+             WHERE {}block_number >= {}{} \
+             ORDER BY block_number ASC, tx_index ASC, log_index ASC \
+             LIMIT {}",
+            select_columns, full_event_table, network_predicate, from_block, cursor_condition, batch_size
+        );
+
+        let rows: Vec<ClickhouseReplayRow> = clickhouse
+            .query_all(&query)
+            .await
+            .map_err(|e| format!("failed replay query for {}: {}", full_event_table, e))?;
+
+        if rows.is_empty() {
+            break;
+        }
+
+        let mut events_data: Vec<(Vec<LogParam>, String, TxMetadata)> = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let row_json = row_json_from_clickhouse_tuple(&row.row_data, &row_columns)?;
+            let log_params = build_log_params_from_row(abi_inputs, &row_json)?;
+            let tx_metadata = build_tx_metadata_from_row(&row_json)?;
+            let event_network = parse_network_from_row(&row_json)?;
+            events_data.push((log_params, event_network, tx_metadata));
+        }
+
+        process_table_operations(
+            std::slice::from_ref(table_runtime),
+            event_name,
+            &events_data,
+            config.postgres(),
+            config.clickhouse(),
+            providers.clone(),
+            constants.as_ref(),
+            multicall_addresses.as_ref(),
+            None,
+        )
+        .await?;
+
+        if let Some((_, _, tx_metadata)) = events_data.last() {
+            let last_log_index = tx_metadata.log_index.to::<u64>();
+            last_cursor = Some((tx_metadata.block_number, tx_metadata.tx_index, last_log_index));
+        }
+
+        if rows.len() < batch_size as usize {
+            break;
+        }
+    }
+
+    info!(
+        "Reorg replay complete (ClickHouse source) for table {} from block {}{}",
+        table_runtime.full_table_name,
+        from_block,
+        network_filter.map(|n| format!(" on {}", n)).unwrap_or(" across all networks".to_string())
+    );
+
+    Ok(())
+}
+
+fn row_json_from_clickhouse_tuple(
+    tuple_json: &str,
+    row_columns: &[String],
+) -> Result<serde_json::Value, String> {
+    let tuple_value: serde_json::Value =
+        serde_json::from_str(tuple_json).map_err(|e| format!("invalid ClickHouse tuple JSON: {}", e))?;
+
+    let values = tuple_value
+        .as_array()
+        .ok_or_else(|| format!("expected tuple JSON array, got {}", tuple_value))?;
+
+    if values.len() != row_columns.len() {
+        return Err(format!(
+            "column/value length mismatch for ClickHouse replay row: {} columns vs {} values",
+            row_columns.len(),
+            values.len()
+        ));
+    }
+
+    let mut obj = serde_json::Map::with_capacity(row_columns.len());
+    for (column, value) in row_columns.iter().zip(values.iter()) {
+        obj.insert(column.clone(), value.clone());
+    }
+
+    Ok(serde_json::Value::Object(obj))
+}
+
 fn build_tx_metadata_from_row(row: &serde_json::Value) -> Result<TxMetadata, String> {
     let contract_address = parse_address(value_as_str(&row["contract_address"])?)?;
     let tx_hash = parse_b256(value_as_str(&row["tx_hash"])?)?;
@@ -845,6 +1017,22 @@ fn parse_sol_value(
     value: &serde_json::Value,
     components: Option<&[ABIInput]>,
 ) -> Result<DynSolValue, String> {
+    if let serde_json::Value::String(json_encoded) = value {
+        if full_type.contains('[') || base_type == "tuple" {
+            if let Ok(decoded_json) = serde_json::from_str::<serde_json::Value>(json_encoded) {
+                return parse_sol_value(base_type, full_type, &decoded_json, components);
+            }
+        }
+
+        if base_type == "bool" {
+            match json_encoded.as_str() {
+                "true" => return Ok(DynSolValue::Bool(true)),
+                "false" => return Ok(DynSolValue::Bool(false)),
+                _ => {}
+            }
+        }
+    }
+
     let is_array = full_type.contains('[');
     let fixed_array_len = extract_fixed_array_len(full_type);
 

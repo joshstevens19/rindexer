@@ -16,5 +16,25 @@ contracts:
     address: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"
   abi: ./abis/ERC20.abi.json
   reorg_safe_distance: 200
+  tables:
+  - name: replay_balances
+    columns:
+    - name: holder
+      type: address
+    - name: total_in
+      default: "0"
+    events:
+    - event: Transfer
+      operations:
+      - type: upsert
+        set:
+        - column: holder
+          action: set
+          value: $to
+        - column: total_in
+          action: add
+          value: $value
+        where:
+          holder: $to
   include_events:
   - Transfer

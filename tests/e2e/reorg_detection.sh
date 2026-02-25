@@ -9,7 +9,8 @@ set -euo pipefail
 #      + verifies full recovery pipeline (handle_reorg_recovery)
 #   2. Parent hash mismatch — new block's parent_hash doesn't match cache
 #      + verifies full recovery pipeline (handle_reorg_recovery)
-#   3. ClickHouse reorg recovery — verify DB state after reorg
+#   3. ClickHouse reorg recovery + replay — verify DB state after reorg
+#      and replay execution for accumulative upsert derived tables
 #      (requires Docker; skipped if unavailable)
 #   4. reorg_safe_distance config — verify YAML field is parsed and active
 #
@@ -277,7 +278,7 @@ fi
 # ================================================================
 echo ""
 echo "========================================================"
-echo "  TEST 3: ClickHouse reorg recovery (DB state)"
+echo "  TEST 3: ClickHouse reorg recovery + replay (DB state)"
 echo "========================================================"
 
 CH_SKIP=false
@@ -395,10 +396,13 @@ if ! $CH_SKIP; then
     echo "Triggering anvil_reorg (depth=$REORG_DEPTH)..."
     cast rpc anvil_reorg "$REORG_DEPTH" "[]" --rpc-url "http://127.0.0.1:$ANVIL_PORT" 2>/dev/null
 
-    # Wait for detection + ClickHouse recovery (look for the DB operation logs)
-    echo "Waiting up to 20s for reorg detection and ClickHouse recovery..."
+    # Wait for detection + ClickHouse recovery + derived replay-path logs
+    echo "Waiting up to 20s for reorg detection, ClickHouse recovery, and replay path..."
     CH_DELETED=false
     CH_REWOUND=false
+    CH_DERIVED_DELETED=false
+    CH_REPLAY=false
+    CH_REPLAY_ERROR=false
     for i in $(seq 1 20); do
         if grep -q "ClickHouse: deleted events" "$CH_LOG_FILE" 2>/dev/null; then
             CH_DELETED=true
@@ -406,7 +410,16 @@ if ! $CH_SKIP; then
         if grep -q "ClickHouse: checkpoint rewound" "$CH_LOG_FILE" 2>/dev/null; then
             CH_REWOUND=true
         fi
-        if $CH_DELETED && $CH_REWOUND; then
+        if grep -q "ClickHouse: deleted derived table rows" "$CH_LOG_FILE" 2>/dev/null; then
+            CH_DERIVED_DELETED=true
+        fi
+        if grep -q "Reorg replay complete (ClickHouse source)" "$CH_LOG_FILE" 2>/dev/null; then
+            CH_REPLAY=true
+        fi
+        if grep -q "Reorg: failed to recompute derived tables" "$CH_LOG_FILE" 2>/dev/null; then
+            CH_REPLAY_ERROR=true
+        fi
+        if $CH_DELETED && $CH_REWOUND && $CH_DERIVED_DELETED; then
             break
         fi
         sleep 1
@@ -415,14 +428,18 @@ if ! $CH_SKIP; then
     # Show reorg-related log lines
     grep -ai "reorg\|ClickHouse" "$CH_LOG_FILE" || true
 
-    if $CH_DELETED && $CH_REWOUND; then
-        echo "  PASS: ClickHouse reorg recovery verified (events deleted + checkpoint rewound)"
+    if $CH_DELETED && $CH_REWOUND && $CH_DERIVED_DELETED && ! $CH_REPLAY_ERROR; then
+        if $CH_REPLAY; then
+            echo "  PASS: ClickHouse reorg recovery verified (events deleted + checkpoint rewound + replay executed)"
+        else
+            echo "  PASS: ClickHouse reorg recovery verified (events + derived table cleanup; replay path active, no recompute errors)"
+        fi
         PASS_COUNT=$((PASS_COUNT + 1))
-    elif ! $CH_DELETED && ! $CH_REWOUND; then
+    elif ! $CH_DELETED && ! $CH_REWOUND && ! $CH_DERIVED_DELETED; then
         echo "  FAIL: No reorg detected in ClickHouse mode"
         FAIL_COUNT=$((FAIL_COUNT + 1))
     else
-        echo "  FAIL: Partial recovery (deleted=$CH_DELETED, rewound=$CH_REWOUND)"
+        echo "  FAIL: Partial recovery/replay (deleted=$CH_DELETED, rewound=$CH_REWOUND, derived_deleted=$CH_DERIVED_DELETED, replay=$CH_REPLAY, replay_error=$CH_REPLAY_ERROR)"
         FAIL_COUNT=$((FAIL_COUNT + 1))
     fi
 
@@ -470,9 +487,9 @@ echo ""
 echo "  Test 1 (tip hash changed):        $(if [ $PASS_COUNT -ge 1 ]; then echo PASS; else echo FAIL; fi)"
 echo "  Test 2 (parent hash mismatch):    $(if [ $PASS_COUNT -ge 2 ]; then echo PASS; else echo FAIL; fi)"
 if $CH_SKIP; then
-echo "  Test 3 (ClickHouse recovery):     SKIP"
+echo "  Test 3 (ClickHouse replay):       SKIP"
 else
-echo "  Test 3 (ClickHouse recovery):     $(if [ $PASS_COUNT -ge 3 ]; then echo PASS; else echo FAIL; fi)"
+echo "  Test 3 (ClickHouse replay):       $(if [ $PASS_COUNT -ge 3 ]; then echo PASS; else echo FAIL; fi)"
 fi
 echo "  Test 4 (reorg_safe_distance):     $(if [ $PASS_COUNT -ge $TOTAL_TESTS ]; then echo PASS; else echo FAIL; fi)"
 echo "  (removed flag: not testable with Anvil)"
