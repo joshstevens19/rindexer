@@ -1,12 +1,12 @@
 name: ReorgTest
-description: Local Anvil reorg detection test (ClickHouse storage)
+description: Local Anvil reorg detection test (PostgreSQL storage)
 project_type: no-code
 networks:
 - name: polygon
   chain_id: 137
   rpc: http://127.0.0.1:8545
 storage:
-  clickhouse:
+  postgres:
     enabled: true
     drop_each_run: true
 contracts:

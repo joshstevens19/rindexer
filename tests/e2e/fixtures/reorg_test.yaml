@@ -13,8 +13,8 @@ contracts:
 - name: USDC
   details:
   - network: polygon
-    address: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"
-  abi: ./abis/ERC20.abi.json
+    address: "__TOKEN_ADDRESS__"
+  abi: ./abis/MockTransfer.abi.json
   reorg_safe_distance: true
   include_events:
   - Transfer
