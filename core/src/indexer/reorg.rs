@@ -13,8 +13,8 @@ use crate::abi::{ABIInput, ABIItem};
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::generate::generate_indexer_contract_schema_name;
 use crate::database::postgres::generate::{
-    generate_column_names_only_with_base_properties,
-    generate_internal_event_table_name, generate_internal_event_table_name_no_shorten,
+    generate_column_names_only_with_base_properties, generate_internal_event_table_name,
+    generate_internal_event_table_name_no_shorten,
 };
 use crate::event::config::EventProcessingConfig;
 use crate::helpers::{camel_to_snake, get_full_path, parse_solidity_integer_type};
@@ -672,10 +672,7 @@ async fn clear_table_for_replay(
                 full_table, network
             )
         } else {
-            format!(
-                "ALTER TABLE {} DELETE WHERE 1 = 1 SETTINGS mutations_sync = 1",
-                full_table
-            )
+            format!("ALTER TABLE {} DELETE WHERE 1 = 1 SETTINGS mutations_sync = 1", full_table)
         };
         if let Err(e) = ch.execute(&query).await {
             error!(
@@ -700,7 +697,8 @@ async fn replay_table_from_postgres(
         return Err("replay requires PostgreSQL raw event storage".to_string());
     };
 
-    let schema = generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
+    let schema =
+        generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
     let event_table = camel_to_snake(event_name);
     let full_event_table = format!("{}.{}", schema, event_table);
     let batch_size = 2_000_u64;
@@ -711,7 +709,8 @@ async fn replay_table_from_postgres(
     let multicall_addresses = config.multicall_addresses();
 
     loop {
-        let cursor_condition = if let Some((last_block, last_tx_index, last_log_index)) = last_cursor
+        let cursor_condition = if let Some((last_block, last_tx_index, last_log_index)) =
+            last_cursor
         {
             format!(
                 " AND (block_number > {} OR (block_number = {} AND tx_index > {}) OR (block_number = {} AND tx_index = {} AND CAST(log_index AS NUMERIC) > {}))",
@@ -749,7 +748,8 @@ async fn replay_table_from_postgres(
             break;
         }
 
-        let mut events_data: Vec<(Vec<LogParam>, String, TxMetadata)> = Vec::with_capacity(rows.len());
+        let mut events_data: Vec<(Vec<LogParam>, String, TxMetadata)> =
+            Vec::with_capacity(rows.len());
         for row in &rows {
             let row_json: serde_json::Value = row.get("row_data");
             let log_params = build_log_params_from_row(abi_inputs, &row_json)?;
@@ -808,7 +808,8 @@ async fn replay_table_from_clickhouse(
         return Err("replay requires ClickHouse raw event storage".to_string());
     };
 
-    let schema = generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
+    let schema =
+        generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
     let event_table = camel_to_snake(event_name);
     let full_event_table = format!("{}.{}", schema, event_table);
     let batch_size = 2_000_u64;
@@ -819,14 +820,12 @@ async fn replay_table_from_clickhouse(
     let multicall_addresses = config.multicall_addresses();
 
     let row_columns = generate_column_names_only_with_base_properties(abi_inputs);
-    let select_columns = row_columns
-        .iter()
-        .map(|column| format!("`{}`", column))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let select_columns =
+        row_columns.iter().map(|column| format!("`{}`", column)).collect::<Vec<_>>().join(", ");
 
     loop {
-        let cursor_condition = if let Some((last_block, last_tx_index, last_log_index)) = last_cursor
+        let cursor_condition = if let Some((last_block, last_tx_index, last_log_index)) =
+            last_cursor
         {
             format!(
                 " AND (block_number > {} OR (block_number = {} AND tx_index > {}) OR (block_number = {} AND tx_index = {} AND log_index > {}))",
@@ -846,7 +845,12 @@ async fn replay_table_from_clickhouse(
              WHERE {}block_number >= {}{} \
              ORDER BY block_number ASC, tx_index ASC, log_index ASC \
              LIMIT {}",
-            select_columns, full_event_table, network_predicate, from_block, cursor_condition, batch_size
+            select_columns,
+            full_event_table,
+            network_predicate,
+            from_block,
+            cursor_condition,
+            batch_size
         );
 
         let rows: Vec<ClickhouseReplayRow> = clickhouse
@@ -858,7 +862,8 @@ async fn replay_table_from_clickhouse(
             break;
         }
 
-        let mut events_data: Vec<(Vec<LogParam>, String, TxMetadata)> = Vec::with_capacity(rows.len());
+        let mut events_data: Vec<(Vec<LogParam>, String, TxMetadata)> =
+            Vec::with_capacity(rows.len());
         for row in &rows {
             let row_json = row_json_from_clickhouse_tuple(&row.row_data, &row_columns)?;
             let log_params = build_log_params_from_row(abi_inputs, &row_json)?;
@@ -904,8 +909,8 @@ fn row_json_from_clickhouse_tuple(
     tuple_json: &str,
     row_columns: &[String],
 ) -> Result<serde_json::Value, String> {
-    let tuple_value: serde_json::Value =
-        serde_json::from_str(tuple_json).map_err(|e| format!("invalid ClickHouse tuple JSON: {}", e))?;
+    let tuple_value: serde_json::Value = serde_json::from_str(tuple_json)
+        .map_err(|e| format!("invalid ClickHouse tuple JSON: {}", e))?;
 
     let values = tuple_value
         .as_array()
@@ -958,11 +963,8 @@ fn build_log_params_from_row(
     let mut params = Vec::with_capacity(abi_inputs.len());
     for input in abi_inputs {
         let value = parse_input_from_row(input, row, None)?;
-        let components = input
-            .components
-            .as_ref()
-            .map(|c| abi_inputs_to_params(c))
-            .unwrap_or_default();
+        let components =
+            input.components.as_ref().map(|c| abi_inputs_to_params(c)).unwrap_or_default();
         params.push(LogParam { name: input.name.clone(), value, components });
     }
     Ok(params)
@@ -1037,9 +1039,8 @@ fn parse_sol_value(
     let fixed_array_len = extract_fixed_array_len(full_type);
 
     if is_array {
-        let values = value
-            .as_array()
-            .ok_or_else(|| format!("expected array for type {}", full_type))?;
+        let values =
+            value.as_array().ok_or_else(|| format!("expected array for type {}", full_type))?;
 
         let parsed_values: Result<Vec<DynSolValue>, String> = values
             .iter()
@@ -1073,9 +1074,7 @@ fn parse_sol_value(
     match base_type {
         "address" => Ok(DynSolValue::Address(parse_address(value_as_str(value)?)?)),
         "bool" => {
-            let b = value
-                .as_bool()
-                .ok_or_else(|| format!("expected bool, got {}", value))?;
+            let b = value.as_bool().ok_or_else(|| format!("expected bool, got {}", value))?;
             Ok(DynSolValue::Bool(b))
         }
         "string" => Ok(DynSolValue::String(value_as_str(value)?.to_string())),
@@ -1105,7 +1104,10 @@ fn parse_sol_value(
     }
 }
 
-fn parse_tuple_json(components: &[ABIInput], value: &serde_json::Value) -> Result<DynSolValue, String> {
+fn parse_tuple_json(
+    components: &[ABIInput],
+    value: &serde_json::Value,
+) -> Result<DynSolValue, String> {
     let object = value
         .as_object()
         .ok_or_else(|| format!("expected object for tuple value, got {}", value))?;
@@ -1147,9 +1149,7 @@ fn extract_fixed_array_len(sol_type: &str) -> Option<usize> {
 fn value_as_str(value: &serde_json::Value) -> Result<&str, String> {
     match value {
         serde_json::Value::String(s) => Ok(s),
-        serde_json::Value::Number(n) => {
-            Err(format!("expected string, got numeric value {}", n))
-        }
+        serde_json::Value::Number(n) => Err(format!("expected string, got numeric value {}", n)),
         serde_json::Value::Null => Err("unexpected null value".to_string()),
         _ => Err(format!("unsupported JSON value: {}", value)),
     }
@@ -1157,10 +1157,12 @@ fn value_as_str(value: &serde_json::Value) -> Result<&str, String> {
 
 fn parse_u64_json(value: &serde_json::Value) -> Result<u64, String> {
     match value {
-        serde_json::Value::Number(num) => num
-            .as_u64()
-            .ok_or_else(|| format!("value {} does not fit u64", num)),
-        serde_json::Value::String(s) => s.parse::<u64>().map_err(|e| format!("invalid u64 {}: {}", s, e)),
+        serde_json::Value::Number(num) => {
+            num.as_u64().ok_or_else(|| format!("value {} does not fit u64", num))
+        }
+        serde_json::Value::String(s) => {
+            s.parse::<u64>().map_err(|e| format!("invalid u64 {}: {}", s, e))
+        }
         _ => Err(format!("unsupported u64 JSON value: {}", value)),
     }
 }
@@ -1168,12 +1170,12 @@ fn parse_u64_json(value: &serde_json::Value) -> Result<u64, String> {
 fn parse_u256_json(value: &serde_json::Value) -> Result<U256, String> {
     match value {
         serde_json::Value::Number(num) => {
-            let as_u64 = num
-                .as_u64()
-                .ok_or_else(|| format!("value {} does not fit u64", num))?;
+            let as_u64 = num.as_u64().ok_or_else(|| format!("value {} does not fit u64", num))?;
             Ok(U256::from(as_u64))
         }
-        serde_json::Value::String(s) => U256::from_str(s).map_err(|e| format!("invalid U256 {}: {}", s, e)),
+        serde_json::Value::String(s) => {
+            U256::from_str(s).map_err(|e| format!("invalid U256 {}: {}", s, e))
+        }
         _ => Err(format!("unsupported U256 JSON value: {}", value)),
     }
 }
@@ -1190,9 +1192,8 @@ fn parse_block_timestamp_to_u256(value: &serde_json::Value) -> Result<Option<U25
             Ok(Some(U256::from(dt.timestamp() as u64)))
         }
         serde_json::Value::Number(num) => {
-            let ts = num
-                .as_u64()
-                .ok_or_else(|| format!("invalid numeric block timestamp {}", num))?;
+            let ts =
+                num.as_u64().ok_or_else(|| format!("invalid numeric block timestamp {}", num))?;
             Ok(Some(U256::from(ts)))
         }
         _ => Err(format!("unsupported block_timestamp value: {}", value)),
@@ -1384,11 +1385,11 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    use alloy::primitives::Address;
     use crate::manifest::contract::ReorgSafeDistance;
     use crate::manifest::contract::{
         OperationType, SetAction, SetColumn, Table, TableEventMapping, TableOperation,
     };
+    use alloy::primitives::Address;
 
     #[test]
     fn test_reorg_safe_distance_for_chain() {
@@ -1613,25 +1614,16 @@ mod tests {
 
     #[test]
     fn test_determine_replay_strategy_set_only_upsert_is_incremental() {
-        let table = build_table_runtime_with_operations(
-            OperationType::Upsert,
-            vec![SetAction::Set],
-            false,
-        );
+        let table =
+            build_table_runtime_with_operations(OperationType::Upsert, vec![SetAction::Set], false);
         let strategy = determine_replay_strategy(&table, "Transfer", 4567);
-        assert!(matches!(
-            strategy,
-            ReplayStrategy::IncrementalReplay { from_block: 4567 }
-        ));
+        assert!(matches!(strategy, ReplayStrategy::IncrementalReplay { from_block: 4567 }));
     }
 
     #[test]
     fn test_determine_replay_strategy_accumulative_upsert_is_full_replay() {
-        let table = build_table_runtime_with_operations(
-            OperationType::Upsert,
-            vec![SetAction::Add],
-            true,
-        );
+        let table =
+            build_table_runtime_with_operations(OperationType::Upsert, vec![SetAction::Add], true);
         let strategy = determine_replay_strategy(&table, "Transfer", 7890);
         assert!(matches!(strategy, ReplayStrategy::FullReplay));
     }

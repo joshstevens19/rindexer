@@ -11,9 +11,9 @@ use crate::event::factory_event_filter_sync::update_known_factory_deployed_addre
 use crate::event::rindexer_event_filter::FactoryFilter;
 use crate::indexer::reorg::ReorgEvent;
 use crate::indexer::tables::TableRuntime;
-use crate::manifest::core::Constants;
 use crate::manifest::config::Config;
 use crate::manifest::contract::EventInputIndexedFilters;
+use crate::manifest::core::Constants;
 use crate::types::single_or_array::StringOrArray;
 use crate::{
     event::{
@@ -60,7 +60,8 @@ pub struct ContractEventProcessingConfig {
     /// ABI path(s) for reconstructing raw events during replay.
     pub contract_abi: Option<StringOrArray>,
     /// Providers by network for replay parity with no-code table execution.
-    pub providers: Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>>,
+    pub providers:
+        Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>>,
     /// Constants for replay parity with no-code table execution.
     pub constants: Arc<Constants>,
     /// Multicall overrides by network for replay parity.
@@ -152,7 +153,8 @@ pub struct FactoryEventProcessingConfig {
     /// ABI path(s) for reconstructing raw events during replay.
     pub contract_abi: Option<StringOrArray>,
     /// Providers by network for replay parity with no-code table execution.
-    pub providers: Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>>,
+    pub providers:
+        Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>>,
     /// Constants for replay parity with no-code table execution.
     pub constants: Arc<Constants>,
     /// Multicall overrides by network for replay parity.
@@ -377,9 +379,7 @@ impl EventProcessingConfig {
         }
     }
 
-    pub fn multicall_addresses(
-        &self,
-    ) -> Arc<std::collections::HashMap<String, Option<String>>> {
+    pub fn multicall_addresses(&self) -> Arc<std::collections::HashMap<String, Option<String>>> {
         match self {
             Self::ContractEventProcessing(config) => config.multicall_addresses.clone(),
             Self::FactoryEventProcessing(config) => config.multicall_addresses.clone(),
