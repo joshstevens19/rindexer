@@ -136,6 +136,13 @@ pub struct EventCallbackRegistryInformation {
     pub tables: Arc<Vec<crate::indexer::tables::TableRuntime>>,
     /// Streams clients for reorg retraction.
     pub streams_clients: Arc<Option<crate::streams::StreamsClients>>,
+    /// RPC providers by network, required for replaying table operations with view calls.
+    pub providers:
+        Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>>,
+    /// Manifest constants used by table expressions.
+    pub constants: Arc<crate::manifest::core::Constants>,
+    /// Multicall address overrides by network.
+    pub multicall_addresses: Arc<std::collections::HashMap<String, Option<String>>>,
 }
 
 impl EventCallbackRegistryInformation {
@@ -166,6 +173,9 @@ impl Clone for EventCallbackRegistryInformation {
             callback: Arc::clone(&self.callback),
             tables: self.tables.clone(),
             streams_clients: self.streams_clients.clone(),
+            providers: self.providers.clone(),
+            constants: self.constants.clone(),
+            multicall_addresses: self.multicall_addresses.clone(),
         }
     }
 }

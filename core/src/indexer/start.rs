@@ -468,6 +468,10 @@ async fn start_indexing_contract_events(
                     tables: event.tables.clone(),
                     reorg_sender: None,
                     streams_clients: event.streams_clients.clone(),
+                    contract_abi: Some(event.contract.abi.clone()),
+                    providers: event.providers.clone(),
+                    constants: event.constants.clone(),
+                    multicall_addresses: event.multicall_addresses.clone(),
                 }
                 .into()
             }
@@ -504,6 +508,10 @@ async fn start_indexing_contract_events(
                 tables: event.tables.clone(),
                 reorg_sender: None,
                 streams_clients: event.streams_clients.clone(),
+                contract_abi: Some(event.contract.abi.clone()),
+                providers: event.providers.clone(),
+                constants: event.constants.clone(),
+                multicall_addresses: event.multicall_addresses.clone(),
             }
             .into(),
         };

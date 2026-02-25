@@ -1006,6 +1006,9 @@ async fn process_contract(
             .event_callback,
             tables: tables_arc,
             streams_clients: streams_arc,
+            providers: providers.clone(),
+            constants: Arc::new(manifest.constants.clone()),
+            multicall_addresses: multicall_addresses.clone(),
         };
 
         events.push(event);

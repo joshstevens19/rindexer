@@ -1,20 +1,30 @@
-use alloy::primitives::{B256, U64};
+use alloy::{
+    dyn_abi::DynSolValue,
+    json_abi::Param,
+    primitives::{Address, B256, I256, U256, U64},
+};
 use lru::LruCache;
 use serde::Serialize;
+use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
+use crate::abi::{ABIInput, ABIItem};
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::generate::generate_indexer_contract_schema_name;
 use crate::database::postgres::generate::{
     generate_internal_event_table_name, generate_internal_event_table_name_no_shorten,
 };
 use crate::event::config::EventProcessingConfig;
-use crate::helpers::camel_to_snake;
+use crate::helpers::{camel_to_snake, get_full_path, parse_solidity_integer_type};
 use crate::indexer::fetch_logs::{BlockMeta, ReorgInfo};
+use crate::indexer::tables::{process_table_operations, TableRuntime, TxMetadata};
+use crate::manifest::contract::{OperationType, SetAction};
 use crate::metrics::indexing as metrics;
 use crate::notifications::ChainStateNotification;
 use crate::provider::JsonRpcCachedProvider;
+use crate::types::core::LogParam;
+use crate::types::single_or_array::StringOrArray;
 use crate::PostgresClient;
 
 /// Broadcast event sent when a reorg is detected and recovery is complete.
@@ -229,6 +239,10 @@ pub async fn handle_reorg_recovery(
             network,
         )
         .await;
+
+        if let Err(e) = recompute_derived_tables(config, &tables, fork_block, network).await {
+            error!("Reorg: failed to recompute derived tables for {}: {}", event_name, e);
+        }
     }
 
     let result: Vec<B256> = all_tx_hashes.into_iter().collect();
@@ -444,6 +458,572 @@ pub async fn delete_derived_table_rows(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplayStrategy {
+    DeletionOnly,
+    IncrementalReplay { from_block: u64 },
+    FullReplay,
+}
+
+fn determine_replay_strategy(
+    table_runtime: &TableRuntime,
+    event_name: &str,
+    fork_block: u64,
+) -> ReplayStrategy {
+    let Some(mapping) = table_runtime.table.events.iter().find(|e| e.event == event_name) else {
+        return ReplayStrategy::DeletionOnly;
+    };
+
+    let has_upsert = mapping.operations.iter().any(|op| op.operation_type == OperationType::Upsert);
+    if !has_upsert {
+        return ReplayStrategy::DeletionOnly;
+    }
+
+    let has_accumulative_upsert = mapping.operations.iter().any(|op| {
+        op.operation_type == OperationType::Upsert
+            && op.set.iter().any(|set| matches!(set.action, SetAction::Add | SetAction::Subtract))
+    });
+
+    if has_accumulative_upsert {
+        ReplayStrategy::FullReplay
+    } else {
+        ReplayStrategy::IncrementalReplay { from_block: fork_block }
+    }
+}
+
+pub async fn recompute_derived_tables(
+    config: &Arc<EventProcessingConfig>,
+    tables: &[TableRuntime],
+    fork_block: u64,
+    network: &str,
+) -> Result<(), String> {
+    let event_name = config.event_name();
+    let mut replay_tables: Vec<(TableRuntime, ReplayStrategy)> = vec![];
+
+    for table in tables {
+        let strategy = determine_replay_strategy(table, &event_name, fork_block);
+        if strategy != ReplayStrategy::DeletionOnly {
+            replay_tables.push((table.clone(), strategy));
+        }
+    }
+
+    if replay_tables.is_empty() {
+        return Ok(());
+    }
+
+    let abi_inputs = load_event_abi_inputs(config)?;
+    if abi_inputs.is_empty() {
+        return Err(format!(
+            "could not find ABI inputs for {}::{}",
+            config.contract_name(),
+            event_name
+        ));
+    }
+
+    for (table_runtime, strategy) in replay_tables {
+        if matches!(strategy, ReplayStrategy::FullReplay) {
+            clear_table_for_replay(
+                &table_runtime,
+                &config.postgres(),
+                &config.clickhouse(),
+                if table_runtime.table.cross_chain { None } else { Some(network) },
+            )
+            .await;
+        }
+
+        let from_block = match strategy {
+            ReplayStrategy::IncrementalReplay { from_block } => from_block,
+            ReplayStrategy::FullReplay => 0,
+            ReplayStrategy::DeletionOnly => continue,
+        };
+
+        replay_table_from_postgres(
+            config,
+            &table_runtime,
+            &abi_inputs,
+            if table_runtime.table.cross_chain { None } else { Some(network) },
+            from_block,
+            &event_name,
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
+fn load_event_abi_inputs(config: &EventProcessingConfig) -> Result<Vec<ABIInput>, String> {
+    let Some(contract_abi) = config.contract_abi() else {
+        return Err("missing contract ABI in event processing config".to_string());
+    };
+
+    let project_path = config.project_path();
+    let merged_abi_json = match contract_abi {
+        StringOrArray::Single(abi_path) => {
+            let full_path = get_full_path(&project_path, &abi_path)
+                .map_err(|e| format!("failed to resolve ABI path {}: {}", abi_path, e))?;
+            std::fs::read_to_string(full_path)
+                .map_err(|e| format!("failed to read ABI {}: {}", abi_path, e))?
+        }
+        StringOrArray::Multiple(abi_paths) => {
+            let mut unique_entries = std::collections::HashSet::new();
+            let mut merged_entries = Vec::new();
+
+            for abi_path in abi_paths {
+                let full_path = get_full_path(&project_path, &abi_path)
+                    .map_err(|e| format!("failed to resolve ABI path {}: {}", abi_path, e))?;
+                let abi_str = std::fs::read_to_string(full_path)
+                    .map_err(|e| format!("failed to read ABI {}: {}", abi_path, e))?;
+                let abi_value: serde_json::Value = serde_json::from_str(&abi_str)
+                    .map_err(|e| format!("invalid ABI JSON in {}: {}", abi_path, e))?;
+
+                let serde_json::Value::Array(entries) = abi_value else {
+                    return Err(format!("ABI file {} must be a JSON array", abi_path));
+                };
+
+                for entry in entries {
+                    let key = serde_json::to_string(&entry)
+                        .map_err(|e| format!("failed to serialize ABI entry: {}", e))?;
+                    if unique_entries.insert(key) {
+                        merged_entries.push(entry);
+                    }
+                }
+            }
+
+            serde_json::to_string(&merged_entries)
+                .map_err(|e| format!("failed to merge ABI entries: {}", e))?
+        }
+    };
+
+    let abi_items: Vec<ABIItem> = serde_json::from_str(&merged_abi_json)
+        .map_err(|e| format!("failed to parse ABI items: {}", e))?;
+    let event_name = config.event_name();
+    let event = abi_items
+        .into_iter()
+        .find(|item| item.type_ == "event" && item.name == event_name)
+        .ok_or_else(|| format!("event {} not found in ABI", event_name))?;
+
+    Ok(event.inputs)
+}
+
+async fn clear_table_for_replay(
+    table_runtime: &TableRuntime,
+    postgres: &Option<Arc<PostgresClient>>,
+    clickhouse: &Option<Arc<ClickhouseClient>>,
+    network: Option<&str>,
+) {
+    let full_table = &table_runtime.full_table_name;
+
+    if let Some(pg) = postgres {
+        let query = if let Some(network) = network {
+            format!("DELETE FROM {} WHERE network = '{}'", full_table, network)
+        } else {
+            format!("DELETE FROM {}", full_table)
+        };
+        if let Err(e) = pg.batch_execute(&query).await {
+            error!(
+                "Reorg replay: failed clearing table {}{}: {:?}",
+                full_table,
+                network.map(|n| format!(" for network {}", n)).unwrap_or_default(),
+                e
+            );
+        }
+    }
+
+    if let Some(ch) = clickhouse {
+        let query = if let Some(network) = network {
+            format!(
+                "ALTER TABLE {} DELETE WHERE network = '{}' SETTINGS mutations_sync = 1",
+                full_table, network
+            )
+        } else {
+            format!(
+                "ALTER TABLE {} DELETE WHERE 1 = 1 SETTINGS mutations_sync = 1",
+                full_table
+            )
+        };
+        if let Err(e) = ch.execute(&query).await {
+            error!(
+                "Reorg replay: failed clearing ClickHouse table {}{}: {:?}",
+                full_table,
+                network.map(|n| format!(" for network {}", n)).unwrap_or_default(),
+                e
+            );
+        }
+    }
+}
+
+async fn replay_table_from_postgres(
+    config: &Arc<EventProcessingConfig>,
+    table_runtime: &TableRuntime,
+    abi_inputs: &[ABIInput],
+    network_filter: Option<&str>,
+    from_block: u64,
+    event_name: &str,
+) -> Result<(), String> {
+    let Some(postgres) = config.postgres() else {
+        return Err("replay requires PostgreSQL raw event storage".to_string());
+    };
+
+    let schema = generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
+    let event_table = camel_to_snake(event_name);
+    let full_event_table = format!("{}.{}", schema, event_table);
+    let batch_size = 2_000_u64;
+    let mut last_cursor: Option<(u64, u64, u64)> = None;
+
+    let providers = config.providers();
+    let constants = config.constants();
+    let multicall_addresses = config.multicall_addresses();
+
+    loop {
+        let cursor_condition = if let Some((last_block, last_tx_index, last_log_index)) = last_cursor
+        {
+            format!(
+                " AND (block_number > {} OR (block_number = {} AND tx_index > {}) OR (block_number = {} AND tx_index = {} AND CAST(log_index AS NUMERIC) > {}))",
+                last_block,
+                last_block,
+                last_tx_index,
+                last_block,
+                last_tx_index,
+                last_log_index
+            )
+        } else {
+            String::new()
+        };
+
+        let network_predicate = network_filter
+            .map(|network| format!("network = '{}' AND ", network))
+            .unwrap_or_default();
+
+        let query = format!(
+            "SELECT row_to_json(t) AS row_data FROM (\
+             SELECT * FROM {} \
+             WHERE {}block_number >= {}{} \
+             ORDER BY block_number ASC, tx_index ASC, CAST(log_index AS NUMERIC) ASC \
+             LIMIT {}\
+             ) t",
+            full_event_table, network_predicate, from_block, cursor_condition, batch_size
+        );
+
+        let rows = postgres
+            .query(&query, &[])
+            .await
+            .map_err(|e| format!("failed replay query for {}: {}", full_event_table, e))?;
+
+        if rows.is_empty() {
+            break;
+        }
+
+        let mut events_data: Vec<(Vec<LogParam>, String, TxMetadata)> = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let row_json: serde_json::Value = row.get("row_data");
+            let log_params = build_log_params_from_row(abi_inputs, &row_json)?;
+            let tx_metadata = build_tx_metadata_from_row(&row_json)?;
+            let event_network = parse_network_from_row(&row_json)?;
+            events_data.push((log_params, event_network, tx_metadata));
+        }
+
+        process_table_operations(
+            std::slice::from_ref(table_runtime),
+            event_name,
+            &events_data,
+            config.postgres(),
+            config.clickhouse(),
+            providers.clone(),
+            constants.as_ref(),
+            multicall_addresses.as_ref(),
+            None,
+        )
+        .await?;
+
+        if let Some((_, _, tx_metadata)) = events_data.last() {
+            let last_log_index = tx_metadata.log_index.to::<u64>();
+            last_cursor = Some((tx_metadata.block_number, tx_metadata.tx_index, last_log_index));
+        }
+
+        if rows.len() < batch_size as usize {
+            break;
+        }
+    }
+
+    info!(
+        "Reorg replay complete for table {} from block {}{}",
+        table_runtime.full_table_name,
+        from_block,
+        network_filter.map(|n| format!(" on {}", n)).unwrap_or(" across all networks".to_string())
+    );
+
+    Ok(())
+}
+
+fn build_tx_metadata_from_row(row: &serde_json::Value) -> Result<TxMetadata, String> {
+    let contract_address = parse_address(value_as_str(&row["contract_address"])?)?;
+    let tx_hash = parse_b256(value_as_str(&row["tx_hash"])?)?;
+    let block_hash = parse_b256(value_as_str(&row["block_hash"])?)?;
+    let block_number = parse_u64_json(&row["block_number"])?;
+    let tx_index = parse_u64_json(&row["tx_index"])?;
+    let log_index = parse_u256_json(&row["log_index"])?;
+    let block_timestamp = parse_block_timestamp_to_u256(&row["block_timestamp"])?;
+
+    Ok(TxMetadata {
+        block_number,
+        block_timestamp,
+        tx_hash,
+        block_hash,
+        contract_address,
+        log_index,
+        tx_index,
+    })
+}
+
+fn parse_network_from_row(row: &serde_json::Value) -> Result<String, String> {
+    value_as_str(&row["network"]).map(|s| s.to_string())
+}
+
+fn build_log_params_from_row(
+    abi_inputs: &[ABIInput],
+    row: &serde_json::Value,
+) -> Result<Vec<LogParam>, String> {
+    let mut params = Vec::with_capacity(abi_inputs.len());
+    for input in abi_inputs {
+        let value = parse_input_from_row(input, row, None)?;
+        let components = input
+            .components
+            .as_ref()
+            .map(|c| abi_inputs_to_params(c))
+            .unwrap_or_default();
+        params.push(LogParam { name: input.name.clone(), value, components });
+    }
+    Ok(params)
+}
+
+fn abi_inputs_to_params(inputs: &[ABIInput]) -> Vec<Param> {
+    inputs
+        .iter()
+        .map(|input| Param {
+            name: input.name.clone(),
+            ty: input.type_.clone(),
+            internal_type: None,
+            components: input
+                .components
+                .as_ref()
+                .map(|components| abi_inputs_to_params(components))
+                .unwrap_or_default(),
+        })
+        .collect()
+}
+
+fn parse_input_from_row(
+    input: &ABIInput,
+    row: &serde_json::Value,
+    prefix: Option<&str>,
+) -> Result<DynSolValue, String> {
+    let field_name = field_name(prefix, &input.name);
+    let base_type = input.type_.split('[').next().unwrap_or(&input.type_);
+    let is_array = input.type_.contains('[');
+
+    if base_type == "tuple" && !is_array {
+        let Some(components) = input.components.as_ref() else {
+            return Err(format!("tuple input {} missing components", input.name));
+        };
+
+        let mut values = Vec::with_capacity(components.len());
+        for component in components {
+            values.push(parse_input_from_row(component, row, Some(&field_name))?);
+        }
+        return Ok(DynSolValue::Tuple(values));
+    }
+
+    let value = row
+        .get(&field_name)
+        .ok_or_else(|| format!("missing field {} in replay row", field_name))?;
+    parse_sol_value(base_type, &input.type_, value, input.components.as_deref())
+}
+
+fn parse_sol_value(
+    base_type: &str,
+    full_type: &str,
+    value: &serde_json::Value,
+    components: Option<&[ABIInput]>,
+) -> Result<DynSolValue, String> {
+    let is_array = full_type.contains('[');
+    let fixed_array_len = extract_fixed_array_len(full_type);
+
+    if is_array {
+        let values = value
+            .as_array()
+            .ok_or_else(|| format!("expected array for type {}", full_type))?;
+
+        let parsed_values: Result<Vec<DynSolValue>, String> = values
+            .iter()
+            .map(|entry| {
+                if base_type == "tuple" {
+                    let Some(tuple_components) = components else {
+                        return Err("tuple[] missing components".to_string());
+                    };
+                    parse_tuple_json(tuple_components, entry)
+                } else {
+                    parse_sol_value(base_type, base_type, entry, components)
+                }
+            })
+            .collect();
+
+        let parsed_values = parsed_values?;
+        return Ok(if fixed_array_len.is_some() {
+            DynSolValue::FixedArray(parsed_values)
+        } else {
+            DynSolValue::Array(parsed_values)
+        });
+    }
+
+    if base_type == "tuple" {
+        let Some(tuple_components) = components else {
+            return Err("tuple missing components".to_string());
+        };
+        return parse_tuple_json(tuple_components, value);
+    }
+
+    match base_type {
+        "address" => Ok(DynSolValue::Address(parse_address(value_as_str(value)?)?)),
+        "bool" => {
+            let b = value
+                .as_bool()
+                .ok_or_else(|| format!("expected bool, got {}", value))?;
+            Ok(DynSolValue::Bool(b))
+        }
+        "string" => Ok(DynSolValue::String(value_as_str(value)?.to_string())),
+        t if t.starts_with("bytes") => {
+            let parsed = parse_hex_bytes(value_as_str(value)?)?;
+            if t == "bytes" {
+                Ok(DynSolValue::Bytes(parsed))
+            } else {
+                let size = t.trim_start_matches("bytes").parse::<usize>().unwrap_or(32);
+                let fixed = alloy::primitives::FixedBytes::<32>::left_padding_from(&parsed);
+                Ok(DynSolValue::FixedBytes(fixed, size))
+            }
+        }
+        t if t.starts_with("uint") => {
+            let (_, bits) = parse_solidity_integer_type(t);
+            let parsed = U256::from_str(value_as_str(value)?)
+                .map_err(|e| format!("invalid uint value for {}: {}", t, e))?;
+            Ok(DynSolValue::Uint(parsed, bits))
+        }
+        t if t.starts_with("int") => {
+            let (_, bits) = parse_solidity_integer_type(t);
+            let parsed = I256::from_str(value_as_str(value)?)
+                .map_err(|e| format!("invalid int value for {}: {}", t, e))?;
+            Ok(DynSolValue::Int(parsed, bits))
+        }
+        _ => Err(format!("unsupported ABI type in replay: {}", base_type)),
+    }
+}
+
+fn parse_tuple_json(components: &[ABIInput], value: &serde_json::Value) -> Result<DynSolValue, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| format!("expected object for tuple value, got {}", value))?;
+    let mut tuple_values = Vec::with_capacity(components.len());
+    for component in components {
+        let component_value = object
+            .get(&component.name)
+            .ok_or_else(|| format!("missing tuple field {}", component.name))?;
+        let base_type = component.type_.split('[').next().unwrap_or(&component.type_);
+        tuple_values.push(parse_sol_value(
+            base_type,
+            &component.type_,
+            component_value,
+            component.components.as_deref(),
+        )?);
+    }
+    Ok(DynSolValue::Tuple(tuple_values))
+}
+
+fn field_name(prefix: Option<&str>, name: &str) -> String {
+    let name = camel_to_snake(name);
+    match prefix {
+        Some(prefix) => format!("{}_{}", prefix, name),
+        None => name,
+    }
+}
+
+fn extract_fixed_array_len(sol_type: &str) -> Option<usize> {
+    let start = sol_type.rfind('[')?;
+    let end = sol_type.rfind(']')?;
+    if end <= start + 1 {
+        return None;
+    }
+
+    let len_str = &sol_type[start + 1..end];
+    len_str.parse::<usize>().ok()
+}
+
+fn value_as_str(value: &serde_json::Value) -> Result<&str, String> {
+    match value {
+        serde_json::Value::String(s) => Ok(s),
+        serde_json::Value::Number(n) => {
+            Err(format!("expected string, got numeric value {}", n))
+        }
+        serde_json::Value::Null => Err("unexpected null value".to_string()),
+        _ => Err(format!("unsupported JSON value: {}", value)),
+    }
+}
+
+fn parse_u64_json(value: &serde_json::Value) -> Result<u64, String> {
+    match value {
+        serde_json::Value::Number(num) => num
+            .as_u64()
+            .ok_or_else(|| format!("value {} does not fit u64", num)),
+        serde_json::Value::String(s) => s.parse::<u64>().map_err(|e| format!("invalid u64 {}: {}", s, e)),
+        _ => Err(format!("unsupported u64 JSON value: {}", value)),
+    }
+}
+
+fn parse_u256_json(value: &serde_json::Value) -> Result<U256, String> {
+    match value {
+        serde_json::Value::Number(num) => {
+            let as_u64 = num
+                .as_u64()
+                .ok_or_else(|| format!("value {} does not fit u64", num))?;
+            Ok(U256::from(as_u64))
+        }
+        serde_json::Value::String(s) => U256::from_str(s).map_err(|e| format!("invalid U256 {}: {}", s, e)),
+        _ => Err(format!("unsupported U256 JSON value: {}", value)),
+    }
+}
+
+fn parse_block_timestamp_to_u256(value: &serde_json::Value) -> Result<Option<U256>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+
+    match value {
+        serde_json::Value::String(ts) => {
+            let dt = chrono::DateTime::parse_from_rfc3339(ts)
+                .map_err(|e| format!("invalid block timestamp {}: {}", ts, e))?;
+            Ok(Some(U256::from(dt.timestamp() as u64)))
+        }
+        serde_json::Value::Number(num) => {
+            let ts = num
+                .as_u64()
+                .ok_or_else(|| format!("invalid numeric block timestamp {}", num))?;
+            Ok(Some(U256::from(ts)))
+        }
+        _ => Err(format!("unsupported block_timestamp value: {}", value)),
+    }
+}
+
+fn parse_address(value: &str) -> Result<Address, String> {
+    Address::from_str(value).map_err(|e| format!("invalid address {}: {}", value, e))
+}
+
+fn parse_b256(value: &str) -> Result<B256, String> {
+    B256::from_str(value).map_err(|e| format!("invalid B256 {}: {}", value, e))
+}
+
+fn parse_hex_bytes(value: &str) -> Result<Vec<u8>, String> {
+    let raw = value.strip_prefix("0x").unwrap_or(value);
+    hex::decode(raw).map_err(|e| format!("invalid hex {}: {}", value, e))
+}
+
 /// Handles reorg recovery for native transfer indexing (PostgreSQL only, no ClickHouse for traces).
 pub async fn handle_native_transfer_reorg_recovery(
     postgres: &Option<Arc<PostgresClient>>,
@@ -614,7 +1194,13 @@ pub fn spawn_post_confirmation_verifier(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
+    use alloy::primitives::Address;
     use crate::manifest::contract::ReorgSafeDistance;
+    use crate::manifest::contract::{
+        OperationType, SetAction, SetColumn, Table, TableEventMapping, TableOperation,
+    };
 
     #[test]
     fn test_reorg_safe_distance_for_chain() {
@@ -787,6 +1373,161 @@ mod tests {
 
         let json = serde_json::to_value(&event).unwrap();
         assert!(json["affected_tx_hashes"].as_array().unwrap().is_empty());
+    }
+
+    // ======================================================================
+    // Replay strategy + row reconstruction helpers
+    // ======================================================================
+
+    fn build_table_runtime_with_operations(
+        operation_type: OperationType,
+        set_actions: Vec<SetAction>,
+        cross_chain: bool,
+    ) -> TableRuntime {
+        let operations = vec![TableOperation {
+            operation_type,
+            where_clause: HashMap::new(),
+            if_condition: None,
+            filter: None,
+            set: set_actions
+                .into_iter()
+                .map(|action| SetColumn {
+                    column: "value".to_string(),
+                    action,
+                    value: Some("$value".to_string()),
+                })
+                .collect(),
+        }];
+
+        let table = Table {
+            name: "balances".to_string(),
+            global: false,
+            cross_chain,
+            columns: vec![],
+            events: vec![TableEventMapping {
+                event: "Transfer".to_string(),
+                iterate: vec![],
+                operations,
+            }],
+            cron: None,
+            timestamp: false,
+        };
+
+        TableRuntime::new(table, "idx", "erc20")
+    }
+
+    #[test]
+    fn test_determine_replay_strategy_insert_only_is_deletion_only() {
+        let table = build_table_runtime_with_operations(OperationType::Insert, vec![], false);
+        let strategy = determine_replay_strategy(&table, "Transfer", 1234);
+        assert!(matches!(strategy, ReplayStrategy::DeletionOnly));
+    }
+
+    #[test]
+    fn test_determine_replay_strategy_set_only_upsert_is_incremental() {
+        let table = build_table_runtime_with_operations(
+            OperationType::Upsert,
+            vec![SetAction::Set],
+            false,
+        );
+        let strategy = determine_replay_strategy(&table, "Transfer", 4567);
+        assert!(matches!(
+            strategy,
+            ReplayStrategy::IncrementalReplay { from_block: 4567 }
+        ));
+    }
+
+    #[test]
+    fn test_determine_replay_strategy_accumulative_upsert_is_full_replay() {
+        let table = build_table_runtime_with_operations(
+            OperationType::Upsert,
+            vec![SetAction::Add],
+            true,
+        );
+        let strategy = determine_replay_strategy(&table, "Transfer", 7890);
+        assert!(matches!(strategy, ReplayStrategy::FullReplay));
+    }
+
+    #[test]
+    fn test_build_tx_metadata_from_row_parses_expected_fields() {
+        let row = serde_json::json!({
+            "contract_address": "0x1111111111111111111111111111111111111111",
+            "tx_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "block_hash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "block_number": 100,
+            "tx_index": 2,
+            "log_index": "3",
+            "block_timestamp": "2026-02-25T10:00:00Z"
+        });
+
+        let metadata = build_tx_metadata_from_row(&row).unwrap();
+        assert_eq!(metadata.block_number, 100);
+        assert_eq!(metadata.tx_index, 2);
+        assert_eq!(metadata.log_index, U256::from(3_u64));
+        assert_eq!(
+            metadata.contract_address,
+            Address::from_str("0x1111111111111111111111111111111111111111").unwrap()
+        );
+        assert!(metadata.block_timestamp.is_some());
+    }
+
+    #[test]
+    fn test_build_log_params_from_row_parses_flat_and_tuple_inputs() {
+        let abi_inputs = vec![
+            ABIInput {
+                indexed: Some(true),
+                name: "from".to_string(),
+                type_: "address".to_string(),
+                components: None,
+            },
+            ABIInput {
+                indexed: Some(false),
+                name: "amount".to_string(),
+                type_: "uint256".to_string(),
+                components: None,
+            },
+            ABIInput {
+                indexed: Some(false),
+                name: "meta".to_string(),
+                type_: "tuple".to_string(),
+                components: Some(vec![
+                    ABIInput {
+                        indexed: None,
+                        name: "id".to_string(),
+                        type_: "uint256".to_string(),
+                        components: None,
+                    },
+                    ABIInput {
+                        indexed: None,
+                        name: "tag".to_string(),
+                        type_: "string".to_string(),
+                        components: None,
+                    },
+                ]),
+            },
+        ];
+
+        let row = serde_json::json!({
+            "from": "0x2222222222222222222222222222222222222222",
+            "amount": "42",
+            "meta_id": "7",
+            "meta_tag": "vip"
+        });
+
+        let params = build_log_params_from_row(&abi_inputs, &row).unwrap();
+        assert_eq!(params.len(), 3);
+        assert_eq!(params[0].name, "from");
+        assert_eq!(params[1].name, "amount");
+        assert_eq!(params[2].name, "meta");
+        assert!(matches!(params[0].value, DynSolValue::Address(_)));
+        assert!(matches!(params[1].value, DynSolValue::Uint(_, 256)));
+        assert!(matches!(params[2].value, DynSolValue::Tuple(_)));
+    }
+
+    #[test]
+    fn test_parse_network_from_row() {
+        let row = serde_json::json!({"network": "polygon"});
+        assert_eq!(parse_network_from_row(&row).unwrap(), "polygon");
     }
 
     // ======================================================================

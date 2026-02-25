@@ -11,8 +11,10 @@ use crate::event::factory_event_filter_sync::update_known_factory_deployed_addre
 use crate::event::rindexer_event_filter::FactoryFilter;
 use crate::indexer::reorg::ReorgEvent;
 use crate::indexer::tables::TableRuntime;
+use crate::manifest::core::Constants;
 use crate::manifest::config::Config;
 use crate::manifest::contract::EventInputIndexedFilters;
+use crate::types::single_or_array::StringOrArray;
 use crate::{
     event::{
         callback_registry::{
@@ -55,6 +57,14 @@ pub struct ContractEventProcessingConfig {
     pub reorg_sender: Option<tokio::sync::broadcast::Sender<ReorgEvent>>,
     /// Streams clients for reorg retraction (no-code mode).
     pub streams_clients: Arc<Option<crate::streams::StreamsClients>>,
+    /// ABI path(s) for reconstructing raw events during replay.
+    pub contract_abi: Option<StringOrArray>,
+    /// Providers by network for replay parity with no-code table execution.
+    pub providers: Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>>,
+    /// Constants for replay parity with no-code table execution.
+    pub constants: Arc<Constants>,
+    /// Multicall overrides by network for replay parity.
+    pub multicall_addresses: Arc<std::collections::HashMap<String, Option<String>>>,
 }
 
 impl ContractEventProcessingConfig {
@@ -139,6 +149,14 @@ pub struct FactoryEventProcessingConfig {
     pub reorg_sender: Option<tokio::sync::broadcast::Sender<ReorgEvent>>,
     /// Streams clients for reorg retraction (no-code mode).
     pub streams_clients: Arc<Option<crate::streams::StreamsClients>>,
+    /// ABI path(s) for reconstructing raw events during replay.
+    pub contract_abi: Option<StringOrArray>,
+    /// Providers by network for replay parity with no-code table execution.
+    pub providers: Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>>,
+    /// Constants for replay parity with no-code table execution.
+    pub constants: Arc<Constants>,
+    /// Multicall overrides by network for replay parity.
+    pub multicall_addresses: Arc<std::collections::HashMap<String, Option<String>>>,
 }
 
 impl FactoryEventProcessingConfig {
@@ -333,6 +351,38 @@ impl EventProcessingConfig {
         match self {
             Self::ContractEventProcessing(config) => config.streams_clients.clone(),
             Self::FactoryEventProcessing(config) => config.streams_clients.clone(),
+        }
+    }
+
+    pub fn contract_abi(&self) -> Option<StringOrArray> {
+        match self {
+            Self::ContractEventProcessing(config) => config.contract_abi.clone(),
+            Self::FactoryEventProcessing(config) => config.contract_abi.clone(),
+        }
+    }
+
+    pub fn providers(
+        &self,
+    ) -> Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>> {
+        match self {
+            Self::ContractEventProcessing(config) => config.providers.clone(),
+            Self::FactoryEventProcessing(config) => config.providers.clone(),
+        }
+    }
+
+    pub fn constants(&self) -> Arc<Constants> {
+        match self {
+            Self::ContractEventProcessing(config) => config.constants.clone(),
+            Self::FactoryEventProcessing(config) => config.constants.clone(),
+        }
+    }
+
+    pub fn multicall_addresses(
+        &self,
+    ) -> Arc<std::collections::HashMap<String, Option<String>>> {
+        match self {
+            Self::ContractEventProcessing(config) => config.multicall_addresses.clone(),
+            Self::FactoryEventProcessing(config) => config.multicall_addresses.clone(),
         }
     }
 

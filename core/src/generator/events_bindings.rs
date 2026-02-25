@@ -674,6 +674,9 @@ fn generate_event_bindings_code(
                     callback,
                     tables: Arc::new(vec![]),
                     streams_clients: Arc::new(None),
+                    providers: Arc::new(HashMap::new()),
+                    constants: Arc::new(HashMap::new()),
+                    multicall_addresses: Arc::new(HashMap::new()),
                 }});
             }}
         }}
