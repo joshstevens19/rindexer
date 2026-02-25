@@ -388,6 +388,9 @@ where
             callback,
             tables: Arc::new(vec![]),
             streams_clients: Arc::new(None),
+            providers: Arc::new(providers),
+            constants: Arc::new(rindexer_yaml.constants.clone()),
+            multicall_addresses: Arc::new(HashMap::new()),
         });
     }
 }
