@@ -138,11 +138,13 @@ fn generate_register_match_arms_code(event_type_name: &str, event_info: &[EventI
                 format!(
                     r#"
                     {}::{}(event) => {{
+                        let reorg_sender = Some(event.context.reorg_tx.clone());
                         let event = Arc::new(event);
-                        Arc::new(move |result| {{
+                        let callback = Arc::new(move |result| {{
                             let event = Arc::clone(&event);
                             async move {{ event.call(result).await }}.boxed()
-                        }})
+                        }});
+                        (callback, reorg_sender)
                     }},
                 "#,
                     event_type_name, info.name
@@ -660,7 +662,10 @@ fn generate_event_bindings_code(
                     reorg_safe_distance: contract_details.reorg_safe_distance,
                 }};
 
-                let callback: Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync> = match self {{
+                let (callback, reorg_sender): (
+                    Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync>,
+                    Option<tokio::sync::broadcast::Sender<rindexer::ReorgEvent>>,
+                ) = match self {{
                     {register_match_arms}
                 }};
 
@@ -673,6 +678,7 @@ fn generate_event_bindings_code(
                     contract,
                     callback,
                     tables: Arc::new(vec![]),
+                    reorg_sender,
                     streams_clients: Arc::new(None),
                     providers: Arc::new(HashMap::new()),
                     constants: Arc::new(HashMap::new()),

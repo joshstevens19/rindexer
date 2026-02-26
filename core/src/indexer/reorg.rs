@@ -153,9 +153,11 @@ pub async fn find_fork_point(
     }
 
     match provider.get_block_by_number_batch(&blocks_to_check, false).await {
-        Ok(canonical_blocks) => {
+        Ok(mut canonical_blocks) => {
+            // Ensure we process canonical blocks from newest to oldest
+            canonical_blocks.sort_by_key(|b| b.header.number);
             // Check each canonical block against our cache (newest first)
-            for block in canonical_blocks {
+            for block in canonical_blocks.into_iter().rev() {
                 let block_num = block.header.number;
                 let canonical_hash = block.header.hash;
 
@@ -225,6 +227,14 @@ pub async fn handle_reorg_recovery(
     }
 
     if let Some(clickhouse) = &config.clickhouse() {
+        let db_hashes = collect_affected_tx_hashes_clickhouse(
+            clickhouse,
+            &schema,
+            &event_table_name,
+            fork_block,
+        )
+        .await;
+        all_tx_hashes.extend(db_hashes);
         delete_events_clickhouse(clickhouse, &schema, &event_table_name, fork_block).await;
         rewind_checkpoint_clickhouse(clickhouse, &schema, &event_name, rewind_block, network).await;
     }
@@ -289,11 +299,11 @@ async fn collect_affected_tx_hashes_postgres(
 ) -> Vec<B256> {
     let full_table = format!("{}.{}", schema, event_table);
     let query = format!(
-        "SELECT DISTINCT tx_hash FROM {} WHERE block_number >= {} AND network = '{}'",
-        full_table, fork_block, network
+        "SELECT DISTINCT tx_hash FROM {} WHERE block_number >= $1 AND network = $2",
+        full_table
     );
 
-    match postgres.query(&query, &[]).await {
+    match postgres.query(&query, &[&(fork_block as i64), &network]).await {
         Ok(rows) => {
             let hashes: Vec<B256> = rows
                 .iter()
@@ -350,6 +360,37 @@ async fn delete_events_clickhouse(
             info!("ClickHouse: deleted events from block >= {} in {}", fork_block, full_table)
         }
         Err(e) => error!("ClickHouse: failed to delete reorged events: {:?}", e),
+    }
+}
+
+#[derive(Debug, clickhouse::Row, Deserialize)]
+struct ClickhouseTxHashRow {
+    tx_hash: String,
+}
+
+/// Queries ClickHouse for distinct tx hashes in blocks >= fork_block.
+/// Intentionally matches delete scope (no network predicate).
+async fn collect_affected_tx_hashes_clickhouse(
+    clickhouse: &Arc<ClickhouseClient>,
+    schema: &str,
+    event_table: &str,
+    fork_block: u64,
+) -> Vec<B256> {
+    let full_table = format!("{}.{}", schema, event_table);
+    let query =
+        format!("SELECT DISTINCT tx_hash FROM {} WHERE block_number >= {}", full_table, fork_block);
+
+    match clickhouse.query_all::<ClickhouseTxHashRow>(&query).await {
+        Ok(rows) => {
+            let hashes: Vec<B256> =
+                rows.into_iter().filter_map(|row| row.tx_hash.parse::<B256>().ok()).collect();
+            debug!("ClickHouse: found {} affected tx hashes in {}", hashes.len(), full_table);
+            hashes
+        }
+        Err(e) => {
+            warn!("ClickHouse: failed to collect affected tx hashes: {:?}", e);
+            vec![]
+        }
     }
 }
 

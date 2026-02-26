@@ -134,6 +134,8 @@ pub struct EventCallbackRegistryInformation {
     pub callback: EventCallbackType,
     /// Derived/custom tables for this event (for reorg cleanup).
     pub tables: Arc<Vec<crate::indexer::tables::TableRuntime>>,
+    /// Broadcast sender for reorg events (code-gen mode).
+    pub reorg_sender: Option<tokio::sync::broadcast::Sender<crate::indexer::reorg::ReorgEvent>>,
     /// Streams clients for reorg retraction.
     pub streams_clients: Arc<Option<crate::streams::StreamsClients>>,
     /// RPC providers by network, required for replaying table operations with view calls.
@@ -172,6 +174,7 @@ impl Clone for EventCallbackRegistryInformation {
             contract: self.contract.clone(),
             callback: Arc::clone(&self.callback),
             tables: self.tables.clone(),
+            reorg_sender: self.reorg_sender.clone(),
             streams_clients: self.streams_clients.clone(),
             providers: self.providers.clone(),
             constants: self.constants.clone(),

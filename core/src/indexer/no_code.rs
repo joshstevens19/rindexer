@@ -1005,6 +1005,7 @@ async fn process_contract(
             }))
             .event_callback,
             tables: tables_arc,
+            reorg_sender: None,
             streams_clients: streams_arc,
             providers: providers.clone(),
             constants: Arc::new(manifest.constants.clone()),
