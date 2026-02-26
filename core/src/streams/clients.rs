@@ -648,8 +648,7 @@ impl StreamsClients {
         index_event_in_order: bool,
         is_trace_event: bool,
     ) -> Result<usize, StreamError> {
-        self.stream_with_mode(id, event_message, index_event_in_order, is_trace_event, false)
-            .await
+        self.stream_with_mode(id, event_message, index_event_in_order, is_trace_event, false).await
     }
 
     async fn stream_with_mode(
@@ -676,8 +675,7 @@ impl StreamsClients {
                         &event_message.event_name,
                         is_trace_event,
                         force_send_network_wide,
-                    )
-                        && config.networks.contains(&event_message.network)
+                    ) && config.networks.contains(&event_message.network)
                     {
                         streams.push(self.sns_stream_tasks(
                             config,
@@ -698,8 +696,7 @@ impl StreamsClients {
                         &event_message.event_name,
                         is_trace_event,
                         force_send_network_wide,
-                    )
-                        && config.networks.contains(&event_message.network)
+                    ) && config.networks.contains(&event_message.network)
                     {
                         streams.push(self.webhook_stream_tasks(
                             config,
@@ -720,8 +717,7 @@ impl StreamsClients {
                         &event_message.event_name,
                         is_trace_event,
                         force_send_network_wide,
-                    )
-                        && config.networks.contains(&event_message.network)
+                    ) && config.networks.contains(&event_message.network)
                     {
                         streams.push(self.rabbitmq_stream_tasks(
                             config,
@@ -743,8 +739,7 @@ impl StreamsClients {
                         &event_message.event_name,
                         is_trace_event,
                         force_send_network_wide,
-                    )
-                        && config.networks.contains(&event_message.network)
+                    ) && config.networks.contains(&event_message.network)
                     {
                         streams.push(self.kafka_stream_tasks(
                             config,
@@ -765,8 +760,7 @@ impl StreamsClients {
                         &event_message.event_name,
                         is_trace_event,
                         force_send_network_wide,
-                    )
-                        && config.networks.contains(&event_message.network)
+                    ) && config.networks.contains(&event_message.network)
                     {
                         streams.push(self.redis_stream_tasks(
                             config,
@@ -787,8 +781,7 @@ impl StreamsClients {
                         &event_message.event_name,
                         is_trace_event,
                         force_send_network_wide,
-                    )
-                        && config.networks.contains(&event_message.network)
+                    ) && config.networks.contains(&event_message.network)
                     {
                         streams.push(self.cloudflare_queues_stream_tasks(
                             config,
@@ -886,33 +879,20 @@ mod tests {
     #[test]
     fn should_send_for_config_requires_event_without_force_or_trace() {
         let events = vec![stream_event("Transfer")];
-        assert!(!StreamsClients::should_send_for_config(
-            &events,
-            "__rindexer_reorg",
-            false,
-            false,
-        ));
+        assert!(
+            !StreamsClients::should_send_for_config(&events, "__rindexer_reorg", false, false,)
+        );
     }
 
     #[test]
     fn should_send_for_config_force_send_bypasses_event_match() {
         let events = vec![stream_event("Transfer")];
-        assert!(StreamsClients::should_send_for_config(
-            &events,
-            "__rindexer_reorg",
-            false,
-            true,
-        ));
+        assert!(StreamsClients::should_send_for_config(&events, "__rindexer_reorg", false, true,));
     }
 
     #[test]
     fn should_send_for_config_trace_event_bypasses_event_match() {
         let events = vec![stream_event("Transfer")];
-        assert!(StreamsClients::should_send_for_config(
-            &events,
-            "NativeTransfer",
-            true,
-            false,
-        ));
+        assert!(StreamsClients::should_send_for_config(&events, "NativeTransfer", true, false,));
     }
 }

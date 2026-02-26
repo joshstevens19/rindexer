@@ -232,10 +232,11 @@ pub async fn handle_reorg_recovery(
             &schema,
             &event_table_name,
             fork_block,
+            network,
         )
         .await;
         all_tx_hashes.extend(db_hashes);
-        delete_events_clickhouse(clickhouse, &schema, &event_table_name, fork_block).await;
+        delete_events_clickhouse(clickhouse, &schema, &event_table_name, fork_block, network).await;
         rewind_checkpoint_clickhouse(clickhouse, &schema, &event_name, rewind_block, network).await;
     }
 
@@ -346,13 +347,14 @@ async fn delete_events_clickhouse(
     schema: &str,
     event_table: &str,
     fork_block: u64,
+    network: &str,
 ) {
     let full_table = format!("{}.{}", schema, event_table);
     // mutations_sync = 1 makes the DELETE synchronous — waits for completion before returning.
     // Without this, rindexer can re-index and insert new events before the old ones are deleted.
     let query = format!(
-        "ALTER TABLE {} DELETE WHERE block_number >= {} SETTINGS mutations_sync = 1",
-        full_table, fork_block
+        "ALTER TABLE {} DELETE WHERE block_number >= {} AND network = '{}' SETTINGS mutations_sync = 1",
+        full_table, fork_block, network
     );
 
     match clickhouse.execute(&query).await {
@@ -375,10 +377,13 @@ async fn collect_affected_tx_hashes_clickhouse(
     schema: &str,
     event_table: &str,
     fork_block: u64,
+    network: &str,
 ) -> Vec<B256> {
     let full_table = format!("{}.{}", schema, event_table);
-    let query =
-        format!("SELECT DISTINCT tx_hash FROM {} WHERE block_number >= {}", full_table, fork_block);
+    let query = format!(
+        "SELECT DISTINCT tx_hash FROM {} WHERE block_number >= {} AND network = '{}'",
+        full_table, fork_block, network
+    );
 
     match clickhouse.query_all::<ClickhouseTxHashRow>(&query).await {
         Ok(rows) => {
