@@ -414,6 +414,7 @@ where
             contract,
             callback,
             tables: Arc::new(vec![]),
+            reorg_sender: None,
             streams_clients: Arc::new(None),
             providers: Arc::new(providers),
             constants: Arc::new(rindexer_yaml.constants.clone()),

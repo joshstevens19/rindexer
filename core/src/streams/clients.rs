@@ -297,7 +297,12 @@ impl StreamsClients {
         events: &[StreamEvent],
         event_message: &EventMessage,
         chunk: &[Value],
+        force_send_network_wide: bool,
     ) -> Vec<Value> {
+        if force_send_network_wide {
+            return chunk.to_vec();
+        }
+
         let stream_event = events.iter().find(|e| e.event_name == event_message.event_name);
 
         // Allow no trace events to be defined, otherwise use the defined event config.
@@ -323,6 +328,17 @@ impl StreamsClients {
         filtered_chunk
     }
 
+    fn should_send_for_config(
+        config_events: &[StreamEvent],
+        event_name: &str,
+        is_trace_event: bool,
+        force_send_network_wide: bool,
+    ) -> bool {
+        force_send_network_wide
+            || is_trace_event
+            || config_events.iter().any(|e| e.event_name == event_name)
+    }
+
     fn sns_stream_tasks(
         &self,
         config: &SNSStreamTopicConfig,
@@ -330,6 +346,7 @@ impl StreamsClients {
         id: &str,
         event_message: &EventMessage,
         chunks: Arc<Vec<Vec<Value>>>,
+        force_send_network_wide: bool,
     ) -> StreamPublishes {
         let tasks: Vec<_> = chunks
             .iter()
@@ -339,6 +356,7 @@ impl StreamsClients {
                     &config.events,
                     event_message,
                     chunk,
+                    force_send_network_wide,
                 );
 
                 let publish_message_id =
@@ -377,6 +395,7 @@ impl StreamsClients {
         id: &str,
         event_message: &EventMessage,
         chunks: Arc<Vec<Vec<Value>>>,
+        force_send_network_wide: bool,
     ) -> StreamPublishes {
         let tasks: Vec<_> = chunks
             .iter()
@@ -386,6 +405,7 @@ impl StreamsClients {
                     &config.events,
                     event_message,
                     chunk,
+                    force_send_network_wide,
                 );
 
                 let publish_message_id = self.generate_publish_message_id(id, index, &None);
@@ -425,6 +445,7 @@ impl StreamsClients {
         id: &str,
         event_message: &EventMessage,
         chunks: Arc<Vec<Vec<Value>>>,
+        force_send_network_wide: bool,
     ) -> StreamPublishes {
         let tasks: Vec<_> = chunks
             .iter()
@@ -434,6 +455,7 @@ impl StreamsClients {
                     &config.events,
                     event_message,
                     chunk,
+                    force_send_network_wide,
                 );
 
                 let publish_message_id = self.generate_publish_message_id(id, index, &None);
@@ -481,6 +503,7 @@ impl StreamsClients {
         id: &str,
         event_message: &EventMessage,
         chunks: Arc<Vec<Vec<Value>>>,
+        force_send_network_wide: bool,
     ) -> StreamPublishes {
         let tasks: Vec<_> = chunks
             .iter()
@@ -490,6 +513,7 @@ impl StreamsClients {
                     &config.events,
                     event_message,
                     chunk,
+                    force_send_network_wide,
                 );
 
                 let publish_message_id = self.generate_publish_message_id(id, index, &None);
@@ -528,6 +552,7 @@ impl StreamsClients {
         id: &str,
         event_message: &EventMessage,
         chunks: Arc<Vec<Vec<Value>>>,
+        force_send_network_wide: bool,
     ) -> StreamPublishes {
         let tasks: Vec<_> = chunks
             .iter()
@@ -537,6 +562,7 @@ impl StreamsClients {
                     &config.events,
                     event_message,
                     chunk,
+                    force_send_network_wide,
                 );
 
                 let publish_message_id = self.generate_publish_message_id(id, index, &None);
@@ -574,6 +600,7 @@ impl StreamsClients {
         id: &str,
         event_message: &EventMessage,
         chunks: Arc<Vec<Vec<Value>>>,
+        force_send_network_wide: bool,
     ) -> StreamPublishes {
         let tasks: Vec<_> = chunks
             .iter()
@@ -583,6 +610,7 @@ impl StreamsClients {
                     &config.events,
                     event_message,
                     chunk,
+                    force_send_network_wide,
                 );
 
                 let publish_message_id = self.generate_publish_message_id(id, index, &None);
@@ -620,6 +648,18 @@ impl StreamsClients {
         index_event_in_order: bool,
         is_trace_event: bool,
     ) -> Result<usize, StreamError> {
+        self.stream_with_mode(id, event_message, index_event_in_order, is_trace_event, false)
+            .await
+    }
+
+    async fn stream_with_mode(
+        &self,
+        id: String,
+        event_message: &EventMessage,
+        index_event_in_order: bool,
+        is_trace_event: bool,
+        force_send_network_wide: bool,
+    ) -> Result<usize, StreamError> {
         if !self.has_any_streams() {
             return Ok(0);
         }
@@ -631,10 +671,12 @@ impl StreamsClients {
 
             if let Some(sns) = &self.sns {
                 for config in &sns.config {
-                    let is_user_event =
-                        config.events.iter().any(|e| e.event_name == event_message.event_name);
-
-                    if (is_user_event || is_trace_event)
+                    if Self::should_send_for_config(
+                        &config.events,
+                        &event_message.event_name,
+                        is_trace_event,
+                        force_send_network_wide,
+                    )
                         && config.networks.contains(&event_message.network)
                     {
                         streams.push(self.sns_stream_tasks(
@@ -643,6 +685,7 @@ impl StreamsClients {
                             &id,
                             event_message,
                             Arc::clone(&chunks),
+                            force_send_network_wide,
                         ));
                     }
                 }
@@ -650,7 +693,12 @@ impl StreamsClients {
 
             if let Some(webhook) = &self.webhook {
                 for config in &webhook.config {
-                    if config.events.iter().any(|e| e.event_name == event_message.event_name)
+                    if Self::should_send_for_config(
+                        &config.events,
+                        &event_message.event_name,
+                        is_trace_event,
+                        force_send_network_wide,
+                    )
                         && config.networks.contains(&event_message.network)
                     {
                         streams.push(self.webhook_stream_tasks(
@@ -659,6 +707,7 @@ impl StreamsClients {
                             &id,
                             event_message,
                             Arc::clone(&chunks),
+                            force_send_network_wide,
                         ));
                     }
                 }
@@ -666,7 +715,12 @@ impl StreamsClients {
 
             if let Some(rabbitmq) = &self.rabbitmq {
                 for config in &rabbitmq.config.exchanges {
-                    if config.events.iter().any(|e| e.event_name == event_message.event_name)
+                    if Self::should_send_for_config(
+                        &config.events,
+                        &event_message.event_name,
+                        is_trace_event,
+                        force_send_network_wide,
+                    )
                         && config.networks.contains(&event_message.network)
                     {
                         streams.push(self.rabbitmq_stream_tasks(
@@ -675,6 +729,7 @@ impl StreamsClients {
                             &id,
                             event_message,
                             Arc::clone(&chunks),
+                            force_send_network_wide,
                         ));
                     }
                 }
@@ -683,7 +738,12 @@ impl StreamsClients {
             #[cfg(feature = "kafka")]
             if let Some(kafka) = &self.kafka {
                 for config in &kafka.config.topics {
-                    if config.events.iter().any(|e| e.event_name == event_message.event_name)
+                    if Self::should_send_for_config(
+                        &config.events,
+                        &event_message.event_name,
+                        is_trace_event,
+                        force_send_network_wide,
+                    )
                         && config.networks.contains(&event_message.network)
                     {
                         streams.push(self.kafka_stream_tasks(
@@ -692,6 +752,7 @@ impl StreamsClients {
                             &id,
                             event_message,
                             Arc::clone(&chunks),
+                            force_send_network_wide,
                         ));
                     }
                 }
@@ -699,7 +760,12 @@ impl StreamsClients {
 
             if let Some(redis) = &self.redis {
                 for config in &redis.config.streams {
-                    if config.events.iter().any(|e| e.event_name == event_message.event_name)
+                    if Self::should_send_for_config(
+                        &config.events,
+                        &event_message.event_name,
+                        is_trace_event,
+                        force_send_network_wide,
+                    )
                         && config.networks.contains(&event_message.network)
                     {
                         streams.push(self.redis_stream_tasks(
@@ -708,6 +774,7 @@ impl StreamsClients {
                             &id,
                             event_message,
                             Arc::clone(&chunks),
+                            force_send_network_wide,
                         ));
                     }
                 }
@@ -715,7 +782,12 @@ impl StreamsClients {
 
             if let Some(cloudflare_queues) = &self.cloudflare_queues {
                 for config in &cloudflare_queues.config.queues {
-                    if config.events.iter().any(|e| e.event_name == event_message.event_name)
+                    if Self::should_send_for_config(
+                        &config.events,
+                        &event_message.event_name,
+                        is_trace_event,
+                        force_send_network_wide,
+                    )
                         && config.networks.contains(&event_message.network)
                     {
                         streams.push(self.cloudflare_queues_stream_tasks(
@@ -724,6 +796,7 @@ impl StreamsClients {
                             &id,
                             event_message,
                             Arc::clone(&chunks),
+                            force_send_network_wide,
                         ));
                     }
                 }
@@ -790,6 +863,56 @@ impl StreamsClients {
             network: network.to_string(),
         };
 
-        self.stream(format!("reorg_{}_{}", network, fork_block), &event_message, false, false).await
+        self.stream_with_mode(
+            format!("reorg_{}_{}", network, fork_block),
+            &event_message,
+            false,
+            false,
+            true,
+        )
+        .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StreamsClients;
+    use crate::manifest::stream::StreamEvent;
+
+    fn stream_event(name: &str) -> StreamEvent {
+        StreamEvent { event_name: name.to_string(), conditions: None, alias: None }
+    }
+
+    #[test]
+    fn should_send_for_config_requires_event_without_force_or_trace() {
+        let events = vec![stream_event("Transfer")];
+        assert!(!StreamsClients::should_send_for_config(
+            &events,
+            "__rindexer_reorg",
+            false,
+            false,
+        ));
+    }
+
+    #[test]
+    fn should_send_for_config_force_send_bypasses_event_match() {
+        let events = vec![stream_event("Transfer")];
+        assert!(StreamsClients::should_send_for_config(
+            &events,
+            "__rindexer_reorg",
+            false,
+            true,
+        ));
+    }
+
+    #[test]
+    fn should_send_for_config_trace_event_bypasses_event_match() {
+        let events = vec![stream_event("Transfer")];
+        assert!(StreamsClients::should_send_for_config(
+            &events,
+            "NativeTransfer",
+            true,
+            false,
+        ));
     }
 }

@@ -75,6 +75,28 @@ pg_query() {
     docker exec "$PG_CONTAINER" psql -U postgres -d postgres -tAc "$1" 2>/dev/null
 }
 
+log_line_count() {
+    local file="$1"
+    if [[ -f "$file" ]]; then
+        wc -l < "$file"
+    else
+        echo 0
+    fi
+}
+
+grep_log_since() {
+    local file="$1"
+    local start_line="$2"
+    local pattern="$3"
+    awk -v start="$start_line" 'NR > start' "$file" 2>/dev/null | grep -q -- "$pattern"
+}
+
+print_reorg_log_since() {
+    local file="$1"
+    local start_line="$2"
+    awk -v start="$start_line" 'NR > start' "$file" 2>/dev/null | grep -ai "reorg" || true
+}
+
 deploy_mock_erc20() {
     if ! command -v forge &>/dev/null; then
         echo "ERROR: forge is required for deterministic replay E2E"
@@ -245,8 +267,7 @@ BLOCK_BEFORE=$(cast block-number --rpc-url "http://127.0.0.1:$ANVIL_PORT" 2>/dev
 HASH_BEFORE=$(cast block "$BLOCK_BEFORE" -f hash --rpc-url "http://127.0.0.1:$ANVIL_PORT" 2>/dev/null)
 echo "Block before reorg: $BLOCK_BEFORE (hash: ${HASH_BEFORE:0:18}...)"
 
-# Clear log for this test
-: > "$LOG_FILE"
+TEST1_LOG_START_LINE=$(log_line_count "$LOG_FILE")
 
 echo "Triggering anvil_reorg (depth=$REORG_DEPTH)..."
 cast rpc anvil_reorg "$REORG_DEPTH" "[]" --rpc-url "http://127.0.0.1:$ANVIL_PORT" 2>/dev/null
@@ -257,12 +278,12 @@ sleep 0.5
 echo "Waiting up to 15s for detection..."
 TIP_DETECTED=false
 for i in $(seq 1 15); do
-    if grep -q "tip hash changed" "$LOG_FILE" 2>/dev/null; then
+    if grep_log_since "$LOG_FILE" "$TEST1_LOG_START_LINE" "tip hash changed"; then
         TIP_DETECTED=true
         break
     fi
     # Also accept generic reorg detection (timing-dependent — might hit parent hash instead)
-    if grep -q "REORG" "$LOG_FILE" 2>/dev/null; then
+    if grep_log_since "$LOG_FILE" "$TEST1_LOG_START_LINE" "REORG"; then
         TIP_DETECTED=true
         break
     fi
@@ -271,23 +292,23 @@ done
 
 if $TIP_DETECTED; then
     echo "  PASS: Reorg detected"
-    grep -ai "reorg" "$LOG_FILE" || true
+    print_reorg_log_since "$LOG_FILE" "$TEST1_LOG_START_LINE"
     PASS_COUNT=$((PASS_COUNT + 1))
     TEST1_STATUS="PASS"
 
     # Verify recovery pipeline ran (handle_reorg_recovery emits these)
     RECOVERY_OK=true
-    if grep -q "Reorg recovery complete" "$LOG_FILE" 2>/dev/null; then
+    if grep_log_since "$LOG_FILE" "$TEST1_LOG_START_LINE" "Reorg recovery complete"; then
         echo "  PASS: Recovery pipeline completed"
     else
         echo "  INFO: Recovery log not found (CSV mode — no DB to clean up, expected)"
     fi
-    if grep -q "affected txs" "$LOG_FILE" 2>/dev/null; then
+    if grep_log_since "$LOG_FILE" "$TEST1_LOG_START_LINE" "affected txs"; then
         echo "  PASS: affected_tx_hashes tracked in recovery"
     fi
 else
     echo "  FAIL: No reorg detected"
-    cat "$LOG_FILE"
+    awk -v start="$TEST1_LOG_START_LINE" 'NR > start' "$LOG_FILE" || true
     FAIL_COUNT=$((FAIL_COUNT + 1))
     TEST1_STATUS="FAIL"
 fi
@@ -328,8 +349,7 @@ echo "========================================================"
 BLOCK_BEFORE=$(cast block-number --rpc-url "http://127.0.0.1:$ANVIL_PORT" 2>/dev/null)
 echo "Block before reorg: $BLOCK_BEFORE"
 
-# Clear log for this test
-: > "$LOG_FILE"
+TEST2_LOG_START_LINE=$(log_line_count "$LOG_FILE")
 
 # Fire reorg + mine atomically (both complete in <50ms, within
 # rindexer's 200ms poll interval). Mine exactly 1 block so block
@@ -345,12 +365,12 @@ echo "Waiting up to 15s for detection..."
 PARENT_DETECTED=false
 PARENT_EXACT=false
 for i in $(seq 1 15); do
-    if grep -q "parent hash mismatch" "$LOG_FILE" 2>/dev/null; then
+    if grep_log_since "$LOG_FILE" "$TEST2_LOG_START_LINE" "parent hash mismatch"; then
         PARENT_DETECTED=true
         PARENT_EXACT=true
         break
     fi
-    if grep -q "REORG" "$LOG_FILE" 2>/dev/null; then
+    if grep_log_since "$LOG_FILE" "$TEST2_LOG_START_LINE" "REORG"; then
         PARENT_DETECTED=true
         break
     fi
@@ -363,12 +383,12 @@ if $PARENT_DETECTED; then
     else
         echo "  PASS: Reorg detected (tip hash path — timing-dependent)"
     fi
-    grep -ai "reorg" "$LOG_FILE" || true
+    print_reorg_log_since "$LOG_FILE" "$TEST2_LOG_START_LINE"
     PASS_COUNT=$((PASS_COUNT + 1))
     TEST2_STATUS="PASS"
 else
     echo "  FAIL: No reorg detected"
-    cat "$LOG_FILE"
+    awk -v start="$TEST2_LOG_START_LINE" 'NR > start' "$LOG_FILE" || true
     FAIL_COUNT=$((FAIL_COUNT + 1))
     TEST2_STATUS="FAIL"
 fi
