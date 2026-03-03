@@ -91,69 +91,10 @@ pub struct SyncConfig<'a> {
 }
 
 pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64> {
-    // Check CSV file for last seen block as no database enabled
-    if config.postgres.is_none() && config.contract_csv_enabled {
-        if let Some(csv_details) = config.csv_details {
-            return if let Ok(result) = get_last_synced_block_number_file(
-                &get_full_path(config.project_path, &csv_details.path).unwrap_or_else(|_| {
-                    panic!("failed to get full path {}", config.project_path.display())
-                }),
-                config.contract_name,
-                config.network,
-                config.event_name,
-            )
-            .await
-            {
-                if let Some(value) = result {
-                    if value.is_zero() {
-                        return None;
-                    }
-                }
+    // 1. Database storage takes priority (matches write-side priority in
+    //    update_progress_and_last_synced_task which uses postgres > clickhouse > csv > stream)
 
-                result
-            } else {
-                error!("Error fetching last synced block from CSV");
-                None
-            };
-        }
-    }
-
-    // Then check streams if no csv or database to find out last synced block
-    if config.postgres.is_none() && !config.contract_csv_enabled && config.stream_details.is_some()
-    {
-        let stream_details = config.stream_details.as_ref().unwrap();
-
-        // create the path if it does not exist
-        stream_details
-            .create_full_streams_last_synced_block_path(config.project_path, config.contract_name)
-            .await;
-
-        return if let Ok(result) = get_last_synced_block_number_file(
-            &config
-                .project_path
-                .join(stream_details.get_streams_last_synced_block_path())
-                .canonicalize()
-                .expect("Failed to canonicalize path"),
-            config.contract_name,
-            config.network,
-            config.event_name,
-        )
-        .await
-        {
-            if let Some(value) = result {
-                if value.is_zero() {
-                    return None;
-                }
-            }
-
-            result
-        } else {
-            error!("Error fetching last synced block from stream");
-            None
-        };
-    }
-
-    // Query database for last synced block
+    // Query Postgres for last synced block
     if let Some(postgres) = config.postgres {
         let schema =
             generate_indexer_contract_schema_name(config.indexer_name, config.contract_name);
@@ -180,7 +121,7 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
         };
     }
 
-    // Query database for last synced block
+    // Query ClickHouse for last synced block
     if let Some(clickhouse) = config.clickhouse {
         #[derive(Row, Deserialize)]
         struct LastBlock {
@@ -213,6 +154,69 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
                 error!("Error fetching last synced block: {:?}", e);
                 None
             }
+        };
+    }
+
+    // 2. File-based fallbacks (only when no database storage is configured)
+
+    // Check CSV file for last seen block
+    if config.contract_csv_enabled {
+        if let Some(csv_details) = config.csv_details {
+            return if let Ok(result) = get_last_synced_block_number_file(
+                &get_full_path(config.project_path, &csv_details.path).unwrap_or_else(|_| {
+                    panic!("failed to get full path {}", config.project_path.display())
+                }),
+                config.contract_name,
+                config.network,
+                config.event_name,
+            )
+            .await
+            {
+                if let Some(value) = result {
+                    if value.is_zero() {
+                        return None;
+                    }
+                }
+
+                result
+            } else {
+                error!("Error fetching last synced block from CSV");
+                None
+            };
+        }
+    }
+
+    // Check stream files for last seen block
+    if config.stream_details.is_some() {
+        let stream_details = config.stream_details.as_ref().unwrap();
+
+        // create the path if it does not exist
+        stream_details
+            .create_full_streams_last_synced_block_path(config.project_path, config.contract_name)
+            .await;
+
+        return if let Ok(result) = get_last_synced_block_number_file(
+            &config
+                .project_path
+                .join(stream_details.get_streams_last_synced_block_path())
+                .canonicalize()
+                .expect("Failed to canonicalize path"),
+            config.contract_name,
+            config.network,
+            config.event_name,
+        )
+        .await
+        {
+            if let Some(value) = result {
+                if value.is_zero() {
+                    return None;
+                }
+            }
+
+            result
+        } else {
+            error!("Error fetching last synced block from stream");
+            None
         };
     }
 
