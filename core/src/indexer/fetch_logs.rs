@@ -1,3 +1,4 @@
+use crate::adaptive_concurrency::AdaptiveConcurrency;
 use crate::blockclock::BlockClock;
 use crate::helpers::{halved_block_number, is_relevant_block};
 use crate::indexer::reorg::reorg_safe_distance_for_chain;
@@ -14,7 +15,9 @@ use alloy::{
 use lru::LruCache;
 use rand::{random_bool, random_ratio};
 use regex::Regex;
+use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
 use tokio::{sync::mpsc, time::Instant};
 use tokio_stream::wrappers::ReceiverStream;
@@ -46,15 +49,228 @@ pub fn fetch_logs_stream(
     let (tx, rx) = mpsc::channel(channel_size);
 
     tokio::spawn(async move {
-        let mut current_filter = config.to_event_filter().unwrap();
+        let current_filter = config.to_event_filter().unwrap();
 
         let snapshot_to_block = current_filter.to_block();
         let from_block = current_filter.from_block();
 
         // add any max block range limitation before we start processing
         let original_max_limit = config.network_contract().cached_provider.max_block_range;
-        let mut max_block_range_limitation =
-            config.network_contract().cached_provider.max_block_range;
+
+        // Determine if we should use parallel fetching
+        let use_parallel = matches!(
+            config.config().fetch_concurrency,
+            Some(n) if n > 1 && !config.is_factory_event()
+        );
+
+        if use_parallel {
+            let concurrency = config.config().fetch_concurrency.unwrap().min(32);
+            let total_blocks = snapshot_to_block.saturating_sub(from_block).to::<u64>();
+
+            // Early fallback to sequential if range is too small
+            if total_blocks >= 1000 && !config.is_factory_event() {
+                // Calculate chunk size and effective concurrency
+                let chunk_size = std::cmp::max(1000u64, total_blocks / concurrency as u64);
+                let effective_concurrency =
+                    std::cmp::min(concurrency, std::cmp::max(1, (total_blocks / 1000) as usize));
+
+                info!(
+                    "{} - Parallel fetch: {} workers, chunk_size: {} blocks, total: {} blocks",
+                    config.info_log_name(),
+                    effective_concurrency,
+                    chunk_size,
+                    total_blocks
+                );
+
+                // Worker -> reorder buffer channel
+                let (worker_tx, mut worker_rx) =
+                    mpsc::channel::<SequencedFetchBatch>(effective_concurrency * 2);
+
+                // Adaptive concurrency controller (per-pipeline instance)
+                let controller = Arc::new(AdaptiveConcurrency::new(
+                    effective_concurrency,
+                    1,
+                    effective_concurrency,
+                ));
+                let active_workers = Arc::new(AtomicUsize::new(0));
+                let worker_done_notify = Arc::new(tokio::sync::Notify::new());
+                let cancel_token = config.cancel_token().clone();
+
+                // --- Dispatcher task ---
+                // CRITICAL: Move worker_tx INTO the dispatcher. Do NOT clone.
+                let dispatcher_filter = current_filter.clone();
+                let dispatcher_handle = tokio::spawn({
+                    let config = Arc::clone(&config);
+                    let cancel_token = cancel_token.clone();
+                    let controller = Arc::clone(&controller);
+                    let active_workers = Arc::clone(&active_workers);
+                    let worker_done_notify = Arc::clone(&worker_done_notify);
+                    async move {
+                        let mut next_from = from_block;
+                        let mut sequence_id: u64 = 0;
+
+                        while next_from <= snapshot_to_block {
+                            if !is_running() || cancel_token.is_cancelled() {
+                                break;
+                            }
+
+                            // Event-driven wait for available slot.
+                            // IMPORTANT: Register the Notified future BEFORE checking the
+                            // condition to avoid a race where a worker finishes between
+                            // the load() and the await, causing a lost notification.
+                            loop {
+                                let notified = worker_done_notify.notified();
+                                let active = active_workers.load(Ordering::Acquire);
+                                let limit = controller.current();
+                                if active < limit {
+                                    break;
+                                }
+                                notified.await;
+                            }
+
+                            active_workers.fetch_add(1, Ordering::Release);
+
+                            let sub_to = U64::from(std::cmp::min(
+                                next_from.to::<u64>() + chunk_size - 1,
+                                snapshot_to_block.to::<u64>(),
+                            ));
+
+                            let mut worker_filter = dispatcher_filter.clone();
+                            worker_filter =
+                                worker_filter.set_from_block(next_from).set_to_block(sub_to);
+
+                            let worker_state = WorkerState {
+                                sequence_id,
+                                filter: worker_filter,
+                                max_block_range_limitation: original_max_limit,
+                                original_max_limit,
+                            };
+
+                            let wtx = worker_tx.clone();
+                            let cfg = Arc::clone(&config);
+                            let ct = cancel_token.clone();
+                            let ctrl = Arc::clone(&controller);
+                            let aw = Arc::clone(&active_workers);
+                            let wdn = Arc::clone(&worker_done_notify);
+
+                            tokio::spawn(async move {
+                                parallel_worker(cfg, worker_state, wtx, ct, ctrl, aw, wdn).await;
+                            });
+
+                            next_from = sub_to + U64::from(1);
+                            sequence_id += 1;
+                        }
+                        // Drop worker_tx to signal completion to reorder task
+                        drop(worker_tx);
+                    }
+                });
+
+                // --- Reorder task ---
+                // Workers may send 0..N partial batches (is_final=false) followed by exactly
+                // 1 final batch (is_final=true). The reorder buffer emits results from the
+                // current expected sequence_id immediately (whether partial or final), and
+                // buffers out-of-order batches. next_expected only advances when the final
+                // batch for that ID arrives. Memory bounded by channel backpressure
+                // (worker_tx capacity = effective_concurrency * 2).
+                let reorder_tx = tx.clone();
+                let reorder_handle = tokio::spawn(async move {
+                    let mut next_expected: u64 = 0;
+                    let mut buffer: BTreeMap<u64, (Vec<SequencedFetchBatch>, bool)> =
+                        BTreeMap::new();
+
+                    while let Some(batch) = worker_rx.recv().await {
+                        let sid = batch.sequence_id;
+                        let is_final = batch.is_final;
+
+                        if sid == next_expected {
+                            for r in batch.results {
+                                if reorder_tx.send(r).await.is_err() {
+                                    return;
+                                }
+                            }
+
+                            if is_final {
+                                next_expected += 1;
+                                // Drain buffered consecutive workers
+                                while let Some((batches, was_final)) = buffer.remove(&next_expected)
+                                {
+                                    for b in batches {
+                                        for r in b.results {
+                                            if reorder_tx.send(r).await.is_err() {
+                                                return;
+                                            }
+                                        }
+                                    }
+                                    if was_final {
+                                        next_expected += 1;
+                                    } else {
+                                        break;
+                                    }
+                                }
+                            }
+                        } else {
+                            let entry = buffer.entry(sid).or_insert_with(|| (Vec::new(), false));
+                            if is_final {
+                                entry.1 = true;
+                            }
+                            entry.0.push(batch);
+                        }
+                    }
+                });
+
+                if let Err(e) = dispatcher_handle.await {
+                    error!("{} - Dispatcher task failed: {:?}", config.info_log_name(), e);
+                }
+                if let Err(e) = reorder_handle.await {
+                    error!("{} - Reorder task failed: {:?}", config.info_log_name(), e);
+                }
+
+                info!(
+                    "{} - {} - Finished parallel indexing historic events",
+                    config.info_log_name(),
+                    IndexingEventProgressStatus::Completed.log()
+                );
+
+                // Live indexing transition (needs a current_filter for live mode)
+                if config.live_indexing() && !force_no_live_indexing {
+                    // For live indexing after parallel historical, set filter to start after
+                    // the snapshot_to_block
+                    let live_filter = current_filter
+                        .set_from_block(snapshot_to_block + U64::from(1))
+                        .set_to_block(snapshot_to_block + U64::from(1));
+
+                    live_indexing_stream(
+                        config.timestamps(),
+                        config.network_contract().block_clock.clone(),
+                        &config.network_contract().cached_provider,
+                        &tx,
+                        snapshot_to_block,
+                        &config.topic_id(),
+                        &config.indexing_distance_from_head(),
+                        live_filter,
+                        &config.info_log_name(),
+                        &config.network_contract().network,
+                        config.network_contract().disable_logs_bloom_checks,
+                        original_max_limit,
+                        config.cancel_token().clone(),
+                    )
+                    .await;
+                }
+
+                return; // Don't fall through to sequential path
+            } else if total_blocks < 1000 {
+                info!(
+                    "{} - Range too small ({} blocks) for parallel fetching, using sequential",
+                    config.info_log_name(),
+                    total_blocks
+                );
+            }
+        }
+
+        // --- Sequential path (existing behavior, unchanged) ---
+        let mut current_filter = current_filter; // shadow with mutable
+        let mut max_block_range_limitation = original_max_limit;
+
         #[allow(clippy::unnecessary_unwrap)]
         if max_block_range_limitation.is_some() {
             current_filter = current_filter.set_to_block(calculate_process_historic_log_to_block(
@@ -153,18 +369,177 @@ struct ProcessHistoricLogsStreamResult {
     pub max_block_range_limitation: Option<U64>,
 }
 
+/// Cap per-worker results to prevent unbounded memory growth.
+const MAX_WORKER_RESULTS: usize = 1000;
+
+struct SequencedFetchBatch {
+    sequence_id: u64,
+    results: Vec<Result<FetchLogsResult, Box<dyn Error + Send>>>,
+    is_final: bool,
+}
+
+struct WorkerState {
+    sequence_id: u64,
+    filter: RindexerEventFilter,
+    max_block_range_limitation: Option<U64>,
+    original_max_limit: Option<U64>,
+}
+
+/// Drop guard ensuring the reorder buffer always receives a message for every
+/// sequence_id, even if the worker panics. Without this, a panicked worker
+/// would leave the reorder buffer waiting forever, deadlocking the pipeline.
+///
+/// On panic, also cancels the pipeline via `cancel_token` to prevent silent
+/// data gaps (later workers' results would accumulate in the reorder buffer
+/// but never flush past the missing sequence_id).
+struct WorkerDropGuard {
+    sequence_id: u64,
+    tx: mpsc::Sender<SequencedFetchBatch>,
+    cancel_token: CancellationToken,
+    sent: bool,
+}
+
+impl Drop for WorkerDropGuard {
+    fn drop(&mut self) {
+        if !self.sent {
+            let error_batch = SequencedFetchBatch {
+                sequence_id: self.sequence_id,
+                results: vec![Err(Box::new(std::io::Error::other(
+                    "worker panicked or was cancelled without sending results",
+                )) as Box<dyn Error + Send>)],
+                is_final: true,
+            };
+            if self.tx.try_send(error_batch).is_err() {
+                // Channel full or closed — cancel the entire pipeline so the
+                // reorder buffer doesn't wait forever for this sequence_id.
+                error!(
+                    "WorkerDropGuard: failed to send panic error for sequence {}. \
+                     Cancelling pipeline to prevent data gaps.",
+                    self.sequence_id
+                );
+                self.cancel_token.cancel();
+            }
+        }
+    }
+}
+
+/// Classify whether an error is a rate limit error for adaptive concurrency.
+#[allow(dead_code)]
+fn is_rate_limit_error(error: &(dyn Error + Send)) -> bool {
+    let msg = error.to_string().to_lowercase();
+    msg.contains("rate limit")
+        || msg.contains("too many requests")
+        || msg.contains("429")
+        || (msg.contains("exceeded") && msg.contains("limit"))
+        || msg.contains("request rate exceeded")
+}
+
+async fn parallel_worker(
+    config: Arc<EventProcessingConfig>,
+    mut state: WorkerState,
+    tx: mpsc::Sender<SequencedFetchBatch>,
+    cancel_token: CancellationToken,
+    controller: Arc<AdaptiveConcurrency>,
+    active_workers: Arc<AtomicUsize>,
+    worker_done_notify: Arc<tokio::sync::Notify>,
+) {
+    let mut guard = WorkerDropGuard {
+        sequence_id: state.sequence_id,
+        tx: tx.clone(),
+        cancel_token: cancel_token.clone(),
+        sent: false,
+    };
+
+    let sub_range_end = state.filter.to_block();
+    let mut current_filter = state.filter.clone();
+    let mut results: Vec<Result<FetchLogsResult, Box<dyn Error + Send>>> = Vec::new();
+
+    while current_filter.from_block() <= sub_range_end {
+        if !is_running() || cancel_token.is_cancelled() {
+            break;
+        }
+
+        // Wait for any active backoff from adaptive controller
+        controller.wait_for_backoff().await;
+
+        let (maybe_result, next_state) = fetch_logs_once(
+            config.timestamps(),
+            config.network_contract().block_clock.clone(),
+            &config.network_contract().cached_provider,
+            &config.topic_id(),
+            current_filter.clone(),
+            state.max_block_range_limitation,
+            sub_range_end,
+            &config.info_log_name(),
+        )
+        .await;
+
+        match maybe_result {
+            Some(fetch_result) => {
+                controller.record_success();
+                results.push(Ok(fetch_result));
+
+                // Flush partial batch if cap reached (prevents OOM on high-volume contracts)
+                if results.len() >= MAX_WORKER_RESULTS {
+                    let _ = tx
+                        .send(SequencedFetchBatch {
+                            sequence_id: state.sequence_id,
+                            results: std::mem::take(&mut results),
+                            is_final: false,
+                        })
+                        .await;
+                }
+            }
+            None => {
+                // Only record error for adaptive concurrency when there's actually a
+                // retry (next_state is Some with adjusted range). When next_state is
+                // None, it's a legitimate completion — recording it as error would
+                // falsely penalize concurrency.
+                if next_state.is_some() {
+                    controller.record_error();
+                }
+            }
+        }
+
+        match next_state {
+            Some(next) => {
+                current_filter = next.next;
+                // Per-worker adaptive range with 10% reset heuristic
+                state.max_block_range_limitation = if random_bool(0.10) {
+                    state.original_max_limit
+                } else {
+                    next.max_block_range_limitation
+                };
+            }
+            None => break,
+        }
+    }
+
+    // Send final batch (may be empty, but must be sent with is_final: true)
+    let _ = tx
+        .send(SequencedFetchBatch { sequence_id: state.sequence_id, results, is_final: true })
+        .await;
+    guard.sent = true;
+
+    active_workers.fetch_sub(1, Ordering::Release);
+    worker_done_notify.notify_one();
+}
+
+/// Pure fetch: get_logs + retry logic. No channel interaction.
+/// Returns (Some(logs), Some(next_state)) on success with more to fetch,
+/// (Some(logs), None) on success at end, (None, Some(next_state)) on recoverable
+/// error with adjusted range, (None, None) on completion.
 #[allow(clippy::too_many_arguments)]
-async fn fetch_historic_logs_stream(
+async fn fetch_logs_once(
     timestamps: bool,
     block_clock: BlockClock,
     cached_provider: &Arc<JsonRpcCachedProvider>,
-    tx: &mpsc::Sender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
     topic_id: &B256,
     current_filter: RindexerEventFilter,
     max_block_range_limitation: Option<U64>,
     snapshot_to_block: U64,
     info_log_name: &str,
-) -> Option<ProcessHistoricLogsStreamResult> {
+) -> (Option<FetchLogsResult>, Option<ProcessHistoricLogsStreamResult>) {
     let from_block = current_filter.from_block();
     let to_block = current_filter.to_block();
 
@@ -185,10 +560,13 @@ async fn fetch_historic_logs_stream(
             to_block
         );
 
-        return Some(ProcessHistoricLogsStreamResult {
-            next: current_filter.set_from_block(to_block).set_to_block(to_block + U64::from(1)),
-            max_block_range_limitation,
-        });
+        return (
+            None,
+            Some(ProcessHistoricLogsStreamResult {
+                next: current_filter.set_from_block(to_block).set_to_block(to_block + U64::from(1)),
+                max_block_range_limitation,
+            }),
+        );
     }
 
     debug!(
@@ -197,16 +575,6 @@ async fn fetch_historic_logs_stream(
         IndexingEventProgressStatus::Syncing.log(),
         current_filter
     );
-
-    let sender = tx.reserve().await.ok()?;
-
-    if tx.capacity() == 0 {
-        debug!(
-            "{} - {} - Log channel full, waiting for events to be processed.",
-            info_log_name,
-            IndexingEventProgressStatus::Syncing.log(),
-        );
-    }
 
     match cached_provider.get_logs(&current_filter).await {
         Ok(logs) => {
@@ -235,25 +603,28 @@ async fn fetch_historic_logs_stream(
                 );
             }
 
-            if timestamps {
+            let result = if timestamps {
                 if let Ok(logs) = block_clock.attach_log_timestamps(logs).await {
-                    sender.send(Ok(FetchLogsResult { logs, from_block, to_block }));
+                    Some(FetchLogsResult { logs, from_block, to_block })
                 } else {
-                    return Some(ProcessHistoricLogsStreamResult {
-                        next: current_filter
-                            .set_from_block(from_block)
-                            .set_to_block(halved_block_number(to_block, from_block)),
-                        max_block_range_limitation,
-                    });
+                    return (
+                        None,
+                        Some(ProcessHistoricLogsStreamResult {
+                            next: current_filter
+                                .set_from_block(from_block)
+                                .set_to_block(halved_block_number(to_block, from_block)),
+                            max_block_range_limitation,
+                        }),
+                    );
                 }
             } else {
-                sender.send(Ok(FetchLogsResult { logs, from_block, to_block }));
-            }
+                Some(FetchLogsResult { logs, from_block, to_block })
+            };
 
             if logs_empty {
                 let next_from_block = to_block + U64::from(1);
                 return if next_from_block > snapshot_to_block {
-                    None
+                    (result, None)
                 } else {
                     let new_to_block = calculate_process_historic_log_to_block(
                         &next_from_block,
@@ -277,12 +648,15 @@ async fn fetch_historic_logs_stream(
                         new_to_block
                     );
 
-                    Some(ProcessHistoricLogsStreamResult {
-                        next: current_filter
-                            .set_from_block(next_from_block)
-                            .set_to_block(new_to_block),
-                        max_block_range_limitation,
-                    })
+                    (
+                        result,
+                        Some(ProcessHistoricLogsStreamResult {
+                            next: current_filter
+                                .set_from_block(next_from_block)
+                                .set_to_block(new_to_block),
+                            max_block_range_limitation,
+                        }),
+                    )
                 };
             }
 
@@ -298,7 +672,7 @@ async fn fetch_historic_logs_stream(
                     next_from_block
                 );
                 return if next_from_block > snapshot_to_block {
-                    None
+                    (result, None)
                 } else {
                     let new_to_block = calculate_process_historic_log_to_block(
                         &next_from_block,
@@ -314,12 +688,15 @@ async fn fetch_historic_logs_stream(
                         new_to_block
                     );
 
-                    Some(ProcessHistoricLogsStreamResult {
-                        next: current_filter
-                            .set_from_block(next_from_block)
-                            .set_to_block(new_to_block),
-                        max_block_range_limitation,
-                    })
+                    (
+                        result,
+                        Some(ProcessHistoricLogsStreamResult {
+                            next: current_filter
+                                .set_from_block(next_from_block)
+                                .set_to_block(new_to_block),
+                            max_block_range_limitation,
+                        }),
+                    )
                 };
             }
         }
@@ -353,12 +730,15 @@ async fn fetch_historic_logs_stream(
                     );
                 }
 
-                return Some(ProcessHistoricLogsStreamResult {
-                    next: current_filter
-                        .set_from_block(U64::from(retry_result.from))
-                        .set_to_block(U64::from(retry_result.to)),
-                    max_block_range_limitation: retry_result.max_block_range,
-                });
+                return (
+                    None,
+                    Some(ProcessHistoricLogsStreamResult {
+                        next: current_filter
+                            .set_from_block(U64::from(retry_result.from))
+                            .set_to_block(U64::from(retry_result.to)),
+                        max_block_range_limitation: retry_result.max_block_range,
+                    }),
+                );
             }
 
             let halved_to_block = halved_block_number(to_block, from_block);
@@ -375,14 +755,58 @@ async fn fetch_historic_logs_stream(
                 err
             );
 
-            return Some(ProcessHistoricLogsStreamResult {
-                next: current_filter.set_from_block(from_block).set_to_block(halved_to_block),
-                max_block_range_limitation,
-            });
+            return (
+                None,
+                Some(ProcessHistoricLogsStreamResult {
+                    next: current_filter.set_from_block(from_block).set_to_block(halved_to_block),
+                    max_block_range_limitation,
+                }),
+            );
         }
     }
 
-    None
+    (None, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn fetch_historic_logs_stream(
+    timestamps: bool,
+    block_clock: BlockClock,
+    cached_provider: &Arc<JsonRpcCachedProvider>,
+    tx: &mpsc::Sender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
+    topic_id: &B256,
+    current_filter: RindexerEventFilter,
+    max_block_range_limitation: Option<U64>,
+    snapshot_to_block: U64,
+    info_log_name: &str,
+) -> Option<ProcessHistoricLogsStreamResult> {
+    // Reserve channel space BEFORE fetching (existing backpressure behavior)
+    let sender = tx.reserve().await.ok()?;
+    if tx.capacity() == 0 {
+        debug!(
+            "{} - {} - Log channel full, waiting for events to be processed.",
+            info_log_name,
+            IndexingEventProgressStatus::Syncing.log(),
+        );
+    }
+
+    let (maybe_result, next_state) = fetch_logs_once(
+        timestamps,
+        block_clock,
+        cached_provider,
+        topic_id,
+        current_filter,
+        max_block_range_limitation,
+        snapshot_to_block,
+        info_log_name,
+    )
+    .await;
+
+    if let Some(result) = maybe_result {
+        sender.send(Ok(result));
+    }
+
+    next_state
 }
 
 /// Handles live indexing mode, continuously checking for new blocks, ensuring they are

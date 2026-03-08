@@ -219,6 +219,7 @@ pub fn handle_new_command(
             callback_concurrency: None,
             timestamp_sample_rate: None,
             max_concurrent_view_calls: None,
+            fetch_concurrency: None,
         },
         constants: HashMap::new(),
         timestamps: None,
