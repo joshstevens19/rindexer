@@ -1,7 +1,8 @@
 use alloy::primitives::{B256, U64};
+use alloy::rpc::types::Log;
 
 use futures::future::join_all;
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
 use tokio::{
@@ -92,17 +93,94 @@ async fn process_event_logs(
 
     let mut logs_stream = fetch_logs_stream(Arc::clone(&config), force_no_live_indexing);
     let mut tasks = Vec::new();
+    let mut pending_error: Option<Box<dyn std::error::Error + Send>> = None;
 
     while let Some(result) = logs_stream.next().await {
-        let task = handle_logs_result(Arc::clone(&config), callback_permits.clone(), result)
-            .await
-            .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
+        // Check for a deferred error from previous coalescing iteration
+        if let Some(e) = pending_error.take() {
+            return Err(Box::new(ProviderError::CustomError(e.to_string())));
+        }
+
+        // Process the first result
+        let (mut coalesced_logs, mut final_from_block, mut final_to_block) = match result {
+            Ok(fetch_result) => {
+                let logs: Vec<Log> = fetch_result.logs;
+                (logs, fetch_result.from_block, fetch_result.to_block)
+            }
+            Err(e) => {
+                return Err(Box::new(ProviderError::CustomError(e.to_string())));
+            }
+        };
+
+        // Drain any additional READY results (non-blocking via now_or_never).
+        // SAFETY: tokio mpsc Receiver::recv/poll_recv is cancel-safe — dropping the
+        // future without completion does not consume any item from the channel.
+        // The coalesced range uses min(from)/max(to) across all batches. Since the
+        // reorder buffer guarantees monotonic delivery, this equals first.from/last.to.
+        const MAX_COALESCE_LOGS: usize = 5000;
+        let mut coalesced_count = 1usize;
+        while coalesced_logs.len() < MAX_COALESCE_LOGS {
+            match logs_stream.next().now_or_never() {
+                Some(Some(Ok(fetch_result))) => {
+                    final_from_block = final_from_block.min(fetch_result.from_block);
+                    final_to_block = final_to_block.max(fetch_result.to_block);
+                    coalesced_logs.extend(fetch_result.logs);
+                    coalesced_count += 1;
+                }
+                Some(Some(Err(e))) => {
+                    pending_error = Some(e);
+                    break;
+                }
+                _ => break, // nothing ready or stream ended
+            }
+        }
+
+        if coalesced_count > 1 {
+            debug!(
+                "{} - Coalesced {} batches into {} logs (blocks {} - {})",
+                config.info_log_name(),
+                coalesced_count,
+                coalesced_logs.len(),
+                final_from_block,
+                final_to_block
+            );
+        }
+
+        let coalesced_result = FetchLogsResult {
+            logs: coalesced_logs,
+            from_block: final_from_block,
+            to_block: final_to_block,
+        };
+
+        let task =
+            handle_logs_result(Arc::clone(&config), callback_permits.clone(), Ok(coalesced_result))
+                .await
+                .map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
 
         if block_until_indexed {
             task.await.map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
         } else {
             tasks.push(task);
+
+            // Periodically reap completed tasks to detect errors early and avoid
+            // unbounded JoinHandle accumulation during long syncs.
+            if tasks.len() >= 64 {
+                let mut pending = Vec::with_capacity(tasks.len());
+                for t in tasks.drain(..) {
+                    if t.is_finished() {
+                        t.await.map_err(|e| Box::new(ProviderError::CustomError(e.to_string())))?;
+                    } else {
+                        pending.push(t);
+                    }
+                }
+                tasks = pending;
+            }
         }
+    }
+
+    // Check for any remaining pending error after stream ends
+    if let Some(e) = pending_error.take() {
+        return Err(Box::new(ProviderError::CustomError(e.to_string())));
     }
 
     // Wait for all remaining tasks to complete
