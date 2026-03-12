@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use tokio::time::timeout;
 use tracing::info;
 
+use crate::anvil_setup::ANVIL_DEFAULT_PRIVATE_KEY;
 use crate::live_feeder::LiveFeeder;
 use crate::test_suite::TestContext;
 use crate::tests::registry::{TestDefinition, TestRegistry};
@@ -21,18 +22,6 @@ pub struct TestRunner {
 #[derive(Debug, Clone)]
 pub struct TestRunnerConfig {
     pub rindexer_binary: String,
-    pub anvil_port: u16,
-    pub health_port: u16,
-}
-
-impl Default for TestRunnerConfig {
-    fn default() -> Self {
-        Self {
-            rindexer_binary: "../rindexer/target/release/rindexer_cli".to_string(),
-            anvil_port: 8545,
-            health_port: 8080,
-        }
-    }
 }
 
 impl TestRunner {
@@ -42,7 +31,7 @@ impl TestRunner {
 
     pub async fn run_all_tests(&self) -> Result<TestSuite> {
         info!("[START] Rindexer E2E Test Suite");
-        info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        info!("---");
 
         let mut suite = TestSuite::new("Rindexer E2E Tests".to_string());
         let overall_start = Instant::now();
@@ -60,8 +49,8 @@ impl TestRunner {
     }
 
     pub async fn run_filtered_tests(&self, test_names: &[String]) -> Result<TestSuite> {
-        info!("[START] Rindexer E2E Test Suite - Filtered Tests: {:?}", test_names);
-        info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        info!("[START] Rindexer E2E Test Suite - Filtered: {:?}", test_names);
+        info!("---");
 
         let mut suite = TestSuite::new(format!("Filtered Tests: {:?}", test_names));
         let overall_start = Instant::now();
@@ -101,7 +90,7 @@ impl TestRunner {
                     println!("[SKIP] SKIPPED");
                     TestResult::Skipped(skip.0.clone())
                 } else {
-                    println!("[ERROR] FAIL");
+                    println!("[ERROR] FAIL: {}", e);
                     TestResult::Failed(e.to_string())
                 }
             }
@@ -116,45 +105,32 @@ impl TestRunner {
     }
 
     async fn run_single_test(&self, test_def: &TestDefinition) -> Result<()> {
-        // Create fresh test context for each test
-        let mut context = TestContext::new(
-            self.config.rindexer_binary.clone(),
-            self.config.anvil_port,
-            self.config.health_port,
-        )
-        .await?;
+        let mut context = TestContext::new(self.config.rindexer_binary.clone()).await?;
 
-        // Start live feeder if this is a live test
         let mut live_feeder = if test_def.is_live_test {
-            info!("Starting live feeder for live indexing test: {}", test_def.name);
+            info!("Starting live feeder for: {}", test_def.name);
             let contract_address = context.deploy_test_contract().await?;
-
-            // Store the contract address in the context for the test to use
             context.test_contract_address = Some(contract_address.clone());
 
             let mut feeder = LiveFeeder::new(
                 context.anvil.rpc_url.clone(),
-                "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80".to_string(),
+                ANVIL_DEFAULT_PRIVATE_KEY.to_string(),
             )
             .with_contract(contract_address.parse()?);
 
-            // Start feeder in background
             feeder.start().await?;
             Some(feeder)
         } else {
             None
         };
 
-        // Run the actual test
         let test_result = (test_def.function)(&mut context).await;
 
-        // Stop live feeder if it was running
         if let Some(feeder) = live_feeder.take() {
-            info!("Stopping live feeder for test: {}", test_def.name);
+            info!("Stopping live feeder for: {}", test_def.name);
             feeder.stop();
         }
 
-        // Cleanup context
         let _ = context.cleanup().await;
 
         test_result

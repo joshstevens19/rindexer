@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use std::net::TcpListener;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -6,17 +7,26 @@ use tokio::process::Command as TokioCommand;
 use tokio::time::sleep;
 use tracing::{debug, error, info};
 
+/// Default Anvil private key (account 0 from the standard mnemonic).
+pub const ANVIL_DEFAULT_PRIVATE_KEY: &str =
+    "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+
 pub struct AnvilInstance {
     pub rpc_url: String,
-    pub process: Option<tokio::process::Child>,
+    pub port: u16,
+    process: Option<tokio::process::Child>,
 }
 
 impl AnvilInstance {
-    pub async fn start_local(private_key: &str) -> Result<Self> {
-        info!("Starting local Anvil instance");
+    /// Start a local Anvil instance on a dynamically allocated free port.
+    pub async fn start_local() -> Result<Self> {
+        let port = allocate_free_port()?;
+        info!("Starting local Anvil instance on port {}", port);
 
         let mut cmd = TokioCommand::new("anvil");
-        cmd.arg("--chain-id")
+        cmd.arg("--port")
+            .arg(port.to_string())
+            .arg("--chain-id")
             .arg("31337")
             .arg("--accounts")
             .arg("10")
@@ -31,33 +41,26 @@ impl AnvilInstance {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
-        let mut child = cmd.spawn().context("Failed to start Anvil")?;
+        let mut child = cmd.spawn().context("Failed to start Anvil — is Foundry installed?")?;
 
-        // Start log streaming for Anvil
         Self::start_log_streaming(&mut child).await;
 
-        // Wait a bit for Anvil to start
         sleep(Duration::from_millis(500)).await;
 
-        // Check if process is still running
         match child.try_wait()? {
             Some(status) => {
-                return Err(anyhow::anyhow!("Anvil exited with status: {}", status));
+                return Err(anyhow::anyhow!("Anvil exited immediately with status: {}", status));
             }
             None => {
-                info!("Anvil process started successfully");
+                info!("Anvil process started (pid={})", child.id().unwrap_or(0));
             }
         }
 
-        let rpc_url = "http://127.0.0.1:8545".to_string();
+        let rpc_url = format!("http://127.0.0.1:{}", port);
 
-        // Wait for RPC to be ready
         Self::wait_for_rpc_ready(&rpc_url).await?;
 
-        // Fund the test account
-        Self::fund_test_account(&rpc_url, private_key).await?;
-
-        Ok(Self { rpc_url, process: Some(child) })
+        Ok(Self { rpc_url, port, process: Some(child) })
     }
 
     async fn wait_for_rpc_ready(rpc_url: &str) -> Result<()> {
@@ -78,7 +81,7 @@ impl AnvilInstance {
                 .await
             {
                 if response.status().is_success() {
-                    info!("Anvil RPC is ready");
+                    info!("Anvil RPC is ready at {}", rpc_url);
                     return Ok(());
                 }
             }
@@ -87,14 +90,11 @@ impl AnvilInstance {
             sleep(Duration::from_millis(200)).await;
         }
 
-        Err(anyhow::anyhow!("Anvil RPC failed to become ready after {} attempts", MAX_ATTEMPTS))
-    }
-
-    async fn fund_test_account(_rpc_url: &str, _private_key: &str) -> Result<()> {
-        //TODO This would typically fund accounts for testing
-        // For now, we'll use the default funded accounts from Anvil
-        info!("Using default Anvil funded accounts");
-        Ok(())
+        Err(anyhow::anyhow!(
+            "Anvil RPC failed to become ready at {} after {} attempts",
+            rpc_url,
+            MAX_ATTEMPTS
+        ))
     }
 
     pub async fn mine_block(&self) -> Result<()> {
@@ -163,14 +163,13 @@ impl AnvilInstance {
             });
         }
     }
-}
 
-impl AnvilInstance {
-    /// Deploy a test contract using forge
+    /// Deploy a test contract using forge.
     pub async fn deploy_test_contract(&self) -> Result<String> {
         info!("Deploying SimpleERC20 test contract...");
 
-        let e2e_tests_dir = std::env::current_dir()?;
+        let e2e_tests_dir =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let contract_path = e2e_tests_dir.join("contracts/SimpleERC20.sol:SimpleERC20");
         let output = std::process::Command::new("forge")
             .args([
@@ -178,20 +177,19 @@ impl AnvilInstance {
                 "--rpc-url",
                 &self.rpc_url,
                 "--private-key",
-                "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+                ANVIL_DEFAULT_PRIVATE_KEY,
                 "--broadcast",
                 &contract_path.to_string_lossy(),
             ])
             .current_dir(&e2e_tests_dir)
             .output()
-            .context("Failed to run forge command")?;
+            .context("Failed to run forge command — is Foundry installed?")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(anyhow::anyhow!("Contract deployment failed: {}", stderr));
         }
 
-        // Parse the contract address from forge output
         let stdout = String::from_utf8_lossy(&output.stdout);
         let address_line = stdout
             .lines()
@@ -206,15 +204,38 @@ impl AnvilInstance {
         info!("Test contract deployed at: {}", address);
         Ok(address.to_string())
     }
+
+    /// Gracefully stop the Anvil process.
+    pub async fn stop(&mut self) {
+        if let Some(mut child) = self.process.take() {
+            info!("Stopping Anvil instance (port={})", self.port);
+            if let Err(e) = child.kill().await {
+                tracing::warn!("Failed to kill Anvil: {}", e);
+            }
+            let _ = tokio::time::timeout(Duration::from_secs(3), child.wait()).await;
+        }
+    }
 }
 
 impl Drop for AnvilInstance {
     fn drop(&mut self) {
         if let Some(mut child) = self.process.take() {
-            info!("Shutting down Anvil instance");
-            std::mem::drop(child.kill());
-            // Note: tokio::process::Child doesn't have wait_timeout,
-            // but the process will be cleaned up when the child is dropped
+            // Sync kill via PID — the only reliable way in Drop.
+            if let Some(pid) = child.id() {
+                let _ = std::process::Command::new("kill")
+                    .arg(pid.to_string())
+                    .output();
+            }
+            // Fallback: start_kill sends SIGKILL to the child. The future is
+            // never polled but the signal is still sent.
+            let _ = child.start_kill();
         }
     }
+}
+
+fn allocate_free_port() -> Result<u16> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))?;
+    let port = listener.local_addr()?.port();
+    drop(listener);
+    Ok(port)
 }

@@ -4,7 +4,9 @@ use tempfile::TempDir;
 use tracing::{info, warn};
 
 use crate::anvil_setup::AnvilInstance;
+use crate::health_client::HealthClient;
 use crate::rindexer_client::RindexerInstance;
+
 // Config structs for Rindexer
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct RindexerConfig {
@@ -13,9 +15,15 @@ pub struct RindexerConfig {
     pub config: serde_json::Value,
     pub timestamps: Option<serde_json::Value>,
     pub networks: Vec<NetworkConfig>,
+    pub global: GlobalConfig,
     pub storage: StorageConfig,
     pub native_transfers: NativeTransfersConfig,
     pub contracts: Vec<ContractConfig>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct GlobalConfig {
+    pub health_port: u16,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -66,9 +74,11 @@ pub struct ContractDetail {
 pub struct EventConfig {
     pub name: String,
 }
-use crate::health_client::HealthClient;
 
-/// Shared context for all tests - provides common infrastructure
+/// Shared context for all tests — provides common infrastructure.
+///
+/// Each test gets a fresh `TestContext` with its own Anvil instance on a
+/// random port, a fresh temp directory, and an isolated health port.
 pub struct TestContext {
     pub anvil: AnvilInstance,
     pub rindexer: Option<RindexerInstance>,
@@ -78,33 +88,26 @@ pub struct TestContext {
     pub project_path: PathBuf,
     pub rindexer_binary: String,
     pub health_client: Option<HealthClient>,
+    pub health_port: u16,
+    /// Containers to clean up on drop (RAII guard).
+    docker_containers: Vec<String>,
 }
 
-// TestSuite is now a separate struct for test results
-
 impl TestContext {
-    pub async fn new(rindexer_binary: String, anvil_port: u16, health_port: u16) -> Result<Self> {
+    pub async fn new(rindexer_binary: String) -> Result<Self> {
         info!("Setting up fresh test context...");
 
-        // Kill any existing Anvil processes and start fresh
-        info!("Killing any existing Anvil processes...");
-        let _ = std::process::Command::new("pkill").arg("-f").arg("anvil").output();
-
-        // Wait for processes to be killed and port to be free
-        wait_for_port_free(anvil_port, 10).await?;
-
-        // Start a fresh Anvil instance
-        let anvil = AnvilInstance::start_local(
-            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
-        )
-        .await
-        .context("Failed to start Anvil instance")?;
+        // Start a fresh Anvil instance on a dynamic port (no pkill needed)
+        let anvil = AnvilInstance::start_local()
+            .await
+            .context("Failed to start Anvil instance")?;
 
         info!("Anvil ready at: {}", anvil.rpc_url);
 
-        // Create temporary directory for this test run
-        let temp_dir = TempDir::new().context("Failed to create temporary directory")?;
+        // Allocate a dynamic health port
+        let health_port = crate::docker::allocate_free_port()?;
 
+        let temp_dir = TempDir::new().context("Failed to create temporary directory")?;
         let project_path = temp_dir.path().join("test_project");
         std::fs::create_dir(&project_path).context("Failed to create project directory")?;
 
@@ -117,86 +120,84 @@ impl TestContext {
             project_path,
             rindexer_binary,
             health_client: Some(HealthClient::new(health_port)),
+            health_port,
+            docker_containers: Vec::new(),
         })
     }
 
-    pub async fn cleanup(&mut self) -> Result<()> {
-        info!("Cleaning up test suite...");
+    /// Register a Docker container for automatic cleanup.
+    pub fn register_container(&mut self, name: String) {
+        self.docker_containers.push(name);
+    }
 
-        // Stop Rindexer if running
+    pub async fn cleanup(&mut self) -> Result<()> {
+        info!("Cleaning up test context...");
+
         if let Some(mut rindexer) = self.rindexer.take() {
             if let Err(e) = rindexer.stop().await {
-                warn!("Error stopping Rindexer: {}", e);
+                warn!("Error stopping rindexer: {}", e);
             }
         }
-        // Stop GraphQL if running
         if let Some(mut graphql) = self.graphql.take() {
             if let Err(e) = graphql.stop().await {
                 warn!("Error stopping GraphQL: {}", e);
             }
         }
 
-        // Anvil will be cleaned up automatically when the process is dropped
+        self.anvil.stop().await;
 
-        // TempDir will be cleaned up automatically on drop
+        // Clean up any registered Docker containers
+        for name in self.docker_containers.drain(..) {
+            if let Err(e) = crate::docker::stop_postgres_container(&name).await {
+                warn!("Error stopping container {}: {}", name, e);
+            }
+        }
+
         self.temp_dir.take();
 
-        info!("Test suite cleanup completed");
+        info!("Test context cleanup completed");
         Ok(())
     }
 
-    /// Deploy a test contract using the Anvil instance
     pub async fn deploy_test_contract(&mut self) -> Result<String> {
         let address = self.anvil.deploy_test_contract().await?;
         self.test_contract_address = Some(address.clone());
         Ok(address)
     }
 
-    /// Create a minimal Rindexer configuration
     pub fn create_minimal_config(&self) -> RindexerConfig {
-        crate::rindexer_client::RindexerInstance::create_minimal_config(&self.anvil.rpc_url)
+        RindexerInstance::create_minimal_config(&self.anvil.rpc_url, self.health_port)
     }
 
-    /// Create a configuration with a specific contract
     pub fn create_contract_config(&self, contract_address: &str) -> RindexerConfig {
-        crate::rindexer_client::RindexerInstance::create_contract_config(
-            &self.anvil.rpc_url,
-            contract_address,
-        )
+        RindexerInstance::create_contract_config(&self.anvil.rpc_url, contract_address, self.health_port)
     }
 
     pub async fn start_rindexer(&mut self, config: RindexerConfig) -> Result<()> {
-        // Create abis directory and copy all ABI files from repo abis/
-        let abis_dir = self.project_path.join("abis");
-        std::fs::create_dir_all(&abis_dir).context("Failed to create abis directory")?;
+        // Copy ABIs using CARGO_MANIFEST_DIR for a stable base path
+        let abis_src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("abis");
+        let abis_dst = self.project_path.join("abis");
+        std::fs::create_dir_all(&abis_dst).context("Failed to create abis directory")?;
 
-        if let Ok(entries) = std::fs::read_dir("abis") {
+        if let Ok(entries) = std::fs::read_dir(&abis_src) {
             for entry in entries.flatten() {
-                if let Ok(file_type) = entry.file_type() {
-                    if file_type.is_file() {
-                        let src_path = entry.path();
-                        if let Some(name) = src_path.file_name() {
-                            let dst_path = abis_dir.join(name);
-                            let _ = std::fs::copy(&src_path, &dst_path);
-                        }
+                if entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+                    if let Some(name) = entry.path().file_name() {
+                        let _ = std::fs::copy(entry.path(), abis_dst.join(name));
                     }
                 }
             }
         }
 
-        // Write the Rindexer configuration
         let config_path = self.project_path.join("rindexer.yaml");
         let config_yaml =
             serde_yaml::to_string(&config).context("Failed to serialize config to YAML")?;
-
         std::fs::write(&config_path, config_yaml).context("Failed to write config file")?;
 
-        info!("Created Rindexer project at: {:?}", self.project_path);
+        info!("Created rindexer project at: {:?}", self.project_path);
 
-        // Create Rindexer instance and start indexer
         let mut rindexer = RindexerInstance::new(&self.rindexer_binary, self.project_path.clone());
-
-        rindexer.start_indexer().await.context("Failed to start Rindexer indexer")?;
+        rindexer.start_indexer().await.context("Failed to start rindexer indexer")?;
 
         self.rindexer = Some(rindexer);
         info!("Rindexer started successfully");
@@ -204,11 +205,10 @@ impl TestContext {
         Ok(())
     }
 
-    /// Wait for Rindexer sync completion based on log output
     pub async fn wait_for_sync_completion(&mut self, timeout_seconds: u64) -> Result<()> {
         if let Some(rindexer) = &mut self.rindexer {
             rindexer.wait_for_initial_sync_completion(timeout_seconds).await?;
-            info!("✓ Rindexer sync completed (detected via logs)");
+            info!("Rindexer sync completed (detected via logs)");
         }
         Ok(())
     }
@@ -218,14 +218,9 @@ impl TestContext {
     }
 
     pub fn is_rindexer_running(&self) -> bool {
-        if let Some(rindexer) = &self.rindexer {
-            rindexer.is_running()
-        } else {
-            false
-        }
+        self.rindexer.as_ref().map(|r| r.is_running()).unwrap_or(false)
     }
 
-    /// Wait for new events to appear in CSV output (for live indexing tests)
     pub async fn wait_for_new_events(
         &self,
         expected_min_events: usize,
@@ -244,11 +239,11 @@ impl TestContext {
         while start_time.elapsed() < timeout {
             if let Ok(content) = std::fs::read_to_string(&csv_path) {
                 let lines: Vec<&str> = content.lines().collect();
-                let event_count = if lines.len() > 1 { lines.len() - 1 } else { 0 }; // Subtract header
+                let event_count = if lines.len() > 1 { lines.len() - 1 } else { 0 };
 
                 if event_count >= expected_min_events {
                     info!(
-                        "✓ Found {} events (expected at least {})",
+                        "Found {} events (expected at least {})",
                         event_count, expected_min_events
                     );
                     return Ok(event_count);
@@ -270,7 +265,6 @@ impl TestContext {
         ))
     }
 
-    /// Get the current number of events in CSV output
     pub fn get_event_count(&self) -> Result<usize> {
         let csv_path =
             self.get_csv_output_path().join("SimpleERC20").join("simpleerc20-transfer.csv");
@@ -281,25 +275,6 @@ impl TestContext {
 
         let content = std::fs::read_to_string(&csv_path)?;
         let lines: Vec<&str> = content.lines().collect();
-        Ok(if lines.len() > 1 { lines.len() - 1 } else { 0 }) // Subtract header
+        Ok(if lines.len() > 1 { lines.len() - 1 } else { 0 })
     }
-}
-
-async fn wait_for_port_free(port: u16, max_attempts: u32) -> Result<()> {
-    for attempt in 1..=max_attempts {
-        // Try to connect to the port - if it fails, the port is free
-        match tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port)).await {
-            Ok(_) => {
-                // Port is still in use, wait a bit
-                if attempt < max_attempts {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                }
-            }
-            Err(_) => {
-                // Port is free, we can proceed
-                return Ok(());
-            }
-        }
-    }
-    Err(anyhow::anyhow!("Port {} is still in use after {} attempts", port, max_attempts))
 }

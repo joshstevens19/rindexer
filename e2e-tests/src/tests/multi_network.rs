@@ -3,7 +3,12 @@ use std::future::Future;
 use std::pin::Pin;
 use tracing::info;
 
+use crate::anvil_setup::ANVIL_DEFAULT_PRIVATE_KEY;
 use crate::test_suite::TestContext;
+use crate::tests::helpers::{
+    derive_block_range_from_csv, generate_test_address, load_tx_hashes_from_csv,
+    produced_csv_path_for,
+};
 use crate::tests::registry::{TestDefinition, TestModule};
 
 pub struct MultiNetworkTests;
@@ -23,9 +28,8 @@ fn multi_network_mixed_test(
     context: &mut TestContext,
 ) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
     Box::pin(async move {
-        info!("Running Test Multi-Network: mainnet rETH historic + anvil SimpleERC20 historic");
+        info!("Running Multi-Network Test: mainnet rETH + anvil SimpleERC20");
 
-        // Require MAINNET_RPC_URL
         let mainnet_rpc = match std::env::var("MAINNET_RPC_URL") {
             Ok(v) if !v.trim().is_empty() => v,
             _ => {
@@ -36,70 +40,53 @@ fn multi_network_mixed_test(
             }
         };
 
-        // Use a small subset of blocks for multi-network test (not full CSV like direct_rpc)
-        // Just test a few blocks to verify multi-network functionality
         let expected_csv = std::env::var("DIRECT_RPC_EXPECTED_CSV")
             .unwrap_or_else(|_| "data/rocketpooleth-transfer.csv".to_string());
 
-        // Get start block from CSV but limit range to just 20 blocks for faster testing
         let (csv_start_block, _csv_end_block) = derive_block_range_from_csv(&expected_csv)
             .context("Failed to derive block range from expected CSV")?;
         let mainnet_start_block = csv_start_block;
-        let mainnet_end_block = csv_start_block + 20; // Just 20 blocks instead of full range
+        let mainnet_end_block = csv_start_block + 20;
         let reth_address = "0xae78736cd615f374d3085123a210448e74fc6393";
 
         info!(
-            "Testing mainnet blocks {} to {} (limited range for multi-network test)",
+            "Testing mainnet blocks {} to {} (limited range)",
             mainnet_start_block, mainnet_end_block
         );
 
-        // Deploy SimpleERC20 on anvil and pre-feed transfers
-        info!("Deploying SimpleERC20 on Anvil and pre-feeding transfers...");
         let anvil_contract = context.deploy_test_contract().await?;
 
-        // Pre-feed some transfers using direct contract calls
         let num_transfers = 5;
         for i in 0..num_transfers {
             feed_transfer_on_anvil(&context.anvil.rpc_url, &anvil_contract, i).await?;
-            context.anvil.mine_block().await?; // Mine to advance nonce
+            context.anvil.mine_block().await?;
         }
 
-        // Get current anvil block number
         let anvil_end_block = context.anvil.get_block_number().await?;
         info!("Anvil has {} blocks with {} transfers", anvil_end_block, num_transfers);
 
-        // Build multi-network config: mainnet rETH + anvil SimpleERC20 (both historic)
-        let config = build_multi_network_config(MultiNetworkConfigParams {
+        let config = build_multi_network_config(context.health_port, MultiNetworkConfigParams {
             mainnet_rpc: &mainnet_rpc,
             anvil_rpc: &context.anvil.rpc_url,
             reth_address,
             anvil_contract: &anvil_contract,
             mainnet_start_block,
             mainnet_end_block,
-            anvil_start_block: 0, // anvil starts at 0
+            anvil_start_block: 0,
             anvil_end_block,
         });
 
         context.start_rindexer(config).await?;
 
-        // Wait for both networks to complete indexing
         let sync_timeout = std::env::var("MULTI_NETWORK_SYNC_TIMEOUT")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(600);
 
-        info!(
-            "Waiting for historic sync to complete on both networks (timeout: {}s)",
-            sync_timeout
-        );
-
-        // For multi-network test, just verify we got SOME events, not exact CSV match
-        // (We're testing multi-network coordination, not full data accuracy like direct_rpc)
         let reth_csv_path = produced_csv_path_for(context, "RocketPoolETH", "transfer");
         let start = std::time::Instant::now();
         let timeout = std::time::Duration::from_secs(sync_timeout);
 
-        info!("Polling for rETH CSV to have at least 1 event in the 20-block window...");
         let produced_reth_hashes = loop {
             if start.elapsed() > timeout {
                 return Err(anyhow::anyhow!("Timeout waiting for rETH CSV"));
@@ -107,28 +94,21 @@ fn multi_network_mixed_test(
 
             match load_tx_hashes_from_csv(&reth_csv_path) {
                 Ok(hashes) if !hashes.is_empty() => {
-                    info!("✓ rETH CSV has {} events", hashes.len());
+                    info!("rETH CSV has {} events", hashes.len());
                     break hashes;
                 }
                 Ok(_) => {
-                    info!("rETH CSV empty, waiting for events...");
+                    info!("rETH CSV empty, waiting...");
                 }
                 Err(_) => {}
             }
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
         };
 
-        info!(
-            "✓ Multi-network mainnet indexing validated ({} rETH events)",
-            produced_reth_hashes.len()
-        );
-
-        // Validate anvil SimpleERC20 has expected transfers
         let anvil_csv_path = produced_csv_path_for(context, "SimpleERC20", "transfer");
         let anvil_hashes =
             load_tx_hashes_from_csv(&anvil_csv_path).context("Failed to load Anvil CSV")?;
 
-        // Expect deployment transfer + num_transfers = num_transfers + 1
         let expected_anvil_count = num_transfers + 1;
         if anvil_hashes.len() < expected_anvil_count {
             return Err(anyhow::anyhow!(
@@ -137,10 +117,12 @@ fn multi_network_mixed_test(
                 expected_anvil_count
             ));
         }
-        info!("✓ Anvil SimpleERC20 CSV validated ({} rows)", anvil_hashes.len());
 
-        info!("✓ Test Multi-Network PASSED: mainnet rETH ({} events in 20 blocks) + anvil SimpleERC20 ({} transfers) indexed on separate networks", 
-              produced_reth_hashes.len(), expected_anvil_count);
+        info!(
+            "Multi-Network Test PASSED: rETH ({} events) + anvil ({} transfers)",
+            produced_reth_hashes.len(),
+            anvil_hashes.len()
+        );
         Ok(())
     })
 }
@@ -157,11 +139,12 @@ struct MultiNetworkConfigParams<'a> {
 }
 
 fn build_multi_network_config(
+    health_port: u16,
     params: MultiNetworkConfigParams<'_>,
 ) -> crate::test_suite::RindexerConfig {
     use crate::test_suite::{
-        ContractConfig, ContractDetail, CsvConfig, EventConfig, NativeTransfersConfig,
-        NetworkConfig, PostgresConfig, RindexerConfig, StorageConfig,
+        ContractConfig, ContractDetail, CsvConfig, EventConfig, GlobalConfig,
+        NativeTransfersConfig, NetworkConfig, PostgresConfig, RindexerConfig, StorageConfig,
     };
 
     RindexerConfig {
@@ -181,13 +164,13 @@ fn build_multi_network_config(
                 rpc: params.anvil_rpc.to_string(),
             },
         ],
+        global: GlobalConfig { health_port },
         storage: StorageConfig {
             postgres: PostgresConfig { enabled: false },
             csv: CsvConfig { enabled: true },
         },
         native_transfers: NativeTransfersConfig { enabled: false },
         contracts: vec![
-            // rETH on mainnet (historic)
             ContractConfig {
                 name: "RocketPoolETH".to_string(),
                 details: vec![ContractDetail {
@@ -199,7 +182,6 @@ fn build_multi_network_config(
                 abi: Some("./abis/ERC20.abi.json".to_string()),
                 include_events: Some(vec![EventConfig { name: "Transfer".to_string() }]),
             },
-            // SimpleERC20 on anvil (historic)
             ContractConfig {
                 name: "SimpleERC20".to_string(),
                 details: vec![ContractDetail {
@@ -219,27 +201,23 @@ async fn feed_transfer_on_anvil(rpc_url: &str, contract_address: &str, nonce: us
     use ethers::middleware::MiddlewareBuilder;
     use ethers::providers::{Http, Middleware, Provider};
     use ethers::signers::{LocalWallet, Signer};
-    use ethers::types::{Address, TransactionRequest, U256};
+    use ethers::types::{TransactionRequest, U256};
 
-    // Base provider to derive chain id
     let base_provider = Provider::<Http>::try_from(rpc_url)?;
     let chain_id = base_provider.get_chainid().await?.as_u64();
 
-    // Configure wallet with correct chain id
-    let private_key = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
-    let wallet: LocalWallet = private_key.parse()?;
+    let wallet: LocalWallet = ANVIL_DEFAULT_PRIVATE_KEY.parse()?;
     let wallet = wallet.with_chain_id(chain_id);
     let signer_address = wallet.address();
 
-    // Signer-enabled provider
     let provider = base_provider.with_signer(wallet);
 
-    let contract_addr: Address = contract_address.parse()?;
+    let contract_addr: ethers::types::Address = contract_address.parse()?;
     let recipient = generate_test_address(nonce as u64);
     let amount = U256::from(1000u64);
 
     // Encode transfer(address,uint256)
-    let mut data = vec![0xa9, 0x05, 0x9c, 0xbb]; // transfer selector
+    let mut data = vec![0xa9, 0x05, 0x9c, 0xbb];
     let mut to_bytes = [0u8; 32];
     to_bytes[12..].copy_from_slice(recipient.as_bytes());
     data.extend_from_slice(&to_bytes);
@@ -248,7 +226,6 @@ async fn feed_transfer_on_anvil(rpc_url: &str, contract_address: &str, nonce: us
     value_bytes.copy_from_slice(&amount_bytes);
     data.extend_from_slice(&value_bytes);
 
-    // Get nonce for the account
     let tx_nonce = provider.get_transaction_count(signer_address, None).await?;
 
     let tx = TransactionRequest {
@@ -259,93 +236,9 @@ async fn feed_transfer_on_anvil(rpc_url: &str, contract_address: &str, nonce: us
         nonce: Some(tx_nonce),
         gas_price: Some(20000000000u128.into()),
         value: None,
-        chain_id: None, // let signer/provider enforce correct chain id
+        chain_id: None,
     };
 
     let _pending = provider.send_transaction(tx, None).await?;
     Ok(())
-}
-
-fn generate_test_address(counter: u64) -> ethers::types::Address {
-    let mut bytes = [0u8; 20];
-    bytes[0] = 0x42;
-    bytes[1..9].copy_from_slice(&counter.to_be_bytes());
-    ethers::types::Address::from(bytes)
-}
-
-fn produced_csv_path_for(
-    context: &TestContext,
-    contract_name: &str,
-    event_slug_lowercase: &str,
-) -> String {
-    let file_name = format!("{}-{}.csv", contract_name.to_lowercase(), event_slug_lowercase);
-    let path = context.get_csv_output_path().join(contract_name).join(file_name);
-    path.to_string_lossy().to_string()
-}
-
-fn load_tx_hashes_from_csv(path: &str) -> Result<std::collections::BTreeSet<String>> {
-    use std::io::Read;
-    let mut file =
-        std::fs::File::open(path).with_context(|| format!("Cannot open CSV at {}", path))?;
-    let mut content = String::new();
-    file.read_to_string(&mut content)?;
-    let mut lines = content.lines();
-    let header = lines.next().ok_or_else(|| anyhow::anyhow!("CSV missing header"))?;
-    let headers: Vec<&str> = header.split(',').collect();
-    let tx_idx = headers
-        .iter()
-        .position(|h| *h == "tx_hash")
-        .ok_or_else(|| anyhow::anyhow!("tx_hash column not found"))?;
-
-    let mut set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    for line in lines {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let cols: Vec<&str> = line.split(',').collect();
-        if cols.len() <= tx_idx {
-            continue;
-        }
-        let tx = cols[tx_idx].trim().to_lowercase();
-        if tx.is_empty() {
-            continue;
-        }
-        set.insert(tx);
-    }
-    Ok(set)
-}
-
-fn derive_block_range_from_csv(path: &str) -> Result<(u64, u64)> {
-    use std::io::Read;
-    let mut file = std::fs::File::open(path)
-        .with_context(|| format!("Cannot open expected CSV at {}", path))?;
-    let mut content = String::new();
-    file.read_to_string(&mut content)?;
-    let mut lines = content.lines();
-    let header = lines.next().ok_or_else(|| anyhow::anyhow!("CSV missing header"))?;
-    let headers: Vec<&str> = header.split(',').collect();
-    let block_idx = headers
-        .iter()
-        .position(|h| *h == "block_number")
-        .ok_or_else(|| anyhow::anyhow!("block_number column not found"))?;
-
-    let mut min_b: Option<u64> = None;
-    let mut max_b: Option<u64> = None;
-    for line in lines {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let cols: Vec<&str> = line.split(',').collect();
-        if cols.len() <= block_idx {
-            continue;
-        }
-        if let Ok(b) = cols[block_idx].parse::<u64>() {
-            min_b = Some(min_b.map_or(b, |m| m.min(b)));
-            max_b = Some(max_b.map_or(b, |m| m.max(b)));
-        }
-    }
-    match (min_b, max_b) {
-        (Some(s), Some(e)) => Ok((s, e)),
-        _ => Err(anyhow::anyhow!("Could not derive block range from CSV")),
-    }
 }

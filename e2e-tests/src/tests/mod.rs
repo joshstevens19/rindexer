@@ -1,4 +1,7 @@
-// New registry-based test modules
+// Shared helpers
+pub mod helpers;
+
+// Test modules
 pub mod basic_connection;
 pub mod config_validation;
 pub mod contract_discovery;
@@ -18,16 +21,11 @@ pub mod registry;
 pub mod test_runner;
 pub mod test_suite;
 
-// Legacy test modules removed - now using registry-based system
-
 use crate::tests::test_runner::{TestRunner, TestRunnerConfig};
 use anyhow::Result;
 
-// Legacy test system removed - now using registry-based system
-
-/// Registry-based test runner
 pub async fn run_tests(rindexer_binary: String, test_names: Option<Vec<String>>) -> Result<()> {
-    let config = TestRunnerConfig { rindexer_binary, anvil_port: 8545, health_port: 8080 };
+    let config = TestRunnerConfig { rindexer_binary };
 
     let runner = TestRunner::new(config);
 
