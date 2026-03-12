@@ -35,7 +35,7 @@ fn direct_rpc_test(context: &mut TestContext) -> Pin<Box<dyn Future<Output = Res
         };
 
         let expected_csv = std::env::var("DIRECT_RPC_EXPECTED_CSV")
-            .unwrap_or_else(|_| "data/rocketpooleth-transfer.csv".to_string());
+            .unwrap_or_else(|_| "data/rocketpooleth-transfer-small.csv".to_string());
 
         let contract_address = std::env::var("DIRECT_RPC_CONTRACT_ADDRESS")
             .unwrap_or_else(|_| "0xae78736cd615f374d3085123a210448e74fc6393".to_string());

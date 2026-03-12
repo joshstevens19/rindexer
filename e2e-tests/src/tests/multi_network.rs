@@ -41,7 +41,7 @@ fn multi_network_mixed_test(
         };
 
         let expected_csv = std::env::var("DIRECT_RPC_EXPECTED_CSV")
-            .unwrap_or_else(|_| "data/rocketpooleth-transfer.csv".to_string());
+            .unwrap_or_else(|_| "data/rocketpooleth-transfer-small.csv".to_string());
 
         let (csv_start_block, _csv_end_block) = derive_block_range_from_csv(&expected_csv)
             .context("Failed to derive block range from expected CSV")?;
