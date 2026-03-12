@@ -284,7 +284,7 @@ impl IndexingEventsProgressState {
         Ok(())
     }
     fn update_event(
-        events: &mut Vec<IndexingEventProgress>,
+        events: &mut [IndexingEventProgress],
         chain_id: u64,
         id: &str,
         new_last_synced_block: U64,

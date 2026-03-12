@@ -166,6 +166,7 @@ async fn get_start_end_block(
     Ok((start_block, end_block, indexing_distance_from_head))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn start_indexing_traces(
     manifest: &Manifest,
     project_path: &Path,
@@ -594,6 +595,7 @@ pub async fn start_live_indexing(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn start_indexing(
     manifest: &Manifest,
     project_path: &Path,
