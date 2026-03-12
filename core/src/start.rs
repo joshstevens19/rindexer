@@ -10,6 +10,7 @@ use crate::events::RindexerEventEmitter;
 use crate::hot_reload::orchestrator::ReloadOrchestrator;
 use crate::hot_reload::watcher::ManifestWatcher;
 use crate::indexer::start::{start_historical_indexing, start_live_indexing};
+use crate::indexer::IndexingEventsProgressState;
 use crate::{
     api::{
         start_graphql_server, stop_graphql_server, GraphqlOverrideSettings, StartGraphqlServerError,
@@ -271,16 +272,33 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                 // to trigger a graceful reload. Without --watch, this token is never cancelled.
                 let cancel_token = CancellationToken::new();
 
+                let event_emitter =
+                    indexing_details.event_stream.map(RindexerEventEmitter::from_stream);
+
+                let historical_registry = indexing_details.registry.complete();
+                let trace_registry = indexing_details.trace_registry.complete();
+
+                let progress = IndexingEventsProgressState::monitor(
+                    &historical_registry.events,
+                    &trace_registry.events,
+                    event_emitter.clone(),
+                )
+                .await;
+
                 let processed_network_contracts = start_historical_indexing(
                     &manifest,
                     project_path,
                     &dependencies,
-                    indexing_details.registry.complete(),
-                    indexing_details.trace_registry.complete(),
-                    indexing_details.event_stream.map(RindexerEventEmitter::from_stream),
+                    historical_registry,
+                    trace_registry,
                     cancel_token.clone(),
+                    progress.clone(),
                 )
                 .await?;
+
+                if let Some(ref emitter) = event_emitter {
+                    emitter.emit(crate::RindexerEvent::HistoricalIndexingCompleted);
+                }
 
                 // TODO if graphql isn't up yet, and we apply this on graphql wont refresh we need to handle this
                 PostgresIndexResult::apply_indexes(postgres_indexes).await?;
@@ -340,6 +358,7 @@ pub async fn start_rindexer(details: StartDetails<'_>) -> Result<(), StartRindex
                             .reapply_after_historic(processed_network_contracts),
                         indexing_details.trace_registry.complete(),
                         cancel_token.clone(),
+                        progress,
                     )
                     .await
                     .map_err(StartRindexerError::CouldNotStartIndexing)?;

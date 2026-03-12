@@ -3,6 +3,15 @@
 pub enum RindexerEvent {
     /// The indexing process has completed indexing historical events (happens every restart of the indexer)
     HistoricalIndexingCompleted,
+
+    /// All event processors on a chain have indexed up to this block.
+    /// It does not emit per block, but rather once all events have indexed up to the block.
+    BlockIndexingCompleted {
+        /// The chain ID of the network (e.g., 1 for Ethereum mainnet)
+        chain_id: u64,
+        /// The block number that all processors have indexed up to
+        block_number: u64,
+    },
 }
 
 /// A handle to subscribe to indexer events

@@ -271,13 +271,14 @@ pub async fn update_progress_and_last_synced_task(
     to_block: U64,
     on_complete: impl FnOnce() + Send + 'static,
 ) {
-    let update_last_synced_block_result = tokio::time::timeout(Duration::from_millis(100), async {
-        config
-            .progress()
-            .lock()
-            .await
-            .update_last_synced_block(&config.network_contract().id, to_block)
-    })
+    let update_last_synced_block_result = tokio::time::timeout(
+        Duration::from_millis(100),
+        config.progress().update_last_synced_block(
+            config.network_contract().cached_provider.chain.id(),
+            config.id(),
+            to_block,
+        ),
+    )
     .await;
 
     // We don't want the in-memory progress reporter to hold up processing. Under high-ingest
@@ -391,9 +392,10 @@ pub async fn evm_trace_update_progress_and_last_synced_task(
     to_block: U64,
     on_complete: impl FnOnce() + Send + 'static,
 ) {
-    let update_last_synced_block_result = tokio::time::timeout(Duration::from_millis(100), async {
-        config.progress.lock().await.update_last_synced_block(&config.id, to_block)
-    })
+    let update_last_synced_block_result = tokio::time::timeout(
+        Duration::from_millis(100),
+        config.progress.update_last_synced_block(config.chain_id, &config.id, to_block),
+    )
     .await;
 
     // We don't want the in-memory progress reporter to hold up processing. Under high-ingest
