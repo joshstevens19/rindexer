@@ -16,7 +16,6 @@ pub enum IndexingEventProgressStatus {
     Syncing { progress: u16, syncing_to_block: U64 },
     Live,
     Completed,
-    Failed,
 }
 
 impl IndexingEventProgressStatus {
@@ -103,7 +102,7 @@ struct NetworkBlockProgress {
 /// Tracks per-event indexing progress and emits `BlockIndexingCompleted` when the minimum
 /// synced block across all events on a chain advances.
 pub struct IndexingEventsProgressState {
-    events: Mutex<Vec<IndexingEventProgress>>,
+    events: Mutex<HashMap<String, IndexingEventProgress>>,
     block_networks: Mutex<HashMap<u64, NetworkBlockProgress>>,
     emitter: Option<RindexerEventEmitter>,
 }
@@ -114,7 +113,7 @@ impl IndexingEventsProgressState {
         trace_information: &[TraceCallbackRegistryInformation],
         emitter: Option<RindexerEventEmitter>,
     ) -> Arc<IndexingEventsProgressState> {
-        let mut events = Vec::new();
+        let mut events: HashMap<String, IndexingEventProgress> = HashMap::new();
         let mut block_networks: HashMap<u64, NetworkBlockProgress> = HashMap::new();
         let mut network_latest_cache: HashMap<String, U64> = HashMap::new();
         let mut seen_trace_networks: HashSet<String> = HashSet::new();
@@ -154,18 +153,21 @@ impl IndexingEventsProgressState {
                             np.events.insert(event_info.id.to_string(), start_block);
                         }
 
-                        events.push(IndexingEventProgress::running(
+                        events.insert(
                             event_info.id.to_string(),
-                            event_info.contract.name.clone(),
-                            event_info.event_name.to_string(),
-                            start_block,
-                            start_block,
-                            if latest_block > end_block { end_block } else { latest_block },
-                            network_contract.network.clone(),
-                            chain_id,
-                            network_contract.end_block.is_none(),
-                            event_info.info_log_name(),
-                        ));
+                            IndexingEventProgress::running(
+                                event_info.id.to_string(),
+                                event_info.contract.name.clone(),
+                                event_info.event_name.to_string(),
+                                start_block,
+                                start_block,
+                                if latest_block > end_block { end_block } else { latest_block },
+                                network_contract.network.clone(),
+                                chain_id,
+                                network_contract.end_block.is_none(),
+                                event_info.info_log_name(),
+                            ),
+                        );
                     }
                     Err(e) => {
                         error!(
@@ -209,18 +211,21 @@ impl IndexingEventsProgressState {
                                 .or_insert(start_block);
                         }
 
-                        events.push(IndexingEventProgress::running(
+                        events.insert(
                             trace_info.id.clone(),
-                            trace_info.contract_name.clone(),
-                            trace_info.event_name.clone(),
-                            start_block,
-                            start_block,
-                            syncing_to_block,
-                            network_traces.network.clone(),
-                            chain_id,
-                            network_traces.end_block.is_none(),
-                            trace_info.info_log_name(),
-                        ));
+                            IndexingEventProgress::running(
+                                trace_info.id.clone(),
+                                trace_info.contract_name.clone(),
+                                trace_info.event_name.clone(),
+                                start_block,
+                                start_block,
+                                syncing_to_block,
+                                network_traces.network.clone(),
+                                chain_id,
+                                network_traces.end_block.is_none(),
+                                trace_info.info_log_name(),
+                            ),
+                        );
                     }
                     Err(e) => {
                         error!(
@@ -245,10 +250,9 @@ impl IndexingEventsProgressState {
         id: &str,
         new_last_synced_block: U64,
     ) -> Result<(), SyncError> {
-        let report = {
-            let mut events = self.events.lock().await;
-            Self::update_event(&mut events, chain_id, id, new_last_synced_block)?
-        };
+        let mut events = self.events.lock().await;
+
+        let report = Self::update_event(&mut events, chain_id, id, new_last_synced_block)?;
 
         if let Some(ref emitter) = self.emitter {
             let mut networks = self.block_networks.lock().await;
@@ -268,12 +272,28 @@ impl IndexingEventsProgressState {
                 return Ok(());
             }
 
-            let min_block = network_progress.events.values().copied().min().unwrap_or(U64::ZERO);
+            let min_block = network_progress
+                .events
+                .iter()
+                .filter(|(id, _)| {
+                    // filter completed events, as they don't advance the block
+                    events.get(id.as_str()).is_some_and(|e| {
+                        !matches!(e.status, IndexingEventProgressStatus::Completed)
+                    })
+                })
+                .map(|(_, block)| *block)
+                .min();
+
+            let Some(min_block) = min_block else {
+                // No events left to process
+                return Ok(());
+            };
 
             if min_block > network_progress.last_emitted_min {
                 network_progress.last_emitted_min = min_block;
                 let chain_id = report.chain_id;
                 drop(networks);
+                drop(events);
                 emitter.emit(RindexerEvent::BlockIndexingCompleted {
                     chain_id,
                     block_number: min_block.to::<u64>(),
@@ -283,81 +303,81 @@ impl IndexingEventsProgressState {
 
         Ok(())
     }
+
     fn update_event(
-        events: &mut [IndexingEventProgress],
+        events: &mut HashMap<String, IndexingEventProgress>,
         chain_id: u64,
         id: &str,
         new_last_synced_block: U64,
     ) -> Result<BlockReport, SyncError> {
-        for event in events.iter_mut() {
-            if event.id == id && event.chain_id == chain_id {
-                if let IndexingEventProgressStatus::Syncing { progress, syncing_to_block } =
-                    &mut event.status
-                {
-                    let syncing_to_block = *syncing_to_block;
-                    if *progress < 10_000 {
-                        if syncing_to_block > event.last_synced_block {
-                            let total_blocks: u64 = syncing_to_block
-                                .checked_sub(event.starting_block)
-                                .ok_or(SyncError::BlockNumberConversionTotalBlocksError(
-                                    syncing_to_block,
-                                    event.starting_block,
-                                ))?
-                                .try_into()
-                                .map_err(|_| {
-                                    SyncError::BlockNumberConversionTotalBlocksError(
-                                        syncing_to_block,
-                                        event.starting_block,
-                                    )
-                                })?;
+        let event = events
+            .get_mut(id)
+            .filter(|e| e.chain_id == chain_id)
+            .ok_or_else(|| SyncError::EventNotFound(format!("{chain_id}::{id}")))?;
 
-                            let blocks_synced: u64 = new_last_synced_block
-                                .checked_sub(event.starting_block)
-                                .ok_or(SyncError::BlockNumberConversionSyncedBlocksError(
-                                    new_last_synced_block,
-                                    event.starting_block,
-                                ))?
-                                .try_into()
-                                .map_err(|_| {
-                                    SyncError::BlockNumberConversionSyncedBlocksError(
-                                        new_last_synced_block,
-                                        event.starting_block,
-                                    )
-                                })?;
+        if let IndexingEventProgressStatus::Syncing { progress, syncing_to_block } =
+            &mut event.status
+        {
+            let syncing_to_block = *syncing_to_block;
+            if *progress < 10_000 {
+                if syncing_to_block > event.last_synced_block {
+                    let total_blocks: u64 = syncing_to_block
+                        .checked_sub(event.starting_block)
+                        .ok_or(SyncError::BlockNumberConversionTotalBlocksError(
+                            syncing_to_block,
+                            event.starting_block,
+                        ))?
+                        .try_into()
+                        .map_err(|_| {
+                            SyncError::BlockNumberConversionTotalBlocksError(
+                                syncing_to_block,
+                                event.starting_block,
+                            )
+                        })?;
 
-                            *progress = (blocks_synced.saturating_mul(10_000) / total_blocks)
-                                .min(10_000) as u16;
-                        }
+                    let blocks_synced: u64 = new_last_synced_block
+                        .checked_sub(event.starting_block)
+                        .ok_or(SyncError::BlockNumberConversionSyncedBlocksError(
+                            new_last_synced_block,
+                            event.starting_block,
+                        ))?
+                        .try_into()
+                        .map_err(|_| {
+                            SyncError::BlockNumberConversionSyncedBlocksError(
+                                new_last_synced_block,
+                                event.starting_block,
+                            )
+                        })?;
 
-                        if new_last_synced_block >= syncing_to_block {
-                            info!("{}::{} - 100.00% progress", event.info_log, event.network,);
-                            event.status = if event.live_indexing {
-                                IndexingEventProgressStatus::Live
-                            } else {
-                                IndexingEventProgressStatus::Completed
-                            };
-                        } else {
-                            info!(
-                                "{}::{} - {:.2}% progress",
-                                event.info_log,
-                                event.network,
-                                *progress as f64 / 100.0
-                            );
-                        }
-                    }
+                    *progress =
+                        (blocks_synced.saturating_mul(10_000) / total_blocks).min(10_000) as u16;
                 }
 
-                event.last_synced_block = new_last_synced_block;
-
-                return Ok(BlockReport {
-                    chain_id: event.chain_id,
-                    event_id: event.id.clone(),
-                    block: new_last_synced_block,
-                });
+                if new_last_synced_block >= syncing_to_block {
+                    info!("{}::{} - 100.00% progress", event.info_log, event.network,);
+                    event.status = if event.live_indexing {
+                        IndexingEventProgressStatus::Live
+                    } else {
+                        IndexingEventProgressStatus::Completed
+                    };
+                } else {
+                    info!(
+                        "{}::{} - {:.2}% progress",
+                        event.info_log,
+                        event.network,
+                        *progress as f64 / 100.0
+                    );
+                }
             }
         }
 
-        Err(SyncError::EventNotFound(format!("{chain_id}::{id}")))
+        event.last_synced_block = new_last_synced_block;
+
+        Ok(BlockReport {
+            chain_id: event.chain_id,
+            event_id: event.id.clone(),
+            block: new_last_synced_block,
+        })
     }
 }
 
@@ -375,22 +395,25 @@ mod tests {
         emitter: RindexerEventEmitter,
         event_defs: Vec<(&str, u64, U64, U64)>, // (id, chain_id, start_block, syncing_to_block)
     ) -> IndexingEventsProgressState {
-        let mut events = Vec::new();
+        let mut events: HashMap<String, IndexingEventProgress> = HashMap::new();
         let mut block_networks: HashMap<u64, NetworkBlockProgress> = HashMap::new();
 
         for (id, chain_id, start_block, syncing_to_block) in &event_defs {
-            events.push(IndexingEventProgress::running(
+            events.insert(
                 id.to_string(),
-                "Contract".to_string(),
-                id.to_string(),
-                *start_block,
-                *start_block,
-                *syncing_to_block,
-                format!("chain_{chain_id}"),
-                *chain_id,
-                false,
-                format!("Contract::{id}"),
-            ));
+                IndexingEventProgress::running(
+                    id.to_string(),
+                    "Contract".to_string(),
+                    id.to_string(),
+                    *start_block,
+                    *start_block,
+                    *syncing_to_block,
+                    format!("chain_{chain_id}"),
+                    *chain_id,
+                    false,
+                    format!("Contract::{id}"),
+                ),
+            );
             let np = block_networks.entry(*chain_id).or_insert_with(|| NetworkBlockProgress {
                 events: HashMap::new(),
                 last_emitted_min: U64::ZERO,
@@ -494,8 +517,8 @@ mod tests {
         let state = test_state_with_events(
             emitter,
             vec![
-                ("event_a", 1, U64::from(0), U64::from(100)),
-                ("event_b", 1, U64::from(0), U64::from(100)),
+                ("event_a", 1, U64::from(0), U64::from(200)),
+                ("event_b", 1, U64::from(0), U64::from(200)),
             ],
         );
 
@@ -510,7 +533,7 @@ mod tests {
 
     #[test]
     fn test_trace_progress_uses_first_event_id_per_network() {
-        let mut events: Vec<IndexingEventProgress> = Vec::new();
+        let mut events: HashMap<String, IndexingEventProgress> = HashMap::new();
         let mut block_networks: HashMap<u64, NetworkBlockProgress> = HashMap::new();
         let processor_id = "event_a".to_string();
 
@@ -520,8 +543,8 @@ mod tests {
         });
         network_progress.events.entry(processor_id.clone()).or_insert(U64::from(10));
 
-        if !events.iter().any(|event| event.id == processor_id && event.chain_id == 1) {
-            events.push(IndexingEventProgress::running(
+        events.entry(processor_id.clone()).or_insert_with(|| {
+            IndexingEventProgress::running(
                 processor_id.clone(),
                 "EvmTraces".to_string(),
                 "TraceEvents".to_string(),
@@ -532,13 +555,13 @@ mod tests {
                 1,
                 true,
                 "Indexer::TraceEvents".to_string(),
-            ));
-        }
+            )
+        });
 
         network_progress.events.entry(processor_id.clone()).or_insert(U64::from(10));
 
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].id, processor_id);
+        assert_eq!(events.get(&processor_id).unwrap().id, processor_id);
         assert_eq!(block_networks.len(), 1);
         assert_eq!(block_networks.get(&1).unwrap().events.len(), 1);
         assert_eq!(block_networks.get(&1).unwrap().events.get(&processor_id), Some(&U64::from(10)));
