@@ -105,7 +105,9 @@ impl TestRunner {
     }
 
     async fn run_single_test(&self, test_def: &TestDefinition) -> Result<()> {
-        let mut context = TestContext::new(self.config.rindexer_binary.clone()).await?;
+        let mut context =
+            TestContext::new_with_chain_id(self.config.rindexer_binary.clone(), test_def.chain_id)
+                .await?;
 
         let mut live_feeder = if test_def.is_live_test {
             info!("Starting live feeder for: {}", test_def.name);
