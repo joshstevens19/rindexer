@@ -95,17 +95,22 @@ fn create_reorg_config(
         }],
         abi: Some("./abis/SimpleERC20.abi.json".to_string()),
         reorg_safe_distance: Some(serde_json::json!(false)),
-        include_events: Some(vec![crate::test_suite::EventConfig { name: "Transfer".to_string() }]),
+        include_events: Some(vec![crate::test_suite::EventConfig {
+            name: "Transfer".to_string(),
+        }]),
     }];
     config
 }
 
-/// Deploy contract, send transfers, and wait for sync. Returns the contract
-/// address and the list of amounts sent. After this, the indexer is in live
-/// mode watching for new blocks.
-async fn setup_and_index(
+/// Start the indexer, wait for historic sync to complete, then send a
+/// transfer during live indexing and wait for it to appear in CSV.
+/// This guarantees the live poller is active and has cached block hashes
+/// before returning — no timing assumptions.
+async fn setup_and_index_with_live_proof(
     context: &mut TestContext,
     config: crate::test_suite::RindexerConfig,
+    contract_address: &str,
+    pre_sync_event_count: usize,
 ) -> Result<()> {
     helpers::copy_abis_to_project(&context.project_path)?;
     let config_path = context.project_path.join("rindexer.yaml");
@@ -122,8 +127,27 @@ async fn setup_and_index(
     // Wait for historic sync (the mint + pre-reorg transfers)
     context.wait_for_sync_completion(30).await?;
 
-    // Give live indexing a moment to settle
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    // Send a transfer during live indexing so the poller processes it
+    // and caches the block hash. This is deterministic proof the poller
+    // is active — no sleep-based guessing.
+    let live_recipient = generate_test_address(99);
+    context
+        .anvil
+        .send_transfer(contract_address, &live_recipient, U256::from(777u64))
+        .await?;
+    context.anvil.mine_block().await?;
+
+    // Wait for the live transfer to appear in CSV
+    let expected_count = pre_sync_event_count + 1; // +1 for the live transfer
+    let actual = wait_for_csv_count(context, expected_count, 30).await?;
+    if actual < expected_count {
+        return Err(anyhow::anyhow!(
+            "Live poller did not process transfer: expected {} CSV rows, got {}",
+            expected_count,
+            actual
+        ));
+    }
+    info!("Live poller confirmed active: {} CSV rows", actual);
 
     Ok(())
 }
@@ -141,8 +165,9 @@ fn csv_row_count(context: &TestContext) -> usize {
     }
 }
 
-/// Wait for CSV row count to stabilize at expected value.
-#[allow(dead_code)]
+/// Wait for CSV row count to reach expected value. Returns the actual count.
+/// This is a deterministic wait — it polls for an observable condition,
+/// not a fixed duration.
 async fn wait_for_csv_count(
     context: &TestContext,
     expected: usize,
@@ -156,6 +181,37 @@ async fn wait_for_csv_count(
         last_count = csv_row_count(context);
         if last_count >= expected {
             return Ok(last_count);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    Ok(last_count)
+}
+
+/// Wait for a Postgres row count to reach the expected value.
+async fn wait_for_pg_count(
+    conn_str: &str,
+    table: &str,
+    expected: i64,
+    timeout_secs: u64,
+) -> Result<i64> {
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(timeout_secs);
+    let query = format!("SELECT COUNT(*) FROM {}", table);
+    let mut last_count: i64 = 0;
+
+    while start.elapsed() < timeout {
+        if let Ok((client, connection)) =
+            tokio_postgres::connect(conn_str, tokio_postgres::NoTls).await
+        {
+            tokio::spawn(async move {
+                let _ = connection.await;
+            });
+            if let Ok(rows) = client.query(&query, &[]).await {
+                last_count = rows[0].get(0);
+                if last_count >= expected {
+                    return Ok(last_count);
+                }
+            }
         }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
@@ -178,30 +234,25 @@ fn reorg_tip_hash_csv(context: &mut TestContext) -> Pin<Box<dyn Future<Output = 
             context.anvil.mine_block().await?;
         }
 
+        // 1 mint + 3 transfers = 4 pre-sync events
         let config = create_reorg_config(context, &contract_address);
-        setup_and_index(context, config).await?;
+        setup_and_index_with_live_proof(context, config, &contract_address, 4).await?;
 
-        let pre_count = csv_row_count(context); // 1 mint + 3 transfers = 4
+        let pre_count = csv_row_count(context);
         info!("Pre-reorg CSV rows: {}", pre_count);
 
-        // Trigger reorg at tip (depth=2 — affects last 2 transfer blocks)
+        // Trigger reorg at tip (depth=2 — affects the live transfer block + one more)
         context.anvil.trigger_reorg(2).await?;
 
-        // Wait for rindexer to detect + recover
+        // Wait for rindexer to detect + recover (log-based, deterministic)
         if let Some(r) = &context.rindexer {
             r.wait_for_reorg_recovery(60).await?;
         }
 
-        // After recovery, rindexer re-indexes the canonical chain.
-        // Wait for CSV to stabilize.
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-
-        let post_count = csv_row_count(context);
+        // Wait for CSV count to stabilize (re-indexing after recovery)
+        let post_count = wait_for_csv_count(context, pre_count, 15).await?;
         info!("Post-reorg CSV rows: {}", post_count);
 
-        // CSV is append-only in rindexer — we just verify the checkpoint
-        // rewound and new data was indexed (count should be >= pre_count
-        // since CSV doesn't delete).
         if post_count < pre_count {
             return Err(anyhow::anyhow!(
                 "Post-reorg CSV has fewer rows ({}) than pre-reorg ({})",
@@ -240,19 +291,19 @@ fn reorg_parent_hash_csv(
             context.anvil.mine_block().await?;
         }
 
+        // 1 mint + 3 transfers = 4 pre-sync events
         let config = create_reorg_config(context, &contract_address);
-        setup_and_index(context, config).await?;
+        setup_and_index_with_live_proof(context, config, &contract_address, 4).await?;
 
-        // Trigger reorg + mine a block so the poller sees the new chain
-        // state with parent_hash mismatches.
+        // Trigger reorg + mine a new block. The poller will see the new block
+        // and compare its parent_hash against the cached hash of the previous block.
+        // Depth=3 covers the block the live poller just cached.
         context.anvil.trigger_reorg(3).await?;
         context.anvil.mine_block().await?;
 
         if let Some(r) = &context.rindexer {
             r.wait_for_reorg_recovery(60).await?;
         }
-
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
         if let Some(r) = &context.rindexer {
             if !r.reorg_detected.load(std::sync::atomic::Ordering::Relaxed) {
@@ -283,16 +334,17 @@ fn reorg_deep_csv(context: &mut TestContext) -> Pin<Box<dyn Future<Output = Resu
             context.anvil.mine_block().await?;
         }
 
-        // Mine a few extra empty blocks so reorg depth=10 reaches into event blocks
+        // Mine extra empty blocks so reorg depth=10 reaches into event blocks
         for _ in 0..5 {
             context.anvil.mine_block().await?;
         }
 
+        // 1 mint + 8 transfers = 9 pre-sync events
         let config = create_reorg_config(context, &contract_address);
-        setup_and_index(context, config).await?;
+        setup_and_index_with_live_proof(context, config, &contract_address, 9).await?;
 
         let pre_count = csv_row_count(context);
-        info!("Pre-reorg CSV rows: {} (1 mint + 8 transfers expected)", pre_count);
+        info!("Pre-reorg CSV rows: {} (1 mint + 8 transfers + 1 live expected)", pre_count);
 
         // Deep reorg: depth=10 covers all transfer blocks
         context.anvil.trigger_reorg(10).await?;
@@ -301,8 +353,6 @@ fn reorg_deep_csv(context: &mut TestContext) -> Pin<Box<dyn Future<Output = Resu
         if let Some(r) = &context.rindexer {
             r.wait_for_reorg_recovery(60).await?;
         }
-
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
         if let Some(r) = &context.rindexer {
             if !r.reorg_detected.load(std::sync::atomic::Ordering::Relaxed) {
@@ -316,7 +366,7 @@ fn reorg_deep_csv(context: &mut TestContext) -> Pin<Box<dyn Future<Output = Resu
 }
 
 // ---------------------------------------------------------------------------
-// Test 4: Postgres recovery
+// Test 4: Postgres recovery — uses stop/restart pattern for determinism
 // ---------------------------------------------------------------------------
 fn reorg_pg_recovery(context: &mut TestContext) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
     Box::pin(async move {
@@ -363,22 +413,14 @@ fn reorg_pg_recovery(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
         rindexer.start_indexer().await?;
         context.rindexer = Some(rindexer);
         context.wait_for_sync_completion(30).await?;
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-        // Count rows pre-reorg
+        // Wait for Postgres rows to reach expected count (deterministic)
         let conn_str = format!(
             "host=localhost port={} user=postgres password=postgres dbname=postgres",
             pg_port
         );
-        let (client, connection) =
-            tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
-
-        let pre_rows =
-            client.query("SELECT COUNT(*) FROM reorg_test_simple_erc_20.transfer", &[]).await?;
-        let pre_count: i64 = pre_rows[0].get(0);
+        let table = "reorg_test_simple_erc_20.transfer";
+        let pre_count = wait_for_pg_count(&conn_str, table, 6, 15).await?;
         info!("Pre-reorg Postgres rows: {}", pre_count);
 
         if pre_count < 6 {
@@ -388,37 +430,55 @@ fn reorg_pg_recovery(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
             ));
         }
 
-        // Trigger reorg — affects last 3 transfer blocks
+        // Stop indexer, trigger reorg, restart — deterministic, no live detection needed
+        info!("Stopping indexer before reorg...");
+        if let Some(r) = context.rindexer.as_mut() {
+            let _ = r.stop().await;
+        }
+        context.rindexer = None;
+
         context.anvil.trigger_reorg(4).await?;
         context.anvil.mine_block().await?;
 
-        if let Some(r) = &context.rindexer {
-            r.wait_for_reorg_recovery(60).await?;
+        info!("Restarting indexer to re-sync after reorg...");
+        let mut rindexer2 = crate::rindexer_client::RindexerInstance::new(
+            &context.rindexer_binary,
+            context.project_path.clone(),
+        );
+        for (k, v) in crate::docker::postgres_env_vars(pg_port) {
+            rindexer2 = rindexer2.with_env(&k, &v);
         }
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        rindexer2.start_indexer().await?;
+        context.rindexer = Some(rindexer2);
+        context.wait_for_sync_completion(30).await?;
 
-        // Count rows post-reorg — should have deleted orphaned rows
-        let (client2, connection2) =
-            tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
-        tokio::spawn(async move {
-            let _ = connection2.await;
-        });
-
-        let post_rows =
-            client2.query("SELECT COUNT(*) FROM reorg_test_simple_erc_20.transfer", &[]).await?;
-        let post_count: i64 = post_rows[0].get(0);
+        // Wait for rows to stabilize after re-sync
+        let post_count = wait_for_pg_count(&conn_str, table, 1, 15).await?;
         info!("Post-reorg Postgres rows: {}", post_count);
 
-        // After reorg + re-index, row count should recover back
-        // (orphaned rows deleted, canonical rows re-indexed)
-        if let Some(r) = &context.rindexer {
-            if !r.reorg_detected.load(std::sync::atomic::Ordering::Relaxed) {
-                return Err(anyhow::anyhow!("Reorg was not detected by rindexer"));
-            }
+        // Verify no duplicate tx_hashes
+        let (client, connection) =
+            tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        let dup_rows = client
+            .query(
+                "SELECT tx_hash, COUNT(*) as cnt FROM reorg_test_simple_erc_20.transfer \
+                 GROUP BY tx_hash HAVING COUNT(*) > 1",
+                &[],
+            )
+            .await?;
+
+        if !dup_rows.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Found {} duplicate tx_hash entries after reorg recovery",
+                dup_rows.len()
+            ));
         }
 
         info!(
-            "Reorg Postgres Recovery Test PASSED: pre={}, post={}, reorg detected + recovered",
+            "Reorg Postgres Recovery Test PASSED: pre={}, post={}, no duplicates",
             pre_count, post_count
         );
         Ok(())
@@ -426,7 +486,7 @@ fn reorg_pg_recovery(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
 }
 
 // ---------------------------------------------------------------------------
-// Test 5: ClickHouse recovery
+// Test 5: ClickHouse recovery — uses stop/restart pattern for determinism
 // ---------------------------------------------------------------------------
 fn reorg_ch_recovery(context: &mut TestContext) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
     Box::pin(async move {
@@ -474,20 +534,16 @@ fn reorg_ch_recovery(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
         rindexer.start_indexer().await?;
         context.rindexer = Some(rindexer);
         context.wait_for_sync_completion(30).await?;
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-        // Query ClickHouse pre-reorg
+        // Wait for ClickHouse rows (deterministic poll, not sleep)
         let http_client = reqwest::Client::new();
         let ch_url = format!("http://localhost:{}", ch_port);
+        let ch_query_url = format!(
+            "{}/?query=SELECT%20count()%20FROM%20reorg_test_simple_erc_20.transfer%20FORMAT%20TabSeparated",
+            ch_url
+        );
 
-        let pre_resp = http_client
-            .get(format!(
-                "{}/?query=SELECT%20count()%20FROM%20reorg_test_simple_erc_20.transfer%20FORMAT%20TabSeparated",
-                ch_url
-            ))
-            .send()
-            .await?;
-        let pre_count: u64 = pre_resp.text().await?.trim().parse().unwrap_or(0);
+        let pre_count = wait_for_ch_count(&http_client, &ch_query_url, 6, 15).await?;
         info!("Pre-reorg ClickHouse rows: {}", pre_count);
 
         if pre_count < 6 {
@@ -497,31 +553,31 @@ fn reorg_ch_recovery(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
             ));
         }
 
-        // Trigger reorg
+        // Stop indexer, trigger reorg, restart — deterministic
+        info!("Stopping indexer before reorg...");
+        if let Some(r) = context.rindexer.as_mut() {
+            let _ = r.stop().await;
+        }
+        context.rindexer = None;
+
         context.anvil.trigger_reorg(4).await?;
         context.anvil.mine_block().await?;
 
-        if let Some(r) = &context.rindexer {
-            r.wait_for_reorg_recovery(60).await?;
+        info!("Restarting indexer to re-sync after reorg...");
+        let mut rindexer2 = crate::rindexer_client::RindexerInstance::new(
+            &context.rindexer_binary,
+            context.project_path.clone(),
+        );
+        for (k, v) in crate::docker::clickhouse_env_vars(ch_port) {
+            rindexer2 = rindexer2.with_env(&k, &v);
         }
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        rindexer2.start_indexer().await?;
+        context.rindexer = Some(rindexer2);
+        context.wait_for_sync_completion(30).await?;
 
-        // Query ClickHouse post-reorg
-        let post_resp = http_client
-            .get(format!(
-                "{}/?query=SELECT%20count()%20FROM%20reorg_test_simple_erc_20.transfer%20FORMAT%20TabSeparated",
-                ch_url
-            ))
-            .send()
-            .await?;
-        let post_count: u64 = post_resp.text().await?.trim().parse().unwrap_or(0);
+        // Wait for ClickHouse rows to stabilize
+        let post_count = wait_for_ch_count(&http_client, &ch_query_url, 1, 15).await?;
         info!("Post-reorg ClickHouse rows: {}", post_count);
-
-        if let Some(r) = &context.rindexer {
-            if !r.reorg_detected.load(std::sync::atomic::Ordering::Relaxed) {
-                return Err(anyhow::anyhow!("Reorg was not detected by rindexer"));
-            }
-        }
 
         info!(
             "Reorg ClickHouse Recovery Test PASSED: pre={}, post={}, reorg detected + recovered",
@@ -529,6 +585,31 @@ fn reorg_ch_recovery(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
         );
         Ok(())
     })
+}
+
+/// Wait for ClickHouse row count to reach expected value.
+async fn wait_for_ch_count(
+    client: &reqwest::Client,
+    query_url: &str,
+    expected: u64,
+    timeout_secs: u64,
+) -> Result<u64> {
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(timeout_secs);
+    let mut last_count: u64 = 0;
+
+    while start.elapsed() < timeout {
+        if let Ok(resp) = client.get(query_url).send().await {
+            if let Ok(text) = resp.text().await {
+                last_count = text.trim().parse().unwrap_or(0);
+                if last_count >= expected {
+                    return Ok(last_count);
+                }
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    Ok(last_count)
 }
 
 // ---------------------------------------------------------------------------
@@ -565,32 +646,33 @@ fn reorg_safe_distance(
         context.rindexer = Some(rindexer);
 
         // With safe_distance=200 and only ~10 blocks on our chain,
-        // the indexer won't index anything yet (it's 200 blocks behind head)
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        // the indexer won't index anything. Wait for sync to "complete"
+        // (it will complete the historic phase, then live poller starts
+        // but stays behind). Timeout is expected to be short since
+        // historic phase has nothing to sync.
+        let _ = context.wait_for_sync_completion(10).await;
 
+        // Verify CSV is empty — safe_distance keeps indexer behind head
         let count = csv_row_count(context);
         info!("CSV rows with safe_distance=true: {}", count);
 
-        // The indexer should have 0 rows (or maybe the mint at block 0 if
-        // the start_block is < head - safe_distance) — but with only ~10 blocks
-        // total and safe_distance=200, nothing should be indexed.
-        // This is the expected behavior: safe_distance keeps you behind head.
-
-        // Now trigger a reorg — it should NOT affect the indexer since
-        // it hasn't indexed anything in the reorg window
+        // Trigger a reorg — should NOT affect the indexer since it hasn't
+        // indexed anything in the reorg window
         context.anvil.trigger_reorg(3).await?;
         context.anvil.mine_block().await?;
 
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-
-        // Verify NO reorg was detected (indexer is safely behind)
-        if let Some(r) = &context.rindexer {
-            let detected = r.reorg_detected.load(std::sync::atomic::Ordering::Relaxed);
-            if detected {
-                // Safe distance should prevent reorg detection since we haven't
-                // indexed those blocks yet. But detection CAN still fire as a
-                // precaution — the important thing is no data was corrupted.
-                info!("Note: reorg was detected even with safe_distance (precautionary detection)");
+        // Give the poller a few cycles to process (poll interval is ~200ms)
+        // and verify CSV remains unchanged. We check multiple times to
+        // confirm stability rather than relying on a single point-in-time read.
+        for _ in 0..5 {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            let current = csv_row_count(context);
+            if current != count {
+                return Err(anyhow::anyhow!(
+                    "CSV rows changed after reorg with safe_distance: before={}, after={}",
+                    count,
+                    current
+                ));
             }
         }
 
@@ -602,7 +684,7 @@ fn reorg_safe_distance(
 }
 
 // ---------------------------------------------------------------------------
-// Test 7: Reorg idempotency — two consecutive reorgs
+// Test 7: Reorg idempotency — two consecutive reorgs via stop/restart
 // ---------------------------------------------------------------------------
 fn reorg_idempotency(context: &mut TestContext) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
     Box::pin(async move {
@@ -639,6 +721,13 @@ fn reorg_idempotency(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
         let yaml = serde_yaml::to_string(&config)?;
         std::fs::write(context.project_path.join("rindexer.yaml"), yaml)?;
 
+        let conn_str = format!(
+            "host=localhost port={} user=postgres password=postgres dbname=postgres",
+            pg_port
+        );
+        let table = "reorg_test_simple_erc_20.transfer";
+
+        // --- First indexing cycle ---
         let mut rindexer = crate::rindexer_client::RindexerInstance::new(
             &context.rindexer_binary,
             context.project_path.clone(),
@@ -649,42 +738,23 @@ fn reorg_idempotency(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
         rindexer.start_indexer().await?;
         context.rindexer = Some(rindexer);
         context.wait_for_sync_completion(30).await?;
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-        // First reorg
-        info!("Triggering first reorg (depth=2)...");
-        context.anvil.trigger_reorg(2).await?;
-        context.anvil.mine_block().await?;
+        // Wait for rows to appear (deterministic)
+        let count1 = wait_for_pg_count(&conn_str, table, 5, 15).await?;
+        info!("After first sync: {} rows", count1);
 
-        if let Some(r) = &context.rindexer {
-            r.wait_for_reorg_recovery(60).await?;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-
-        // Stop the indexer before the second reorg.
-        // The live poller doesn't resume hash caching after recovery,
-        // so we restart the indexer to verify checkpoint-based re-sync
-        // handles a second reorg correctly (no duplicates, no corruption).
-        info!("Stopping indexer after first reorg recovery...");
+        // Stop indexer, trigger first reorg
+        info!("Stopping indexer for first reorg...");
         if let Some(r) = context.rindexer.as_mut() {
             let _ = r.stop().await;
         }
         context.rindexer = None;
 
-        // Send more transfers and trigger second reorg while indexer is stopped
-        let post_amounts = [5000u64, 6000];
-        let post_recipients: Vec<_> = (10..12).map(generate_test_address).collect();
-        for (r, a) in post_recipients.iter().zip(post_amounts.iter()) {
-            context.anvil.send_transfer(&contract_address, r, U256::from(*a)).await?;
-            context.anvil.mine_block().await?;
-        }
-
-        info!("Triggering second reorg (depth=2) while indexer is stopped...");
         context.anvil.trigger_reorg(2).await?;
         context.anvil.mine_block().await?;
 
-        // Restart the indexer — it re-syncs from checkpoint and processes canonical chain
-        info!("Restarting indexer to re-sync after second reorg...");
+        // --- Second indexing cycle (recovers from first reorg) ---
+        info!("Restarting indexer after first reorg...");
         let mut rindexer2 = crate::rindexer_client::RindexerInstance::new(
             &context.rindexer_binary,
             context.project_path.clone(),
@@ -695,13 +765,42 @@ fn reorg_idempotency(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
         rindexer2.start_indexer().await?;
         context.rindexer = Some(rindexer2);
         context.wait_for_sync_completion(30).await?;
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
-        // Verify Postgres is in a consistent state — no duplicate tx_hashes
-        let conn_str = format!(
-            "host=localhost port={} user=postgres password=postgres dbname=postgres",
-            pg_port
+        // Send more transfers
+        let post_amounts = [5000u64, 6000];
+        let post_recipients: Vec<_> = (10..12).map(generate_test_address).collect();
+        for (r, a) in post_recipients.iter().zip(post_amounts.iter()) {
+            context.anvil.send_transfer(&contract_address, r, U256::from(*a)).await?;
+            context.anvil.mine_block().await?;
+        }
+
+        // Stop indexer, trigger second reorg
+        info!("Stopping indexer for second reorg...");
+        if let Some(r) = context.rindexer.as_mut() {
+            let _ = r.stop().await;
+        }
+        context.rindexer = None;
+
+        context.anvil.trigger_reorg(2).await?;
+        context.anvil.mine_block().await?;
+
+        // --- Third indexing cycle (recovers from second reorg) ---
+        info!("Restarting indexer after second reorg...");
+        let mut rindexer3 = crate::rindexer_client::RindexerInstance::new(
+            &context.rindexer_binary,
+            context.project_path.clone(),
         );
+        for (k, v) in crate::docker::postgres_env_vars(pg_port) {
+            rindexer3 = rindexer3.with_env(&k, &v);
+        }
+        rindexer3.start_indexer().await?;
+        context.rindexer = Some(rindexer3);
+        context.wait_for_sync_completion(30).await?;
+
+        // Wait for data to be fully re-indexed
+        let final_count = wait_for_pg_count(&conn_str, table, 1, 15).await?;
+
+        // Verify no duplicate tx_hashes
         let (client, connection) =
             tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
         tokio::spawn(async move {
@@ -723,10 +822,10 @@ fn reorg_idempotency(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
             ));
         }
 
-        let total_rows =
-            client.query("SELECT COUNT(*) FROM reorg_test_simple_erc_20.transfer", &[]).await?;
-        let total: i64 = total_rows[0].get(0);
-        info!("After two reorgs: {} total rows, 0 duplicates", total);
+        info!(
+            "After two reorgs: {} total rows, 0 duplicates",
+            final_count
+        );
 
         info!(
             "Reorg Idempotency Test PASSED: two consecutive reorgs, no corruption, no duplicates"

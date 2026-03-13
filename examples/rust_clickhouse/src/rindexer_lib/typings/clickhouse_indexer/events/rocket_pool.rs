@@ -384,15 +384,22 @@ where
             reorg_safe_distance: contract_details.reorg_safe_distance,
         };
 
-        let callback: Arc<
-            dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync,
-        > = match self {
+        let (callback, reorg_sender): (
+            Arc<
+                dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>>
+                    + Send
+                    + Sync,
+            >,
+            Option<tokio::sync::broadcast::Sender<rindexer::ReorgEvent>>,
+        ) = match self {
             RocketPoolEventType::Transfer(event) => {
+                let reorg_sender = Some(event.context.reorg_tx.clone());
                 let event = Arc::new(event);
-                Arc::new(move |result| {
+                let callback = Arc::new(move |result| {
                     let event = Arc::clone(&event);
                     async move { event.call(result).await }.boxed()
-                })
+                });
+                (callback, reorg_sender)
             }
         };
 
@@ -405,10 +412,10 @@ where
             contract,
             callback,
             tables: Arc::new(vec![]),
-            reorg_sender: None,
+            reorg_sender,
             streams_clients: Arc::new(None),
-            providers: Arc::new(providers),
-            constants: Arc::new(rindexer_yaml.constants.clone()),
+            providers: Arc::new(HashMap::new()),
+            constants: Arc::new(HashMap::new()),
             multicall_addresses: Arc::new(HashMap::new()),
         });
     }
