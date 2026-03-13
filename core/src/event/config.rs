@@ -2,7 +2,6 @@ use alloy::json_abi::Event;
 use alloy::primitives::{keccak256, Address, B256, U64};
 use alloy::rpc::types::ValueOrArray;
 use std::{path::PathBuf, sync::Arc};
-use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::database::clickhouse::client::ClickhouseClient;
@@ -37,7 +36,7 @@ pub struct ContractEventProcessingConfig {
     pub start_block: U64,
     pub end_block: U64,
     pub registry: Arc<EventCallbackRegistry>,
-    pub progress: Arc<Mutex<IndexingEventsProgressState>>,
+    pub progress: Arc<IndexingEventsProgressState>,
     pub postgres: Option<Arc<PostgresClient>>,
     pub clickhouse: Option<Arc<ClickhouseClient>>,
     pub csv_details: Option<CsvDetails>,
@@ -115,7 +114,7 @@ pub struct FactoryEventProcessingConfig {
     pub start_block: U64,
     pub end_block: U64,
     pub registry: Arc<EventCallbackRegistry>,
-    pub progress: Arc<Mutex<IndexingEventsProgressState>>,
+    pub progress: Arc<IndexingEventsProgressState>,
     pub postgres: Option<Arc<PostgresClient>>,
     pub clickhouse: Option<Arc<ClickhouseClient>>,
     pub csv_details: Option<CsvDetails>,
@@ -201,7 +200,7 @@ impl EventProcessingConfig {
         }
     }
 
-    pub fn id(&self) -> B256 {
+    pub fn processor_id(&self) -> B256 {
         let topic_id = self.topic_id();
         let contract_name = self.contract_name();
         let network = self.network_contract().network.to_string();
@@ -226,7 +225,7 @@ impl EventProcessingConfig {
 
     pub fn info_log_name(&self) -> String {
         match self {
-            Self::ContractEventProcessing(config) => config.info_log_name().clone(),
+            Self::ContractEventProcessing(config) => config.info_log_name(),
             Self::FactoryEventProcessing(config) => config.info_log_name(),
         }
     }
@@ -259,6 +258,13 @@ impl EventProcessingConfig {
         }
     }
 
+    pub fn id(&self) -> &str {
+        match self {
+            Self::ContractEventProcessing(config) => &config.id,
+            Self::FactoryEventProcessing(config) => &config.id,
+        }
+    }
+
     pub fn event_name(&self) -> String {
         match self {
             Self::ContractEventProcessing(config) => config.event_name.clone(),
@@ -280,7 +286,7 @@ impl EventProcessingConfig {
         }
     }
 
-    pub fn progress(&self) -> Arc<Mutex<IndexingEventsProgressState>> {
+    pub fn progress(&self) -> Arc<IndexingEventsProgressState> {
         match self {
             Self::ContractEventProcessing(config) => config.progress.clone(),
             Self::FactoryEventProcessing(config) => config.progress.clone(),
@@ -351,6 +357,7 @@ impl EventProcessingConfig {
 #[derive(Clone)]
 pub struct TraceProcessingConfig {
     pub id: String,
+    pub chain_id: u64,
     pub project_path: PathBuf,
     pub start_block: U64,
     pub end_block: U64,
@@ -358,7 +365,7 @@ pub struct TraceProcessingConfig {
     pub contract_name: String,
     pub event_name: String,
     pub network: String,
-    pub progress: Arc<Mutex<IndexingEventsProgressState>>,
+    pub progress: Arc<IndexingEventsProgressState>,
     pub postgres: Option<Arc<PostgresClient>>,
     pub csv_details: Option<CsvDetails>,
     pub registry: Arc<TraceCallbackRegistry>,
