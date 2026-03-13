@@ -4282,6 +4282,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "csv",
  "dotenvy",
  "ethers",
  "hex",

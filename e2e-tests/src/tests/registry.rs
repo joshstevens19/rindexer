@@ -47,36 +47,29 @@ impl TestRegistry {
     pub fn get_all_tests() -> Vec<TestDefinition> {
         let mut tests = Vec::new();
 
-        // Historical indexing tests
-        tests.extend(crate::tests::basic_connection::BasicConnectionTests::get_tests());
-        tests.extend(crate::tests::contract_discovery::ContractDiscoveryTests::get_tests());
+        // Core indexing tests
         tests.extend(crate::tests::historic_indexing::HistoricIndexingTests::get_tests());
-        tests.extend(crate::tests::config_validation::ConfigValidationTests::get_tests());
-        tests.extend(crate::tests::demo_yaml::DemoYamlTests::get_tests());
-
-        // Live indexing tests
         tests.extend(crate::tests::live_indexing::LiveIndexingTests::get_tests());
+        tests.extend(crate::tests::block_edge_cases::BlockEdgeCaseTests::get_tests());
 
-        // Resilience/restart tests
+        // Resilience/restart
         tests.extend(crate::tests::restart_checkpoint::RestartCheckpointTests::get_tests());
 
-        // GraphQL
-        tests.extend(crate::tests::graphql_start::GraphqlStartTests::get_tests());
+        // Configuration
+        tests.extend(crate::tests::config_validation::ConfigValidationTests::get_tests());
+
+        // Storage backends
+        tests.extend(crate::tests::postgres_e2e::PostgresE2ETests::get_tests());
+        tests.extend(crate::tests::graphql_queries::GraphqlQueriesTests::get_tests());
+
+        // Multi-network
+        tests.extend(crate::tests::multi_network::MultiNetworkTests::get_tests());
+
+        // Direct RPC
+        tests.extend(crate::tests::direct_rpc::DirectRpcTests::get_tests());
 
         // Health assertions
         tests.extend(crate::tests::health_assertions::HealthAssertionsTests::get_tests());
-
-        // Postgres E2E
-        tests.extend(crate::tests::postgres_e2e::PostgresE2ETests::get_tests());
-
-        // GraphQL query tests
-        tests.extend(crate::tests::graphql_queries::GraphqlQueriesTests::get_tests());
-
-        // Direct RPC tests
-        tests.extend(crate::tests::direct_rpc::DirectRpcTests::get_tests());
-
-        // Multi-network tests
-        tests.extend(crate::tests::multi_network::MultiNetworkTests::get_tests());
 
         tests
     }

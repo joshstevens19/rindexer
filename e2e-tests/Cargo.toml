@@ -21,3 +21,4 @@ ethers = { version = "2.0", features = ["ws", "rustls"] }
 tokio-postgres = { version = "0.7", features = ["runtime"] }
 regex = "1.10"
 dotenvy = "0.15"
+csv = "1.3"

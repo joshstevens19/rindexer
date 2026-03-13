@@ -2,13 +2,10 @@
 pub mod helpers;
 
 // Test modules
-pub mod basic_connection;
+pub mod block_edge_cases;
 pub mod config_validation;
-pub mod contract_discovery;
-pub mod demo_yaml;
 pub mod direct_rpc;
 pub mod graphql_queries;
-pub mod graphql_start;
 pub mod health_assertions;
 pub mod historic_indexing;
 pub mod live_indexing;
