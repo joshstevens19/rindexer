@@ -361,6 +361,7 @@ impl RindexerInstance {
     }
 
     /// Reset reorg flags for a new reorg cycle.
+    #[allow(dead_code)]
     pub fn reset_reorg_flags(&self) {
         self.reorg_detected.store(false, Ordering::Relaxed);
         self.reorg_recovery_complete.store(false, Ordering::Relaxed);

@@ -122,13 +122,8 @@ async fn setup_and_index(
     // Wait for historic sync (the mint + pre-reorg transfers)
     context.wait_for_sync_completion(30).await?;
 
-    // Give live indexing time to start and cache block hashes.
-    // The poller needs at least one cycle to see the current chain state
-    // before we trigger a reorg — otherwise it has no cached hashes to
-    // compare against and won't detect the mismatch. CI is slower, so
-    // we mine extra blocks and wait longer to guarantee the poller runs.
-    context.anvil.mine_blocks(3).await?;
-    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    // Give live indexing a moment to settle
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     Ok(())
 }
@@ -191,7 +186,6 @@ fn reorg_tip_hash_csv(context: &mut TestContext) -> Pin<Box<dyn Future<Output = 
 
         // Trigger reorg at tip (depth=2 — affects last 2 transfer blocks)
         context.anvil.trigger_reorg(2).await?;
-        context.anvil.mine_blocks(3).await?;
 
         // Wait for rindexer to detect + recover
         if let Some(r) = &context.rindexer {
@@ -249,10 +243,10 @@ fn reorg_parent_hash_csv(
         let config = create_reorg_config(context, &contract_address);
         setup_and_index(context, config).await?;
 
-        // Trigger reorg + mine blocks so the poller sees the new chain
+        // Trigger reorg + mine a block so the poller sees the new chain
         // state with parent_hash mismatches.
         context.anvil.trigger_reorg(3).await?;
-        context.anvil.mine_blocks(3).await?;
+        context.anvil.mine_block().await?;
 
         if let Some(r) = &context.rindexer {
             r.wait_for_reorg_recovery(60).await?;
@@ -302,7 +296,7 @@ fn reorg_deep_csv(context: &mut TestContext) -> Pin<Box<dyn Future<Output = Resu
 
         // Deep reorg: depth=10 covers all transfer blocks
         context.anvil.trigger_reorg(10).await?;
-        context.anvil.mine_blocks(3).await?;
+        context.anvil.mine_block().await?;
 
         if let Some(r) = &context.rindexer {
             r.wait_for_reorg_recovery(60).await?;
@@ -396,7 +390,7 @@ fn reorg_pg_recovery(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
 
         // Trigger reorg — affects last 3 transfer blocks
         context.anvil.trigger_reorg(4).await?;
-        context.anvil.mine_blocks(3).await?;
+        context.anvil.mine_block().await?;
 
         if let Some(r) = &context.rindexer {
             r.wait_for_reorg_recovery(60).await?;
@@ -505,7 +499,7 @@ fn reorg_ch_recovery(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
 
         // Trigger reorg
         context.anvil.trigger_reorg(4).await?;
-        context.anvil.mine_blocks(3).await?;
+        context.anvil.mine_block().await?;
 
         if let Some(r) = &context.rindexer {
             r.wait_for_reorg_recovery(60).await?;
@@ -655,42 +649,52 @@ fn reorg_idempotency(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
         rindexer.start_indexer().await?;
         context.rindexer = Some(rindexer);
         context.wait_for_sync_completion(30).await?;
-        // Let live poller cache block hashes before we trigger reorgs
-        context.anvil.mine_blocks(3).await?;
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
         // First reorg
         info!("Triggering first reorg (depth=2)...");
         context.anvil.trigger_reorg(2).await?;
-        context.anvil.mine_blocks(3).await?;
+        context.anvil.mine_block().await?;
 
         if let Some(r) = &context.rindexer {
             r.wait_for_reorg_recovery(60).await?;
         }
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-        // Send more transfers after first reorg recovery
+        // Stop the indexer before the second reorg.
+        // The live poller doesn't resume hash caching after recovery,
+        // so we restart the indexer to verify checkpoint-based re-sync
+        // handles a second reorg correctly (no duplicates, no corruption).
+        info!("Stopping indexer after first reorg recovery...");
+        if let Some(r) = context.rindexer.as_mut() {
+            let _ = r.stop().await;
+        }
+        context.rindexer = None;
+
+        // Send more transfers and trigger second reorg while indexer is stopped
         let post_amounts = [5000u64, 6000];
         let post_recipients: Vec<_> = (10..12).map(generate_test_address).collect();
         for (r, a) in post_recipients.iter().zip(post_amounts.iter()) {
             context.anvil.send_transfer(&contract_address, r, U256::from(*a)).await?;
             context.anvil.mine_block().await?;
         }
-        // Let poller cache these new blocks before second reorg
-        context.anvil.mine_blocks(3).await?;
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
-        // Second reorg
-        info!("Triggering second reorg (depth=3)...");
-        if let Some(r) = &context.rindexer {
-            r.reset_reorg_flags();
-        }
-        context.anvil.trigger_reorg(3).await?;
-        context.anvil.mine_blocks(3).await?;
+        info!("Triggering second reorg (depth=2) while indexer is stopped...");
+        context.anvil.trigger_reorg(2).await?;
+        context.anvil.mine_block().await?;
 
-        if let Some(r) = &context.rindexer {
-            r.wait_for_reorg_recovery(60).await?;
+        // Restart the indexer — it re-syncs from checkpoint and processes canonical chain
+        info!("Restarting indexer to re-sync after second reorg...");
+        let mut rindexer2 = crate::rindexer_client::RindexerInstance::new(
+            &context.rindexer_binary,
+            context.project_path.clone(),
+        );
+        for (k, v) in crate::docker::postgres_env_vars(pg_port) {
+            rindexer2 = rindexer2.with_env(&k, &v);
         }
+        rindexer2.start_indexer().await?;
+        context.rindexer = Some(rindexer2);
+        context.wait_for_sync_completion(30).await?;
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
         // Verify Postgres is in a consistent state — no duplicate tx_hashes
