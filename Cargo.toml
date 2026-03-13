@@ -5,6 +5,7 @@ members = [
     "cli",
     "xtask",
     "examples/rindexer_rust_playground",
+    "e2e-tests",
     "examples/rust_clickhouse",
     "examples/clickhouse_factory_indexing",
     "examples/rindexer_factory_indexing"
