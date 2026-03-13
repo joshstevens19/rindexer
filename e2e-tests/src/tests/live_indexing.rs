@@ -37,10 +37,7 @@ fn live_indexing_boundary_test(
         let historic_amounts: Vec<u64> = vec![100, 200, 300];
         for (i, amount) in historic_amounts.iter().enumerate() {
             let recipient = generate_test_address(i as u64);
-            context
-                .anvil
-                .send_transfer(&contract_address, &recipient, U256::from(*amount))
-                .await?;
+            context.anvil.send_transfer(&contract_address, &recipient, U256::from(*amount)).await?;
             context.anvil.mine_block().await?;
         }
 
@@ -87,10 +84,7 @@ fn live_indexing_boundary_test(
         let live_amounts: Vec<u64> = vec![400, 500, 600];
         for (i, amount) in live_amounts.iter().enumerate() {
             let recipient = generate_test_address((i + 3) as u64);
-            context
-                .anvil
-                .send_transfer(&contract_address, &recipient, U256::from(*amount))
-                .await?;
+            context.anvil.send_transfer(&contract_address, &recipient, U256::from(*amount)).await?;
             context.anvil.mine_block().await?;
             info!("Live transfer {}: {} tokens", i, amount);
         }
@@ -122,10 +116,8 @@ fn live_indexing_boundary_test(
         }
 
         // Identify live rows (block_number > historic_end_block)
-        let live_rows: Vec<_> = all_rows
-            .iter()
-            .filter(|r| r.block_number > historic_end_block)
-            .collect();
+        let live_rows: Vec<_> =
+            all_rows.iter().filter(|r| r.block_number > historic_end_block).collect();
 
         if live_rows.len() != 3 {
             return Err(anyhow::anyhow!(

@@ -50,14 +50,10 @@ fn graphql_data_accuracy_test(
         let contract_address = context.deploy_test_contract().await?;
 
         let amounts: Vec<u64> = vec![1000, 2000, 3000];
-        let recipients: Vec<ethers::types::Address> =
-            (0..3).map(generate_test_address).collect();
+        let recipients: Vec<ethers::types::Address> = (0..3).map(generate_test_address).collect();
 
         for (recipient, amount) in recipients.iter().zip(amounts.iter()) {
-            context
-                .anvil
-                .send_transfer(&contract_address, recipient, U256::from(*amount))
-                .await?;
+            context.anvil.send_transfer(&contract_address, recipient, U256::from(*amount)).await?;
             context.anvil.mine_block().await?;
         }
 
@@ -126,12 +122,7 @@ fn graphql_data_accuracy_test(
         let timeout = std::time::Duration::from_secs(30);
 
         while start.elapsed() < timeout {
-            match client
-                .post(&gql_url)
-                .json(&serde_json::json!({"query": query}))
-                .send()
-                .await
-            {
+            match client.post(&gql_url).json(&serde_json::json!({"query": query})).send().await {
                 Ok(rsp) if rsp.status().is_success() => {
                     if let Ok(json) = rsp.json::<serde_json::Value>().await {
                         // PostGraphile relay connection: nodes
@@ -172,10 +163,8 @@ fn graphql_data_accuracy_test(
         let transfer_items: Vec<_> = result_items
             .iter()
             .filter(|item| {
-                let from = item["from"]
-                    .as_str()
-                    .or_else(|| item["fromAddress"].as_str())
-                    .unwrap_or("");
+                let from =
+                    item["from"].as_str().or_else(|| item["fromAddress"].as_str()).unwrap_or("");
                 from != "0x0000000000000000000000000000000000000000"
             })
             .collect();
@@ -188,10 +177,7 @@ fn graphql_data_accuracy_test(
         }
 
         for (i, item) in transfer_items.iter().enumerate() {
-            let to = item["to"]
-                .as_str()
-                .or_else(|| item["toAddress"].as_str())
-                .unwrap_or("");
+            let to = item["to"].as_str().or_else(|| item["toAddress"].as_str()).unwrap_or("");
             let value = item["value"].as_str().unwrap_or("");
 
             let expected_to = format_address(&recipients[i]);
@@ -215,10 +201,8 @@ fn graphql_data_accuracy_test(
             }
 
             // Validate tx_hash format
-            let tx_hash = item["txHash"]
-                .as_str()
-                .or_else(|| item["tx_hash"].as_str())
-                .unwrap_or("");
+            let tx_hash =
+                item["txHash"].as_str().or_else(|| item["tx_hash"].as_str()).unwrap_or("");
             if !tx_hash.starts_with("0x") || tx_hash.len() != 66 {
                 return Err(anyhow::anyhow!(
                     "GraphQL transfer {}: invalid tx_hash format: {}",
@@ -251,19 +235,13 @@ fn graphql_data_accuracy_test(
 }
 
 /// Discover the GraphQL transfer query field name via introspection
-async fn discover_transfer_field(
-    client: &reqwest::Client,
-    gql_url: &str,
-) -> Result<String> {
+async fn discover_transfer_field(client: &reqwest::Client, gql_url: &str) -> Result<String> {
     // Get query type name
     let introspect = r#"{ __schema { queryType { name } } }"#;
     let mut query_type = "Query".to_string();
 
-    if let Ok(resp) = client
-        .post(gql_url)
-        .json(&serde_json::json!({"query": introspect}))
-        .send()
-        .await
+    if let Ok(resp) =
+        client.post(gql_url).json(&serde_json::json!({"query": introspect})).send().await
     {
         if let Ok(json) = resp.json::<serde_json::Value>().await {
             if let Some(name) = json["data"]["__schema"]["queryType"]["name"].as_str() {
@@ -273,15 +251,9 @@ async fn discover_transfer_field(
     }
 
     // Get fields on query type
-    let fields_query = format!(
-        "{{ __type(name: \"{}\") {{ fields {{ name }} }} }}",
-        query_type
-    );
-    if let Ok(resp) = client
-        .post(gql_url)
-        .json(&serde_json::json!({"query": fields_query}))
-        .send()
-        .await
+    let fields_query = format!("{{ __type(name: \"{}\") {{ fields {{ name }} }} }}", query_type);
+    if let Ok(resp) =
+        client.post(gql_url).json(&serde_json::json!({"query": fields_query})).send().await
     {
         if let Ok(json) = resp.json::<serde_json::Value>().await {
             if let Some(fields) = json["data"]["__type"]["fields"].as_array() {

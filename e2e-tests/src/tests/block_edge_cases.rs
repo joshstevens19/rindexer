@@ -54,10 +54,7 @@ fn multi_tx_block_test(
             (generate_test_address(4), U256::from(500u64)),
         ];
 
-        let tx_hashes = context
-            .anvil
-            .send_transfers_no_mine(&contract_address, &transfers)
-            .await?;
+        let tx_hashes = context.anvil.send_transfers_no_mine(&contract_address, &transfers).await?;
         info!("Submitted {} transfers to mempool", tx_hashes.len());
 
         // Mine ONE block containing all 5 transactions
@@ -102,10 +99,7 @@ fn multi_tx_block_test(
         }
 
         // Find rows in the multi-tx block
-        let multi_rows: Vec<_> = rows
-            .iter()
-            .filter(|r| r.block_number == multi_tx_block)
-            .collect();
+        let multi_rows: Vec<_> = rows.iter().filter(|r| r.block_number == multi_tx_block).collect();
         if multi_rows.len() != 5 {
             // Debug: print all block numbers to diagnose
             let block_nums: Vec<u64> = rows.iter().map(|r| r.block_number).collect();
@@ -152,10 +146,7 @@ fn multi_tx_block_test(
         }
 
         // Verify the single-tx block value
-        let single_rows: Vec<_> = rows
-            .iter()
-            .filter(|r| r.value == "600")
-            .collect();
+        let single_rows: Vec<_> = rows.iter().filter(|r| r.value == "600").collect();
         if single_rows.len() != 1 {
             return Err(anyhow::anyhow!(
                 "Expected 1 row with value=600, got {}",
@@ -204,11 +195,7 @@ fn empty_block_gaps_test(
             let recipient = generate_test_address(i + 10);
             context
                 .anvil
-                .send_transfer(
-                    &contract_address,
-                    &recipient,
-                    U256::from((i + 1) * 5000),
-                )
+                .send_transfer(&contract_address, &recipient, U256::from((i + 1) * 5000))
                 .await?;
             context.anvil.mine_block().await?;
         }
@@ -255,15 +242,10 @@ fn empty_block_gaps_test(
         }
 
         // Verify post-gap events have correct values
-        let post_gap_rows: Vec<_> = rows
-            .iter()
-            .filter(|r| r.block_number > post_gap_block)
-            .collect();
+        let post_gap_rows: Vec<_> =
+            rows.iter().filter(|r| r.block_number > post_gap_block).collect();
         if post_gap_rows.len() != 2 {
-            return Err(anyhow::anyhow!(
-                "Expected 2 post-gap rows, got {}",
-                post_gap_rows.len()
-            ));
+            return Err(anyhow::anyhow!("Expected 2 post-gap rows, got {}", post_gap_rows.len()));
         }
 
         // Verify post-gap recipients

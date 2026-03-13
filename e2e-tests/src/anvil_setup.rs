@@ -16,6 +16,7 @@ pub const ANVIL_DEPLOYER_ADDRESS: &str = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb9
 
 /// Block metadata returned by `get_block`.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct BlockInfo {
     pub number: u64,
     pub hash: String,
@@ -24,6 +25,7 @@ pub struct BlockInfo {
 
 /// Transaction receipt.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct TxReceipt {
     pub transaction_hash: String,
     pub block_number: u64,
@@ -343,10 +345,10 @@ impl AnvilInstance {
     }
 
     /// Get transaction receipt.
+    #[allow(dead_code)]
     pub async fn get_receipt(&self, tx_hash: &str) -> Result<TxReceipt> {
-        let result = self
-            .rpc_call("eth_getTransactionReceipt", serde_json::json!([tx_hash]))
-            .await?;
+        let result =
+            self.rpc_call("eth_getTransactionReceipt", serde_json::json!([tx_hash])).await?;
 
         let receipt = &result["result"];
         if receipt.is_null() {
@@ -370,10 +372,7 @@ impl AnvilInstance {
         Ok(TxReceipt {
             transaction_hash: tx_hash.to_lowercase(),
             block_number: u64::from_str_radix(block_number_hex.trim_start_matches("0x"), 16)?,
-            block_hash: receipt["blockHash"]
-                .as_str()
-                .unwrap_or("")
-                .to_lowercase(),
+            block_hash: receipt["blockHash"].as_str().unwrap_or("").to_lowercase(),
             status: status_hex != "0x0",
             log_index_start,
             log_count,

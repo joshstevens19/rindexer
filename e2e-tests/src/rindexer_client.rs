@@ -60,10 +60,7 @@ impl RindexerInstance {
         };
 
         if !binary_path.exists() {
-            return Err(anyhow::anyhow!(
-                "Rindexer binary not found at: {}",
-                binary_path.display()
-            ));
+            return Err(anyhow::anyhow!("Rindexer binary not found at: {}", binary_path.display()));
         }
         Ok(binary_path)
     }
@@ -106,10 +103,7 @@ impl RindexerInstance {
                 }
             }
             None => {
-                info!(
-                    "Rindexer indexer started (pid={})",
-                    child.id().unwrap_or(0)
-                );
+                info!("Rindexer indexer started (pid={})", child.id().unwrap_or(0));
             }
         }
 
@@ -155,10 +149,7 @@ impl RindexerInstance {
                 }
             }
             None => {
-                info!(
-                    "Rindexer all services started (pid={})",
-                    child.id().unwrap_or(0)
-                );
+                info!("Rindexer all services started (pid={})", child.id().unwrap_or(0));
             }
         }
 
@@ -167,6 +158,7 @@ impl RindexerInstance {
     }
 
     /// Check if the rindexer process is still alive via `try_wait`.
+    #[allow(dead_code)]
     pub fn is_running(&self) -> bool {
         // We need interior mutability to call try_wait, so we check the PID
         // is present. For a true liveness check, use `check_running()`.
@@ -178,7 +170,7 @@ impl RindexerInstance {
     pub fn check_running(&mut self) -> bool {
         if let Some(ref mut child) = self.process {
             match child.try_wait() {
-                Ok(None) => true,   // still running
+                Ok(None) => true, // still running
                 Ok(Some(_)) => {
                     self.process = None;
                     false
@@ -204,20 +196,14 @@ impl RindexerInstance {
 
             if let Some(process) = &mut self.process {
                 if let Some(status) = process.try_wait()? {
-                    return Err(anyhow::anyhow!(
-                        "Rindexer process exited with status: {}",
-                        status
-                    ));
+                    return Err(anyhow::anyhow!("Rindexer process exited with status: {}", status));
                 }
             }
 
             sleep(Duration::from_millis(500)).await;
         }
 
-        Err(anyhow::anyhow!(
-            "Timeout waiting for initial sync after {}s",
-            timeout_seconds
-        ))
+        Err(anyhow::anyhow!("Timeout waiting for initial sync after {}s", timeout_seconds))
     }
 
     pub async fn stop(&mut self) -> Result<()> {
@@ -228,8 +214,7 @@ impl RindexerInstance {
                 warn!("Failed to kill rindexer process: {}", e);
             }
 
-            let timeout =
-                tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+            let timeout = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
 
             match timeout {
                 Ok(Ok(status)) => {
@@ -330,7 +315,10 @@ impl RindexerInstance {
 
 /// Configuration creation utilities
 impl RindexerInstance {
-    pub fn create_minimal_config(anvil_rpc_url: &str, health_port: u16) -> crate::test_suite::RindexerConfig {
+    pub fn create_minimal_config(
+        anvil_rpc_url: &str,
+        health_port: u16,
+    ) -> crate::test_suite::RindexerConfig {
         crate::test_suite::RindexerConfig {
             name: "minimal_test".to_string(),
             project_type: "no-code".to_string(),
@@ -380,9 +368,7 @@ impl Drop for RindexerInstance {
         if let Some(mut child) = self.process.take() {
             info!("Shutting down rindexer instance");
             if let Some(pid) = child.id() {
-                let _ = std::process::Command::new("kill")
-                    .arg(pid.to_string())
-                    .output();
+                let _ = std::process::Command::new("kill").arg(pid.to_string()).output();
             }
             let _ = child.start_kill();
         }

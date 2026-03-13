@@ -49,14 +49,10 @@ fn postgres_field_accuracy_test(
         let contract_address = context.deploy_test_contract().await?;
 
         let amounts: Vec<u64> = vec![1000, 2000, 3000, 4000, 5000];
-        let recipients: Vec<ethers::types::Address> =
-            (0..5).map(generate_test_address).collect();
+        let recipients: Vec<ethers::types::Address> = (0..5).map(generate_test_address).collect();
 
         for (recipient, amount) in recipients.iter().zip(amounts.iter()) {
-            context
-                .anvil
-                .send_transfer(&contract_address, recipient, U256::from(*amount))
-                .await?;
+            context.anvil.send_transfer(&contract_address, recipient, U256::from(*amount)).await?;
             context.anvil.mine_block().await?;
         }
 
@@ -134,10 +130,7 @@ fn postgres_field_accuracy_test(
         let mint_network: String = mint.get("network");
 
         if mint_from.to_lowercase() != zero_addr {
-            return Err(anyhow::anyhow!(
-                "Mint from should be zero address, got: {}",
-                mint_from
-            ));
+            return Err(anyhow::anyhow!("Mint from should be zero address, got: {}", mint_from));
         }
         if mint_to.to_lowercase() != deployer.to_lowercase() {
             return Err(anyhow::anyhow!(
@@ -154,10 +147,7 @@ fn postgres_field_accuracy_test(
             ));
         }
         if mint_network != "anvil" {
-            return Err(anyhow::anyhow!(
-                "Mint network should be 'anvil', got: '{}'",
-                mint_network
-            ));
+            return Err(anyhow::anyhow!("Mint network should be 'anvil', got: '{}'", mint_network));
         }
         info!("Mint row validated: 0x0 -> deployer");
 
@@ -235,11 +225,7 @@ fn postgres_field_accuracy_test(
         for (i, row) in rows.iter().enumerate() {
             let tx_hash: String = row.get("tx_hash");
             if !tx_hash.starts_with("0x") || tx_hash.len() != 66 {
-                return Err(anyhow::anyhow!(
-                    "Row {}: invalid tx_hash format: {}",
-                    i,
-                    tx_hash
-                ));
+                return Err(anyhow::anyhow!("Row {}: invalid tx_hash format: {}", i, tx_hash));
             }
         }
 

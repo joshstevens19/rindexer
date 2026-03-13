@@ -35,8 +35,7 @@ fn historic_indexing_correctness_test(
 
         // Execute 5 transfers with varying amounts (not constant!)
         let amounts: Vec<u64> = vec![1000, 2000, 3000, 4000, 5000];
-        let recipients: Vec<ethers::types::Address> =
-            (0..5).map(|i| generate_test_address(i)).collect();
+        let recipients: Vec<ethers::types::Address> = (0..5).map(generate_test_address).collect();
 
         let mut tx_hashes = Vec::new();
         for (i, (recipient, amount)) in recipients.iter().zip(amounts.iter()).enumerate() {
@@ -72,7 +71,10 @@ fn historic_indexing_correctness_test(
 
         // 2. Row count: exactly 6 (1 mint + 5 transfers)
         if rows.len() != 6 {
-            return Err(anyhow::anyhow!("Expected 6 rows (1 mint + 5 transfers), got {}", rows.len()));
+            return Err(anyhow::anyhow!(
+                "Expected 6 rows (1 mint + 5 transfers), got {}",
+                rows.len()
+            ));
         }
 
         let deployer = ANVIL_DEPLOYER_ADDRESS;
@@ -85,7 +87,11 @@ fn historic_indexing_correctness_test(
             return Err(anyhow::anyhow!("Mint from should be zero address, got: {}", mint.from));
         }
         if mint.to != deployer {
-            return Err(anyhow::anyhow!("Mint to should be deployer {}, got: {}", deployer, mint.to));
+            return Err(anyhow::anyhow!(
+                "Mint to should be deployer {}, got: {}",
+                deployer,
+                mint.to
+            ));
         }
         if mint.contract_address != contract_lower {
             return Err(anyhow::anyhow!("Wrong contract_address in mint row"));

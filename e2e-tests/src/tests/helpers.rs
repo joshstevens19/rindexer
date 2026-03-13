@@ -139,10 +139,16 @@ pub fn validate_csv_headers(headers: &[String]) -> Result<()> {
     // If 10 columns, validate the extra two
     if headers.len() >= 10 {
         if headers[8] != "tx_index" {
-            return Err(anyhow::anyhow!("Column 8 mismatch: got '{}', expected 'tx_index'", headers[8]));
+            return Err(anyhow::anyhow!(
+                "Column 8 mismatch: got '{}', expected 'tx_index'",
+                headers[8]
+            ));
         }
         if headers[9] != "log_index" {
-            return Err(anyhow::anyhow!("Column 9 mismatch: got '{}', expected 'log_index'", headers[9]));
+            return Err(anyhow::anyhow!(
+                "Column 9 mismatch: got '{}', expected 'log_index'",
+                headers[9]
+            ));
         }
     }
     Ok(())

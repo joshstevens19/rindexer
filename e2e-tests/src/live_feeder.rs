@@ -34,11 +34,13 @@ impl LiveFeeder {
         self
     }
 
+    #[allow(dead_code)]
     pub fn with_tx_interval(mut self, interval: Duration) -> Self {
         self.tx_interval = interval;
         self
     }
 
+    #[allow(dead_code)]
     pub fn with_mine_interval(mut self, interval: Duration) -> Self {
         self.mine_interval = interval;
         self

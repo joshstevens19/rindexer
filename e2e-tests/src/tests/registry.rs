@@ -31,6 +31,7 @@ impl TestDefinition {
         self
     }
 
+    #[allow(dead_code)]
     pub fn with_live_test(mut self) -> Self {
         self.is_live_test = true;
         self

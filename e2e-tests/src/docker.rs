@@ -64,40 +64,30 @@ pub async fn start_postgres_container() -> Result<(String, u16)> {
 pub async fn wait_for_postgres_ready(port: u16, timeout_seconds: u64) -> Result<()> {
     let start = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs(timeout_seconds);
-    let conn_str = format!(
-        "host=localhost port={} user=postgres password=postgres dbname=postgres",
-        port
-    );
+    let conn_str =
+        format!("host=localhost port={} user=postgres password=postgres dbname=postgres", port);
 
     while start.elapsed() < timeout {
-        match tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await {
-            Ok((client, connection)) => {
-                tokio::spawn(async move {
-                    let _ = connection.await;
-                });
-                if client.simple_query("SELECT 1").await.is_ok() {
-                    info!("Postgres ready on port {}", port);
-                    return Ok(());
-                }
+        if let Ok((client, connection)) =
+            tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await
+        {
+            tokio::spawn(async move {
+                let _ = connection.await;
+            });
+            if client.simple_query("SELECT 1").await.is_ok() {
+                info!("Postgres ready on port {}", port);
+                return Ok(());
             }
-            Err(_) => {}
         }
         sleep(Duration::from_millis(250)).await;
     }
 
-    Err(anyhow::anyhow!(
-        "Postgres not ready on port {} after {}s",
-        port,
-        timeout_seconds
-    ))
+    Err(anyhow::anyhow!("Postgres not ready on port {} after {}s", port, timeout_seconds))
 }
 
 /// Build the standard set of Postgres env vars for rindexer.
 pub fn postgres_env_vars(port: u16) -> Vec<(String, String)> {
-    let database_url = format!(
-        "postgresql://postgres:postgres@localhost:{}/postgres",
-        port
-    );
+    let database_url = format!("postgresql://postgres:postgres@localhost:{}/postgres", port);
     vec![
         ("POSTGRES_HOST".into(), "localhost".into()),
         ("POSTGRES_PORT".into(), port.to_string()),

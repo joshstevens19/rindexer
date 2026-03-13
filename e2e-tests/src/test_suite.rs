@@ -98,9 +98,7 @@ impl TestContext {
         info!("Setting up fresh test context...");
 
         // Start a fresh Anvil instance on a dynamic port (no pkill needed)
-        let anvil = AnvilInstance::start_local()
-            .await
-            .context("Failed to start Anvil instance")?;
+        let anvil = AnvilInstance::start_local().await.context("Failed to start Anvil instance")?;
 
         info!("Anvil ready at: {}", anvil.rpc_url);
 
@@ -165,12 +163,17 @@ impl TestContext {
         Ok(address)
     }
 
+    #[allow(dead_code)]
     pub fn create_minimal_config(&self) -> RindexerConfig {
         RindexerInstance::create_minimal_config(&self.anvil.rpc_url, self.health_port)
     }
 
     pub fn create_contract_config(&self, contract_address: &str) -> RindexerConfig {
-        RindexerInstance::create_contract_config(&self.anvil.rpc_url, contract_address, self.health_port)
+        RindexerInstance::create_contract_config(
+            &self.anvil.rpc_url,
+            contract_address,
+            self.health_port,
+        )
     }
 
     pub async fn start_rindexer(&mut self, config: RindexerConfig) -> Result<()> {
@@ -217,10 +220,12 @@ impl TestContext {
         self.project_path.join("generated_csv")
     }
 
+    #[allow(dead_code)]
     pub fn is_rindexer_running(&self) -> bool {
         self.rindexer.as_ref().map(|r| r.is_running()).unwrap_or(false)
     }
 
+    #[allow(dead_code)]
     pub async fn wait_for_new_events(
         &self,
         expected_min_events: usize,
@@ -265,6 +270,7 @@ impl TestContext {
         ))
     }
 
+    #[allow(dead_code)]
     pub fn get_event_count(&self) -> Result<usize> {
         let csv_path =
             self.get_csv_output_path().join("SimpleERC20").join("simpleerc20-transfer.csv");

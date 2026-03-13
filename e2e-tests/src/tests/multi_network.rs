@@ -52,32 +52,21 @@ fn multi_network_isolation_test(
         let mainnet_end_block = csv_start_block + 20;
         let reth_address = "0xae78736cd615f374d3085123a210448e74fc6393";
 
-        info!(
-            "Mainnet blocks {} to {} (limited range)",
-            mainnet_start_block, mainnet_end_block
-        );
+        info!("Mainnet blocks {} to {} (limited range)", mainnet_start_block, mainnet_end_block);
 
         // Deploy anvil contract + 5 transfers with varying amounts
         let anvil_contract = context.deploy_test_contract().await?;
 
         let amounts: Vec<u64> = vec![1000, 2000, 3000, 4000, 5000];
-        let recipients: Vec<ethers::types::Address> =
-            (0..5).map(generate_test_address).collect();
+        let recipients: Vec<ethers::types::Address> = (0..5).map(generate_test_address).collect();
 
         for (recipient, amount) in recipients.iter().zip(amounts.iter()) {
-            context
-                .anvil
-                .send_transfer(&anvil_contract, recipient, U256::from(*amount))
-                .await?;
+            context.anvil.send_transfer(&anvil_contract, recipient, U256::from(*amount)).await?;
             context.anvil.mine_block().await?;
         }
 
         let anvil_end_block = context.anvil.get_block_number().await?;
-        info!(
-            "Anvil: {} blocks, {} transfers",
-            anvil_end_block,
-            amounts.len()
-        );
+        info!("Anvil: {} blocks, {} transfers", anvil_end_block, amounts.len());
 
         let config = build_multi_network_config(
             context.health_port,
@@ -287,9 +276,7 @@ fn build_multi_network_config(
                     end_block: Some(params.mainnet_end_block.to_string()),
                 }],
                 abi: Some("./abis/ERC20.abi.json".to_string()),
-                include_events: Some(vec![EventConfig {
-                    name: "Transfer".to_string(),
-                }]),
+                include_events: Some(vec![EventConfig { name: "Transfer".to_string() }]),
             },
             ContractConfig {
                 name: "SimpleERC20".to_string(),
@@ -300,9 +287,7 @@ fn build_multi_network_config(
                     end_block: Some(params.anvil_end_block.to_string()),
                 }],
                 abi: Some("./abis/SimpleERC20.abi.json".to_string()),
-                include_events: Some(vec![EventConfig {
-                    name: "Transfer".to_string(),
-                }]),
+                include_events: Some(vec![EventConfig { name: "Transfer".to_string() }]),
             },
         ],
     }

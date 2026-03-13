@@ -4,7 +4,9 @@ use std::pin::Pin;
 use tracing::{info, warn};
 
 use crate::test_suite::TestContext;
-use crate::tests::helpers::{derive_block_range_from_csv, load_tx_hashes_from_csv, produced_csv_path_for};
+use crate::tests::helpers::{
+    derive_block_range_from_csv, load_tx_hashes_from_csv, produced_csv_path_for,
+};
 use crate::tests::registry::{TestDefinition, TestModule};
 
 pub struct DirectRpcTests;
