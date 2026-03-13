@@ -122,8 +122,13 @@ async fn setup_and_index(
     // Wait for historic sync (the mint + pre-reorg transfers)
     context.wait_for_sync_completion(30).await?;
 
-    // Give live indexing a moment to settle
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    // Give live indexing time to start and cache block hashes.
+    // The poller needs at least one cycle to see the current chain state
+    // before we trigger a reorg — otherwise it has no cached hashes to
+    // compare against and won't detect the mismatch. CI is slower, so
+    // we mine extra blocks and wait longer to guarantee the poller runs.
+    context.anvil.mine_blocks(3).await?;
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
     Ok(())
 }
@@ -186,10 +191,11 @@ fn reorg_tip_hash_csv(context: &mut TestContext) -> Pin<Box<dyn Future<Output = 
 
         // Trigger reorg at tip (depth=2 — affects last 2 transfer blocks)
         context.anvil.trigger_reorg(2).await?;
+        context.anvil.mine_blocks(3).await?;
 
         // Wait for rindexer to detect + recover
         if let Some(r) = &context.rindexer {
-            r.wait_for_reorg_recovery(30).await?;
+            r.wait_for_reorg_recovery(60).await?;
         }
 
         // After recovery, rindexer re-indexes the canonical chain.
@@ -243,13 +249,13 @@ fn reorg_parent_hash_csv(
         let config = create_reorg_config(context, &contract_address);
         setup_and_index(context, config).await?;
 
-        // Trigger reorg + immediately mine a block — rindexer sees
-        // the new block whose parent_hash doesn't match its cache.
+        // Trigger reorg + mine blocks so the poller sees the new chain
+        // state with parent_hash mismatches.
         context.anvil.trigger_reorg(3).await?;
-        context.anvil.mine_block().await?;
+        context.anvil.mine_blocks(3).await?;
 
         if let Some(r) = &context.rindexer {
-            r.wait_for_reorg_recovery(30).await?;
+            r.wait_for_reorg_recovery(60).await?;
         }
 
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -296,10 +302,10 @@ fn reorg_deep_csv(context: &mut TestContext) -> Pin<Box<dyn Future<Output = Resu
 
         // Deep reorg: depth=10 covers all transfer blocks
         context.anvil.trigger_reorg(10).await?;
-        context.anvil.mine_block().await?;
+        context.anvil.mine_blocks(3).await?;
 
         if let Some(r) = &context.rindexer {
-            r.wait_for_reorg_recovery(30).await?;
+            r.wait_for_reorg_recovery(60).await?;
         }
 
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
@@ -334,7 +340,7 @@ fn reorg_pg_recovery(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
             }
         };
         context.register_container(container_name);
-        crate::docker::wait_for_postgres_ready(pg_port, 10).await?;
+        crate::docker::wait_for_postgres_ready(pg_port, 30).await?;
 
         let contract_address = context.deploy_test_contract().await?;
         let amounts = [1000u64, 2000, 3000, 4000, 5000];
@@ -390,10 +396,10 @@ fn reorg_pg_recovery(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
 
         // Trigger reorg — affects last 3 transfer blocks
         context.anvil.trigger_reorg(4).await?;
-        context.anvil.mine_block().await?;
+        context.anvil.mine_blocks(3).await?;
 
         if let Some(r) = &context.rindexer {
-            r.wait_for_reorg_recovery(30).await?;
+            r.wait_for_reorg_recovery(60).await?;
         }
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
@@ -499,10 +505,10 @@ fn reorg_ch_recovery(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
 
         // Trigger reorg
         context.anvil.trigger_reorg(4).await?;
-        context.anvil.mine_block().await?;
+        context.anvil.mine_blocks(3).await?;
 
         if let Some(r) = &context.rindexer {
-            r.wait_for_reorg_recovery(30).await?;
+            r.wait_for_reorg_recovery(60).await?;
         }
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
@@ -620,7 +626,7 @@ fn reorg_idempotency(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
             }
         };
         context.register_container(container_name);
-        crate::docker::wait_for_postgres_ready(pg_port, 10).await?;
+        crate::docker::wait_for_postgres_ready(pg_port, 30).await?;
 
         let contract_address = context.deploy_test_contract().await?;
         let amounts = [1000u64, 2000, 3000, 4000];
@@ -649,15 +655,17 @@ fn reorg_idempotency(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
         rindexer.start_indexer().await?;
         context.rindexer = Some(rindexer);
         context.wait_for_sync_completion(30).await?;
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        // Let live poller cache block hashes before we trigger reorgs
+        context.anvil.mine_blocks(3).await?;
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
         // First reorg
         info!("Triggering first reorg (depth=2)...");
         context.anvil.trigger_reorg(2).await?;
-        context.anvil.mine_block().await?;
+        context.anvil.mine_blocks(3).await?;
 
         if let Some(r) = &context.rindexer {
-            r.wait_for_reorg_recovery(30).await?;
+            r.wait_for_reorg_recovery(60).await?;
         }
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
@@ -668,7 +676,9 @@ fn reorg_idempotency(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
             context.anvil.send_transfer(&contract_address, r, U256::from(*a)).await?;
             context.anvil.mine_block().await?;
         }
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        // Let poller cache these new blocks before second reorg
+        context.anvil.mine_blocks(3).await?;
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
         // Second reorg
         info!("Triggering second reorg (depth=3)...");
@@ -676,10 +686,10 @@ fn reorg_idempotency(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
             r.reset_reorg_flags();
         }
         context.anvil.trigger_reorg(3).await?;
-        context.anvil.mine_block().await?;
+        context.anvil.mine_blocks(3).await?;
 
         if let Some(r) = &context.rindexer {
-            r.wait_for_reorg_recovery(30).await?;
+            r.wait_for_reorg_recovery(60).await?;
         }
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
