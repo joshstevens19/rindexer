@@ -87,7 +87,7 @@ pub fn fetch_logs_stream(
                 warn!(
                     "{} - {} - max block range of {} applied - indexing will be slower than providers supplying the optimal ranges - https://rindexer.xyz/docs/references/rpc-node-providers#rpc-node-providers",
                     config.info_log_name(),
-                    IndexingEventProgressStatus::Syncing.log(),
+                    IndexingEventProgressStatus::syncing_log(),
                     max_block_range_limitation.unwrap()
                 );
             }
@@ -142,7 +142,7 @@ pub fn fetch_logs_stream(
         info!(
             "{} - {} - Finished indexing historic events",
             &config.info_log_name(),
-            IndexingEventProgressStatus::Completed.log()
+            IndexingEventProgressStatus::completed_log()
         );
 
         // Live indexing mode
@@ -192,7 +192,7 @@ async fn fetch_historic_logs_stream(
     debug!(
         "{} - {} - Process historic events - blocks: {} - {}",
         info_log_name,
-        IndexingEventProgressStatus::Syncing.log(),
+        IndexingEventProgressStatus::syncing_log(),
         from_block,
         to_block
     );
@@ -201,7 +201,7 @@ async fn fetch_historic_logs_stream(
         warn!(
             "{} - {} - from_block {:?} > to_block {:?}",
             info_log_name,
-            IndexingEventProgressStatus::Syncing.log(),
+            IndexingEventProgressStatus::syncing_log(),
             from_block,
             to_block
         );
@@ -215,7 +215,7 @@ async fn fetch_historic_logs_stream(
     debug!(
         "{} - {} - Processing filter: {:?}",
         info_log_name,
-        IndexingEventProgressStatus::Syncing.log(),
+        IndexingEventProgressStatus::syncing_log(),
         current_filter
     );
 
@@ -225,7 +225,7 @@ async fn fetch_historic_logs_stream(
         debug!(
             "{} - {} - Log channel full, waiting for events to be processed.",
             info_log_name,
-            IndexingEventProgressStatus::Syncing.log(),
+            IndexingEventProgressStatus::syncing_log(),
         );
     }
 
@@ -234,7 +234,7 @@ async fn fetch_historic_logs_stream(
             debug!(
                 "{} - {} - topic_id {}, Logs: {} from {} to {}",
                 info_log_name,
-                IndexingEventProgressStatus::Syncing.log(),
+                IndexingEventProgressStatus::syncing_log(),
                 topic_id,
                 logs.len(),
                 from_block,
@@ -249,7 +249,7 @@ async fn fetch_historic_logs_stream(
                 info!(
                     "{} - {} - Fetched {} logs between: {} - {}",
                     info_log_name,
-                    IndexingEventProgressStatus::Syncing.log(),
+                    IndexingEventProgressStatus::syncing_log(),
                     logs.len(),
                     from_block,
                     to_block
@@ -293,7 +293,7 @@ async fn fetch_historic_logs_stream(
                     debug!(
                         "{} - {} - new_from_block {:?} new_to_block {:?}",
                         info_log_name,
-                        IndexingEventProgressStatus::Syncing.log(),
+                        IndexingEventProgressStatus::syncing_log(),
                         next_from_block,
                         new_to_block
                     );
@@ -315,7 +315,7 @@ async fn fetch_historic_logs_stream(
                 debug!(
                     "{} - {} - next_block {:?}",
                     info_log_name,
-                    IndexingEventProgressStatus::Syncing.log(),
+                    IndexingEventProgressStatus::syncing_log(),
                     next_from_block
                 );
                 return if next_from_block > snapshot_to_block {
@@ -330,7 +330,7 @@ async fn fetch_historic_logs_stream(
                     debug!(
                         "{} - {} - new_from_block {:?} new_to_block {:?}",
                         info_log_name,
-                        IndexingEventProgressStatus::Syncing.log(),
+                        IndexingEventProgressStatus::syncing_log(),
                         next_from_block,
                         new_to_block
                     );
@@ -361,7 +361,7 @@ async fn fetch_historic_logs_stream(
                     debug!(
                         "{} - {} - Over-fetched {} to {}. Shrunk ({}): {} to {}{}",
                         info_log_name,
-                        IndexingEventProgressStatus::Syncing.log(),
+                        IndexingEventProgressStatus::syncing_log(),
                         from_block,
                         to_block,
                         retry_result.to - retry_result.from,
@@ -388,7 +388,7 @@ async fn fetch_historic_logs_stream(
             error!(
                 "{} - {} - Unexpected error fetching logs in range {} - {}. Retry fetching {} - {}: {:?}",
                 info_log_name,
-                IndexingEventProgressStatus::Syncing.log(),
+                IndexingEventProgressStatus::syncing_log(),
                 from_block,
                 to_block,
                 from_block,
@@ -620,13 +620,13 @@ async fn live_indexing_stream(
                         debug!(
                             "{} - {} - No new blocks to process...",
                             info_log_name,
-                            IndexingEventProgressStatus::Live.log()
+                            IndexingEventProgressStatus::live_log()
                         );
                         if last_no_new_block_log_time.elapsed() >= log_no_new_block_interval {
                             info!(
                                     "{} - {} - No new blocks published in the last 5 minutes - latest block number {}",
                                     info_log_name,
-                                    IndexingEventProgressStatus::Live.log(),
+                                    IndexingEventProgressStatus::live_log(),
                                     last_seen_block_number,
                                 );
                             last_no_new_block_log_time = Instant::now();
@@ -635,7 +635,7 @@ async fn live_indexing_stream(
                         debug!(
                             "{} - {} - New block seen {} - Last seen block {}",
                             info_log_name,
-                            IndexingEventProgressStatus::Live.log(),
+                            IndexingEventProgressStatus::live_log(),
                             latest_block_number,
                             last_seen_block_number
                         );
@@ -655,7 +655,7 @@ async fn live_indexing_stream(
                                     error!(
                                         "{} - {} - LIVE INDEXING STREAM - RPC has gone back on latest block: rpc returned {}, last seen: {}",
                                         info_log_name,
-                                        IndexingEventProgressStatus::Live.log(),
+                                        IndexingEventProgressStatus::live_log(),
                                         latest_block_number,
                                         from_block
                                     );
@@ -663,7 +663,7 @@ async fn live_indexing_stream(
                                     info!(
                                         "{} - {} - LIVE INDEXING STREAM - RPC has gone back on latest block: rpc returned {}, last seen: {}",
                                         info_log_name,
-                                        IndexingEventProgressStatus::Live.log(),
+                                        IndexingEventProgressStatus::live_log(),
                                         latest_block_number,
                                         from_block
                                     );
@@ -672,7 +672,7 @@ async fn live_indexing_stream(
                                 info!(
                                     "{} - {} - LIVE INDEXING STREAM - not in safe reorg block range yet block: {} > range: {}",
                                     info_log_name,
-                                    IndexingEventProgressStatus::Live.log(),
+                                    IndexingEventProgressStatus::live_log(),
                                     from_block,
                                     safe_block_number
                                 );
@@ -688,13 +688,13 @@ async fn live_indexing_stream(
                                 debug!(
                                     "{} - {} - Skipping block {} as it's not relevant",
                                     info_log_name,
-                                    IndexingEventProgressStatus::Live.log(),
+                                    IndexingEventProgressStatus::live_log(),
                                     from_block
                                 );
                                 debug!(
                                         "{} - {} - Did not need to hit RPC as no events in {} block - LogsBloom for block checked",
                                         info_log_name,
-                                        IndexingEventProgressStatus::Live.log(),
+                                        IndexingEventProgressStatus::live_log(),
                                         from_block
                                     );
                                 current_filter =
@@ -706,7 +706,7 @@ async fn live_indexing_stream(
                                 debug!(
                                     "{} - {} - Processing live filter: {:?}",
                                     info_log_name,
-                                    IndexingEventProgressStatus::Live.log(),
+                                    IndexingEventProgressStatus::live_log(),
                                     current_filter
                                 );
 
@@ -715,7 +715,7 @@ async fn live_indexing_stream(
                                         debug!(
                                             "{} - {} - Live topic_id {}, Logs: {} from {} to {}",
                                             info_log_name,
-                                            IndexingEventProgressStatus::Live.log(),
+                                            IndexingEventProgressStatus::live_log(),
                                             topic_id,
                                             logs.len(),
                                             from_block,
@@ -725,7 +725,7 @@ async fn live_indexing_stream(
                                         debug!(
                                             "{} - {} - Fetched {} event logs - blocks: {} - {}",
                                             info_log_name,
-                                            IndexingEventProgressStatus::Live.log(),
+                                            IndexingEventProgressStatus::live_log(),
                                             logs.len(),
                                             from_block,
                                             to_block
@@ -800,7 +800,7 @@ async fn live_indexing_stream(
                                             warn!(
                                                 "{} - {} - Log channel full, live indexer will wait for events to be processed.",
                                                 info_log_name,
-                                                IndexingEventProgressStatus::Live.log(),
+                                                IndexingEventProgressStatus::live_log(),
                                             );
                                         }
 
@@ -832,7 +832,7 @@ async fn live_indexing_stream(
                                             error!(
                                                 "{} - {} - Failed to send logs to stream consumer! Err: {}",
                                                 info_log_name,
-                                                IndexingEventProgressStatus::Live.log(),
+                                                IndexingEventProgressStatus::live_log(),
                                                 e
                                             );
                                             break;
@@ -847,7 +847,7 @@ async fn live_indexing_stream(
                                             debug!(
                                                 "{} - {} - No events found between blocks {} - {}",
                                                 info_log_name,
-                                                IndexingEventProgressStatus::Live.log(),
+                                                IndexingEventProgressStatus::live_log(),
                                                 from_block,
                                                 to_block,
                                             );
@@ -876,7 +876,7 @@ async fn live_indexing_stream(
                                             debug!(
                                                     "{} - {} - Overfetched from {} to {} - shrinking to block range: from {} to {}",
                                                     info_log_name,
-                                                    IndexingEventProgressStatus::Live.log(),
+                                                    IndexingEventProgressStatus::live_log(),
                                                     from_block,
                                                     to_block,
                                                     from_block,
@@ -891,7 +891,7 @@ async fn live_indexing_stream(
                                             error!(
                                                     "{} - {} - Unexpected error fetching logs in range {} - {}. Retry fetching {} - {}: {:?}",
                                                     info_log_name,
-                                                    IndexingEventProgressStatus::Live.log(),
+                                                    IndexingEventProgressStatus::live_log(),
                                                     from_block,
                                                     to_block,
                                                     from_block,

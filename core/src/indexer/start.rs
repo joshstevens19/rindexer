@@ -14,7 +14,6 @@ use tracing::{error, info};
 
 use crate::database::clickhouse::client::{ClickhouseClient, ClickhouseConnectionError};
 use crate::event::config::{ContractEventProcessingConfig, FactoryEventProcessingConfig};
-use crate::events::RindexerEventEmitter;
 use crate::helpers::format_duration;
 use crate::indexer::native_transfer::native_transfer_block_processor;
 use crate::indexer::Indexer;
@@ -37,7 +36,7 @@ use crate::{
     },
     manifest::{contract::ReorgSafeDistance, core::Manifest},
     provider::{JsonRpcCachedProvider, ProviderError},
-    PostgresClient, RindexerEvent,
+    PostgresClient,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -166,6 +165,7 @@ async fn get_start_end_block(
     Ok((start_block, end_block, indexing_distance_from_head))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn start_indexing_traces(
     manifest: &Manifest,
     project_path: &Path,
@@ -174,6 +174,7 @@ async fn start_indexing_traces(
     indexer: &Indexer,
     trace_registry: Arc<TraceCallbackRegistry>,
     cancel_token: CancellationToken,
+    progress: Arc<IndexingEventsProgressState>,
 ) -> Result<Vec<JoinHandle<Result<(), ProcessEventError>>>, StartIndexingError> {
     if !manifest.native_transfers.enabled {
         info!("Native transfer indexing disabled!");
@@ -181,8 +182,6 @@ async fn start_indexing_traces(
     }
 
     let mut non_blocking_process_events = Vec::new();
-    let trace_progress_state =
-        IndexingEventsProgressState::monitor_traces(&trace_registry.events).await;
 
     // Group events by network to create one pipeline per network
     let mut network_events: std::collections::HashMap<
@@ -245,6 +244,7 @@ async fn start_indexing_traces(
 
         let config = Arc::new(TraceProcessingConfig {
             id: first_event.id.clone(), // Use the first event's ID for progress tracking
+            chain_id: network_details.cached_provider.chain.id(),
             project_path: project_path.to_path_buf(),
             start_block,
             end_block,
@@ -252,7 +252,7 @@ async fn start_indexing_traces(
             contract_name: NATIVE_TRANSFER_CONTRACT_NAME.to_string(),
             event_name: "TraceEvents".to_string(),
             network: network_name.clone(),
-            progress: trace_progress_state.clone(),
+            progress: progress.clone(),
             postgres: postgres.clone(),
             csv_details: None,
             registry: network_registry,
@@ -298,6 +298,7 @@ async fn start_indexing_contract_events(
     dependencies: &[ContractEventDependencies],
     no_live_indexing_forced: bool,
     cancel_token: CancellationToken,
+    progress: Arc<IndexingEventsProgressState>,
 ) -> Result<
     (
         Vec<JoinHandle<Result<(), ProcessEventError>>>,
@@ -307,8 +308,6 @@ async fn start_indexing_contract_events(
     ),
     StartIndexingError,
 > {
-    let event_progress_state = IndexingEventsProgressState::monitor(&registry.events).await;
-
     let mut apply_cross_contract_dependency_events_config_after_processing = Vec::new();
     let mut non_blocking_process_events = Vec::new();
     let mut processed_network_contracts: Vec<ProcessedNetworkContract> = Vec::new();
@@ -335,7 +334,7 @@ async fn start_indexing_contract_events(
             let clickhouse = clickhouse.clone();
             let manifest_csv_details = manifest.storage.csv.clone();
             let registry = Arc::clone(&registry);
-            let event_progress_state = Arc::clone(&event_progress_state);
+            let progress = Arc::clone(&progress);
             let dependencies = dependencies.to_vec();
 
             block_tasks.push(async move {
@@ -374,7 +373,7 @@ async fn start_indexing_contract_events(
                         clickhouse,
                         manifest_csv_details,
                         registry,
-                        event_progress_state,
+                        progress,
                         no_live_indexing_forced,
                         dependencies,
                     )
@@ -394,7 +393,7 @@ async fn start_indexing_contract_events(
             clickhouse,
             manifest_csv_details,
             registry,
-            event_progress_state,
+            progress,
             no_live_indexing_forced,
             dependencies,
         ) = res?;
@@ -446,7 +445,7 @@ async fn start_indexing_contract_events(
                     start_block,
                     end_block,
                     registry: Arc::clone(&registry),
-                    progress: Arc::clone(&event_progress_state),
+                    progress: Arc::clone(&progress),
                     clickhouse: clickhouse.clone(),
                     postgres: postgres.clone(),
                     config: manifest.config.clone(),
@@ -486,7 +485,7 @@ async fn start_indexing_contract_events(
                 start_block,
                 end_block,
                 registry: Arc::clone(&registry),
-                progress: Arc::clone(&event_progress_state),
+                progress: Arc::clone(&progress),
                 postgres: postgres.clone(),
                 clickhouse: clickhouse.clone(),
                 csv_details: manifest_csv_details.clone(),
@@ -561,8 +560,8 @@ pub async fn start_historical_indexing(
     dependencies: &[ContractEventDependencies],
     registry: Arc<EventCallbackRegistry>,
     trace_registry: Arc<TraceCallbackRegistry>,
-    event_emitter: Option<RindexerEventEmitter>,
     cancel_token: CancellationToken,
+    progress: Arc<IndexingEventsProgressState>,
 ) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
     info!("Historical indexing started");
 
@@ -576,16 +575,13 @@ pub async fn start_historical_indexing(
         registry,
         trace_registry,
         cancel_token,
+        progress,
     )
     .await?;
 
     let duration = start.elapsed();
 
     info!("Historical indexing completed - time taken: {}", format_duration(duration));
-
-    if let Some(ref emitter) = event_emitter {
-        emitter.emit(RindexerEvent::HistoricalIndexingCompleted);
-    }
 
     Ok(result)
 }
@@ -597,6 +593,7 @@ pub async fn start_live_indexing(
     registry: Arc<EventCallbackRegistry>,
     trace_registry: Arc<TraceCallbackRegistry>,
     cancel_token: CancellationToken,
+    progress: Arc<IndexingEventsProgressState>,
 ) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
     info!("Live indexing started");
 
@@ -608,10 +605,12 @@ pub async fn start_live_indexing(
         registry,
         trace_registry,
         cancel_token,
+        progress,
     )
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn start_indexing(
     manifest: &Manifest,
     project_path: &Path,
@@ -620,6 +619,7 @@ async fn start_indexing(
     registry: Arc<EventCallbackRegistry>,
     trace_registry: Arc<TraceCallbackRegistry>,
     cancel_token: CancellationToken,
+    progress: Arc<IndexingEventsProgressState>,
 ) -> Result<Vec<ProcessedNetworkContract>, StartIndexingError> {
     let database = initialize_database(manifest).await?;
     let clickhouse = initialize_clickhouse(manifest).await?;
@@ -639,6 +639,7 @@ async fn start_indexing(
             &indexer,
             trace_registry.clone(),
             cancel_token.clone(),
+            progress.clone(),
         ),
         start_indexing_contract_events(
             manifest,
@@ -650,6 +651,7 @@ async fn start_indexing(
             dependencies,
             no_live_indexing_forced,
             cancel_token.clone(),
+            progress.clone(),
         )
     );
 
