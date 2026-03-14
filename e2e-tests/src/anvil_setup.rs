@@ -44,8 +44,15 @@ pub struct AnvilInstance {
 impl AnvilInstance {
     /// Start a local Anvil instance on a dynamically allocated free port.
     /// Uses `--block-time 1` for auto-mining (suitable for live indexing tests).
+    #[allow(dead_code)]
     pub async fn start_local() -> Result<Self> {
-        Self::start_with_args(&["--block-time", "1"]).await
+        Self::start_with_args(&["--block-time", "1"], 31337).await
+    }
+
+    /// Start a local Anvil instance with a custom chain ID.
+    /// Uses `--block-time 1` for auto-mining.
+    pub async fn start_local_with_chain_id(chain_id: u64) -> Result<Self> {
+        Self::start_with_args(&["--block-time", "1"], chain_id).await
     }
 
     /// Start a local Anvil instance with manual mining only.
@@ -53,7 +60,7 @@ impl AnvilInstance {
     /// Use this for deterministic test scenarios where you need full control.
     #[allow(dead_code)]
     pub async fn start_local_manual_mining() -> Result<Self> {
-        Self::start_with_args(&["--no-mining"]).await
+        Self::start_with_args(&["--no-mining"], 31337).await
     }
 
     /// Disable auto-mining. Transactions will stay in the mempool until `mine_block()`.
@@ -62,15 +69,15 @@ impl AnvilInstance {
         Ok(())
     }
 
-    async fn start_with_args(extra_args: &[&str]) -> Result<Self> {
+    async fn start_with_args(extra_args: &[&str], chain_id: u64) -> Result<Self> {
         let port = allocate_free_port()?;
-        info!("Starting local Anvil instance on port {}", port);
+        info!("Starting local Anvil instance on port {} (chain_id={})", port, chain_id);
 
         let mut cmd = TokioCommand::new("anvil");
         cmd.arg("--port")
             .arg(port.to_string())
             .arg("--chain-id")
-            .arg("31337")
+            .arg(chain_id.to_string())
             .arg("--accounts")
             .arg("10")
             .arg("--balance")
@@ -246,6 +253,15 @@ impl AnvilInstance {
     #[allow(dead_code)]
     pub async fn revert_to_snapshot(&self, snapshot_id: &str) -> Result<()> {
         self.rpc_call("evm_revert", serde_json::json!([snapshot_id])).await?;
+        Ok(())
+    }
+
+    /// Trigger a chain reorganization of the given depth.
+    /// Uses Anvil's `anvil_reorg` RPC method — block hashes change for the
+    /// last `depth` blocks, simulating a real chain reorg.
+    pub async fn trigger_reorg(&self, depth: u64) -> Result<()> {
+        info!("Triggering anvil_reorg (depth={})", depth);
+        self.rpc_call("anvil_reorg", serde_json::json!([depth, []])).await?;
         Ok(())
     }
 

@@ -95,7 +95,7 @@ pub struct NativeTransfers {
     pub generate_csv: Option<bool>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reorg_safe_distance: Option<bool>,
+    pub reorg_safe_distance: Option<super::contract::ReorgSafeDistance>,
 }
 
 /// The config to enable native transfers. This can be either a "simple" opinionated enable-all, or

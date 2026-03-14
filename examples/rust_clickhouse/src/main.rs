@@ -113,18 +113,13 @@ fn generate_all() {
 mod tests {
     use super::*;
 
+    // All three generators write to the same `src/rindexer_lib/typings/`
+    // directory. Running them in parallel causes file corruption.
+    // Combined into one test to guarantee sequential execution.
     #[test]
-    fn test_generate() {
+    fn test_generate_all_modes() {
         generate();
-    }
-
-    #[test]
-    fn test_code_generate() {
         generate_code_test();
-    }
-
-    #[test]
-    fn test_generate_all() {
         generate_all();
     }
 }

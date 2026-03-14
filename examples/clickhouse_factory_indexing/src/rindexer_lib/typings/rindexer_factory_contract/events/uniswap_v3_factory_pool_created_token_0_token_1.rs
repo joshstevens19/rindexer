@@ -103,6 +103,18 @@ where
     pub database: Arc<ClickhouseClient>,
 
     pub extensions: Arc<TExtensions>,
+    reorg_tx: tokio::sync::broadcast::Sender<rindexer::ReorgEvent>,
+}
+
+impl<TExtensions> EventContext<TExtensions>
+where
+    TExtensions: Send + Sync,
+{
+    /// Subscribe to reorg events. Returns a receiver that will get notified
+    /// whenever a reorg is detected and recovery is complete.
+    pub fn reorg_receiver(&self) -> tokio::sync::broadcast::Receiver<rindexer::ReorgEvent> {
+        self.reorg_tx.subscribe()
+    }
 }
 
 // didn't want to use option or none made harder DX
@@ -164,12 +176,14 @@ where
             + Clone,
         Fut: Future<Output = EventCallbackResult<()>> + Send + 'static,
     {
+        let (reorg_tx, _) = tokio::sync::broadcast::channel(16);
         Self {
             callback: poolcreated_handler(closure),
             context: Arc::new(EventContext {
                 database: get_or_init_clickhouse_client().await,
 
                 extensions: Arc::new(extensions),
+                reorg_tx,
             }),
         }
     }
@@ -352,7 +366,7 @@ where
                 })
                 .collect(),
             abi: contract_details.abi,
-            reorg_safe_distance: contract_details.reorg_safe_distance.unwrap_or_default(),
+            reorg_safe_distance: contract_details.reorg_safe_distance,
         };
 
         let callback: Arc<
@@ -375,6 +389,12 @@ where
             topic_id: topic_id.parse::<B256>().unwrap(),
             contract,
             callback,
+            tables: Arc::new(vec![]),
+            reorg_sender: None,
+            streams_clients: Arc::new(None),
+            providers: Arc::new(providers),
+            constants: Arc::new(rindexer_yaml.constants.clone()),
+            multicall_addresses: Arc::new(HashMap::new()),
         });
     }
 }

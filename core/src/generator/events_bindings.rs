@@ -138,11 +138,13 @@ fn generate_register_match_arms_code(event_type_name: &str, event_info: &[EventI
                 format!(
                     r#"
                     {}::{}(event) => {{
+                        let reorg_sender = Some(event.context.reorg_tx.clone());
                         let event = Arc::new(event);
-                        Arc::new(move |result| {{
+                        let callback = Arc::new(move |result| {{
                             let event = Arc::clone(&event);
                             async move {{ event.call(result).await }}.boxed()
-                        }})
+                        }});
+                        (callback, reorg_sender)
                     }},
                 "#,
                     event_type_name, info.name
@@ -299,12 +301,14 @@ fn generate_event_callback_structs_code(
                 {{
                     {csv_generator}
 
+                    let (reorg_tx, _) = tokio::sync::broadcast::channel(16);
                     Self {{
                         callback: {lower_name}_handler(closure),
                         context: Arc::new(EventContext {{
                             {database}
                             {csv}
                             extensions: Arc::new(extensions),
+                            reorg_tx,
                         }}),
                     }}
                 }}
@@ -541,6 +545,15 @@ fn generate_event_bindings_code(
             {event_context_database}
             {event_context_csv}
             pub extensions: Arc<TExtensions>,
+            reorg_tx: tokio::sync::broadcast::Sender<rindexer::ReorgEvent>,
+        }}
+
+        impl<TExtensions> EventContext<TExtensions> where TExtensions: Send + Sync {{
+            /// Subscribe to reorg events. Returns a receiver that will get notified
+            /// whenever a reorg is detected and recovery is complete.
+            pub fn reorg_receiver(&self) -> tokio::sync::broadcast::Receiver<rindexer::ReorgEvent> {{
+                self.reorg_tx.subscribe()
+            }}
         }}
 
         // didn't want to use option or none made harder DX
@@ -646,10 +659,13 @@ fn generate_event_bindings_code(
                         }})
                         .collect(),
                     abi: contract_details.abi,
-                    reorg_safe_distance: contract_details.reorg_safe_distance.unwrap_or_default(),
+                    reorg_safe_distance: contract_details.reorg_safe_distance,
                 }};
 
-                let callback: Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync> = match self {{
+                let (callback, reorg_sender): (
+                    Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync>,
+                    Option<tokio::sync::broadcast::Sender<rindexer::ReorgEvent>>,
+                ) = match self {{
                     {register_match_arms}
                 }};
 
@@ -661,6 +677,12 @@ fn generate_event_bindings_code(
                     topic_id: topic_id.parse::<B256>().unwrap(),
                     contract,
                     callback,
+                    tables: Arc::new(vec![]),
+                    reorg_sender,
+                    streams_clients: Arc::new(None),
+                    providers: Arc::new(HashMap::new()),
+                    constants: Arc::new(HashMap::new()),
+                    multicall_addresses: Arc::new(HashMap::new()),
                 }});
             }}
         }}

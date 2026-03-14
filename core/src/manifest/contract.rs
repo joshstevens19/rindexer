@@ -1213,6 +1213,40 @@ impl SetAction {
 }
 
 // ============================================================================
+// Reorg Safe Distance
+// ============================================================================
+
+/// Reorg safety configuration.
+/// - `false` / omitted: index at head with active reorg detection
+/// - `true`: use chain-specific default safe distance
+/// - integer (u64): override with custom block distance
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ReorgSafeDistance {
+    Enabled(bool),
+    Custom(u64),
+}
+
+impl Default for ReorgSafeDistance {
+    fn default() -> Self {
+        ReorgSafeDistance::Enabled(false)
+    }
+}
+
+impl ReorgSafeDistance {
+    /// Resolve to a concrete block distance, or None if disabled.
+    pub fn resolve(&self, chain_id: u64) -> Option<u64> {
+        match self {
+            ReorgSafeDistance::Enabled(true) => {
+                Some(crate::indexer::reorg::reorg_safe_distance_for_chain(chain_id))
+            }
+            ReorgSafeDistance::Custom(blocks) => Some(*blocks),
+            ReorgSafeDistance::Enabled(false) => None,
+        }
+    }
+}
+
+// ============================================================================
 // Contract Struct
 // ============================================================================
 
@@ -1238,7 +1272,7 @@ pub struct Contract {
     pub dependency_events: Option<DependencyEventTreeYaml>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reorg_safe_distance: Option<bool>,
+    pub reorg_safe_distance: Option<ReorgSafeDistance>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generate_csv: Option<bool>,

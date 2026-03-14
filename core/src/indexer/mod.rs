@@ -13,7 +13,7 @@ pub use fetch_logs::FetchLogsResult;
 mod last_synced;
 pub mod native_transfer;
 pub mod no_code;
-mod reorg;
+pub(crate) mod reorg;
 pub mod start;
 pub mod task_tracker;
 

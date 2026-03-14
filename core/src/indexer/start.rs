@@ -32,10 +32,9 @@ use crate::{
             ProcessContractsEventsWithDependenciesError, ProcessEventError,
         },
         progress::IndexingEventsProgressState,
-        reorg::reorg_safe_distance_for_chain,
         ContractEventDependencies,
     },
-    manifest::core::Manifest,
+    manifest::{contract::ReorgSafeDistance, core::Manifest},
     provider::{JsonRpcCachedProvider, ProviderError},
     PostgresClient,
 };
@@ -99,7 +98,7 @@ async fn get_start_end_block(
     config: SyncConfig<'_>,
     event_name: &str,
     network: &str,
-    reorg_safe_distance: bool,
+    reorg_safe_distance: Option<ReorgSafeDistance>,
 ) -> Result<(U64, U64, U64), StartIndexingError> {
     let latest_block = provider.get_block_number().await?;
 
@@ -270,6 +269,8 @@ async fn start_indexing_traces(
             indexing_distance_from_head,
             network_name.clone(),
             cancel_token.clone(),
+            postgres.clone(),
+            first_event.indexer_name.clone(),
         ));
 
         non_blocking_process_events.push(block_fetch_handle);
@@ -463,6 +464,13 @@ async fn start_indexing_contract_events(
                     index_event_in_order: event.index_event_in_order,
                     indexing_distance_from_head,
                     cancel_token: cancel_token.clone(),
+                    tables: event.tables.clone(),
+                    reorg_sender: event.reorg_sender.clone(),
+                    streams_clients: event.streams_clients.clone(),
+                    contract_abi: Some(event.contract.abi.clone()),
+                    providers: event.providers.clone(),
+                    constants: event.constants.clone(),
+                    multicall_addresses: event.multicall_addresses.clone(),
                 }
                 .into()
             }
@@ -496,6 +504,13 @@ async fn start_indexing_contract_events(
                 index_event_in_order: event.index_event_in_order,
                 indexing_distance_from_head,
                 cancel_token: cancel_token.clone(),
+                tables: event.tables.clone(),
+                reorg_sender: event.reorg_sender.clone(),
+                streams_clients: event.streams_clients.clone(),
+                contract_abi: Some(event.contract.abi.clone()),
+                providers: event.providers.clone(),
+                constants: event.constants.clone(),
+                multicall_addresses: event.multicall_addresses.clone(),
             }
             .into(),
         };
@@ -728,20 +743,22 @@ pub async fn initialize_clickhouse(
 }
 
 pub fn calculate_safe_block_number(
-    reorg_safe_distance: bool,
+    reorg_safe_distance: Option<ReorgSafeDistance>,
     provider: &Arc<JsonRpcCachedProvider>,
     latest_block: U64,
     mut end_block: U64,
 ) -> (U64, U64) {
     let mut indexing_distance_from_head = U64::ZERO;
-    if reorg_safe_distance {
+    if let Some(ref config) = reorg_safe_distance {
         let chain_id = provider.chain.id();
-        let reorg_safe_distance = reorg_safe_distance_for_chain(chain_id);
-        let safe_block_number = latest_block - reorg_safe_distance;
-        if end_block > safe_block_number {
-            end_block = safe_block_number;
+        if let Some(distance) = config.resolve(chain_id) {
+            let safe_distance = U64::from(distance);
+            let safe_block_number = latest_block.saturating_sub(safe_distance);
+            if end_block > safe_block_number {
+                end_block = safe_block_number;
+            }
+            indexing_distance_from_head = safe_distance;
         }
-        indexing_distance_from_head = reorg_safe_distance;
     }
     (end_block, indexing_distance_from_head)
 }

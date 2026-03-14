@@ -7,14 +7,20 @@ use alloy::{
     rpc::types::trace::parity::{Action, LocalizedTransactionTrace},
 };
 use futures::future::try_join_all;
+use lru::LruCache;
 use serde::Serialize;
+use std::num::NonZeroUsize;
 use tokio::{sync::mpsc, time::sleep};
 use tracing::{debug, error, info, warn};
 
 use tokio_util::sync::CancellationToken;
 
+use crate::indexer::fetch_logs::{BlockMeta, ReorgInfo};
+use crate::indexer::reorg::{find_fork_point, handle_native_transfer_reorg_recovery};
 use crate::is_running;
+use crate::metrics::indexing as metrics;
 use crate::provider::RECOMMENDED_RPC_CHUNK_SIZE;
+use crate::PostgresClient;
 use crate::{
     event::{
         callback_registry::{TraceResult, TxInformation},
@@ -106,6 +112,7 @@ async fn push_range(block_tx: &mpsc::Sender<U64>, last: U64, latest: U64) {
 ///
 /// This process respects channel backpressure and will only complete once the `end_block` is
 /// reached.
+#[allow(clippy::too_many_arguments)]
 pub async fn native_transfer_block_fetch(
     publisher: Arc<JsonRpcCachedProvider>,
     block_tx: mpsc::Sender<U64>,
@@ -114,19 +121,27 @@ pub async fn native_transfer_block_fetch(
     indexing_distance_from_head: U64,
     network: String,
     cancel_token: CancellationToken,
+    postgres: Option<Arc<PostgresClient>>,
+    indexer_name: String,
 ) -> Result<(), ProcessEventError> {
     let mut last_seen_block = start_block;
 
-    let chain_state_notification = publisher.get_chain_state_notification();
+    // Block metadata cache for reorg detection via parent hash chain validation.
+    let mut block_cache: LruCache<u64, BlockMeta> = LruCache::new(NonZeroUsize::new(1024).unwrap());
 
-    // Spawn a separate task to handle notifications
-    if let Some(notifications) = chain_state_notification {
-        // Subscribe to notifications for this network
-        let mut notifications_clone = notifications.subscribe();
+    // Channel for reth-provided reorg signals (None for HTTP RPC users).
+    let (reth_reorg_tx, mut reth_reorg_rx) = tokio::sync::mpsc::unbounded_channel::<ReorgInfo>();
+
+    if let Some(notifications) = publisher.get_chain_state_notification() {
         let network_clone = network.clone();
         tokio::spawn(async move {
-            while let Ok(notification) = notifications_clone.recv().await {
-                handle_chain_notification(notification, "NativeTransfer", &network_clone);
+            let mut rx = notifications.subscribe();
+            while let Ok(notification) = rx.recv().await {
+                if let Some(reorg_info) =
+                    handle_chain_notification(notification, "NativeTransfer", &network_clone)
+                {
+                    let _ = reth_reorg_tx.send(reorg_info);
+                }
             }
         });
     }
@@ -137,10 +152,96 @@ pub async fn native_transfer_block_fetch(
             break Ok(());
         }
 
+        // Reth reorg signal — instant detection, same recovery as cache-based.
+        if let Ok(reth_reorg) = reth_reorg_rx.try_recv() {
+            let fork_block = reth_reorg.fork_block.to::<u64>();
+            warn!(
+                "NativeTransfer on {} - REORG (reth notification): depth={}, fork_block={}",
+                network, reth_reorg.depth, fork_block
+            );
+
+            for b in fork_block..=(fork_block + reth_reorg.depth) {
+                block_cache.pop(&b);
+            }
+
+            handle_native_transfer_reorg_recovery(
+                &postgres,
+                &indexer_name,
+                &network,
+                fork_block,
+                reth_reorg.depth,
+                &None,
+            )
+            .await;
+
+            last_seen_block = U64::from(fork_block.saturating_sub(1));
+            continue;
+        }
+
         let latest_block = publisher.get_latest_block().await;
 
         match latest_block {
             Ok(Some(latest_block)) => {
+                // Reorg detection #1: tip hash changed (same block, different hash)
+                let tip_reorged = block_cache
+                    .peek(&latest_block.header.number)
+                    .map(|cached| cached.hash != latest_block.header.hash)
+                    .unwrap_or(false);
+
+                block_cache.put(
+                    latest_block.header.number,
+                    BlockMeta {
+                        hash: latest_block.header.hash,
+                        parent_hash: latest_block.header.parent_hash,
+                        timestamp: latest_block.header.timestamp,
+                    },
+                );
+
+                // Reorg detection #2: parent hash chain discontinuity
+                let parent_mismatch = if !tip_reorged && latest_block.header.number > 0 {
+                    block_cache
+                        .peek(&(latest_block.header.number - 1))
+                        .map(|cached| cached.hash != latest_block.header.parent_hash)
+                        .unwrap_or(false)
+                } else {
+                    false
+                };
+
+                if tip_reorged || parent_mismatch {
+                    let reason =
+                        if tip_reorged { "tip hash changed" } else { "parent hash mismatch" };
+                    let fork_block =
+                        find_fork_point(&block_cache, &publisher, latest_block.header.number).await;
+                    let depth = latest_block.header.number.saturating_sub(fork_block);
+                    metrics::record_reorg(&network, depth);
+                    warn!(
+                        "NativeTransfer on {} - REORG ({}): depth={}, fork_block={}",
+                        network, reason, depth, fork_block
+                    );
+
+                    // Invalidate cached hashes for reorged blocks
+                    for b in fork_block..=latest_block.header.number {
+                        block_cache.pop(&b);
+                    }
+
+                    // Delete orphaned native transfer events and rewind checkpoint
+                    handle_native_transfer_reorg_recovery(
+                        &postgres,
+                        &indexer_name,
+                        &network,
+                        fork_block,
+                        depth,
+                        &None,
+                    )
+                    .await;
+
+                    // Rewind to re-publish blocks from fork point
+                    last_seen_block = U64::from(fork_block.saturating_sub(1));
+                    // Drain any pending reth signals to avoid double recovery
+                    while reth_reorg_rx.try_recv().is_ok() {}
+                    continue;
+                }
+
                 let block = U64::from(latest_block.header.number);
 
                 // Always trim back to the safe indexing threshold (which is zero if disabled)

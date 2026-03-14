@@ -135,6 +135,92 @@ pub async fn stop_postgres_container(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Start an ephemeral ClickHouse container on a random HTTP port.
+/// Returns `(container_name, http_port)`.
+pub async fn start_clickhouse_container() -> Result<(String, u16)> {
+    ensure_docker_daemon().await?;
+
+    let http_port = allocate_free_port()?;
+    let name = format!("rindexer_ch_{}_{http_port}", std::process::id());
+
+    let out = Command::new("docker")
+        .args([
+            "run",
+            "-d",
+            "--name",
+            &name,
+            "-e",
+            "CLICKHOUSE_DB=default",
+            "-e",
+            "CLICKHOUSE_USER=default",
+            "-e",
+            "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1",
+            "-p",
+            &format!("{http_port}:8123"),
+            "--ulimit",
+            "nofile=262144:262144",
+            "clickhouse/clickhouse-server:24.8",
+        ])
+        .output();
+
+    let out = match out {
+        Ok(o) => o,
+        Err(_) => return Err(anyhow::anyhow!("Docker not available")),
+    };
+    if !out.status.success() {
+        return Err(anyhow::anyhow!(
+            "Failed to start ClickHouse container: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+
+    for _ in 0..40 {
+        if port_open(http_port).await {
+            return Ok((name, http_port));
+        }
+        sleep(Duration::from_millis(250)).await;
+    }
+
+    let _ = stop_container(&name).await;
+    Err(anyhow::anyhow!("ClickHouse did not become ready on port {}", http_port))
+}
+
+/// Wait for ClickHouse to accept HTTP queries.
+pub async fn wait_for_clickhouse_ready(port: u16, timeout_seconds: u64) -> Result<()> {
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(timeout_seconds);
+    let url = format!("http://localhost:{}/?query=SELECT%201", port);
+    let client = reqwest::Client::new();
+
+    while start.elapsed() < timeout {
+        if let Ok(resp) = client.get(&url).send().await {
+            if resp.status().is_success() {
+                info!("ClickHouse ready on port {}", port);
+                return Ok(());
+            }
+        }
+        sleep(Duration::from_millis(250)).await;
+    }
+
+    Err(anyhow::anyhow!("ClickHouse not ready on port {} after {}s", port, timeout_seconds))
+}
+
+/// Build the standard set of ClickHouse env vars for rindexer.
+pub fn clickhouse_env_vars(port: u16) -> Vec<(String, String)> {
+    vec![
+        ("CLICKHOUSE_URL".into(), format!("http://localhost:{port}")),
+        ("CLICKHOUSE_USER".into(), "default".into()),
+        ("CLICKHOUSE_PASSWORD".into(), String::new()),
+        ("CLICKHOUSE_DB".into(), "default".into()),
+    ]
+}
+
+/// Generic container stop (works for any Docker container).
+pub async fn stop_container(name: &str) -> Result<()> {
+    let _ = Command::new("docker").args(["rm", "-f", name]).output();
+    Ok(())
+}
+
 async fn port_open(port: u16) -> bool {
     tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok()
 }
