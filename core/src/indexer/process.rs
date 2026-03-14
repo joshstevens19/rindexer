@@ -418,7 +418,7 @@ async fn live_indexing_for_contract_event_dependencies(
             for (config, _) in events.iter() {
                 let _affected_hashes = handle_reorg_recovery(config, &reorg_info).await;
                 let mut details = ordering_live_indexing_details_map
-                    .get(&config.id())
+                    .get(&config.processor_id())
                     .expect("ordering_live_indexing_details_map")
                     .lock()
                     .await;
@@ -615,7 +615,7 @@ async fn live_indexing_for_contract_event_dependencies(
                         ordering_live_indexing_details.last_seen_block_number =
                             U64::from(min_removed_block.saturating_sub(1));
                         *ordering_live_indexing_details_map
-                            .get(&config.id())
+                            .get(&config.processor_id())
                             .expect("ordering_live_indexing_details_map")
                             .lock()
                             .await = ordering_live_indexing_details;
