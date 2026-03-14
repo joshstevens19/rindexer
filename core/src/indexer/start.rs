@@ -266,7 +266,7 @@ async fn start_indexing_traces(
             network_details.cached_provider.clone(),
             block_tx,
             start_block,
-            network_details.end_block,
+            Some(end_block),
             indexing_distance_from_head,
             network_name.clone(),
             cancel_token.clone(),
