@@ -478,6 +478,13 @@ async fn live_indexing_for_contract_event_dependencies(
                     .expect("Failed to get ordering_live_indexing_details_map")
                     .lock()
                     .await = ordering_live_indexing_details;
+
+                update_progress_and_last_synced_task(
+                    Arc::clone(config),
+                    to_block,
+                    indexing_event_processed,
+                )
+                .await;
                 continue;
             }
 
