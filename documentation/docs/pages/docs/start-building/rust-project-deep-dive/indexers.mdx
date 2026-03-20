@@ -1196,7 +1196,8 @@ async fn main() {
 }
 ```
 
-For now only a single event is emitted:
+### Available events
+
 - `HistoricalIndexingCompleted` - emitted when historical indexing was completed (happens every restart of the indexer once it catches up with the latest block)
-
-
+- `BlockIndexingCompleted { chain_id, block_number }` - emitted when all events on a given chain
+have indexed up to at least `block_number`.
