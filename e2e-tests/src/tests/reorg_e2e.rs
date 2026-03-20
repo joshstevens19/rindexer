@@ -1117,8 +1117,7 @@ fn reorg_derived_table_replay(
 /// Query a balance value from a Postgres balances table by holder address.
 /// Uses text cast to avoid needing rust_decimal dependency.
 async fn query_pg_balance(conn_str: &str, table: &str, holder: &str) -> Result<String> {
-    let (client, connection) =
-        tokio_postgres::connect(conn_str, tokio_postgres::NoTls).await?;
+    let (client, connection) = tokio_postgres::connect(conn_str, tokio_postgres::NoTls).await?;
     tokio::spawn(async move {
         let _ = connection.await;
     });
