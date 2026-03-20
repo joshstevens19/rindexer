@@ -9,14 +9,13 @@ use bb8_postgres::PostgresConnectionManager;
 use bytes::Buf;
 use dotenv::dotenv;
 use futures::pin_mut;
-use native_tls::TlsConnector;
-use postgres_native_tls::MakeTlsConnector;
 use tokio::{task, time::timeout};
 pub use tokio_postgres::types::{ToSql, Type as PgType};
 use tokio_postgres::{
     binary_copy::BinaryCopyInWriter, config::SslMode, Config, CopyInSink, Error as PgError, Row,
     Statement, ToStatement, Transaction as PgTransaction,
 };
+use tokio_postgres_rustls::MakeRustlsConnect;
 use tracing::error;
 
 use crate::database::generate::generate_event_table_columns_names_sql;
@@ -95,7 +94,7 @@ pub enum BulkInsertPostgresError {
 }
 
 pub struct PostgresClient {
-    pool: Pool<PostgresConnectionManager<MakeTlsConnector>>,
+    pool: Pool<PostgresConnectionManager<MakeRustlsConnect>>,
 }
 
 impl PostgresClient {
@@ -110,10 +109,12 @@ impl PostgresClient {
                 config.ssl_mode(SslMode::Disable);
             }
 
-            let connector = TlsConnector::builder()
-                .build()
-                .map_err(|_| PostgresConnectionError::CouldNotCreateTlsConnector)?;
-            let tls_connector = MakeTlsConnector::new(connector);
+            let mut root_store = rustls::RootCertStore::empty();
+            root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+            let tls_config = rustls::ClientConfig::builder()
+                .with_root_certificates(root_store)
+                .with_no_client_auth();
+            let tls_connector = MakeRustlsConnect::new(tls_config);
 
             // Perform a direct connection test
             let (client, connection) =
@@ -168,7 +169,7 @@ impl PostgresClient {
     }
 
     pub async fn from_connection(
-        pool: Pool<PostgresConnectionManager<MakeTlsConnector>>,
+        pool: Pool<PostgresConnectionManager<MakeRustlsConnect>>,
     ) -> Result<Self, PostgresConnectionError> {
         Ok(Self { pool })
     }
@@ -443,7 +444,7 @@ impl PostgresClient {
 
     pub async fn raw_connection(
         &self,
-    ) -> Result<PooledConnection<'_, PostgresConnectionManager<MakeTlsConnector>>, PostgresError>
+    ) -> Result<PooledConnection<'_, PostgresConnectionManager<MakeRustlsConnect>>, PostgresError>
     {
         let conn = self.pool.get().await?;
 
