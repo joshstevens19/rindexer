@@ -122,6 +122,7 @@ fn build_direct_rpc_config(
             abi: Some("./abis/ERC20.abi.json".to_string()),
             reorg_safe_distance: None,
             include_events: Some(vec![EventConfig { name: "Transfer".to_string() }]),
+            tables: None,
         }],
     }
 }

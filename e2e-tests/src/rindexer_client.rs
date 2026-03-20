@@ -415,6 +415,7 @@ impl RindexerInstance {
             include_events: Some(vec![crate::test_suite::EventConfig {
                 name: "Transfer".to_string(),
             }]),
+            tables: None,
         }];
         config
     }

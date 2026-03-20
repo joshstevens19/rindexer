@@ -72,6 +72,8 @@ pub struct ContractConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reorg_safe_distance: Option<serde_json::Value>,
     pub include_events: Option<Vec<EventConfig>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tables: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]

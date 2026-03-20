@@ -10,6 +10,21 @@ use crate::tests::registry::{TestDefinition, TestModule};
 
 pub struct ReorgTests;
 
+// ---------------------------------------------------------------------------
+// Known test gap: Post-confirmation verifier (30s background task in reorg.rs)
+//
+// The verifier catches "silent" reorgs — reorgs the live poller misses due to
+// network blips or polling gaps. It compares shadow-cached block hashes against
+// canonical chain hashes after N confirmations.
+//
+// This CANNOT be tested with Anvil because `anvil_reorg(depth)` always changes
+// the tip block hash, which means the live poller's tip-hash-change detection
+// catches it first. To test the verifier in isolation, you'd need a mock RPC
+// that returns stale block hashes during live polling but correct hashes when
+// the verifier queries later — or an Anvil extension for mid-chain reorgs
+// that don't affect the tip.
+// ---------------------------------------------------------------------------
+
 impl TestModule for ReorgTests {
     fn get_tests() -> Vec<TestDefinition> {
         vec![
@@ -62,6 +77,13 @@ impl TestModule for ReorgTests {
             )
             .with_timeout(180)
             .with_chain_id(137),
+            TestDefinition::new(
+                "test_reorg_derived_table_replay",
+                "Reorg: derived balance table (upsert+add) triggers FullReplay, balances correct after recovery",
+                reorg_derived_table_replay,
+            )
+            .with_timeout(180)
+            .with_chain_id(137),
         ]
     }
 }
@@ -96,6 +118,7 @@ fn create_reorg_config(
         abi: Some("./abis/SimpleERC20.abi.json".to_string()),
         reorg_safe_distance: Some(serde_json::json!(false)),
         include_events: Some(vec![crate::test_suite::EventConfig { name: "Transfer".to_string() }]),
+        tables: None,
     }];
     config
 }
@@ -606,8 +629,29 @@ fn reorg_ch_recovery(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
         let post_count = wait_for_ch_count(&http_client, &ch_query_url, 1, 15).await?;
         info!("Post-reorg ClickHouse rows: {}", post_count);
 
+        // Verify no duplicate tx_hashes (CH mutations are async — this catches
+        // incomplete deletes before re-indexing that would cause silent double-counting)
+        let dup_resp = http_client
+            .get(&ch_url)
+            .query(&[(
+                "query",
+                "SELECT tx_hash, count() as cnt FROM reorg_test_simple_erc_20.transfer \
+                 GROUP BY tx_hash HAVING cnt > 1 FORMAT TabSeparated",
+            )])
+            .send()
+            .await?
+            .text()
+            .await?;
+        let dup_trimmed = dup_resp.trim();
+        if !dup_trimmed.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Found duplicate tx_hash entries in ClickHouse after reorg recovery:\n{}",
+                dup_trimmed
+            ));
+        }
+
         info!(
-            "Reorg ClickHouse Recovery Test PASSED: pre={}, post={}, reorg detected + recovered",
+            "Reorg ClickHouse Recovery Test PASSED: pre={}, post={}, no duplicates",
             pre_count, post_count
         );
         Ok(())
@@ -856,4 +900,235 @@ fn reorg_idempotency(context: &mut TestContext) -> Pin<Box<dyn Future<Output = R
         );
         Ok(())
     })
+}
+
+// ---------------------------------------------------------------------------
+// Test 8: Derived table (balance tracking) reorg — exercises FullReplay
+//
+// Uses a `balances` table with `upsert + add` on Transfer events.
+// After a reorg, rindexer must use FullReplay (clear table, replay from
+// block 0) because accumulative operations depend on prior state.
+// We verify the final balance values are mathematically correct.
+// ---------------------------------------------------------------------------
+fn reorg_derived_table_replay(
+    context: &mut TestContext,
+) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
+    Box::pin(async move {
+        info!("Running Reorg Derived Table Replay Test");
+
+        // Start Postgres (required for tables)
+        let (container_name, pg_port) = match crate::docker::start_postgres_container().await {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(crate::tests::test_runner::SkipTest(format!(
+                    "Docker not available: {}",
+                    e
+                ))
+                .into());
+            }
+        };
+        context.register_container(container_name);
+        crate::docker::wait_for_postgres_ready(pg_port, 30).await?;
+
+        let contract_address = context.deploy_test_contract().await?;
+
+        // Send transfers to unique recipients. Each recipient gets exactly one
+        // transfer so we can verify exact balance values after FullReplay.
+        //
+        // NOTE: We use unique recipients per batch because rindexer's UNNEST-based
+        // batch upsert does not accumulate `add` values for duplicate keys within
+        // the same batch — the last value wins instead of summing. Cross-batch
+        // accumulation works correctly (the ON CONFLICT DO UPDATE sees committed state).
+        // Use large counter values so generate_test_address produces distinct addresses.
+        // Small values (0,1,2) collide because to_be_bytes()[..7] truncates the LSB.
+        let recipient_0 = generate_test_address(1 << 56);
+        let recipient_1 = generate_test_address(2 << 56);
+        let recipient_2 = generate_test_address(3 << 56);
+
+        context.anvil.send_transfer(&contract_address, &recipient_0, U256::from(1000u64)).await?;
+        context.anvil.mine_block().await?;
+        context.anvil.send_transfer(&contract_address, &recipient_1, U256::from(2000u64)).await?;
+        context.anvil.mine_block().await?;
+        context.anvil.send_transfer(&contract_address, &recipient_2, U256::from(3000u64)).await?;
+        context.anvil.mine_block().await?;
+
+        // Mine extra blocks so reorg depth=3 reaches into event blocks
+        for _ in 0..3 {
+            context.anvil.mine_block().await?;
+        }
+
+        // Build config with a balances table (upsert + add → triggers FullReplay)
+        let mut config = create_reorg_config(context, &contract_address);
+        config.storage.postgres = Some(crate::test_suite::PostgresConfig { enabled: true });
+        config.storage.csv.enabled = false;
+        config.contracts[0].tables = Some(vec![serde_json::json!({
+            "name": "balances",
+            "columns": [
+                { "name": "holder" },
+                { "name": "balance", "default": "0" }
+            ],
+            "events": [{
+                "event": "Transfer",
+                "operations": [
+                    {
+                        "type": "upsert",
+                        "where": { "holder": "$to" },
+                        "set": [{
+                            "column": "balance",
+                            "action": "add",
+                            "value": "$value"
+                        }]
+                    }
+                ]
+            }]
+        })]);
+
+        helpers::copy_abis_to_project(&context.project_path)?;
+        let yaml = serde_yaml::to_string(&config)?;
+        std::fs::write(context.project_path.join("rindexer.yaml"), yaml)?;
+
+        let conn_str = format!(
+            "host=localhost port={} user=postgres password=postgres dbname=postgres",
+            pg_port
+        );
+
+        // Start indexer and wait for sync
+        let mut rindexer = crate::rindexer_client::RindexerInstance::new(
+            &context.rindexer_binary,
+            context.project_path.clone(),
+        );
+        for (k, v) in crate::docker::postgres_env_vars(pg_port) {
+            rindexer = rindexer.with_env(&k, &v);
+        }
+        rindexer.start_indexer().await?;
+        context.rindexer = Some(rindexer);
+        context.wait_for_sync_completion(30).await?;
+
+        // Wait for balances table to be populated
+        let balances_table = "reorg_test_simple_erc_20.balances";
+        let pre_count = wait_for_pg_count(&conn_str, balances_table, 1, 15).await?;
+        info!("Pre-reorg balances rows: {}", pre_count);
+
+        // Verify pre-reorg balances
+        let r0_addr = helpers::format_address(&recipient_0);
+        let r1_addr = helpers::format_address(&recipient_1);
+        let r2_addr = helpers::format_address(&recipient_2);
+
+        let pre_bal_0 = query_pg_balance(&conn_str, balances_table, &r0_addr).await?;
+        let pre_bal_1 = query_pg_balance(&conn_str, balances_table, &r1_addr).await?;
+        let pre_bal_2 = query_pg_balance(&conn_str, balances_table, &r2_addr).await?;
+        info!("Pre-reorg balances: r0={}, r1={}, r2={}", pre_bal_0, pre_bal_1, pre_bal_2);
+
+        if pre_bal_0 != "1000" {
+            return Err(anyhow::anyhow!(
+                "Pre-reorg balance for recipient_0 should be 1000, got {}",
+                pre_bal_0
+            ));
+        }
+        if pre_bal_1 != "2000" {
+            return Err(anyhow::anyhow!(
+                "Pre-reorg balance for recipient_1 should be 2000, got {}",
+                pre_bal_1
+            ));
+        }
+
+        // Stop indexer, trigger reorg, restart
+        info!("Stopping indexer before reorg...");
+        if let Some(r) = context.rindexer.as_mut() {
+            let _ = r.stop().await;
+        }
+        context.rindexer = None;
+
+        context.anvil.trigger_reorg(4).await?;
+        context.anvil.mine_block().await?;
+
+        info!("Restarting indexer to re-sync after reorg...");
+        let mut rindexer2 = crate::rindexer_client::RindexerInstance::new(
+            &context.rindexer_binary,
+            context.project_path.clone(),
+        );
+        for (k, v) in crate::docker::postgres_env_vars(pg_port) {
+            rindexer2 = rindexer2.with_env(&k, &v);
+        }
+        rindexer2.start_indexer().await?;
+        context.rindexer = Some(rindexer2);
+        context.wait_for_sync_completion(30).await?;
+
+        // Wait for balances table to stabilize after recovery
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+        // Verify post-reorg balances — must match pre-reorg after FullReplay
+        let post_bal_0 = query_pg_balance(&conn_str, balances_table, &r0_addr).await?;
+        let post_bal_1 = query_pg_balance(&conn_str, balances_table, &r1_addr).await?;
+        let post_bal_2 = query_pg_balance(&conn_str, balances_table, &r2_addr).await?;
+        info!("Post-reorg balances: r0={}, r1={}, r2={}", post_bal_0, post_bal_1, post_bal_2);
+
+        if post_bal_0 != "1000" {
+            return Err(anyhow::anyhow!(
+                "Post-reorg balance for recipient_0 should be 1000 after FullReplay, got {} — \
+                 accumulative state was corrupted by reorg recovery",
+                post_bal_0
+            ));
+        }
+        if post_bal_1 != "2000" {
+            return Err(anyhow::anyhow!(
+                "Post-reorg balance for recipient_1 should be 2000 after FullReplay, got {}",
+                post_bal_1
+            ));
+        }
+        if post_bal_2 != "3000" {
+            return Err(anyhow::anyhow!(
+                "Post-reorg balance for recipient_2 should be 3000 after FullReplay, got {}",
+                post_bal_2
+            ));
+        }
+
+        // Verify no duplicate holders
+        let (client, connection) =
+            tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        let dup_rows = client
+            .query(
+                &format!(
+                    "SELECT holder, COUNT(*) as cnt FROM {} GROUP BY holder HAVING COUNT(*) > 1",
+                    balances_table
+                ),
+                &[],
+            )
+            .await?;
+
+        if !dup_rows.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Found {} duplicate holder entries in balances table after reorg — \
+                 FullReplay did not deduplicate correctly",
+                dup_rows.len()
+            ));
+        }
+
+        info!(
+            "Reorg Derived Table Replay Test PASSED: balances correct after FullReplay, no duplicates"
+        );
+        Ok(())
+    })
+}
+
+/// Query a balance value from a Postgres balances table by holder address.
+/// Uses text cast to avoid needing rust_decimal dependency.
+async fn query_pg_balance(conn_str: &str, table: &str, holder: &str) -> Result<String> {
+    let (client, connection) =
+        tokio_postgres::connect(conn_str, tokio_postgres::NoTls).await?;
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let query = format!("SELECT balance::text FROM {} WHERE holder = $1", table);
+    let rows = client.query(&query, &[&holder]).await?;
+    if rows.is_empty() {
+        return Ok("0".to_string());
+    }
+
+    let balance: String = rows[0].get(0);
+    Ok(balance)
 }

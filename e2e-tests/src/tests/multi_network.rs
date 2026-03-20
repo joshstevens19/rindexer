@@ -279,6 +279,7 @@ fn build_multi_network_config(
                 abi: Some("./abis/ERC20.abi.json".to_string()),
                 reorg_safe_distance: None,
                 include_events: Some(vec![EventConfig { name: "Transfer".to_string() }]),
+                tables: None,
             },
             ContractConfig {
                 name: "SimpleERC20".to_string(),
@@ -291,6 +292,7 @@ fn build_multi_network_config(
                 abi: Some("./abis/SimpleERC20.abi.json".to_string()),
                 reorg_safe_distance: None,
                 include_events: Some(vec![EventConfig { name: "Transfer".to_string() }]),
+                tables: None,
             },
         ],
     }
