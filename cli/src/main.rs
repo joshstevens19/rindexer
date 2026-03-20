@@ -42,6 +42,12 @@ fn resolve_path(override_path: &Option<String>) -> Result<PathBuf, String> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Both `ring` and `aws-lc-rs` are in the dependency tree (aws-smithy pulls aws-lc-rs),
+    // so rustls cannot auto-detect — we must explicitly select one.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
+
     let cli = CLI::parse();
 
     match &cli.command {
