@@ -1,0 +1,80 @@
+name: E2E Tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - "master"
+      - "**"
+    types: [opened, synchronize, reopened]
+    paths:
+      - "core/**"
+      - "cli/**"
+      - "e2e-tests/**"
+      - "graphql/**"
+      - "Cargo.lock"
+      - ".github/workflows/e2e.yml"
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Install OpenSSL dev libraries
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Build rindexer binary
+        run: cargo build --release -p rindexer_cli --features jemalloc,reth
+
+      - name: Install GraphQL dependencies
+        working-directory: graphql
+        run: npm ci
+
+      - name: Build E2E test binary
+        run: cargo build --bin e2e-tests
+
+      - name: Run E2E tests
+        env:
+          RUST_LOG: info
+          FOUNDRY_DISABLE_NIGHTLY_WARNING: "1"
+        run: |
+          cargo run --bin e2e-tests -- \
+            --rindexer-binary "${{ github.workspace }}/target/release/rindexer_cli"
