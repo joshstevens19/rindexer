@@ -697,6 +697,22 @@ async fn live_indexing_stream(
                                         IndexingEventProgressStatus::live_log(),
                                         from_block
                                     );
+                                if let Err(e) = tx
+                                    .send(Ok(FetchLogsResult {
+                                        logs: Vec::new(),
+                                        from_block,
+                                        to_block,
+                                    }))
+                                    .await
+                                {
+                                    error!(
+                                        "{} - {} - Failed to send logs to stream consumer! Err: {}",
+                                        info_log_name,
+                                        IndexingEventProgressStatus::live_log(),
+                                        e
+                                    );
+                                    break;
+                                }
                                 current_filter =
                                     current_filter.set_from_block(to_block + U64::from(1));
                                 last_seen_block_number = to_block;
