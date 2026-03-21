@@ -702,6 +702,7 @@ async fn live_indexing_stream(
                                         logs: Vec::new(),
                                         from_block,
                                         to_block,
+                                        reorg: None,
                                     }))
                                     .await
                                 {
