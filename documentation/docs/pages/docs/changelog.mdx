@@ -3,6 +3,8 @@
 ### Breaking changes
 -------------------------------------------------
 
+- 
+
 ### Bug fixes
 -------------------------------------------------
 
@@ -13,6 +15,7 @@
 
 - feat: add support for tuple[] (array of structs) via JSONB storage
 - feat: `BlockIndexingCompleted` event — emitted when all events on a chain have indexed up to a block
+- feat:  Reorg detection & recovery — active reorg detection during live indexing via tip hash comparison, parent hash chain validation, removed log detection, and a background post-confirmation verifier 
 
 ## Releases
 -------------------------------------------------
