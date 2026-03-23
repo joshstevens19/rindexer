@@ -3,7 +3,7 @@ use colored::{ColoredString, Colorize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::event::callback_registry::{
     EventCallbackRegistryInformation, TraceCallbackRegistryInformation,
@@ -284,9 +284,13 @@ impl IndexingEventsProgressState {
                 .filter(|(id, _)| {
                     // filter completed events, as they don't advance the block
                     let key = progress_key(report.chain_id, id);
-                    events.get(key.as_str()).is_some_and(|e| {
-                        !matches!(e.status, IndexingEventProgressStatus::Completed)
-                    })
+                    match events.get(key.as_str()) {
+                        Some(e) => !matches!(e.status, IndexingEventProgressStatus::Completed),
+                        None => {
+                            warn!("BlockProgress: event {} missing from events map for chain {}", id, report.chain_id);
+                            false
+                        }
+                    }
                 })
                 .map(|(_, block)| *block)
                 .min();
