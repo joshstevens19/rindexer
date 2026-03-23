@@ -142,7 +142,7 @@ pub async fn update_known_factory_deployed_addresses(
     };
     invalidate_known_factory_deployed_addresses_cache(&key);
 
-    if let Some(postgres) = &config.postgres {
+    if let Some(postgres) = &config.databases.postgres {
         let params = GenerateInternalFactoryEventTableNameParams {
             indexer_name: config.indexer_name.clone(),
             contract_name: config.contract_name.clone(),
@@ -177,7 +177,7 @@ pub async fn update_known_factory_deployed_addresses(
         return Ok(());
     }
 
-    if let Some(clickhouse) = &config.clickhouse {
+    if let Some(clickhouse) = &config.databases.clickhouse {
         let params = GenerateInternalFactoryEventTableNameParams {
             indexer_name: config.indexer_name.clone(),
             contract_name: config.contract_name.clone(),
