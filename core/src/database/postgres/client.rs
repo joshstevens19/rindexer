@@ -567,3 +567,20 @@ impl PostgresClient {
         Ok((total_deleted, all_affected_tx_hashes))
     }
 }
+
+#[async_trait::async_trait]
+impl crate::database::Database for PostgresClient {
+    async fn insert_bulk(
+        &self,
+        table: &str,
+        columns: &[String],
+        data: &[Vec<EthereumSqlTypeWrapper>],
+    ) -> Result<(), String> {
+        // Delegates to the inherent method (same signature).
+        self.insert_bulk(table, columns, data).await
+    }
+
+    fn backend_name(&self) -> &'static str {
+        "postgres"
+    }
+}

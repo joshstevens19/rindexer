@@ -338,3 +338,20 @@ mod tests {
         );
     }
 }
+
+#[async_trait::async_trait]
+impl crate::database::Database for ClickhouseClient {
+    async fn insert_bulk(
+        &self,
+        table: &str,
+        columns: &[String],
+        data: &[Vec<EthereumSqlTypeWrapper>],
+    ) -> Result<(), String> {
+        // Wraps the inherent method: discards u64 row count, maps ClickhouseError → String.
+        self.insert_bulk(table, columns, data).await.map(|_| ()).map_err(|e| e.to_string())
+    }
+
+    fn backend_name(&self) -> &'static str {
+        "clickhouse"
+    }
+}

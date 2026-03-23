@@ -15,6 +15,7 @@ use tracing::{error, info, warn};
 use crate::database::clickhouse::client::{ClickhouseClient, ClickhouseConnectionError};
 use crate::database::generate::generate_indexer_contract_schema_name;
 use crate::database::postgres::generate::generate_internal_event_table_name;
+use crate::database::DatabaseBackends;
 use crate::event::config::{ContractEventProcessingConfig, FactoryEventProcessingConfig};
 use crate::helpers::{camel_to_snake, format_duration};
 use crate::indexer::native_transfer::native_transfer_block_processor;
@@ -281,6 +282,7 @@ async fn start_indexing_traces(
             network: network_name.clone(),
             progress: progress.clone(),
             postgres: postgres.clone(),
+            clickhouse: clickhouse.clone(),
             csv_details: None,
             registry: network_registry,
             method: network_details.method,
@@ -901,8 +903,7 @@ async fn start_indexing_contract_events(
                     end_block,
                     registry: Arc::clone(&registry),
                     progress: Arc::clone(&progress),
-                    clickhouse: clickhouse.clone(),
-                    postgres: postgres.clone(),
+                    databases: DatabaseBackends::new(postgres.clone(), clickhouse.clone()),
                     config: manifest.config.clone(),
                     csv_details: manifest_csv_details.clone(),
                     // timestamps: timestamp_enabled_for_event
@@ -941,8 +942,7 @@ async fn start_indexing_contract_events(
                 end_block,
                 registry: Arc::clone(&registry),
                 progress: Arc::clone(&progress),
-                postgres: postgres.clone(),
-                clickhouse: clickhouse.clone(),
+                databases: DatabaseBackends::new(postgres.clone(), clickhouse.clone()),
                 csv_details: manifest_csv_details.clone(),
                 config: manifest.config.clone(),
                 // timestamps: timestamp_enabled_for_event
