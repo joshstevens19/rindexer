@@ -35,8 +35,18 @@ pub struct NetworkConfig {
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct StorageConfig {
-    pub postgres: PostgresConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub postgres: Option<PostgresConfig>,
     pub csv: CsvConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clickhouse: Option<ClickHouseConfig>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct ClickHouseConfig {
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drop_each_run: Option<bool>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -59,7 +69,11 @@ pub struct ContractConfig {
     pub name: String,
     pub details: Vec<ContractDetail>,
     pub abi: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reorg_safe_distance: Option<serde_json::Value>,
     pub include_events: Option<Vec<EventConfig>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tables: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -94,11 +108,18 @@ pub struct TestContext {
 }
 
 impl TestContext {
+    #[allow(dead_code)]
     pub async fn new(rindexer_binary: String) -> Result<Self> {
-        info!("Setting up fresh test context...");
+        Self::new_with_chain_id(rindexer_binary, 31337).await
+    }
 
-        // Start a fresh Anvil instance on a dynamic port (no pkill needed)
-        let anvil = AnvilInstance::start_local().await.context("Failed to start Anvil instance")?;
+    pub async fn new_with_chain_id(rindexer_binary: String, chain_id: u64) -> Result<Self> {
+        info!("Setting up fresh test context (chain_id={})...", chain_id);
+
+        // Start a fresh Anvil instance on a dynamic port
+        let anvil = AnvilInstance::start_local_with_chain_id(chain_id)
+            .await
+            .context("Failed to start Anvil instance")?;
 
         info!("Anvil ready at: {}", anvil.rpc_url);
 

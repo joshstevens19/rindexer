@@ -12,7 +12,9 @@ pub struct TestDefinition {
     pub description: &'static str,
     pub function: TestFunction,
     pub timeout_seconds: u64,
-    pub is_live_test: bool, // true for live indexing tests that need a feeder
+    pub is_live_test: bool,
+    /// Custom Anvil chain_id (default: 31337). Reorg tests use 137 (Polygon).
+    pub chain_id: u64,
 }
 
 impl TestDefinition {
@@ -23,6 +25,7 @@ impl TestDefinition {
             function,
             timeout_seconds: 180, // Default 3 minutes
             is_live_test: false,
+            chain_id: 31337,
         }
     }
 
@@ -34,6 +37,11 @@ impl TestDefinition {
     #[allow(dead_code)]
     pub fn with_live_test(mut self) -> Self {
         self.is_live_test = true;
+        self
+    }
+
+    pub fn with_chain_id(mut self, chain_id: u64) -> Self {
+        self.chain_id = chain_id;
         self
     }
 }
@@ -68,6 +76,9 @@ impl TestRegistry {
 
         // Direct RPC
         tests.extend(crate::tests::direct_rpc::DirectRpcTests::get_tests());
+
+        // Reorg detection & recovery
+        tests.extend(crate::tests::reorg_e2e::ReorgTests::get_tests());
 
         // Health assertions
         tests.extend(crate::tests::health_assertions::HealthAssertionsTests::get_tests());

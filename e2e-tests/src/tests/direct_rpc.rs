@@ -91,7 +91,7 @@ fn build_direct_rpc_config(
 ) -> crate::test_suite::RindexerConfig {
     use crate::test_suite::{
         ContractConfig, ContractDetail, CsvConfig, EventConfig, GlobalConfig,
-        NativeTransfersConfig, NetworkConfig, PostgresConfig, RindexerConfig, StorageConfig,
+        NativeTransfersConfig, NetworkConfig, RindexerConfig, StorageConfig,
     };
 
     RindexerConfig {
@@ -106,8 +106,9 @@ fn build_direct_rpc_config(
         }],
         global: GlobalConfig { health_port },
         storage: StorageConfig {
-            postgres: PostgresConfig { enabled: false },
+            postgres: None,
             csv: CsvConfig { enabled: true },
+            clickhouse: None,
         },
         native_transfers: NativeTransfersConfig { enabled: false },
         contracts: vec![ContractConfig {
@@ -119,7 +120,9 @@ fn build_direct_rpc_config(
                 end_block: end_block.map(|b| b.to_string()),
             }],
             abi: Some("./abis/ERC20.abi.json".to_string()),
+            reorg_safe_distance: None,
             include_events: Some(vec![EventConfig { name: "Transfer".to_string() }]),
+            tables: None,
         }],
     }
 }

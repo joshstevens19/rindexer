@@ -54,6 +54,7 @@ pub use abi::ABIItem;
 mod chat;
 pub mod event;
 pub mod notifications;
+pub use indexer::reorg::ReorgEvent;
 pub use notifications::ChainStateNotification;
 pub mod blockclock;
 pub mod phantom;

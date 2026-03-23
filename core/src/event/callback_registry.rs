@@ -132,6 +132,19 @@ pub struct EventCallbackRegistryInformation {
     pub index_event_in_order: bool,
     pub contract: ContractInformation,
     pub callback: EventCallbackType,
+    /// Derived/custom tables for this event (for reorg cleanup).
+    pub tables: Arc<Vec<crate::indexer::tables::TableRuntime>>,
+    /// Broadcast sender for reorg events (code-gen mode).
+    pub reorg_sender: Option<tokio::sync::broadcast::Sender<crate::indexer::reorg::ReorgEvent>>,
+    /// Streams clients for reorg retraction.
+    pub streams_clients: Arc<Option<crate::streams::StreamsClients>>,
+    /// RPC providers by network, required for replaying table operations with view calls.
+    pub providers:
+        Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>>,
+    /// Manifest constants used by table expressions.
+    pub constants: Arc<crate::manifest::core::Constants>,
+    /// Multicall address overrides by network.
+    pub multicall_addresses: Arc<std::collections::HashMap<String, Option<String>>>,
 }
 
 impl EventCallbackRegistryInformation {
@@ -160,6 +173,12 @@ impl Clone for EventCallbackRegistryInformation {
             index_event_in_order: self.index_event_in_order,
             contract: self.contract.clone(),
             callback: Arc::clone(&self.callback),
+            tables: self.tables.clone(),
+            reorg_sender: self.reorg_sender.clone(),
+            streams_clients: self.streams_clients.clone(),
+            providers: self.providers.clone(),
+            constants: self.constants.clone(),
+            multicall_addresses: self.multicall_addresses.clone(),
         }
     }
 }

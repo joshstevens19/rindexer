@@ -60,7 +60,7 @@ fn postgres_field_accuracy_test(
 
         // Configure with Postgres enabled, CSV disabled
         let mut config = context.create_contract_config(&contract_address);
-        config.storage.postgres.enabled = true;
+        config.storage.postgres = Some(crate::test_suite::PostgresConfig { enabled: true });
         config.storage.csv.enabled = false;
         if let Some(contract) = config.contracts.get_mut(0) {
             if let Some(detail) = contract.details.get_mut(0) {

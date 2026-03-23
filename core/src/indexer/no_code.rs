@@ -970,9 +970,13 @@ async fn process_contract(
             .unwrap_or_default();
 
         // Determine if this event should store raw events
-        // Only store raw events if the event is explicitly in include_events
-        let store_raw_events = contract.is_event_in_include_events(&event_name);
+        // Store raw events if: (a) event is in include_events, OR (b) tables are defined
+        // (tables need raw events as source of truth for reorg recomputation)
+        let has_tables = !contract_tables.is_empty();
+        let store_raw_events = contract.is_event_in_include_events(&event_name) || has_tables;
 
+        let tables_arc = Arc::new(contract_tables);
+        let streams_arc = Arc::new(streams_client);
         let event = EventCallbackRegistryInformation {
             id: generate_random_id(10),
             indexer_name: manifest.name.clone(),
@@ -991,15 +995,21 @@ async fn process_contract(
                 clickhouse: clickhouse.clone(),
                 sql_event_table_name,
                 sql_column_names,
-                streams_clients: Arc::new(streams_client),
+                streams_clients: Arc::clone(&streams_arc),
                 chat_clients: Arc::new(chat_clients),
-                tables: Arc::new(contract_tables),
+                tables: Arc::clone(&tables_arc),
                 store_raw_events,
                 providers: providers.clone(),
                 constants: Arc::new(manifest.constants.clone()),
                 multicall_addresses: multicall_addresses.clone(),
             }))
             .event_callback,
+            tables: tables_arc,
+            reorg_sender: None,
+            streams_clients: streams_arc,
+            providers: providers.clone(),
+            constants: Arc::new(manifest.constants.clone()),
+            multicall_addresses: multicall_addresses.clone(),
         };
 
         events.push(event);

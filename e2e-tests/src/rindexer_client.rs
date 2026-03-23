@@ -17,6 +17,8 @@ pub struct RindexerInstance {
     pub project_path: PathBuf,
     pub binary_path: String,
     pub sync_completed: Arc<AtomicBool>,
+    pub reorg_detected: Arc<AtomicBool>,
+    pub reorg_recovery_complete: Arc<AtomicBool>,
     pub env: HashMap<String, String>,
     pub graphql_url: Arc<Mutex<Option<String>>>,
 }
@@ -28,6 +30,8 @@ impl Clone for RindexerInstance {
             project_path: self.project_path.clone(),
             binary_path: self.binary_path.clone(),
             sync_completed: self.sync_completed.clone(),
+            reorg_detected: self.reorg_detected.clone(),
+            reorg_recovery_complete: self.reorg_recovery_complete.clone(),
             env: self.env.clone(),
             graphql_url: self.graphql_url.clone(),
         }
@@ -41,6 +45,8 @@ impl RindexerInstance {
             project_path,
             binary_path: binary_path.to_string(),
             sync_completed: Arc::new(AtomicBool::new(false)),
+            reorg_detected: Arc::new(AtomicBool::new(false)),
+            reorg_recovery_complete: Arc::new(AtomicBool::new(false)),
             env: HashMap::new(),
             graphql_url: Arc::new(Mutex::new(None)),
         }
@@ -82,9 +88,11 @@ impl RindexerInstance {
 
         let mut child = cmd.spawn().context("Failed to start rindexer indexer")?;
 
-        Self::start_log_streaming_with_completion_detection(
+        Self::start_log_streaming_with_reorg_detection(
             &mut child,
             self.sync_completed.clone(),
+            self.reorg_detected.clone(),
+            self.reorg_recovery_complete.clone(),
             self.graphql_url.clone(),
         )
         .await;
@@ -128,9 +136,11 @@ impl RindexerInstance {
 
         let mut child = cmd.spawn().context("Failed to start rindexer all services")?;
 
-        Self::start_log_streaming_with_completion_detection(
+        Self::start_log_streaming_with_reorg_detection(
             &mut child,
             self.sync_completed.clone(),
+            self.reorg_detected.clone(),
+            self.reorg_recovery_complete.clone(),
             self.graphql_url.clone(),
         )
         .await;
@@ -237,15 +247,19 @@ impl RindexerInstance {
         Ok(())
     }
 
-    async fn start_log_streaming_with_completion_detection(
+    async fn start_log_streaming_with_reorg_detection(
         child: &mut tokio::process::Child,
         sync_completed: Arc<AtomicBool>,
+        reorg_detected: Arc<AtomicBool>,
+        reorg_recovery_complete: Arc<AtomicBool>,
         graphql_url: Arc<Mutex<Option<String>>>,
     ) {
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
             let mut lines = reader.lines();
             let sync_completed_clone = sync_completed.clone();
+            let reorg_detected_clone = reorg_detected.clone();
+            let reorg_recovery_clone = reorg_recovery_complete.clone();
             let graphql_url_clone = graphql_url.clone();
             let url_regex = Regex::new(r"https?://[^\s]+").ok();
 
@@ -260,6 +274,16 @@ impl RindexerInstance {
                     {
                         info!("[RINDEXER] Detected sync completion: {}", line);
                         sync_completed_clone.store(true, Ordering::Relaxed);
+                    }
+
+                    // Reorg detection signals
+                    if line.contains("REORG") {
+                        info!("[RINDEXER] Reorg detected: {}", line);
+                        reorg_detected_clone.store(true, Ordering::Relaxed);
+                    }
+                    if line.contains("Reorg recovery complete") {
+                        info!("[RINDEXER] Reorg recovery complete: {}", line);
+                        reorg_recovery_clone.store(true, Ordering::Relaxed);
                     }
 
                     if (line.contains("GraphQL")
@@ -311,6 +335,37 @@ impl RindexerInstance {
     pub fn get_graphql_url(&self) -> Option<String> {
         self.graphql_url.lock().ok().and_then(|g| g.clone())
     }
+
+    /// Wait for reorg recovery to complete (detected from rindexer logs).
+    pub async fn wait_for_reorg_recovery(&self, timeout_seconds: u64) -> Result<()> {
+        info!("Waiting for reorg recovery (timeout: {}s)", timeout_seconds);
+        let start = std::time::Instant::now();
+        let timeout = Duration::from_secs(timeout_seconds);
+
+        while start.elapsed() < timeout {
+            if self.reorg_recovery_complete.load(Ordering::Relaxed) {
+                info!("Reorg recovery completed");
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+
+        // Check if at least reorg was detected
+        if self.reorg_detected.load(Ordering::Relaxed) {
+            return Err(anyhow::anyhow!(
+                "Reorg was detected but recovery did not complete within {}s",
+                timeout_seconds
+            ));
+        }
+        Err(anyhow::anyhow!("No reorg detected within {}s", timeout_seconds))
+    }
+
+    /// Reset reorg flags for a new reorg cycle.
+    #[allow(dead_code)]
+    pub fn reset_reorg_flags(&self) {
+        self.reorg_detected.store(false, Ordering::Relaxed);
+        self.reorg_recovery_complete.store(false, Ordering::Relaxed);
+    }
 }
 
 /// Configuration creation utilities
@@ -331,8 +386,9 @@ impl RindexerInstance {
             }],
             global: crate::test_suite::GlobalConfig { health_port },
             storage: crate::test_suite::StorageConfig {
-                postgres: crate::test_suite::PostgresConfig { enabled: false },
+                postgres: None,
                 csv: crate::test_suite::CsvConfig { enabled: true },
+                clickhouse: None,
             },
             native_transfers: crate::test_suite::NativeTransfersConfig { enabled: false },
             contracts: vec![],
@@ -355,9 +411,11 @@ impl RindexerInstance {
                 end_block: None,
             }],
             abi: Some("./abis/SimpleERC20.abi.json".to_string()),
+            reorg_safe_distance: None,
             include_events: Some(vec![crate::test_suite::EventConfig {
                 name: "Transfer".to_string(),
             }]),
+            tables: None,
         }];
         config
     }
