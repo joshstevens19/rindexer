@@ -14,6 +14,7 @@ pub mod native_transfer;
 pub mod postgres_e2e;
 pub mod reorg_e2e;
 pub mod restart_checkpoint;
+pub mod dual_write_e2e;
 
 // Registry and runner
 pub mod registry;
