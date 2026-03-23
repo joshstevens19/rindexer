@@ -16,6 +16,7 @@ use crate::database::postgres::generate::{
     generate_column_names_only_with_base_properties, generate_internal_event_table_name,
     generate_internal_event_table_name_no_shorten,
 };
+use crate::database::DatabaseBackends;
 use crate::event::config::EventProcessingConfig;
 use crate::helpers::{camel_to_snake, get_full_path, parse_solidity_integer_type};
 use crate::indexer::fetch_logs::{BlockMeta, ReorgInfo};
@@ -245,8 +246,7 @@ pub async fn handle_reorg_recovery(
     if !tables.is_empty() {
         delete_derived_table_rows(
             &tables,
-            &config.postgres(),
-            &config.clickhouse(),
+            config.databases(),
             fork_block,
             network,
         )
@@ -447,8 +447,7 @@ async fn rewind_checkpoint_clickhouse(
 /// For `cross_chain` tables, no network filter is applied.
 pub async fn delete_derived_table_rows(
     tables: &[super::tables::TableRuntime],
-    postgres: &Option<Arc<PostgresClient>>,
-    clickhouse: &Option<Arc<ClickhouseClient>>,
+    databases: &DatabaseBackends,
     fork_block: u64,
     network: &str,
 ) {
@@ -456,7 +455,7 @@ pub async fn delete_derived_table_rows(
         let full_table = &table_rt.full_table_name;
         let is_cross_chain = table_rt.table.cross_chain;
 
-        if let Some(pg) = postgres {
+        if let Some(pg) = &databases.postgres {
             let query = if is_cross_chain {
                 format!("DELETE FROM {} WHERE rindexer_block_number >= {}", full_table, fork_block)
             } else {
@@ -478,7 +477,7 @@ pub async fn delete_derived_table_rows(
             }
         }
 
-        if let Some(ch) = clickhouse {
+        if let Some(ch) = &databases.clickhouse {
             let query = if is_cross_chain {
                 format!(
                     "ALTER TABLE {} DELETE WHERE rindexer_block_number >= {} SETTINGS mutations_sync = 1",
@@ -571,8 +570,7 @@ pub async fn recompute_derived_tables(
         if matches!(strategy, ReplayStrategy::FullReplay) {
             clear_table_for_replay(
                 &table_runtime,
-                &config.postgres(),
-                &config.clickhouse(),
+                config.databases(),
                 if table_runtime.table.cross_chain { None } else { Some(network) },
             )
             .await;
@@ -689,13 +687,12 @@ fn load_event_abi_inputs(config: &EventProcessingConfig) -> Result<Vec<ABIInput>
 
 async fn clear_table_for_replay(
     table_runtime: &TableRuntime,
-    postgres: &Option<Arc<PostgresClient>>,
-    clickhouse: &Option<Arc<ClickhouseClient>>,
+    databases: &DatabaseBackends,
     network: Option<&str>,
 ) {
     let full_table = &table_runtime.full_table_name;
 
-    if let Some(pg) = postgres {
+    if let Some(pg) = &databases.postgres {
         let query = if let Some(network) = network {
             format!("DELETE FROM {} WHERE network = '{}'", full_table, network)
         } else {
@@ -711,7 +708,7 @@ async fn clear_table_for_replay(
         }
     }
 
-    if let Some(ch) = clickhouse {
+    if let Some(ch) = &databases.clickhouse {
         let query = if let Some(network) = network {
             format!(
                 "ALTER TABLE {} DELETE WHERE network = '{}' SETTINGS mutations_sync = 1",
@@ -1259,9 +1256,9 @@ fn parse_hex_bytes(value: &str) -> Result<Vec<u8>, String> {
     hex::decode(raw).map_err(|e| format!("invalid hex {}: {}", value, e))
 }
 
-/// Handles reorg recovery for native transfer indexing (PostgreSQL only, no ClickHouse for traces).
+/// Handles reorg recovery for native transfer indexing.
 pub async fn handle_native_transfer_reorg_recovery(
-    postgres: &Option<Arc<PostgresClient>>,
+    databases: &DatabaseBackends,
     indexer_name: &str,
     network: &str,
     fork_block: u64,
@@ -1279,14 +1276,27 @@ pub async fn handle_native_transfer_reorg_recovery(
 
     let mut affected_tx_hashes = Vec::new();
 
-    if let Some(pg) = postgres {
+    if let Some(pg) = &databases.postgres {
         affected_tx_hashes =
             collect_affected_tx_hashes_postgres(pg, &schema, event_table_name, fork_block, network)
                 .await;
         delete_events_postgres(pg, &schema, event_table_name, fork_block, network).await;
         rewind_checkpoint_postgres(pg, &schema, "native_transfer", rewind_block, network).await;
         info!(
-            "Native transfer reorg recovery complete: checkpoint rewound to block {} for {}.{}",
+            "Native transfer reorg recovery complete (PG): checkpoint rewound to block {} for {}.{}",
+            rewind_block, schema, event_table_name
+        );
+    }
+
+    if let Some(clickhouse) = &databases.clickhouse {
+        let ch_hashes =
+            collect_affected_tx_hashes_clickhouse(clickhouse, &schema, event_table_name, fork_block, network)
+                .await;
+        affected_tx_hashes.extend(ch_hashes);
+        delete_events_clickhouse(clickhouse, &schema, event_table_name, fork_block, network).await;
+        rewind_checkpoint_clickhouse(clickhouse, indexer_name, "native_transfer", rewind_block, network).await;
+        info!(
+            "Native transfer reorg recovery complete (CH): checkpoint rewound to block {} for {}.{}",
             rewind_block, schema, event_table_name
         );
     }

@@ -356,7 +356,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_conflicting_storage() {
+    fn test_dual_storage() {
         let yaml = r#"
         name: test
         project_type: no-code
@@ -369,13 +369,10 @@ mod tests {
             enabled: true
         "#;
 
-        let manifest: Result<Manifest, _> = serde_yaml::from_str(yaml);
+        let manifest: Manifest = serde_yaml::from_str(yaml).expect("dual storage should parse");
 
-        assert!(manifest.is_err());
-        assert!(manifest
-            .unwrap_err()
-            .to_string()
-            .contains("cannot specify both `postgres` and `clickhouse` at the same time"));
+        assert!(manifest.storage.postgres_enabled());
+        assert!(manifest.storage.clickhouse_enabled());
     }
 
     #[test]

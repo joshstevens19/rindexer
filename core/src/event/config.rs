@@ -103,8 +103,7 @@ impl ContractEventProcessingConfig {
                     network: self.network_contract.network.clone(),
                     topic_id: self.topic_id,
                     topics: index_filter.cloned().map(Into::into).unwrap_or_default(),
-                    clickhouse: self.databases.clickhouse.clone(),
-                    postgres: self.databases.postgres.clone(),
+                    databases: self.databases.clone(),
                     csv_details: self.csv_details.clone(),
 
                     current_block: self.start_block,

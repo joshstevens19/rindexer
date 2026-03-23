@@ -16,6 +16,7 @@ use super::cron_scheduler::{manifest_has_cron_tables, CronScheduler};
 use super::native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME};
 use super::tables::{process_table_operations, ProgressCheckpointConfig, TableRuntime, TxMetadata};
 use crate::database::clickhouse::client::ClickhouseClient;
+use crate::database::DatabaseBackends;
 use crate::database::clickhouse::setup::{setup_clickhouse, SetupClickhouseError};
 use crate::database::generate::generate_event_table_full_name;
 use crate::database::sql_type_wrapper::{
@@ -187,11 +188,12 @@ pub async fn setup_no_code(
                     .join(", ")
             );
 
+            let databases = DatabaseBackends::new(postgres.clone(), clickhouse.clone());
+
             let events = process_events(
                 project_path,
                 &manifest,
-                postgres.clone(),
-                clickhouse.clone(),
+                databases.clone(),
                 &network_providers,
             )
             .await?;
@@ -210,8 +212,7 @@ pub async fn setup_no_code(
             let trace_events = process_trace_events(
                 project_path,
                 &mut manifest,
-                postgres.clone(),
-                clickhouse.clone(),
+                databases.clone(),
                 &network_providers,
             )
             .await?;
@@ -243,8 +244,7 @@ pub async fn setup_no_code(
 
                 let scheduler = CronScheduler::new(
                     &manifest,
-                    postgres.clone(),
-                    clickhouse.clone(),
+                    databases.clone(),
                     providers_map,
                 );
 
@@ -297,10 +297,9 @@ struct NoCodeCallbackParams {
     event: Event,
     index_event_in_order: bool,
     csv: Option<Arc<AsyncCsvAppender>>,
-    postgres: Option<Arc<PostgresClient>>,
+    databases: DatabaseBackends,
     sql_event_table_name: String,
     sql_column_names: Vec<String>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
     streams_clients: Arc<Option<StreamsClients>>,
     chat_clients: Arc<Option<ChatClients>>,
     /// Custom tables for aggregation operations
@@ -564,7 +563,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                         all_params.iter().map(|param| param.to_type()).collect();
                 }
 
-                if params.postgres.is_some() || params.clickhouse.is_some() {
+                if params.databases.has_any_db() {
                     sql_bulk_data.push(all_params);
                 }
 
@@ -604,41 +603,21 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
 
             // Only store raw events if include_events was specified for this event
             if params.store_raw_events {
-                if let Some(postgres) = &params.postgres {
-                    if !sql_bulk_data.is_empty() {
-                        if let Err(e) = postgres
-                            .insert_bulk(
-                                &params.sql_event_table_name,
-                                &params.sql_column_names,
-                                &sql_bulk_data,
-                            )
-                            .await
-                        {
-                            error!(
-                                "{}::{} - Error performing postgres bulk insert: {}",
-                                params.contract_name, params.event_info.name, e
-                            );
-                            return Err(e.to_string());
-                        }
-                    }
-                }
-
-                if let Some(clickhouse) = &params.clickhouse {
-                    if !sql_bulk_data.is_empty() {
-                        if let Err(e) = clickhouse
-                            .insert_bulk(
-                                &params.sql_event_table_name,
-                                &params.sql_column_names,
-                                &sql_bulk_data,
-                            )
-                            .await
-                        {
-                            error!(
-                                "{}::{} - Error performing clickhouse bulk insert: {}",
-                                params.contract_name, params.event_info.name, e
-                            );
-                            return Err(e.to_string());
-                        };
+                if !sql_bulk_data.is_empty() && params.databases.has_any_db() {
+                    if let Err(e) = params
+                        .databases
+                        .insert_bulk(
+                            &params.sql_event_table_name,
+                            &params.sql_column_names,
+                            &sql_bulk_data,
+                        )
+                        .await
+                    {
+                        error!(
+                            "{}::{} - Error performing bulk insert: {}",
+                            params.contract_name, params.event_info.name, e
+                        );
+                        return Err(e);
                     }
                 }
 
@@ -658,14 +637,15 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                     params.indexer_name.clone(),
                     params.contract_name.clone(),
                     params.event_info.name.clone(),
-                    params.postgres.clone(),
+                    params.databases.postgres.clone(),
+                    params.databases.clickhouse.clone(),
                 );
                 if let Err(e) = process_table_operations(
                     &params.tables,
                     &params.event_info.name,
                     &table_events_data,
-                    params.postgres.clone(),
-                    params.clickhouse.clone(),
+                    params.databases.postgres.clone(),
+                    params.databases.clickhouse.clone(),
                     params.providers.clone(),
                     &params.constants,
                     &params.multicall_addresses,
@@ -839,8 +819,7 @@ pub enum ProcessIndexersError {
 pub async fn process_events(
     project_path: &Path,
     manifest: &Manifest,
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    databases: DatabaseBackends,
     network_providers: &[CreateNetworkProvider],
 ) -> Result<Vec<EventCallbackRegistryInformation>, ProcessIndexersError> {
     let mut events: Vec<EventCallbackRegistryInformation> = vec![];
@@ -849,8 +828,7 @@ pub async fn process_events(
         let contract_events = process_contract(
             project_path,
             manifest,
-            postgres.clone(),
-            clickhouse.clone(),
+            databases.clone(),
             network_providers,
             &mut contract,
         )
@@ -865,8 +843,7 @@ pub async fn process_events(
 async fn process_contract(
     project_path: &Path,
     manifest: &Manifest,
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    databases: DatabaseBackends,
     network_providers: &[CreateNetworkProvider],
     contract: &mut Contract,
 ) -> Result<Vec<EventCallbackRegistryInformation>, ProcessIndexersError> {
@@ -991,8 +968,7 @@ async fn process_contract(
                 event: event.clone(),
                 index_event_in_order,
                 csv,
-                postgres: postgres.clone(),
-                clickhouse: clickhouse.clone(),
+                databases: databases.clone(),
                 sql_event_table_name,
                 sql_column_names,
                 streams_clients: Arc::clone(&streams_arc),
@@ -1021,8 +997,7 @@ async fn process_contract(
 pub async fn process_trace_events(
     project_path: &Path,
     manifest: &mut Manifest,
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    databases: DatabaseBackends,
     network_providers: &[CreateNetworkProvider],
 ) -> Result<Vec<TraceCallbackRegistryInformation>, ProcessIndexersError> {
     let mut events: Vec<TraceCallbackRegistryInformation> = vec![];
@@ -1124,8 +1099,7 @@ pub async fn process_trace_events(
             event: event.clone(),
             index_event_in_order: false,
             csv,
-            postgres: postgres.clone(),
-            clickhouse: clickhouse.clone(),
+            databases: databases.clone(),
             sql_event_table_name,
             sql_column_names,
             streams_clients: Arc::new(streams_client),

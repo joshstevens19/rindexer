@@ -343,7 +343,9 @@ fn generate_event_callback_structs_code(
             lower_name = info.name.to_lowercase(),
             struct_result = info.struct_result(),
             struct_data = info.struct_data(),
-            database = if storage.postgres_enabled() {
+            database = if storage.postgres_enabled() && storage.clickhouse_enabled() {
+                "database: get_or_init_database_backends().await,"
+            } else if storage.postgres_enabled() {
                 "database: get_or_init_postgres_client().await,"
             } else if storage.clickhouse_enabled() {
                 "database: get_or_init_clickhouse_client().await,"
@@ -687,14 +689,18 @@ fn generate_event_bindings_code(
             }}
         }}
         "#,
-        postgres_import = if storage.postgres_enabled() {
+        postgres_import = if storage.postgres_enabled() && storage.clickhouse_enabled() {
+            "use super::super::super::super::typings::database::get_or_init_postgres_client;\nuse super::super::super::super::typings::database::get_or_init_clickhouse_client;\nuse super::super::super::super::typings::database::get_or_init_database_backends;"
+        } else if storage.postgres_enabled() {
             "use super::super::super::super::typings::database::get_or_init_postgres_client;"
         } else if storage.clickhouse_enabled() {
             "use super::super::super::super::typings::database::get_or_init_clickhouse_client;"
         } else {
             ""
         },
-        postgres_client_import = if storage.postgres_enabled() {
+        postgres_client_import = if storage.postgres_enabled() && storage.clickhouse_enabled() {
+            "PostgresClient, ClickhouseClient, DatabaseBackends,"
+        } else if storage.postgres_enabled() {
             "PostgresClient,"
         } else if storage.clickhouse_enabled() {
             "ClickhouseClient,"
@@ -706,7 +712,9 @@ fn generate_event_bindings_code(
         abigen_name = abigen_contract_name(contract),
         structs = generate_structs(project_path, contract)?,
         event_type_name = &event_type_name,
-        event_context_database = if storage.postgres_enabled() {
+        event_context_database = if storage.postgres_enabled() && storage.clickhouse_enabled() {
+            "pub database: Arc<rindexer::DatabaseBackends>,"
+        } else if storage.postgres_enabled() {
             "pub database: Arc<PostgresClient>,"
         } else if storage.clickhouse_enabled() {
             "pub database: Arc<ClickhouseClient>,"

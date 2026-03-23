@@ -13,9 +13,8 @@ use alloy::primitives::{Address, B256, U256};
 use chrono::{DateTime, Utc};
 use tracing::{debug, error, info, warn};
 
-use crate::database::clickhouse::client::ClickhouseClient;
-use crate::database::postgres::client::PostgresClient;
 use crate::database::sql_type_wrapper::EthereumSqlTypeWrapper;
+use crate::database::DatabaseBackends;
 use crate::event::{
     get_factory_addresses_with_birth_blocks, GetFactoryAddressesWithBirthBlocksParams,
 };
@@ -240,8 +239,7 @@ pub struct CronTask {
 /// The cron scheduler manages and executes scheduled table operations.
 pub struct CronScheduler {
     pub tasks: Vec<CronTask>,
-    pub postgres: Option<Arc<PostgresClient>>,
-    pub clickhouse: Option<Arc<ClickhouseClient>>,
+    pub databases: DatabaseBackends,
     pub providers: Arc<HashMap<String, Arc<JsonRpcCachedProvider>>>,
     /// Indexer name for factory address lookup
     pub indexer_name: String,
@@ -254,8 +252,7 @@ impl CronScheduler {
     /// builds a list of tasks to execute.
     pub fn new(
         manifest: &Manifest,
-        postgres: Option<Arc<PostgresClient>>,
-        clickhouse: Option<Arc<ClickhouseClient>>,
+        databases: DatabaseBackends,
         providers: Arc<HashMap<String, Arc<JsonRpcCachedProvider>>>,
     ) -> Self {
         let mut tasks = Vec::new();
@@ -376,7 +373,7 @@ impl CronScheduler {
 
         info!("Cron scheduler initialized with {} tasks", tasks.len());
 
-        Self { tasks, postgres, clickhouse, providers, indexer_name: manifest.name.clone() }
+        Self { tasks, databases, providers, indexer_name: manifest.name.clone() }
     }
 
     /// Check if there are any cron tasks to run.
@@ -393,8 +390,7 @@ impl CronScheduler {
             return Ok(());
         }
 
-        let postgres = self.postgres;
-        let clickhouse = self.clickhouse;
+        let databases = self.databases;
         let providers = self.providers;
 
         // Create shared context for factory address lookup
@@ -403,13 +399,12 @@ impl CronScheduler {
         let mut handles = Vec::new();
 
         for task in self.tasks {
-            let postgres = postgres.clone();
-            let clickhouse = clickhouse.clone();
+            let databases = databases.clone();
             let providers = providers.clone();
             let context = context.clone();
 
             let handle = tokio::spawn(async move {
-                run_cron_task(task, postgres, clickhouse, providers, context).await;
+                run_cron_task(task, databases, providers, context).await;
             });
 
             handles.push(handle);
@@ -439,8 +434,7 @@ struct CronContext {
 /// Returns HashMap<Address, u64> where the value is the birth block (0 for static contracts).
 async fn get_factory_addresses_with_blocks(
     task: &CronTask,
-    postgres: &Option<Arc<PostgresClient>>,
-    clickhouse: &Option<Arc<ClickhouseClient>>,
+    databases: &DatabaseBackends,
     context: &CronContext,
 ) -> Result<HashMap<Address, u64>, Box<dyn std::error::Error + Send + Sync>> {
     let Some(factory_config) = &task.factory_config else {
@@ -466,8 +460,8 @@ async fn get_factory_addresses_with_blocks(
         event_name: factory_config.event_name.clone(),
         input_names: factory_config.input_names.clone(),
         network: task.network.clone(),
-        postgres: postgres.clone(),
-        clickhouse: clickhouse.clone(),
+        postgres: databases.postgres.clone(),
+        clickhouse: databases.clickhouse.clone(),
     };
 
     match get_factory_addresses_with_birth_blocks(&params).await {
@@ -500,12 +494,11 @@ async fn get_factory_addresses_with_blocks(
 /// Get factory addresses as a simple Vec (for compatibility with wait_for_factory_sync).
 async fn get_factory_addresses(
     task: &CronTask,
-    postgres: &Option<Arc<PostgresClient>>,
-    clickhouse: &Option<Arc<ClickhouseClient>>,
+    databases: &DatabaseBackends,
     context: &CronContext,
 ) -> Result<Vec<Address>, Box<dyn std::error::Error + Send + Sync>> {
     let addresses_with_blocks =
-        get_factory_addresses_with_blocks(task, postgres, clickhouse, context).await?;
+        get_factory_addresses_with_blocks(task, databases, context).await?;
     Ok(addresses_with_blocks.keys().copied().collect())
 }
 
@@ -516,8 +509,7 @@ async fn get_factory_addresses(
 /// one factory address is available before proceeding.
 async fn wait_for_factory_sync(
     task: &CronTask,
-    postgres: &Option<Arc<PostgresClient>>,
-    clickhouse: &Option<Arc<ClickhouseClient>>,
+    databases: &DatabaseBackends,
     context: &CronContext,
     _start_block: u64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -540,7 +532,7 @@ async fn wait_for_factory_sync(
 
         // Check if any factory addresses have been discovered
         // DB errors are expected early on (tables may not exist yet), so treat them as "not ready"
-        let addresses = match get_factory_addresses(task, postgres, clickhouse, context).await {
+        let addresses = match get_factory_addresses(task, databases, context).await {
             Ok(addrs) => addrs,
             Err(e) => {
                 if !logged_db_error {
@@ -587,8 +579,7 @@ async fn wait_for_factory_sync(
 /// - Otherwise, live cron continues with the configured schedule.
 async fn run_cron_task(
     task: CronTask,
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    databases: DatabaseBackends,
     providers: Arc<HashMap<String, Arc<JsonRpcCachedProvider>>>,
     context: CronContext,
 ) {
@@ -608,7 +599,7 @@ async fn run_cron_task(
         if is_factory {
             let start_block = start_block_value.to::<u64>();
             if let Err(e) =
-                wait_for_factory_sync(&task, &postgres, &clickhouse, &context, start_block).await
+                wait_for_factory_sync(&task, &databases, &context, start_block).await
             {
                 error!(
                     "Failed waiting for factory sync for table '{}' on network '{}': {}",
@@ -620,8 +611,7 @@ async fn run_cron_task(
 
         let historical_completed = run_historical_sync(
             &task,
-            postgres.clone(),
-            clickhouse.clone(),
+            databases.clone(),
             providers.clone(),
             &context,
         )
@@ -651,7 +641,7 @@ async fn run_cron_task(
     }
 
     // Live cron mode
-    run_live_cron_loop(&task, postgres, clickhouse, providers, &context).await;
+    run_live_cron_loop(&task, databases, providers, &context).await;
 }
 
 /// Run historical sync for a cron task using batched operations.
@@ -660,8 +650,7 @@ async fn run_cron_task(
 /// and batched database writes. Returns true if completed successfully, false if interrupted.
 async fn run_historical_sync(
     task: &CronTask,
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    databases: DatabaseBackends,
     providers: Arc<HashMap<String, Arc<JsonRpcCachedProvider>>>,
     context: &CronContext,
 ) -> bool {
@@ -671,7 +660,7 @@ async fn run_historical_sync(
     // Get contract addresses (1 for static, N for factory)
     // Get addresses with their birth blocks (for factory contracts, only process blocks >= birth)
     let addresses_with_blocks =
-        match get_factory_addresses_with_blocks(task, &postgres, &clickhouse, context).await {
+        match get_factory_addresses_with_blocks(task, &databases, context).await {
             Ok(addrs) => addrs,
             Err(e) => {
                 error!(
@@ -710,8 +699,7 @@ async fn run_historical_sync(
 
     // Get last synced block from database
     let sync_config = CronSyncConfig {
-        postgres: &postgres,
-        clickhouse: &clickhouse,
+        databases: &databases,
         indexer_name: &task.indexer_name,
         contract_name: &task.contract_name,
         table_name: &task.table.name,
@@ -776,8 +764,7 @@ async fn run_historical_sync(
         // Execute batch and get last successful block
         let result = execute_cron_operations_batch(
             task,
-            postgres.clone(),
-            clickhouse.clone(),
+            databases.clone(),
             providers.clone(),
             &batch_blocks,
             &addresses_with_blocks,
@@ -803,8 +790,7 @@ async fn run_historical_sync(
                         task.table.name, batch_start, batch_end, batch_blocks.len(), addr_info, concurrency, batch_sz, batch_duration.as_secs_f64(), b
                     );
                     update_last_synced_cron_block(
-                        &postgres,
-                        &clickhouse,
+                        &databases,
                         &task.indexer_name,
                         &task.contract_name,
                         &task.table.name,
@@ -852,8 +838,7 @@ async fn run_historical_sync(
 /// For static contracts, birth_block is 0.
 async fn execute_cron_operations_batch(
     task: &CronTask,
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    databases: DatabaseBackends,
     providers: Arc<HashMap<String, Arc<JsonRpcCachedProvider>>>,
     blocks: &[u64],
     addresses_with_blocks: &HashMap<Address, u64>,
@@ -1191,7 +1176,7 @@ async fn execute_cron_operations_batch(
 
     info!("Tables::{} - {:?} - {} rows", task.table.name, operation.operation_type, all_rows.len());
 
-    if let Some(postgres) = &postgres {
+    if let Some(postgres) = &databases.postgres {
         super::tables::execute_postgres_operation_internal(
             postgres,
             &task.full_table_name,
@@ -1203,7 +1188,7 @@ async fn execute_cron_operations_batch(
         .await?;
     }
 
-    if let Some(clickhouse) = &clickhouse {
+    if let Some(clickhouse) = &databases.clickhouse {
         super::tables::execute_clickhouse_operation_internal(
             clickhouse,
             &task.full_table_name,
@@ -1223,8 +1208,7 @@ async fn execute_cron_operations_batch(
 /// Run live cron loop for a task.
 async fn run_live_cron_loop(
     task: &CronTask,
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    databases: DatabaseBackends,
     providers: Arc<HashMap<String, Arc<JsonRpcCachedProvider>>>,
     context: &CronContext,
 ) {
@@ -1283,7 +1267,7 @@ async fn run_live_cron_loop(
         // Get factory addresses (refreshed on each tick to pick up new contracts)
         // For live cron, birth blocks don't matter (latest block >= all birth blocks)
         let addresses_with_blocks =
-            match get_factory_addresses_with_blocks(task, &postgres, &clickhouse, context).await {
+            match get_factory_addresses_with_blocks(task, &databases, context).await {
                 Ok(addrs) => addrs,
                 Err(e) => {
                     error!(
@@ -1314,8 +1298,7 @@ async fn run_live_cron_loop(
 
             match execute_cron_operations(
                 task,
-                postgres.clone(),
-                clickhouse.clone(),
+                &databases,
                 providers.clone(),
                 &addresses,
             )
@@ -1375,8 +1358,7 @@ async fn run_live_cron_loop(
 /// Execute the cron operations for a task (for all addresses).
 async fn execute_cron_operations(
     task: &CronTask,
-    postgres: Option<Arc<PostgresClient>>,
-    clickhouse: Option<Arc<ClickhouseClient>>,
+    databases: &DatabaseBackends,
     providers: Arc<HashMap<String, Arc<JsonRpcCachedProvider>>>,
     addresses: &[Address],
 ) -> Result<(), String> {
@@ -1526,7 +1508,7 @@ async fn execute_cron_operations(
         }
 
         // Execute the operation for all rows
-        if let Some(postgres) = &postgres {
+        if let Some(postgres) = &databases.postgres {
             super::tables::execute_postgres_operation_internal(
                 postgres,
                 &task.full_table_name,
@@ -1538,7 +1520,7 @@ async fn execute_cron_operations(
             .await?;
         }
 
-        if let Some(clickhouse) = &clickhouse {
+        if let Some(clickhouse) = &databases.clickhouse {
             super::tables::execute_clickhouse_operation_internal(
                 clickhouse,
                 &task.full_table_name,

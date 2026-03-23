@@ -213,10 +213,10 @@ async fn start_indexing_traces(
             .find(|c| c.name == first_event.contract_name)
             .and_then(|c| c.streams.as_ref());
 
+        let databases = DatabaseBackends::new(postgres.clone(), clickhouse.clone());
         let sync_config = SyncConfig {
             project_path,
-            postgres: &postgres,
-            clickhouse: &clickhouse,
+            databases: &databases,
             csv_details: &manifest.storage.csv,
             contract_csv_enabled: manifest.contract_csv_enabled(&first_event.contract_name),
             stream_details: &stream_details,
@@ -271,7 +271,7 @@ async fn start_indexing_traces(
             indexing_distance_from_head,
             network_name.clone(),
             cancel_token.clone(),
-            postgres.clone(),
+            databases.clone(),
             first_event.indexer_name.clone(),
         ));
 
@@ -340,10 +340,10 @@ async fn start_indexing_contract_events(
             let dependencies = dependencies.to_vec();
 
             block_tasks.push(async move {
+                let databases = DatabaseBackends::new(postgres.clone(), clickhouse.clone());
                 let config = SyncConfig {
                     project_path: &project_path,
-                    postgres: &postgres,
-                    clickhouse: &clickhouse,
+                    databases: &databases,
                     csv_details: &manifest_csv_details,
                     contract_csv_enabled: manifest.contract_csv_enabled(&event.contract.name),
                     stream_details: &stream_details,
