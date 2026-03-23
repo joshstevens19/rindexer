@@ -281,6 +281,9 @@ pub struct GetKnownFactoryDeployedAddressesParams {
     pub csv_details: Option<CsvDetails>,
 }
 
+/// Read factory-deployed addresses from the first available backend (PG > CH > CSV).
+/// With dual-write, PG is authoritative for reads — both backends receive writes
+/// via `update_known_factory_deployed_addresses`, so PG is always up-to-date.
 pub async fn get_known_factory_deployed_addresses(
     params: &GetKnownFactoryDeployedAddressesParams,
 ) -> Result<Option<HashSet<Address>>, GetKnownFactoryDeployedAddressesError> {

@@ -1294,7 +1294,7 @@ pub async fn handle_native_transfer_reorg_recovery(
                 .await;
         affected_tx_hashes.extend(ch_hashes);
         delete_events_clickhouse(clickhouse, &schema, event_table_name, fork_block, network).await;
-        rewind_checkpoint_clickhouse(clickhouse, indexer_name, "native_transfer", rewind_block, network).await;
+        rewind_checkpoint_clickhouse(clickhouse, &schema, "native_transfer", rewind_block, network).await;
         info!(
             "Native transfer reorg recovery complete (CH): checkpoint rewound to block {} for {}.{}",
             rewind_block, schema, event_table_name

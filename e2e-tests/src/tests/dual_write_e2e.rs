@@ -382,7 +382,7 @@ fn dual_write_reorg(
         config.storage.postgres = Some(PostgresConfig { enabled: true });
         config.storage.clickhouse = Some(ClickHouseConfig {
             enabled: true,
-            drop_each_run: Some(true),
+            drop_each_run: None, // Do NOT drop on restart — we need to verify reorg cleanup actually works
         });
         config.storage.csv.enabled = false;
 
@@ -433,7 +433,7 @@ fn dual_write_reorg(
         let pg_dups = pg_client
             .query(
                 &format!(
-                    "SELECT tx_hash, COUNT(*) as cnt FROM {} GROUP BY tx_hash HAVING COUNT(*) > 1",
+                    "SELECT tx_hash, log_index, COUNT(*) as cnt FROM {} GROUP BY tx_hash, log_index HAVING COUNT(*) > 1",
                     pg_table
                 ),
                 &[],
@@ -447,7 +447,7 @@ fn dual_write_reorg(
 
         // 8. Verify no duplicate tx_hashes in CH
         let ch_dup_query = format!(
-            "SELECT tx_hash, count() as cnt FROM {} FINAL GROUP BY tx_hash HAVING cnt > 1 FORMAT TabSeparated",
+            "SELECT tx_hash, log_index, count() as cnt FROM {} FINAL GROUP BY tx_hash, log_index HAVING cnt > 1 FORMAT TabSeparated",
             ch_table
         );
         let ch_dup_resp = http_client
@@ -465,9 +465,14 @@ fn dual_write_reorg(
         );
 
         // 9. Verify both backends have consistent post-reorg counts
-        let pg_post = wait_for_pg_count(&pg_conn_str, pg_table, 1, 5).await?;
-        let ch_post = wait_for_ch_count(&http_client, ch_port, ch_table, 1, 5).await?;
+        let pg_post = wait_for_pg_count(&pg_conn_str, pg_table, 1, 15).await?;
+        let ch_post = wait_for_ch_count(&http_client, ch_port, ch_table, 1, 15).await?;
         info!("Post-reorg: PG={}, CH={}", pg_post, ch_post);
+        assert_eq!(
+            pg_post, ch_post as i64,
+            "Post-reorg PG ({}) and CH ({}) row counts should match",
+            pg_post, ch_post
+        );
 
         info!(
             "dual_write_reorg PASSED: pre-reorg PG={}/CH={}, post-reorg PG={}/CH={}, no duplicates",
