@@ -378,6 +378,7 @@ fn dual_write_reorg(
                 name: "Transfer".to_string(),
             }]),
             tables: None,
+            streams: None,
         }];
         config.storage.postgres = Some(PostgresConfig { enabled: true });
         config.storage.clickhouse = Some(ClickHouseConfig {

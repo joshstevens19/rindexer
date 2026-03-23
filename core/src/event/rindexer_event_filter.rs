@@ -3,7 +3,7 @@ use crate::event::factory_event_filter_sync::{
     get_known_factory_deployed_addresses, GetKnownFactoryDeployedAddressesParams,
 };
 use crate::manifest::storage::CsvDetails;
-use crate::{ClickhouseClient, PostgresClient};
+use crate::database::DatabaseBackends;
 use alloy::rpc::types::Topic;
 use alloy::{
     primitives::{Address, B256, U64},
@@ -11,7 +11,6 @@ use alloy::{
 };
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 #[derive(thiserror::Error, Debug)]
 pub enum BuildRindexerFilterError {
@@ -62,8 +61,7 @@ pub struct FactoryFilter {
     pub topic_id: B256,
     pub topics: [Topic; 4],
 
-    pub clickhouse: Option<Arc<ClickhouseClient>>,
-    pub postgres: Option<Arc<PostgresClient>>,
+    pub databases: DatabaseBackends,
     pub csv_details: Option<CsvDetails>,
 
     pub current_block: U64,
@@ -113,8 +111,8 @@ impl FactoryFilter {
             event_name: self.factory_event_name.clone(),
             input_names,
             network: self.network.clone(),
-            clickhouse: self.clickhouse.clone(),
-            postgres: self.postgres.clone(),
+            postgres: self.databases.postgres.clone(),
+            clickhouse: self.databases.clickhouse.clone(),
             csv_details: self.csv_details.clone(),
         })
         .await
