@@ -461,43 +461,46 @@ pub async fn evm_trace_update_progress_and_last_synced_task(
         }
     }
 
-    if let Some(csv_details) = &config.csv_details {
-        if let Err(e) = update_last_synced_block_number_for_file(
-            &config.contract_name,
-            &config.network,
-            &config.event_name,
-            &get_full_path(&config.project_path, &csv_details.path).unwrap_or_else(|_| {
-                panic!("failed to get full path {}", config.project_path.display())
-            }),
-            to_block,
-        )
-        .await
+    // CSV/stream fallback only when no database is configured
+    if config.postgres.is_none() && config.clickhouse.is_none() {
+        if let Some(csv_details) = &config.csv_details {
+            if let Err(e) = update_last_synced_block_number_for_file(
+                &config.contract_name,
+                &config.network,
+                &config.event_name,
+                &get_full_path(&config.project_path, &csv_details.path).unwrap_or_else(|_| {
+                    panic!("failed to get full path {}", config.project_path.display())
+                }),
+                to_block,
+            )
+            .await
+            {
+                error!(
+                    "Error updating last synced block to CSV - path - {} error - {:?}",
+                    csv_details.path, e
+                );
+            }
+        } else if let Some(stream_last_synced_block_file_path) =
+            &config.stream_last_synced_block_file_path
         {
-            error!(
-                "Error updating last synced block to CSV - path - {} error - {:?}",
-                csv_details.path, e
-            );
-        }
-    } else if let Some(stream_last_synced_block_file_path) =
-        &config.stream_last_synced_block_file_path
-    {
-        if let Err(e) = update_last_synced_block_number_for_file(
-            &config.contract_name,
-            &config.network,
-            &config.event_name,
-            &config
-                .project_path
-                .join(stream_last_synced_block_file_path)
-                .canonicalize()
-                .expect("Failed to canonicalize path"),
-            to_block,
-        )
-        .await
-        {
-            error!(
-                "Error updating last synced block to stream - path - {} error - {:?}",
-                stream_last_synced_block_file_path, e
-            );
+            if let Err(e) = update_last_synced_block_number_for_file(
+                &config.contract_name,
+                &config.network,
+                &config.event_name,
+                &config
+                    .project_path
+                    .join(stream_last_synced_block_file_path)
+                    .canonicalize()
+                    .expect("Failed to canonicalize path"),
+                to_block,
+            )
+            .await
+            {
+                error!(
+                    "Error updating last synced block to stream - path - {} error - {:?}",
+                    stream_last_synced_block_file_path, e
+                );
+            }
         }
     }
 
