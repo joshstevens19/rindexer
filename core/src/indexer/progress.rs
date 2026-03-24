@@ -3,7 +3,7 @@ use colored::{ColoredString, Colorize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::event::callback_registry::{
     EventCallbackRegistryInformation, TraceCallbackRegistryInformation,
@@ -87,6 +87,12 @@ pub enum SyncError {
     BlockNumberConversionSyncedBlocksError(U64, U64),
 }
 
+/// Build a composite key for the `events` HashMap so that the same event ID
+/// on different chains gets its own entry.
+fn progress_key(chain_id: u64, id: &str) -> String {
+    format!("{chain_id}::{id}")
+}
+
 /// Info needed for block-level progress reporting after releasing the events lock.
 struct BlockReport {
     chain_id: u64,
@@ -154,7 +160,7 @@ impl IndexingEventsProgressState {
                         }
 
                         events.insert(
-                            event_info.id.to_string(),
+                            progress_key(chain_id, &event_info.id),
                             IndexingEventProgress::running(
                                 event_info.id.to_string(),
                                 event_info.contract.name.clone(),
@@ -212,7 +218,7 @@ impl IndexingEventsProgressState {
                         }
 
                         events.insert(
-                            trace_info.id.clone(),
+                            progress_key(chain_id, &trace_info.id),
                             IndexingEventProgress::running(
                                 trace_info.id.clone(),
                                 trace_info.contract_name.clone(),
@@ -277,9 +283,17 @@ impl IndexingEventsProgressState {
                 .iter()
                 .filter(|(id, _)| {
                     // filter completed events, as they don't advance the block
-                    events.get(id.as_str()).is_some_and(|e| {
-                        !matches!(e.status, IndexingEventProgressStatus::Completed)
-                    })
+                    let key = progress_key(report.chain_id, id);
+                    match events.get(key.as_str()) {
+                        Some(e) => !matches!(e.status, IndexingEventProgressStatus::Completed),
+                        None => {
+                            warn!(
+                                "BlockProgress: event {} missing from events map for chain {}",
+                                id, report.chain_id
+                            );
+                            false
+                        }
+                    }
                 })
                 .map(|(_, block)| *block)
                 .min();
@@ -310,10 +324,9 @@ impl IndexingEventsProgressState {
         id: &str,
         new_last_synced_block: U64,
     ) -> Result<BlockReport, SyncError> {
-        let event = events
-            .get_mut(id)
-            .filter(|e| e.chain_id == chain_id)
-            .ok_or_else(|| SyncError::EventNotFound(format!("{chain_id}::{id}")))?;
+        let key = progress_key(chain_id, id);
+        let event =
+            events.get_mut(key.as_str()).ok_or_else(|| SyncError::EventNotFound(key.clone()))?;
 
         if let IndexingEventProgressStatus::Syncing { progress, syncing_to_block } =
             &mut event.status
@@ -400,7 +413,7 @@ mod tests {
 
         for (id, chain_id, start_block, syncing_to_block) in &event_defs {
             events.insert(
-                id.to_string(),
+                progress_key(*chain_id, id),
                 IndexingEventProgress::running(
                     id.to_string(),
                     "Contract".to_string(),
@@ -536,14 +549,15 @@ mod tests {
         let mut events: HashMap<String, IndexingEventProgress> = HashMap::new();
         let mut block_networks: HashMap<u64, NetworkBlockProgress> = HashMap::new();
         let processor_id = "event_a".to_string();
+        let chain_id: u64 = 1;
+        let key = progress_key(chain_id, &processor_id);
 
-        let network_progress = block_networks.entry(1).or_insert_with(|| NetworkBlockProgress {
-            events: HashMap::new(),
-            last_emitted_min: U64::ZERO,
+        let network_progress = block_networks.entry(chain_id).or_insert_with(|| {
+            NetworkBlockProgress { events: HashMap::new(), last_emitted_min: U64::ZERO }
         });
         network_progress.events.entry(processor_id.clone()).or_insert(U64::from(10));
 
-        events.entry(processor_id.clone()).or_insert_with(|| {
+        events.entry(key.clone()).or_insert_with(|| {
             IndexingEventProgress::running(
                 processor_id.clone(),
                 "EvmTraces".to_string(),
@@ -552,7 +566,7 @@ mod tests {
                 U64::from(10),
                 U64::from(100),
                 "mainnet".to_string(),
-                1,
+                chain_id,
                 true,
                 "Indexer::TraceEvents".to_string(),
             )
@@ -561,9 +575,37 @@ mod tests {
         network_progress.events.entry(processor_id.clone()).or_insert(U64::from(10));
 
         assert_eq!(events.len(), 1);
-        assert_eq!(events.get(&processor_id).unwrap().id, processor_id);
+        assert_eq!(events.get(&key).unwrap().id, processor_id);
         assert_eq!(block_networks.len(), 1);
-        assert_eq!(block_networks.get(&1).unwrap().events.len(), 1);
-        assert_eq!(block_networks.get(&1).unwrap().events.get(&processor_id), Some(&U64::from(10)));
+        assert_eq!(block_networks.get(&chain_id).unwrap().events.len(), 1);
+        assert_eq!(
+            block_networks.get(&chain_id).unwrap().events.get(&processor_id),
+            Some(&U64::from(10))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_same_event_id_different_chains() {
+        let stream = RindexerEventStream::new();
+        let mut rx = stream.subscribe();
+        let emitter = RindexerEventEmitter::from_stream(stream);
+
+        // Same event ID on two different chains - previously this would cause the
+        // second insert to overwrite the first in the events HashMap.
+        let state = test_state_with_events(
+            emitter,
+            vec![
+                ("shared_event", 1, U64::from(0), U64::from(200)),
+                ("shared_event", 42161, U64::from(0), U64::from(1000)),
+            ],
+        );
+
+        // Chain 1 update should succeed (not EventNotFound)
+        state.update_last_synced_block(1, "shared_event", U64::from(100)).await.unwrap();
+        assert_block_event(&mut rx, 1, 100);
+
+        // Chain 42161 update should also succeed independently
+        state.update_last_synced_block(42161, "shared_event", U64::from(500)).await.unwrap();
+        assert_block_event(&mut rx, 42161, 500);
     }
 }
