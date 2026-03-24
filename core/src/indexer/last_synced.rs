@@ -11,11 +11,11 @@ use tokio::{
 };
 use tracing::{debug, error};
 
-use crate::database::DatabaseBackends;
 use crate::database::postgres::generate::{
     generate_internal_cron_table_name, generate_internal_cron_table_name_no_shorten,
     generate_internal_event_table_name_no_shorten,
 };
+use crate::database::DatabaseBackends;
 use crate::{
     database::{
         generate::generate_indexer_contract_schema_name,
@@ -469,8 +469,7 @@ pub async fn evm_trace_update_progress_and_last_synced_task(
     if let Some(clickhouse) = &config.databases.clickhouse {
         let schema =
             generate_indexer_contract_schema_name(&config.indexer_name, &config.contract_name);
-        let table_name =
-            generate_internal_event_table_name_no_shorten(&schema, "native_transfer");
+        let table_name = generate_internal_event_table_name_no_shorten(&schema, "native_transfer");
         let query = format!(
             "INSERT INTO rindexer_internal.{table_name} (network, last_synced_block) VALUES ('{}', {})",
             config.network, to_block

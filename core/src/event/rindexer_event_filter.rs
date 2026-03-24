@@ -1,9 +1,9 @@
+use crate::database::DatabaseBackends;
 use crate::event::contract_setup::{AddressDetails, FilterDetails};
 use crate::event::factory_event_filter_sync::{
     get_known_factory_deployed_addresses, GetKnownFactoryDeployedAddressesParams,
 };
 use crate::manifest::storage::CsvDetails;
-use crate::database::DatabaseBackends;
 use alloy::rpc::types::Topic;
 use alloy::{
     primitives::{Address, B256, U64},

@@ -182,8 +182,11 @@ impl DatabaseBackends {
                     failure_threshold: config.failure_threshold.max(1),
                     cooldown_seconds: config.cooldown_seconds.max(1),
                 };
-                self.health =
-                    self.backends.iter().map(|_| Arc::new(Mutex::new(BackendHealth::new(&safe_config)))).collect();
+                self.health = self
+                    .backends
+                    .iter()
+                    .map(|_| Arc::new(Mutex::new(BackendHealth::new(&safe_config))))
+                    .collect();
             }
         }
         // Clamp max_batch_size to >= 1 to prevent panic in chunks(0)
@@ -272,14 +275,19 @@ impl DatabaseBackends {
                                 let was_half_open = h.state == CircuitState::HalfOpen;
                                 h.record_success();
                                 if was_half_open {
-                                    info!("{} circuit breaker recovered — backend is healthy", name);
+                                    info!(
+                                        "{} circuit breaker recovered — backend is healthy",
+                                        name
+                                    );
                                 }
                             }
                             Err(_) => {
                                 h.record_failure();
                                 if h.state == CircuitState::Open {
-                                    warn!("{} circuit breaker tripped after {} consecutive failures",
-                                        name, h.consecutive_failures);
+                                    warn!(
+                                        "{} circuit breaker tripped after {} consecutive failures",
+                                        name, h.consecutive_failures
+                                    );
                                 }
                             }
                         }
@@ -301,7 +309,9 @@ impl DatabaseBackends {
             // All backends have open circuits — this is a data loss vector.
             // Return error so the caller does NOT advance the checkpoint.
             error!("All backend circuits are open — no writes dispatched for {}", table);
-            return Err("All backend circuits are open — data not written to any backend".to_string());
+            return Err(
+                "All backend circuits are open — data not written to any backend".to_string()
+            );
         }
 
         let results = join_all(futs).await;
@@ -334,12 +344,20 @@ impl DatabaseBackends {
                 if failures.is_empty() {
                     Ok(())
                 } else {
-                    Err(failures.iter().map(|(n, e)| format!("{}: {}", n, e)).collect::<Vec<_>>().join("; "))
+                    Err(failures
+                        .iter()
+                        .map(|(n, e)| format!("{}: {}", n, e))
+                        .collect::<Vec<_>>()
+                        .join("; "))
                 }
             }
             WritePolicy::Any => {
                 if successes.is_empty() {
-                    Err(failures.iter().map(|(n, e)| format!("{}: {}", n, e)).collect::<Vec<_>>().join("; "))
+                    Err(failures
+                        .iter()
+                        .map(|(n, e)| format!("{}: {}", n, e))
+                        .collect::<Vec<_>>()
+                        .join("; "))
                 } else {
                     Ok(())
                 }
@@ -348,7 +366,11 @@ impl DatabaseBackends {
                 // PG is primary — error only if PG failed
                 let pg_failed = failures.iter().any(|(name, _)| *name == "postgres");
                 if pg_failed {
-                    Err(failures.iter().map(|(n, e)| format!("{}: {}", n, e)).collect::<Vec<_>>().join("; "))
+                    Err(failures
+                        .iter()
+                        .map(|(n, e)| format!("{}: {}", n, e))
+                        .collect::<Vec<_>>()
+                        .join("; "))
                 } else {
                     Ok(())
                 }
