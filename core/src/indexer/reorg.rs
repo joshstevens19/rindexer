@@ -350,14 +350,12 @@ async fn delete_events_clickhouse(
     network: &str,
 ) {
     let full_table = format!("{}.{}", schema, event_table);
-    // mutations_sync = 1 makes the DELETE synchronous — waits for completion before returning.
-    // Without this, rindexer can re-index and insert new events before the old ones are deleted.
-    let query = format!(
-        "ALTER TABLE {} DELETE WHERE block_number >= {} AND network = '{}' SETTINGS mutations_sync = 1",
-        full_table, fork_block, network
+    let where_clause = format!(
+        "block_number >= {} AND network = '{}'",
+        fork_block, network
     );
 
-    match clickhouse.execute(&query).await {
+    match clickhouse.delete_where(&full_table, &where_clause).await {
         Ok(_) => {
             info!("ClickHouse: deleted events from block >= {} in {}", fork_block, full_table)
         }
@@ -478,19 +476,16 @@ pub async fn delete_derived_table_rows(
         }
 
         if let Some(ch) = &databases.clickhouse {
-            let query = if is_cross_chain {
-                format!(
-                    "ALTER TABLE {} DELETE WHERE rindexer_block_number >= {} SETTINGS mutations_sync = 1",
-                    full_table, fork_block
-                )
+            let where_clause = if is_cross_chain {
+                format!("rindexer_block_number >= {}", fork_block)
             } else {
                 format!(
-                    "ALTER TABLE {} DELETE WHERE rindexer_block_number >= {} AND network = '{}' SETTINGS mutations_sync = 1",
-                    full_table, fork_block, network
+                    "rindexer_block_number >= {} AND network = '{}'",
+                    fork_block, network
                 )
             };
 
-            match ch.execute(&query).await {
+            match ch.delete_where(&full_table, &where_clause).await {
                 Ok(_) => info!(
                     "ClickHouse: deleted derived table rows from block >= {} in {}",
                     fork_block, full_table
@@ -709,15 +704,12 @@ async fn clear_table_for_replay(
     }
 
     if let Some(ch) = &databases.clickhouse {
-        let query = if let Some(network) = network {
-            format!(
-                "ALTER TABLE {} DELETE WHERE network = '{}' SETTINGS mutations_sync = 1",
-                full_table, network
-            )
+        let where_clause = if let Some(network) = network {
+            format!("network = '{}'", network)
         } else {
-            format!("ALTER TABLE {} DELETE WHERE 1 = 1 SETTINGS mutations_sync = 1", full_table)
+            "1 = 1".to_string()
         };
-        if let Err(e) = ch.execute(&query).await {
+        if let Err(e) = ch.delete_where(&full_table, &where_clause).await {
             error!(
                 "Reorg replay: failed clearing ClickHouse table {}{}: {:?}",
                 full_table,

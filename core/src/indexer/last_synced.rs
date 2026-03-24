@@ -169,6 +169,15 @@ pub async fn get_last_synced_block_number(config: SyncConfig<'_>) -> Option<U64>
                 ch_block,
                 result
             );
+
+            // Record checkpoint lag metrics when both backends have values
+            if let (Some(pg), Some(ch)) = (pg_block, ch_block) {
+                let max_block = std::cmp::max(pg, ch);
+                let pg_lag = (max_block - pg).to::<u64>();
+                let ch_lag = (max_block - ch).to::<u64>();
+                crate::metrics::database::set_checkpoint_lag("postgres", pg_lag);
+                crate::metrics::database::set_checkpoint_lag("clickhouse", ch_lag);
+            }
         }
         return result;
     }
@@ -428,7 +437,7 @@ pub async fn evm_trace_update_progress_and_last_synced_task(
         _ => {}
     }
 
-    if let Some(postgres) = &config.postgres {
+    if let Some(postgres) = &config.databases.postgres {
         // Use the native_transfer table for all trace events since they share the same pipeline
         let schema =
             generate_indexer_contract_schema_name(&config.indexer_name, &config.contract_name);
@@ -444,7 +453,7 @@ pub async fn evm_trace_update_progress_and_last_synced_task(
             error!("Error updating last synced trace block db: {:?}", e);
         }
     }
-    if let Some(clickhouse) = &config.clickhouse {
+    if let Some(clickhouse) = &config.databases.clickhouse {
         let schema =
             generate_indexer_contract_schema_name(&config.indexer_name, &config.contract_name);
         let table_name =
@@ -462,7 +471,7 @@ pub async fn evm_trace_update_progress_and_last_synced_task(
     }
 
     // CSV/stream fallback only when no database is configured
-    if config.postgres.is_none() && config.clickhouse.is_none() {
+    if config.databases.postgres.is_none() && config.databases.clickhouse.is_none() {
         if let Some(csv_details) = &config.csv_details {
             if let Err(e) = update_last_synced_block_number_for_file(
                 &config.contract_name,
