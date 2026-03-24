@@ -50,9 +50,7 @@ impl TestModule for DualWriteTests {
 // ============================================================================
 
 /// Start both PG and CH containers, return (pg_port, ch_port).
-async fn start_dual_containers(
-    context: &mut TestContext,
-) -> Result<(u16, u16)> {
+async fn start_dual_containers(context: &mut TestContext) -> Result<(u16, u16)> {
     let (pg_container, pg_port) = crate::docker::start_postgres_container().await?;
     context.register_container(pg_container);
     crate::docker::wait_for_postgres_ready(pg_port, 30).await?;
@@ -65,11 +63,7 @@ async fn start_dual_containers(
 }
 
 /// Create a RindexerInstance with both PG and CH env vars.
-fn create_dual_rindexer(
-    context: &TestContext,
-    pg_port: u16,
-    ch_port: u16,
-) -> RindexerInstance {
+fn create_dual_rindexer(context: &TestContext, pg_port: u16, ch_port: u16) -> RindexerInstance {
     let mut r = RindexerInstance::new(&context.rindexer_binary, context.project_path.clone());
     for (k, v) in crate::docker::postgres_env_vars(pg_port) {
         r = r.with_env(&k, &v);
@@ -96,7 +90,9 @@ async fn wait_for_pg_count(
         if let Ok((client, connection)) =
             tokio_postgres::connect(conn_str, tokio_postgres::NoTls).await
         {
-            tokio::spawn(async move { let _ = connection.await; });
+            tokio::spawn(async move {
+                let _ = connection.await;
+            });
             if let Ok(rows) = client.query(&query, &[]).await {
                 last_count = rows[0].get(0);
                 if last_count >= expected {
@@ -123,10 +119,7 @@ async fn wait_for_ch_count(
     let mut last_count: u64 = 0;
 
     while start.elapsed() < timeout {
-        let query = format!(
-            "SELECT count() FROM {} FINAL FORMAT TabSeparated",
-            table
-        );
+        let query = format!("SELECT count() FROM {} FINAL FORMAT TabSeparated", table);
         if let Ok(resp) = http_client
             .get(format!("http://localhost:{}", ch_port))
             .query(&[("query", &query)])
@@ -173,10 +166,7 @@ async fn generate_transfer_load(
 
         // Disable automine, send batch, mine single block
         context.anvil.set_automine(false).await?;
-        context
-            .anvil
-            .send_transfers_no_mine(contract_address, &transfers)
-            .await?;
+        context.anvil.send_transfers_no_mine(contract_address, &transfers).await?;
         context.anvil.mine_block().await?;
         context.anvil.set_automine(true).await?;
 
@@ -196,9 +186,7 @@ async fn generate_transfer_load(
 // Test 1: Dual-write events — identical rows in PG and CH at scale
 // ============================================================================
 
-fn dual_write_events(
-    context: &mut TestContext,
-) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
+fn dual_write_events(context: &mut TestContext) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
     Box::pin(async move {
         // 1. Start both containers
         let (pg_port, ch_port) = start_dual_containers(context).await?;
@@ -216,10 +204,8 @@ fn dual_write_events(
         );
         config.name = "dual_write_test".to_string();
         config.storage.postgres = Some(PostgresConfig { enabled: true });
-        config.storage.clickhouse = Some(ClickHouseConfig {
-            enabled: true,
-            drop_each_run: Some(true),
-        });
+        config.storage.clickhouse =
+            Some(ClickHouseConfig { enabled: true, drop_each_run: Some(true) });
         config.storage.csv.enabled = false;
         if let Some(contract) = config.contracts.get_mut(0) {
             if let Some(detail) = contract.details.get_mut(0) {
@@ -250,18 +236,23 @@ fn dual_write_events(
             wait_for_pg_count(&pg_conn_str, pg_table, expected_events as i64, 30).await?;
         let ch_count =
             wait_for_ch_count(&http_client, ch_port, ch_table, expected_events, 30).await?;
-        info!("PG row count: {}, CH row count: {} (expected: {})", pg_count, ch_count, expected_events);
+        info!(
+            "PG row count: {}, CH row count: {} (expected: {})",
+            pg_count, ch_count, expected_events
+        );
 
         // 6. Assert identical counts
         assert!(
             pg_count >= expected_events as i64,
             "PG should have >= {} rows, got {}",
-            expected_events, pg_count
+            expected_events,
+            pg_count
         );
         assert!(
             ch_count >= expected_events,
             "CH should have >= {} rows, got {}",
-            expected_events, ch_count
+            expected_events,
+            ch_count
         );
         assert_eq!(
             pg_count, ch_count as i64,
@@ -272,7 +263,9 @@ fn dual_write_events(
         // 7. Verify no duplicates in either backend
         let (pg_client, pg_conn) =
             tokio_postgres::connect(&pg_conn_str, tokio_postgres::NoTls).await?;
-        tokio::spawn(async move { let _ = pg_conn.await; });
+        tokio::spawn(async move {
+            let _ = pg_conn.await;
+        });
         let pg_dups = pg_client
             .query(
                 &format!(
@@ -282,11 +275,7 @@ fn dual_write_events(
                 &[],
             )
             .await?;
-        assert!(
-            pg_dups.is_empty(),
-            "PG should have no duplicates, found {}",
-            pg_dups.len()
-        );
+        assert!(pg_dups.is_empty(), "PG should have no duplicates, found {}", pg_dups.len());
 
         let ch_dup_query = format!(
             "SELECT tx_hash, log_index, count() as cnt FROM {} FINAL GROUP BY tx_hash, log_index HAVING cnt > 1 FORMAT TabSeparated",
@@ -308,14 +297,12 @@ fn dual_write_events(
         // 8. Field accuracy: compare tx_hashes between PG and CH
         let pg_hashes_rows = pg_client
             .query(
-                &format!(
-                    "SELECT tx_hash FROM {} ORDER BY block_number, log_index",
-                    pg_table
-                ),
+                &format!("SELECT tx_hash FROM {} ORDER BY block_number, log_index", pg_table),
                 &[],
             )
             .await?;
-        let pg_hashes: Vec<String> = pg_hashes_rows.iter().map(|r| r.get::<_, String>("tx_hash")).collect();
+        let pg_hashes: Vec<String> =
+            pg_hashes_rows.iter().map(|r| r.get::<_, String>("tx_hash")).collect();
 
         let ch_hashes_query = format!(
             "SELECT tx_hash FROM {} FINAL ORDER BY block_number, log_index FORMAT TabSeparated",
@@ -352,10 +339,8 @@ fn dual_write_events(
             )
             .await?;
         assert!(!pg_checkpoint_rows.is_empty(), "PG checkpoint should exist");
-        let pg_checkpoint: u64 = pg_checkpoint_rows[0]
-            .get::<_, String>("block")
-            .parse()
-            .unwrap_or(0);
+        let pg_checkpoint: u64 =
+            pg_checkpoint_rows[0].get::<_, String>("block").parse().unwrap_or(0);
 
         let ch_checkpoint_query =
             "SELECT last_synced_block FROM rindexer_internal.dual_write_test_simple_erc_20_transfer FINAL WHERE network = 'anvil' FORMAT TabSeparated";
@@ -395,9 +380,7 @@ fn dual_write_events(
 // Test 2: Dual-write reorg — both backends cleaned up
 // ============================================================================
 
-fn dual_write_reorg(
-    context: &mut TestContext,
-) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
+fn dual_write_reorg(context: &mut TestContext) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
     Box::pin(async move {
         // 1. Start both containers
         let (pg_port, ch_port) = start_dual_containers(context).await?;
@@ -408,10 +391,8 @@ fn dual_write_reorg(
             generate_transfer_load(context, &contract_address).await?;
 
         // 3. Create reorg-aware config with both backends (chain_id=137)
-        let mut config = RindexerInstance::create_minimal_config(
-            &context.anvil.rpc_url,
-            context.health_port,
-        );
+        let mut config =
+            RindexerInstance::create_minimal_config(&context.anvil.rpc_url, context.health_port);
         config.name = "dual_reorg_test".to_string();
         config.networks[0].name = "polygon".to_string();
         config.networks[0].chain_id = 137;
@@ -425,9 +406,7 @@ fn dual_write_reorg(
             }],
             abi: Some("./abis/SimpleERC20.abi.json".to_string()),
             reorg_safe_distance: Some(serde_json::json!(false)),
-            include_events: Some(vec![EventConfig {
-                name: "Transfer".to_string(),
-            }]),
+            include_events: Some(vec![EventConfig { name: "Transfer".to_string() }]),
             tables: None,
         }];
         config.storage.postgres = Some(PostgresConfig { enabled: true });
@@ -457,10 +436,21 @@ fn dual_write_reorg(
         let http_client = reqwest::Client::new();
 
         let pg_pre = wait_for_pg_count(&pg_conn_str, pg_table, expected_events as i64, 30).await?;
-        let ch_pre = wait_for_ch_count(&http_client, ch_port, ch_table, expected_events, 30).await?;
+        let ch_pre =
+            wait_for_ch_count(&http_client, ch_port, ch_table, expected_events, 30).await?;
         info!("Pre-reorg: PG={}, CH={} (expected: {})", pg_pre, ch_pre, expected_events);
-        assert!(pg_pre >= expected_events as i64, "PG pre-reorg should have >= {} rows, got {}", expected_events, pg_pre);
-        assert!(ch_pre >= expected_events, "CH pre-reorg should have >= {} rows, got {}", expected_events, ch_pre);
+        assert!(
+            pg_pre >= expected_events as i64,
+            "PG pre-reorg should have >= {} rows, got {}",
+            expected_events,
+            pg_pre
+        );
+        assert!(
+            ch_pre >= expected_events,
+            "CH pre-reorg should have >= {} rows, got {}",
+            expected_events,
+            ch_pre
+        );
 
         // 6. Stop indexer, trigger reorg, restart
         if let Some(r) = context.rindexer.as_mut() {
@@ -480,7 +470,9 @@ fn dual_write_reorg(
         // 7. Verify no duplicate tx_hashes in PG
         let (pg_client, pg_conn) =
             tokio_postgres::connect(&pg_conn_str, tokio_postgres::NoTls).await?;
-        tokio::spawn(async move { let _ = pg_conn.await; });
+        tokio::spawn(async move {
+            let _ = pg_conn.await;
+        });
         let pg_dups = pg_client
             .query(
                 &format!(
@@ -551,7 +543,11 @@ fn dual_write_checkpoint_resume(
             let recipient = helpers::generate_test_address(i);
             context
                 .anvil
-                .send_transfer(&contract_address, &recipient, ethers::types::U256::from((i + 1) * 100))
+                .send_transfer(
+                    &contract_address,
+                    &recipient,
+                    ethers::types::U256::from((i + 1) * 100),
+                )
                 .await?;
             context.anvil.mine_block().await?;
         }
@@ -565,10 +561,7 @@ fn dual_write_checkpoint_resume(
         );
         config.name = "resume_test".to_string();
         config.storage.postgres = Some(PostgresConfig { enabled: true });
-        config.storage.clickhouse = Some(ClickHouseConfig {
-            enabled: true,
-            drop_each_run: None,
-        });
+        config.storage.clickhouse = Some(ClickHouseConfig { enabled: true, drop_each_run: None });
         config.storage.csv.enabled = false;
         if let Some(contract) = config.contracts.get_mut(0) {
             if let Some(detail) = contract.details.get_mut(0) {
@@ -611,7 +604,11 @@ fn dual_write_checkpoint_resume(
             let recipient = helpers::generate_test_address(i);
             context
                 .anvil
-                .send_transfer(&contract_address, &recipient, ethers::types::U256::from((i + 1) * 100))
+                .send_transfer(
+                    &contract_address,
+                    &recipient,
+                    ethers::types::U256::from((i + 1) * 100),
+                )
                 .await?;
             context.anvil.mine_block().await?;
         }
@@ -619,13 +616,12 @@ fn dual_write_checkpoint_resume(
         info!("Second batch sent: blocks {} to {}", mid_block + 1, final_block);
 
         // 7. Restart indexer with new end_block — should resume from checkpoint
-        let mut config2 = config.clone();
-        if let Some(contract) = config2.contracts.get_mut(0) {
+        if let Some(contract) = config.contracts.get_mut(0) {
             if let Some(detail) = contract.details.get_mut(0) {
                 detail.end_block = Some(final_block.to_string());
             }
         }
-        let yaml2 = serde_yaml::to_string(&config2)?;
+        let yaml2 = serde_yaml::to_string(&config)?;
         std::fs::write(context.project_path.join("rindexer.yaml"), yaml2)?;
 
         let mut rindexer2 = create_dual_rindexer(context, pg_port, ch_port);
@@ -644,7 +640,9 @@ fn dual_write_checkpoint_resume(
         // 9. Verify no duplicates (proves resume didn't re-index batch 1)
         let (pg_client, pg_conn) =
             tokio_postgres::connect(&pg_conn_str, tokio_postgres::NoTls).await?;
-        tokio::spawn(async move { let _ = pg_conn.await; });
+        tokio::spawn(async move {
+            let _ = pg_conn.await;
+        });
         let pg_dups = pg_client
             .query(
                 &format!(
@@ -681,7 +679,11 @@ fn single_backend_regression(
             let recipient = helpers::generate_test_address(i);
             context
                 .anvil
-                .send_transfer(&contract_address, &recipient, ethers::types::U256::from((i + 1) * 500))
+                .send_transfer(
+                    &contract_address,
+                    &recipient,
+                    ethers::types::U256::from((i + 1) * 500),
+                )
                 .await?;
             context.anvil.mine_block().await?;
         }
@@ -693,7 +695,7 @@ fn single_backend_regression(
             &contract_address,
             context.health_port,
         );
-        config.name = "pg_only_test".to_string();
+        config.name = "single_pg_test".to_string();
         config.storage.postgres = Some(PostgresConfig { enabled: true });
         config.storage.clickhouse = None;
         config.storage.csv.enabled = false;
@@ -708,7 +710,8 @@ fn single_backend_regression(
         let yaml = serde_yaml::to_string(&config)?;
         std::fs::write(context.project_path.join("rindexer.yaml"), yaml)?;
 
-        let mut rindexer = RindexerInstance::new(&context.rindexer_binary, context.project_path.clone());
+        let mut rindexer =
+            RindexerInstance::new(&context.rindexer_binary, context.project_path.clone());
         for (k, v) in crate::docker::postgres_env_vars(pg_port) {
             rindexer = rindexer.with_env(&k, &v);
         }
@@ -721,17 +724,23 @@ fn single_backend_regression(
             "host=localhost port={} user=postgres password=postgres dbname=postgres",
             pg_port
         );
-        let pg_table = "pg_only_test_simple_erc_20.transfer";
+        let pg_table = "single_pg_test_simple_erc_20.transfer";
         let pg_count = wait_for_pg_count(&pg_conn_str, pg_table, 11, 15).await?;
-        assert_eq!(pg_count, 11, "PG-only should have 11 rows (1 mint + 10 transfers), got {}", pg_count);
+        assert_eq!(
+            pg_count, 11,
+            "PG-only should have 11 rows (1 mint + 10 transfers), got {}",
+            pg_count
+        );
 
         // 6. Verify checkpoint
         let (pg_client, pg_conn) =
             tokio_postgres::connect(&pg_conn_str, tokio_postgres::NoTls).await?;
-        tokio::spawn(async move { let _ = pg_conn.await; });
+        tokio::spawn(async move {
+            let _ = pg_conn.await;
+        });
         let checkpoint_rows = pg_client
             .query(
-                "SELECT last_synced_block::TEXT as block FROM rindexer_internal.pg_only_test_simple_erc_20_transfer WHERE network = 'anvil'",
+                "SELECT last_synced_block::TEXT as block FROM rindexer_internal.single_pg_test_simple_erc_20_transfer WHERE network = 'anvil'",
                 &[],
             )
             .await?;

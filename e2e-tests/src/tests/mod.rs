@@ -5,6 +5,7 @@ pub mod helpers;
 pub mod block_edge_cases;
 pub mod config_validation;
 pub mod direct_rpc;
+pub mod dual_write_e2e;
 pub mod graphql_queries;
 pub mod health_assertions;
 pub mod historic_indexing;
@@ -13,7 +14,6 @@ pub mod multi_network;
 pub mod postgres_e2e;
 pub mod reorg_e2e;
 pub mod restart_checkpoint;
-pub mod dual_write_e2e;
 
 // Registry and runner
 pub mod registry;

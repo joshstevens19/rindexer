@@ -18,7 +18,6 @@ mod health;
 pub use health::{start_health_server, HealthServer, HealthServerState, HealthStatus};
 
 mod database;
-pub use database::{Database, DatabaseBackends};
 pub use database::{
     clickhouse::{
         client::ClickhouseClient,
@@ -36,6 +35,7 @@ pub use database::{
         setup::setup_postgres,
     },
 };
+pub use database::{Database, DatabaseBackends};
 
 mod simple_file_formatters;
 pub use simple_file_formatters::csv::AsyncCsvAppender;

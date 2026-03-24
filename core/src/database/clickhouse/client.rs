@@ -83,7 +83,10 @@ impl ClickhouseClient {
                 (major, minor)
             }
             Err(e) => {
-                tracing::warn!("Failed to probe ClickHouse version: {:?}, defaulting to mutation deletes", e);
+                tracing::warn!(
+                    "Failed to probe ClickHouse version: {:?}, defaulting to mutation deletes",
+                    e
+                );
                 (0, 0)
             }
         }
@@ -106,8 +109,7 @@ impl ClickhouseClient {
         where_clause: &str,
     ) -> Result<(), ClickhouseError> {
         if self.supports_lightweight_delete() {
-            self.execute(&format!("DELETE FROM {} WHERE {}", table, where_clause))
-                .await
+            self.execute(&format!("DELETE FROM {} WHERE {}", table, where_clause)).await
         } else {
             self.execute(&format!(
                 "ALTER TABLE {} DELETE WHERE {} SETTINGS mutations_sync = 1",

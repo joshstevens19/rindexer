@@ -16,12 +16,12 @@ use super::cron_scheduler::{manifest_has_cron_tables, CronScheduler};
 use super::native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME};
 use super::tables::{process_table_operations, ProgressCheckpointConfig, TableRuntime, TxMetadata};
 use crate::database::clickhouse::client::ClickhouseClient;
-use crate::database::DatabaseBackends;
 use crate::database::clickhouse::setup::{setup_clickhouse, SetupClickhouseError};
 use crate::database::generate::generate_event_table_full_name;
 use crate::database::sql_type_wrapper::{
     map_ethereum_wrapper_to_json, map_log_params_to_ethereum_wrapper, EthereumSqlTypeWrapper,
 };
+use crate::database::DatabaseBackends;
 use crate::manifest::contract::Contract;
 use crate::manifest::core::Constants;
 use crate::{
@@ -195,13 +195,9 @@ pub async fn setup_no_code(
                     manifest.storage.max_batch_size,
                 );
 
-            let events = process_events(
-                project_path,
-                &manifest,
-                databases.clone(),
-                &network_providers,
-            )
-            .await?;
+            let events =
+                process_events(project_path, &manifest, databases.clone(), &network_providers)
+                    .await?;
 
             let registry = EventCallbackRegistry { events };
             info!(
@@ -247,11 +243,7 @@ pub async fn setup_no_code(
                         .collect(),
                 );
 
-                let scheduler = CronScheduler::new(
-                    &manifest,
-                    databases.clone(),
-                    providers_map,
-                );
+                let scheduler = CronScheduler::new(&manifest, databases.clone(), providers_map);
 
                 let cron_scheduler_handle = if scheduler.has_tasks() {
                     info!("Starting cron scheduler with {} tasks", scheduler.tasks.len());

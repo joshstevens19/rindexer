@@ -497,8 +497,7 @@ async fn get_factory_addresses(
     databases: &DatabaseBackends,
     context: &CronContext,
 ) -> Result<Vec<Address>, Box<dyn std::error::Error + Send + Sync>> {
-    let addresses_with_blocks =
-        get_factory_addresses_with_blocks(task, databases, context).await?;
+    let addresses_with_blocks = get_factory_addresses_with_blocks(task, databases, context).await?;
     Ok(addresses_with_blocks.keys().copied().collect())
 }
 
@@ -598,9 +597,7 @@ async fn run_cron_task(
         // For factory contracts, wait for factory event indexing to discover addresses
         if is_factory {
             let start_block = start_block_value.to::<u64>();
-            if let Err(e) =
-                wait_for_factory_sync(&task, &databases, &context, start_block).await
-            {
+            if let Err(e) = wait_for_factory_sync(&task, &databases, &context, start_block).await {
                 error!(
                     "Failed waiting for factory sync for table '{}' on network '{}': {}",
                     task.table.name, task.network, e
@@ -609,13 +606,8 @@ async fn run_cron_task(
             }
         }
 
-        let historical_completed = run_historical_sync(
-            &task,
-            databases.clone(),
-            providers.clone(),
-            &context,
-        )
-        .await;
+        let historical_completed =
+            run_historical_sync(&task, databases.clone(), providers.clone(), &context).await;
 
         if !historical_completed {
             debug!(
@@ -1296,14 +1288,7 @@ async fn run_live_cron_loop(
                 break;
             }
 
-            match execute_cron_operations(
-                task,
-                &databases,
-                providers.clone(),
-                &addresses,
-            )
-            .await
-            {
+            match execute_cron_operations(task, &databases, providers.clone(), &addresses).await {
                 Ok(()) => {
                     // Success - clear any previous error state
                     if retry_count > 0 {

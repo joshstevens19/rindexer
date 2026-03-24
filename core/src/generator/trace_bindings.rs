@@ -749,16 +749,15 @@ fn generate_trace_bindings_code(
         abigen_name = trace_abigen_contract_name(contract_name),
         structs = trace_generate_structs(contract_name)?,
         event_type_name = &event_type_name,
-        event_context_database =
-            if storage.postgres_enabled() && storage.clickhouse_enabled() {
-                "pub database: Arc<rindexer::DatabaseBackends>,"
-            } else if storage.postgres_enabled() {
-                "pub database: Arc<PostgresClient>,"
-            } else if storage.clickhouse_enabled() {
-                "pub database: Arc<ClickhouseClient>,"
-            } else {
-                ""
-            },
+        event_context_database = if storage.postgres_enabled() && storage.clickhouse_enabled() {
+            "pub database: Arc<rindexer::DatabaseBackends>,"
+        } else if storage.postgres_enabled() {
+            "pub database: Arc<PostgresClient>,"
+        } else if storage.clickhouse_enabled() {
+            "pub database: Arc<ClickhouseClient>,"
+        } else {
+            ""
+        },
         event_context_csv =
             if storage.csv_enabled() { "pub csv: Arc<AsyncCsvAppender>," } else { "" },
         event_callback_structs =

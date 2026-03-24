@@ -139,9 +139,15 @@ pub struct CircuitBreakerConfig {
     pub cooldown_seconds: u64,
 }
 
-fn default_true() -> bool { true }
-fn default_failure_threshold() -> u32 { 5 }
-fn default_cooldown_seconds() -> u64 { 60 }
+fn default_true() -> bool {
+    true
+}
+fn default_failure_threshold() -> u32 {
+    5
+}
+fn default_cooldown_seconds() -> u64 {
+    60
+}
 
 impl Default for CircuitBreakerConfig {
     fn default() -> Self {

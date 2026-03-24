@@ -213,12 +213,11 @@ async fn start_indexing_traces(
             .find(|c| c.name == first_event.contract_name)
             .and_then(|c| c.streams.as_ref());
 
-        let databases = DatabaseBackends::new(postgres.clone(), clickhouse.clone())
-            .with_config(
-                manifest.storage.write_policy.clone(),
-                manifest.storage.circuit_breaker.clone(),
-                manifest.storage.max_batch_size,
-            );
+        let databases = DatabaseBackends::new(postgres.clone(), clickhouse.clone()).with_config(
+            manifest.storage.write_policy.clone(),
+            manifest.storage.circuit_breaker.clone(),
+            manifest.storage.max_batch_size,
+        );
         let sync_config = SyncConfig {
             project_path,
             databases: &databases,

@@ -244,13 +244,7 @@ pub async fn handle_reorg_recovery(
     // Delete derived/custom table rows affected by the reorg
     let tables = config.tables();
     if !tables.is_empty() {
-        delete_derived_table_rows(
-            &tables,
-            config.databases(),
-            fork_block,
-            network,
-        )
-        .await;
+        delete_derived_table_rows(&tables, config.databases(), fork_block, network).await;
 
         if let Err(e) = recompute_derived_tables(config, &tables, fork_block, network).await {
             error!("Reorg: failed to recompute derived tables for {}: {}", event_name, e);
@@ -350,10 +344,7 @@ async fn delete_events_clickhouse(
     network: &str,
 ) {
     let full_table = format!("{}.{}", schema, event_table);
-    let where_clause = format!(
-        "block_number >= {} AND network = '{}'",
-        fork_block, network
-    );
+    let where_clause = format!("block_number >= {} AND network = '{}'", fork_block, network);
 
     match clickhouse.delete_where(&full_table, &where_clause).await {
         Ok(_) => {
@@ -479,10 +470,7 @@ pub async fn delete_derived_table_rows(
             let where_clause = if is_cross_chain {
                 format!("rindexer_block_number >= {}", fork_block)
             } else {
-                format!(
-                    "rindexer_block_number >= {} AND network = '{}'",
-                    fork_block, network
-                )
+                format!("rindexer_block_number >= {} AND network = '{}'", fork_block, network)
             };
 
             match ch.delete_where(&full_table, &where_clause).await {
@@ -1281,12 +1269,18 @@ pub async fn handle_native_transfer_reorg_recovery(
     }
 
     if let Some(clickhouse) = &databases.clickhouse {
-        let ch_hashes =
-            collect_affected_tx_hashes_clickhouse(clickhouse, &schema, event_table_name, fork_block, network)
-                .await;
+        let ch_hashes = collect_affected_tx_hashes_clickhouse(
+            clickhouse,
+            &schema,
+            event_table_name,
+            fork_block,
+            network,
+        )
+        .await;
         affected_tx_hashes.extend(ch_hashes);
         delete_events_clickhouse(clickhouse, &schema, event_table_name, fork_block, network).await;
-        rewind_checkpoint_clickhouse(clickhouse, &schema, "native_transfer", rewind_block, network).await;
+        rewind_checkpoint_clickhouse(clickhouse, &schema, "native_transfer", rewind_block, network)
+            .await;
         info!(
             "Native transfer reorg recovery complete (CH): checkpoint rewound to block {} for {}.{}",
             rewind_block, schema, event_table_name
