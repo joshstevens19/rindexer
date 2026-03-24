@@ -1,9 +1,24 @@
 # Changelog
 
-### Breaking changes
+### Bug fixes
 -------------------------------------------------
 
-- 
+### Features
+-------------------------------------------------
+
+## Releases
+-------------------------------------------------
+
+All release branches are deployed through `release/VERSION_NUMBER` branches
+
+# 0.36.0-beta - 24th Match 2026
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.36.0
+
+- linux binary - https://github.com/joshstevens19/rindexer/releases/download/v0.36.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://github.com/joshstevens19/rindexer/releases/download/v0.36.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://github.com/joshstevens19/rindexer/releases/download/v0.36.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://github.com/joshstevens19/rindexer/releases/download/v0.36.0/rindexer_win32-amd64.zip
 
 ### Bug fixes
 -------------------------------------------------
@@ -16,12 +31,7 @@
 
 - feat: add support for tuple[] (array of structs) via JSONB storage
 - feat: `BlockIndexingCompleted` event — emitted when all events on a chain have indexed up to a block
-- feat:  Reorg detection & recovery — active reorg detection during live indexing via tip hash comparison, parent hash chain validation, removed log detection, and a background post-confirmation verifier 
-
-## Releases
--------------------------------------------------
-
-all release branches are deployed through `release/VERSION_NUMBER` branches
+- feat:  Reorg detection & recovery — active reorg detection during live indexing via tip hash comparison, parent hash chain validation, removed log detection, and a background post-confirmation verifier
 
 # 0.35.0-beta - 28th Janurary 2026
 
