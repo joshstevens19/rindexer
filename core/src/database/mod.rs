@@ -157,23 +157,37 @@ impl DatabaseBackends {
     }
 
     /// Configure write policy, circuit breaker, and batch size from storage config.
+    /// Validates config values — clamps degenerate inputs to safe minimums.
     pub fn with_config(
         mut self,
         write_policy: Option<WritePolicy>,
         circuit_breaker: Option<CircuitBreakerConfig>,
         max_batch_size: Option<usize>,
     ) -> Self {
-        if let Some(policy) = write_policy {
-            self.write_policy = policy;
+        if let Some(policy) = &write_policy {
+            // Validate PrimaryWithShadow requires postgres
+            if *policy == WritePolicy::PrimaryWithShadow && self.postgres.is_none() {
+                warn!("WritePolicy::PrimaryWithShadow requires postgres — falling back to WritePolicy::All");
+                self.write_policy = WritePolicy::All;
+            } else {
+                self.write_policy = policy.clone();
+            }
         }
         if let Some(config) = &circuit_breaker {
             if config.enabled {
                 self.circuit_breaker_enabled = true;
+                // Clamp to safe minimums: threshold >= 1, cooldown >= 1s
+                let safe_config = CircuitBreakerConfig {
+                    enabled: true,
+                    failure_threshold: config.failure_threshold.max(1),
+                    cooldown_seconds: config.cooldown_seconds.max(1),
+                };
                 self.health =
-                    self.backends.iter().map(|_| Arc::new(Mutex::new(BackendHealth::new(config)))).collect();
+                    self.backends.iter().map(|_| Arc::new(Mutex::new(BackendHealth::new(&safe_config)))).collect();
             }
         }
-        self.max_batch_size = max_batch_size;
+        // Clamp max_batch_size to >= 1 to prevent panic in chunks(0)
+        self.max_batch_size = max_batch_size.map(|v| v.max(1));
         self
     }
 
@@ -254,13 +268,18 @@ impl DatabaseBackends {
                     if let Some(health) = health {
                         let mut h = health.lock();
                         match &result {
-                            Ok(_) => h.record_success(),
+                            Ok(_) => {
+                                let was_half_open = h.state == CircuitState::HalfOpen;
+                                h.record_success();
+                                if was_half_open {
+                                    info!("{} circuit breaker recovered — backend is healthy", name);
+                                }
+                            }
                             Err(_) => {
                                 h.record_failure();
                                 if h.state == CircuitState::Open {
                                     warn!("{} circuit breaker tripped after {} consecutive failures",
                                         name, h.consecutive_failures);
-                                    db_metrics::set_circuit_state(name, 1.0);
                                 }
                             }
                         }
@@ -279,9 +298,10 @@ impl DatabaseBackends {
             .collect();
 
         if futs.is_empty() {
-            // All backends have open circuits
-            warn!("All backend circuits are open — no writes dispatched for {}", table);
-            return Ok(());
+            // All backends have open circuits — this is a data loss vector.
+            // Return error so the caller does NOT advance the checkpoint.
+            error!("All backend circuits are open — no writes dispatched for {}", table);
+            return Err("All backend circuits are open — data not written to any backend".to_string());
         }
 
         let results = join_all(futs).await;
