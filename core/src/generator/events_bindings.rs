@@ -680,9 +680,13 @@ fn generate_event_bindings_code(
                     tables: Arc::new(vec![]),
                     reorg_sender,
                     streams_clients: Arc::new(None),
-                    providers: Arc::new(HashMap::new()),
-                    constants: Arc::new(HashMap::new()),
-                    multicall_addresses: Arc::new(HashMap::new()),
+                    providers: Arc::new(providers),
+                    constants: Arc::new(rindexer_yaml.constants.clone()),
+                    multicall_addresses: Arc::new(
+                        rindexer_yaml.networks.iter()
+                            .map(|n| (n.name.clone(), n.multicall3_address.clone()))
+                            .collect(),
+                    ),
                 }});
             }}
         }}
