@@ -93,7 +93,7 @@ impl ContractEventProcessingConfig {
                     indexed_filters.iter().find(|&n| n.event_name == self.event_name)
                 });
 
-                Ok(RindexerEventFilter::Factory(FactoryFilter {
+                Ok(RindexerEventFilter::Factory(Box::new(FactoryFilter {
                     project_path: self.project_path.clone(),
                     indexer_name: self.indexer_name.clone(),
                     factory_contract_name: details.contract_name.clone(),
@@ -108,7 +108,7 @@ impl ContractEventProcessingConfig {
 
                     current_block: self.start_block,
                     next_block: self.end_block,
-                }))
+                })))
             }
         }
     }
