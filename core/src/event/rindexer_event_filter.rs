@@ -125,7 +125,7 @@ impl FactoryFilter {
 pub enum RindexerEventFilter {
     Address(SimpleEventFilter),
     Filter(SimpleEventFilter),
-    Factory(FactoryFilter),
+    Factory(Box<FactoryFilter>),
 }
 
 impl RindexerEventFilter {
@@ -224,7 +224,7 @@ impl RindexerEventFilter {
         match self {
             Self::Address(filter) => Self::Address(filter.set_from_block(block)),
             Self::Filter(filter) => Self::Filter(filter.set_from_block(block)),
-            Self::Factory(filter) => Self::Factory(filter.set_from_block(block)),
+            Self::Factory(filter) => Self::Factory(Box::new(filter.set_from_block(block))),
         }
     }
     pub fn set_to_block<R: Into<U64>>(self, block: R) -> Self {
@@ -236,7 +236,7 @@ impl RindexerEventFilter {
                 RindexerEventFilter::Filter(filter.set_to_block(block.into()))
             }
             RindexerEventFilter::Factory(filter) => {
-                RindexerEventFilter::Factory(filter.set_to_block(block.into()))
+                RindexerEventFilter::Factory(Box::new(filter.set_to_block(block.into())))
             }
         }
     }
