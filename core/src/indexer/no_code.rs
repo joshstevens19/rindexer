@@ -188,7 +188,12 @@ pub async fn setup_no_code(
                     .join(", ")
             );
 
-            let databases = DatabaseBackends::new(postgres.clone(), clickhouse.clone());
+            let databases = DatabaseBackends::new(postgres.clone(), clickhouse.clone())
+                .with_config(
+                    manifest.storage.write_policy.clone(),
+                    manifest.storage.circuit_breaker.clone(),
+                    manifest.storage.max_batch_size,
+                );
 
             let events = process_events(
                 project_path,

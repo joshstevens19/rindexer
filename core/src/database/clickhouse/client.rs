@@ -95,6 +95,11 @@ impl ClickhouseClient {
     }
 
     /// Delete rows matching a WHERE clause, using lightweight DELETE when available.
+    ///
+    /// **IMPORTANT**: Lightweight deletes (CH >= 23.3) mark rows as deleted but they remain
+    /// visible until the next merge. All post-delete reads MUST use `FINAL` to exclude
+    /// deleted rows. Mutation deletes (CH < 23.3) are synchronous (`mutations_sync = 1`)
+    /// and rows are immediately invisible.
     pub async fn delete_where(
         &self,
         table: &str,

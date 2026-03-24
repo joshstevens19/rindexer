@@ -337,6 +337,9 @@ pub async fn update_progress_and_last_synced_task(
     }
 
     // Write checkpoint to ALL configured database backends (independent blocks, not else-if).
+    let mut pg_checkpoint_ok = false;
+    let mut ch_checkpoint_ok = false;
+
     if let Some(postgres) = &config.postgres() {
         let schema =
             generate_indexer_contract_schema_name(&config.indexer_name(), &config.contract_name());
@@ -347,10 +350,9 @@ pub async fn update_progress_and_last_synced_task(
              UPDATE rindexer_internal.latest_block SET block = {latest} WHERE network = '{network}' AND {latest} > block;"
         );
 
-        let result = postgres.batch_execute(&query).await;
-
-        if let Err(e) = result {
-            error!("Error updating db last synced block: {:?}", e);
+        match postgres.batch_execute(&query).await {
+            Ok(_) => pg_checkpoint_ok = true,
+            Err(e) => error!("Error updating db last synced block: {:?}", e),
         }
     }
     if let Some(clickhouse) = &config.clickhouse() {
@@ -366,10 +368,21 @@ pub async fn update_progress_and_last_synced_task(
             "#
         );
 
-        let result = clickhouse.execute_batch(&query).await;
+        match clickhouse.execute_batch(&query).await {
+            Ok(_) => ch_checkpoint_ok = true,
+            Err(e) => error!("Error updating clickhouse last synced block: {:?}", e),
+        }
+    }
 
-        if let Err(e) = result {
-            error!("Error updating clickhouse last synced block: {:?}", e);
+    // Record checkpoint lag: if one backend's checkpoint failed, it's now behind.
+    if config.postgres().is_some() && config.clickhouse().is_some() {
+        if pg_checkpoint_ok && !ch_checkpoint_ok {
+            crate::metrics::database::set_checkpoint_lag("clickhouse", 1);
+        } else if !pg_checkpoint_ok && ch_checkpoint_ok {
+            crate::metrics::database::set_checkpoint_lag("postgres", 1);
+        } else if pg_checkpoint_ok && ch_checkpoint_ok {
+            crate::metrics::database::set_checkpoint_lag("postgres", 0);
+            crate::metrics::database::set_checkpoint_lag("clickhouse", 0);
         }
     }
     // CSV/stream fallback only when no database is configured

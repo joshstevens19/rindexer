@@ -213,7 +213,12 @@ async fn start_indexing_traces(
             .find(|c| c.name == first_event.contract_name)
             .and_then(|c| c.streams.as_ref());
 
-        let databases = DatabaseBackends::new(postgres.clone(), clickhouse.clone());
+        let databases = DatabaseBackends::new(postgres.clone(), clickhouse.clone())
+            .with_config(
+                manifest.storage.write_policy.clone(),
+                manifest.storage.circuit_breaker.clone(),
+                manifest.storage.max_batch_size,
+            );
         let sync_config = SyncConfig {
             project_path,
             databases: &databases,
@@ -334,12 +339,16 @@ async fn start_indexing_contract_events(
             let postgres = postgres.clone();
             let clickhouse = clickhouse.clone();
             let manifest_csv_details = manifest.storage.csv.clone();
+            let write_policy = manifest.storage.write_policy.clone();
+            let circuit_breaker = manifest.storage.circuit_breaker.clone();
+            let max_batch_size = manifest.storage.max_batch_size;
             let registry = Arc::clone(&registry);
             let progress = Arc::clone(&progress);
             let dependencies = dependencies.to_vec();
 
             block_tasks.push(async move {
-                let databases = DatabaseBackends::new(postgres.clone(), clickhouse.clone());
+                let databases = DatabaseBackends::new(postgres.clone(), clickhouse.clone())
+                    .with_config(write_policy, circuit_breaker, max_batch_size);
                 let config = SyncConfig {
                     project_path: &project_path,
                     databases: &databases,
@@ -370,8 +379,7 @@ async fn start_indexing_contract_events(
                         stream_details,
                         blocks,
                         project_path,
-                        postgres,
-                        clickhouse,
+                        databases,
                         manifest_csv_details,
                         registry,
                         progress,
@@ -390,8 +398,7 @@ async fn start_indexing_contract_events(
             stream_details,
             (start_block, end_block, indexing_distance_from_head),
             project_path,
-            postgres,
-            clickhouse,
+            databases,
             manifest_csv_details,
             registry,
             progress,
@@ -447,7 +454,7 @@ async fn start_indexing_contract_events(
                     end_block,
                     registry: Arc::clone(&registry),
                     progress: Arc::clone(&progress),
-                    databases: DatabaseBackends::new(postgres.clone(), clickhouse.clone()),
+                    databases: databases.clone(),
                     config: manifest.config.clone(),
                     csv_details: manifest_csv_details.clone(),
                     // timestamps: timestamp_enabled_for_event
@@ -486,7 +493,7 @@ async fn start_indexing_contract_events(
                 end_block,
                 registry: Arc::clone(&registry),
                 progress: Arc::clone(&progress),
-                databases: DatabaseBackends::new(postgres.clone(), clickhouse.clone()),
+                databases: databases.clone(),
                 csv_details: manifest_csv_details.clone(),
                 config: manifest.config.clone(),
                 // timestamps: timestamp_enabled_for_event
