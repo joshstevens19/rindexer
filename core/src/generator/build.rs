@@ -13,7 +13,9 @@ use super::{
 };
 use crate::manifest::contract::Contract;
 use crate::{
-    generator::database_bindings::{generate_clickhouse_code, generate_postgres_code},
+    generator::database_bindings::{
+        generate_clickhouse_code, generate_database_backends_code, generate_postgres_code,
+    },
     generator::trace_bindings::{
         generate_trace_bindings, generate_trace_handlers, trace_abigen_contract_file_name,
         GenerateTraceBindingsError, GenerateTraceHandlersError,
@@ -240,15 +242,19 @@ pub fn generate_rindexer_typings(
                 write_global(&output, global_contracts, &manifest.networks)?;
             }
 
-            if manifest.storage.postgres_enabled() {
+            if manifest.storage.postgres_enabled() && manifest.storage.clickhouse_enabled() {
+                write_file(
+                    &generate_file_location(&output, "database"),
+                    generate_database_backends_code().as_str(),
+                )
+                .map_err(WriteGlobalError::from)?;
+            } else if manifest.storage.postgres_enabled() {
                 write_file(
                     &generate_file_location(&output, "database"),
                     generate_postgres_code().as_str(),
                 )
                 .map_err(WriteGlobalError::from)?;
-            }
-
-            if manifest.storage.clickhouse_enabled() {
+            } else if manifest.storage.clickhouse_enabled() {
                 write_file(
                     &generate_file_location(&output, "database"),
                     generate_clickhouse_code().as_str(),

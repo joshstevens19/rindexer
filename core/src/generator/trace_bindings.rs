@@ -270,7 +270,6 @@ fn generate_trace_callback_structs_code(
     contract: &NativeTransfers,
     storage: &Storage,
 ) -> Result<Code, GenerateTraceCallbackStructsError> {
-    let databases_enabled = storage.postgres_enabled();
     let csv_enabled = storage.csv_enabled();
     let is_filter = false; // TODO: Hardcoded for now
 
@@ -377,8 +376,12 @@ fn generate_trace_callback_structs_code(
             name = info.name,
             lower_name = info.name.to_lowercase(),
             struct_result = info.struct_result(),
-            database = if databases_enabled {
+            database = if storage.postgres_enabled() && storage.clickhouse_enabled() {
+                "database: get_or_init_database_backends().await,"
+            } else if storage.postgres_enabled() {
                 "database: get_or_init_postgres_client().await,"
+            } else if storage.clickhouse_enabled() {
+                "database: get_or_init_clickhouse_client().await,"
             } else {
                 ""
             },
@@ -479,8 +482,15 @@ fn generate_trace_callback_structs_code(
             }}
         }}
         "#,
-        database =
-            if databases_enabled { "database: get_or_init_postgres_client().await," } else { "" },
+        database = if storage.postgres_enabled() && storage.clickhouse_enabled() {
+            "database: get_or_init_database_backends().await,"
+        } else if storage.postgres_enabled() {
+            "database: get_or_init_postgres_client().await,"
+        } else if storage.clickhouse_enabled() {
+            "database: get_or_init_clickhouse_client().await,"
+        } else {
+            ""
+        },
     );
 
     parts.push(block_part);
@@ -716,19 +726,38 @@ fn generate_trace_bindings_code(
             }}
         }}
         "#,
-        postgres_import = if storage.postgres_enabled() {
+        postgres_import = if storage.postgres_enabled() && storage.clickhouse_enabled() {
+            "use super::super::super::super::typings::database::get_or_init_postgres_client;\nuse super::super::super::super::typings::database::get_or_init_clickhouse_client;\nuse super::super::super::super::typings::database::get_or_init_database_backends;"
+        } else if storage.postgres_enabled() {
             "use super::super::super::super::typings::database::get_or_init_postgres_client;"
+        } else if storage.clickhouse_enabled() {
+            "use super::super::super::super::typings::database::get_or_init_clickhouse_client;"
         } else {
             ""
         },
-        postgres_client_import = if storage.postgres_enabled() { "PostgresClient," } else { "" },
+        postgres_client_import = if storage.postgres_enabled() && storage.clickhouse_enabled() {
+            "PostgresClient, ClickhouseClient, DatabaseBackends,"
+        } else if storage.postgres_enabled() {
+            "PostgresClient,"
+        } else if storage.clickhouse_enabled() {
+            "ClickhouseClient,"
+        } else {
+            ""
+        },
         csv_import = if storage.csv_enabled() { "AsyncCsvAppender," } else { "" },
         abigen_file_name = trace_abigen_contract_file_name(contract_name),
         abigen_name = trace_abigen_contract_name(contract_name),
         structs = trace_generate_structs(contract_name)?,
         event_type_name = &event_type_name,
-        event_context_database =
-            if storage.postgres_enabled() { "pub database: Arc<PostgresClient>," } else { "" },
+        event_context_database = if storage.postgres_enabled() && storage.clickhouse_enabled() {
+            "pub database: Arc<rindexer::DatabaseBackends>,"
+        } else if storage.postgres_enabled() {
+            "pub database: Arc<PostgresClient>,"
+        } else if storage.clickhouse_enabled() {
+            "pub database: Arc<ClickhouseClient>,"
+        } else {
+            ""
+        },
         event_context_csv =
             if storage.csv_enabled() { "pub csv: Arc<AsyncCsvAppender>," } else { "" },
         event_callback_structs =

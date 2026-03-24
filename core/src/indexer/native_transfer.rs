@@ -15,12 +15,12 @@ use tracing::{debug, error, info, warn};
 
 use tokio_util::sync::CancellationToken;
 
+use crate::database::DatabaseBackends;
 use crate::indexer::fetch_logs::{BlockMeta, ReorgInfo};
 use crate::indexer::reorg::{find_fork_point, handle_native_transfer_reorg_recovery};
 use crate::is_running;
 use crate::metrics::indexing as metrics;
 use crate::provider::RECOMMENDED_RPC_CHUNK_SIZE;
-use crate::PostgresClient;
 use crate::{
     event::{
         callback_registry::{TraceResult, TxInformation},
@@ -121,7 +121,7 @@ pub async fn native_transfer_block_fetch(
     indexing_distance_from_head: U64,
     network: String,
     cancel_token: CancellationToken,
-    postgres: Option<Arc<PostgresClient>>,
+    databases: DatabaseBackends,
     indexer_name: String,
 ) -> Result<(), ProcessEventError> {
     let mut last_seen_block = start_block;
@@ -165,7 +165,7 @@ pub async fn native_transfer_block_fetch(
             }
 
             handle_native_transfer_reorg_recovery(
-                &postgres,
+                &databases,
                 &indexer_name,
                 &network,
                 fork_block,
@@ -226,7 +226,7 @@ pub async fn native_transfer_block_fetch(
 
                     // Delete orphaned native transfer events and rewind checkpoint
                     handle_native_transfer_reorg_recovery(
-                        &postgres,
+                        &databases,
                         &indexer_name,
                         &network,
                         fork_block,

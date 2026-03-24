@@ -3,20 +3,30 @@
 ### Breaking changes
 -------------------------------------------------
 
-- 
+-
 
 ### Bug fixes
 -------------------------------------------------
 
 - fix: migrate PostgreSQL TLS from native-tls to rustls
 - fix: use composite key in progress tracker for multi-network events
+- fix: checkpoint write `else if` chain only wrote to first enabled backend — changed to independent writes to all backends
+- fix: factory address `return Ok(())` after PG write skipped ClickHouse — both backends now receive factory addresses
+- fix: trace checkpoint wrote to CSV/stream even when databases were configured — added fallback guard
 
 ### Features
 -------------------------------------------------
 
 - feat: add support for tuple[] (array of structs) via JSONB storage
 - feat: `BlockIndexingCompleted` event — emitted when all events on a chain have indexed up to a block
-- feat:  Reorg detection & recovery — active reorg detection during live indexing via tip hash comparison, parent hash chain validation, removed log detection, and a background post-confirmation verifier 
+- feat: Reorg detection & recovery — active reorg detection during live indexing via tip hash comparison, parent hash chain validation, removed log detection, and a background post-confirmation verifier
+- feat: **Multi-database writes** — simultaneous PostgreSQL + ClickHouse writes with parallel `insert_bulk`, per-backend checkpoints, and `min(pg, ch)` checkpoint reconciliation on restart
+- feat: `write_policy` config — `all` (default, both must succeed), `any` (succeed if one writes), `primary_with_shadow` (PG primary, CH shadow)
+- feat: **Circuit breaker** — per-backend health tracking (Closed/Open/HalfOpen state machine) with configurable `failure_threshold` and `cooldown_seconds`. Prevents a failing backend from blocking the indexer
+- feat: `max_batch_size` config — splits large event batches into sequential chunks to prevent memory pressure
+- feat: **Lightweight ClickHouse deletes** — automatic version detection (`SELECT version()`), uses `DELETE FROM` on CH >= 23.3 instead of `ALTER TABLE DELETE` (10-100x faster reorg cleanup)
+- feat: **Per-backend Prometheus metrics** — `rindexer_backend_insert_duration_seconds`, `rindexer_backend_insert_errors_total`, `rindexer_backend_circuit_state`, `rindexer_checkpoint_lag_blocks`
+- feat: 3-way code generation — Rust-mode projects with both backends get `Arc<DatabaseBackends>` in the generated context; single-backend projects produce identical code to before
 
 ## Releases
 -------------------------------------------------

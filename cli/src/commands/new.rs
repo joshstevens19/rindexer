@@ -293,6 +293,9 @@ pub fn handle_new_command(
             } else {
                 None
             },
+            write_policy: None,
+            circuit_breaker: None,
+            max_batch_size: None,
         },
         graphql: None,
     };

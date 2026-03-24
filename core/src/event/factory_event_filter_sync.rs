@@ -142,7 +142,10 @@ pub async fn update_known_factory_deployed_addresses(
     };
     invalidate_known_factory_deployed_addresses_cache(&key);
 
-    if let Some(postgres) = &config.postgres {
+    // Write to ALL configured database backends (independent blocks, not early-return).
+    let mut wrote_to_db = false;
+
+    if let Some(postgres) = &config.databases.postgres {
         let params = GenerateInternalFactoryEventTableNameParams {
             indexer_name: config.indexer_name.clone(),
             contract_name: config.contract_name.clone(),
@@ -174,10 +177,10 @@ pub async fn update_known_factory_deployed_addresses(
             .await
             .map_err(UpdateKnownFactoryDeployedAddressesError::PostgresWrite)?;
 
-        return Ok(());
+        wrote_to_db = true;
     }
 
-    if let Some(clickhouse) = &config.clickhouse {
+    if let Some(clickhouse) = &config.databases.clickhouse {
         let params = GenerateInternalFactoryEventTableNameParams {
             indexer_name: config.indexer_name.clone(),
             contract_name: config.contract_name.clone(),
@@ -208,43 +211,46 @@ pub async fn update_known_factory_deployed_addresses(
             )
             .await?;
 
-        return Ok(());
+        wrote_to_db = true;
     }
 
-    if let Some(csv_details) = &config.csv_details {
-        let full_path = get_full_path(&config.project_path, &csv_details.path)?;
+    // CSV fallback only when no database is configured
+    if !wrote_to_db {
+        if let Some(csv_details) = &config.csv_details {
+            let full_path = get_full_path(&config.project_path, &csv_details.path)?;
 
-        let csv_path = build_known_factory_address_file(
-            &full_path,
-            &config.contract_name,
-            &config.network_contract.network,
-            &config.event.name,
-            &config.input_names(),
-        );
-        let csv_appender = AsyncCsvAppender::new(&csv_path);
+            let csv_path = build_known_factory_address_file(
+                &full_path,
+                &config.contract_name,
+                &config.network_contract.network,
+                &config.event.name,
+                &config.input_names(),
+            );
+            let csv_appender = AsyncCsvAppender::new(&csv_path);
 
-        if !Path::new(&csv_path).exists() {
+            if !Path::new(&csv_path).exists() {
+                csv_appender
+                    .append_header(vec![
+                        "factory_address".to_string(),
+                        "factory_deployed_address".to_string(),
+                    ])
+                    .await?;
+            }
+
             csv_appender
-                .append_header(vec![
-                    "factory_address".to_string(),
-                    "factory_deployed_address".to_string(),
-                ])
+                .append_bulk(
+                    addresses
+                        .iter()
+                        .map(|item| {
+                            vec![item.factory_address.to_string(), item.address.to_string()]
+                        })
+                        .collect::<Vec<_>>(),
+                )
                 .await?;
         }
-
-        csv_appender
-            .append_bulk(
-                addresses
-                    .iter()
-                    .map(|item| vec![item.factory_address.to_string(), item.address.to_string()])
-                    .collect::<Vec<_>>(),
-            )
-            .await?;
-
-        return Ok(());
     }
 
-    unreachable!("Can't update known factory deployed addresses without database or csv details")
+    Ok(())
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -275,6 +281,9 @@ pub struct GetKnownFactoryDeployedAddressesParams {
     pub csv_details: Option<CsvDetails>,
 }
 
+/// Read factory-deployed addresses from the first available backend (PG > CH > CSV).
+/// With dual-write, PG is authoritative for reads — both backends receive writes
+/// via `update_known_factory_deployed_addresses`, so PG is always up-to-date.
 pub async fn get_known_factory_deployed_addresses(
     params: &GetKnownFactoryDeployedAddressesParams,
 ) -> Result<Option<HashSet<Address>>, GetKnownFactoryDeployedAddressesError> {

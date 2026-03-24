@@ -16,6 +16,7 @@ use crate::database::postgres::generate::{
     generate_column_names_only_with_base_properties, generate_internal_event_table_name,
     generate_internal_event_table_name_no_shorten,
 };
+use crate::database::DatabaseBackends;
 use crate::event::config::EventProcessingConfig;
 use crate::helpers::{camel_to_snake, get_full_path, parse_solidity_integer_type};
 use crate::indexer::fetch_logs::{BlockMeta, ReorgInfo};
@@ -243,14 +244,7 @@ pub async fn handle_reorg_recovery(
     // Delete derived/custom table rows affected by the reorg
     let tables = config.tables();
     if !tables.is_empty() {
-        delete_derived_table_rows(
-            &tables,
-            &config.postgres(),
-            &config.clickhouse(),
-            fork_block,
-            network,
-        )
-        .await;
+        delete_derived_table_rows(&tables, config.databases(), fork_block, network).await;
 
         if let Err(e) = recompute_derived_tables(config, &tables, fork_block, network).await {
             error!("Reorg: failed to recompute derived tables for {}: {}", event_name, e);
@@ -350,14 +344,9 @@ async fn delete_events_clickhouse(
     network: &str,
 ) {
     let full_table = format!("{}.{}", schema, event_table);
-    // mutations_sync = 1 makes the DELETE synchronous — waits for completion before returning.
-    // Without this, rindexer can re-index and insert new events before the old ones are deleted.
-    let query = format!(
-        "ALTER TABLE {} DELETE WHERE block_number >= {} AND network = '{}' SETTINGS mutations_sync = 1",
-        full_table, fork_block, network
-    );
+    let where_clause = format!("block_number >= {} AND network = '{}'", fork_block, network);
 
-    match clickhouse.execute(&query).await {
+    match clickhouse.delete_where(full_table.as_str(), where_clause.as_str()).await {
         Ok(_) => {
             info!("ClickHouse: deleted events from block >= {} in {}", fork_block, full_table)
         }
@@ -447,8 +436,7 @@ async fn rewind_checkpoint_clickhouse(
 /// For `cross_chain` tables, no network filter is applied.
 pub async fn delete_derived_table_rows(
     tables: &[super::tables::TableRuntime],
-    postgres: &Option<Arc<PostgresClient>>,
-    clickhouse: &Option<Arc<ClickhouseClient>>,
+    databases: &DatabaseBackends,
     fork_block: u64,
     network: &str,
 ) {
@@ -456,7 +444,7 @@ pub async fn delete_derived_table_rows(
         let full_table = &table_rt.full_table_name;
         let is_cross_chain = table_rt.table.cross_chain;
 
-        if let Some(pg) = postgres {
+        if let Some(pg) = &databases.postgres {
             let query = if is_cross_chain {
                 format!("DELETE FROM {} WHERE rindexer_block_number >= {}", full_table, fork_block)
             } else {
@@ -478,20 +466,14 @@ pub async fn delete_derived_table_rows(
             }
         }
 
-        if let Some(ch) = clickhouse {
-            let query = if is_cross_chain {
-                format!(
-                    "ALTER TABLE {} DELETE WHERE rindexer_block_number >= {} SETTINGS mutations_sync = 1",
-                    full_table, fork_block
-                )
+        if let Some(ch) = &databases.clickhouse {
+            let where_clause = if is_cross_chain {
+                format!("rindexer_block_number >= {}", fork_block)
             } else {
-                format!(
-                    "ALTER TABLE {} DELETE WHERE rindexer_block_number >= {} AND network = '{}' SETTINGS mutations_sync = 1",
-                    full_table, fork_block, network
-                )
+                format!("rindexer_block_number >= {} AND network = '{}'", fork_block, network)
             };
 
-            match ch.execute(&query).await {
+            match ch.delete_where(full_table.as_str(), where_clause.as_str()).await {
                 Ok(_) => info!(
                     "ClickHouse: deleted derived table rows from block >= {} in {}",
                     fork_block, full_table
@@ -571,8 +553,7 @@ pub async fn recompute_derived_tables(
         if matches!(strategy, ReplayStrategy::FullReplay) {
             clear_table_for_replay(
                 &table_runtime,
-                &config.postgres(),
-                &config.clickhouse(),
+                config.databases(),
                 if table_runtime.table.cross_chain { None } else { Some(network) },
             )
             .await;
@@ -689,13 +670,12 @@ fn load_event_abi_inputs(config: &EventProcessingConfig) -> Result<Vec<ABIInput>
 
 async fn clear_table_for_replay(
     table_runtime: &TableRuntime,
-    postgres: &Option<Arc<PostgresClient>>,
-    clickhouse: &Option<Arc<ClickhouseClient>>,
+    databases: &DatabaseBackends,
     network: Option<&str>,
 ) {
     let full_table = &table_runtime.full_table_name;
 
-    if let Some(pg) = postgres {
+    if let Some(pg) = &databases.postgres {
         let query = if let Some(network) = network {
             format!("DELETE FROM {} WHERE network = '{}'", full_table, network)
         } else {
@@ -711,16 +691,13 @@ async fn clear_table_for_replay(
         }
     }
 
-    if let Some(ch) = clickhouse {
-        let query = if let Some(network) = network {
-            format!(
-                "ALTER TABLE {} DELETE WHERE network = '{}' SETTINGS mutations_sync = 1",
-                full_table, network
-            )
+    if let Some(ch) = &databases.clickhouse {
+        let where_clause = if let Some(network) = network {
+            format!("network = '{}'", network)
         } else {
-            format!("ALTER TABLE {} DELETE WHERE 1 = 1 SETTINGS mutations_sync = 1", full_table)
+            "1 = 1".to_string()
         };
-        if let Err(e) = ch.execute(&query).await {
+        if let Err(e) = ch.delete_where(full_table.as_str(), where_clause.as_str()).await {
             error!(
                 "Reorg replay: failed clearing ClickHouse table {}{}: {:?}",
                 full_table,
@@ -1259,9 +1236,9 @@ fn parse_hex_bytes(value: &str) -> Result<Vec<u8>, String> {
     hex::decode(raw).map_err(|e| format!("invalid hex {}: {}", value, e))
 }
 
-/// Handles reorg recovery for native transfer indexing (PostgreSQL only, no ClickHouse for traces).
+/// Handles reorg recovery for native transfer indexing.
 pub async fn handle_native_transfer_reorg_recovery(
-    postgres: &Option<Arc<PostgresClient>>,
+    databases: &DatabaseBackends,
     indexer_name: &str,
     network: &str,
     fork_block: u64,
@@ -1279,14 +1256,33 @@ pub async fn handle_native_transfer_reorg_recovery(
 
     let mut affected_tx_hashes = Vec::new();
 
-    if let Some(pg) = postgres {
+    if let Some(pg) = &databases.postgres {
         affected_tx_hashes =
             collect_affected_tx_hashes_postgres(pg, &schema, event_table_name, fork_block, network)
                 .await;
         delete_events_postgres(pg, &schema, event_table_name, fork_block, network).await;
         rewind_checkpoint_postgres(pg, &schema, "native_transfer", rewind_block, network).await;
         info!(
-            "Native transfer reorg recovery complete: checkpoint rewound to block {} for {}.{}",
+            "Native transfer reorg recovery complete (PG): checkpoint rewound to block {} for {}.{}",
+            rewind_block, schema, event_table_name
+        );
+    }
+
+    if let Some(clickhouse) = &databases.clickhouse {
+        let ch_hashes = collect_affected_tx_hashes_clickhouse(
+            clickhouse,
+            &schema,
+            event_table_name,
+            fork_block,
+            network,
+        )
+        .await;
+        affected_tx_hashes.extend(ch_hashes);
+        delete_events_clickhouse(clickhouse, &schema, event_table_name, fork_block, network).await;
+        rewind_checkpoint_clickhouse(clickhouse, &schema, "native_transfer", rewind_block, network)
+            .await;
+        info!(
+            "Native transfer reorg recovery complete (CH): checkpoint rewound to block {} for {}.{}",
             rewind_block, schema, event_table_name
         );
     }

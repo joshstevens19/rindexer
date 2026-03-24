@@ -83,6 +83,9 @@ impl TestRegistry {
         // Health assertions
         tests.extend(crate::tests::health_assertions::HealthAssertionsTests::get_tests());
 
+        // Dual-write (PG + CH simultaneously)
+        tests.extend(crate::tests::dual_write_e2e::DualWriteTests::get_tests());
+
         tests
     }
 
