@@ -287,7 +287,10 @@ impl IndexingEventsProgressState {
                     match events.get(key.as_str()) {
                         Some(e) => !matches!(e.status, IndexingEventProgressStatus::Completed),
                         None => {
-                            warn!("BlockProgress: event {} missing from events map for chain {}", id, report.chain_id);
+                            warn!(
+                                "BlockProgress: event {} missing from events map for chain {}",
+                                id, report.chain_id
+                            );
                             false
                         }
                     }
