@@ -137,6 +137,51 @@ pub static DB_OPERATION_DURATION: Lazy<HistogramVec> = Lazy::new(|| {
     .expect("failed to register DB_OPERATION_DURATION")
 });
 
+/// Per-backend insert duration histogram.
+/// Labels: backend (postgres/clickhouse), table
+pub static BACKEND_INSERT_DURATION: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "rindexer_backend_insert_duration_seconds",
+        "Per-backend insert_bulk duration in seconds",
+        &["backend", "table"],
+        vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5]
+    )
+    .expect("failed to register BACKEND_INSERT_DURATION")
+});
+
+/// Per-backend insert error counter.
+/// Labels: backend (postgres/clickhouse), table
+pub static BACKEND_INSERT_ERRORS: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "rindexer_backend_insert_errors_total",
+        "Total per-backend insert_bulk errors",
+        &["backend", "table"]
+    )
+    .expect("failed to register BACKEND_INSERT_ERRORS")
+});
+
+/// Per-backend circuit breaker state gauge.
+/// Labels: backend. Values: 0=closed, 1=open, 2=half_open
+pub static BACKEND_CIRCUIT_STATE: Lazy<GaugeVec> = Lazy::new(|| {
+    register_gauge_vec!(
+        "rindexer_backend_circuit_state",
+        "Circuit breaker state per backend (0=closed, 1=open, 2=half_open)",
+        &["backend"]
+    )
+    .expect("failed to register BACKEND_CIRCUIT_STATE")
+});
+
+/// Checkpoint lag between backends in blocks.
+/// Labels: backend (the one that's behind)
+pub static CHECKPOINT_LAG_BLOCKS: Lazy<GaugeVec> = Lazy::new(|| {
+    register_gauge_vec!(
+        "rindexer_checkpoint_lag_blocks",
+        "Blocks behind the leading checkpoint per backend",
+        &["backend"]
+    )
+    .expect("failed to register CHECKPOINT_LAG_BLOCKS")
+});
+
 /// Database connection pool size.
 /// Labels: database (postgres/clickhouse)
 pub static DB_POOL_CONNECTIONS: Lazy<GaugeVec> = Lazy::new(|| {

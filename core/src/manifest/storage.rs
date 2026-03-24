@@ -115,6 +115,40 @@ pub struct CsvDetails {
     pub disable_create_headers: Option<bool>,
 }
 
+/// Write policy for multi-backend writes.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum WritePolicy {
+    /// All backends must succeed. Error if any fail. (Default — Phase 1 behavior.)
+    #[default]
+    All,
+    /// Succeed if at least one backend writes. Log failures on others.
+    Any,
+    /// PG is primary (error on PG failure), CH is shadow (log-only on CH failure).
+    PrimaryWithShadow,
+}
+
+/// Circuit breaker configuration for multi-backend writes.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CircuitBreakerConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_failure_threshold")]
+    pub failure_threshold: u32,
+    #[serde(default = "default_cooldown_seconds")]
+    pub cooldown_seconds: u64,
+}
+
+fn default_true() -> bool { true }
+fn default_failure_threshold() -> u32 { 5 }
+fn default_cooldown_seconds() -> u64 { 60 }
+
+impl Default for CircuitBreakerConfig {
+    fn default() -> Self {
+        Self { enabled: true, failure_threshold: 5, cooldown_seconds: 60 }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct Storage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -125,6 +159,15 @@ pub struct Storage {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csv: Option<CsvDetails>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write_policy: Option<WritePolicy>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub circuit_breaker: Option<CircuitBreakerConfig>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_batch_size: Option<usize>,
 }
 
 #[derive(thiserror::Error, Debug)]

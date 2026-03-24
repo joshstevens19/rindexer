@@ -53,6 +53,8 @@ pub enum ClickhouseError {
 pub struct ClickhouseClient {
     pub(crate) conn: Client,
     batch_size: usize,
+    /// ClickHouse server version (major, minor). Used to select lightweight vs mutation deletes.
+    version: (u32, u32),
 }
 
 fn parse_clickhouse_batch_size() -> usize {
@@ -91,11 +93,58 @@ impl ClickhouseClient {
         client.query("select 1").execute().await?;
         info!("Clickhouse client connected successfully! dynamic batch size={}", batch_size);
 
-        Ok(ClickhouseClient { conn: client, batch_size })
+        // Probe server version for feature detection (lightweight deletes >= 23.3)
+        let version = Self::probe_version(&client).await;
+
+        Ok(ClickhouseClient { conn: client, batch_size, version })
     }
 
     pub fn batch_size(&self) -> usize {
         self.batch_size
+    }
+
+    async fn probe_version(client: &Client) -> (u32, u32) {
+        #[derive(Row, Deserialize)]
+        struct Version {
+            v: String,
+        }
+
+        match client.query("SELECT version() AS v").fetch_one::<Version>().await {
+            Ok(row) => {
+                let parts: Vec<&str> = row.v.split('.').collect();
+                let major = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+                let minor = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+                info!("ClickHouse version: {}.{}", major, minor);
+                (major, minor)
+            }
+            Err(e) => {
+                tracing::warn!("Failed to probe ClickHouse version: {:?}, defaulting to mutation deletes", e);
+                (0, 0)
+            }
+        }
+    }
+
+    /// Whether this ClickHouse server supports lightweight DELETE FROM (>= 23.3).
+    pub fn supports_lightweight_delete(&self) -> bool {
+        self.version >= (23, 3)
+    }
+
+    /// Delete rows matching a WHERE clause, using lightweight DELETE when available.
+    pub async fn delete_where(
+        &self,
+        table: &str,
+        where_clause: &str,
+    ) -> Result<(), ClickhouseError> {
+        if self.supports_lightweight_delete() {
+            self.execute(&format!("DELETE FROM {} WHERE {}", table, where_clause))
+                .await
+        } else {
+            self.execute(&format!(
+                "ALTER TABLE {} DELETE WHERE {} SETTINGS mutations_sync = 1",
+                table, where_clause
+            ))
+            .await
+        }
     }
 
     pub async fn query_one<T>(&self, sql: &str) -> Result<T, ClickhouseError>
