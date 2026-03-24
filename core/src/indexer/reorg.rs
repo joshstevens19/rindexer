@@ -473,7 +473,7 @@ pub async fn delete_derived_table_rows(
                 format!("rindexer_block_number >= {} AND network = '{}'", fork_block, network)
             };
 
-            match ch.delete_where(&full_table, &where_clause).await {
+            match ch.delete_where(&full_table, where_clause.as_str()).await {
                 Ok(_) => info!(
                     "ClickHouse: deleted derived table rows from block >= {} in {}",
                     fork_block, full_table
@@ -697,7 +697,7 @@ async fn clear_table_for_replay(
         } else {
             "1 = 1".to_string()
         };
-        if let Err(e) = ch.delete_where(&full_table, &where_clause).await {
+        if let Err(e) = ch.delete_where(&full_table, where_clause.as_str()).await {
             error!(
                 "Reorg replay: failed clearing ClickHouse table {}{}: {:?}",
                 full_table,
