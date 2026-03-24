@@ -1222,7 +1222,9 @@ storage:
 
 ## Multiple Storage Providers
 
-You can have multiple storage providers in the YAML file.
+You can have multiple storage providers in the YAML file, including running PostgreSQL and ClickHouse simultaneously.
+When both database backends are enabled, rindexer writes events to both in parallel and maintains independent
+checkpoints per backend.
 
 ```yaml [rindexer.yaml]
 name: rETHIndexer
@@ -1236,6 +1238,92 @@ networks:
 storage: // [!code focus]
   postgres: // [!code focus]
     enabled: true // [!code focus]
+  clickhouse: // [!code focus]
+    enabled: true // [!code focus]
   csv: // [!code focus]
     enabled: true // [!code focus]
+```
+
+### Dual-write behavior
+
+When both `postgres` and `clickhouse` are enabled:
+
+- **Writes**: Events are written to both backends in parallel using `join_all`. If one backend is slow, the other is not blocked.
+- **Checkpoints**: Each backend maintains its own checkpoint. On restart, rindexer resumes from `min(postgres_checkpoint, clickhouse_checkpoint)` so the lagging backend catches up. The leading backend receives idempotent re-inserts (PG uses `ON CONFLICT DO UPDATE`, CH deduplicates via `ReplacingMergeTree FINAL`).
+- **Reorg cleanup**: Both backends are cleaned up independently during chain reorganization recovery.
+- **Code-gen (Rust mode)**: When both backends are enabled, the generated context exposes `Arc<rindexer::DatabaseBackends>` instead of a single client. Single-backend projects produce identical generated code to before.
+
+## write_policy
+
+:::info
+This is optional. Defaults to `all` which matches the behavior of previous versions.
+:::
+
+Controls what happens when one backend fails during a write.
+
+| Value | Behavior |
+|-------|----------|
+| `all` | Both backends must succeed. If either fails, the batch errors and the indexer retries. **(default)** |
+| `any` | Succeed if at least one backend writes. Failed backends are logged but don't block the indexer. The lagging backend catches up on restart via checkpoint reconciliation. |
+| `primary_with_shadow` | PostgreSQL is the primary — error only if PG fails. ClickHouse failures are logged but tolerated. Use this when PG is the source of truth and CH is for analytics. |
+
+```yaml [rindexer.yaml]
+storage:
+  postgres:
+    enabled: true
+  clickhouse:
+    enabled: true
+  write_policy: any // [!code focus]
+```
+
+## circuit_breaker
+
+:::info
+This is optional. When omitted, no circuit breaking is applied (all writes always attempt all backends).
+:::
+
+Prevents a failing backend from adding latency to every write. When a backend fails consecutively, rindexer temporarily
+stops sending writes to it and periodically probes to check if it has recovered.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `enabled` | `true` | Toggle circuit breaker on/off. |
+| `failure_threshold` | `5` | Consecutive failures before tripping the circuit. |
+| `cooldown_seconds` | `60` | Seconds to wait before probing a tripped backend. |
+
+**How it works:**
+1. **Closed** (normal) — writes go to the backend. Failures increment a counter.
+2. **Open** (tripped) — after `failure_threshold` consecutive failures, the backend is skipped entirely. A warning is logged.
+3. **Half-open** (probing) — after `cooldown_seconds`, one probe write is sent. If it succeeds, the circuit closes. If it fails, the circuit stays open.
+
+When a circuit is open, the backend is excluded from writes. The `write_policy` is evaluated against the remaining backends. On restart, the lagging backend catches up from its stale checkpoint.
+
+```yaml [rindexer.yaml]
+storage:
+  postgres:
+    enabled: true
+  clickhouse:
+    enabled: true
+  circuit_breaker: // [!code focus]
+    enabled: true // [!code focus]
+    failure_threshold: 5 // [!code focus]
+    cooldown_seconds: 60 // [!code focus]
+```
+
+## max_batch_size
+
+:::info
+This is optional. When omitted, no batch splitting is applied.
+:::
+
+Caps how many rows are sent in a single database write. Large blocks (e.g., Uniswap pools with thousands of swaps)
+can produce very large batches. This setting splits them into sequential chunks to prevent memory pressure and timeouts.
+
+```yaml [rindexer.yaml]
+storage:
+  postgres:
+    enabled: true
+  clickhouse:
+    enabled: true
+  max_batch_size: 1000 // [!code focus]
 ```
