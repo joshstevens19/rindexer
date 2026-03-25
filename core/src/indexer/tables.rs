@@ -3079,6 +3079,13 @@ fn dyn_sol_value_to_wrapper(
             let addr = Address::from_slice(&bytes[12..32]);
             EthereumSqlTypeWrapper::Address(addr)
         }
+        // Uint/Int → String: store as decimal string (e.g., token IDs, amounts)
+        (DynSolValue::Uint(val, _), ColumnType::String) => {
+            EthereumSqlTypeWrapper::String(val.to_string())
+        }
+        (DynSolValue::Int(val, _), ColumnType::String) => {
+            EthereumSqlTypeWrapper::String(val.to_string())
+        }
         // Fallback conversions - use PostgreSQL-compatible types
         (DynSolValue::Uint(val, _), _) => EthereumSqlTypeWrapper::U256Numeric(*val),
         (DynSolValue::Int(val, _), _) => EthereumSqlTypeWrapper::I256Numeric(*val),
