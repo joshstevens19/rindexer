@@ -2622,7 +2622,13 @@ async fn extract_value_from_event_async(
         .await?;
 
         // Now evaluate the arithmetic with calls resolved to values
-        let json_data = log_params_to_json(log_params);
+        let mut json_data = log_params_to_json(log_params);
+        // Fix #7: Inject rindexer metadata (same as sync path)
+        if let Value::Object(ref mut map) = json_data {
+            map.insert("rindexer_block_number".to_string(), json!(tx_metadata.block_number));
+            map.insert("rindexer_tx_index".to_string(), json!(tx_metadata.tx_index));
+            map.insert("rindexer_log_index".to_string(), json!(tx_metadata.log_index.to::<u64>()));
+        }
         return match evaluate_arithmetic(&resolved_expr, &json_data) {
             Ok(ComputedValue::U256(val)) => match column_type {
                 ColumnType::Uint64 => Some(EthereumSqlTypeWrapper::U64BigInt(val.to::<u64>())),
@@ -2873,7 +2879,17 @@ fn extract_value_from_event(
 
     // Check for arithmetic expression first (e.g., "$value * 2", "$amount + $fee")
     if is_arithmetic_expression(value_ref) {
-        let json_data = log_params_to_json(log_params);
+        let mut json_data = log_params_to_json(log_params);
+        // Fix #7: Inject rindexer metadata into arithmetic evaluation context
+        // so expressions like `$rindexer_block_number * 10B + ...` can resolve.
+        if let Value::Object(ref mut map) = json_data {
+            map.insert("rindexer_block_number".to_string(), json!(tx_metadata.block_number));
+            map.insert("rindexer_tx_index".to_string(), json!(tx_metadata.tx_index));
+            map.insert("rindexer_log_index".to_string(), json!(tx_metadata.log_index.to::<u64>()));
+            if let Some(ts) = tx_metadata.block_timestamp {
+                map.insert("rindexer_block_timestamp".to_string(), json!(ts.to::<u64>()));
+            }
+        }
         return match evaluate_arithmetic(value_ref, &json_data) {
             Ok(ComputedValue::U256(val)) => {
                 // Convert based on column type
