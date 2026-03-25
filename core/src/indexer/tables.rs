@@ -4450,6 +4450,98 @@ mod tests {
         ));
     }
 
+    // =========================================================================
+    // Tests for fixes #4/#5: rindexer metadata in filter evaluation
+    // =========================================================================
+
+    #[test]
+    fn test_evaluate_filter_with_metadata_block_number() {
+        let params =
+            vec![LogParam::new("value".to_string(), DynSolValue::Uint(U256::from(100u64), 256))];
+        let meta = TxMetadata {
+            block_number: 80114147,
+            block_timestamp: Some(U256::from(1700000000u64)),
+            tx_hash: alloy::primitives::B256::ZERO,
+            block_hash: alloy::primitives::B256::ZERO,
+            contract_address: alloy::primitives::Address::ZERO,
+            log_index: U256::from(5u64),
+            tx_index: 3,
+        };
+
+        // Block number filter should work with metadata
+        assert!(evaluate_filter("rindexer_block_number > 80114146", &params, Some(&meta)));
+        assert!(!evaluate_filter("rindexer_block_number > 90000000", &params, Some(&meta)));
+    }
+
+    #[test]
+    fn test_evaluate_filter_with_metadata_log_index() {
+        let params =
+            vec![LogParam::new("value".to_string(), DynSolValue::Uint(U256::from(100u64), 256))];
+        let meta = TxMetadata {
+            block_number: 100,
+            block_timestamp: None,
+            tx_hash: alloy::primitives::B256::ZERO,
+            block_hash: alloy::primitives::B256::ZERO,
+            contract_address: alloy::primitives::Address::ZERO,
+            log_index: U256::from(5u64),
+            tx_index: 3,
+        };
+
+        assert!(evaluate_filter("rindexer_log_index == 5", &params, Some(&meta)));
+        assert!(evaluate_filter("rindexer_tx_index == 3", &params, Some(&meta)));
+    }
+
+    #[test]
+    fn test_evaluate_filter_metadata_combined_with_event_fields() {
+        let params = vec![LogParam::new(
+            "stakeholder".to_string(),
+            DynSolValue::Address(alloy::primitives::address!(
+                "0000000000000000000000000000000000000001"
+            )),
+        )];
+        let meta = TxMetadata {
+            block_number: 80114147,
+            block_timestamp: None,
+            tx_hash: alloy::primitives::B256::ZERO,
+            block_hash: alloy::primitives::B256::ZERO,
+            contract_address: alloy::primitives::Address::ZERO,
+            log_index: U256::from(0u64),
+            tx_index: 0,
+        };
+
+        // Combined: event field + metadata
+        assert!(evaluate_filter(
+            "stakeholder != 0x0000000000000000000000000000000000000000 && rindexer_block_number > 80114146",
+            &params,
+            Some(&meta)
+        ));
+    }
+
+    #[test]
+    fn test_evaluate_filter_without_metadata_still_works() {
+        let params =
+            vec![LogParam::new("value".to_string(), DynSolValue::Uint(U256::from(100u64), 256))];
+        // Without metadata, rindexer_* fields won't be found — filter should return false
+        assert!(!evaluate_filter("rindexer_block_number > 0", &params, None));
+        // But event-field-only filters still work
+        assert!(evaluate_filter("value > 50", &params, None));
+    }
+
+    // =========================================================================
+    // Tests for fix #2: is_arithmetic_expression
+    // =========================================================================
+
+    #[test]
+    fn test_is_arithmetic_expression_basic() {
+        assert!(is_arithmetic_expression("$amount / 1000000"));
+        assert!(is_arithmetic_expression("$a * $b"));
+        assert!(is_arithmetic_expression("$x + $y"));
+        assert!(is_arithmetic_expression("$price ^ 2"));
+        assert!(!is_arithmetic_expression("$fieldName"));
+        assert!(!is_arithmetic_expression("TRADE"));
+        assert!(!is_arithmetic_expression("$if($x == 0, a, b)"));
+    }
+
     #[test]
     fn test_is_string_template() {
         // Pure field references - NOT templates
