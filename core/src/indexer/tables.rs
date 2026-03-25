@@ -3120,6 +3120,13 @@ fn dyn_sol_value_to_wrapper(
         (DynSolValue::Address(addr), _) => EthereumSqlTypeWrapper::Address(*addr),
         (DynSolValue::Bool(b), _) => EthereumSqlTypeWrapper::Bool(*b),
         (DynSolValue::String(s), _) => EthereumSqlTypeWrapper::String(s.clone()),
+        // FixedBytes/Bytes → String: store as 0x-prefixed hex (standard blockchain representation)
+        (DynSolValue::FixedBytes(bytes, _), ColumnType::String) => {
+            EthereumSqlTypeWrapper::String(format!("0x{}", alloy::hex::encode(bytes)))
+        }
+        (DynSolValue::Bytes(bytes), ColumnType::String) => {
+            EthereumSqlTypeWrapper::String(format!("0x{}", alloy::hex::encode(bytes)))
+        }
         _ => EthereumSqlTypeWrapper::String(format!("{:?}", value)),
     }
 }
