@@ -115,7 +115,7 @@ pub fn build_to_process_cte_aggregated(
         .to_string();
     }
 
-    let quoted_seq = sequence_col.map(|s| quote_identifier(s));
+    let quoted_seq = sequence_col.map(quote_identifier);
 
     let select_exprs: Vec<String> = columns
         .iter()
