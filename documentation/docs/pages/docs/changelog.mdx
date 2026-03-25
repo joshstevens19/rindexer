@@ -8,6 +8,7 @@
 ### Bug fixes
 -------------------------------------------------
 
+- fix: UNNEST batch upsert now accumulates duplicate keys in same batch — `add`/`subtract`/`max`/`min` actions use `GROUP BY` pre-aggregation instead of `DISTINCT ON` ([#383](https://github.com/joshstevens19/rindexer/issues/383))
 - fix: migrate PostgreSQL TLS from native-tls to rustls
 - fix: use composite key in progress tracker for multi-network events
 
