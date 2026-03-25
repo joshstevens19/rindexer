@@ -151,9 +151,10 @@ async fn execute_batch(
     // When arithmetic columns exist (add/subtract/max/min), use GROUP BY with
     // aggregations instead of DISTINCT ON. This fixes duplicate-key accumulation
     // within a single batch (GitHub #383).
-    let has_arithmetic =
-        !add_columns.is_empty() || !subtract_columns.is_empty() ||
-        !max_columns.is_empty() || !min_columns.is_empty();
+    let has_arithmetic = !add_columns.is_empty()
+        || !subtract_columns.is_empty()
+        || !max_columns.is_empty()
+        || !min_columns.is_empty();
 
     if has_arithmetic && !distinct_cols.is_empty() {
         let agg_columns: Vec<(&str, ColumnAggregate)> = columns
