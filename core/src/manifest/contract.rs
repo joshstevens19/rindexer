@@ -643,6 +643,17 @@ impl Table {
         value_ref: &str,
         event_types: Option<&HashMap<String, String>>,
     ) -> Option<ColumnType> {
+        // Fix #3: Arithmetic expressions produce U256 results — infer as uint256
+        if Self::value_contains_arithmetic(value_ref) {
+            return Some(ColumnType::Uint256);
+        }
+
+        // Fix #3b: $if() expressions may return any type — default to string
+        // (users should specify explicit type for $if columns)
+        if value_ref.starts_with("$if(") {
+            return Some(ColumnType::String);
+        }
+
         if let Some(field_name) = value_ref.strip_prefix('$') {
             // Check for tx metadata fields first
             if let Some(column_type) = ColumnType::from_tx_metadata_field(field_name) {
@@ -662,6 +673,15 @@ impl Table {
 
         // Literal values - can't infer without explicit type
         None
+    }
+
+    /// Check if a value contains arithmetic operators (*, /, ^, +, -).
+    fn value_contains_arithmetic(value: &str) -> bool {
+        value.contains('$')
+            && value
+                .chars()
+                .enumerate()
+                .any(|(i, c)| c == '*' || c == '/' || c == '^' || ((c == '+' || c == '-') && i > 0))
     }
 }
 

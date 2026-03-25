@@ -2885,7 +2885,9 @@ fn extract_value_from_event(
             }
             Ok(ComputedValue::String(s)) => Some(EthereumSqlTypeWrapper::String(s)),
             Err(e) => {
-                debug!("Arithmetic expression evaluation failed: {}. Expression: {}", e, value_ref);
+                // Fix #6: Log at warn level for arithmetic failures (division by zero,
+                // overflow) so they're visible in production — not silently swallowed.
+                warn!("Arithmetic expression evaluation failed: {}. Expression: '{}'. Row will be skipped.", e, value_ref);
                 None
             }
         };
@@ -3280,10 +3282,33 @@ fn dyn_sol_value_to_json(value: &DynSolValue) -> Value {
     }
 }
 
-/// Evaluates a filter expression against log parameters.
-/// Uses the powerful filter module for complex expressions.
-fn evaluate_filter(filter_expr: &str, log_params: &[LogParam]) -> bool {
-    let json_data = log_params_to_json(log_params);
+/// Evaluates a filter expression against log parameters and optional tx metadata.
+/// Fix #4/#5: Injects rindexer metadata ($rindexer_block_number, etc.) into the
+/// evaluation context so operation-level `if` conditions and `$if()` expressions
+/// can reference block number, log index, and other tx metadata.
+fn evaluate_filter(
+    filter_expr: &str,
+    log_params: &[LogParam],
+    tx_metadata: Option<&TxMetadata>,
+) -> bool {
+    let mut json_data = log_params_to_json(log_params);
+
+    // Inject rindexer metadata fields into the evaluation context
+    if let (Value::Object(ref mut map), Some(meta)) = (&mut json_data, tx_metadata) {
+        map.insert("rindexer_block_number".to_string(), json!(meta.block_number));
+        map.insert("rindexer_tx_index".to_string(), json!(meta.tx_index));
+        map.insert("rindexer_log_index".to_string(), json!(meta.log_index.to::<u64>()));
+        map.insert("rindexer_tx_hash".to_string(), json!(format!("{:?}", meta.tx_hash)));
+        map.insert("rindexer_block_hash".to_string(), json!(format!("{:?}", meta.block_hash)));
+        map.insert(
+            "rindexer_contract_address".to_string(),
+            json!(format!("{:?}", meta.contract_address)),
+        );
+        if let Some(ts) = meta.block_timestamp {
+            map.insert("rindexer_block_timestamp".to_string(), json!(ts.to::<u64>()));
+        }
+    }
+
     match filter_by_expression(filter_expr, &json_data) {
         Ok(result) => result,
         Err(e) => {
@@ -3543,7 +3568,11 @@ pub async fn process_table_operations(
                 for expanded_log_params in &expanded_params_list {
                     if should_filter_in_rust {
                         if let Some(condition_expr) = operation.condition() {
-                            if !evaluate_filter(condition_expr, expanded_log_params) {
+                            if !evaluate_filter(
+                                condition_expr,
+                                expanded_log_params,
+                                Some(tx_metadata),
+                            ) {
                                 continue;
                             }
                         }
@@ -4364,8 +4393,16 @@ mod tests {
             DynSolValue::Address(alloy::primitives::Address::ZERO),
         )];
 
-        assert!(evaluate_filter("from == 0x0000000000000000000000000000000000000000", &params));
-        assert!(!evaluate_filter("from == 0x1111111111111111111111111111111111111111", &params));
+        assert!(evaluate_filter(
+            "from == 0x0000000000000000000000000000000000000000",
+            &params,
+            None
+        ));
+        assert!(!evaluate_filter(
+            "from == 0x1111111111111111111111111111111111111111",
+            &params,
+            None
+        ));
     }
 
     #[test]
@@ -4375,8 +4412,12 @@ mod tests {
             DynSolValue::Address(alloy::primitives::Address::ZERO),
         )];
 
-        assert!(!evaluate_filter("to != 0x0000000000000000000000000000000000000000", &params));
-        assert!(evaluate_filter("to != 0x1111111111111111111111111111111111111111", &params));
+        assert!(!evaluate_filter(
+            "to != 0x0000000000000000000000000000000000000000",
+            &params,
+            None
+        ));
+        assert!(evaluate_filter("to != 0x1111111111111111111111111111111111111111", &params, None));
     }
 
     #[test]
@@ -4392,17 +4433,20 @@ mod tests {
         // Complex AND expression
         assert!(evaluate_filter(
             "from == 0x0000000000000000000000000000000000000000 && value > 500",
-            &params
+            &params,
+            None
         ));
         assert!(!evaluate_filter(
             "from == 0x0000000000000000000000000000000000000000 && value > 2000",
-            &params
+            &params,
+            None
         ));
 
         // Complex OR expression
         assert!(evaluate_filter(
             "from != 0x0000000000000000000000000000000000000000 || value > 500",
-            &params
+            &params,
+            None
         ));
     }
 
