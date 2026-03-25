@@ -2623,7 +2623,6 @@ async fn extract_value_from_event_async(
 
         // Now evaluate the arithmetic with calls resolved to values
         let mut json_data = log_params_to_json(log_params);
-        // Fix #7: Inject rindexer metadata (same as sync path)
         if let Value::Object(ref mut map) = json_data {
             map.insert("rindexer_block_number".to_string(), json!(tx_metadata.block_number));
             map.insert("rindexer_tx_index".to_string(), json!(tx_metadata.tx_index));
@@ -2880,8 +2879,6 @@ fn extract_value_from_event(
     // Check for arithmetic expression first (e.g., "$value * 2", "$amount + $fee")
     if is_arithmetic_expression(value_ref) {
         let mut json_data = log_params_to_json(log_params);
-        // Fix #7: Inject rindexer metadata into arithmetic evaluation context
-        // so expressions like `$rindexer_block_number * 10B + ...` can resolve.
         if let Value::Object(ref mut map) = json_data {
             map.insert("rindexer_block_number".to_string(), json!(tx_metadata.block_number));
             map.insert("rindexer_tx_index".to_string(), json!(tx_metadata.tx_index));
@@ -2901,8 +2898,6 @@ fn extract_value_from_event(
             }
             Ok(ComputedValue::String(s)) => Some(EthereumSqlTypeWrapper::String(s)),
             Err(e) => {
-                // Fix #6: Log at warn level for arithmetic failures (division by zero,
-                // overflow) so they're visible in production — not silently swallowed.
                 warn!("Arithmetic expression evaluation failed: {}. Expression: '{}'. Row will be skipped.", e, value_ref);
                 None
             }
@@ -3299,9 +3294,6 @@ fn dyn_sol_value_to_json(value: &DynSolValue) -> Value {
 }
 
 /// Evaluates a filter expression against log parameters and optional tx metadata.
-/// Fix #4/#5: Injects rindexer metadata ($rindexer_block_number, etc.) into the
-/// evaluation context so operation-level `if` conditions and `$if()` expressions
-/// can reference block number, log index, and other tx metadata.
 fn evaluate_filter(
     filter_expr: &str,
     log_params: &[LogParam],
