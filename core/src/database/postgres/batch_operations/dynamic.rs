@@ -4,9 +4,9 @@ use tokio_postgres::types::ToSql;
 
 use super::query_builder::{
     build_cte_header, build_delete_body, build_sequence_condition, build_set_clause,
-    build_to_process_cte, build_update_body, build_upsert_body, build_upsert_set_clause,
-    build_where_clause, build_where_condition, format_table_name, ColumnInfo, SetClauseType,
-    UpsertClauseType,
+    build_to_process_cte, build_to_process_cte_aggregated, build_update_body, build_upsert_body,
+    build_upsert_set_clause, build_where_clause, build_where_condition, format_table_name,
+    ColumnAggregate, ColumnInfo, SetClauseType, UpsertClauseType,
 };
 use crate::database::batch_operations::{
     BatchOperationAction, BatchOperationColumnBehavior, BatchOperationType, DynamicColumnDefinition,
@@ -148,7 +148,42 @@ async fn execute_batch(
     query.push(')');
 
     // Add to_process CTE
-    query.push_str(&build_to_process_cte(&distinct_cols, sequence_col));
+    // When arithmetic columns exist (add/subtract/max/min), use GROUP BY with
+    // aggregations instead of DISTINCT ON. This fixes duplicate-key accumulation
+    // within a single batch (GitHub #383).
+    let has_arithmetic = !add_columns.is_empty()
+        || !subtract_columns.is_empty()
+        || !max_columns.is_empty()
+        || !min_columns.is_empty();
+
+    if has_arithmetic && !distinct_cols.is_empty() {
+        let agg_columns: Vec<(&str, ColumnAggregate)> = columns
+            .iter()
+            .map(|col| {
+                let name = col.name.as_str();
+                let agg = if distinct_cols.contains(&name) || where_columns.contains(&name) {
+                    ColumnAggregate::GroupKey
+                } else if sequence_col == Some(name) {
+                    ColumnAggregate::Max
+                } else if add_columns.contains(&name) || subtract_columns.contains(&name) {
+                    ColumnAggregate::Sum
+                } else if max_columns.contains(&name) {
+                    ColumnAggregate::Max
+                } else if min_columns.contains(&name) {
+                    ColumnAggregate::Min
+                } else if set_columns.contains(&name) {
+                    ColumnAggregate::LastBySeq
+                } else {
+                    // Unknown columns (shouldn't happen) — take last by sequence
+                    ColumnAggregate::LastBySeq
+                };
+                (name, agg)
+            })
+            .collect();
+        query.push_str(&build_to_process_cte_aggregated(&agg_columns, sequence_col));
+    } else {
+        query.push_str(&build_to_process_cte(&distinct_cols, sequence_col));
+    }
 
     let formatted_table_name = format_table_name(table_name);
 

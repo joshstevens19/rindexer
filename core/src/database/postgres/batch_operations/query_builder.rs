@@ -71,6 +71,85 @@ pub fn build_to_process_cte(distinct_cols: &[&str], sequence_col: Option<&str>) 
     }
 }
 
+/// Describes how a column should be aggregated in GROUP BY.
+pub enum ColumnAggregate {
+    /// Column is a GROUP BY key (distinct/where columns).
+    GroupKey,
+    /// SUM the values (for add/subtract actions).
+    Sum,
+    /// Take the MAX value (for max action or sequence column).
+    Max,
+    /// Take the MIN value (for min action).
+    Min,
+    /// Take the value from the row with the highest sequence (for set action).
+    LastBySeq,
+}
+
+/// Builds the `to_process` CTE with GROUP BY and aggregations for arithmetic columns.
+///
+/// When a batch contains duplicate keys with arithmetic actions (add/subtract/max/min),
+/// `DISTINCT ON` would discard all but one row per key. Instead, this function generates
+/// a `GROUP BY` with appropriate aggregations so all values contribute:
+/// - `add`/`subtract` columns → `SUM()` (accumulated in ON CONFLICT SET clause)
+/// - `max` columns → `MAX()`
+/// - `min` columns → `MIN()`
+/// - `set` columns → last value by sequence (`(array_agg(col ORDER BY seq DESC))[1]`)
+/// - sequence column → `MAX()` (latest sequence per group)
+pub fn build_to_process_cte_aggregated(
+    columns: &[(&str, ColumnAggregate)],
+    sequence_col: Option<&str>,
+) -> String {
+    let group_keys: Vec<String> = columns
+        .iter()
+        .filter_map(|(name, agg)| match agg {
+            ColumnAggregate::GroupKey => Some(quote_identifier(name)),
+            _ => None,
+        })
+        .collect();
+
+    if group_keys.is_empty() {
+        return ",
+        to_process AS (
+            SELECT * FROM raw_data
+        )"
+        .to_string();
+    }
+
+    let quoted_seq = sequence_col.map(quote_identifier);
+
+    let select_exprs: Vec<String> = columns
+        .iter()
+        .map(|(name, agg)| {
+            let qname = quote_identifier(name);
+            match agg {
+                ColumnAggregate::GroupKey => qname,
+                ColumnAggregate::Sum => format!("SUM({}) AS {}", qname, qname),
+                ColumnAggregate::Max => format!("MAX({}) AS {}", qname, qname),
+                ColumnAggregate::Min => format!("MIN({}) AS {}", qname, qname),
+                ColumnAggregate::LastBySeq => {
+                    if let Some(ref seq) = quoted_seq {
+                        format!("(array_agg({} ORDER BY {} DESC))[1] AS {}", qname, seq, qname)
+                    } else {
+                        // No sequence column — fall back to MAX as a deterministic pick
+                        format!("MAX({}) AS {}", qname, qname)
+                    }
+                }
+            }
+        })
+        .collect();
+
+    format!(
+        ",
+        to_process AS (
+            SELECT {}
+            FROM raw_data
+            GROUP BY {}
+        )",
+        select_exprs.join(", "),
+        group_keys.join(", ")
+    )
+}
+
 /// Column info needed for building SET clauses.
 pub struct ColumnInfo<'a> {
     pub name: &'a str,
