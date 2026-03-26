@@ -3,7 +3,25 @@
 ### Breaking changes
 -------------------------------------------------
 
-- 
+### Bug fixes
+-------------------------------------------------
+
+### Features
+-------------------------------------------------
+
+## Releases
+-------------------------------------------------
+
+all release branches are deployed through `release/VERSION_NUMBER` branches
+
+# 0.37.0-beta - 24th Match 2026
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.37.0
+
+- linux binary - https://github.com/joshstevens19/rindexer/releases/download/v0.37.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://github.com/joshstevens19/rindexer/releases/download/v0.37.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://github.com/joshstevens19/rindexer/releases/download/v0.37.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://github.com/joshstevens19/rindexer/releases/download/v0.37.0/rindexer_win32-amd64.zip
 
 ### Bug fixes
 -------------------------------------------------
@@ -11,18 +29,16 @@
 - fix: UNNEST batch upsert now accumulates duplicate keys in same batch — `add`/`subtract`/`max`/`min` actions use `GROUP BY` pre-aggregation instead of `DISTINCT ON` ([#383](https://github.com/joshstevens19/rindexer/issues/383))
 - fix: migrate PostgreSQL TLS from native-tls to rustls
 - fix: use composite key in progress tracker for multi-network events
+- fix: pass providers, constants, and multicall addresses in codegen template
+- fix: YAML arithmetics
+
 
 ### Features
 -------------------------------------------------
 
 - feat: add support for tuple[] (array of structs) via JSONB storage
 - feat: `BlockIndexingCompleted` event — emitted when all events on a chain have indexed up to a block
-- feat:  Reorg detection & recovery — active reorg detection during live indexing via tip hash comparison, parent hash chain validation, removed log detection, and a background post-confirmation verifier 
-
-## Releases
--------------------------------------------------
-
-all release branches are deployed through `release/VERSION_NUMBER` branches
+- feat:  Reorg detection & recovery — active reorg detection during live indexing via tip hash comparison, parent hash chain validation, removed log detection, and a background post-confirmation verifier
 
 # 0.35.0-beta - 28th Janurary 2026
 
