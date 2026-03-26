@@ -2622,7 +2622,12 @@ async fn extract_value_from_event_async(
         .await?;
 
         // Now evaluate the arithmetic with calls resolved to values
-        let json_data = log_params_to_json(log_params);
+        let mut json_data = log_params_to_json(log_params);
+        if let Value::Object(ref mut map) = json_data {
+            map.insert("rindexer_block_number".to_string(), json!(tx_metadata.block_number));
+            map.insert("rindexer_tx_index".to_string(), json!(tx_metadata.tx_index));
+            map.insert("rindexer_log_index".to_string(), json!(tx_metadata.log_index.to::<u64>()));
+        }
         return match evaluate_arithmetic(&resolved_expr, &json_data) {
             Ok(ComputedValue::U256(val)) => match column_type {
                 ColumnType::Uint64 => Some(EthereumSqlTypeWrapper::U64BigInt(val.to::<u64>())),
@@ -2873,7 +2878,15 @@ fn extract_value_from_event(
 
     // Check for arithmetic expression first (e.g., "$value * 2", "$amount + $fee")
     if is_arithmetic_expression(value_ref) {
-        let json_data = log_params_to_json(log_params);
+        let mut json_data = log_params_to_json(log_params);
+        if let Value::Object(ref mut map) = json_data {
+            map.insert("rindexer_block_number".to_string(), json!(tx_metadata.block_number));
+            map.insert("rindexer_tx_index".to_string(), json!(tx_metadata.tx_index));
+            map.insert("rindexer_log_index".to_string(), json!(tx_metadata.log_index.to::<u64>()));
+            if let Some(ts) = tx_metadata.block_timestamp {
+                map.insert("rindexer_block_timestamp".to_string(), json!(ts.to::<u64>()));
+            }
+        }
         return match evaluate_arithmetic(value_ref, &json_data) {
             Ok(ComputedValue::U256(val)) => {
                 // Convert based on column type
@@ -2885,7 +2898,7 @@ fn extract_value_from_event(
             }
             Ok(ComputedValue::String(s)) => Some(EthereumSqlTypeWrapper::String(s)),
             Err(e) => {
-                debug!("Arithmetic expression evaluation failed: {}. Expression: {}", e, value_ref);
+                warn!("Arithmetic expression evaluation failed: {}. Expression: '{}'. Row will be skipped.", e, value_ref);
                 None
             }
         };
@@ -3066,6 +3079,13 @@ fn dyn_sol_value_to_wrapper(
             let addr = Address::from_slice(&bytes[12..32]);
             EthereumSqlTypeWrapper::Address(addr)
         }
+        // Uint/Int → String: store as decimal string (e.g., token IDs, amounts)
+        (DynSolValue::Uint(val, _), ColumnType::String) => {
+            EthereumSqlTypeWrapper::String(val.to_string())
+        }
+        (DynSolValue::Int(val, _), ColumnType::String) => {
+            EthereumSqlTypeWrapper::String(val.to_string())
+        }
         // Fallback conversions - use PostgreSQL-compatible types
         (DynSolValue::Uint(val, _), _) => EthereumSqlTypeWrapper::U256Numeric(*val),
         (DynSolValue::Int(val, _), _) => EthereumSqlTypeWrapper::I256Numeric(*val),
@@ -3107,6 +3127,13 @@ fn dyn_sol_value_to_wrapper(
         (DynSolValue::Address(addr), _) => EthereumSqlTypeWrapper::Address(*addr),
         (DynSolValue::Bool(b), _) => EthereumSqlTypeWrapper::Bool(*b),
         (DynSolValue::String(s), _) => EthereumSqlTypeWrapper::String(s.clone()),
+        // FixedBytes/Bytes → String: store as 0x-prefixed hex (standard blockchain representation)
+        (DynSolValue::FixedBytes(bytes, _), ColumnType::String) => {
+            EthereumSqlTypeWrapper::String(format!("0x{}", alloy::hex::encode(bytes)))
+        }
+        (DynSolValue::Bytes(bytes), ColumnType::String) => {
+            EthereumSqlTypeWrapper::String(format!("0x{}", alloy::hex::encode(bytes)))
+        }
         _ => EthereumSqlTypeWrapper::String(format!("{:?}", value)),
     }
 }
@@ -3280,10 +3307,30 @@ fn dyn_sol_value_to_json(value: &DynSolValue) -> Value {
     }
 }
 
-/// Evaluates a filter expression against log parameters.
-/// Uses the powerful filter module for complex expressions.
-fn evaluate_filter(filter_expr: &str, log_params: &[LogParam]) -> bool {
-    let json_data = log_params_to_json(log_params);
+/// Evaluates a filter expression against log parameters and optional tx metadata.
+fn evaluate_filter(
+    filter_expr: &str,
+    log_params: &[LogParam],
+    tx_metadata: Option<&TxMetadata>,
+) -> bool {
+    let mut json_data = log_params_to_json(log_params);
+
+    // Inject rindexer metadata fields into the evaluation context
+    if let (Value::Object(ref mut map), Some(meta)) = (&mut json_data, tx_metadata) {
+        map.insert("rindexer_block_number".to_string(), json!(meta.block_number));
+        map.insert("rindexer_tx_index".to_string(), json!(meta.tx_index));
+        map.insert("rindexer_log_index".to_string(), json!(meta.log_index.to::<u64>()));
+        map.insert("rindexer_tx_hash".to_string(), json!(format!("{:?}", meta.tx_hash)));
+        map.insert("rindexer_block_hash".to_string(), json!(format!("{:?}", meta.block_hash)));
+        map.insert(
+            "rindexer_contract_address".to_string(),
+            json!(format!("{:?}", meta.contract_address)),
+        );
+        if let Some(ts) = meta.block_timestamp {
+            map.insert("rindexer_block_timestamp".to_string(), json!(ts.to::<u64>()));
+        }
+    }
+
     match filter_by_expression(filter_expr, &json_data) {
         Ok(result) => result,
         Err(e) => {
@@ -3543,7 +3590,11 @@ pub async fn process_table_operations(
                 for expanded_log_params in &expanded_params_list {
                     if should_filter_in_rust {
                         if let Some(condition_expr) = operation.condition() {
-                            if !evaluate_filter(condition_expr, expanded_log_params) {
+                            if !evaluate_filter(
+                                condition_expr,
+                                expanded_log_params,
+                                Some(tx_metadata),
+                            ) {
                                 continue;
                             }
                         }
@@ -4364,8 +4415,16 @@ mod tests {
             DynSolValue::Address(alloy::primitives::Address::ZERO),
         )];
 
-        assert!(evaluate_filter("from == 0x0000000000000000000000000000000000000000", &params));
-        assert!(!evaluate_filter("from == 0x1111111111111111111111111111111111111111", &params));
+        assert!(evaluate_filter(
+            "from == 0x0000000000000000000000000000000000000000",
+            &params,
+            None
+        ));
+        assert!(!evaluate_filter(
+            "from == 0x1111111111111111111111111111111111111111",
+            &params,
+            None
+        ));
     }
 
     #[test]
@@ -4375,8 +4434,12 @@ mod tests {
             DynSolValue::Address(alloy::primitives::Address::ZERO),
         )];
 
-        assert!(!evaluate_filter("to != 0x0000000000000000000000000000000000000000", &params));
-        assert!(evaluate_filter("to != 0x1111111111111111111111111111111111111111", &params));
+        assert!(!evaluate_filter(
+            "to != 0x0000000000000000000000000000000000000000",
+            &params,
+            None
+        ));
+        assert!(evaluate_filter("to != 0x1111111111111111111111111111111111111111", &params, None));
     }
 
     #[test]
@@ -4392,18 +4455,113 @@ mod tests {
         // Complex AND expression
         assert!(evaluate_filter(
             "from == 0x0000000000000000000000000000000000000000 && value > 500",
-            &params
+            &params,
+            None
         ));
         assert!(!evaluate_filter(
             "from == 0x0000000000000000000000000000000000000000 && value > 2000",
-            &params
+            &params,
+            None
         ));
 
         // Complex OR expression
         assert!(evaluate_filter(
             "from != 0x0000000000000000000000000000000000000000 || value > 500",
-            &params
+            &params,
+            None
         ));
+    }
+
+    // =========================================================================
+    // Tests for fixes #4/#5: rindexer metadata in filter evaluation
+    // =========================================================================
+
+    #[test]
+    fn test_evaluate_filter_with_metadata_block_number() {
+        let params =
+            vec![LogParam::new("value".to_string(), DynSolValue::Uint(U256::from(100u64), 256))];
+        let meta = TxMetadata {
+            block_number: 80114147,
+            block_timestamp: Some(U256::from(1700000000u64)),
+            tx_hash: alloy::primitives::B256::ZERO,
+            block_hash: alloy::primitives::B256::ZERO,
+            contract_address: alloy::primitives::Address::ZERO,
+            log_index: U256::from(5u64),
+            tx_index: 3,
+        };
+
+        // Block number filter should work with metadata
+        assert!(evaluate_filter("rindexer_block_number > 80114146", &params, Some(&meta)));
+        assert!(!evaluate_filter("rindexer_block_number > 90000000", &params, Some(&meta)));
+    }
+
+    #[test]
+    fn test_evaluate_filter_with_metadata_log_index() {
+        let params =
+            vec![LogParam::new("value".to_string(), DynSolValue::Uint(U256::from(100u64), 256))];
+        let meta = TxMetadata {
+            block_number: 100,
+            block_timestamp: None,
+            tx_hash: alloy::primitives::B256::ZERO,
+            block_hash: alloy::primitives::B256::ZERO,
+            contract_address: alloy::primitives::Address::ZERO,
+            log_index: U256::from(5u64),
+            tx_index: 3,
+        };
+
+        assert!(evaluate_filter("rindexer_log_index == 5", &params, Some(&meta)));
+        assert!(evaluate_filter("rindexer_tx_index == 3", &params, Some(&meta)));
+    }
+
+    #[test]
+    fn test_evaluate_filter_metadata_combined_with_event_fields() {
+        let params = vec![LogParam::new(
+            "stakeholder".to_string(),
+            DynSolValue::Address(alloy::primitives::address!(
+                "0000000000000000000000000000000000000001"
+            )),
+        )];
+        let meta = TxMetadata {
+            block_number: 80114147,
+            block_timestamp: None,
+            tx_hash: alloy::primitives::B256::ZERO,
+            block_hash: alloy::primitives::B256::ZERO,
+            contract_address: alloy::primitives::Address::ZERO,
+            log_index: U256::from(0u64),
+            tx_index: 0,
+        };
+
+        // Combined: event field + metadata
+        assert!(evaluate_filter(
+            "stakeholder != 0x0000000000000000000000000000000000000000 && rindexer_block_number > 80114146",
+            &params,
+            Some(&meta)
+        ));
+    }
+
+    #[test]
+    fn test_evaluate_filter_without_metadata_still_works() {
+        let params =
+            vec![LogParam::new("value".to_string(), DynSolValue::Uint(U256::from(100u64), 256))];
+        // Without metadata, rindexer_* fields won't be found — filter should return false
+        assert!(!evaluate_filter("rindexer_block_number > 0", &params, None));
+        // But event-field-only filters still work
+        assert!(evaluate_filter("value > 50", &params, None));
+    }
+
+    // =========================================================================
+    // Tests for fix #2: is_arithmetic_expression
+    // =========================================================================
+
+    #[test]
+    fn test_is_arithmetic_expression_basic() {
+        assert!(is_arithmetic_expression("$amount / 1000000"));
+        assert!(is_arithmetic_expression("$a * $b"));
+        assert!(is_arithmetic_expression("$x + $y"));
+        assert!(is_arithmetic_expression("$price ^ 2"));
+        assert!(!is_arithmetic_expression("$fieldName"));
+        assert!(!is_arithmetic_expression("TRADE"));
+        assert!(!is_arithmetic_expression("$if($x == 0, a, b)"));
     }
 
     #[test]

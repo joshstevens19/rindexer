@@ -35,7 +35,12 @@ pub async fn execute_dynamic_batch_operation(
         return Ok(());
     }
 
-    for batch in rows.chunks(1000) {
+    // PostgreSQL wire protocol limits parameters to i16::MAX (32767) per statement.
+    // Cap batch size to stay under this limit based on column count.
+    let num_columns = rows.first().map_or(1, |r| r.len().max(1));
+    let max_rows_per_batch = (32767 / num_columns).max(1);
+
+    for batch in rows.chunks(max_rows_per_batch) {
         execute_batch(database, table_name, op_type, batch, custom_where).await.map_err(|e| {
             tracing::error!("{} - Batch operation failed: {}", event_name, e);
             e
@@ -337,7 +342,7 @@ async fn execute_batch(
             database.with_transaction(&query, &params, |_| async move { Ok(()) }).await.map_err(
                 |e| {
                     tracing::error!("PostgreSQL error: {:?}", e);
-                    tracing::error!("Failed query:\n{}", query);
+                    tracing::error!("Failed query:");
                     e.to_string()
                 },
             )?;

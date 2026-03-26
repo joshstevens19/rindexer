@@ -497,6 +497,10 @@ fn validate_manifest(
                             if value.starts_with("$if(") {
                                 continue;
                             }
+                            // Skip validation for arithmetic expressions in where clause
+                            if is_arithmetic_expression(value) {
+                                continue;
+                            }
                             if let Some(event_field) = value.strip_prefix('$') {
                                 // For nested fields like $data.amount, validate the root field
                                 // Also strip array indices like ids[0] -> ids
@@ -581,6 +585,11 @@ fn validate_manifest(
                             // Get the effective value (handles increment/decrement defaults)
                             let effective_value = set_col.effective_value();
 
+                            if effective_value.starts_with("$if(") {
+                                // Conditional expressions are validated at runtime
+                                continue;
+                            }
+
                             // Check for arithmetic expression (e.g., "$value * 2", "$amount + $fee")
                             if is_arithmetic_expression(effective_value) {
                                 // If expression contains $call(), skip parse validation
@@ -643,9 +652,6 @@ fn validate_manifest(
                                 continue;
                             } else if effective_value == "$null" {
                                 // Skip validation for explicit null values
-                                continue;
-                            } else if effective_value.starts_with("$if(") {
-                                // Skip validation for conditional expressions
                                 continue;
                             } else if let Some(event_field) = effective_value.strip_prefix('$') {
                                 // Simple event field reference

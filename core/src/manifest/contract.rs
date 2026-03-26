@@ -643,6 +643,14 @@ impl Table {
         value_ref: &str,
         event_types: Option<&HashMap<String, String>>,
     ) -> Option<ColumnType> {
+        if Self::value_contains_arithmetic(value_ref) {
+            return Some(ColumnType::Uint256);
+        }
+
+        if value_ref.starts_with("$if(") {
+            return Some(ColumnType::String);
+        }
+
         if let Some(field_name) = value_ref.strip_prefix('$') {
             // Check for tx metadata fields first
             if let Some(column_type) = ColumnType::from_tx_metadata_field(field_name) {
@@ -662,6 +670,15 @@ impl Table {
 
         // Literal values - can't infer without explicit type
         None
+    }
+
+    /// Check if a value contains arithmetic operators (*, /, ^, +, -).
+    fn value_contains_arithmetic(value: &str) -> bool {
+        value.contains('$')
+            && value
+                .chars()
+                .enumerate()
+                .any(|(i, c)| c == '*' || c == '/' || c == '^' || ((c == '+' || c == '-') && i > 0))
     }
 }
 
@@ -1495,5 +1512,44 @@ mod tests {
                 ContractEvent { name: "Approval".to_string(), timestamps: Some(false) }
             ])
         );
+    }
+
+    #[test]
+    fn test_value_contains_arithmetic() {
+        assert!(Table::value_contains_arithmetic("$amount / 1000000"));
+        assert!(Table::value_contains_arithmetic("$a * $b"));
+        assert!(Table::value_contains_arithmetic("$x + $y"));
+        assert!(Table::value_contains_arithmetic(
+            "$rindexer_block_number * 10000000000 + $rindexer_tx_index * 100000"
+        ));
+        assert!(!Table::value_contains_arithmetic("$fieldName"));
+        assert!(!Table::value_contains_arithmetic("TRADE"));
+        assert!(!Table::value_contains_arithmetic("hello world"));
+    }
+
+    #[test]
+    fn test_infer_type_arithmetic_returns_uint256() {
+        let result = Table::infer_type_from_value("$amount / 1000000", None);
+        assert_eq!(result, Some(ColumnType::Uint256));
+    }
+
+    #[test]
+    fn test_infer_type_if_returns_string() {
+        let result = Table::infer_type_from_value("$if($x == '0', 'BUY', 'SELL')", None);
+        assert_eq!(result, Some(ColumnType::String));
+    }
+
+    #[test]
+    fn test_infer_type_simple_field_no_abi() {
+        // Without ABI types, can't infer from $fieldName
+        let result = Table::infer_type_from_value("$someField", None);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_infer_type_metadata_field() {
+        let result = Table::infer_type_from_value("$rindexer_block_number", None);
+        // Should return the metadata field's type (u64 → Uint64)
+        assert!(result.is_some());
     }
 }

@@ -1,0 +1,93 @@
+
+name: advanced-tables-test
+project_type: no-code
+
+storage:
+  postgres:
+    enabled: true
+
+networks:
+  - name: polygon
+    chain_id: 137
+    rpc: https://polygon-rpc.com
+    compute_units_per_second: 660
+    max_block_range: "100"
+
+contracts:
+  - name: TestExchange
+    details:
+      - network: polygon
+        address: "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
+        start_block: "65000000"
+        end_block: "65000100"
+    abi: ./tests/fixtures/exchange_v1_minimal.json
+    include_events:
+      - OrderFilled
+    tables:
+      - name: activities
+        columns:
+          - name: sequence_id
+            type: uint256
+          - name: tx_type
+            type: string
+          - name: user_id
+            type: address
+          - name: side
+            type: string
+          - name: amount_usdc
+            type: uint256
+          - name: price
+            type: uint256
+        events:
+          - event: OrderFilled
+            operations:
+              # Operation 1: arithmetic in set values + $if with arithmetic
+              - type: insert
+                set:
+                  - column: tx_type
+                    action: set
+                    value: TRADE
+                  - column: user_id
+                    action: set
+                    value: $taker
+                  - column: side
+                    action: set
+                    value: $if($makerAssetId == '0', 'BUY', 'SELL')
+                  - column: amount_usdc
+                    action: set
+                    value: $makerAmountFilled / 1000000
+                  - column: price
+                    action: set
+                    value: $makerAmountFilled / $takerAmountFilled
+              # Operation 2: fan-out (second row from same event)
+              - type: insert
+                set:
+                  - column: tx_type
+                    action: set
+                    value: TRADE
+                  - column: user_id
+                    action: set
+                    value: $maker
+                  - column: side
+                    action: set
+                    value: $if($makerAssetId == '0', 'SELL', 'BUY')
+                  - column: amount_usdc
+                    action: set
+                    value: $takerAmountFilled / 1000000
+                  - column: price
+                    action: set
+                    value: $makerAmountFilled / $takerAmountFilled
+              # Operation 3: fan-out with arithmetic in where (upsert)
+              - type: upsert
+                where:
+                  sequence_id: $rindexer_block_number * 10000000000 + $rindexer_tx_index * 100000 + $rindexer_log_index * 10 + 2
+                set:
+                  - column: tx_type
+                    action: set
+                    value: FEE
+                  - column: user_id
+                    action: set
+                    value: $taker
+                  - column: amount_usdc
+                    action: set
+                    value: $fee / 1000000
