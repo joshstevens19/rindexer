@@ -6,6 +6,8 @@
 ### Bug fixes
 -------------------------------------------------
 
+- fix: built-in rindexer variables (`$rindexer_block_timestamp`, `$rindexer_log_index`) now respect the target column type when used as direct values (not in arithmetic expressions). Previously `$rindexer_block_timestamp` always produced a `DateTime` wrapper and `$rindexer_log_index` always produced a `U256/VARCHAR` wrapper, causing `invalid sign in external "numeric" value` or `insufficient data left in message` errors when the custom table column was `uint256` (NUMERIC) or `uint64` (BIGINT). The direct variable access path now matches the column type: NUMERIC columns get `U256Numeric`, BIGINT columns get `U64BigInt`, TIMESTAMP columns get `DateTime`, and STRING columns get the decimal string representation.
+
 ### Features
 -------------------------------------------------
 
@@ -14,7 +16,7 @@
 
 all release branches are deployed through `release/VERSION_NUMBER` branches
 
-# 0.37.1-beta - 26th Match 2026
+# 0.37.1-beta - 26th March 2026
 
 github branch - https://github.com/joshstevens19/rindexer/tree/release/0.37.1
 
