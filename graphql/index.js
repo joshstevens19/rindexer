@@ -103,13 +103,13 @@ const options = {
 
 
 
-const htmlContent = (endpoint) => `
+const htmlContent = `
     <div style="width: 100%; height: 100%;" id='embedded-sandbox'></div>
-    <script src="https://embeddable-sandbox.cdn.apollographql.com/_latest/embeddable-sandbox.umd.production.min.js"></script> 
+    <script src="https://embeddable-sandbox.cdn.apollographql.com/_latest/embeddable-sandbox.umd.production.min.js"></script>
     <script>
       new window.EmbeddedSandbox({
         target: '#embedded-sandbox',
-        initialEndpoint: '${endpoint}',
+        initialEndpoint: window.location.origin + '/graphql',
       });
     </script>
 `;
@@ -120,7 +120,7 @@ app.use(express.json())
 app.use(postgraphile(connectionString, schemas, options))
 
 app.get('/playground', (req, res) => {
-    res.send(htmlContent(`http://localhost:${port}/graphql`));
+    res.send(htmlContent);
 });
 
 app.listen(port, "0.0.0.0", () => {
