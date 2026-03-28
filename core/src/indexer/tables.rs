@@ -1346,8 +1346,11 @@ async fn prefetch_block_timestamps(
                         } else {
                             ADAPTIVE_CONCURRENCY.record_error();
                         }
-                        warn!(
-                            "Failed to batch fetch block timestamps for {}: {}",
+                        crate::metrics::definitions::BLOCK_TIMESTAMP_FETCH_FAILURES_TOTAL
+                            .with_label_values(&[&network_clone])
+                            .inc();
+                        tracing::error!(
+                            "Failed to batch fetch block timestamps for {}: {} — downstream writes will retry",
                             network_clone, e
                         );
                         None
@@ -3701,14 +3704,26 @@ pub async fn process_table_operations(
                                 get_cached_block_timestamp(network, tx_metadata.block_number).await
                             };
 
-                            if let Some(ts) = block_timestamp {
-                                if let Some(dt) = DateTime::from_timestamp(ts as i64, 0) {
-                                    columns.insert(
-                                        injected_columns::BLOCK_TIMESTAMP.to_string(),
-                                        EthereumSqlTypeWrapper::DateTime(dt.with_timezone(&Utc)),
-                                    );
-                                }
-                            }
+                            // block_timestamp is required (NOT NULL column) — if missing after
+                            // prefetch + cache lookup, the RPC was unreachable. Return error so
+                            // the batch retries instead of writing NULLs. (fix: #320 cascade)
+                            let ts = block_timestamp.ok_or_else(|| {
+                                format!(
+                                    "block_timestamp unavailable for block {} on {} — RPC may be down",
+                                    tx_metadata.block_number, network
+                                )
+                            })?;
+
+                            let dt = DateTime::from_timestamp(ts as i64, 0).ok_or_else(|| {
+                                format!(
+                                    "block_timestamp {} out of DateTime range for block {} on {}",
+                                    ts, tx_metadata.block_number, network
+                                )
+                            })?;
+                            columns.insert(
+                                injected_columns::BLOCK_TIMESTAMP.to_string(),
+                                EthereumSqlTypeWrapper::DateTime(dt.with_timezone(&Utc)),
+                            );
                         }
                         columns.insert(
                             injected_columns::TX_HASH.to_string(),
