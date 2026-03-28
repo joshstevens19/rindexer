@@ -111,6 +111,9 @@ impl PostgresClient {
 
             let mut root_store = rustls::RootCertStore::empty();
             root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+            for cert in rustls_native_certs::load_native_certs().certs {
+                let _ = root_store.add(cert);
+            }
             let tls_config = rustls::ClientConfig::builder()
                 .with_root_certificates(root_store)
                 .with_no_client_auth();
