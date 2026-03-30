@@ -5,8 +5,9 @@ use tokio_postgres::types::ToSql;
 use super::query_builder::{
     build_cte_header, build_delete_body, build_sequence_condition, build_set_clause,
     build_to_process_cte, build_to_process_cte_aggregated, build_update_body, build_upsert_body,
-    build_upsert_set_clause, build_where_clause, build_where_condition, format_table_name,
-    ColumnAggregate, ColumnInfo, SetClauseType, UpsertClauseType,
+    build_upsert_set_clause, build_upsert_set_clause_latest_by_sequence, build_where_clause,
+    build_where_condition, format_table_name, ColumnAggregate, ColumnInfo, SetClauseType,
+    UpsertClauseType,
 };
 use crate::database::batch_operations::{
     BatchOperationAction, BatchOperationColumnBehavior, BatchOperationType, DynamicColumnDefinition,
@@ -274,14 +275,31 @@ async fn execute_batch(
             };
 
             let mut update_clauses: Vec<String> = Vec::new();
+            let arithmetic_without_sequence_guard = has_arithmetic && sequence_col.is_some();
 
             for col in &set_columns {
                 if !where_columns.contains(col) && !distinct_cols.contains(col) {
-                    update_clauses.push(build_upsert_set_clause(
-                        col,
-                        &formatted_table_name,
-                        UpsertClauseType::Set,
-                    ));
+                    if arithmetic_without_sequence_guard {
+                        if Some(*col) == sequence_col {
+                            update_clauses.push(build_upsert_set_clause(
+                                col,
+                                &formatted_table_name,
+                                UpsertClauseType::Max,
+                            ));
+                        } else {
+                            update_clauses.push(build_upsert_set_clause_latest_by_sequence(
+                                col,
+                                &formatted_table_name,
+                                sequence_col.expect("sequence column exists"),
+                            ));
+                        }
+                    } else {
+                        update_clauses.push(build_upsert_set_clause(
+                            col,
+                            &formatted_table_name,
+                            UpsertClauseType::Set,
+                        ));
+                    }
                 }
             }
 
@@ -330,7 +348,7 @@ async fn execute_batch(
                 &column_names,
                 &conflict_columns,
                 update_clauses,
-                sequence_col,
+                if arithmetic_without_sequence_guard { None } else { sequence_col },
                 custom_where,
             ));
 
