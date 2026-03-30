@@ -111,6 +111,15 @@ impl PostgresClient {
 
             let mut root_store = rustls::RootCertStore::empty();
             root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+            let native = rustls_native_certs::load_native_certs();
+            for e in &native.errors {
+                tracing::debug!("Native cert load error (skipped): {}", e);
+            }
+            for cert in native.certs {
+                if let Err(e) = root_store.add(cert) {
+                    tracing::debug!("Skipped malformed native cert: {}", e);
+                }
+            }
             let tls_config = rustls::ClientConfig::builder()
                 .with_root_certificates(root_store)
                 .with_no_client_auth();
