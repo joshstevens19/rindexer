@@ -168,10 +168,8 @@ impl PostgresClient {
             let manager = PostgresConnectionManager::new(config, tls_connector);
 
             // Pool size: configurable via DATABASE_POOL_SIZE env var, defaults to 10.
-            let pool_size: u32 = env::var("DATABASE_POOL_SIZE")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(10);
+            let pool_size: u32 =
+                env::var("DATABASE_POOL_SIZE").ok().and_then(|s| s.parse().ok()).unwrap_or(10);
             let pool = Pool::builder().max_size(pool_size).build(manager).await?;
 
             Ok(PostgresClient { pool })
