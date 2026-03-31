@@ -149,6 +149,23 @@ pub static DB_POOL_CONNECTIONS: Lazy<GaugeVec> = Lazy::new(|| {
 });
 
 // =============================================================================
+// Metadata Fetch Metrics
+// =============================================================================
+
+/// Total block timestamp fetch failures.
+/// Labels: network
+/// When this fires, downstream writes will fail with NOT NULL violations.
+/// Alert on any non-zero rate.
+pub static BLOCK_TIMESTAMP_FETCH_FAILURES_TOTAL: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "rindexer_block_timestamp_fetch_failures_total",
+        "Total block timestamp fetch failures (causes batch retry)",
+        &["network"]
+    )
+    .expect("failed to register BLOCK_TIMESTAMP_FETCH_FAILURES_TOTAL")
+});
+
+// =============================================================================
 // Chain State Metrics
 // =============================================================================
 

@@ -1346,8 +1346,11 @@ async fn prefetch_block_timestamps(
                         } else {
                             ADAPTIVE_CONCURRENCY.record_error();
                         }
-                        warn!(
-                            "Failed to batch fetch block timestamps for {}: {}",
+                        crate::metrics::definitions::BLOCK_TIMESTAMP_FETCH_FAILURES_TOTAL
+                            .with_label_values(&[&network_clone])
+                            .inc();
+                        tracing::error!(
+                            "Failed to batch fetch block timestamps for {}: {} — downstream writes will retry",
                             network_clone, e
                         );
                         None
@@ -2918,9 +2921,25 @@ fn extract_value_from_event(
                 return Some(EthereumSqlTypeWrapper::U64BigInt(tx_metadata.block_number));
             }
             "rindexer_block_timestamp" => {
-                return tx_metadata.block_timestamp.and_then(|ts| {
-                    DateTime::from_timestamp(ts.to::<i64>(), 0)
-                        .map(|dt| EthereumSqlTypeWrapper::DateTime(dt.with_timezone(&Utc)))
+                return tx_metadata.block_timestamp.map(|ts| {
+                    match column_type {
+                        ColumnType::Uint256 | ColumnType::Uint128 | ColumnType::Uint64 => {
+                            // NUMERIC/BIGINT column — store as epoch integer
+                            EthereumSqlTypeWrapper::U256Numeric(U256::from(ts.to::<u64>()))
+                        }
+                        ColumnType::Timestamp => {
+                            // TIMESTAMPTZ column — store as DateTime
+                            DateTime::from_timestamp(ts.to::<i64>(), 0)
+                                .map(|dt| EthereumSqlTypeWrapper::DateTime(dt.with_timezone(&Utc)))
+                                .unwrap_or_else(|| {
+                                    EthereumSqlTypeWrapper::U256Numeric(U256::from(ts.to::<u64>()))
+                                })
+                        }
+                        _ => {
+                            // Default to NUMERIC for safety
+                            EthereumSqlTypeWrapper::U256Numeric(U256::from(ts.to::<u64>()))
+                        }
+                    }
                 });
             }
             "rindexer_tx_hash" => {
@@ -2941,7 +2960,18 @@ fn extract_value_from_event(
                 return Some(EthereumSqlTypeWrapper::Address(tx_metadata.contract_address));
             }
             "rindexer_log_index" => {
-                return Some(EthereumSqlTypeWrapper::U256(tx_metadata.log_index));
+                return Some(match column_type {
+                    ColumnType::Uint256 | ColumnType::Uint128 => {
+                        EthereumSqlTypeWrapper::U256Numeric(tx_metadata.log_index)
+                    }
+                    ColumnType::Uint64 => {
+                        EthereumSqlTypeWrapper::U64BigInt(tx_metadata.log_index.to::<u64>())
+                    }
+                    ColumnType::String => {
+                        EthereumSqlTypeWrapper::String(tx_metadata.log_index.to_string())
+                    }
+                    _ => EthereumSqlTypeWrapper::U256Numeric(tx_metadata.log_index),
+                });
             }
             "rindexer_tx_index" => {
                 // Use U64BigInt for proper BIGINT binary serialization
@@ -3674,14 +3704,26 @@ pub async fn process_table_operations(
                                 get_cached_block_timestamp(network, tx_metadata.block_number).await
                             };
 
-                            if let Some(ts) = block_timestamp {
-                                if let Some(dt) = DateTime::from_timestamp(ts as i64, 0) {
-                                    columns.insert(
-                                        injected_columns::BLOCK_TIMESTAMP.to_string(),
-                                        EthereumSqlTypeWrapper::DateTime(dt.with_timezone(&Utc)),
-                                    );
-                                }
-                            }
+                            // block_timestamp is required (NOT NULL column) — if missing after
+                            // prefetch + cache lookup, the RPC was unreachable. Return error so
+                            // the batch retries instead of writing NULLs. (fix: #320 cascade)
+                            let ts = block_timestamp.ok_or_else(|| {
+                                format!(
+                                    "block_timestamp unavailable for block {} on {} — RPC may be down",
+                                    tx_metadata.block_number, network
+                                )
+                            })?;
+
+                            let dt = DateTime::from_timestamp(ts as i64, 0).ok_or_else(|| {
+                                format!(
+                                    "block_timestamp {} out of DateTime range for block {} on {}",
+                                    ts, tx_metadata.block_number, network
+                                )
+                            })?;
+                            columns.insert(
+                                injected_columns::BLOCK_TIMESTAMP.to_string(),
+                                EthereumSqlTypeWrapper::DateTime(dt.with_timezone(&Utc)),
+                            );
                         }
                         columns.insert(
                             injected_columns::TX_HASH.to_string(),

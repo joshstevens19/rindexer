@@ -329,6 +329,29 @@ pub fn build_upsert_set_clause(
     }
 }
 
+/// Builds an upsert SET clause that keeps the latest value by sequence while
+/// allowing arithmetic columns in the same upsert to accumulate regardless of
+/// processing order.
+pub fn build_upsert_set_clause_latest_by_sequence(
+    col: &str,
+    formatted_table_name: &str,
+    sequence_col: &str,
+) -> String {
+    let column_name = quote_identifier(col);
+    let sequence_name = quote_identifier(sequence_col);
+
+    format!(
+        "{} = CASE WHEN EXCLUDED.{} > COALESCE({}.{}, 0) THEN EXCLUDED.{} ELSE {}.{} END",
+        column_name,
+        sequence_name,
+        formatted_table_name,
+        sequence_name,
+        column_name,
+        formatted_table_name,
+        column_name
+    )
+}
+
 /// Type of upsert SET clause to generate.
 pub enum UpsertClauseType {
     Set,
