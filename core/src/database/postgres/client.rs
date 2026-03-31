@@ -167,9 +167,12 @@ impl PostgresClient {
 
             let manager = PostgresConnectionManager::new(config, tls_connector);
 
-            // TODO: It's important for users to be able to define the pool size they want.
-            // Rust binding projects can use this client, but it's critical to have config access.
-            let pool = Pool::builder().build(manager).await?;
+            // Pool size: configurable via DATABASE_POOL_SIZE env var, defaults to 10.
+            let pool_size: u32 = env::var("DATABASE_POOL_SIZE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(10);
+            let pool = Pool::builder().max_size(pool_size).build(manager).await?;
 
             Ok(PostgresClient { pool })
         }
