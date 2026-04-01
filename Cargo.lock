@@ -11892,7 +11892,7 @@ dependencies = [
 
 [[package]]
 name = "rindexer"
-version = "0.37.0"
+version = "0.37.1"
 dependencies = [
  "alloy",
  "alloy-chains",
@@ -11939,6 +11939,7 @@ dependencies = [
  "reth-tracing",
  "rust_decimal",
  "rustls 0.23.31",
+ "rustls-native-certs 0.8.2",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -11966,7 +11967,7 @@ dependencies = [
 
 [[package]]
 name = "rindexer_cli"
-version = "0.37.0"
+version = "0.37.1"
 dependencies = [
  "alloy",
  "alloy-chains",

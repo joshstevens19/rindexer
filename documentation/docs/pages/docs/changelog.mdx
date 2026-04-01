@@ -6,13 +6,6 @@
 ### Bug fixes
 -------------------------------------------------
 
-- fix: built-in rindexer variables (`$rindexer_block_timestamp`, `$rindexer_log_index`) now respect the target column type when used as direct values (not in arithmetic expressions). Previously `$rindexer_block_timestamp` always produced a `DateTime` wrapper and `$rindexer_log_index` always produced a `U256/VARCHAR` wrapper, causing `invalid sign in external "numeric" value` or `insufficient data left in message` errors when the custom table column was `uint256` (NUMERIC) or `uint64` (BIGINT). The direct variable access path now matches the column type: NUMERIC columns get `U256Numeric`, BIGINT columns get `U64BigInt`, TIMESTAMP columns get `DateTime`, and STRING columns get the decimal string representation.
-- fix: `block_timestamp` NULL data integrity — when `prefetch_block_timestamps` fails (RPC unreachable), the old code silently wrote NULL timestamps to PostgreSQL, causing NOT NULL constraint violations. Now returns an error so the entire event batch retries instead of writing corrupt data. Added `rindexer_block_timestamp_fetch_failures_total` Prometheus counter for observability.
-- fix: Fixed a PostgreSQL dynamic-upsert bug where arithmetic custom-table updates (add/subtract) could be dropped by
-  rindexer_sequence_id ordering, causing wrong final balances for repeated same-key mutations in no-code tables;
-  arithmetic values now always accumulate while metadata fields still keep latest-by-sequence semantics.
-- fix: Add DATABASE_POOL_SIZE allowing user to define the pool size for rindexer
-
 ### Features
 -------------------------------------------------
 
@@ -20,6 +13,25 @@
 -------------------------------------------------
 
 all release branches are deployed through `release/VERSION_NUMBER` branches
+
+# 0.37.2-beta - 1st April 2026
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.37.2
+
+- linux binary - https://github.com/joshstevens19/rindexer/releases/download/v0.37.2/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://github.com/joshstevens19/rindexer/releases/download/v0.37.2/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://github.com/joshstevens19/rindexer/releases/download/v0.37.2/rindexer_darwin-amd64.tar.gz
+- windows binary - https://github.com/joshstevens19/rindexer/releases/download/v0.37.2/rindexer_win32-amd64.zip
+
+### Bug fixes
+-------------------------------------------------
+
+- fix: built-in rindexer variables (`$rindexer_block_timestamp`, `$rindexer_log_index`) now respect the target column type when used as direct values (not in arithmetic expressions). Previously `$rindexer_block_timestamp` always produced a `DateTime` wrapper and `$rindexer_log_index` always produced a `U256/VARCHAR` wrapper, causing `invalid sign in external "numeric" value` or `insufficient data left in message` errors when the custom table column was `uint256` (NUMERIC) or `uint64` (BIGINT). The direct variable access path now matches the column type: NUMERIC columns get `U256Numeric`, BIGINT columns get `U64BigInt`, TIMESTAMP columns get `DateTime`, and STRING columns get the decimal string representation.
+- fix: `block_timestamp` NULL data integrity — when `prefetch_block_timestamps` fails (RPC unreachable), the old code silently wrote NULL timestamps to PostgreSQL, causing NOT NULL constraint violations. Now returns an error so the entire event batch retries instead of writing corrupt data. Added `rindexer_block_timestamp_fetch_failures_total` Prometheus counter for observability.
+- fix: Fixed a PostgreSQL dynamic-upsert bug where arithmetic custom-table updates (add/subtract) could be dropped by
+rindexer_sequence_id ordering, causing wrong final balances for repeated same-key mutations in no-code tables;
+arithmetic values now always accumulate while metadata fields still keep latest-by-sequence semantics.
+- fix: Add DATABASE_POOL_SIZE allowing user to define the pool size for rindexer
 
 # 0.37.1-beta - 26th March 2026
 
