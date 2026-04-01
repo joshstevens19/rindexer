@@ -11,6 +11,7 @@
 - fix: Fixed a PostgreSQL dynamic-upsert bug where arithmetic custom-table updates (add/subtract) could be dropped by
   rindexer_sequence_id ordering, causing wrong final balances for repeated same-key mutations in no-code tables;
   arithmetic values now always accumulate while metadata fields still keep latest-by-sequence semantics.
+- fix: Add DATABASE_POOL_SIZE allowing user to define the pool size for rindexer
 
 ### Features
 -------------------------------------------------
