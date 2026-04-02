@@ -1,7 +1,10 @@
 /// Extracts the integer type and its size (bit width) from a Solidity type string.
+/// Supports array variants (e.g., `uint256[]`, `int128[3]`).
 /// Panics if the type is not a valid Solidity integer type.
 pub fn parse_solidity_integer_type(solidity_type: &str) -> (&str, usize) {
-    match solidity_type {
+    // Strip array suffix (e.g., "[]" or "[N]") if present
+    let base_type = solidity_type.split('[').next().unwrap_or(solidity_type);
+    match base_type {
         t if t.starts_with("int") => ("int", t[3..].parse().expect("Invalid intN type")),
         t if t.starts_with("uint") => ("uint", t[4..].parse().expect("Invalid uintN type")),
         _ => panic!("Invalid Solidity type: {solidity_type}"),
