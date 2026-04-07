@@ -65,6 +65,29 @@ pub struct SlackEvent {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TwilioConfig {
+    pub account_sid: String,
+    pub auth_token: String,
+    pub from_number: String,
+    pub to_number: String,
+    pub networks: Vec<String>,
+    pub messages: Vec<TwilioEvent>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TwilioEvent {
+    pub event_name: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conditions: Option<Vec<Map<String, Value>>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter_expression: Option<String>,
+
+    pub template_inline: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChatConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telegram: Option<Vec<TelegramConfig>>,
@@ -74,4 +97,7 @@ pub struct ChatConfig {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slack: Option<Vec<SlackConfig>>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub twilio: Option<Vec<TwilioConfig>>,
 }
