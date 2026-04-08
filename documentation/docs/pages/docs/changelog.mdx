@@ -6,6 +6,9 @@
 ### Bug fixes
 -------------------------------------------------
 
+- fix: **ClickHouse no-code tables now use native types** — `uint256` columns map to `UInt256` (was `String`), `uint128` to `UInt128`, `int256` to `Int256`, `int128` to `Int128`, and `address` to `FixedString(42)` (was `String`). Custom table types now match raw event table types (`solidity_type_to_clickhouse_type`), ensuring consistent schemas across the same rindexer project.
+- fix: **ClickHouse serialization no longer panics on PG-specific type wrappers** — `U256Numeric`, `I256Numeric`, `U256Bytes`, `I256Bytes`, `AddressBytes`, and their Nullable/Vec variants are now serialized correctly for ClickHouse instead of panicking with `"Clickhouse in no-code should never encounter these types"`. This enables no-code tables with `$if()` conditions, arithmetic expressions, and direct `uint256`/`address` field references to work with the ClickHouse storage backend. Previously, any computed value or conditional expression in a no-code table would crash when writing to ClickHouse.
+
 ### Features
 -------------------------------------------------
 
