@@ -141,6 +141,7 @@ pub async fn process_contracts_events_with_dependencies(
             process_contract_events_with_dependencies(
                 contract_events.event_dependencies,
                 Arc::new(contract_events.events_config),
+                contract_events.reorg_coordinators,
             )
             .await
         });
@@ -186,6 +187,7 @@ pub struct OrderedLiveIndexingDetails {
 async fn process_contract_events_with_dependencies(
     dependencies: EventDependencies,
     events_processing_config: Arc<Vec<Arc<EventProcessingConfig>>>,
+    mut reorg_coordinators: HashMap<String, ReorgCoordinator>,
 ) -> Result<(), ProcessContractEventsWithDependenciesError> {
     let mut stack = vec![dependencies.tree];
 
@@ -227,6 +229,7 @@ async fn process_contract_events_with_dependencies(
                                     network: network_contract.network.clone(),
                                     cached_provider: network_contract.cached_provider.clone(),
                                     events: Vec::new(),
+                                    reorg_coordinator: None,
                                 });
 
                             let rindexer_event_filter =
@@ -268,14 +271,21 @@ async fn process_contract_events_with_dependencies(
         }
     }
 
-    let live_indexing_events = live_indexing_events.lock().await;
+    let mut live_indexing_events = live_indexing_events.lock().await;
     if live_indexing_events.is_empty() {
         return Ok(());
     }
 
+    // Inject per-network reorg coordinators into the live indexing configs
+    for (network, coordinator) in reorg_coordinators.drain() {
+        if let Some(config) = live_indexing_events.get_mut(&network) {
+            config.reorg_coordinator = Some(coordinator);
+        }
+    }
+
     let live_indexing_tasks = live_indexing_events
-        .values()
-        .map(|config| tokio::spawn(live_indexing_for_contract_event_dependencies(config.clone())))
+        .drain()
+        .map(|(_, config)| tokio::spawn(live_indexing_for_contract_event_dependencies(config)))
         .collect::<Vec<_>>();
 
     futures::future::try_join_all(live_indexing_tasks).await?;
@@ -283,18 +293,23 @@ async fn process_contract_events_with_dependencies(
     Ok(())
 }
 
-#[derive(Clone)]
 pub struct EventDependenciesIndexingConfig {
     pub network: String,
     pub cached_provider: Arc<JsonRpcCachedProvider>,
     pub events: Vec<(Arc<EventProcessingConfig>, RindexerEventFilter)>,
+    pub reorg_coordinator: Option<ReorgCoordinator>,
 }
 
 // TODO - this is a similar to live_indexing_stream but has to be a bit different we should merge
 // code
 #[allow(clippy::type_complexity)]
 async fn live_indexing_for_contract_event_dependencies(
-    EventDependenciesIndexingConfig { cached_provider, events, network }: EventDependenciesIndexingConfig,
+    EventDependenciesIndexingConfig {
+        cached_provider,
+        events,
+        network,
+        reorg_coordinator,
+    }: EventDependenciesIndexingConfig,
 ) {
     debug!(
         "Live indexing events on {} in order: {}",
@@ -336,6 +351,15 @@ async fn live_indexing_for_contract_event_dependencies(
     // Use the first event's cancel_token -- all events in this generation share the same token.
     let generation_cancel = events.first().map(|(config, _)| config.cancel_token().clone());
 
+    // Reorg coordinator is mutated in-place during the loop
+    let mut reorg_coordinator = reorg_coordinator;
+
+    // Postgres/clickhouse clients for reorg rollback — taken from the first event's config.
+    let (pg_client, ch_client) = events
+        .first()
+        .map(|(config, _)| (config.postgres(), config.clickhouse()))
+        .unwrap_or((None, None));
+
     loop {
         if !is_running() {
             break;
@@ -368,6 +392,63 @@ async fn live_indexing_for_contract_event_dependencies(
                 continue;
             }
         };
+
+        // Reorg detection: validate parent hash via coordinator
+        if let Some(ref mut coordinator) = reorg_coordinator {
+            match coordinator
+                .on_new_block(
+                    latest_block.header.number,
+                    latest_block.header.hash,
+                    latest_block.header.parent_hash,
+                )
+                .await
+            {
+                Ok(Some(reorg_task)) => {
+                    tracing::warn!(
+                        "{} - {} - REORG DETECTED by coordinator on block {} (fork_point: {}, depth: {}). Executing rollback.",
+                        network,
+                        IndexingEventProgressStatus::Live.log(),
+                        latest_block.header.number,
+                        reorg_task.fork_point,
+                        reorg_task.detection_point - reorg_task.fork_point + 1,
+                    );
+
+                    if let Err(e) = reorg_task
+                        .execute(
+                            &mut coordinator.window,
+                            &coordinator.persistence,
+                            pg_client.as_deref(),
+                            ch_client.as_ref(),
+                        )
+                        .await
+                    {
+                        error!(
+                            "{} - {} - Failed to execute reorg rollback: {}",
+                            network,
+                            IndexingEventProgressStatus::Live.log(),
+                            e
+                        );
+                    }
+
+                    // After handling reorg, continue the loop to re-fetch and process from
+                    // the corrected chain state
+                    continue;
+                }
+                Ok(None) => {
+                    // No reorg, proceed normally
+                }
+                Err(e) => {
+                    error!(
+                        "{} - {} - Reorg coordinator error: {}",
+                        network,
+                        IndexingEventProgressStatus::Live.log(),
+                        e
+                    );
+                    // Proceed with normal processing on coordinator error
+                }
+            }
+        }
+
         let latest_block_number = U64::from(latest_block.header.number);
 
         for (config, _) in events.iter() {
