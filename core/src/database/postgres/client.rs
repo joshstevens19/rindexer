@@ -460,4 +460,80 @@ impl PostgresClient {
 
         Ok(conn)
     }
+
+    /// Delete events in a block range for a given network from a specific table.
+    /// Returns the number of rows deleted.
+    pub async fn delete_by_block_range(
+        &self,
+        table_name: &str,
+        network: &str,
+        fork_point: u64,
+        detection_point: u64,
+    ) -> Result<u64, String> {
+        let query = format!(
+            "DELETE FROM {} WHERE network = $1 AND block_number >= $2 AND block_number <= $3",
+            table_name
+        );
+        let fork_point = fork_point as i64;
+        let detection_point = detection_point as i64;
+        self.execute(&query, &[&network, &fork_point, &detection_point])
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// Execute a full reorg rollback atomically in a single PostgreSQL transaction:
+    /// 1. Delete stale events from all given event tables in the block range
+    /// 2. Delete stale entries from `rindexer_internal.latest_blocks` for the block range
+    /// 3. Insert corrected latest_blocks entries (marking reorg as handled)
+    ///
+    /// Returns the total number of event rows deleted across all tables.
+    pub async fn reorg_rollback_transaction(
+        &self,
+        event_table_names: &[&str],
+        network: &str,
+        fork_point: u64,
+        detection_point: u64,
+        corrected_blocks: &[(u64, &str, &str)], // (block_number, block_hash, parent_hash)
+    ) -> Result<u64, PostgresError> {
+        let mut conn = self.pool.get().await?;
+        let transaction = conn.transaction().await?;
+
+        let fork_point_i64 = fork_point as i64;
+        let detection_point_i64 = detection_point as i64;
+        let mut total_deleted: u64 = 0;
+
+        // 1. Delete stale events from all event tables
+        for table_name in event_table_names {
+            let query = format!(
+                "DELETE FROM {} WHERE network = $1 AND block_number >= $2 AND block_number <= $3",
+                table_name
+            );
+            let deleted = transaction
+                .execute(&query, &[&network, &fork_point_i64, &detection_point_i64])
+                .await?;
+            total_deleted += deleted;
+        }
+
+        // 2. Delete stale entries from rindexer_internal.latest_blocks
+        let delete_latest_blocks_query = "DELETE FROM rindexer_internal.latest_blocks \
+             WHERE network = $1 AND block_number >= $2 AND block_number <= $3";
+        transaction
+            .execute(delete_latest_blocks_query, &[&network, &fork_point_i64, &detection_point_i64])
+            .await?;
+
+        // 3. Insert corrected latest_blocks entries
+        let insert_query = "INSERT INTO rindexer_internal.latest_blocks \
+             (network, block_number, block_hash, parent_hash) \
+             VALUES ($1, $2, $3, $4)";
+        for &(block_number, block_hash, parent_hash) in corrected_blocks {
+            let block_number_i64 = block_number as i64;
+            transaction
+                .execute(insert_query, &[&network, &block_number_i64, &block_hash, &parent_hash])
+                .await?;
+        }
+
+        transaction.commit().await?;
+
+        Ok(total_deleted)
+    }
 }

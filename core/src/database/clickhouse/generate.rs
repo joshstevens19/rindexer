@@ -18,14 +18,14 @@ use crate::database::postgres::generate::{
 use crate::manifest::contract::{injected_columns, FactoryDetailsYaml, Table};
 
 pub fn generate_latest_blocks_table_clickhouse_sql() -> String {
-    "CREATE TABLE IF NOT EXISTS rindexer_internal.latest_blocks (\
-        network String, \
-        block_number UInt64, \
-        block_hash FixedString(66), \
-        parent_hash FixedString(66)\
-    ) ENGINE = ReplacingMergeTree \
-    ORDER BY (network, block_number);"
-    .to_string()
+    r#"CREATE TABLE IF NOT EXISTS rindexer_internal.latest_blocks (
+        network String,
+        block_number UInt64,
+        block_hash FixedString(66),
+        parent_hash FixedString(66)
+    ) ENGINE = ReplacingMergeTree
+    ORDER BY (network, block_number);"#
+        .to_string()
 }
 
 pub fn generate_tables_for_indexer_clickhouse(

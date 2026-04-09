@@ -3,6 +3,7 @@ use std::{env, time::Instant};
 use clickhouse::{Client, Row};
 use dotenv::dotenv;
 use serde::Deserialize;
+use tokio::time::Duration;
 use tracing::info;
 
 use crate::metrics::database::{self as db_metrics, ops};
@@ -206,6 +207,68 @@ impl ClickhouseClient {
         bulk_data: &[Vec<EthereumSqlTypeWrapper>],
     ) -> Result<u64, ClickhouseError> {
         self.bulk_insert_via_query(table_name, column_names, bulk_data).await
+    }
+
+    pub async fn delete_by_block_range(
+        &self,
+        table_name: &str,
+        network: &str,
+        fork_point: u64,
+        detection_point: u64,
+    ) -> Result<(), ClickhouseError> {
+        let sql = format!(
+            "ALTER TABLE {table_name} DELETE WHERE block_number >= {fork_point} AND block_number <= {detection_point} AND network = '{network}'"
+        );
+        self.execute(&sql).await
+    }
+
+    async fn wait_for_mutations(
+        &self,
+        database: &str,
+        table: &str,
+    ) -> Result<(), ClickhouseError> {
+        #[derive(Row, Deserialize)]
+        struct MutationCount {
+            c: u64,
+        }
+
+        loop {
+            let sql = format!(
+                "SELECT count() as c FROM system.mutations WHERE database = '{database}' AND table = '{table}' AND is_done = 0"
+            );
+            let row: MutationCount = self.conn.query(&sql).fetch_one().await?;
+            if row.c == 0 {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    pub async fn reorg_rollback(
+        &self,
+        event_tables: &[(String, String)], // (database, table_name)
+        network: &str,
+        fork_point: u64,
+        detection_point: u64,
+    ) -> Result<(), ClickhouseError> {
+        // DELETE from all event tables
+        for (_, table_name) in event_tables {
+            self.delete_by_block_range(table_name, network, fork_point, detection_point).await?;
+        }
+
+        // DELETE from rindexer_internal.latest_blocks
+        let latest_blocks_sql = format!(
+            "ALTER TABLE rindexer_internal.latest_blocks DELETE WHERE block_number >= {fork_point} AND block_number <= {detection_point} AND network = '{network}'"
+        );
+        self.execute(&latest_blocks_sql).await?;
+
+        // Wait for all mutations to complete
+        for (database, table_name) in event_tables {
+            self.wait_for_mutations(database, table_name).await?;
+        }
+        self.wait_for_mutations("rindexer_internal", "latest_blocks").await?;
+
+        Ok(())
     }
 }
 
