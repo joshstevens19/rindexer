@@ -7,6 +7,7 @@ use crate::metrics::indexing as metrics;
 use super::persistence::LatestBlocksPersistence;
 use super::window::BlockChainWindow;
 
+#[derive(Clone)]
 pub struct EventTableInfo {
     pub schema: String,
     pub table_name: String,
