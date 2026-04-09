@@ -8,11 +8,52 @@ pub use persistence::LatestBlocksPersistence;
 pub use task::EventTableInfo;
 pub use window::BlockChainWindow;
 
-use alloy::primitives::U64;
-use tracing::{debug, warn};
+use std::sync::Arc;
 
+use alloy::primitives::{B256, U64};
+use tracing::{debug, error, warn};
+
+use crate::database::clickhouse::client::ClickhouseClient;
+use crate::database::postgres::client::PostgresClient;
 use crate::metrics::indexing as metrics;
 use crate::notifications::ChainStateNotification;
+
+/// Returns true if a reorg was detected and handled (caller should `continue`).
+pub async fn detect_and_handle_reorg(
+    coordinator: &mut ReorgCoordinator,
+    block_number: u64,
+    block_hash: B256,
+    parent_hash: B256,
+    log_prefix: &str,
+    postgres: Option<&PostgresClient>,
+    clickhouse: Option<&Arc<ClickhouseClient>>,
+) -> bool {
+    match coordinator.on_new_block(block_number, block_hash, parent_hash).await {
+        Ok(Some(reorg_task)) => {
+            warn!(
+                "{} - REORG DETECTED by coordinator on block {} (fork_point: {}, depth: {}). Executing rollback.",
+                log_prefix,
+                block_number,
+                reorg_task.fork_point,
+                reorg_task.detection_point - reorg_task.fork_point + 1,
+            );
+
+            if let Err(e) = coordinator.handle_reorg(reorg_task, postgres, clickhouse).await {
+                error!(
+                    "{} - Failed to execute reorg rollback: {}",
+                    log_prefix, e
+                );
+            }
+
+            true
+        }
+        Ok(None) => false,
+        Err(e) => {
+            error!("{} - Reorg coordinator error: {}", log_prefix, e);
+            false
+        }
+    }
+}
 
 /// Handles chain state notifications (reorgs, reverts, commits)
 pub fn handle_chain_notification(

@@ -3,6 +3,8 @@ use std::sync::Arc;
 use alloy::primitives::{B256, U64};
 use tracing::{info, warn};
 
+use crate::database::clickhouse::client::ClickhouseClient;
+use crate::database::postgres::client::PostgresClient;
 use crate::metrics::indexing as metrics;
 use crate::provider::JsonRpcCachedProvider;
 
@@ -10,15 +12,15 @@ use super::persistence::LatestBlocksPersistence;
 use super::task::{EventTableInfo, ReorgTask};
 use super::window::{BlockChainWindow, ParentValidation};
 
-const PRUNE_INTERVAL: u64 = 50;
+const FLUSH_INTERVAL: u64 = 50;
 
 pub struct ReorgCoordinator {
-    pub network: String,
-    pub window: BlockChainWindow,
-    pub persistence: Arc<LatestBlocksPersistence>,
-    pub provider: Option<Arc<JsonRpcCachedProvider>>,
-    pub event_tables: Vec<EventTableInfo>,
-    prune_counter: u64,
+    network: String,
+    window: BlockChainWindow,
+    persistence: Arc<LatestBlocksPersistence>,
+    provider: Option<Arc<JsonRpcCachedProvider>>,
+    event_tables: Vec<EventTableInfo>,
+    blocks_since_flush: u64,
 }
 
 impl ReorgCoordinator {
@@ -35,7 +37,7 @@ impl ReorgCoordinator {
             persistence,
             provider: Some(provider),
             event_tables,
-            prune_counter: 0,
+            blocks_since_flush: 0,
         }
     }
 
@@ -48,9 +50,9 @@ impl ReorgCoordinator {
         parent_hash: B256,
     ) -> Result<Option<ReorgTask>, String> {
         match self.window.validate_parent(block_number, parent_hash) {
-            ParentValidation::Valid => {
+            ParentValidation::Valid | ParentValidation::NoPreviousBlock => {
                 self.window.insert(block_number, block_hash, parent_hash);
-                self.persist_and_maybe_prune(block_number, block_hash, parent_hash).await?;
+                self.persist_and_maybe_prune(block_number, block_hash, parent_hash)?;
                 Ok(None)
             }
             ParentValidation::Mismatch { expected, got } => {
@@ -64,7 +66,7 @@ impl ReorgCoordinator {
                 metrics::record_reorg_detection_source(&self.network, "rpc");
 
                 let fork_point = self.find_fork_point().await?;
-                let depth = block_number.saturating_sub(fork_point);
+                let depth = block_number.saturating_sub(fork_point) + 1;
                 metrics::record_reorg(&self.network, depth);
 
                 Ok(Some(ReorgTask {
@@ -73,11 +75,6 @@ impl ReorgCoordinator {
                     detection_point: block_number,
                     event_tables: self.event_tables.clone(),
                 }))
-            }
-            ParentValidation::NoPreviousBlock => {
-                self.window.insert(block_number, block_hash, parent_hash);
-                self.persist_and_maybe_prune(block_number, block_hash, parent_hash).await?;
-                Ok(None)
             }
         }
     }
@@ -205,29 +202,56 @@ impl ReorgCoordinator {
         }
     }
 
-    /// Persist the new block to DB and periodically prune old entries.
-    async fn persist_and_maybe_prune(
+    /// Execute a reorg task through the coordinator, keeping internals encapsulated.
+    pub async fn handle_reorg(
+        &mut self,
+        reorg_task: ReorgTask,
+        postgres: Option<&PostgresClient>,
+        clickhouse: Option<&Arc<ClickhouseClient>>,
+    ) -> Result<(), String> {
+        reorg_task.execute(&mut self.window, &self.persistence, postgres, clickhouse).await?;
+        Ok(())
+    }
+
+    /// Persist the new block to DB (fire-and-forget) and periodically prune old entries.
+    fn persist_and_maybe_prune(
         &mut self,
         block_number: u64,
         block_hash: B256,
         parent_hash: B256,
     ) -> Result<(), String> {
-        self.persistence
-            .insert_block(
-                &self.network,
-                block_number,
-                &format!("{:#x}", block_hash),
-                &format!("{:#x}", parent_hash),
-            )
-            .await?;
+        self.blocks_since_flush += 1;
 
-        self.prune_counter += 1;
-        if self.prune_counter >= PRUNE_INTERVAL {
-            self.prune_counter = 0;
-            if let Some(oldest) = self.window.oldest_block() {
-                self.persistence.prune(&self.network, oldest).await?;
-            }
+        // Fire-and-forget: spawn the DB write so the live loop is not blocked.
+        let persistence = Arc::clone(&self.persistence);
+        let network = self.network.clone();
+        let needs_prune = self.blocks_since_flush >= FLUSH_INTERVAL;
+        if needs_prune {
+            self.blocks_since_flush = 0;
         }
+        let oldest = self.window.oldest_block();
+
+        tokio::spawn(async move {
+            if let Err(e) = persistence
+                .insert_block(
+                    &network,
+                    block_number,
+                    &format!("{:#x}", block_hash),
+                    &format!("{:#x}", parent_hash),
+                )
+                .await
+            {
+                tracing::error!("Background DB insert failed for block {}: {}", block_number, e);
+            }
+
+            if needs_prune {
+                if let Some(oldest) = oldest {
+                    if let Err(e) = persistence.prune(&network, oldest).await {
+                        tracing::error!("Background DB prune failed: {}", e);
+                    }
+                }
+            }
+        });
 
         Ok(())
     }
@@ -259,7 +283,7 @@ mod tests {
             persistence,
             provider: None,
             event_tables: vec![],
-            prune_counter: 0,
+            blocks_since_flush: 0,
         }
     }
 
@@ -333,7 +357,7 @@ mod tests {
             persistence,
             provider: None,
             event_tables: vec![EventTableInfo::new("schema".to_string(), "table".to_string())],
-            prune_counter: 0,
+            blocks_since_flush: 0,
         };
 
         let task = coordinator.on_exex_reorg(100, 105);

@@ -423,6 +423,89 @@ async fn start_indexing_contract_events(
         clickhouse.clone(),
     ));
 
+    // Build one ReorgCoordinator per network (shared across all events on that network).
+    // The first non-blocking event on each network takes ownership; subsequent events get None.
+    let mut network_coordinators: HashMap<String, ReorgCoordinator> = HashMap::new();
+    if !no_live_indexing_forced {
+        for (network_name, reorg_config) in &reorg_configs {
+            let event_tables =
+                network_event_tables.get(network_name).cloned().unwrap_or_default();
+
+            let window = match reorg_persistence
+                .load(network_name, reorg_config.window_size)
+                .await
+            {
+                Ok(window) => {
+                    info!(
+                        "Loaded {} blocks into reorg window for network {}",
+                        window.len(),
+                        network_name,
+                    );
+                    window
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to load reorg window from persistence for {}: {}. Using empty window.",
+                        network_name, e
+                    );
+                    BlockChainWindow::new(reorg_config.window_size)
+                }
+            };
+
+            // Get a provider for this network from any registry event targeting it
+            let provider = registry
+                .events
+                .iter()
+                .flat_map(|e| e.contract.details.iter())
+                .find(|nc| nc.network == *network_name)
+                .map(|nc| nc.cached_provider.clone());
+
+            if let Some(provider) = provider {
+                let mut coordinator = ReorgCoordinator::new(
+                    network_name.clone(),
+                    window,
+                    Arc::clone(&reorg_persistence),
+                    provider,
+                    event_tables,
+                );
+
+                // Run startup validation
+                match coordinator.validate_on_startup().await {
+                    Ok(Some(startup_task)) => {
+                        warn!(
+                            "Startup reorg detected on {} (fork_point: {}, depth: {}). Executing rollback before indexing.",
+                            network_name,
+                            startup_task.fork_point,
+                            startup_task.detection_point - startup_task.fork_point + 1,
+                        );
+                        if let Err(e) = coordinator
+                            .handle_reorg(
+                                startup_task,
+                                postgres.as_deref(),
+                                clickhouse.as_ref(),
+                            )
+                            .await
+                        {
+                            error!(
+                                "Failed to execute startup reorg rollback for {}: {}",
+                                network_name, e
+                            );
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        error!(
+                            "Startup reorg validation failed for {}: {}. Proceeding without validation.",
+                            network_name, e
+                        );
+                    }
+                }
+
+                network_coordinators.insert(network_name.clone(), coordinator);
+            }
+        }
+    }
+
     while let Some(res) = block_tasks.next().await {
         let (
             event,
@@ -568,89 +651,14 @@ async fn start_indexing_contract_events(
                 &dependencies,
             );
         } else {
-            // Create reorg coordinator if reorg handling is enabled for this network
-            // AND this event uses live indexing (reorgs only matter during live indexing)
+            // Take ownership of the per-network coordinator for the FIRST event on each
+            // network. Subsequent events on the same network get None — only one event
+            // per network drives reorg detection.
             let reorg_coordinator = if event_processing_config.live_indexing()
                 && !no_live_indexing_forced
             {
                 let network_name = event_processing_config.network_contract().network.clone();
-                if let Some(reorg_config) = reorg_configs.get(&network_name) {
-                    let event_tables = network_event_tables
-                        .get(&network_name)
-                        .cloned()
-                        .unwrap_or_default();
-
-                    // Load the blockchain window from persistence
-                    let window = match reorg_persistence
-                        .load(&network_name, reorg_config.window_size)
-                        .await
-                    {
-                        Ok(window) => {
-                            info!(
-                                "{} - Loaded {} blocks into reorg window for network {}",
-                                event_processing_config.info_log_name(),
-                                window.len(),
-                                network_name,
-                            );
-                            window
-                        }
-                        Err(e) => {
-                            warn!(
-                                "{} - Failed to load reorg window from persistence: {}. Using empty window.",
-                                event_processing_config.info_log_name(),
-                                e
-                            );
-                            BlockChainWindow::new(reorg_config.window_size)
-                        }
-                    };
-
-                    let mut coordinator = ReorgCoordinator::new(
-                        network_name.clone(),
-                        window,
-                        Arc::clone(&reorg_persistence),
-                        event_processing_config.network_contract().cached_provider.clone(),
-                        event_tables,
-                    );
-
-                    // Run startup validation — detect reorgs that happened while offline
-                    match coordinator.validate_on_startup().await {
-                        Ok(Some(startup_task)) => {
-                            warn!(
-                                "{} - Startup reorg detected on {} (fork_point: {}, depth: {}). Executing rollback before indexing.",
-                                event_processing_config.info_log_name(),
-                                network_name,
-                                startup_task.fork_point,
-                                startup_task.detection_point - startup_task.fork_point + 1,
-                            );
-                            if let Err(e) = startup_task.execute(
-                                &mut coordinator.window,
-                                &coordinator.persistence,
-                                postgres.as_deref(),
-                                clickhouse.as_ref(),
-                            ).await {
-                                error!(
-                                    "{} - Failed to execute startup reorg rollback: {}",
-                                    event_processing_config.info_log_name(),
-                                    e
-                                );
-                            }
-                        }
-                        Ok(None) => {
-                            // No reorg detected on startup
-                        }
-                        Err(e) => {
-                            error!(
-                                "{} - Startup reorg validation failed: {}. Proceeding without validation.",
-                                event_processing_config.info_log_name(),
-                                e
-                            );
-                        }
-                    }
-
-                    Some(coordinator)
-                } else {
-                    None
-                }
+                network_coordinators.remove(&network_name)
             } else {
                 None
             };
@@ -661,102 +669,120 @@ async fn start_indexing_contract_events(
         }
     }
 
-    // Build per-network reorg coordinators for dependency events (same logic as non-blocking path)
-    for dep_config in &mut dependency_event_processing_configs {
-        // Collect unique networks from all event configs in this dependency group
-        let networks: std::collections::HashSet<String> = dep_config
-            .events_config
+    // Build per-network reorg coordinators for dependency events.
+    // Any coordinators left over in network_coordinators (not consumed by non-blocking events)
+    // are available for dependency events. Build new ones for networks only used in dependencies.
+    if !no_live_indexing_forced {
+        // Collect all networks needed by dependency events
+        let dep_networks: std::collections::HashSet<String> = dependency_event_processing_configs
             .iter()
-            .filter(|e| e.live_indexing())
-            .map(|e| e.network_contract().network.clone())
+            .flat_map(|dep| {
+                dep.events_config
+                    .iter()
+                    .filter(|e| e.live_indexing())
+                    .map(|e| e.network_contract().network.clone())
+            })
             .collect();
 
-        for network_name in networks {
-            // Skip if a coordinator was already built for this network (shouldn't happen, but safe)
-            if dep_config.reorg_coordinators.contains_key(&network_name) {
+        // Build coordinators for networks that weren't already consumed
+        let mut dep_coordinators: HashMap<String, ReorgCoordinator> = HashMap::new();
+        for network_name in &dep_networks {
+            // Try to take a leftover from the non-blocking build
+            if let Some(coord) = network_coordinators.remove(network_name) {
+                dep_coordinators.insert(network_name.clone(), coord);
                 continue;
             }
 
-            if !no_live_indexing_forced {
-                if let Some(reorg_config) = reorg_configs.get(&network_name) {
-                    // Get the first event config for this network to access the provider
-                    let Some(first_event_config) = dep_config
-                        .events_config
-                        .iter()
-                        .find(|e| e.network_contract().network == network_name)
-                    else {
-                        continue;
-                    };
+            // Otherwise build a fresh one
+            if let Some(reorg_config) = reorg_configs.get(network_name) {
+                let event_tables =
+                    network_event_tables.get(network_name).cloned().unwrap_or_default();
 
-                    let event_tables =
-                        network_event_tables.get(&network_name).cloned().unwrap_or_default();
+                let window = match reorg_persistence
+                    .load(network_name, reorg_config.window_size)
+                    .await
+                {
+                    Ok(window) => {
+                        info!(
+                            "Dependency events - Loaded {} blocks into reorg window for network {}",
+                            window.len(),
+                            network_name,
+                        );
+                        window
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Dependency events - Failed to load reorg window for {}: {}. Using empty window.",
+                            network_name, e
+                        );
+                        BlockChainWindow::new(reorg_config.window_size)
+                    }
+                };
 
-                    let window = match reorg_persistence
-                        .load(&network_name, reorg_config.window_size)
-                        .await
-                    {
-                        Ok(window) => {
-                            info!(
-                                "Dependency events - Loaded {} blocks into reorg window for network {}",
-                                window.len(),
-                                network_name,
-                            );
-                            window
-                        }
-                        Err(e) => {
-                            warn!(
-                                "Dependency events - Failed to load reorg window for network {}: {}. Using empty window.",
-                                network_name,
-                                e
-                            );
-                            BlockChainWindow::new(reorg_config.window_size)
-                        }
-                    };
+                // Get a provider from any dependency event config for this network
+                let provider = dependency_event_processing_configs
+                    .iter()
+                    .flat_map(|dep| dep.events_config.iter())
+                    .find(|e| e.network_contract().network == *network_name)
+                    .map(|e| e.network_contract().cached_provider.clone());
 
+                if let Some(provider) = provider {
                     let mut coordinator = ReorgCoordinator::new(
                         network_name.clone(),
                         window,
                         Arc::clone(&reorg_persistence),
-                        first_event_config.network_contract().cached_provider.clone(),
+                        provider,
                         event_tables,
                     );
 
-                    // Run startup validation
                     match coordinator.validate_on_startup().await {
                         Ok(Some(startup_task)) => {
                             warn!(
-                                "Dependency events - Startup reorg detected on {} (fork_point: {}, depth: {}). Executing rollback before indexing.",
+                                "Dependency events - Startup reorg detected on {} (fork_point: {}, depth: {}). Executing rollback.",
                                 network_name,
                                 startup_task.fork_point,
                                 startup_task.detection_point - startup_task.fork_point + 1,
                             );
-                            if let Err(e) = startup_task
-                                .execute(
-                                    &mut coordinator.window,
-                                    &coordinator.persistence,
+                            if let Err(e) = coordinator
+                                .handle_reorg(
+                                    startup_task,
                                     postgres.as_deref(),
                                     clickhouse.as_ref(),
                                 )
                                 .await
                             {
                                 error!(
-                                    "Dependency events - Failed to execute startup reorg rollback for network {}: {}",
-                                    network_name,
-                                    e
+                                    "Dependency events - Failed to execute startup reorg rollback for {}: {}",
+                                    network_name, e
                                 );
                             }
                         }
                         Ok(None) => {}
                         Err(e) => {
                             error!(
-                                "Dependency events - Startup reorg validation failed for network {}: {}. Proceeding without validation.",
-                                network_name,
-                                e
+                                "Dependency events - Startup reorg validation failed for {}: {}. Proceeding without validation.",
+                                network_name, e
                             );
                         }
                     }
 
-                    dep_config.reorg_coordinators.insert(network_name, coordinator);
+                    dep_coordinators.insert(network_name.clone(), coordinator);
+                }
+            }
+        }
+
+        // Inject per-network coordinators into each dependency config group
+        for dep_config in &mut dependency_event_processing_configs {
+            let networks: std::collections::HashSet<String> = dep_config
+                .events_config
+                .iter()
+                .filter(|e| e.live_indexing())
+                .map(|e| e.network_contract().network.clone())
+                .collect();
+
+            for network_name in networks {
+                if let Some(coord) = dep_coordinators.remove(&network_name) {
+                    dep_config.reorg_coordinators.insert(network_name, coord);
                 }
             }
         }

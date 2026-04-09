@@ -56,15 +56,14 @@ impl BlockChainWindow {
     /// Finds the highest block number in the window that matches a hash in `canonical_blocks`.
     ///
     /// `canonical_blocks` is a slice of `(block_number, block_hash)` pairs representing
-    /// the canonical chain. The method sorts them descending and returns the first match.
+    /// the canonical chain. Iterates in reverse to find the highest match first.
     pub fn find_fork_point(&self, canonical_blocks: &[(u64, B256)]) -> Option<u64> {
-        let mut sorted = canonical_blocks.to_vec();
-        sorted.sort_unstable_by(|a, b| b.0.cmp(&a.0));
-
-        for (block_number, canonical_hash) in &sorted {
-            if let Some((stored_hash, _)) = self.entries.get(block_number) {
+        // Iterate in reverse so we find the highest matching block first,
+        // without allocating a sorted copy.
+        for &(block_number, ref canonical_hash) in canonical_blocks.iter().rev() {
+            if let Some((stored_hash, _)) = self.entries.get(&block_number) {
                 if stored_hash == canonical_hash {
-                    return Some(*block_number);
+                    return Some(block_number);
                 }
             }
         }

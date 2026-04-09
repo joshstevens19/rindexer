@@ -1,7 +1,7 @@
 use crate::blockclock::BlockClock;
 use crate::helpers::{halved_block_number, is_relevant_block};
 use crate::indexer::reorg::reorg_safe_distance_for_chain;
-use crate::indexer::reorg::ReorgCoordinator;
+use crate::indexer::reorg::{detect_and_handle_reorg, ReorgCoordinator};
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
     indexer::{reorg::handle_chain_notification, IndexingEventProgressStatus},
@@ -454,51 +454,23 @@ async fn live_indexing_stream(
 
                     // Reorg detection: validate parent hash via coordinator
                     if let Some(ref mut coordinator) = reorg_coordinator {
-                        match coordinator.on_new_block(
+                        let log_prefix = format!(
+                            "{} - {}",
+                            info_log_name,
+                            IndexingEventProgressStatus::Live.log()
+                        );
+                        if detect_and_handle_reorg(
+                            coordinator,
                             latest_block.header.number,
                             latest_block.header.hash,
                             latest_block.header.parent_hash,
-                        ).await {
-                            Ok(Some(reorg_task)) => {
-                                warn!(
-                                    "{} - {} - REORG DETECTED by coordinator on block {} (fork_point: {}, depth: {}). Executing rollback.",
-                                    info_log_name,
-                                    IndexingEventProgressStatus::Live.log(),
-                                    latest_block.header.number,
-                                    reorg_task.fork_point,
-                                    reorg_task.detection_point - reorg_task.fork_point + 1,
-                                );
-
-                                if let Err(e) = reorg_task.execute(
-                                    &mut coordinator.window,
-                                    &coordinator.persistence,
-                                    postgres.as_deref(),
-                                    clickhouse.as_ref(),
-                                ).await {
-                                    error!(
-                                        "{} - {} - Failed to execute reorg rollback: {}",
-                                        info_log_name,
-                                        IndexingEventProgressStatus::Live.log(),
-                                        e
-                                    );
-                                }
-
-                                // After handling reorg, continue the loop to re-fetch the latest block
-                                // and process logs from the corrected chain state
-                                continue;
-                            }
-                            Ok(None) => {
-                                // No reorg, proceed normally
-                            }
-                            Err(e) => {
-                                error!(
-                                    "{} - {} - Reorg coordinator error: {}",
-                                    info_log_name,
-                                    IndexingEventProgressStatus::Live.log(),
-                                    e
-                                );
-                                // Proceed with normal processing on coordinator error
-                            }
+                            &log_prefix,
+                            postgres.as_deref(),
+                            clickhouse.as_ref(),
+                        )
+                        .await
+                        {
+                            continue;
                         }
                     }
 
