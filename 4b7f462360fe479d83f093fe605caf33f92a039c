@@ -1,0 +1,29 @@
+core/src/database/clickhouse/client.rs
+  88fdb9834fb286df 6,180-241
+core/src/database/postgres/client.rs
+  88fdb9834fb286df 452-527
+core/src/database/clickhouse/generate.rs
+  88fdb9834fb286df 21-28
+core/src/database/postgres/generate.rs
+  88fdb9834fb286df 39-45
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.7",
+  "base_commit_sha": "4b7f462360fe479d83f093fe605caf33f92a039c",
+  "prompts": {
+    "88fdb9834fb286df": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "873f225a-14f4-44ad-853e-0abc7ff1e218",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 175,
+      "total_deletions": 36,
+      "accepted_lines": 241,
+      "overriden_lines": 0
+    }
+  }
+}
