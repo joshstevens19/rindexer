@@ -1,6 +1,7 @@
 use crate::blockclock::BlockClock;
 use crate::helpers::{halved_block_number, is_relevant_block};
-use crate::indexer::reorg::{new_shadow_cache, reorg_safe_distance_for_chain};
+use crate::indexer::reorg::reorg_safe_distance_for_chain;
+use crate::indexer::reorg::ReorgCoordinator;
 use crate::metrics::indexing as metrics;
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
@@ -51,6 +52,7 @@ pub struct FetchLogsResult {
 pub fn fetch_logs_stream(
     config: Arc<EventProcessingConfig>,
     force_no_live_indexing: bool,
+    reorg_coordinator: Option<ReorgCoordinator>,
 ) -> impl tokio_stream::Stream<Item = Result<FetchLogsResult, Box<dyn Error + Send>>> + Send + Unpin
 {
     // If the sink is slower than the producer it can lead to unbounded memory growth and
@@ -161,6 +163,9 @@ pub fn fetch_logs_stream(
                 config.network_contract().disable_logs_bloom_checks,
                 original_max_limit,
                 config.cancel_token().clone(),
+                reorg_coordinator,
+                config.postgres(),
+                config.clickhouse(),
             )
             .await;
         }
@@ -423,6 +428,9 @@ async fn live_indexing_stream(
     disable_logs_bloom_checks: bool,
     original_max_limit: Option<U64>,
     cancel_token: CancellationToken,
+    mut reorg_coordinator: Option<ReorgCoordinator>,
+    postgres: Option<Arc<crate::PostgresClient>>,
+    clickhouse: Option<Arc<crate::database::clickhouse::client::ClickhouseClient>>,
 ) {
     let mut last_seen_block_number = last_seen_block_number;
     let mut log_response_to_large_to_block: Option<U64> = None;
@@ -611,6 +619,56 @@ async fn live_indexing_stream(
                         // Drain any pending reth signals to avoid double recovery
                         while reth_reorg_rx.try_recv().is_ok() {}
                         continue;
+                    }
+
+                    // Reorg detection: validate parent hash via coordinator
+                    if let Some(ref mut coordinator) = reorg_coordinator {
+                        match coordinator.on_new_block(
+                            latest_block.header.number,
+                            latest_block.header.hash,
+                            latest_block.header.parent_hash,
+                        ).await {
+                            Ok(Some(reorg_task)) => {
+                                warn!(
+                                    "{} - {} - REORG DETECTED by coordinator on block {} (fork_point: {}, depth: {}). Executing rollback.",
+                                    info_log_name,
+                                    IndexingEventProgressStatus::Live.log(),
+                                    latest_block.header.number,
+                                    reorg_task.fork_point,
+                                    reorg_task.detection_point - reorg_task.fork_point + 1,
+                                );
+
+                                if let Err(e) = reorg_task.execute(
+                                    &mut coordinator.window,
+                                    &coordinator.persistence,
+                                    postgres.as_deref(),
+                                    clickhouse.as_ref(),
+                                ).await {
+                                    error!(
+                                        "{} - {} - Failed to execute reorg rollback: {}",
+                                        info_log_name,
+                                        IndexingEventProgressStatus::Live.log(),
+                                        e
+                                    );
+                                }
+
+                                // After handling reorg, continue the loop to re-fetch the latest block
+                                // and process logs from the corrected chain state
+                                continue;
+                            }
+                            Ok(None) => {
+                                // No reorg, proceed normally
+                            }
+                            Err(e) => {
+                                error!(
+                                    "{} - {} - Reorg coordinator error: {}",
+                                    info_log_name,
+                                    IndexingEventProgressStatus::Live.log(),
+                                    e
+                                );
+                                // Proceed with normal processing on coordinator error
+                            }
+                        }
                     }
 
                     let latest_block_number = log_response_to_large_to_block

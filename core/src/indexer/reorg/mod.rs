@@ -26,6 +26,14 @@ use crate::helpers::{camel_to_snake, get_full_path, parse_solidity_integer_type}
 use crate::indexer::fetch_logs::{BlockMeta, ReorgInfo};
 use crate::indexer::tables::{process_table_operations, TableRuntime, TxMetadata};
 use crate::manifest::contract::{OperationType, SetAction};
+pub use coordinator::ReorgCoordinator;
+pub use persistence::LatestBlocksPersistence;
+pub use task::EventTableInfo;
+pub use window::BlockChainWindow;
+
+use alloy::primitives::U64;
+use tracing::{debug, warn};
+
 use crate::metrics::indexing as metrics;
 use crate::notifications::ChainStateNotification;
 use crate::provider::ChainProvider;

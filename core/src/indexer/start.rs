@@ -1,4 +1,4 @@
-use std::{path::Path, sync::Arc};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 use alloy::primitives::U64;
 use futures::future::try_join_all;
@@ -10,13 +10,20 @@ use tokio::{
     time::Instant,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::database::clickhouse::client::{ClickhouseClient, ClickhouseConnectionError};
+use crate::database::generate::generate_indexer_contract_schema_name;
 use crate::event::config::{ContractEventProcessingConfig, FactoryEventProcessingConfig};
 use crate::helpers::format_duration;
+use crate::events::RindexerEventEmitter;
+use crate::helpers::{camel_to_snake, format_duration};
 use crate::indexer::native_transfer::native_transfer_block_processor;
+use crate::indexer::reorg::{
+    BlockChainWindow, EventTableInfo, LatestBlocksPersistence, ReorgCoordinator,
+};
 use crate::indexer::Indexer;
+use crate::manifest::network::ReorgHandlingConfig;
 use crate::{
     database::postgres::client::PostgresConnectionError,
     event::{
@@ -386,6 +393,42 @@ async fn start_indexing_contract_events(
         }
     }
 
+    // Build per-network reorg handling config lookup
+    let reorg_configs: HashMap<String, ReorgHandlingConfig> = manifest
+        .networks
+        .iter()
+        .filter_map(|n| {
+            n.reorg_handling.as_ref().and_then(|cfg| {
+                if cfg.enabled {
+                    Some((n.name.clone(), cfg.clone()))
+                } else {
+                    None
+                }
+            })
+        })
+        .collect();
+
+    // Build per-network event tables for reorg rollback.
+    // Includes all contract events deployed on each network.
+    let mut network_event_tables: HashMap<String, Vec<EventTableInfo>> = HashMap::new();
+    for event in registry.events.iter() {
+        for network_contract in event.contract.details.iter() {
+            let schema =
+                generate_indexer_contract_schema_name(&event.indexer_name, &event.contract.name);
+            let table_name = camel_to_snake(&event.event_name);
+            network_event_tables
+                .entry(network_contract.network.clone())
+                .or_default()
+                .push(EventTableInfo::new(schema, table_name));
+        }
+    }
+
+    // Shared persistence per invocation (shared across all coordinators)
+    let reorg_persistence = Arc::new(LatestBlocksPersistence::new(
+        postgres.clone(),
+        clickhouse.clone(),
+    ));
+
     while let Some(res) = block_tasks.next().await {
         let (
             event,
@@ -545,7 +588,95 @@ async fn start_indexing_contract_events(
                 &dependencies,
             );
         } else {
-            let process_event = tokio::spawn(process_non_blocking_event(event_processing_config));
+            // Create reorg coordinator if reorg handling is enabled for this network
+            // AND this event uses live indexing (reorgs only matter during live indexing)
+            let reorg_coordinator = if event_processing_config.live_indexing()
+                && !no_live_indexing_forced
+            {
+                let network_name = event_processing_config.network_contract().network.clone();
+                if let Some(reorg_config) = reorg_configs.get(&network_name) {
+                    let event_tables = network_event_tables
+                        .get(&network_name)
+                        .cloned()
+                        .unwrap_or_default();
+
+                    // Load the blockchain window from persistence
+                    let window = match reorg_persistence
+                        .load(&network_name, reorg_config.window_size)
+                        .await
+                    {
+                        Ok(window) => {
+                            info!(
+                                "{} - Loaded {} blocks into reorg window for network {}",
+                                event_processing_config.info_log_name(),
+                                window.len(),
+                                network_name,
+                            );
+                            window
+                        }
+                        Err(e) => {
+                            warn!(
+                                "{} - Failed to load reorg window from persistence: {}. Using empty window.",
+                                event_processing_config.info_log_name(),
+                                e
+                            );
+                            BlockChainWindow::new(reorg_config.window_size)
+                        }
+                    };
+
+                    let mut coordinator = ReorgCoordinator::new(
+                        network_name.clone(),
+                        window,
+                        Arc::clone(&reorg_persistence),
+                        event_processing_config.network_contract().cached_provider.clone(),
+                        event_tables,
+                    );
+
+                    // Run startup validation — detect reorgs that happened while offline
+                    match coordinator.validate_on_startup().await {
+                        Ok(Some(startup_task)) => {
+                            warn!(
+                                "{} - Startup reorg detected on {} (fork_point: {}, depth: {}). Executing rollback before indexing.",
+                                event_processing_config.info_log_name(),
+                                network_name,
+                                startup_task.fork_point,
+                                startup_task.detection_point - startup_task.fork_point + 1,
+                            );
+                            if let Err(e) = startup_task.execute(
+                                &mut coordinator.window,
+                                &coordinator.persistence,
+                                postgres.as_deref(),
+                                clickhouse.as_ref(),
+                            ).await {
+                                error!(
+                                    "{} - Failed to execute startup reorg rollback: {}",
+                                    event_processing_config.info_log_name(),
+                                    e
+                                );
+                            }
+                        }
+                        Ok(None) => {
+                            // No reorg detected on startup
+                        }
+                        Err(e) => {
+                            error!(
+                                "{} - Startup reorg validation failed: {}. Proceeding without validation.",
+                                event_processing_config.info_log_name(),
+                                e
+                            );
+                        }
+                    }
+
+                    Some(coordinator)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let process_event =
+                tokio::spawn(process_non_blocking_event(event_processing_config, reorg_coordinator));
             non_blocking_process_events.push(process_event);
         }
     }

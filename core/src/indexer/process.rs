@@ -14,6 +14,8 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 
 use crate::helpers::is_relevant_block;
+use crate::indexer::reorg::reorg_safe_distance_for_chain;
+use crate::indexer::reorg::ReorgCoordinator;
 use crate::indexer::reorg::{
     find_fork_point, handle_reorg_recovery, reorg_safe_distance_for_chain,
 };
@@ -52,10 +54,11 @@ pub enum ProcessEventError {
 /// This function returns immediately without waiting for the indexing to complete.
 pub async fn process_non_blocking_event(
     config: EventProcessingConfig,
+    reorg_coordinator: Option<ReorgCoordinator>,
 ) -> Result<(), ProcessEventError> {
     debug!("{} - Processing non blocking event", config.info_log_name());
 
-    process_event_logs(Arc::new(config), false, false).await?;
+    process_event_logs(Arc::new(config), false, false, reorg_coordinator).await?;
 
     Ok(())
 }
@@ -67,7 +70,9 @@ pub async fn process_blocking_event_historical_data(
 ) -> Result<(), Box<ProviderError>> {
     debug!("{} - Processing blocking event historical data", config.info_log_name());
 
-    process_event_logs(config, true, true).await?;
+    // Historical data processing does not use reorg coordinator — reorgs are only
+    // handled during live indexing.
+    process_event_logs(config, true, true, None).await?;
 
     Ok(())
 }
@@ -79,6 +84,7 @@ async fn process_event_logs(
     config: Arc<EventProcessingConfig>,
     force_no_live_indexing: bool,
     block_until_indexed: bool,
+    reorg_coordinator: Option<ReorgCoordinator>,
 ) -> Result<(), Box<ProviderError>> {
     // The concurrency with which we can call the trigger. If the indexer is running in-order
     // we can only call one at a time, otherwise we can call multiple in parallel based on what is
@@ -94,7 +100,8 @@ async fn process_event_logs(
 
     let callback_permits = Arc::new(Semaphore::new(callback_concurrency));
 
-    let mut logs_stream = fetch_logs_stream(Arc::clone(&config), force_no_live_indexing);
+    let mut logs_stream =
+        fetch_logs_stream(Arc::clone(&config), force_no_live_indexing, reorg_coordinator);
     let mut tasks = Vec::new();
 
     while let Some(result) = logs_stream.next().await {
