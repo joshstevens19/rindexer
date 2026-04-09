@@ -17,12 +17,24 @@ use crate::database::postgres::generate::{
 };
 use crate::manifest::contract::{injected_columns, FactoryDetailsYaml, Table};
 
+pub fn generate_latest_blocks_table_clickhouse_sql() -> String {
+    "CREATE TABLE IF NOT EXISTS rindexer_internal.latest_blocks (\
+        network String, \
+        block_number UInt64, \
+        block_hash FixedString(66), \
+        parent_hash FixedString(66)\
+    ) ENGINE = ReplacingMergeTree \
+    ORDER BY (network, block_number);"
+    .to_string()
+}
+
 pub fn generate_tables_for_indexer_clickhouse(
     project_path: &Path,
     indexer: &Indexer,
     disable_event_tables: bool,
 ) -> Result<Code, GenerateTablesForIndexerSqlError> {
     let mut sql = "CREATE DATABASE IF NOT EXISTS rindexer_internal;".to_string();
+    sql.push_str(&generate_latest_blocks_table_clickhouse_sql());
 
     for contract in &indexer.contracts {
         let contract_name = contract.before_modify_name_if_filter_readonly();
