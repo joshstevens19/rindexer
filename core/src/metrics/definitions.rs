@@ -174,6 +174,61 @@ pub static REORG_DEPTH: Lazy<GaugeVec> = Lazy::new(|| {
     .expect("failed to register REORG_DEPTH")
 });
 
+/// Duration of reorg handling from detection to completion.
+/// Labels: network
+pub static REORG_HANDLING_DURATION: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "rindexer_reorg_handling_duration_seconds",
+        "Duration of reorg handling from detection to completion",
+        &["network"]
+    )
+    .expect("failed to register rindexer_reorg_handling_duration_seconds")
+});
+
+/// Total number of events deleted during reorg rollback.
+/// Labels: network
+pub static REORG_EVENTS_DELETED: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "rindexer_reorg_events_deleted_total",
+        "Total number of events deleted during reorg rollback",
+        &["network"]
+    )
+    .expect("failed to register rindexer_reorg_events_deleted_total")
+});
+
+/// Total number of events re-indexed after reorg.
+/// Labels: network
+pub static REORG_EVENTS_REINDEXED: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "rindexer_reorg_events_reindexed_total",
+        "Total number of events re-indexed after reorg",
+        &["network"]
+    )
+    .expect("failed to register rindexer_reorg_events_reindexed_total")
+});
+
+/// Number of reorgs detected by source.
+/// Labels: network, source
+pub static REORG_DETECTION_SOURCE: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "rindexer_reorg_detection_source_total",
+        "Number of reorgs detected by source",
+        &["network", "source"]
+    )
+    .expect("failed to register rindexer_reorg_detection_source_total")
+});
+
+/// Number of cascading reorgs detected immediately after handling a previous reorg.
+/// Labels: network
+pub static REORG_CASCADE: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "rindexer_reorg_cascade_total",
+        "Number of cascading reorgs detected immediately after handling a previous reorg",
+        &["network"]
+    )
+    .expect("failed to register rindexer_reorg_cascade_total")
+});
+
 // =============================================================================
 // Stream Metrics
 // =============================================================================

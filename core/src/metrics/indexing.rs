@@ -2,7 +2,8 @@
 
 use super::definitions::{
     ACTIVE_INDEXING_TASKS, BLOCKS_BEHIND, BLOCKS_INDEXED_TOTAL, EVENTS_PROCESSED_TOTAL,
-    LAST_SYNCED_BLOCK, LATEST_CHAIN_BLOCK, REORGS_DETECTED_TOTAL, REORG_DEPTH,
+    LAST_SYNCED_BLOCK, LATEST_CHAIN_BLOCK, REORG_CASCADE, REORG_DEPTH, REORG_DETECTION_SOURCE,
+    REORG_EVENTS_DELETED, REORG_EVENTS_REINDEXED, REORG_HANDLING_DURATION, REORGS_DETECTED_TOTAL,
 };
 
 /// Record events being indexed for a contract/event pair.
@@ -80,4 +81,29 @@ pub fn dec_active_tasks() {
 pub fn record_reorg(network: &str, depth: u64) {
     REORGS_DETECTED_TOTAL.with_label_values(&[network]).inc();
     REORG_DEPTH.with_label_values(&[network]).set(depth as f64);
+}
+
+/// Record the duration of reorg handling from detection to completion.
+pub fn record_reorg_handling_duration(network: &str, duration_secs: f64) {
+    REORG_HANDLING_DURATION.with_label_values(&[network]).observe(duration_secs);
+}
+
+/// Record the number of events deleted during reorg rollback.
+pub fn record_reorg_events_deleted(network: &str, count: u64) {
+    REORG_EVENTS_DELETED.with_label_values(&[network]).inc_by(count as f64);
+}
+
+/// Record the number of events re-indexed after reorg.
+pub fn record_reorg_events_reindexed(network: &str, count: u64) {
+    REORG_EVENTS_REINDEXED.with_label_values(&[network]).inc_by(count as f64);
+}
+
+/// Record the source of a reorg detection.
+pub fn record_reorg_detection_source(network: &str, source: &str) {
+    REORG_DETECTION_SOURCE.with_label_values(&[network, source]).inc();
+}
+
+/// Record a cascading reorg detected immediately after handling a previous reorg.
+pub fn record_reorg_cascade(network: &str) {
+    REORG_CASCADE.with_label_values(&[network]).inc();
 }
