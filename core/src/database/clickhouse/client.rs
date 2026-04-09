@@ -45,6 +45,9 @@ pub enum ClickhouseConnectionError {
 pub enum ClickhouseError {
     #[error("ClickhouseError: {0}")]
     ClickhouseError(#[from] clickhouse::error::Error),
+
+    #[error("{0}")]
+    Custom(String),
 }
 
 pub struct ClickhouseClient {
@@ -232,6 +235,7 @@ impl ClickhouseClient {
             c: u64,
         }
 
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
         loop {
             let sql = format!(
                 "SELECT count() as c FROM system.mutations WHERE database = '{database}' AND table = '{table}' AND is_done = 0"
@@ -239,6 +243,12 @@ impl ClickhouseClient {
             let row: MutationCount = self.conn.query(&sql).fetch_one().await?;
             if row.c == 0 {
                 return Ok(());
+            }
+            if tokio::time::Instant::now() > deadline {
+                return Err(ClickhouseError::Custom(format!(
+                    "Timeout waiting for mutations on {}.{}",
+                    database, table
+                )));
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -257,10 +267,7 @@ impl ClickhouseClient {
         }
 
         // DELETE from rindexer_internal.latest_blocks
-        let latest_blocks_sql = format!(
-            "ALTER TABLE rindexer_internal.latest_blocks DELETE WHERE block_number >= {fork_point} AND block_number <= {detection_point} AND network = '{network}'"
-        );
-        self.execute(&latest_blocks_sql).await?;
+        self.delete_by_block_range("rindexer_internal.latest_blocks", network, fork_point, detection_point).await?;
 
         // Wait for all mutations to complete
         for (database, table_name) in event_tables {

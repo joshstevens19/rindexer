@@ -15,6 +15,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::helpers::is_relevant_block;
 use crate::indexer::reorg::reorg_safe_distance_for_chain;
+use crate::indexer::reorg::{detect_and_handle_reorg, ReorgCoordinator};
 use crate::indexer::reorg::ReorgCoordinator;
 use crate::indexer::reorg::{
     find_fork_point, handle_reorg_recovery, reorg_safe_distance_for_chain,
@@ -400,57 +401,23 @@ async fn live_indexing_for_contract_event_dependencies(
 
         // Reorg detection: validate parent hash via coordinator
         if let Some(ref mut coordinator) = reorg_coordinator {
-            match coordinator
-                .on_new_block(
-                    latest_block.header.number,
-                    latest_block.header.hash,
-                    latest_block.header.parent_hash,
-                )
-                .await
+            let log_prefix = format!(
+                "{} - {}",
+                network,
+                IndexingEventProgressStatus::Live.log()
+            );
+            if detect_and_handle_reorg(
+                coordinator,
+                latest_block.header.number,
+                latest_block.header.hash,
+                latest_block.header.parent_hash,
+                &log_prefix,
+                pg_client.as_deref(),
+                ch_client.as_ref(),
+            )
+            .await
             {
-                Ok(Some(reorg_task)) => {
-                    tracing::warn!(
-                        "{} - {} - REORG DETECTED by coordinator on block {} (fork_point: {}, depth: {}). Executing rollback.",
-                        network,
-                        IndexingEventProgressStatus::Live.log(),
-                        latest_block.header.number,
-                        reorg_task.fork_point,
-                        reorg_task.detection_point - reorg_task.fork_point + 1,
-                    );
-
-                    if let Err(e) = reorg_task
-                        .execute(
-                            &mut coordinator.window,
-                            &coordinator.persistence,
-                            pg_client.as_deref(),
-                            ch_client.as_ref(),
-                        )
-                        .await
-                    {
-                        error!(
-                            "{} - {} - Failed to execute reorg rollback: {}",
-                            network,
-                            IndexingEventProgressStatus::Live.log(),
-                            e
-                        );
-                    }
-
-                    // After handling reorg, continue the loop to re-fetch and process from
-                    // the corrected chain state
-                    continue;
-                }
-                Ok(None) => {
-                    // No reorg, proceed normally
-                }
-                Err(e) => {
-                    error!(
-                        "{} - {} - Reorg coordinator error: {}",
-                        network,
-                        IndexingEventProgressStatus::Live.log(),
-                        e
-                    );
-                    // Proceed with normal processing on coordinator error
-                }
+                continue;
             }
         }
 
