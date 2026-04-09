@@ -194,7 +194,7 @@ pub async fn setup_no_code(
             )
             .await?;
 
-            let registry = EventCallbackRegistry { events };
+            let registry = EventCallbackRegistry { events, on_reorg: None };
             info!(
                 "Events registered to index:{}",
                 registry
