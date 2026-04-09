@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Instant};
+use std::{collections::BTreeMap, sync::Arc, time::Instant};
 
 use aws_sdk_sns::{config::http::HttpResponse, error::SdkError, operation::publish::PublishError};
 use futures::future::join_all;
@@ -760,5 +760,91 @@ impl StreamsClients {
         } else {
             unreachable!("Event data should be an array");
         }
+    }
+}
+
+pub fn build_reorg_notification_event(
+    network: &str,
+    fork_block: u64,
+    invalidated_range: (u64, u64),
+) -> serde_json::Value {
+    serde_json::json!({
+        "event_type": "rindexer_reorg",
+        "network": network,
+        "fork_block": fork_block,
+        "invalidated_range": [invalidated_range.0, invalidated_range.1],
+        "new_events_indexed": true
+    })
+}
+
+pub struct FinalizedBuffer {
+    buffer: BTreeMap<u64, Vec<serde_json::Value>>,
+    reorg_safe_distance: u64,
+}
+
+impl FinalizedBuffer {
+    pub fn new(reorg_safe_distance: u64) -> Self {
+        Self { buffer: BTreeMap::new(), reorg_safe_distance }
+    }
+
+    pub fn add(&mut self, block_number: u64, events: Vec<serde_json::Value>) {
+        self.buffer.entry(block_number).or_default().extend(events);
+    }
+
+    pub fn flush(&mut self, current_head: u64) -> Vec<(u64, Vec<serde_json::Value>)> {
+        let finality_threshold = current_head.saturating_sub(self.reorg_safe_distance);
+        let ready_keys: Vec<u64> =
+            self.buffer.keys().copied().filter(|&k| k <= finality_threshold).collect();
+        ready_keys
+            .into_iter()
+            .filter_map(|k| self.buffer.remove(&k).map(|v| (k, v)))
+            .collect()
+    }
+
+    pub fn discard_range(&mut self, fork_point: u64, detection_point: u64) {
+        let keys_to_remove: Vec<u64> = self
+            .buffer
+            .keys()
+            .copied()
+            .filter(|&k| k >= fork_point && k <= detection_point)
+            .collect();
+        for k in keys_to_remove {
+            self.buffer.remove(&k);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::FinalizedBuffer;
+
+    #[test]
+    fn test_finalized_buffer_flush() {
+        let mut buf = FinalizedBuffer::new(10);
+        buf.add(100, vec![json!({"event": "a"})]);
+        buf.add(105, vec![json!({"event": "b"})]);
+
+        let flushed = buf.flush(112); // 112 - 10 = 102, so only block 100 flushes
+        assert_eq!(flushed.len(), 1);
+        assert_eq!(flushed[0].0, 100);
+
+        let flushed2 = buf.flush(120); // 120 - 10 = 110, block 105 flushes
+        assert_eq!(flushed2.len(), 1);
+    }
+
+    #[test]
+    fn test_finalized_buffer_discard_range() {
+        let mut buf = FinalizedBuffer::new(10);
+        buf.add(98, vec![json!({"event": "a"})]);
+        buf.add(99, vec![json!({"event": "b"})]);
+        buf.add(100, vec![json!({"event": "c"})]);
+
+        buf.discard_range(99, 100);
+
+        let flushed = buf.flush(200); // everything past finality
+        assert_eq!(flushed.len(), 1); // only block 98 remains
+        assert_eq!(flushed[0].0, 98);
     }
 }

@@ -4,6 +4,7 @@ use std::{
     sync::Arc,
 };
 
+use chrono::Utc;
 use csv::Reader;
 use csv::Writer;
 use tokio::sync::Mutex;
@@ -77,6 +78,44 @@ impl AsyncCsvAppender {
         .await
         .expect("Failed to run CSV write operation")
     }
+}
+
+pub async fn write_reorg_invalidation_file(
+    base_path: &Path,
+    contract_name: &str,
+    network: &str,
+    event_name: &str,
+    fork_point: u64,
+    detection_point: u64,
+    invalidated_tx_hashes: &[String],
+) -> Result<(), csv::Error> {
+    let timestamp = Utc::now().format("%Y%m%d_%H%M%S");
+    let file_name =
+        format!("{contract_name}_{network}_{event_name}_reorg_{timestamp}.csv");
+    let file_path = base_path
+        .join(contract_name)
+        .join("reorgs")
+        .join(&file_name);
+
+    let file_path_str = file_path.to_string_lossy().to_string();
+    let appender = AsyncCsvAppender::new(&file_path_str);
+
+    appender
+        .append_header(vec![
+            "fork_block".to_string(),
+            "detection_block".to_string(),
+            "invalidated_tx_hash".to_string(),
+        ])
+        .await?;
+
+    let records: Vec<Vec<String>> = invalidated_tx_hashes
+        .iter()
+        .map(|hash| {
+            vec![fork_point.to_string(), detection_point.to_string(), hash.clone()]
+        })
+        .collect();
+
+    appender.append_bulk(records).await
 }
 
 pub struct AsyncCsvReader {
