@@ -1,0 +1,25 @@
+core/src/indexer/no_code.rs
+  88fdb9834fb286df 199
+core/src/event/callback_registry.rs
+  88fdb9834fb286df 127-135,179,190,201-210
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.7",
+  "base_commit_sha": "f62e52e6ed31031eef9af2dd51cf7267c3cb8902",
+  "prompts": {
+    "88fdb9834fb286df": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "873f225a-14f4-44ad-853e-0abc7ff1e218",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 22,
+      "overriden_lines": 0
+    }
+  }
+}
