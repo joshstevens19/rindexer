@@ -1,1 +1,345 @@
-// Placeholder for future reorg coordinator implementation
+use std::sync::Arc;
+
+use alloy::primitives::{B256, U64};
+use tracing::{info, warn};
+
+use crate::metrics::indexing as metrics;
+use crate::provider::JsonRpcCachedProvider;
+
+use super::persistence::LatestBlocksPersistence;
+use super::task::{EventTableInfo, ReorgTask};
+use super::window::{BlockChainWindow, ParentValidation};
+
+const PRUNE_INTERVAL: u64 = 50;
+
+pub struct ReorgCoordinator {
+    pub network: String,
+    pub window: BlockChainWindow,
+    pub persistence: Arc<LatestBlocksPersistence>,
+    pub provider: Option<Arc<JsonRpcCachedProvider>>,
+    pub event_tables: Vec<EventTableInfo>,
+    prune_counter: u64,
+}
+
+impl ReorgCoordinator {
+    pub fn new(
+        network: String,
+        window: BlockChainWindow,
+        persistence: Arc<LatestBlocksPersistence>,
+        provider: Arc<JsonRpcCachedProvider>,
+        event_tables: Vec<EventTableInfo>,
+    ) -> Self {
+        Self {
+            network,
+            window,
+            persistence,
+            provider: Some(provider),
+            event_tables,
+            prune_counter: 0,
+        }
+    }
+
+    /// Called on each new block during live indexing.
+    /// Returns `Some(ReorgTask)` if a reorg is detected, `None` otherwise.
+    pub async fn on_new_block(
+        &mut self,
+        block_number: u64,
+        block_hash: B256,
+        parent_hash: B256,
+    ) -> Result<Option<ReorgTask>, String> {
+        match self.window.validate_parent(block_number, parent_hash) {
+            ParentValidation::Valid => {
+                self.window.insert(block_number, block_hash, parent_hash);
+                self.persist_and_maybe_prune(block_number, block_hash, parent_hash).await?;
+                Ok(None)
+            }
+            ParentValidation::Mismatch { expected, got } => {
+                warn!(
+                    network = %self.network,
+                    block_number,
+                    %expected,
+                    %got,
+                    "Parent hash mismatch — reorg detected"
+                );
+                metrics::record_reorg_detection_source(&self.network, "rpc");
+
+                let fork_point = self.find_fork_point().await?;
+                let depth = block_number.saturating_sub(fork_point);
+                metrics::record_reorg(&self.network, depth);
+
+                Ok(Some(ReorgTask {
+                    network: self.network.clone(),
+                    fork_point,
+                    detection_point: block_number,
+                    event_tables: self.event_tables.clone(),
+                }))
+            }
+            ParentValidation::NoPreviousBlock => {
+                self.window.insert(block_number, block_hash, parent_hash);
+                self.persist_and_maybe_prune(block_number, block_hash, parent_hash).await?;
+                Ok(None)
+            }
+        }
+    }
+
+    /// Called once on restart before indexing resumes.
+    /// Checks whether any blocks in the window were reorged while offline.
+    pub async fn validate_on_startup(&self) -> Result<Option<ReorgTask>, String> {
+        let block_numbers = self.window.block_numbers();
+        if block_numbers.is_empty() {
+            return Ok(None);
+        }
+
+        let provider = self
+            .provider
+            .as_ref()
+            .ok_or_else(|| "No provider configured for startup validation".to_string())?;
+
+        let block_numbers_u64: Vec<U64> = block_numbers.iter().map(|&n| U64::from(n)).collect();
+        let blocks = provider
+            .get_block_by_number_batch(&block_numbers_u64, false)
+            .await
+            .map_err(|e| format!("Failed to fetch blocks for startup validation: {}", e))?;
+
+        let canonical: Vec<(u64, B256)> =
+            blocks.iter().map(|b| (b.header.number, b.header.hash)).collect();
+
+        match self.window.find_fork_point(&canonical) {
+            Some(last_match) => {
+                // Check if the last match is the latest block — all good, no reorg
+                let latest = self.window.latest_block().unwrap_or(0);
+                if last_match >= latest {
+                    info!(
+                        network = %self.network,
+                        "Startup validation: all blocks match canonical chain"
+                    );
+                    return Ok(None);
+                }
+
+                // Partial match: fork found after last_match
+                let fork_point = last_match + 1;
+                let detection_point = latest;
+                let depth = detection_point.saturating_sub(fork_point) + 1;
+                warn!(
+                    network = %self.network,
+                    fork_point,
+                    detection_point,
+                    depth,
+                    "Startup validation: offline reorg detected"
+                );
+                metrics::record_reorg_detection_source(&self.network, "startup");
+                metrics::record_reorg(&self.network, depth);
+
+                Ok(Some(ReorgTask {
+                    network: self.network.clone(),
+                    fork_point,
+                    detection_point,
+                    event_tables: self.event_tables.clone(),
+                }))
+            }
+            None => {
+                // Entire window reorged
+                let oldest = self.window.oldest_block().unwrap_or(0);
+                let latest = self.window.latest_block().unwrap_or(0);
+                let depth = latest.saturating_sub(oldest) + 1;
+                warn!(
+                    network = %self.network,
+                    oldest,
+                    latest,
+                    depth,
+                    "Startup validation: entire window reorged"
+                );
+                metrics::record_reorg_detection_source(&self.network, "startup");
+                metrics::record_reorg(&self.network, depth);
+
+                Ok(Some(ReorgTask {
+                    network: self.network.clone(),
+                    fork_point: oldest,
+                    detection_point: latest,
+                    event_tables: self.event_tables.clone(),
+                }))
+            }
+        }
+    }
+
+    /// Handle reth ExEx notification — fork point provided directly.
+    pub fn on_exex_reorg(&self, revert_from_block: u64, revert_to_block: u64) -> ReorgTask {
+        metrics::record_reorg_detection_source(&self.network, "exex");
+        metrics::record_reorg(&self.network, revert_to_block - revert_from_block + 1);
+        ReorgTask {
+            network: self.network.clone(),
+            fork_point: revert_from_block,
+            detection_point: revert_to_block,
+            event_tables: self.event_tables.clone(),
+        }
+    }
+
+    /// Find the fork point by comparing window entries against canonical chain from RPC.
+    /// Returns the first block number that needs to be re-indexed.
+    async fn find_fork_point(&self) -> Result<u64, String> {
+        let block_numbers = self.window.block_numbers();
+        if block_numbers.is_empty() {
+            return Err("Cannot find fork point: window is empty".to_string());
+        }
+
+        let provider = self
+            .provider
+            .as_ref()
+            .ok_or_else(|| "No provider configured for fork point detection".to_string())?;
+
+        let block_numbers_u64: Vec<U64> = block_numbers.iter().map(|&n| U64::from(n)).collect();
+        let blocks = provider
+            .get_block_by_number_batch(&block_numbers_u64, false)
+            .await
+            .map_err(|e| format!("Failed to fetch blocks for fork point detection: {}", e))?;
+
+        let canonical: Vec<(u64, B256)> =
+            blocks.iter().map(|b| (b.header.number, b.header.hash)).collect();
+
+        match self.window.find_fork_point(&canonical) {
+            Some(last_match) => Ok(last_match + 1),
+            None => {
+                // Entire window reorged — return oldest block
+                Ok(block_numbers[0])
+            }
+        }
+    }
+
+    /// Persist the new block to DB and periodically prune old entries.
+    async fn persist_and_maybe_prune(
+        &mut self,
+        block_number: u64,
+        block_hash: B256,
+        parent_hash: B256,
+    ) -> Result<(), String> {
+        self.persistence
+            .insert_block(
+                &self.network,
+                block_number,
+                &format!("{:#x}", block_hash),
+                &format!("{:#x}", parent_hash),
+            )
+            .await?;
+
+        self.prune_counter += 1;
+        if self.prune_counter >= PRUNE_INTERVAL {
+            self.prune_counter = 0;
+            if let Some(oldest) = self.window.oldest_block() {
+                self.persistence.prune(&self.network, oldest).await?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hash(n: u8) -> B256 {
+        let mut bytes = [0u8; 32];
+        bytes[31] = n;
+        B256::from(bytes)
+    }
+
+    fn make_window_with_blocks(blocks: &[(u64, u8, u8)]) -> BlockChainWindow {
+        let mut window = BlockChainWindow::new(100);
+        for &(num, h, p) in blocks {
+            window.insert(num, hash(h), hash(p));
+        }
+        window
+    }
+
+    fn make_coordinator(window: BlockChainWindow) -> ReorgCoordinator {
+        let persistence = Arc::new(LatestBlocksPersistence::new(None, None));
+        ReorgCoordinator {
+            network: "test".to_string(),
+            window,
+            persistence,
+            provider: None,
+            event_tables: vec![],
+            prune_counter: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_on_new_block_valid_chain() {
+        // Build a window with blocks 10, 11, 12
+        let window = make_window_with_blocks(&[
+            (10, 10, 9),
+            (11, 11, 10),
+            (12, 12, 11),
+        ]);
+        let mut coordinator = make_coordinator(window);
+
+        // Block 13 with parent_hash matching block 12's hash
+        let result = coordinator
+            .on_new_block(13, hash(13), hash(12))
+            .await
+            .unwrap();
+
+        assert!(result.is_none(), "Expected no reorg for valid chain continuation");
+        assert!(coordinator.window.get(13).is_some(), "Block 13 should be in window");
+    }
+
+    #[tokio::test]
+    async fn test_on_new_block_no_previous_block() {
+        // Empty window — NoPreviousBlock path
+        let window = BlockChainWindow::new(100);
+        let mut coordinator = make_coordinator(window);
+
+        let result = coordinator
+            .on_new_block(100, hash(1), hash(0))
+            .await
+            .unwrap();
+
+        assert!(result.is_none(), "Expected None for NoPreviousBlock");
+        assert!(coordinator.window.get(100).is_some(), "Block should be inserted");
+    }
+
+    #[tokio::test]
+    async fn test_on_new_block_reorg_detected() {
+        // Build a window with blocks 10, 11, 12
+        let window = make_window_with_blocks(&[
+            (10, 10, 9),
+            (11, 11, 10),
+            (12, 12, 11),
+        ]);
+        let mut coordinator = make_coordinator(window);
+
+        // Block 13 with a parent_hash that does NOT match block 12's hash → mismatch
+        let result = coordinator.on_new_block(13, hash(13), hash(99)).await;
+
+        // Without a provider, find_fork_point will return an error,
+        // confirming we entered the Mismatch branch (not Valid or NoPreviousBlock)
+        match result {
+            Err(err) => assert!(
+                err.contains("No provider configured"),
+                "Expected provider-related error, got: {}",
+                err
+            ),
+            Ok(_) => panic!("Expected error from mismatch branch (no provider for fork point)"),
+        }
+    }
+
+    #[test]
+    fn test_on_exex_reorg() {
+        let window = BlockChainWindow::new(100);
+        let persistence = Arc::new(LatestBlocksPersistence::new(None, None));
+        let coordinator = ReorgCoordinator {
+            network: "test".to_string(),
+            window,
+            persistence,
+            provider: None,
+            event_tables: vec![EventTableInfo::new("schema".to_string(), "table".to_string())],
+            prune_counter: 0,
+        };
+
+        let task = coordinator.on_exex_reorg(100, 105);
+        assert_eq!(task.network, "test");
+        assert_eq!(task.fork_point, 100);
+        assert_eq!(task.detection_point, 105);
+        assert_eq!(task.event_tables.len(), 1);
+    }
+}
