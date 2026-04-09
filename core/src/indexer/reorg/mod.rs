@@ -3,6 +3,11 @@ pub mod persistence;
 pub mod task;
 pub mod window;
 
+pub use coordinator::ReorgCoordinator;
+pub use persistence::LatestBlocksPersistence;
+pub use task::EventTableInfo;
+pub use window::BlockChainWindow;
+
 use alloy::primitives::U64;
 use tracing::{debug, warn};
 
