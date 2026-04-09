@@ -1,0 +1,25 @@
+core/src/indexer/reorg/persistence.rs
+  88fdb9834fb286df 1-195
+core/src/indexer/reorg/mod.rs
+  88fdb9834fb286df 2
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.7",
+  "base_commit_sha": "40e013b0893ad50c25154595837d46cc1006aa65",
+  "prompts": {
+    "88fdb9834fb286df": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "873f225a-14f4-44ad-853e-0abc7ff1e218",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 218,
+      "total_deletions": 2,
+      "accepted_lines": 223,
+      "overriden_lines": 0
+    }
+  }
+}
