@@ -1,0 +1,11 @@
+core/src/database/postgres/generate.rs
+  88fdb9834fb286df 38,46-48
+core/src/database/clickhouse/generate.rs
+  88fdb9834fb286df 20,29-30,37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.7",
+  "base_commit_sha": "3ae4f00fcf17b197c6c37964462f659d2a150eb6",
+  "prompts": {}
+}

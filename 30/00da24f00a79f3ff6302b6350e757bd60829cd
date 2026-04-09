@@ -1,0 +1,27 @@
+core/src/database/generate.rs
+  88fdb9834fb286df 5-6,357
+core/src/database/clickhouse/generate.rs
+  88fdb9834fb286df 20,29-30,37
+core/src/database/postgres/generate.rs
+  88fdb9834fb286df 38,46-48
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.7",
+  "base_commit_sha": "3000da24f00a79f3ff6302b6350e757bd60829cd",
+  "prompts": {
+    "88fdb9834fb286df": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "873f225a-14f4-44ad-853e-0abc7ff1e218",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 26,
+      "total_deletions": 1,
+      "accepted_lines": 11,
+      "overriden_lines": 0
+    }
+  }
+}

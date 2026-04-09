@@ -1,0 +1,25 @@
+core/src/metrics/definitions.rs
+  88fdb9834fb286df 194-248
+core/src/metrics/indexing.rs
+  88fdb9834fb286df 5-6,85-109
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.7",
+  "base_commit_sha": "e5dd1593ea8c6ab2ae60feb2ff1f8ebc7bfb73e3",
+  "prompts": {
+    "88fdb9834fb286df": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "873f225a-14f4-44ad-853e-0abc7ff1e218",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 82,
+      "total_deletions": 1,
+      "accepted_lines": 82,
+      "overriden_lines": 0
+    }
+  }
+}

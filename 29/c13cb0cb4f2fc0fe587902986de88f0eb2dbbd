@@ -1,0 +1,25 @@
+core/src/indexer/reorg/task.rs
+  88fdb9834fb286df 1-9,11-122
+core/src/indexer/reorg/coordinator.rs
+  88fdb9834fb286df 2,5,8,12,14,23,40-41,55,59,65,69,76,81,83-84,92,97,103,106,117-118,132,139,154,161,163-164,175-176,184,189,195,198,204,206-207,214,223,229,231-233,235,239,244-245,252-253,264-265,275,281,284-285,291,296,299-300,310,313,324-325,338,344
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.7",
+  "base_commit_sha": "29c13cb0cb4f2fc0fe587902986de88f0eb2dbbd",
+  "prompts": {
+    "88fdb9834fb286df": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "873f225a-14f4-44ad-853e-0abc7ff1e218",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 82,
+      "total_deletions": 1,
+      "accepted_lines": 65,
+      "overriden_lines": 0
+    }
+  }
+}

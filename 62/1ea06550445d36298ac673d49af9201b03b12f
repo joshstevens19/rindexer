@@ -1,0 +1,29 @@
+core/tests/e2e_reorg.rs
+  88fdb9834fb286df 1-498
+core/Cargo.toml
+  88fdb9834fb286df 17-20
+core/src/indexer/mod.rs
+  88fdb9834fb286df 16
+core/tests/fixtures/reorg_test/abis/PingPong.abi.json
+  88fdb9834fb286df 1-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.7",
+  "base_commit_sha": "621ea06550445d36298ac673d49af9201b03b12f",
+  "prompts": {
+    "88fdb9834fb286df": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "873f225a-14f4-44ad-853e-0abc7ff1e218",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 534,
+      "total_deletions": 13,
+      "accepted_lines": 522,
+      "overriden_lines": 0
+    }
+  }
+}

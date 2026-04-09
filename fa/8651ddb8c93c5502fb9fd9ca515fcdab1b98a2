@@ -1,0 +1,35 @@
+core/src/indexer/reorg/mod.rs
+  88fdb9834fb286df 9,13,42,92-93,1840-1841
+core/src/indexer/start.rs
+  88fdb9834fb286df 427,681,702,710-711,737,752-753,761,775,778,781-784,802-806
+core/src/database/clickhouse/client.rs
+  88fdb9834fb286df 45-47,207,216-220,239
+core/src/indexer/process.rs
+  88fdb9834fb286df 460
+core/src/indexer/reorg/coordinator.rs
+  88fdb9834fb286df 2,5,10,14,16,25,42-43,57,61,67,71,78,80-81,89,94,100,103,114-115,129,136,151,158,160-161,172-173,181,186,192,195,201,203-204,222,255-257,259,263,268-269,276-277,288-289,299,305,308-309,315,320,323-324,334,337,348-349,362,368
+core/src/indexer/reorg/window.rs
+  88fdb9834fb286df 1-58,60,65,67-286
+core/src/indexer/fetch_logs.rs
+  88fdb9834fb286df 4,627-633,637-643
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.7",
+  "base_commit_sha": "fa8651ddb8c93c5502fb9fd9ca515fcdab1b98a2",
+  "prompts": {
+    "88fdb9834fb286df": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "873f225a-14f4-44ad-853e-0abc7ff1e218",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 316,
+      "total_deletions": 281,
+      "accepted_lines": 314,
+      "overriden_lines": 0
+    }
+  }
+}
