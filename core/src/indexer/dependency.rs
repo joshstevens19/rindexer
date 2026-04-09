@@ -6,6 +6,7 @@ use std::{
 use crate::{
     database::postgres::relationship::Relationship,
     event::{config::EventProcessingConfig, contract_setup::ContractEventMapping},
+    indexer::reorg::ReorgCoordinator,
     manifest::{contract::DependencyEventTree, core::Manifest},
 };
 
@@ -304,6 +305,8 @@ pub struct ContractEventsDependenciesConfig {
     pub contract_name: String,
     pub event_dependencies: EventDependencies,
     pub events_config: Vec<Arc<EventProcessingConfig>>,
+    /// Per-network reorg coordinators for live indexing reorg protection.
+    pub reorg_coordinators: HashMap<String, ReorgCoordinator>,
 }
 
 impl ContractEventsDependenciesConfig {
@@ -333,6 +336,7 @@ impl ContractEventsDependenciesConfig {
                         .event_dependencies
                         .clone(),
                     events_config: vec![event_processing_config],
+                    reorg_coordinators: HashMap::new(),
                 });
             }
         }
