@@ -1,0 +1,195 @@
+use std::str::FromStr;
+use std::sync::Arc;
+
+use alloy::primitives::B256;
+use clickhouse::Row;
+use serde::Deserialize;
+use tracing::error;
+
+use crate::database::clickhouse::client::ClickhouseClient;
+use crate::database::postgres::client::PostgresClient;
+
+use super::window::BlockChainWindow;
+
+pub struct LatestBlocksPersistence {
+    postgres: Option<Arc<PostgresClient>>,
+    clickhouse: Option<Arc<ClickhouseClient>>,
+}
+
+impl LatestBlocksPersistence {
+    pub fn new(
+        postgres: Option<Arc<PostgresClient>>,
+        clickhouse: Option<Arc<ClickhouseClient>>,
+    ) -> Self {
+        Self { postgres, clickhouse }
+    }
+
+    /// Load all entries from the persisted `latest_blocks` table into a new
+    /// `BlockChainWindow`. Priority: postgres > clickhouse.
+    pub async fn load(
+        &self,
+        network: &str,
+        max_window_size: usize,
+    ) -> Result<BlockChainWindow, String> {
+        let mut window = BlockChainWindow::new(max_window_size);
+
+        if let Some(postgres) = &self.postgres {
+            let query = r#"
+                SELECT block_number, block_hash, parent_hash
+                FROM rindexer_internal.latest_blocks
+                WHERE network = $1
+                ORDER BY block_number ASC"#;
+
+            let rows = postgres.query(query, &[&network]).await.map_err(|e| {
+                let msg = format!("Failed to load latest_blocks from postgres: {}", e);
+                error!("{}", msg);
+                msg
+            })?;
+
+            for row in rows {
+                let block_number: i64 = row.get("block_number");
+                let block_hash_str: String = row.get("block_hash");
+                let parent_hash_str: String = row.get("parent_hash");
+
+                let block_hash = B256::from_str(&block_hash_str).map_err(|e| {
+                    format!(
+                        "Failed to parse block_hash '{}' at block {}: {}",
+                        block_hash_str, block_number, e
+                    )
+                })?;
+                let parent_hash = B256::from_str(&parent_hash_str).map_err(|e| {
+                    format!(
+                        "Failed to parse parent_hash '{}' at block {}: {}",
+                        parent_hash_str, block_number, e
+                    )
+                })?;
+
+                window.insert(block_number as u64, block_hash, parent_hash);
+            }
+
+            return Ok(window);
+        }
+
+        if let Some(clickhouse) = &self.clickhouse {
+            #[derive(Row, Deserialize)]
+            struct LatestBlockRow {
+                block_number: u64,
+                block_hash: String,
+                parent_hash: String,
+            }
+
+            let query = format!(
+                r#"SELECT block_number, block_hash, parent_hash
+                 FROM rindexer_internal.latest_blocks FINAL
+                 WHERE network = '{}'
+                 ORDER BY block_number ASC"#,
+                network
+            );
+
+            let rows = clickhouse.query_all::<LatestBlockRow>(&query).await.map_err(|e| {
+                let msg = format!("Failed to load latest_blocks from clickhouse: {}", e);
+                error!("{}", msg);
+                msg
+            })?;
+
+            for row in rows {
+                let block_hash = B256::from_str(&row.block_hash).map_err(|e| {
+                    format!(
+                        "Failed to parse block_hash '{}' at block {}: {}",
+                        row.block_hash, row.block_number, e
+                    )
+                })?;
+                let parent_hash = B256::from_str(&row.parent_hash).map_err(|e| {
+                    format!(
+                        "Failed to parse parent_hash '{}' at block {}: {}",
+                        row.parent_hash, row.block_number, e
+                    )
+                })?;
+
+                window.insert(row.block_number, block_hash, parent_hash);
+            }
+
+            return Ok(window);
+        }
+
+        Ok(window)
+    }
+
+    /// Persist a single new block entry. Uses upsert for postgres, simple insert
+    /// for clickhouse.
+    pub async fn insert_block(
+        &self,
+        network: &str,
+        block_number: u64,
+        block_hash: &str,
+        parent_hash: &str,
+    ) -> Result<(), String> {
+        if let Some(postgres) = &self.postgres {
+            let query = r#"INSERT INTO rindexer_internal.latest_blocks
+                         (network, block_number, block_hash, parent_hash)
+                         VALUES ($1, $2, $3, $4)
+                         ON CONFLICT (network, block_number)
+                         DO UPDATE SET block_hash = EXCLUDED.block_hash,
+                         parent_hash = EXCLUDED.parent_hash"#;
+
+            let block_number_i64 = block_number as i64;
+            postgres
+                .execute(query, &[&network, &block_number_i64, &block_hash, &parent_hash])
+                .await
+                .map_err(|e| {
+                    let msg =
+                        format!("Failed to insert block {} into postgres: {}", block_number, e);
+                    error!("{}", msg);
+                    msg
+                })?;
+        }
+
+        if let Some(clickhouse) = &self.clickhouse {
+            let query = format!(
+                "INSERT INTO rindexer_internal.latest_blocks \
+                 (network, block_number, block_hash, parent_hash) \
+                 VALUES ('{}', {}, '{}', '{}')",
+                network, block_number, block_hash, parent_hash
+            );
+
+            clickhouse.execute(&query).await.map_err(|e| {
+                let msg = format!("Failed to insert block {} into clickhouse: {}", block_number, e);
+                error!("{}", msg);
+                msg
+            })?;
+        }
+
+        Ok(())
+    }
+
+    /// Delete entries older than the given block number.
+    pub async fn prune(&self, network: &str, older_than: u64) -> Result<(), String> {
+        if let Some(postgres) = &self.postgres {
+            let query = r#"DELETE FROM rindexer_internal.latest_blocks
+                         WHERE network = $1 AND block_number < $2"#;
+
+            let older_than_i64 = older_than as i64;
+            postgres.execute(query, &[&network, &older_than_i64]).await.map_err(|e| {
+                let msg = format!("Failed to prune latest_blocks in postgres: {}", e);
+                error!("{}", msg);
+                msg
+            })?;
+        }
+
+        if let Some(clickhouse) = &self.clickhouse {
+            let query = format!(
+                r#"ALTER TABLE rindexer_internal.latest_blocks DELETE
+                 WHERE network = '{}' AND block_number < {}"#,
+                network, older_than
+            );
+
+            clickhouse.execute(&query).await.map_err(|e| {
+                let msg = format!("Failed to prune latest_blocks in clickhouse: {}", e);
+                error!("{}", msg);
+                msg
+            })?;
+        }
+
+        Ok(())
+    }
+}

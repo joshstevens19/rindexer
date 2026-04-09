@@ -1,4 +1,5 @@
 pub mod coordinator;
+pub mod persistence;
 pub mod task;
 pub mod window;
 
