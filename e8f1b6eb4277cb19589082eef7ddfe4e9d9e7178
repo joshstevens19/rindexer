@@ -1,0 +1,25 @@
+core/src/manifest/stream.rs
+  88fdb9834fb286df 10-17,36-37,53-54,75-76,126-127,177-178,206-207
+core/src/manifest/network.rs
+  88fdb9834fb286df 26-42,89-91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.7",
+  "base_commit_sha": "e8f1b6eb4277cb19589082eef7ddfe4e9d9e7178",
+  "prompts": {
+    "88fdb9834fb286df": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "873f225a-14f4-44ad-853e-0abc7ff1e218",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 40,
+      "total_deletions": 0,
+      "accepted_lines": 119,
+      "overriden_lines": 0
+    }
+  }
+}
