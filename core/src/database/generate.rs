@@ -2,7 +2,8 @@ use crate::abi::{EventInfo, ParamTypeError, ReadAbiError};
 use crate::database::postgres::client::PostgresError;
 use crate::database::postgres::generate::{
     generate_columns_with_data_types, generate_internal_cron_table_name,
-    generate_internal_event_table_name, GenerateInternalFactoryEventTableNameParams,
+    generate_internal_event_table_name, generate_latest_blocks_table_sql,
+    GenerateInternalFactoryEventTableNameParams,
 };
 use crate::helpers::{camel_to_snake, snake_to_camel};
 use crate::indexer::native_transfer::{NATIVE_TRANSFER_ABI, NATIVE_TRANSFER_CONTRACT_NAME};
@@ -353,6 +354,7 @@ pub fn generate_tables_for_indexer_sql(
     disable_event_tables: bool,
 ) -> Result<Code, GenerateTablesForIndexerSqlError> {
     let mut sql = "CREATE SCHEMA IF NOT EXISTS rindexer_internal;".to_string();
+    sql.push_str(&generate_latest_blocks_table_sql());
 
     for contract in &indexer.contracts {
         let contract_name = contract.before_modify_name_if_filter_readonly();

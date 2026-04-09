@@ -35,6 +35,17 @@ pub fn generate_column_names_only_with_base_properties(inputs: &[ABIInput]) -> V
     column_names
 }
 
+pub fn generate_latest_blocks_table_sql() -> String {
+    "CREATE TABLE IF NOT EXISTS rindexer_internal.latest_blocks (\
+        network TEXT NOT NULL, \
+        block_number BIGINT NOT NULL, \
+        block_hash CHAR(66) NOT NULL, \
+        parent_hash CHAR(66) NOT NULL, \
+        PRIMARY KEY (network, block_number)\
+    );"
+    .to_string()
+}
+
 pub fn generate_internal_event_table_name(schema_name: &str, event_name: &str) -> String {
     let table_name = format!("{}_{}", schema_name, camel_to_snake(event_name));
 
