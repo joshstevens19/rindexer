@@ -57,3 +57,32 @@ jobs:
         run: cargo test --exclude rindexer_rust_playground --workspace
       - name: Run tests (all features including reth)
         run: cargo test --exclude rindexer_rust_playground --workspace --all-features
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    needs: [fmt, clippy]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install OpenSSL dev libraries
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y libssl-dev pkg-config
+      - name: Install cargo-llvm-cov and cargo-nextest
+        run: cargo install -q cargo-llvm-cov cargo-nextest --locked
+      - name: Run coverage
+        run: cargo llvm-cov nextest --workspace --exclude rindexer_rust_playground --all-features --lcov --output-path lcov.info
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov.info
+          fail_ci_if_error: true
