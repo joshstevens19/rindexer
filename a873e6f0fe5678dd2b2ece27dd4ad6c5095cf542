@@ -1,0 +1,23 @@
+docs/superpowers/plans/2026-04-10-reorg-recovery-enhancement.md
+  88fdb9834fb286df 1-239
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.7",
+  "base_commit_sha": "a873e6f0fe5678dd2b2ece27dd4ad6c5095cf542",
+  "prompts": {
+    "88fdb9834fb286df": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "873f225a-14f4-44ad-853e-0abc7ff1e218",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 239,
+      "overriden_lines": 0
+    }
+  }
+}
