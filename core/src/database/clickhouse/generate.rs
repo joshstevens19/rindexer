@@ -173,9 +173,13 @@ fn generate_tables_clickhouse(tables: &[Table], schema_name: &str) -> String {
                 }
             }
 
-            // Use ReplacingMergeTree with rindexer_sequence_id as version column
-            let engine =
-                format!("ReplacingMergeTree(`{}`)", injected_columns::RINDEXER_SEQUENCE_ID);
+            // Insert-only tables use MergeTree (no dedup needed — each row is unique).
+            // Tables with upsert/update/delete use ReplacingMergeTree for deduplication.
+            let engine = if table.is_insert_only() {
+                "MergeTree()".to_string()
+            } else {
+                format!("ReplacingMergeTree(`{}`)", injected_columns::RINDEXER_SEQUENCE_ID)
+            };
 
             format!(
                 "CREATE TABLE IF NOT EXISTS {} ({}) ENGINE = {} ORDER BY ({});",

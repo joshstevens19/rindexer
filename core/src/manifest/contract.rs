@@ -799,20 +799,23 @@ impl ColumnType {
         }
     }
 
-    /// Convert to ClickHouse type
+    /// Convert to ClickHouse type.
+    /// Uses native CH types matching `solidity_type_to_clickhouse_type()` for raw event tables.
     pub fn to_clickhouse_type(&self) -> String {
         match self {
             ColumnType::Uint8 => "UInt8".to_string(),
             ColumnType::Uint16 => "UInt16".to_string(),
             ColumnType::Uint32 => "UInt32".to_string(),
             ColumnType::Uint64 => "UInt64".to_string(),
-            ColumnType::Uint128 | ColumnType::Uint256 => "String".to_string(),
+            ColumnType::Uint128 => "UInt128".to_string(),
+            ColumnType::Uint256 => "UInt256".to_string(),
             ColumnType::Int8 => "Int8".to_string(),
             ColumnType::Int16 => "Int16".to_string(),
             ColumnType::Int32 => "Int32".to_string(),
             ColumnType::Int64 => "Int64".to_string(),
-            ColumnType::Int128 | ColumnType::Int256 => "String".to_string(),
-            ColumnType::Address => "String".to_string(),
+            ColumnType::Int128 => "Int128".to_string(),
+            ColumnType::Int256 => "Int256".to_string(),
+            ColumnType::Address => "FixedString(42)".to_string(),
             ColumnType::Bytes | ColumnType::Bytes32 => "String".to_string(),
             ColumnType::String => "String".to_string(),
             ColumnType::Bool => "Bool".to_string(),
@@ -1551,5 +1554,85 @@ mod tests {
         let result = Table::infer_type_from_value("$rindexer_block_number", None);
         // Should return the metadata field's type (u64 → Uint64)
         assert!(result.is_some());
+    }
+
+    // =========================================================================
+    // ClickHouse type mapping — native types instead of String fallback
+    // =========================================================================
+
+    #[test]
+    fn test_ch_type_uint256_is_native() {
+        assert_eq!(ColumnType::Uint256.to_clickhouse_type(), "UInt256");
+    }
+
+    #[test]
+    fn test_ch_type_uint128_is_native() {
+        assert_eq!(ColumnType::Uint128.to_clickhouse_type(), "UInt128");
+    }
+
+    #[test]
+    fn test_ch_type_int256_is_native() {
+        assert_eq!(ColumnType::Int256.to_clickhouse_type(), "Int256");
+    }
+
+    #[test]
+    fn test_ch_type_int128_is_native() {
+        assert_eq!(ColumnType::Int128.to_clickhouse_type(), "Int128");
+    }
+
+    #[test]
+    fn test_ch_type_address_is_fixed_string() {
+        assert_eq!(ColumnType::Address.to_clickhouse_type(), "FixedString(42)");
+    }
+
+    #[test]
+    fn test_ch_type_uint64_unchanged() {
+        assert_eq!(ColumnType::Uint64.to_clickhouse_type(), "UInt64");
+    }
+
+    #[test]
+    fn test_ch_type_int64_unchanged() {
+        assert_eq!(ColumnType::Int64.to_clickhouse_type(), "Int64");
+    }
+
+    #[test]
+    fn test_ch_type_bool_unchanged() {
+        assert_eq!(ColumnType::Bool.to_clickhouse_type(), "Bool");
+    }
+
+    #[test]
+    fn test_ch_type_string_unchanged() {
+        assert_eq!(ColumnType::String.to_clickhouse_type(), "String");
+    }
+
+    #[test]
+    fn test_ch_type_array_uses_native_inner() {
+        let arr = ColumnType::Array(Box::new(ColumnType::Uint256));
+        assert_eq!(arr.to_clickhouse_type(), "Array(UInt256)");
+    }
+
+    #[test]
+    fn test_ch_type_matches_solidity_raw_event_mapping() {
+        // Custom table types must match raw event table types for consistency.
+        // Raw events: solidity_type_to_clickhouse_type("uint256") → "UInt256"
+        // Custom tables: ColumnType::Uint256.to_clickhouse_type() → should also be "UInt256"
+        assert_eq!(ColumnType::Uint256.to_clickhouse_type(), "UInt256");
+        assert_eq!(ColumnType::Uint128.to_clickhouse_type(), "UInt128");
+        assert_eq!(ColumnType::Int256.to_clickhouse_type(), "Int256");
+        assert_eq!(ColumnType::Int128.to_clickhouse_type(), "Int128");
+    }
+
+    // =========================================================================
+    // PostgreSQL type mapping — sanity checks (shouldn't change)
+    // =========================================================================
+
+    #[test]
+    fn test_pg_type_uint256_is_numeric() {
+        assert_eq!(ColumnType::Uint256.to_postgres_type(), "NUMERIC");
+    }
+
+    #[test]
+    fn test_pg_type_address_is_char42() {
+        assert_eq!(ColumnType::Address.to_postgres_type(), "CHAR(42)");
     }
 }
