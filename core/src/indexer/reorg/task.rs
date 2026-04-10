@@ -148,7 +148,7 @@ impl ReorgTask {
                 .map(|t| t.checkpoint_table.clone())
                 .collect();
 
-            ch.reorg_rollback(&tables, &self.network, self.fork_point, self.detection_point, &checkpoint_tables)
+            ch.reorg_rollback(&tables, &self.network, self.fork_point, self.detection_point, &checkpoint_tables, &corrected_blocks)
                 .await
                 .map_err(|e| e.to_string())?;
         }

@@ -425,6 +425,7 @@ async fn test_reorg_detection_and_rollback() {
             "test_schema_ping".to_string(),
         )],
         derived_tables: vec![],
+        canonical_blocks: vec![],
     };
 
     // Build a PostgresClient from a pool using the same connection string.

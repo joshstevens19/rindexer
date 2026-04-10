@@ -187,13 +187,15 @@ impl ReorgCoordinator {
     }
 
     /// Handle reth ExEx notification — fork point provided directly.
+    /// `revert_from_block` is the higher block (detection point),
+    /// `revert_to_block` is the lower block (fork point).
     pub fn on_exex_reorg(&self, revert_from_block: u64, revert_to_block: u64) -> ReorgTask {
         metrics::record_reorg_detection_source(&self.network, "exex");
-        metrics::record_reorg(&self.network, revert_to_block - revert_from_block + 1);
+        metrics::record_reorg(&self.network, revert_from_block.saturating_sub(revert_to_block) + 1);
         ReorgTask {
             network: self.network.clone(),
-            fork_point: revert_from_block,
-            detection_point: revert_to_block,
+            fork_point: revert_to_block,
+            detection_point: revert_from_block,
             event_tables: self.event_tables.clone(),
             derived_tables: self.derived_tables.clone(),
             canonical_blocks: vec![],
@@ -447,10 +449,10 @@ mod tests {
             blocks_since_flush: 0,
         };
 
-        let task = coordinator.on_exex_reorg(100, 105);
+        let task = coordinator.on_exex_reorg(110, 100);
         assert_eq!(task.network, "test");
         assert_eq!(task.fork_point, 100);
-        assert_eq!(task.detection_point, 105);
+        assert_eq!(task.detection_point, 110);
         assert_eq!(task.event_tables.len(), 1);
     }
 }

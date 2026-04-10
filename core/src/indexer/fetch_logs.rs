@@ -525,7 +525,7 @@ async fn live_indexing_stream(
                             registry: None,
                             streams_clients: streams_clients.as_ref().as_ref(),
                         };
-                        if detect_and_handle_reorg(
+                        if let Some(fork_point) = detect_and_handle_reorg(
                             coordinator,
                             latest_block.header.number,
                             latest_block.header.hash,
@@ -535,6 +535,8 @@ async fn live_indexing_stream(
                         )
                         .await
                         {
+                            current_filter = current_filter.set_from_block(U64::from(fork_point));
+                            last_seen_block_number = U64::from(fork_point.saturating_sub(1));
                             continue;
                         }
                     }

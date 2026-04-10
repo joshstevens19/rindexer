@@ -32,7 +32,8 @@ pub struct ReorgContext<'a> {
     pub streams_clients: Option<&'a StreamsClients>,
 }
 
-/// Returns true if a reorg was detected and handled (caller should `continue`).
+/// Returns `Some(fork_point)` if a reorg was detected and handled (caller should rewind and `continue`),
+/// or `None` if no reorg was detected.
 pub async fn detect_and_handle_reorg(
     coordinator: &mut ReorgCoordinator,
     block_number: u64,
@@ -40,15 +41,16 @@ pub async fn detect_and_handle_reorg(
     parent_hash: B256,
     log_prefix: &str,
     ctx: &ReorgContext<'_>,
-) -> bool {
+) -> Option<u64> {
     match coordinator.on_new_block(block_number, block_hash, parent_hash).await {
         Ok(Some(reorg_task)) => {
+            let fork_point = reorg_task.fork_point;
             warn!(
                 "{} - REORG DETECTED by coordinator on block {} (fork_point: {}, depth: {}). Executing rollback.",
                 log_prefix,
                 block_number,
-                reorg_task.fork_point,
-                reorg_task.detection_point - reorg_task.fork_point + 1,
+                fork_point,
+                reorg_task.detection_point - fork_point + 1,
             );
 
             if let Err(e) =
@@ -60,12 +62,12 @@ pub async fn detect_and_handle_reorg(
                 );
             }
 
-            true
+            Some(fork_point)
         }
-        Ok(None) => false,
+        Ok(None) => None,
         Err(e) => {
             error!("{} - Reorg coordinator error: {}", log_prefix, e);
-            false
+            None
         }
     }
 }

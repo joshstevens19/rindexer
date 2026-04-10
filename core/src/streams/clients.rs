@@ -1389,20 +1389,6 @@ mod tests {
     }
 }
 
-pub fn build_reorg_notification_event(
-    network: &str,
-    fork_block: u64,
-    invalidated_range: (u64, u64),
-) -> serde_json::Value {
-    serde_json::json!({
-        "event_type": "rindexer_reorg",
-        "network": network,
-        "fork_block": fork_block,
-        "invalidated_range": [invalidated_range.0, invalidated_range.1],
-        "new_events_indexed": true
-    })
-}
-
 pub struct FinalizedBuffer {
     buffer: BTreeMap<u64, Vec<serde_json::Value>>,
     reorg_safe_distance: u64,

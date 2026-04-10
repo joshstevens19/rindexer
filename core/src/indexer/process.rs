@@ -405,7 +405,7 @@ async fn live_indexing_for_contract_event_dependencies(
                 registry: None,
                 streams_clients: streams_clients.as_ref().as_ref(),
             };
-            if detect_and_handle_reorg(
+            if let Some(fork_point) = detect_and_handle_reorg(
                 coordinator,
                 latest_block.header.number,
                 latest_block.header.hash,
@@ -415,6 +415,16 @@ async fn live_indexing_for_contract_event_dependencies(
             )
             .await
             {
+                // Rewind all event filters to re-fetch logs for the corrected blocks
+                for (config, _) in events.iter() {
+                    let mut details = ordering_live_indexing_details_map
+                        .get(&config.processor_id())
+                        .expect("Failed to get ordering_live_indexing_details_map")
+                        .lock()
+                        .await;
+                    details.filter = details.filter.clone().set_from_block(U64::from(fork_point));
+                    details.last_seen_block_number = U64::from(fork_point.saturating_sub(1));
+                }
                 continue;
             }
         }
