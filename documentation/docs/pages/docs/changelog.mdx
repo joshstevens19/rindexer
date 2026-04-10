@@ -12,6 +12,8 @@
 ### Features
 -------------------------------------------------
 
+- feat: **`database` field on custom tables** — optional YAML field that directs a custom table to a specific ClickHouse database (or PostgreSQL schema) instead of the default `{project}_{contract}` naming. Enables multiple contracts to write to a shared table (e.g., `database: indexer` → `indexer.events`).
+
 ## Releases
 -------------------------------------------------
 
