@@ -79,7 +79,7 @@ jobs:
       - name: Install cargo-llvm-cov and cargo-nextest
         run: cargo install -q cargo-llvm-cov cargo-nextest --locked
       - name: Run coverage
-        run: cargo llvm-cov nextest --workspace --exclude rindexer_rust_playground --all-features --lcov --output-path lcov.info
+        run: cargo llvm-cov nextest -p rindexer -p rindexer_cli --all-features --lcov --output-path lcov.info
       - name: Upload to Codecov
         uses: codecov/codecov-action@v5
         with:
