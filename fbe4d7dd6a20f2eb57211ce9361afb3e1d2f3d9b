@@ -1,0 +1,25 @@
+core/src/database/postgres/client.rs
+  88fdb9834fb286df 484-502
+core/src/indexer/reorg/task.rs
+  88fdb9834fb286df 3-4,8,47,53,57,69-102,104-127,233,235
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.7",
+  "base_commit_sha": "fbe4d7dd6a20f2eb57211ce9361afb3e1d2f3d9b",
+  "prompts": {
+    "88fdb9834fb286df": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "873f225a-14f4-44ad-853e-0abc7ff1e218",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 459,
+      "total_deletions": 2409,
+      "accepted_lines": 454,
+      "overriden_lines": 0
+    }
+  }
+}
