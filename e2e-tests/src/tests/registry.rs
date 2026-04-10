@@ -77,6 +77,9 @@ impl TestRegistry {
         // Direct RPC
         tests.extend(crate::tests::direct_rpc::DirectRpcTests::get_tests());
 
+        // Reorg handling
+        tests.extend(crate::tests::reorg_e2e::ReorgTests::get_tests());
+
         // Health assertions
         tests.extend(crate::tests::health_assertions::HealthAssertionsTests::get_tests());
 

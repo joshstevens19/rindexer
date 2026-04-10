@@ -11,6 +11,7 @@ pub mod historic_indexing;
 pub mod live_indexing;
 pub mod multi_network;
 pub mod postgres_e2e;
+pub mod reorg_e2e;
 pub mod restart_checkpoint;
 
 // Registry and runner
