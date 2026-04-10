@@ -9,7 +9,7 @@ use alloy::primitives::{Address, B256};
 use rindexer::indexer::reorg::{
     persistence::LatestBlocksPersistence,
     task::{EventTableInfo, ReorgTask},
-    window::BlockChainWindow,
+    window::{BlockChainWindow, ParentValidation},
 };
 use rindexer::PostgresClient;
 use reqwest::Client as HttpClient;
@@ -70,6 +70,7 @@ async fn get_block_number(http: &HttpClient, rpc_url: &str) -> u64 {
     u64::from_str_radix(result.as_str().unwrap().trim_start_matches("0x"), 16).unwrap()
 }
 
+/// Returns `(block_hash, parent_hash)` for the given block number.
 async fn get_block_by_number(http: &HttpClient, rpc_url: &str, block_number: u64) -> (B256, B256) {
     let hex_block = format!("0x{:x}", block_number);
     let result = rpc_call(http, rpc_url, "eth_getBlockByNumber", json!([hex_block, false])).await;
@@ -78,6 +79,16 @@ async fn get_block_by_number(http: &HttpClient, rpc_url: &str, block_number: u64
     let hash: B256 = hash_str.parse().expect("invalid block hash");
     let parent: B256 = parent_str.parse().expect("invalid parent hash");
     (hash, parent)
+}
+
+/// Returns `(block_number, block_hash, parent_hash)` for the given block number.
+async fn get_block_full(
+    http: &HttpClient,
+    rpc_url: &str,
+    block_number: u64,
+) -> (u64, B256, B256) {
+    let (hash, parent) = get_block_by_number(http, rpc_url, block_number).await;
+    (block_number, hash, parent)
 }
 
 async fn get_accounts(http: &HttpClient, rpc_url: &str) -> Vec<Address> {
@@ -430,15 +441,48 @@ async fn test_reorg_detection_and_rollback() {
     // Re-create a fresh PostgresClient for the task execution
     let rindexer_pg2 = PostgresClient::new().await.expect("failed to create PostgresClient for task");
 
+    // Collect the pre-reorg hashes for the reorged range so we can verify they change.
+    let old_block2_hash = {
+        let (h, _) = get_block_by_number(&http, &rpc_url, block2).await;
+        format!("{:#x}", h)
+    };
+
     let result = task
-        .execute(&mut task_window, &persistence, Some(&rindexer_pg2), None)
+        .execute(&mut task_window, &persistence, Some(&rindexer_pg2), None, None)
         .await
         .expect("reorg task execution failed");
 
+    // -----------------------------------------------------------------------
+    // Assertion: events_deleted
+    // -----------------------------------------------------------------------
     // Events for block2 and block3 should be deleted (Ping(2) and Ping(3))
     assert_eq!(result.events_deleted, 2, "should have deleted 2 stale events");
 
-    // Verify only Ping(1) remains
+    // -----------------------------------------------------------------------
+    // Assertion: affected_tx_hashes is non-empty
+    // -----------------------------------------------------------------------
+    // collect_affected_tx_hashes gathers distinct tx_hash values for the reorged
+    // block range. Our fake events all carry the zero hash, so expect exactly one
+    // entry (deduplicated) corresponding to those two stale rows.
+    assert!(
+        !result.affected_tx_hashes.is_empty(),
+        "affected_tx_hashes should be non-empty after reorg recovery"
+    );
+    // Both stale events share the same placeholder tx_hash; after dedup only one entry.
+    assert_eq!(
+        result.affected_tx_hashes.len(),
+        1,
+        "expected exactly 1 distinct tx_hash from the two stale events"
+    );
+    assert_eq!(
+        result.affected_tx_hashes[0],
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "affected tx_hash should be the zero hash used in test fixtures"
+    );
+
+    // -----------------------------------------------------------------------
+    // Assertion: only Ping(1) remains in the event table
+    // -----------------------------------------------------------------------
     let post_count: i64 = pg_client
         .query_one("SELECT count(*) FROM test_schema.ping_pong_ping", &[])
         .await
@@ -446,7 +490,11 @@ async fn test_reorg_detection_and_rollback() {
         .get(0);
     assert_eq!(post_count, 1, "only Ping(1) should remain after rollback");
 
-    // Verify latest_blocks entries for invalidated range are removed
+    // -----------------------------------------------------------------------
+    // Assertion: latest_blocks for invalidated range are removed
+    // -----------------------------------------------------------------------
+    // When execute() is called without a provider the corrected_blocks list is
+    // empty, so the transaction deletes the stale rows but inserts nothing back.
     let latest_blocks_count: i64 = pg_client
         .query_one(
             "SELECT count(*) FROM rindexer_internal.latest_blocks \
@@ -458,7 +506,61 @@ async fn test_reorg_detection_and_rollback() {
         .get(0);
     assert_eq!(
         latest_blocks_count, 0,
-        "latest_blocks for invalidated range should be deleted"
+        "latest_blocks for invalidated range should be deleted when no provider is given"
+    );
+
+    // The entry for block1 (the fork point itself, which is NOT in the invalidated
+    // range) should still exist unchanged.
+    let fork_block_row = pg_client
+        .query_one(
+            "SELECT block_hash FROM rindexer_internal.latest_blocks \
+             WHERE network = $1 AND block_number = $2",
+            &[&network, &(block1 as i64)],
+        )
+        .await
+        .unwrap();
+    let stored_block1_hash: &str = fork_block_row.get(0);
+    assert!(
+        !stored_block1_hash.is_empty(),
+        "block1 entry in latest_blocks should survive the reorg rollback"
+    );
+    // Sanity: stored hash should differ from the (post-reorg) hash we captured
+    // for block2 — they are different blocks.
+    assert_ne!(
+        stored_block1_hash, old_block2_hash.as_str(),
+        "block1 hash in latest_blocks should not equal block2 hash"
+    );
+
+    // -----------------------------------------------------------------------
+    // Assertion: window is NOT updated when provider is None
+    // -----------------------------------------------------------------------
+    // task_window was empty before execute() and, since no provider was given,
+    // update_range was never called — the window should remain empty.
+    assert!(
+        task_window.is_empty(),
+        "task_window should remain empty when execute() is called without a provider"
+    );
+
+    // -----------------------------------------------------------------------
+    // Assertion: validate_parent on the canonical chain still works
+    // -----------------------------------------------------------------------
+    // Wait until chain has block1+1 available (may already exist from earlier).
+    let check_after = block1 + 1;
+    for _ in 0..30 {
+        let tip = get_block_number(&http, &rpc_url).await;
+        if tip >= check_after {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    let (_check_num, _check_hash, check_parent) =
+        get_block_full(&http, &rpc_url, check_after).await;
+    // Our original `window` still holds block1's canonical hash; the new block
+    // at check_after must have block1's hash as its parent.
+    let validation = window.validate_parent(check_after, check_parent);
+    assert!(
+        matches!(validation, ParentValidation::Valid),
+        "block at check_after should have block1's hash as its parent (canonical chain is intact)"
     );
 
     // -----------------------------------------------------------------------
