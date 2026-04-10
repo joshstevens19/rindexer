@@ -49,7 +49,7 @@ pub fn generate_tables_for_indexer_clickhouse(
 
             // Generate custom tables if defined
             if let Some(tables) = &contract.tables {
-                sql.push_str(&generate_tables_clickhouse(tables, &schema_name, &indexer.name));
+                sql.push_str(&generate_tables_clickhouse(tables, &schema_name));
             }
         }
 
@@ -106,7 +106,7 @@ fn generate_event_table_clickhouse(abi_inputs: &[EventInfo], schema_name: &str) 
 }
 
 /// Generate ClickHouse SQL for custom tables
-fn generate_tables_clickhouse(tables: &[Table], schema_name: &str, indexer_name: &str) -> String {
+fn generate_tables_clickhouse(tables: &[Table], schema_name: &str) -> String {
     tables
         .iter()
         .map(|table| {
