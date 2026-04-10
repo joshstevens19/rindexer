@@ -476,6 +476,13 @@ async fn start_indexing_contract_events(
                     event_tables,
                 );
 
+                // Get streams_clients for this network (if any event has one)
+                let startup_streams_clients = registry
+                    .events
+                    .iter()
+                    .find(|e| e.contract.details.iter().any(|d| d.network == *network_name))
+                    .map(|e| e.streams_clients.clone());
+
                 // Run startup validation
                 match coordinator.validate_on_startup().await {
                     Ok(Some(startup_task)) => {
@@ -491,6 +498,7 @@ async fn start_indexing_contract_events(
                                 postgres.as_deref(),
                                 clickhouse.as_ref(),
                                 None,
+                                startup_streams_clients.as_ref().and_then(|a| a.as_ref().as_ref()),
                             )
                             .await
                         {
@@ -757,6 +765,13 @@ async fn start_indexing_contract_events(
                         event_tables,
                     );
 
+                    // Get streams_clients for this network from dependency events
+                    let dep_streams_clients = dependency_event_processing_configs
+                        .iter()
+                        .flat_map(|dep| dep.events_config.iter())
+                        .find(|e| e.network_contract().network == *network_name)
+                        .map(|e| e.streams_clients());
+
                     match coordinator.validate_on_startup().await {
                         Ok(Some(startup_task)) => {
                             warn!(
@@ -771,6 +786,7 @@ async fn start_indexing_contract_events(
                                     postgres.as_deref(),
                                     clickhouse.as_ref(),
                                     None,
+                                    dep_streams_clients.as_ref().and_then(|a| a.as_ref().as_ref()),
                                 )
                                 .await
                             {

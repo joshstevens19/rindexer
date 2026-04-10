@@ -14,6 +14,7 @@ use crate::event::callback_registry::EventCallbackRegistry;
 use crate::indexer::fetch_logs::ReorgInfo;
 use crate::metrics::indexing as metrics;
 use crate::notifications::ChainStateNotification;
+use crate::streams::StreamsClients;
 
 pub use coordinator::ReorgCoordinator;
 pub use persistence::LatestBlocksPersistence;
@@ -30,6 +31,7 @@ pub async fn detect_and_handle_reorg(
     postgres: Option<&PostgresClient>,
     clickhouse: Option<&Arc<ClickhouseClient>>,
     registry: Option<&EventCallbackRegistry>,
+    streams_clients: Option<&StreamsClients>,
 ) -> bool {
     match coordinator.on_new_block(block_number, block_hash, parent_hash).await {
         Ok(Some(reorg_task)) => {
@@ -42,7 +44,7 @@ pub async fn detect_and_handle_reorg(
             );
 
             if let Err(e) =
-                coordinator.handle_reorg(reorg_task, postgres, clickhouse, registry).await
+                coordinator.handle_reorg(reorg_task, postgres, clickhouse, registry, streams_clients).await
             {
                 error!(
                     "{} - Failed to execute reorg rollback: {}",

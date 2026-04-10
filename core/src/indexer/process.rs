@@ -353,11 +353,11 @@ async fn live_indexing_for_contract_event_dependencies(
     // Reorg coordinator is mutated in-place during the loop
     let mut reorg_coordinator = reorg_coordinator;
 
-    // Postgres/clickhouse clients for reorg rollback — taken from the first event's config.
-    let (pg_client, ch_client) = events
+    // Postgres/clickhouse/streams clients for reorg rollback — taken from the first event's config.
+    let (pg_client, ch_client, streams_clients) = events
         .first()
-        .map(|(config, _)| (config.postgres(), config.clickhouse()))
-        .unwrap_or((None, None));
+        .map(|(config, _)| (config.postgres(), config.clickhouse(), config.streams_clients()))
+        .unwrap_or((None, None, Arc::new(None)));
 
     loop {
         if !is_running() {
@@ -408,6 +408,7 @@ async fn live_indexing_for_contract_event_dependencies(
                 pg_client.as_deref(),
                 ch_client.as_ref(),
                 None,
+                streams_clients.as_ref().as_ref(),
             )
             .await
             {

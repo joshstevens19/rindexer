@@ -165,6 +165,7 @@ pub fn fetch_logs_stream(
                 reorg_coordinator,
                 config.postgres(),
                 config.clickhouse(),
+                config.streams_clients(),
             )
             .await;
         }
@@ -430,6 +431,7 @@ async fn live_indexing_stream(
     mut reorg_coordinator: Option<ReorgCoordinator>,
     postgres: Option<Arc<crate::PostgresClient>>,
     clickhouse: Option<Arc<crate::database::clickhouse::client::ClickhouseClient>>,
+    streams_clients: Arc<Option<crate::streams::StreamsClients>>,
 ) {
     let mut last_seen_block_number = last_seen_block_number;
     let mut log_response_to_large_to_block: Option<U64> = None;
@@ -526,6 +528,7 @@ async fn live_indexing_stream(
                             postgres.as_deref(),
                             clickhouse.as_ref(),
                             None,
+                            streams_clients.as_ref().as_ref(),
                         )
                         .await
                         {
@@ -708,6 +711,7 @@ async fn live_indexing_stream(
                                                         postgres.as_deref(),
                                                         clickhouse.as_ref(),
                                                         None,
+                                                        streams_clients.as_ref().as_ref(),
                                                     )
                                                     .await
                                                 {

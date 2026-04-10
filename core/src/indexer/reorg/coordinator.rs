@@ -9,6 +9,7 @@ use crate::database::postgres::client::PostgresClient;
 use crate::event::callback_registry::{EventCallbackRegistry, ReorgNotification};
 use crate::metrics::indexing as metrics;
 use crate::provider::JsonRpcCachedProvider;
+use crate::streams::StreamsClients;
 
 use super::persistence::LatestBlocksPersistence;
 use super::task::{DerivedTableInfo, EventTableInfo, ReorgTask};
@@ -234,6 +235,7 @@ impl ReorgCoordinator {
         postgres: Option<&PostgresClient>,
         clickhouse: Option<&Arc<ClickhouseClient>>,
         registry: Option<&EventCallbackRegistry>,
+        streams_clients: Option<&StreamsClients>,
     ) -> Result<(), String> {
         let result = reorg_task
             .execute(
@@ -245,19 +247,51 @@ impl ReorgCoordinator {
             )
             .await?;
 
+        let affected_tx_hashes: Vec<B256> = result
+            .affected_tx_hashes
+            .iter()
+            .filter_map(|h| B256::from_str(h).ok())
+            .collect();
+
         if let Some(registry) = registry {
             let notification = ReorgNotification {
                 network: reorg_task.network.clone(),
                 fork_block: reorg_task.fork_point,
                 detection_block: reorg_task.detection_point,
-                invalidated_tx_hashes: result
-                    .affected_tx_hashes
-                    .iter()
-                    .filter_map(|h| B256::from_str(h).ok())
-                    .collect(),
+                invalidated_tx_hashes: affected_tx_hashes.clone(),
             };
             registry.fire_on_reorg(notification).await;
         }
+
+        // Publish reorg retraction through instant-mode streams
+        if let Some(clients) = streams_clients {
+            let depth = reorg_task.detection_point.saturating_sub(reorg_task.fork_point) + 1;
+            if let Err(e) = clients
+                .stream_reorg(
+                    &reorg_task.network,
+                    reorg_task.fork_point,
+                    depth,
+                    &affected_tx_hashes,
+                )
+                .await
+            {
+                tracing::error!(
+                    network = %reorg_task.network,
+                    fork_point = reorg_task.fork_point,
+                    "Failed to publish reorg notification to streams: {}",
+                    e
+                );
+            }
+        }
+
+        // TODO: Part B — FinalizedBuffer integration.
+        // For streams configured with `delivery: finalized`, events should be buffered in
+        // FinalizedBuffer instead of being published immediately. On reorg, call
+        // `FinalizedBuffer::discard_range(fork_point, detection_point)` here to drop
+        // buffered events in the reorged block range. On each new block, call
+        // `FinalizedBuffer::flush(current_head)` and publish the flushed events.
+        // The FinalizedBuffer struct is ready in streams/clients.rs; the integration
+        // requires threading it through the streaming pipeline in no_code.rs.
 
         Ok(())
     }
