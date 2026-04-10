@@ -219,7 +219,15 @@ impl ReorgCoordinator {
         postgres: Option<&PostgresClient>,
         clickhouse: Option<&Arc<ClickhouseClient>>,
     ) -> Result<(), String> {
-        reorg_task.execute(&mut self.window, &self.persistence, postgres, clickhouse).await?;
+        reorg_task
+            .execute(
+                &mut self.window,
+                &self.persistence,
+                postgres,
+                clickhouse,
+                self.provider.as_ref(),
+            )
+            .await?;
         Ok(())
     }
 
