@@ -53,5 +53,7 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y libssl-dev pkg-config
-      - name: Run tests
+      - name: Run tests (default features)
+        run: cargo test --exclude rindexer_rust_playground --workspace
+      - name: Run tests (all features including reth)
         run: cargo test --exclude rindexer_rust_playground --workspace --all-features
