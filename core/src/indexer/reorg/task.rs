@@ -22,11 +22,19 @@ impl EventTableInfo {
     }
 }
 
+/// Metadata for a derived/custom table needed during reorg rollback.
+#[derive(Clone)]
+pub struct DerivedTableInfo {
+    pub full_table_name: String,
+    pub cross_chain: bool,
+}
+
 pub struct ReorgTask {
     pub network: String,
     pub fork_point: u64,
     pub detection_point: u64,
     pub event_tables: Vec<EventTableInfo>,
+    pub derived_tables: Vec<DerivedTableInfo>,
 }
 
 pub struct ReorgTaskResult {
@@ -90,6 +98,59 @@ impl ReorgTask {
             ch.reorg_rollback(&tables, &self.network, self.fork_point, self.detection_point)
                 .await
                 .map_err(|e| e.to_string())?;
+        }
+
+        // Step 2b: Delete rows from derived/custom tables
+        for dt in &self.derived_tables {
+            if let Some(pg) = postgres {
+                let query = if dt.cross_chain {
+                    format!(
+                        "DELETE FROM {} WHERE rindexer_block_number >= {}",
+                        dt.full_table_name, self.fork_point
+                    )
+                } else {
+                    format!(
+                        "DELETE FROM {} WHERE rindexer_block_number >= {} AND network = '{}'",
+                        dt.full_table_name, self.fork_point, self.network
+                    )
+                };
+
+                match pg.batch_execute(&query).await {
+                    Ok(_) => tracing::info!(
+                        "PostgreSQL: deleted derived table rows from block >= {} in {}",
+                        self.fork_point, dt.full_table_name
+                    ),
+                    Err(e) => tracing::error!(
+                        "PostgreSQL: failed to delete derived table rows in {}: {:?}",
+                        dt.full_table_name, e
+                    ),
+                }
+            }
+
+            if let Some(ch) = clickhouse {
+                let query = if dt.cross_chain {
+                    format!(
+                        "ALTER TABLE {} DELETE WHERE rindexer_block_number >= {} SETTINGS mutations_sync = 1",
+                        dt.full_table_name, self.fork_point
+                    )
+                } else {
+                    format!(
+                        "ALTER TABLE {} DELETE WHERE rindexer_block_number >= {} AND network = '{}' SETTINGS mutations_sync = 1",
+                        dt.full_table_name, self.fork_point, self.network
+                    )
+                };
+
+                match ch.execute(&query).await {
+                    Ok(_) => tracing::info!(
+                        "ClickHouse: deleted derived table rows from block >= {} in {}",
+                        self.fork_point, dt.full_table_name
+                    ),
+                    Err(e) => tracing::error!(
+                        "ClickHouse: failed to delete derived table rows in {}: {:?}",
+                        dt.full_table_name, e
+                    ),
+                }
+            }
         }
 
         // Step 3: Update in-memory window

@@ -15,8 +15,6 @@ use tracing::{error, info, warn};
 use crate::database::clickhouse::client::{ClickhouseClient, ClickhouseConnectionError};
 use crate::database::generate::generate_indexer_contract_schema_name;
 use crate::event::config::{ContractEventProcessingConfig, FactoryEventProcessingConfig};
-use crate::helpers::format_duration;
-use crate::events::RindexerEventEmitter;
 use crate::helpers::{camel_to_snake, format_duration};
 use crate::indexer::native_transfer::native_transfer_block_processor;
 use crate::indexer::reorg::{

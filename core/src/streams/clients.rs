@@ -877,6 +877,9 @@ mod tests {
     use alloy::primitives::B256;
     use serde_json::json;
 
+    use super::{FinalizedBuffer, StreamsClients};
+    use crate::manifest::stream::StreamEvent;
+
     // ---- helpers ----
 
     fn stream_event(name: &str) -> StreamEvent {
@@ -1356,6 +1359,34 @@ mod tests {
 
         assert_eq!(result.unwrap(), 0);
     }
+
+    #[test]
+    fn test_finalized_buffer_flush() {
+        let mut buf = FinalizedBuffer::new(10);
+        buf.add(100, vec![json!({"event": "a"})]);
+        buf.add(105, vec![json!({"event": "b"})]);
+
+        let flushed = buf.flush(112);
+        assert_eq!(flushed.len(), 1);
+        assert_eq!(flushed[0].0, 100);
+
+        let flushed2 = buf.flush(120);
+        assert_eq!(flushed2.len(), 1);
+    }
+
+    #[test]
+    fn test_finalized_buffer_discard_range() {
+        let mut buf = FinalizedBuffer::new(10);
+        buf.add(98, vec![json!({"event": "a"})]);
+        buf.add(99, vec![json!({"event": "b"})]);
+        buf.add(100, vec![json!({"event": "c"})]);
+
+        buf.discard_range(99, 100);
+
+        let flushed = buf.flush(200);
+        assert_eq!(flushed.len(), 1);
+        assert_eq!(flushed[0].0, 98);
+    }
 }
 
 pub fn build_reorg_notification_event(
@@ -1406,40 +1437,5 @@ impl FinalizedBuffer {
         for k in keys_to_remove {
             self.buffer.remove(&k);
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::FinalizedBuffer;
-
-    #[test]
-    fn test_finalized_buffer_flush() {
-        let mut buf = FinalizedBuffer::new(10);
-        buf.add(100, vec![json!({"event": "a"})]);
-        buf.add(105, vec![json!({"event": "b"})]);
-
-        let flushed = buf.flush(112); // 112 - 10 = 102, so only block 100 flushes
-        assert_eq!(flushed.len(), 1);
-        assert_eq!(flushed[0].0, 100);
-
-        let flushed2 = buf.flush(120); // 120 - 10 = 110, block 105 flushes
-        assert_eq!(flushed2.len(), 1);
-    }
-
-    #[test]
-    fn test_finalized_buffer_discard_range() {
-        let mut buf = FinalizedBuffer::new(10);
-        buf.add(98, vec![json!({"event": "a"})]);
-        buf.add(99, vec![json!({"event": "b"})]);
-        buf.add(100, vec![json!({"event": "c"})]);
-
-        buf.discard_range(99, 100);
-
-        let flushed = buf.flush(200); // everything past finality
-        assert_eq!(flushed.len(), 1); // only block 98 remains
-        assert_eq!(flushed[0].0, 98);
     }
 }

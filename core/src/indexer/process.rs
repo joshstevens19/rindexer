@@ -2,8 +2,6 @@ use alloy::primitives::{B256, U64};
 
 use futures::future::join_all;
 use futures::StreamExt;
-use lru::LruCache;
-use std::num::NonZeroUsize;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
 use tokio::{
@@ -11,15 +9,10 @@ use tokio::{
     task::{JoinError, JoinHandle},
     time::Instant,
 };
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::helpers::is_relevant_block;
-use crate::indexer::reorg::reorg_safe_distance_for_chain;
-use crate::indexer::reorg::{detect_and_handle_reorg, ReorgCoordinator};
-use crate::indexer::reorg::ReorgCoordinator;
-use crate::indexer::reorg::{
-    find_fork_point, handle_reorg_recovery, reorg_safe_distance_for_chain,
-};
+use crate::indexer::reorg::{detect_and_handle_reorg, reorg_safe_distance_for_chain, ReorgCoordinator};
 use crate::metrics::indexing as metrics;
 use crate::provider::ChainProvider;
 use crate::{
@@ -29,7 +22,7 @@ use crate::{
     },
     indexer::{
         dependency::{ContractEventsDependenciesConfig, EventDependencies},
-        fetch_logs::{fetch_logs_stream, BlockMeta, FetchLogsResult, ReorgInfo},
+        fetch_logs::{fetch_logs_stream, FetchLogsResult},
         last_synced::update_progress_and_last_synced_task,
         progress::IndexingEventProgressStatus,
         task_tracker::{indexing_event_processed, indexing_event_processing},
@@ -404,7 +397,7 @@ async fn live_indexing_for_contract_event_dependencies(
             let log_prefix = format!(
                 "{} - {}",
                 network,
-                IndexingEventProgressStatus::Live.log()
+                IndexingEventProgressStatus::live_log()
             );
             if detect_and_handle_reorg(
                 coordinator,
@@ -422,63 +415,6 @@ async fn live_indexing_for_contract_event_dependencies(
         }
 
         let latest_block_number = U64::from(latest_block.header.number);
-
-        // Reorg detection #1: tip hash changed (same block, different hash)
-        let tip_reorged = block_cache
-            .peek(&latest_block.header.number)
-            .map(|cached| cached.hash != latest_block.header.hash)
-            .unwrap_or(false);
-
-        block_cache.put(
-            latest_block.header.number,
-            BlockMeta {
-                hash: latest_block.header.hash,
-                parent_hash: latest_block.header.parent_hash,
-                timestamp: latest_block.header.timestamp,
-            },
-        );
-
-        // Reorg detection #2: parent hash chain discontinuity
-        let parent_mismatch = if !tip_reorged && latest_block.header.number > 0 {
-            block_cache
-                .peek(&(latest_block.header.number - 1))
-                .map(|cached| cached.hash != latest_block.header.parent_hash)
-                .unwrap_or(false)
-        } else {
-            false
-        };
-
-        if tip_reorged || parent_mismatch {
-            let reason = if tip_reorged { "tip hash changed" } else { "parent hash mismatch" };
-            let fork_block =
-                find_fork_point(&block_cache, &cached_provider, latest_block.header.number).await;
-            let depth = latest_block.header.number.saturating_sub(fork_block);
-            metrics::record_reorg(&network, depth);
-            warn!(
-                "Dependency indexer on {} - REORG ({}): depth={}, fork_block={}",
-                network, reason, depth, fork_block
-            );
-
-            // Invalidate cached hashes for reorged blocks
-            for b in fork_block..=latest_block.header.number {
-                block_cache.pop(&b);
-            }
-
-            // Recovery: delete reorged events and rewind checkpoints for all events
-            let reorg_info =
-                ReorgInfo { fork_block: U64::from(fork_block), depth, affected_tx_hashes: vec![] };
-            for (config, _) in events.iter() {
-                let _affected_hashes = handle_reorg_recovery(config, &reorg_info).await;
-                let mut details = ordering_live_indexing_details_map
-                    .get(&config.processor_id())
-                    .expect("ordering_live_indexing_details_map")
-                    .lock()
-                    .await;
-                details.filter = details.filter.clone().set_from_block(U64::from(fork_block));
-                details.last_seen_block_number = U64::from(fork_block.saturating_sub(1));
-            }
-            continue;
-        }
 
         for (config, _) in events.iter() {
             let mut ordering_live_indexing_details = ordering_live_indexing_details_map
@@ -636,50 +572,8 @@ async fn live_indexing_for_contract_event_dependencies(
                         to_block
                     );
 
-                    // Reorg detection: check for removed logs from RPC
-                    if logs.iter().any(|log| log.removed) {
-                        let min_removed_block = logs
-                            .iter()
-                            .filter(|l| l.removed)
-                            .filter_map(|l| l.block_number)
-                            .min()
-                            .unwrap_or(from_block.to::<u64>());
-                        let depth = from_block.to::<u64>().saturating_sub(min_removed_block);
-                        metrics::record_reorg(&network, depth);
-                        warn!(
-                            "{} - REORG (removed logs): fork_block={}, depth={}",
-                            config.info_log_name(),
-                            min_removed_block,
-                            depth
-                        );
-
-                        let affected_tx_hashes: Vec<B256> = logs
-                            .iter()
-                            .filter(|l| l.removed)
-                            .filter_map(|l| l.transaction_hash)
-                            .collect::<std::collections::HashSet<_>>()
-                            .into_iter()
-                            .collect();
-                        let reorg_info = ReorgInfo {
-                            fork_block: U64::from(min_removed_block),
-                            depth,
-                            affected_tx_hashes,
-                        };
-                        let _affected_hashes = handle_reorg_recovery(config, &reorg_info).await;
-
-                        // Rewind cursor for this event
-                        ordering_live_indexing_details.filter = ordering_live_indexing_details
-                            .filter
-                            .set_from_block(U64::from(min_removed_block));
-                        ordering_live_indexing_details.last_seen_block_number =
-                            U64::from(min_removed_block.saturating_sub(1));
-                        *ordering_live_indexing_details_map
-                            .get(&config.processor_id())
-                            .expect("ordering_live_indexing_details_map")
-                            .lock()
-                            .await = ordering_live_indexing_details;
-                        continue;
-                    }
+                    // Filter out removed logs — the coordinator handles reorg detection.
+                    let logs: Vec<_> = logs.into_iter().filter(|l| !l.removed).collect();
 
                     let logs_empty = logs.is_empty();
                     // clone here over the full logs way less overhead
@@ -814,9 +708,9 @@ async fn handle_logs_result(
 ) -> Result<JoinHandle<()>, Box<dyn std::error::Error + Send>> {
     match result {
         Ok(result) => {
-            // Handle reorg recovery before processing logs
-            if let Some(reorg) = &result.reorg {
-                let _affected_hashes = handle_reorg_recovery(&config, reorg).await;
+            // Reorg signal from reth ExEx — the coordinator handles rollback,
+            // so we just skip processing these empty results.
+            if result.reorg.is_some() {
                 return Ok(tokio::spawn(async {}));
             }
 

@@ -9,7 +9,7 @@ use crate::metrics::indexing as metrics;
 use crate::provider::JsonRpcCachedProvider;
 
 use super::persistence::LatestBlocksPersistence;
-use super::task::{EventTableInfo, ReorgTask};
+use super::task::{DerivedTableInfo, EventTableInfo, ReorgTask};
 use super::window::{BlockChainWindow, ParentValidation};
 
 const FLUSH_INTERVAL: u64 = 50;
@@ -20,6 +20,7 @@ pub struct ReorgCoordinator {
     persistence: Arc<LatestBlocksPersistence>,
     provider: Option<Arc<JsonRpcCachedProvider>>,
     event_tables: Vec<EventTableInfo>,
+    derived_tables: Vec<DerivedTableInfo>,
     blocks_since_flush: u64,
 }
 
@@ -37,8 +38,13 @@ impl ReorgCoordinator {
             persistence,
             provider: Some(provider),
             event_tables,
+            derived_tables: vec![],
             blocks_since_flush: 0,
         }
+    }
+
+    pub fn set_derived_tables(&mut self, derived_tables: Vec<DerivedTableInfo>) {
+        self.derived_tables = derived_tables;
     }
 
     /// Called on each new block during live indexing.
@@ -74,6 +80,7 @@ impl ReorgCoordinator {
                     fork_point,
                     detection_point: block_number,
                     event_tables: self.event_tables.clone(),
+                    derived_tables: self.derived_tables.clone(),
                 }))
             }
         }
@@ -132,6 +139,7 @@ impl ReorgCoordinator {
                     fork_point,
                     detection_point,
                     event_tables: self.event_tables.clone(),
+                    derived_tables: self.derived_tables.clone(),
                 }))
             }
             None => {
@@ -154,6 +162,7 @@ impl ReorgCoordinator {
                     fork_point: oldest,
                     detection_point: latest,
                     event_tables: self.event_tables.clone(),
+                    derived_tables: self.derived_tables.clone(),
                 }))
             }
         }
@@ -168,6 +177,7 @@ impl ReorgCoordinator {
             fork_point: revert_from_block,
             detection_point: revert_to_block,
             event_tables: self.event_tables.clone(),
+            derived_tables: self.derived_tables.clone(),
         }
     }
 
@@ -283,6 +293,7 @@ mod tests {
             persistence,
             provider: None,
             event_tables: vec![],
+            derived_tables: vec![],
             blocks_since_flush: 0,
         }
     }
@@ -357,6 +368,7 @@ mod tests {
             persistence,
             provider: None,
             event_tables: vec![EventTableInfo::new("schema".to_string(), "table".to_string())],
+            derived_tables: vec![],
             blocks_since_flush: 0,
         };
 
