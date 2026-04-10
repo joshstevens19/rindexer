@@ -91,8 +91,8 @@ pub struct ProcessedNetworkContract {
     pub processed_up_to: U64,
 }
 
-async fn get_start_end_block<P: ChainProvider>(
-    provider: Arc<P>,
+async fn get_start_end_block(
+    provider: &dyn ChainProvider,
     manifest_start_block: Option<U64>,
     manifest_end_block: Option<U64>,
     config: SyncConfig<'_>,
@@ -231,7 +231,7 @@ async fn start_indexing_traces(
 
         let (block_tx, block_rx) = tokio::sync::mpsc::channel(4096);
         let (start_block, end_block, indexing_distance_from_head) = get_start_end_block(
-            network_details.cached_provider.clone(),
+            &*network_details.cached_provider,
             network_details.start_block,
             network_details.end_block,
             sync_config,
@@ -248,7 +248,7 @@ async fn start_indexing_traces(
 
         let config = Arc::new(TraceProcessingConfig {
             id: first_event.id.clone(), // Use the first event's ID for progress tracking
-            chain_id: network_details.cached_provider.chain.id(),
+            chain_id: network_details.cached_provider.chain().id(),
             project_path: project_path.to_path_buf(),
             start_block,
             end_block,
@@ -356,7 +356,7 @@ async fn start_indexing_contract_events(
                 };
 
                 let result = get_start_end_block(
-                    network_contract.cached_provider.clone(),
+                    &*network_contract.cached_provider,
                     network_contract.start_block,
                     network_contract.end_block,
                     config,
@@ -789,8 +789,6 @@ mod tests {
         }
     }
 
-    // ---- calculate_safe_block_number ----
-
     #[test]
     fn safe_block_no_reorg_distance() {
         let (end, distance) =
@@ -850,13 +848,11 @@ mod tests {
         assert!(end < U64::from(10000));
     }
 
-    // ---- get_start_end_block ----
-
     #[tokio::test]
     async fn start_block_higher_than_latest_errors() {
-        let mock = Arc::new(MockChainProvider::new(1).with_block_number(100));
+        let mock = MockChainProvider::new(1).with_block_number(100);
         let result = get_start_end_block(
-            mock,
+            &mock,
             Some(U64::from(200)), // start > latest
             None,
             empty_sync_config(),
@@ -874,9 +870,9 @@ mod tests {
 
     #[tokio::test]
     async fn end_block_higher_than_latest_errors() {
-        let mock = Arc::new(MockChainProvider::new(1).with_block_number(100));
+        let mock = MockChainProvider::new(1).with_block_number(100);
         let result = get_start_end_block(
-            mock,
+            &mock,
             Some(U64::from(50)),
             Some(U64::from(200)), // end > latest
             empty_sync_config(),
@@ -894,9 +890,9 @@ mod tests {
 
     #[tokio::test]
     async fn normal_range_returns_start_and_end() {
-        let mock = Arc::new(MockChainProvider::new(1).with_block_number(1000));
+        let mock = MockChainProvider::new(1).with_block_number(1000);
         let (start, end, distance) = get_start_end_block(
-            mock,
+            &mock,
             Some(U64::from(100)),
             Some(U64::from(500)),
             empty_sync_config(),
@@ -914,9 +910,9 @@ mod tests {
 
     #[tokio::test]
     async fn end_block_clamped_to_latest() {
-        let mock = Arc::new(MockChainProvider::new(1).with_block_number(1000));
+        let mock = MockChainProvider::new(1).with_block_number(1000);
         let (_, end, _) = get_start_end_block(
-            mock,
+            &mock,
             Some(U64::from(100)),
             None, // no manifest end → defaults to latest
             empty_sync_config(),
@@ -932,9 +928,9 @@ mod tests {
 
     #[tokio::test]
     async fn reorg_safe_distance_applied() {
-        let mock = Arc::new(MockChainProvider::new(1).with_block_number(1000));
+        let mock = MockChainProvider::new(1).with_block_number(1000);
         let (start, end, distance) = get_start_end_block(
-            mock,
+            &mock,
             Some(U64::from(100)),
             None,
             empty_sync_config(),
@@ -952,9 +948,9 @@ mod tests {
 
     #[tokio::test]
     async fn no_start_block_defaults_to_latest() {
-        let mock = Arc::new(MockChainProvider::new(1).with_block_number(500));
+        let mock = MockChainProvider::new(1).with_block_number(500);
         let (start, end, _) = get_start_end_block(
-            mock,
+            &mock,
             None, // no manifest start → defaults to latest
             None,
             empty_sync_config(),

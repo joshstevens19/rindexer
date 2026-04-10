@@ -98,7 +98,7 @@ impl EventResult {
             log: log.clone(),
             decoded_data: network_contract.decode_log(log.inner),
             tx_information: TxInformation {
-                chain_id: network_contract.cached_provider.chain.id(),
+                chain_id: network_contract.cached_provider.chain().id(),
                 network: network_contract.network.to_string(),
                 address: log_address,
                 block_hash: log.block_hash.expect("log should contain block_hash"),

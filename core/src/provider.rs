@@ -62,6 +62,7 @@ use crate::{event::RindexerEventFilter, manifest::core::Manifest};
 pub trait ChainProvider: Send + Sync + Debug {
     fn chain(&self) -> Chain;
     fn max_block_range(&self) -> Option<U64>;
+    fn chain_state_notification(&self) -> Option<Sender<ChainStateNotification>>;
 
     async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError>;
     async fn get_block_number(&self) -> Result<U64, ProviderError>;
@@ -769,6 +770,10 @@ impl ChainProvider for JsonRpcCachedProvider {
         self.max_block_range
     }
 
+    fn chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
+        self.chain_state_notification.clone()
+    }
+
     async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
         self.get_latest_block().await
     }
@@ -843,13 +848,17 @@ impl ChainProvider for JsonRpcCachedProvider {
 /// `ChainProvider` impl) pass `&arc_value` to generic functions without
 /// having to dereference manually.
 #[async_trait]
-impl<T: ChainProvider> ChainProvider for Arc<T> {
+impl<T: ChainProvider + ?Sized> ChainProvider for Arc<T> {
     fn chain(&self) -> Chain {
         (**self).chain()
     }
 
     fn max_block_range(&self) -> Option<U64> {
         (**self).max_block_range()
+    }
+
+    fn chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
+        (**self).chain_state_notification()
     }
 
     async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
@@ -922,21 +931,21 @@ impl<T: ChainProvider> ChainProvider for Arc<T> {
 
 /// A mock implementation of [`ChainProvider`] for testing.
 ///
-/// Each method returns data from a pre-configured closure or a sensible default.
-/// Use the builder methods to set up the responses you need for your test.
+/// Use the builder methods to configure canned responses, then pass to
+/// functions that accept `impl ChainProvider`.
 #[cfg(test)]
 pub mod mock {
     use super::*;
 
     #[derive(Debug)]
     pub struct MockChainProvider {
-        pub chain: Chain,
-        pub max_block_range: Option<U64>,
-        pub logs: Vec<Log>,
-        pub blocks: Vec<AnyRpcBlock>,
-        pub block_number: U64,
-        pub receipts: Vec<AnyTransactionReceipt>,
-        pub traces: Vec<LocalizedTransactionTrace>,
+        chain: Chain,
+        max_block_range: Option<U64>,
+        logs: Vec<Log>,
+        blocks: Vec<Arc<AnyRpcBlock>>,
+        block_number: U64,
+        receipts: Vec<AnyTransactionReceipt>,
+        traces: Vec<LocalizedTransactionTrace>,
     }
 
     impl MockChainProvider {
@@ -963,7 +972,7 @@ pub mod mock {
         }
 
         pub fn with_blocks(mut self, blocks: Vec<AnyRpcBlock>) -> Self {
-            self.blocks = blocks;
+            self.blocks = blocks.into_iter().map(Arc::new).collect();
             self
         }
 
@@ -983,8 +992,12 @@ pub mod mock {
             self.max_block_range
         }
 
+        fn chain_state_notification(&self) -> Option<Sender<ChainStateNotification>> {
+            None
+        }
+
         async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
-            Ok(self.blocks.last().map(|b| Arc::new(b.clone())))
+            Ok(self.blocks.last().cloned())
         }
 
         async fn get_block_number(&self) -> Result<U64, ProviderError> {
@@ -1003,7 +1016,7 @@ pub mod mock {
             _block_numbers: &[U64],
             _include_txs: bool,
         ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
-            Ok(self.blocks.clone())
+            Ok(self.blocks.iter().map(|b| (**b).clone()).collect())
         }
 
         async fn get_block_by_number_batch_with_size(
@@ -1261,7 +1274,7 @@ mod tests {
         let mock = MockChainProvider::new(137)
             .with_block_number(12345);
         assert_eq!(mock.chain(), Chain::from(137));
-        assert_eq!(mock.block_number, U64::from(12345));
+        assert_eq!(mock.chain().id(), 137);
     }
 
     #[tokio::test]

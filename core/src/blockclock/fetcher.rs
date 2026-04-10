@@ -1,4 +1,4 @@
-use crate::provider::{JsonRpcCachedProvider, ProviderError, RECOMMENDED_RPC_CHUNK_SIZE};
+use crate::provider::{ChainProvider, ProviderError, RECOMMENDED_RPC_CHUNK_SIZE};
 use alloy::primitives::U64;
 use alloy::rpc::types::Log;
 use alloy_chains::Chain;
@@ -18,11 +18,11 @@ pub enum BlockFetcherError {
 #[derive(Debug, Clone)]
 pub struct BlockFetcher {
     sample_rate: f32,
-    pub(super) provider: Arc<JsonRpcCachedProvider>,
+    pub(super) provider: Arc<dyn ChainProvider>,
 }
 
 impl BlockFetcher {
-    pub fn new(sample_rate: Option<f32>, provider: Arc<JsonRpcCachedProvider>) -> Self {
+    pub fn new(sample_rate: Option<f32>, provider: Arc<dyn ChainProvider>) -> Self {
         let bounded_sampling = sample_rate.unwrap_or(1.0).clamp(0.001, 1.0);
         Self { provider, sample_rate: bounded_sampling }
     }
@@ -158,7 +158,7 @@ impl BlockFetcher {
 
         for block in blocks {
             if !dates.contains_key(&block.to()) {
-                return Err(BlockFetcherError::MissingBlockInRange(self.provider.chain, block));
+                return Err(BlockFetcherError::MissingBlockInRange(self.provider.chain(), block));
             }
         }
 
@@ -209,9 +209,10 @@ impl BlockFetcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::mock::MockChainProvider;
 
-    fn mock_provider() -> Arc<JsonRpcCachedProvider> {
-        JsonRpcCachedProvider::mock(1)
+    fn mock_provider() -> Arc<dyn ChainProvider> {
+        Arc::new(MockChainProvider::new(1))
     }
 
     #[test]

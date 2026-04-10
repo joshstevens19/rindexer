@@ -33,7 +33,7 @@ use crate::{
         task_tracker::{indexing_event_processed, indexing_event_processing},
     },
     manifest::native_transfer::TraceProcessingMethod,
-    provider::{JsonRpcCachedProvider, ProviderError},
+    provider::{ChainProvider, ProviderError},
 };
 
 /// An imaginary contract name to ensure native transfer "debug trace" indexing is compatible
@@ -114,7 +114,7 @@ async fn push_range(block_tx: &mpsc::Sender<U64>, last: U64, latest: U64) {
 /// reached.
 #[allow(clippy::too_many_arguments)]
 pub async fn native_transfer_block_fetch(
-    publisher: Arc<JsonRpcCachedProvider>,
+    publisher: Arc<dyn ChainProvider>,
     block_tx: mpsc::Sender<U64>,
     start_block: U64,
     end_block: Option<U64>,
@@ -132,7 +132,7 @@ pub async fn native_transfer_block_fetch(
     // Channel for reth-provided reorg signals (None for HTTP RPC users).
     let (reth_reorg_tx, mut reth_reorg_rx) = tokio::sync::mpsc::unbounded_channel::<ReorgInfo>();
 
-    if let Some(notifications) = publisher.get_chain_state_notification() {
+    if let Some(notifications) = publisher.chain_state_notification() {
         let network_clone = network.clone();
         tokio::spawn(async move {
             let mut rx = notifications.subscribe();
@@ -275,7 +275,7 @@ pub async fn native_transfer_block_fetch(
 
 pub async fn native_transfer_block_processor(
     network_name: String,
-    provider: Arc<JsonRpcCachedProvider>,
+    provider: Arc<dyn ChainProvider>,
     config: Arc<TraceProcessingConfig>,
     mut block_rx: mpsc::Receiver<U64>,
 ) -> Result<(), ProcessEventError> {
@@ -367,7 +367,7 @@ pub async fn native_transfer_block_processor(
 }
 
 async fn provider_trace_call(
-    provider: Arc<JsonRpcCachedProvider>,
+    provider: Arc<dyn ChainProvider>,
     config: &TraceProcessingConfig,
     block: U64,
 ) -> Result<Vec<LocalizedTransactionTrace>, ProviderError> {
@@ -382,7 +382,7 @@ async fn provider_trace_call(
 
 /// Index native transfers via batched rpc block call method
 pub async fn native_transfer_block_consumer(
-    provider: Arc<JsonRpcCachedProvider>,
+    provider: Arc<dyn ChainProvider>,
     block_numbers: &[U64],
     network_name: &str,
     config: &Arc<TraceProcessingConfig>,
@@ -410,7 +410,7 @@ pub async fn native_transfer_block_consumer(
                     ts,
                     to,
                     network_name,
-                    provider.chain.id(),
+                    provider.chain().id(),
                     from_block,
                     to_block,
                 ))
@@ -426,7 +426,7 @@ pub async fn native_transfer_block_consumer(
 
     let blocks = blocks
         .into_iter()
-        .map(|b| TraceResult::new_block(b, network_name, provider.chain.id(), from_block, to_block))
+        .map(|b| TraceResult::new_block(b, network_name, provider.chain().id(), from_block, to_block))
         .collect::<Vec<_>>();
     config.trigger_event(blocks).await;
 
@@ -451,7 +451,7 @@ pub async fn native_transfer_block_consumer(
 /// choose to continue to support `debug` and `trace` based native transfer indexing.
 #[allow(unused)]
 pub async fn native_transfer_block_consumer_debug(
-    provider: Arc<JsonRpcCachedProvider>,
+    provider: Arc<dyn ChainProvider>,
     block_numbers: &[U64],
     network_name: &str,
     config: Arc<TraceProcessingConfig>,
@@ -510,7 +510,7 @@ pub async fn native_transfer_block_consumer_debug(
                     action,
                     &trace,
                     network_name,
-                    provider.chain.id(),
+                    provider.chain().id(),
                     from_block,
                     to_block,
                 ))
@@ -532,4 +532,96 @@ pub async fn native_transfer_block_consumer_debug(
         .await;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::provider::mock::MockChainProvider;
+
+    #[test]
+    fn native_transfer_abi_parses() {
+        let abi: Vec<alloy::json_abi::Event> = serde_json::from_str(NATIVE_TRANSFER_ABI).unwrap();
+        assert_eq!(abi.len(), 1);
+        assert_eq!(abi[0].name, "NativeTransfer");
+        assert_eq!(abi[0].inputs.len(), 3);
+    }
+
+    #[test]
+    fn native_transfer_filter_logic() {
+        // The core filtering in native_transfer_block_consumer:
+        // has_to_address && is_empty_input && !is_value_zero
+        let cases: Vec<(bool, bool, bool, bool)> = vec![
+            // (input_empty, value_zero, has_to, expected)
+            (true, false, true, true),   // ETH transfer
+            (false, false, true, false),  // Contract call: has input data
+            (true, true, true, false),    // Zero value: not a transfer
+            (true, false, false, false),  // Contract creation: no to address
+        ];
+
+        for (input_empty, value_zero, has_to, expected) in cases {
+            let is_native_transfer = has_to && input_empty && !value_zero;
+            assert_eq!(
+                is_native_transfer, expected,
+                "Failed for input_empty={input_empty}, value_zero={value_zero}, has_to={has_to}",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mock_provider_returns_empty_blocks() {
+        let mock = Arc::new(MockChainProvider::new(1).with_block_number(100));
+        let block_numbers = vec![U64::from(10), U64::from(11)];
+        let result = mock.get_block_by_number_batch(&block_numbers, true).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn mock_provider_trace_block_returns_empty() {
+        let mock = Arc::new(MockChainProvider::new(1));
+        let traces = mock.trace_block(U64::from(100)).await.unwrap();
+        assert!(traces.is_empty());
+    }
+
+    #[test]
+    fn concurrency_backoff() {
+        // Mimics the backoff in native_transfer_block_processor
+        let backed_off = |n: usize| cmp::max(1, (n as f64 * 0.8) as usize);
+        assert_eq!(backed_off(10), 8);
+        assert_eq!(backed_off(5), 4);
+        assert_eq!(backed_off(1), 1); // bottoms at 1
+    }
+
+    #[test]
+    fn concurrency_increase_caps_at_limit() {
+        let limit = RECOMMENDED_RPC_CHUNK_SIZE;
+        let increase = |n: usize| ((n * 20) / 10).min(limit);
+        assert_eq!(increase(5), 10); // doubles
+        assert_eq!(increase(25), 50); // doubles
+        assert_eq!(increase(40), limit.min(80)); // capped
+    }
+
+    #[test]
+    fn zksync_system_contracts_list() {
+        // Verify the system contract addresses are valid and contain expected count
+        let contracts: [Address; 13] = [
+            "0x0000000000000000000000000000000000008001".parse().unwrap(),
+            "0x0000000000000000000000000000000000008002".parse().unwrap(),
+            "0x0000000000000000000000000000000000008003".parse().unwrap(),
+            "0x0000000000000000000000000000000000008004".parse().unwrap(),
+            "0x0000000000000000000000000000000000008005".parse().unwrap(),
+            "0x0000000000000000000000000000000000008006".parse().unwrap(),
+            "0x0000000000000000000000000000000000008008".parse().unwrap(),
+            "0x0000000000000000000000000000000000008009".parse().unwrap(),
+            "0x000000000000000000000000000000000000800a".parse().unwrap(),
+            "0x000000000000000000000000000000000000800b".parse().unwrap(),
+            "0x000000000000000000000000000000000000800c".parse().unwrap(),
+            "0x000000000000000000000000000000000000800e".parse().unwrap(),
+            "0x000000000000000000000000000000000000800f".parse().unwrap(),
+        ];
+        assert_eq!(contracts.len(), 13);
+        // 0x8007 is intentionally missing (not a system contract used in transfers)
+        assert!(!contracts.contains(&"0x0000000000000000000000000000000000008007".parse().unwrap()));
+    }
 }

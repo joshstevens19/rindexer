@@ -1,3 +1,4 @@
+
 use rindexer::PostgresClient;
 use std::sync::Arc;
 use tokio::sync::OnceCell;

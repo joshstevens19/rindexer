@@ -39,7 +39,7 @@ mod runlencoder;
 
 use crate::blockclock::fetcher::BlockFetcherError;
 use crate::blockclock::fixed::SpacedNetwork;
-use crate::provider::JsonRpcCachedProvider;
+use crate::provider::ChainProvider;
 use alloy::rpc::types::Log;
 pub use fetcher::BlockFetcher;
 pub use runlencoder::DeltaEncoder;
@@ -83,9 +83,9 @@ impl BlockClock {
     pub fn new(
         enabled: Option<bool>,
         sample_rate: Option<f32>,
-        provider: Arc<JsonRpcCachedProvider>,
+        provider: Arc<dyn ChainProvider>,
     ) -> Self {
-        let network_id = provider.chain.id();
+        let network_id = provider.chain().id();
         let fetcher = BlockFetcher::new(sample_rate, provider);
 
         // Filepath based blockclock increases startup time so only proceed to enable if
@@ -140,7 +140,7 @@ impl BlockClock {
         }
 
         // 2. Use fixed-interval chains to compute timestamps and return
-        let logs = if let Ok(spaced) = SpacedNetwork::try_from(&self.fetcher.provider.chain) {
+        let logs = if let Ok(spaced) = SpacedNetwork::try_from(&self.fetcher.provider.chain()) {
             logs.into_iter()
                 .map(|mut log| {
                     log.block_timestamp = spaced.get_block_time(log.block_number.unwrap());

@@ -18,7 +18,7 @@ use crate::indexer::reorg::{
     find_fork_point, handle_reorg_recovery, reorg_safe_distance_for_chain,
 };
 use crate::metrics::indexing as metrics;
-use crate::provider::JsonRpcCachedProvider;
+use crate::provider::ChainProvider;
 use crate::{
     event::{
         callback_registry::EventResult, config::EventProcessingConfig, BuildRindexerFilterError,
@@ -284,7 +284,7 @@ async fn process_contract_events_with_dependencies(
 #[derive(Clone)]
 pub struct EventDependenciesIndexingConfig {
     pub network: String,
-    pub cached_provider: Arc<JsonRpcCachedProvider>,
+    pub cached_provider: Arc<dyn ChainProvider>,
     pub events: Vec<(Arc<EventProcessingConfig>, RindexerEventFilter)>,
 }
 
@@ -476,10 +476,10 @@ async fn live_indexing_for_contract_event_dependencies(
                 if reorg_safe_distance.is_zero() {
                     let block_distance = from_block - latest_block_number;
                     let is_outside_reorg_range =
-                        block_distance > reorg_safe_distance_for_chain(cached_provider.chain.id());
+                        block_distance > reorg_safe_distance_for_chain(cached_provider.chain().id());
 
                     // it should never get under normal conditions outside the reorg range,
-                    // therefore, we log an error as means RCP state is not in sync with the blockchain
+                    // therefore, we log an error as means RPC state is not in sync with the blockchain
                     if is_outside_reorg_range {
                         error!(
                             "{} - {} - RPC has gone back on latest block: rpc returned {}, last seen: {}",

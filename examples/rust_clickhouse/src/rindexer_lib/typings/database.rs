@@ -1,3 +1,4 @@
+
 use rindexer::ClickhouseClient;
 use std::sync::Arc;
 use tokio::sync::OnceCell;

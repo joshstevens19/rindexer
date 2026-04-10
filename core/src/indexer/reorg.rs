@@ -1324,9 +1324,9 @@ pub fn new_shadow_cache() -> ShadowCache {
 /// sends a `ReorgInfo` through the provided channel for the main loop to handle.
 ///
 /// The task runs until the `cancel_token` is cancelled.
-pub fn spawn_post_confirmation_verifier<P: ChainProvider + 'static>(
+pub fn spawn_post_confirmation_verifier(
     shadow_cache: ShadowCache,
-    provider: Arc<P>,
+    provider: Arc<dyn ChainProvider>,
     confirmations: u64,
     reorg_signal_tx: UnboundedSender<ReorgInfo>,
     cancel_token: CancellationToken,

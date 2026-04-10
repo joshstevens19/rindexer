@@ -7,7 +7,6 @@ use crate::{
     indexer::{reorg::handle_chain_notification, IndexingEventProgressStatus},
     is_running,
     provider::{ChainProvider, ProviderError},
-    ChainStateNotification,
 };
 use alloy::{
     primitives::{B256, U64},
@@ -18,7 +17,6 @@ use rand::{random_bool, random_ratio};
 use regex::Regex;
 use std::num::NonZeroUsize;
 use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
-use tokio::sync::broadcast::Sender;
 use tokio::{sync::mpsc, time::Instant};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
@@ -75,9 +73,9 @@ pub fn fetch_logs_stream(
         let from_block = current_filter.from_block();
 
         // add any max block range limitation before we start processing
-        let original_max_limit = config.network_contract().cached_provider.max_block_range;
+        let original_max_limit = config.network_contract().cached_provider.max_block_range();
         let mut max_block_range_limitation =
-            config.network_contract().cached_provider.max_block_range;
+            config.network_contract().cached_provider.max_block_range();
         #[allow(clippy::unnecessary_unwrap)]
         if max_block_range_limitation.is_some() {
             current_filter = current_filter.set_to_block(calculate_process_historic_log_to_block(
@@ -152,7 +150,7 @@ pub fn fetch_logs_stream(
             live_indexing_stream(
                 config.timestamps(),
                 config.network_contract().block_clock.clone(),
-                &config.network_contract().cached_provider,
+                config.network_contract().cached_provider.clone(),
                 &tx,
                 snapshot_to_block,
                 &config.topic_id(),
@@ -163,7 +161,6 @@ pub fn fetch_logs_stream(
                 config.network_contract().disable_logs_bloom_checks,
                 original_max_limit,
                 config.cancel_token().clone(),
-                config.network_contract().chain_state_notification(),
             )
             .await;
         }
@@ -412,10 +409,10 @@ async fn fetch_historic_logs_stream<P: ChainProvider>(
 /// Handles live indexing mode, continuously checking for new blocks, ensuring they are
 /// within a safe range, updating the filter, and sending the logs to the provided channel.
 #[allow(clippy::too_many_arguments)]
-async fn live_indexing_stream<P: ChainProvider + 'static>(
+async fn live_indexing_stream(
     timestamps: bool,
     block_clock: BlockClock,
-    cached_provider: &Arc<P>,
+    cached_provider: Arc<dyn ChainProvider>,
     tx: &mpsc::Sender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
     last_seen_block_number: U64,
     topic_id: &B256,
@@ -426,7 +423,6 @@ async fn live_indexing_stream<P: ChainProvider + 'static>(
     disable_logs_bloom_checks: bool,
     original_max_limit: Option<U64>,
     cancel_token: CancellationToken,
-    chain_state_notification: Option<Sender<ChainStateNotification>>,
 ) {
     let mut last_seen_block_number = last_seen_block_number;
     let mut log_response_to_large_to_block: Option<U64> = None;
@@ -439,7 +435,7 @@ async fn live_indexing_stream<P: ChainProvider + 'static>(
     // the main loop try_recv()s to trigger the same recovery codepath as cache-based detection.
     let (reth_reorg_tx, mut reth_reorg_rx) = mpsc::unbounded_channel::<ReorgInfo>();
 
-    if let Some(notifications) = chain_state_notification {
+    if let Some(notifications) = cached_provider.chain_state_notification() {
         let info_log_name = info_log_name.to_string();
         let network = network.to_string();
         tokio::spawn(async move {
@@ -467,7 +463,7 @@ async fn live_indexing_stream<P: ChainProvider + 'static>(
         tokio::sync::mpsc::unbounded_channel::<ReorgInfo>();
     let _verifier_handle = crate::indexer::reorg::spawn_post_confirmation_verifier(
         Arc::clone(&shadow_cache),
-        Arc::clone(cached_provider),
+        Arc::clone(&cached_provider),
         64, // confirmations before verification
         verifier_reorg_tx,
         cancel_token.clone(),
@@ -579,7 +575,7 @@ async fn live_indexing_stream<P: ChainProvider + 'static>(
                             if tip_reorged { "tip hash changed" } else { "parent hash mismatch" };
                         let fork_block = crate::indexer::reorg::find_fork_point(
                             &block_cache,
-                            cached_provider,
+                            &cached_provider,
                             latest_block.header.number,
                         )
                         .await;
@@ -1286,8 +1282,6 @@ mod tests {
     use alloy::rpc::types::Log;
     use tokio::sync::mpsc;
 
-    // ---- calculate_process_historic_log_to_block ----
-
     #[test]
     fn to_block_no_limit() {
         let result = calculate_process_historic_log_to_block(
@@ -1318,8 +1312,6 @@ mod tests {
         assert_eq!(result, U64::from(5000));
     }
 
-    // ---- FallbackBlockRange ----
-
     #[test]
     fn fallback_from_diff_large() {
         assert_eq!(FallbackBlockRange::from_diff(U64::from(10000)), FallbackBlockRange::Range5000);
@@ -1347,8 +1339,6 @@ mod tests {
         assert_eq!(FallbackBlockRange::Range1.lower(), FallbackBlockRange::Range1);
     }
 
-    // ---- fetch_historic_logs_stream ----
-
     fn make_log_at_block(block_number: u64) -> Log {
         Log {
             inner: PrimitiveLog { address: Default::default(), data: Default::default() },
@@ -1372,7 +1362,7 @@ mod tests {
 
         let result = fetch_historic_logs_stream(
             false,
-            BlockClock::new(None, None, crate::provider::JsonRpcCachedProvider::mock(1)),
+            BlockClock::new(None, None, Arc::new(MockChainProvider::new(1))),
             &mock,
             &tx,
             &B256::ZERO,
@@ -1398,7 +1388,7 @@ mod tests {
 
         let result = fetch_historic_logs_stream(
             false,
-            BlockClock::new(None, None, crate::provider::JsonRpcCachedProvider::mock(1)),
+            BlockClock::new(None, None, Arc::new(MockChainProvider::new(1))),
             &mock,
             &tx,
             &B256::ZERO,
@@ -1424,7 +1414,7 @@ mod tests {
 
         let result = fetch_historic_logs_stream(
             false,
-            BlockClock::new(None, None, crate::provider::JsonRpcCachedProvider::mock(1)),
+            BlockClock::new(None, None, Arc::new(MockChainProvider::new(1))),
             &mock,
             &tx,
             &B256::ZERO,
@@ -1450,7 +1440,7 @@ mod tests {
 
         let result = fetch_historic_logs_stream(
             false,
-            BlockClock::new(None, None, crate::provider::JsonRpcCachedProvider::mock(1)),
+            BlockClock::new(None, None, Arc::new(MockChainProvider::new(1))),
             &mock,
             &tx,
             &B256::ZERO,
@@ -1474,7 +1464,7 @@ mod tests {
 
         let result = fetch_historic_logs_stream(
             false,
-            BlockClock::new(None, None, crate::provider::JsonRpcCachedProvider::mock(1)),
+            BlockClock::new(None, None, Arc::new(MockChainProvider::new(1))),
             &mock,
             &tx,
             &B256::ZERO,

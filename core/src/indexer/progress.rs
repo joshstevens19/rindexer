@@ -147,7 +147,7 @@ impl IndexingEventsProgressState {
                     Ok(latest_block) => {
                         let start_block = network_contract.start_block.unwrap_or(latest_block);
                         let end_block = network_contract.end_block.unwrap_or(latest_block);
-                        let chain_id = network_contract.cached_provider.chain.id();
+                        let chain_id = network_contract.cached_provider.chain().id();
 
                         if emitter.is_some() {
                             let np = block_networks.entry(chain_id).or_insert_with(|| {
@@ -197,7 +197,7 @@ impl IndexingEventsProgressState {
                     Ok(latest_block) => {
                         let start_block = network_traces.start_block.unwrap_or(latest_block);
                         let end_block = network_traces.end_block.unwrap_or(latest_block);
-                        let chain_id = network_traces.cached_provider.chain.id();
+                        let chain_id = network_traces.cached_provider.chain().id();
                         let syncing_to_block =
                             if latest_block > end_block { end_block } else { latest_block };
 
