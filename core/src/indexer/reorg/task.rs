@@ -40,6 +40,9 @@ pub struct ReorgTask {
     pub detection_point: u64,
     pub event_tables: Vec<EventTableInfo>,
     pub derived_tables: Vec<DerivedTableInfo>,
+    /// Pre-fetched canonical blocks `(block_number, block_hash, parent_hash)` from
+    /// `find_fork_point`, so `execute()` can skip a redundant RPC round-trip.
+    pub canonical_blocks: Vec<(u64, B256, B256)>,
 }
 
 pub struct ReorgTaskResult {
@@ -53,11 +56,12 @@ impl ReorgTask {
     pub async fn execute(
         &self,
         window: &mut BlockChainWindow,
-        _persistence: &LatestBlocksPersistence,
+        persistence: &LatestBlocksPersistence,
         postgres: Option<&PostgresClient>,
         clickhouse: Option<&Arc<ClickhouseClient>>,
         provider: Option<&Arc<JsonRpcCachedProvider>>,
     ) -> Result<ReorgTaskResult, String> {
+        let _ = persistence;
         let start = std::time::Instant::now();
 
         tracing::info!(
@@ -68,67 +72,47 @@ impl ReorgTask {
             "Starting reorg task"
         );
 
-        let mut corrected_blocks_owned: Vec<(u64, String, String)> = Vec::new();
-        if let Some(provider) = provider {
+        // Use pre-fetched canonical blocks if available; otherwise fall back to RPC.
+        let canonical: Vec<(u64, B256, B256)> = if !self.canonical_blocks.is_empty() {
+            self.canonical_blocks
+                .iter()
+                .filter(|(n, _, _)| *n >= self.fork_point && *n <= self.detection_point)
+                .copied()
+                .collect()
+        } else if let Some(provider) = provider {
             let block_numbers: Vec<U64> = (self.fork_point..=self.detection_point)
                 .map(|n| U64::from(n))
                 .collect();
             match provider.get_block_by_number_batch(&block_numbers, false).await {
-                Ok(blocks) => {
-                    corrected_blocks_owned = blocks
-                        .iter()
-                        .map(|b| {
-                            (
-                                b.header.number,
-                                format!("{:#x}", b.header.hash),
-                                format!("{:#x}", b.header.parent_hash),
-                            )
-                        })
-                        .collect();
-
-                    let window_updates: Vec<(u64, B256, B256)> = blocks
-                        .iter()
-                        .map(|b| (b.header.number, b.header.hash, b.header.parent_hash))
-                        .collect();
-                    window.update_range(&window_updates);
-                }
+                Ok(blocks) => blocks
+                    .iter()
+                    .map(|b| (b.header.number, b.header.hash, b.header.parent_hash))
+                    .collect(),
                 Err(e) => {
-                    tracing::error!("Failed to fetch corrected blocks for reorg range: {}", e)
+                    tracing::error!("Failed to fetch corrected blocks for reorg range: {}", e);
+                    vec![]
                 }
             }
+        } else {
+            vec![]
+        };
+
+        // Update the in-memory window with canonical blocks
+        if !canonical.is_empty() {
+            window.update_range(&canonical);
         }
+
+        let corrected_blocks_owned: Vec<(u64, String, String)> = canonical
+            .iter()
+            .map(|(n, h, p)| (*n, format!("{:#x}", h), format!("{:#x}", p)))
+            .collect();
 
         let corrected_blocks: Vec<(u64, &str, &str)> = corrected_blocks_owned
             .iter()
             .map(|(n, h, p)| (*n, h.as_str(), p.as_str()))
             .collect();
 
-        // Collect affected tx hashes before deletion (for on_reorg callback)
         let mut affected_tx_hashes: Vec<String> = Vec::new();
-        if let Some(pg) = postgres {
-            for table in &self.event_tables {
-                match pg
-                    .collect_affected_tx_hashes(
-                        &table.full_name,
-                        &self.network,
-                        self.fork_point,
-                        self.detection_point,
-                    )
-                    .await
-                {
-                    Ok(hashes) => affected_tx_hashes.extend(hashes),
-                    Err(e) => tracing::warn!(
-                        "Failed to collect tx hashes from {}: {:?}",
-                        table.full_name,
-                        e
-                    ),
-                }
-            }
-        }
-        affected_tx_hashes.sort();
-        affected_tx_hashes.dedup();
-
-        // Step 2: Delete stale events + insert new events + update latest_blocks
         let mut total_deleted = 0u64;
 
         if let Some(pg) = postgres {
@@ -137,7 +121,7 @@ impl ReorgTask {
             let checkpoint_tables: Vec<&str> =
                 self.event_tables.iter().map(|t| t.checkpoint_table.as_str()).collect();
 
-            total_deleted = pg
+            let (deleted, tx_hashes) = pg
                 .reorg_rollback_transaction(
                     &table_names,
                     &self.network,
@@ -148,6 +132,8 @@ impl ReorgTask {
                 )
                 .await
                 .map_err(|e| e.to_string())?;
+            total_deleted = deleted;
+            affected_tx_hashes = tx_hashes;
         }
 
         if let Some(ch) = clickhouse {
@@ -156,30 +142,17 @@ impl ReorgTask {
                 .iter()
                 .map(|t| (t.schema.clone(), t.table_name.clone()))
                 .collect();
+            let checkpoint_tables: Vec<String> = self
+                .event_tables
+                .iter()
+                .map(|t| t.checkpoint_table.clone())
+                .collect();
 
-            ch.reorg_rollback(&tables, &self.network, self.fork_point, self.detection_point)
+            ch.reorg_rollback(&tables, &self.network, self.fork_point, self.detection_point, &checkpoint_tables)
                 .await
                 .map_err(|e| e.to_string())?;
-
-            // Rewind ClickHouse checkpoint tables via DELETE + INSERT
-            // (ReplacingMergeTree discards lower values on merge, so we must delete first)
-            let rewind_block = self.fork_point.saturating_sub(1);
-            for table in &self.event_tables {
-                let delete_sql = format!(
-                    "ALTER TABLE rindexer_internal.{} DELETE WHERE network = '{}' SETTINGS mutations_sync = 1",
-                    table.checkpoint_table, self.network
-                );
-                ch.execute(&delete_sql).await.map_err(|e| e.to_string())?;
-
-                let insert_sql = format!(
-                    "INSERT INTO rindexer_internal.{} (network, last_synced_block) VALUES ('{}', {})",
-                    table.checkpoint_table, self.network, rewind_block
-                );
-                ch.execute(&insert_sql).await.map_err(|e| e.to_string())?;
-            }
         }
 
-        // Step 2b: Delete rows from derived/custom tables
         for dt in &self.derived_tables {
             if let Some(pg) = postgres {
                 let query = if dt.cross_chain {
@@ -232,7 +205,6 @@ impl ReorgTask {
             }
         }
 
-        // Step 4: Record metrics
         let duration = start.elapsed().as_secs_f64();
         metrics::record_reorg_handling_duration(&self.network, duration);
         metrics::record_reorg_events_deleted(&self.network, total_deleted);

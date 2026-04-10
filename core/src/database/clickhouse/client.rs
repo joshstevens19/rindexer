@@ -260,6 +260,7 @@ impl ClickhouseClient {
         network: &str,
         fork_point: u64,
         detection_point: u64,
+        checkpoint_tables: &[String],
     ) -> Result<(), ClickhouseError> {
         // DELETE from all event tables
         for (_, table_name) in event_tables {
@@ -274,6 +275,23 @@ impl ClickhouseClient {
             self.wait_for_mutations(database, table_name).await?;
         }
         self.wait_for_mutations("rindexer_internal", "latest_blocks").await?;
+
+        // Rewind checkpoint tables via DELETE + INSERT
+        // (ReplacingMergeTree discards lower values on merge, so we must delete first)
+        let rewind_block = fork_point.saturating_sub(1);
+        for table in checkpoint_tables {
+            let delete_sql = format!(
+                "ALTER TABLE rindexer_internal.{} DELETE WHERE network = '{}' SETTINGS mutations_sync = 1",
+                table, network
+            );
+            self.execute(&delete_sql).await?;
+
+            let insert_sql = format!(
+                "INSERT INTO rindexer_internal.{} (network, last_synced_block) VALUES ('{}', {})",
+                table, network, rewind_block
+            );
+            self.execute(&insert_sql).await?;
+        }
 
         Ok(())
     }

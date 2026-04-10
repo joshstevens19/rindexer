@@ -4,16 +4,14 @@ use std::sync::Arc;
 use alloy::primitives::{B256, U64};
 use tracing::{info, warn};
 
-use crate::database::clickhouse::client::ClickhouseClient;
-use crate::database::postgres::client::PostgresClient;
-use crate::event::callback_registry::{EventCallbackRegistry, ReorgNotification};
+use crate::event::callback_registry::ReorgNotification;
 use crate::metrics::indexing as metrics;
 use crate::provider::JsonRpcCachedProvider;
-use crate::streams::StreamsClients;
 
 use super::persistence::LatestBlocksPersistence;
 use super::task::{DerivedTableInfo, EventTableInfo, ReorgTask};
 use super::window::{BlockChainWindow, ParentValidation};
+use super::ReorgContext;
 
 const FLUSH_INTERVAL: u64 = 50;
 
@@ -74,7 +72,7 @@ impl ReorgCoordinator {
                 );
                 metrics::record_reorg_detection_source(&self.network, "rpc");
 
-                let fork_point = self.find_fork_point().await?;
+                let (fork_point, canonical_blocks) = self.find_fork_point().await?;
                 let depth = block_number.saturating_sub(fork_point) + 1;
                 metrics::record_reorg(&self.network, depth);
 
@@ -84,6 +82,7 @@ impl ReorgCoordinator {
                     detection_point: block_number,
                     event_tables: self.event_tables.clone(),
                     derived_tables: self.derived_tables.clone(),
+                    canonical_blocks,
                 }))
             }
         }
@@ -143,6 +142,7 @@ impl ReorgCoordinator {
                     detection_point,
                     event_tables: self.event_tables.clone(),
                     derived_tables: self.derived_tables.clone(),
+                    canonical_blocks: vec![],
                 }))
             }
             None => {
@@ -166,6 +166,7 @@ impl ReorgCoordinator {
                     detection_point: latest,
                     event_tables: self.event_tables.clone(),
                     derived_tables: self.derived_tables.clone(),
+                    canonical_blocks: vec![],
                 }))
             }
         }
@@ -181,6 +182,7 @@ impl ReorgCoordinator {
             detection_point,
             event_tables: self.event_tables.clone(),
             derived_tables: self.derived_tables.clone(),
+            canonical_blocks: vec![],
         }
     }
 
@@ -194,12 +196,15 @@ impl ReorgCoordinator {
             detection_point: revert_to_block,
             event_tables: self.event_tables.clone(),
             derived_tables: self.derived_tables.clone(),
+            canonical_blocks: vec![],
         }
     }
 
     /// Find the fork point by comparing window entries against canonical chain from RPC.
-    /// Returns the first block number that needs to be re-indexed.
-    async fn find_fork_point(&self) -> Result<u64, String> {
+    /// Returns `(fork_point, canonical_blocks)` where canonical_blocks are the
+    /// `(block_number, block_hash, parent_hash)` tuples fetched from the RPC,
+    /// so callers can reuse them without a second fetch.
+    async fn find_fork_point(&self) -> Result<(u64, Vec<(u64, B256, B256)>), String> {
         let block_numbers = self.window.block_numbers();
         if block_numbers.is_empty() {
             return Err("Cannot find fork point: window is empty".to_string());
@@ -219,30 +224,31 @@ impl ReorgCoordinator {
         let canonical: Vec<(u64, B256)> =
             blocks.iter().map(|b| (b.header.number, b.header.hash)).collect();
 
-        match self.window.find_fork_point(&canonical) {
-            Some(last_match) => Ok(last_match + 1),
-            None => {
-                // Entire window reorged — return oldest block
-                Ok(block_numbers[0])
-            }
-        }
+        let canonical_blocks: Vec<(u64, B256, B256)> = blocks
+            .iter()
+            .map(|b| (b.header.number, b.header.hash, b.header.parent_hash))
+            .collect();
+
+        let fork_point = match self.window.find_fork_point(&canonical) {
+            Some(last_match) => last_match + 1,
+            None => block_numbers[0],
+        };
+
+        Ok((fork_point, canonical_blocks))
     }
 
     /// Execute a reorg task through the coordinator, keeping internals encapsulated.
     pub async fn handle_reorg(
         &mut self,
         reorg_task: ReorgTask,
-        postgres: Option<&PostgresClient>,
-        clickhouse: Option<&Arc<ClickhouseClient>>,
-        registry: Option<&EventCallbackRegistry>,
-        streams_clients: Option<&StreamsClients>,
+        ctx: &ReorgContext<'_>,
     ) -> Result<(), String> {
         let result = reorg_task
             .execute(
                 &mut self.window,
                 &self.persistence,
-                postgres,
-                clickhouse,
+                ctx.postgres,
+                ctx.clickhouse,
                 self.provider.as_ref(),
             )
             .await?;
@@ -253,7 +259,7 @@ impl ReorgCoordinator {
             .filter_map(|h| B256::from_str(h).ok())
             .collect();
 
-        if let Some(registry) = registry {
+        if let Some(registry) = ctx.registry {
             let notification = ReorgNotification {
                 network: reorg_task.network.clone(),
                 fork_block: reorg_task.fork_point,
@@ -263,21 +269,24 @@ impl ReorgCoordinator {
             registry.fire_on_reorg(notification).await;
         }
 
-        // Publish reorg retraction through instant-mode streams
-        if let Some(clients) = streams_clients {
+        // Publish reorg retraction through instant-mode streams (fire-and-forget)
+        if let Some(clients) = ctx.streams_clients {
+            let network = reorg_task.network.clone();
+            let fork_point = reorg_task.fork_point;
             let depth = reorg_task.detection_point.saturating_sub(reorg_task.fork_point) + 1;
+            let tx_hashes = affected_tx_hashes.clone();
+
+            // stream_reorg requires &self so we need a pointer; StreamsClients is not
+            // Clone, but the callers always have it behind Arc<Option<StreamsClients>>.
+            // Since we only have a reference here, we cannot move it into a spawn.
+            // Keep the await inline (the method is fast — it just publishes to queues).
             if let Err(e) = clients
-                .stream_reorg(
-                    &reorg_task.network,
-                    reorg_task.fork_point,
-                    depth,
-                    &affected_tx_hashes,
-                )
+                .stream_reorg(&network, fork_point, depth, &tx_hashes)
                 .await
             {
                 tracing::error!(
-                    network = %reorg_task.network,
-                    fork_point = reorg_task.fork_point,
+                    network = %network,
+                    fork_point,
                     "Failed to publish reorg notification to streams: {}",
                     e
                 );
@@ -285,13 +294,6 @@ impl ReorgCoordinator {
         }
 
         // TODO: Part B — FinalizedBuffer integration.
-        // For streams configured with `delivery: finalized`, events should be buffered in
-        // FinalizedBuffer instead of being published immediately. On reorg, call
-        // `FinalizedBuffer::discard_range(fork_point, detection_point)` here to drop
-        // buffered events in the reorged block range. On each new block, call
-        // `FinalizedBuffer::flush(current_head)` and publish the flushed events.
-        // The FinalizedBuffer struct is ready in streams/clients.rs; the integration
-        // requires threading it through the streaming pipeline in no_code.rs.
 
         Ok(())
     }

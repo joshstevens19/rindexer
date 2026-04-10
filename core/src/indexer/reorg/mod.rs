@@ -20,6 +20,17 @@ pub use coordinator::ReorgCoordinator;
 pub use persistence::LatestBlocksPersistence;
 pub use task::{DerivedTableInfo, EventTableInfo};
 pub use window::BlockChainWindow;
+// Re-export ReorgContext so callers can use `reorg::ReorgContext`
+// (it's defined just below)
+
+/// Bundles the optional DB clients, callback registry, and streams clients
+/// that reorg recovery needs, avoiding parameter sprawl.
+pub struct ReorgContext<'a> {
+    pub postgres: Option<&'a PostgresClient>,
+    pub clickhouse: Option<&'a Arc<ClickhouseClient>>,
+    pub registry: Option<&'a EventCallbackRegistry>,
+    pub streams_clients: Option<&'a StreamsClients>,
+}
 
 /// Returns true if a reorg was detected and handled (caller should `continue`).
 pub async fn detect_and_handle_reorg(
@@ -28,10 +39,7 @@ pub async fn detect_and_handle_reorg(
     block_hash: B256,
     parent_hash: B256,
     log_prefix: &str,
-    postgres: Option<&PostgresClient>,
-    clickhouse: Option<&Arc<ClickhouseClient>>,
-    registry: Option<&EventCallbackRegistry>,
-    streams_clients: Option<&StreamsClients>,
+    ctx: &ReorgContext<'_>,
 ) -> bool {
     match coordinator.on_new_block(block_number, block_hash, parent_hash).await {
         Ok(Some(reorg_task)) => {
@@ -44,7 +52,7 @@ pub async fn detect_and_handle_reorg(
             );
 
             if let Err(e) =
-                coordinator.handle_reorg(reorg_task, postgres, clickhouse, registry, streams_clients).await
+                coordinator.handle_reorg(reorg_task, ctx).await
             {
                 error!(
                     "{} - Failed to execute reorg rollback: {}",

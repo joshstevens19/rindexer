@@ -481,31 +481,13 @@ impl PostgresClient {
             .map_err(|e| e.to_string())
     }
 
-    /// Collect distinct tx_hashes for events in a block range for a given network from a specific table.
-    pub async fn collect_affected_tx_hashes(
-        &self,
-        table_name: &str,
-        network: &str,
-        fork_point: u64,
-        detection_point: u64,
-    ) -> Result<Vec<String>, PostgresError> {
-        let query = format!(
-            "SELECT DISTINCT tx_hash FROM {} WHERE network = $1 AND block_number >= $2 AND block_number <= $3",
-            table_name
-        );
-        let conn = self.pool.get().await?;
-        let fork_i64 = fork_point as i64;
-        let det_i64 = detection_point as i64;
-        let rows = conn.query(&query, &[&network, &fork_i64, &det_i64]).await?;
-        Ok(rows.iter().map(|r| r.get::<_, String>("tx_hash")).collect())
-    }
-
     /// Execute a full reorg rollback atomically in a single PostgreSQL transaction:
-    /// 1. Delete stale events from all given event tables in the block range
+    /// 1. Delete stale events from all given event tables (returning affected tx hashes)
     /// 2. Delete stale entries from `rindexer_internal.latest_blocks` for the block range
     /// 3. Insert corrected latest_blocks entries (marking reorg as handled)
+    /// 4. Rewind checkpoint cursors
     ///
-    /// Returns the total number of event rows deleted across all tables.
+    /// Returns `(total_rows_deleted, affected_tx_hashes)`.
     pub async fn reorg_rollback_transaction(
         &self,
         event_table_names: &[&str],
@@ -514,25 +496,31 @@ impl PostgresClient {
         detection_point: u64,
         corrected_blocks: &[(u64, &str, &str)], // (block_number, block_hash, parent_hash)
         checkpoint_tables: &[&str],
-    ) -> Result<u64, PostgresError> {
+    ) -> Result<(u64, Vec<String>), PostgresError> {
         let mut conn = self.pool.get().await?;
         let transaction = conn.transaction().await?;
 
         let fork_point_i64 = fork_point as i64;
         let detection_point_i64 = detection_point as i64;
         let mut total_deleted: u64 = 0;
+        let mut all_affected_tx_hashes: Vec<String> = Vec::new();
 
-        // 1. Delete stale events from all event tables
+        // 1. Delete stale events and collect affected tx hashes in one round-trip per table
         for table_name in event_table_names {
             let query = format!(
-                "DELETE FROM {} WHERE network = $1 AND block_number >= $2 AND block_number <= $3",
+                "DELETE FROM {} WHERE network = $1 AND block_number >= $2 AND block_number <= $3 RETURNING tx_hash",
                 table_name
             );
-            let deleted = transaction
-                .execute(&query, &[&network, &fork_point_i64, &detection_point_i64])
+            let rows = transaction
+                .query(&query, &[&network, &fork_point_i64, &detection_point_i64])
                 .await?;
-            total_deleted += deleted;
+            total_deleted += rows.len() as u64;
+            let hashes: Vec<String> = rows.iter().map(|r| r.get::<_, String>("tx_hash")).collect();
+            all_affected_tx_hashes.extend(hashes);
         }
+
+        all_affected_tx_hashes.sort();
+        all_affected_tx_hashes.dedup();
 
         // 2. Delete stale entries from rindexer_internal.latest_blocks
         let delete_latest_blocks_query = "DELETE FROM rindexer_internal.latest_blocks \
@@ -564,6 +552,6 @@ impl PostgresClient {
 
         transaction.commit().await?;
 
-        Ok(total_deleted)
+        Ok((total_deleted, all_affected_tx_hashes))
     }
 }

@@ -19,7 +19,7 @@ use crate::event::config::{ContractEventProcessingConfig, FactoryEventProcessing
 use crate::helpers::{camel_to_snake, format_duration};
 use crate::indexer::native_transfer::native_transfer_block_processor;
 use crate::indexer::reorg::{
-    BlockChainWindow, EventTableInfo, LatestBlocksPersistence, ReorgCoordinator,
+    BlockChainWindow, EventTableInfo, LatestBlocksPersistence, ReorgContext, ReorgCoordinator,
 };
 use crate::indexer::Indexer;
 use crate::manifest::network::ReorgHandlingConfig;
@@ -492,14 +492,14 @@ async fn start_indexing_contract_events(
                             startup_task.fork_point,
                             startup_task.detection_point - startup_task.fork_point + 1,
                         );
+                        let reorg_ctx = ReorgContext {
+                            postgres: postgres.as_deref(),
+                            clickhouse: clickhouse.as_ref(),
+                            registry: None,
+                            streams_clients: startup_streams_clients.as_ref().and_then(|a| a.as_ref().as_ref()),
+                        };
                         if let Err(e) = coordinator
-                            .handle_reorg(
-                                startup_task,
-                                postgres.as_deref(),
-                                clickhouse.as_ref(),
-                                None,
-                                startup_streams_clients.as_ref().and_then(|a| a.as_ref().as_ref()),
-                            )
+                            .handle_reorg(startup_task, &reorg_ctx)
                             .await
                         {
                             error!(
@@ -780,14 +780,14 @@ async fn start_indexing_contract_events(
                                 startup_task.fork_point,
                                 startup_task.detection_point - startup_task.fork_point + 1,
                             );
+                            let reorg_ctx = ReorgContext {
+                                postgres: postgres.as_deref(),
+                                clickhouse: clickhouse.as_ref(),
+                                registry: None,
+                                streams_clients: dep_streams_clients.as_ref().and_then(|a| a.as_ref().as_ref()),
+                            };
                             if let Err(e) = coordinator
-                                .handle_reorg(
-                                    startup_task,
-                                    postgres.as_deref(),
-                                    clickhouse.as_ref(),
-                                    None,
-                                    dep_streams_clients.as_ref().and_then(|a| a.as_ref().as_ref()),
-                                )
+                                .handle_reorg(startup_task, &reorg_ctx)
                                 .await
                             {
                                 error!(
