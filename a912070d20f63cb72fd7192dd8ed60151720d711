@@ -1,0 +1,38 @@
+e2e-tests/src/tests/reorg_e2e.rs
+  e45478a42aee6e7a 1-577
+core/tests/e2e_reorg.rs
+  88fdb9834fb286df 12,73,84-91,444-449,451,455-457,461-481,483-485,493-497,509-563
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.7",
+  "base_commit_sha": "a912070d20f63cb72fd7192dd8ed60151720d711",
+  "prompts": {
+    "88fdb9834fb286df": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "873f225a-14f4-44ad-853e-0abc7ff1e218",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 107,
+      "total_deletions": 5,
+      "accepted_lines": 853,
+      "overriden_lines": 0
+    },
+    "e45478a42aee6e7a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "48bbb844-82a0-4860-8857-7567fd2855d2",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 581,
+      "total_deletions": 0,
+      "accepted_lines": 581,
+      "overriden_lines": 0
+    }
+  }
+}
