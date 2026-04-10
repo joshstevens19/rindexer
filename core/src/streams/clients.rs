@@ -1407,10 +1407,7 @@ impl FinalizedBuffer {
         let finality_threshold = current_head.saturating_sub(self.reorg_safe_distance);
         let ready_keys: Vec<u64> =
             self.buffer.keys().copied().filter(|&k| k <= finality_threshold).collect();
-        ready_keys
-            .into_iter()
-            .filter_map(|k| self.buffer.remove(&k).map(|v| (k, v)))
-            .collect()
+        ready_keys.into_iter().filter_map(|k| self.buffer.remove(&k).map(|v| (k, v))).collect()
     }
 
     pub fn discard_range(&mut self, fork_point: u64, detection_point: u64) {

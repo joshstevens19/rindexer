@@ -415,8 +415,7 @@ async fn start_indexing_contract_events(
             let schema =
                 generate_indexer_contract_schema_name(&event.indexer_name, &event.contract.name);
             let table_name = camel_to_snake(&event.event_name);
-            let checkpoint_table =
-                generate_internal_event_table_name(&schema, &event.event_name);
+            let checkpoint_table = generate_internal_event_table_name(&schema, &event.event_name);
             network_event_tables
                 .entry(network_contract.network.clone())
                 .or_default()
@@ -425,22 +424,17 @@ async fn start_indexing_contract_events(
     }
 
     // Shared persistence per invocation (shared across all coordinators)
-    let reorg_persistence = Arc::new(LatestBlocksPersistence::new(
-        postgres.clone(),
-        clickhouse.clone(),
-    ));
+    let reorg_persistence =
+        Arc::new(LatestBlocksPersistence::new(postgres.clone(), clickhouse.clone()));
 
     // Build one ReorgCoordinator per network (shared across all events on that network).
     // The first non-blocking event on each network takes ownership; subsequent events get None.
     let mut network_coordinators: HashMap<String, ReorgCoordinator> = HashMap::new();
     if !no_live_indexing_forced {
         for (network_name, reorg_config) in &reorg_configs {
-            let event_tables =
-                network_event_tables.get(network_name).cloned().unwrap_or_default();
+            let event_tables = network_event_tables.get(network_name).cloned().unwrap_or_default();
 
-            let window = match reorg_persistence
-                .load(network_name, reorg_config.window_size)
-                .await
+            let window = match reorg_persistence.load(network_name, reorg_config.window_size).await
             {
                 Ok(window) => {
                     info!(
@@ -496,12 +490,11 @@ async fn start_indexing_contract_events(
                             postgres: postgres.as_deref(),
                             clickhouse: clickhouse.as_ref(),
                             registry: None,
-                            streams_clients: startup_streams_clients.as_ref().and_then(|a| a.as_ref().as_ref()),
+                            streams_clients: startup_streams_clients
+                                .as_ref()
+                                .and_then(|a| a.as_ref().as_ref()),
                         };
-                        if let Err(e) = coordinator
-                            .handle_reorg(startup_task, &reorg_ctx)
-                            .await
-                        {
+                        if let Err(e) = coordinator.handle_reorg(startup_task, &reorg_ctx).await {
                             error!(
                                 "Failed to execute startup reorg rollback for {}: {}",
                                 network_name, e
@@ -684,17 +677,18 @@ async fn start_indexing_contract_events(
             // Take ownership of the per-network coordinator for the FIRST event on each
             // network. Subsequent events on the same network get None — only one event
             // per network drives reorg detection.
-            let reorg_coordinator = if event_processing_config.live_indexing()
-                && !no_live_indexing_forced
-            {
-                let network_name = event_processing_config.network_contract().network.clone();
-                network_coordinators.remove(&network_name)
-            } else {
-                None
-            };
+            let reorg_coordinator =
+                if event_processing_config.live_indexing() && !no_live_indexing_forced {
+                    let network_name = event_processing_config.network_contract().network.clone();
+                    network_coordinators.remove(&network_name)
+                } else {
+                    None
+                };
 
-            let process_event =
-                tokio::spawn(process_non_blocking_event(event_processing_config, reorg_coordinator));
+            let process_event = tokio::spawn(process_non_blocking_event(
+                event_processing_config,
+                reorg_coordinator,
+            ));
             non_blocking_process_events.push(process_event);
         }
     }
@@ -784,11 +778,11 @@ async fn start_indexing_contract_events(
                                 postgres: postgres.as_deref(),
                                 clickhouse: clickhouse.as_ref(),
                                 registry: None,
-                                streams_clients: dep_streams_clients.as_ref().and_then(|a| a.as_ref().as_ref()),
+                                streams_clients: dep_streams_clients
+                                    .as_ref()
+                                    .and_then(|a| a.as_ref().as_ref()),
                             };
-                            if let Err(e) = coordinator
-                                .handle_reorg(startup_task, &reorg_ctx)
-                                .await
+                            if let Err(e) = coordinator.handle_reorg(startup_task, &reorg_ctx).await
                             {
                                 error!(
                                     "Dependency events - Failed to execute startup reorg rollback for {}: {}",

@@ -225,11 +225,7 @@ impl ClickhouseClient {
         self.execute(&sql).await
     }
 
-    async fn wait_for_mutations(
-        &self,
-        database: &str,
-        table: &str,
-    ) -> Result<(), ClickhouseError> {
+    async fn wait_for_mutations(&self, database: &str, table: &str) -> Result<(), ClickhouseError> {
         #[derive(Row, Deserialize)]
         struct MutationCount {
             c: u64,
@@ -270,7 +266,13 @@ impl ClickhouseClient {
         }
 
         // DELETE from rindexer_internal.latest_blocks
-        self.delete_by_block_range("rindexer_internal.latest_blocks", network, fork_point, detection_point).await?;
+        self.delete_by_block_range(
+            "rindexer_internal.latest_blocks",
+            network,
+            fork_point,
+            detection_point,
+        )
+        .await?;
 
         // Wait for all mutations to complete
         for (database, table_name) in event_tables {

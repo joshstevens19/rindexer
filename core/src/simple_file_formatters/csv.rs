@@ -90,12 +90,8 @@ pub async fn write_reorg_invalidation_file(
     invalidated_tx_hashes: &[String],
 ) -> Result<(), csv::Error> {
     let timestamp = Utc::now().format("%Y%m%d_%H%M%S");
-    let file_name =
-        format!("{contract_name}_{network}_{event_name}_reorg_{timestamp}.csv");
-    let file_path = base_path
-        .join(contract_name)
-        .join("reorgs")
-        .join(&file_name);
+    let file_name = format!("{contract_name}_{network}_{event_name}_reorg_{timestamp}.csv");
+    let file_path = base_path.join(contract_name).join("reorgs").join(&file_name);
 
     let file_path_str = file_path.to_string_lossy().to_string();
     let appender = AsyncCsvAppender::new(&file_path_str);
@@ -110,9 +106,7 @@ pub async fn write_reorg_invalidation_file(
 
     let records: Vec<Vec<String>> = invalidated_tx_hashes
         .iter()
-        .map(|hash| {
-            vec![fork_point.to_string(), detection_point.to_string(), hash.clone()]
-        })
+        .map(|hash| vec![fork_point.to_string(), detection_point.to_string(), hash.clone()])
         .collect();
 
     appender.append_bulk(records).await

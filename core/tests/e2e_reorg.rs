@@ -6,13 +6,13 @@
 use std::sync::Arc;
 
 use alloy::primitives::{Address, B256};
+use reqwest::Client as HttpClient;
 use rindexer::indexer::reorg::{
     persistence::LatestBlocksPersistence,
     task::{EventTableInfo, ReorgTask},
     window::{BlockChainWindow, ParentValidation},
 };
 use rindexer::PostgresClient;
-use reqwest::Client as HttpClient;
 use serde_json::{json, Value};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{GenericImage, ImageExt};
@@ -39,12 +39,7 @@ async fn rpc_call(http: &HttpClient, rpc_url: &str, method: &str, params: Value)
         "method": method,
         "params": params,
     });
-    let resp = http
-        .post(rpc_url)
-        .json(&body)
-        .send()
-        .await
-        .expect("RPC request failed");
+    let resp = http.post(rpc_url).json(&body).send().await.expect("RPC request failed");
     let json: Value = resp.json().await.expect("RPC response not JSON");
     if let Some(err) = json.get("error") {
         panic!("RPC error calling {}: {:?}", method, err);
@@ -82,11 +77,7 @@ async fn get_block_by_number(http: &HttpClient, rpc_url: &str, block_number: u64
 }
 
 /// Returns `(block_number, block_hash, parent_hash)` for the given block number.
-async fn get_block_full(
-    http: &HttpClient,
-    rpc_url: &str,
-    block_number: u64,
-) -> (u64, B256, B256) {
+async fn get_block_full(http: &HttpClient, rpc_url: &str, block_number: u64) -> (u64, B256, B256) {
     let (hash, parent) = get_block_by_number(http, rpc_url, block_number).await;
     (block_number, hash, parent)
 }
@@ -103,8 +94,7 @@ async fn get_accounts(http: &HttpClient, rpc_url: &str) -> Vec<Address> {
 
 async fn wait_for_receipt(http: &HttpClient, rpc_url: &str, tx_hash: &str) -> Value {
     for _ in 0..60 {
-        let result =
-            rpc_call(http, rpc_url, "eth_getTransactionReceipt", json!([tx_hash])).await;
+        let result = rpc_call(http, rpc_url, "eth_getTransactionReceipt", json!([tx_hash])).await;
         if !result.is_null() {
             return result;
         }
@@ -113,11 +103,7 @@ async fn wait_for_receipt(http: &HttpClient, rpc_url: &str, tx_hash: &str) -> Va
     panic!("Timed out waiting for receipt of {}", tx_hash);
 }
 
-async fn deploy_ping_pong(
-    http: &HttpClient,
-    rpc_url: &str,
-    from: Address,
-) -> (Address, u64) {
+async fn deploy_ping_pong(http: &HttpClient, rpc_url: &str, from: Address) -> (Address, u64) {
     let tx = json!({
         "from": format!("{:#x}", from),
         "data": format!("0x{}", PING_PONG_BYTECODE),
@@ -175,18 +161,11 @@ async fn test_reorg_detection_and_rollback() {
     // -----------------------------------------------------------------------
 
     // Postgres
-    let pg_container = Postgres::default()
-        .start()
-        .await
-        .expect("failed to start postgres container");
-    let pg_port = pg_container
-        .get_host_port_ipv4(5432)
-        .await
-        .expect("failed to get postgres port");
-    let pg_conn_str = format!(
-        "host=127.0.0.1 port={} user=postgres password=postgres dbname=postgres",
-        pg_port
-    );
+    let pg_container =
+        Postgres::default().start().await.expect("failed to start postgres container");
+    let pg_port = pg_container.get_host_port_ipv4(5432).await.expect("failed to get postgres port");
+    let pg_conn_str =
+        format!("host=127.0.0.1 port={} user=postgres password=postgres dbname=postgres", pg_port);
 
     // Reth dev node
     let reth_container = GenericImage::new("ghcr.io/paradigmxyz/reth", "v1.8.2")
@@ -208,10 +187,7 @@ async fn test_reorg_detection_and_rollback() {
         .start()
         .await
         .expect("failed to start reth container");
-    let reth_port = reth_container
-        .get_host_port_ipv4(8545)
-        .await
-        .expect("failed to get reth port");
+    let reth_port = reth_container.get_host_port_ipv4(8545).await.expect("failed to get reth port");
     let rpc_url = format!("http://127.0.0.1:{}", reth_port);
 
     let http = HttpClient::new();
@@ -352,10 +328,7 @@ async fn test_reorg_detection_and_rollback() {
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
     let new_tip = get_block_number(&http, &rpc_url).await;
-    assert!(
-        new_tip >= block1,
-        "chain should have advanced past reorg target"
-    );
+    assert!(new_tip >= block1, "chain should have advanced past reorg target");
 
     // -----------------------------------------------------------------------
     // 7. Detect reorg via window validation
@@ -382,11 +355,7 @@ async fn test_reorg_detection_and_rollback() {
     // However the HASH of check_block itself should differ from the old block2 hash.
     let old_entry = window.get(check_block);
     if let Some((old_hash, _)) = old_entry {
-        assert_ne!(
-            *old_hash, new_hash,
-            "block {} hash should differ after reorg",
-            check_block
-        );
+        assert_ne!(*old_hash, new_hash, "block {} hash should differ after reorg", check_block);
     }
 
     // -----------------------------------------------------------------------
@@ -407,10 +376,7 @@ async fn test_reorg_detection_and_rollback() {
     assert!(fork_point.is_some(), "should find a fork point");
     let fork_block = fork_point.unwrap();
     // Fork point should be block1 (the last block that matches on both chains)
-    assert_eq!(
-        fork_block, block1,
-        "fork point should be block1 (reorg target)"
-    );
+    assert_eq!(fork_block, block1, "fork point should be block1 (reorg target)");
 
     // -----------------------------------------------------------------------
     // 9. Execute ReorgTask against postgres
@@ -430,17 +396,18 @@ async fn test_reorg_detection_and_rollback() {
 
     // Build a PostgresClient from a pool using the same connection string.
     // Since PostgresClient::new() reads DATABASE_URL from env, set it.
-    std::env::set_var("DATABASE_URL", format!(
-        "postgres://postgres:postgres@127.0.0.1:{}/postgres",
-        pg_port
-    ));
+    std::env::set_var(
+        "DATABASE_URL",
+        format!("postgres://postgres:postgres@127.0.0.1:{}/postgres", pg_port),
+    );
     let rindexer_pg = PostgresClient::new().await.expect("failed to create PostgresClient");
 
     let mut task_window = BlockChainWindow::new(256);
     let persistence = LatestBlocksPersistence::new(Some(Arc::new(rindexer_pg)), None);
 
     // Re-create a fresh PostgresClient for the task execution
-    let rindexer_pg2 = PostgresClient::new().await.expect("failed to create PostgresClient for task");
+    let rindexer_pg2 =
+        PostgresClient::new().await.expect("failed to create PostgresClient for task");
 
     // Collect the pre-reorg hashes for the reorged range so we can verify they change.
     let old_block2_hash = {
@@ -528,7 +495,8 @@ async fn test_reorg_detection_and_rollback() {
     // Sanity: stored hash should differ from the (post-reorg) hash we captured
     // for block2 — they are different blocks.
     assert_ne!(
-        stored_block1_hash, old_block2_hash.as_str(),
+        stored_block1_hash,
+        old_block2_hash.as_str(),
         "block1 hash in latest_blocks should not equal block2 hash"
     );
 
@@ -589,11 +557,7 @@ async fn test_reorg_detection_and_rollback() {
     // The stale window should have a fork point at block1 (blocks after that diverge)
     let startup_fork = stale_window.find_fork_point(&canonical_after);
     assert!(startup_fork.is_some(), "startup validation should find fork point");
-    assert_eq!(
-        startup_fork.unwrap(),
-        block1,
-        "startup validation fork point should be block1"
-    );
+    assert_eq!(startup_fork.unwrap(), block1, "startup validation fork point should be block1");
     // Since fork_point < latest_block, this confirms an offline reorg occurred
     let latest = stale_window.latest_block().unwrap();
     assert!(

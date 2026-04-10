@@ -174,7 +174,11 @@ impl ReorgCoordinator {
 
     /// Create a ReorgTask for a known block range (e.g. from removed-logs detection).
     /// The caller is responsible for executing the task via `handle_reorg`.
-    pub fn create_reorg_task_for_block_range(&self, fork_point: u64, detection_point: u64) -> ReorgTask {
+    pub fn create_reorg_task_for_block_range(
+        &self,
+        fork_point: u64,
+        detection_point: u64,
+    ) -> ReorgTask {
         metrics::record_reorg_detection_source(&self.network, "removed_logs");
         ReorgTask {
             network: self.network.clone(),
@@ -226,10 +230,8 @@ impl ReorgCoordinator {
         let canonical: Vec<(u64, B256)> =
             blocks.iter().map(|b| (b.header.number, b.header.hash)).collect();
 
-        let canonical_blocks: Vec<(u64, B256, B256)> = blocks
-            .iter()
-            .map(|b| (b.header.number, b.header.hash, b.header.parent_hash))
-            .collect();
+        let canonical_blocks: Vec<(u64, B256, B256)> =
+            blocks.iter().map(|b| (b.header.number, b.header.hash, b.header.parent_hash)).collect();
 
         let fork_point = match self.window.find_fork_point(&canonical) {
             Some(last_match) => last_match + 1,
@@ -255,11 +257,8 @@ impl ReorgCoordinator {
             )
             .await?;
 
-        let affected_tx_hashes: Vec<B256> = result
-            .affected_tx_hashes
-            .iter()
-            .filter_map(|h| B256::from_str(h).ok())
-            .collect();
+        let affected_tx_hashes: Vec<B256> =
+            result.affected_tx_hashes.iter().filter_map(|h| B256::from_str(h).ok()).collect();
 
         if let Some(registry) = ctx.registry {
             let notification = ReorgNotification {
@@ -282,10 +281,7 @@ impl ReorgCoordinator {
             // Clone, but the callers always have it behind Arc<Option<StreamsClients>>.
             // Since we only have a reference here, we cannot move it into a spawn.
             // Keep the await inline (the method is fast — it just publishes to queues).
-            if let Err(e) = clients
-                .stream_reorg(&network, fork_point, depth, &tx_hashes)
-                .await
-            {
+            if let Err(e) = clients.stream_reorg(&network, fork_point, depth, &tx_hashes).await {
                 tracing::error!(
                     network = %network,
                     fork_point,
@@ -378,18 +374,11 @@ mod tests {
     #[tokio::test]
     async fn test_on_new_block_valid_chain() {
         // Build a window with blocks 10, 11, 12
-        let window = make_window_with_blocks(&[
-            (10, 10, 9),
-            (11, 11, 10),
-            (12, 12, 11),
-        ]);
+        let window = make_window_with_blocks(&[(10, 10, 9), (11, 11, 10), (12, 12, 11)]);
         let mut coordinator = make_coordinator(window);
 
         // Block 13 with parent_hash matching block 12's hash
-        let result = coordinator
-            .on_new_block(13, hash(13), hash(12))
-            .await
-            .unwrap();
+        let result = coordinator.on_new_block(13, hash(13), hash(12)).await.unwrap();
 
         assert!(result.is_none(), "Expected no reorg for valid chain continuation");
         assert!(coordinator.window.get(13).is_some(), "Block 13 should be in window");
@@ -401,10 +390,7 @@ mod tests {
         let window = BlockChainWindow::new(100);
         let mut coordinator = make_coordinator(window);
 
-        let result = coordinator
-            .on_new_block(100, hash(1), hash(0))
-            .await
-            .unwrap();
+        let result = coordinator.on_new_block(100, hash(1), hash(0)).await.unwrap();
 
         assert!(result.is_none(), "Expected None for NoPreviousBlock");
         assert!(coordinator.window.get(100).is_some(), "Block should be inserted");
@@ -413,11 +399,7 @@ mod tests {
     #[tokio::test]
     async fn test_on_new_block_reorg_detected() {
         // Build a window with blocks 10, 11, 12
-        let window = make_window_with_blocks(&[
-            (10, 10, 9),
-            (11, 11, 10),
-            (12, 12, 11),
-        ]);
+        let window = make_window_with_blocks(&[(10, 10, 9), (11, 11, 10), (12, 12, 11)]);
         let mut coordinator = make_coordinator(window);
 
         // Block 13 with a parent_hash that does NOT match block 12's hash → mismatch
@@ -444,7 +426,11 @@ mod tests {
             window,
             persistence,
             provider: None,
-            event_tables: vec![EventTableInfo::new("schema".to_string(), "table".to_string(), "schema_table".to_string())],
+            event_tables: vec![EventTableInfo::new(
+                "schema".to_string(),
+                "table".to_string(),
+                "schema_table".to_string(),
+            )],
             derived_tables: vec![],
             blocks_since_flush: 0,
         };

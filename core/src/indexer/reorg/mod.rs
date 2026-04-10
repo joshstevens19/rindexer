@@ -53,13 +53,8 @@ pub async fn detect_and_handle_reorg(
                 reorg_task.detection_point - fork_point + 1,
             );
 
-            if let Err(e) =
-                coordinator.handle_reorg(reorg_task, ctx).await
-            {
-                error!(
-                    "{} - Failed to execute reorg rollback: {}",
-                    log_prefix, e
-                );
+            if let Err(e) = coordinator.handle_reorg(reorg_task, ctx).await {
+                error!("{} - Failed to execute reorg rollback: {}", log_prefix, e);
             }
 
             Some(fork_point)

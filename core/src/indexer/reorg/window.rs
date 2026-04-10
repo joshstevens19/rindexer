@@ -217,11 +217,7 @@ mod tests {
         }
 
         // No canonical block matches any stored hash
-        let canonical = vec![
-            (1u64, hash(100)),
-            (2u64, hash(101)),
-            (3u64, hash(102)),
-        ];
+        let canonical = vec![(1u64, hash(100)), (2u64, hash(101)), (3u64, hash(102))];
 
         assert_eq!(w.find_fork_point(&canonical), None);
     }

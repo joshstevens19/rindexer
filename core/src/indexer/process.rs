@@ -12,7 +12,9 @@ use tokio::{
 use tracing::{debug, error, info};
 
 use crate::helpers::is_relevant_block;
-use crate::indexer::reorg::{detect_and_handle_reorg, reorg_safe_distance_for_chain, ReorgContext, ReorgCoordinator};
+use crate::indexer::reorg::{
+    detect_and_handle_reorg, reorg_safe_distance_for_chain, ReorgContext, ReorgCoordinator,
+};
 use crate::metrics::indexing as metrics;
 use crate::provider::ChainProvider;
 use crate::{
@@ -394,11 +396,7 @@ async fn live_indexing_for_contract_event_dependencies(
 
         // Reorg detection: validate parent hash via coordinator
         if let Some(ref mut coordinator) = reorg_coordinator {
-            let log_prefix = format!(
-                "{} - {}",
-                network,
-                IndexingEventProgressStatus::live_log()
-            );
+            let log_prefix = format!("{} - {}", network, IndexingEventProgressStatus::live_log());
             let reorg_ctx = ReorgContext {
                 postgres: pg_client.as_deref(),
                 clickhouse: ch_client.as_ref(),

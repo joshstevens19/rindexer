@@ -80,9 +80,8 @@ impl ReorgTask {
                 .copied()
                 .collect()
         } else if let Some(provider) = provider {
-            let block_numbers: Vec<U64> = (self.fork_point..=self.detection_point)
-                .map(|n| U64::from(n))
-                .collect();
+            let block_numbers: Vec<U64> =
+                (self.fork_point..=self.detection_point).map(|n| U64::from(n)).collect();
             match provider.get_block_by_number_batch(&block_numbers, false).await {
                 Ok(blocks) => blocks
                     .iter()
@@ -107,10 +106,8 @@ impl ReorgTask {
             .map(|(n, h, p)| (*n, format!("{:#x}", h), format!("{:#x}", p)))
             .collect();
 
-        let corrected_blocks: Vec<(u64, &str, &str)> = corrected_blocks_owned
-            .iter()
-            .map(|(n, h, p)| (*n, h.as_str(), p.as_str()))
-            .collect();
+        let corrected_blocks: Vec<(u64, &str, &str)> =
+            corrected_blocks_owned.iter().map(|(n, h, p)| (*n, h.as_str(), p.as_str())).collect();
 
         let mut affected_tx_hashes: Vec<String> = Vec::new();
         let mut total_deleted = 0u64;
@@ -142,15 +139,19 @@ impl ReorgTask {
                 .iter()
                 .map(|t| (t.schema.clone(), t.table_name.clone()))
                 .collect();
-            let checkpoint_tables: Vec<String> = self
-                .event_tables
-                .iter()
-                .map(|t| t.checkpoint_table.clone())
-                .collect();
+            let checkpoint_tables: Vec<String> =
+                self.event_tables.iter().map(|t| t.checkpoint_table.clone()).collect();
 
-            ch.reorg_rollback(&tables, &self.network, self.fork_point, self.detection_point, &checkpoint_tables, &corrected_blocks)
-                .await
-                .map_err(|e| e.to_string())?;
+            ch.reorg_rollback(
+                &tables,
+                &self.network,
+                self.fork_point,
+                self.detection_point,
+                &checkpoint_tables,
+                &corrected_blocks,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
         }
 
         for dt in &self.derived_tables {
@@ -170,11 +171,13 @@ impl ReorgTask {
                 match pg.batch_execute(&query).await {
                     Ok(_) => tracing::info!(
                         "PostgreSQL: deleted derived table rows from block >= {} in {}",
-                        self.fork_point, dt.full_table_name
+                        self.fork_point,
+                        dt.full_table_name
                     ),
                     Err(e) => tracing::error!(
                         "PostgreSQL: failed to delete derived table rows in {}: {:?}",
-                        dt.full_table_name, e
+                        dt.full_table_name,
+                        e
                     ),
                 }
             }
@@ -195,11 +198,13 @@ impl ReorgTask {
                 match ch.execute(&query).await {
                     Ok(_) => tracing::info!(
                         "ClickHouse: deleted derived table rows from block >= {} in {}",
-                        self.fork_point, dt.full_table_name
+                        self.fork_point,
+                        dt.full_table_name
                     ),
                     Err(e) => tracing::error!(
                         "ClickHouse: failed to delete derived table rows in {}: {:?}",
-                        dt.full_table_name, e
+                        dt.full_table_name,
+                        e
                     ),
                 }
             }

@@ -73,9 +73,7 @@ fn create_reorg_config(
         }],
         abi: Some("./abis/SimpleERC20.abi.json".to_string()),
         reorg_safe_distance: Some(serde_json::json!(false)),
-        include_events: Some(vec![crate::test_suite::EventConfig {
-            name: "Transfer".to_string(),
-        }]),
+        include_events: Some(vec![crate::test_suite::EventConfig { name: "Transfer".to_string() }]),
         tables: None,
     }];
     config
@@ -238,10 +236,11 @@ fn reorg_live_pg_recovery(
         let (container_name, pg_port) = match crate::docker::start_postgres_container().await {
             Ok(v) => v,
             Err(e) => {
-                return Err(
-                    crate::tests::test_runner::SkipTest(format!("Docker not available: {}", e))
-                        .into(),
-                );
+                return Err(crate::tests::test_runner::SkipTest(format!(
+                    "Docker not available: {}",
+                    e
+                ))
+                .into());
             }
         };
         context.register_container(container_name);
@@ -282,10 +281,7 @@ fn reorg_live_pg_recovery(
         // Send a live transfer to confirm the poller is active and has cached
         // block hashes in the BlockChainWindow before we trigger the reorg.
         let live_recipient = generate_test_address(99);
-        context
-            .anvil
-            .send_transfer(&contract_address, &live_recipient, U256::from(777u64))
-            .await?;
+        context.anvil.send_transfer(&contract_address, &live_recipient, U256::from(777u64)).await?;
         context.anvil.mine_block().await?;
         let live_count = wait_for_pg_count(&conn_str, table, pre_count + 1, 15).await?;
         info!("After live transfer: {} PG rows", live_count);
@@ -338,10 +334,11 @@ fn reorg_offline_startup_validation(
         let (container_name, pg_port) = match crate::docker::start_postgres_container().await {
             Ok(v) => v,
             Err(e) => {
-                return Err(
-                    crate::tests::test_runner::SkipTest(format!("Docker not available: {}", e))
-                        .into(),
-                );
+                return Err(crate::tests::test_runner::SkipTest(format!(
+                    "Docker not available: {}",
+                    e
+                ))
+                .into());
             }
         };
         context.register_container(container_name);
@@ -502,10 +499,11 @@ fn reorg_double_reorg_idempotency(
         let (container_name, pg_port) = match crate::docker::start_postgres_container().await {
             Ok(v) => v,
             Err(e) => {
-                return Err(
-                    crate::tests::test_runner::SkipTest(format!("Docker not available: {}", e))
-                        .into(),
-                );
+                return Err(crate::tests::test_runner::SkipTest(format!(
+                    "Docker not available: {}",
+                    e
+                ))
+                .into());
             }
         };
         context.register_container(container_name);

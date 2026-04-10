@@ -1,6 +1,8 @@
 use crate::blockclock::BlockClock;
 use crate::helpers::{halved_block_number, is_relevant_block};
-use crate::indexer::reorg::{detect_and_handle_reorg, reorg_safe_distance_for_chain, ReorgContext, ReorgCoordinator};
+use crate::indexer::reorg::{
+    detect_and_handle_reorg, reorg_safe_distance_for_chain, ReorgContext, ReorgCoordinator,
+};
 use crate::metrics::indexing as metrics;
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
@@ -714,11 +716,12 @@ async fn live_indexing_stream(
                                                     postgres: postgres.as_deref(),
                                                     clickhouse: clickhouse.as_ref(),
                                                     registry: None,
-                                                    streams_clients: streams_clients.as_ref().as_ref(),
+                                                    streams_clients: streams_clients
+                                                        .as_ref()
+                                                        .as_ref(),
                                                 };
-                                                if let Err(e) = coordinator
-                                                    .handle_reorg(task, &reorg_ctx)
-                                                    .await
+                                                if let Err(e) =
+                                                    coordinator.handle_reorg(task, &reorg_ctx).await
                                                 {
                                                     error!(
                                                         "{} - Failed to handle removed-logs reorg: {}",
@@ -732,7 +735,9 @@ async fn live_indexing_stream(
                                                         from_block: U64::from(min_removed_block),
                                                         to_block: U64::from(min_removed_block),
                                                         reorg: Some(ReorgInfo {
-                                                            fork_block: U64::from(min_removed_block),
+                                                            fork_block: U64::from(
+                                                                min_removed_block,
+                                                            ),
                                                             depth,
                                                             affected_tx_hashes: vec![],
                                                         }),
