@@ -3527,9 +3527,10 @@ pub async fn process_table_operations(
             e.event == event_name
                 && e.operations.iter().any(|op| {
                     op.where_clause.values().any(|v| v.contains("rindexer_block_timestamp"))
-                        || op.set.iter().any(|s| {
-                            s.effective_value().contains("rindexer_block_timestamp")
-                        })
+                        || op
+                            .set
+                            .iter()
+                            .any(|s| s.effective_value().contains("rindexer_block_timestamp"))
                 })
         })
     });
