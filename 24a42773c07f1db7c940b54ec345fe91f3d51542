@@ -1,0 +1,99 @@
+core/src/database/clickhouse/generate.rs
+  bfd21b9906a1d96c 20-21,37
+core/src/indexer/reorg/task.rs
+  bfd21b9906a1d96c 10,59
+core/src/manifest/network.rs
+  bfd21b9906a1d96c 31-34
+core/src/indexer/reorg/mod.rs
+  bfd21b9906a1d96c 20
+e2e-tests/src/tests/reorg_e2e.rs
+  bfd21b9906a1d96c 25,228,323,379,391,400,407,491
+core/src/indexer/reorg/persistence.rs
+  bfd21b9906a1d96c 14,19,27,39,44,75,83,89-90,128,149,168,173,181,187
+core/src/database/postgres/generate.rs
+  bfd21b9906a1d96c 38-39
+core/src/indexer/reorg/coordinator.rs
+  bfd21b9906a1d96c 11,21,32,362,423
+core/tests/e2e_reorg.rs
+  bfd21b9906a1d96c 11,221,267,294,299,406,462,466,468,476-477,484,493,500
+core/src/indexer/start.rs
+  bfd21b9906a1d96c 22-23,392-393,399,425,431-434,437,451,720-723,727,741
+core/src/database/clickhouse/client.rs
+  bfd21b9906a1d96c 237,239,250,252,255
+core/src/database/postgres/client.rs
+  bfd21b9906a1d96c 486-487,525-526,529,532-533
+core/src/database/generate.rs
+  bfd21b9906a1d96c 5,357
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "24a42773c07f1db7c940b54ec345fe91f3d51542",
+  "prompts": {
+    "16dcee90fbfb078d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "633cc1ae-7ee5-47c1-8516-af09d1b75b7e",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 6,
+      "overriden_lines": 0
+    },
+    "1b08df16bedb81d2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "38e7988a-b926-4fd3-944a-a1de72fe5c30",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 144,
+      "overriden_lines": 0
+    },
+    "5230b843d86bc378": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ebee4bea-20f9-4cf6-8742-0223a382e801",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "b2b7cc4cbb3a23d3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "90b2f33e-6746-404d-ba67-acb796bb6a5a",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 3,
+      "overriden_lines": 0
+    },
+    "bfd21b9906a1d96c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1e9cf1e5-d4e3-4bdd-8b7a-1db3228e9e8c",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 90,
+      "overriden_lines": 0
+    }
+  }
+}
