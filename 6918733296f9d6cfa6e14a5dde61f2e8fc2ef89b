@@ -1,0 +1,35 @@
+core/src/indexer/reorg/coordinator.rs
+  88fdb9834fb286df 190-191,194,197-198,452,455
+core/src/database/clickhouse/client.rs
+  88fdb9834fb286df 233,235-238,250-257
+core/src/indexer/reorg/mod.rs
+  88fdb9834fb286df 35-36,44,47,52-53,65,67,70
+core/src/indexer/reorg/task.rs
+  88fdb9834fb286df 151
+core/src/indexer/process.rs
+  88fdb9834fb286df 408,418-427
+core/src/indexer/fetch_logs.rs
+  88fdb9834fb286df 528,538-539
+core/tests/e2e_reorg.rs
+  88fdb9834fb286df 428
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.7",
+  "base_commit_sha": "6918733296f9d6cfa6e14a5dde61f2e8fc2ef89b",
+  "prompts": {
+    "88fdb9834fb286df": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "873f225a-14f4-44ad-853e-0abc7ff1e218",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 47,
+      "total_deletions": 33,
+      "accepted_lines": 792,
+      "overriden_lines": 0
+    }
+  }
+}
