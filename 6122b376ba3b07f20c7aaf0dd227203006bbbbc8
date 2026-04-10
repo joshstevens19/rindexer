@@ -1,0 +1,31 @@
+core/src/indexer/process.rs
+  88fdb9834fb286df 356-357,359-360,411
+core/src/indexer/fetch_logs.rs
+  88fdb9834fb286df 168,434,531,714
+core/src/indexer/reorg/coordinator.rs
+  88fdb9834fb286df 12,238,250-255,261,266-284,286-294
+core/src/indexer/reorg/mod.rs
+  88fdb9834fb286df 17,34,47
+core/src/indexer/start.rs
+  88fdb9834fb286df 475-481,497,764-770,785
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.7",
+  "base_commit_sha": "6122b376ba3b07f20c7aaf0dd227203006bbbbc8",
+  "prompts": {
+    "88fdb9834fb286df": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "873f225a-14f4-44ad-853e-0abc7ff1e218",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 67,
+      "total_deletions": 10,
+      "accepted_lines": 813,
+      "overriden_lines": 0
+    }
+  }
+}
