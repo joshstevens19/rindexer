@@ -1,12 +1,13 @@
 use crate::blockclock::BlockClock;
 use crate::helpers::{halved_block_number, is_relevant_block};
-use crate::indexer::reorg::reorg_safe_distance_for_chain;
+use crate::indexer::reorg::{new_shadow_cache, reorg_safe_distance_for_chain};
 use crate::metrics::indexing as metrics;
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
     indexer::{reorg::handle_chain_notification, IndexingEventProgressStatus},
     is_running,
-    provider::{JsonRpcCachedProvider, ProviderError},
+    provider::{ChainProvider, ProviderError},
+    ChainStateNotification,
 };
 use alloy::{
     primitives::{B256, U64},
@@ -17,6 +18,7 @@ use rand::{random_bool, random_ratio};
 use regex::Regex;
 use std::num::NonZeroUsize;
 use std::{error::Error, str::FromStr, sync::Arc, time::Duration};
+use tokio::sync::broadcast::Sender;
 use tokio::{sync::mpsc, time::Instant};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
@@ -161,6 +163,7 @@ pub fn fetch_logs_stream(
                 config.network_contract().disable_logs_bloom_checks,
                 original_max_limit,
                 config.cancel_token().clone(),
+                config.network_contract().chain_state_notification(),
             )
             .await;
         }
@@ -175,10 +178,10 @@ struct ProcessHistoricLogsStreamResult {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn fetch_historic_logs_stream(
+async fn fetch_historic_logs_stream<P: ChainProvider>(
     timestamps: bool,
     block_clock: BlockClock,
-    cached_provider: &Arc<JsonRpcCachedProvider>,
+    cached_provider: &P,
     tx: &mpsc::Sender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
     topic_id: &B256,
     current_filter: RindexerEventFilter,
@@ -409,10 +412,10 @@ async fn fetch_historic_logs_stream(
 /// Handles live indexing mode, continuously checking for new blocks, ensuring they are
 /// within a safe range, updating the filter, and sending the logs to the provided channel.
 #[allow(clippy::too_many_arguments)]
-async fn live_indexing_stream(
+async fn live_indexing_stream<P: ChainProvider + 'static>(
     timestamps: bool,
     block_clock: BlockClock,
-    cached_provider: &Arc<JsonRpcCachedProvider>,
+    cached_provider: &Arc<P>,
     tx: &mpsc::Sender<Result<FetchLogsResult, Box<dyn Error + Send>>>,
     last_seen_block_number: U64,
     topic_id: &B256,
@@ -423,6 +426,7 @@ async fn live_indexing_stream(
     disable_logs_bloom_checks: bool,
     original_max_limit: Option<U64>,
     cancel_token: CancellationToken,
+    chain_state_notification: Option<Sender<ChainStateNotification>>,
 ) {
     let mut last_seen_block_number = last_seen_block_number;
     let mut log_response_to_large_to_block: Option<U64> = None;
@@ -433,9 +437,9 @@ async fn live_indexing_stream(
     // Channel for reth-provided reorg signals (feature-gated, None for HTTP RPC).
     // The spawned task converts ChainStateNotification → ReorgInfo and sends here;
     // the main loop try_recv()s to trigger the same recovery codepath as cache-based detection.
-    let (reth_reorg_tx, mut reth_reorg_rx) = tokio::sync::mpsc::unbounded_channel::<ReorgInfo>();
+    let (reth_reorg_tx, mut reth_reorg_rx) = mpsc::unbounded_channel::<ReorgInfo>();
 
-    if let Some(notifications) = cached_provider.get_chain_state_notification() {
+    if let Some(notifications) = chain_state_notification {
         let info_log_name = info_log_name.to_string();
         let network = network.to_string();
         tokio::spawn(async move {
@@ -458,7 +462,7 @@ async fn live_indexing_stream(
 
     // Shadow cache + post-confirmation verifier: catches silent reorgs that
     // the real-time detection might miss (e.g., when we were between polls).
-    let shadow_cache = crate::indexer::reorg::new_shadow_cache();
+    let shadow_cache = new_shadow_cache();
     let (verifier_reorg_tx, mut verifier_reorg_rx) =
         tokio::sync::mpsc::unbounded_channel::<ReorgInfo>();
     let _verifier_handle = crate::indexer::reorg::spawn_post_confirmation_verifier(
@@ -647,7 +651,7 @@ async fn live_indexing_stream(
                             if reorg_safe_distance.is_zero() {
                                 let block_distance = from_block - latest_block_number;
                                 let is_outside_reorg_range = block_distance
-                                    > reorg_safe_distance_for_chain(cached_provider.chain.id());
+                                    > reorg_safe_distance_for_chain(cached_provider.chain().id());
 
                                 // it should never get under normal conditions outside the reorg range,
                                 // therefore, we log an error as means RCP state is not in sync with the blockchain
@@ -1269,5 +1273,221 @@ fn calculate_process_historic_log_to_block(
         }
     } else {
         *snapshot_to_block
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::blockclock::BlockClock;
+    use crate::event::RindexerEventFilter;
+    use crate::provider::mock::MockChainProvider;
+    use alloy::primitives::Log as PrimitiveLog;
+    use alloy::rpc::types::Log;
+    use tokio::sync::mpsc;
+
+    // ---- calculate_process_historic_log_to_block ----
+
+    #[test]
+    fn to_block_no_limit() {
+        let result = calculate_process_historic_log_to_block(
+            &U64::from(100),
+            &U64::from(5000),
+            &None,
+        );
+        assert_eq!(result, U64::from(5000));
+    }
+
+    #[test]
+    fn to_block_with_limit_within_snapshot() {
+        let result = calculate_process_historic_log_to_block(
+            &U64::from(100),
+            &U64::from(5000),
+            &Some(U64::from(1000)),
+        );
+        assert_eq!(result, U64::from(1100));
+    }
+
+    #[test]
+    fn to_block_with_limit_exceeds_snapshot() {
+        let result = calculate_process_historic_log_to_block(
+            &U64::from(4500),
+            &U64::from(5000),
+            &Some(U64::from(1000)),
+        );
+        assert_eq!(result, U64::from(5000));
+    }
+
+    // ---- FallbackBlockRange ----
+
+    #[test]
+    fn fallback_from_diff_large() {
+        assert_eq!(FallbackBlockRange::from_diff(U64::from(10000)), FallbackBlockRange::Range5000);
+    }
+
+    #[test]
+    fn fallback_from_diff_medium() {
+        assert_eq!(FallbackBlockRange::from_diff(U64::from(500)), FallbackBlockRange::Range500);
+    }
+
+    #[test]
+    fn fallback_from_diff_small() {
+        assert_eq!(FallbackBlockRange::from_diff(U64::from(3)), FallbackBlockRange::Range1);
+    }
+
+    #[test]
+    fn fallback_lower_chain() {
+        let range = FallbackBlockRange::Range5000;
+        assert_eq!(range.lower(), FallbackBlockRange::Range500);
+        assert_eq!(range.lower().lower(), FallbackBlockRange::Range75);
+    }
+
+    #[test]
+    fn fallback_lower_bottoms_at_1() {
+        assert_eq!(FallbackBlockRange::Range1.lower(), FallbackBlockRange::Range1);
+    }
+
+    // ---- fetch_historic_logs_stream ----
+
+    fn make_log_at_block(block_number: u64) -> Log {
+        Log {
+            inner: PrimitiveLog { address: Default::default(), data: Default::default() },
+            block_hash: None,
+            block_number: Some(block_number),
+            block_timestamp: None,
+            transaction_hash: None,
+            transaction_index: None,
+            log_index: None,
+            removed: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn historic_empty_logs_advances_to_next_range() {
+        let mock = MockChainProvider::new(1).with_block_number(1000);
+        let (tx, _rx) = mpsc::channel(4);
+        let filter = RindexerEventFilter::empty_for_test()
+            .set_from_block(U64::from(100))
+            .set_to_block(U64::from(200));
+
+        let result = fetch_historic_logs_stream(
+            false,
+            BlockClock::new(None, None, crate::provider::JsonRpcCachedProvider::mock(1)),
+            &mock,
+            &tx,
+            &B256::ZERO,
+            filter,
+            None,
+            U64::from(500),
+            "test",
+        )
+        .await;
+
+        let result = result.expect("should return next range");
+        assert_eq!(result.next.from_block(), U64::from(201));
+    }
+
+    #[tokio::test]
+    async fn historic_with_logs_advances_past_last_log() {
+        let logs = vec![make_log_at_block(150), make_log_at_block(175)];
+        let mock = MockChainProvider::new(1).with_logs(logs);
+        let (tx, _rx) = mpsc::channel(4);
+        let filter = RindexerEventFilter::empty_for_test()
+            .set_from_block(U64::from(100))
+            .set_to_block(U64::from(200));
+
+        let result = fetch_historic_logs_stream(
+            false,
+            BlockClock::new(None, None, crate::provider::JsonRpcCachedProvider::mock(1)),
+            &mock,
+            &tx,
+            &B256::ZERO,
+            filter,
+            None,
+            U64::from(500),
+            "test",
+        )
+        .await;
+
+        let result = result.expect("should return next range");
+        // Next from_block should be last_log.block_number + 1 = 176
+        assert_eq!(result.next.from_block(), U64::from(176));
+    }
+
+    #[tokio::test]
+    async fn historic_from_greater_than_to_corrects() {
+        let mock = MockChainProvider::new(1);
+        let (tx, _rx) = mpsc::channel(4);
+        let filter = RindexerEventFilter::empty_for_test()
+            .set_from_block(U64::from(300))
+            .set_to_block(U64::from(200));
+
+        let result = fetch_historic_logs_stream(
+            false,
+            BlockClock::new(None, None, crate::provider::JsonRpcCachedProvider::mock(1)),
+            &mock,
+            &tx,
+            &B256::ZERO,
+            filter,
+            None,
+            U64::from(500),
+            "test",
+        )
+        .await;
+
+        let result = result.expect("should return corrected range");
+        assert_eq!(result.next.from_block(), U64::from(200));
+    }
+
+    #[tokio::test]
+    async fn historic_empty_logs_past_snapshot_returns_none() {
+        let mock = MockChainProvider::new(1);
+        let (tx, _rx) = mpsc::channel(4);
+        // from=500, to=500, snapshot=500 → after processing, next would be 501 > 500
+        let filter = RindexerEventFilter::empty_for_test()
+            .set_from_block(U64::from(500))
+            .set_to_block(U64::from(500));
+
+        let result = fetch_historic_logs_stream(
+            false,
+            BlockClock::new(None, None, crate::provider::JsonRpcCachedProvider::mock(1)),
+            &mock,
+            &tx,
+            &B256::ZERO,
+            filter,
+            None,
+            U64::from(500),
+            "test",
+        )
+        .await;
+
+        assert!(result.is_none(), "should signal completion when past snapshot");
+    }
+
+    #[tokio::test]
+    async fn historic_with_max_block_range_limits_next() {
+        let mock = MockChainProvider::new(1);
+        let (tx, _rx) = mpsc::channel(4);
+        let filter = RindexerEventFilter::empty_for_test()
+            .set_from_block(U64::from(100))
+            .set_to_block(U64::from(200));
+
+        let result = fetch_historic_logs_stream(
+            false,
+            BlockClock::new(None, None, crate::provider::JsonRpcCachedProvider::mock(1)),
+            &mock,
+            &tx,
+            &B256::ZERO,
+            filter,
+            Some(U64::from(50)), // max range = 50
+            U64::from(5000),
+            "test",
+        )
+        .await;
+
+        let result = result.expect("should return next range");
+        // next from = 201, next to = 201 + 50 = 251
+        assert_eq!(result.next.from_block(), U64::from(201));
+        assert_eq!(result.next.to_block(), U64::from(251));
     }
 }

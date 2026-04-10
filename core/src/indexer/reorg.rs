@@ -1,3 +1,4 @@
+use alloy::primitives::FixedBytes;
 use alloy::{
     dyn_abi::DynSolValue,
     json_abi::Param,
@@ -5,8 +6,12 @@ use alloy::{
 };
 use lru::LruCache;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::abi::{ABIInput, ABIItem};
@@ -23,7 +28,8 @@ use crate::indexer::tables::{process_table_operations, TableRuntime, TxMetadata}
 use crate::manifest::contract::{OperationType, SetAction};
 use crate::metrics::indexing as metrics;
 use crate::notifications::ChainStateNotification;
-use crate::provider::JsonRpcCachedProvider;
+use crate::provider::ChainProvider;
+use crate::streams::StreamsClients;
 use crate::types::core::LogParam;
 use crate::types::single_or_array::StringOrArray;
 use crate::PostgresClient;
@@ -127,9 +133,9 @@ pub fn reorg_safe_distance_for_chain(chain_id: u64) -> u64 {
 ///
 /// Compares cached block hashes with current canonical chain hashes from the RPC.
 /// Returns the first block number that diverged (i.e., the fork point).
-pub async fn find_fork_point(
+pub async fn find_fork_point<P: ChainProvider>(
     block_cache: &LruCache<u64, BlockMeta>,
-    provider: &Arc<JsonRpcCachedProvider>,
+    provider: &P,
     reorged_block: u64,
 ) -> u64 {
     // Collect cached block numbers walking backwards from just before the reorg.
@@ -446,7 +452,7 @@ async fn rewind_checkpoint_clickhouse(
 /// Deletes rows from derived/custom tables where `rindexer_block_number >= fork_block`.
 /// For `cross_chain` tables, no network filter is applied.
 pub async fn delete_derived_table_rows(
-    tables: &[super::tables::TableRuntime],
+    tables: &[TableRuntime],
     postgres: &Option<Arc<PostgresClient>>,
     clickhouse: &Option<Arc<ClickhouseClient>>,
     fork_block: u64,
@@ -1130,7 +1136,7 @@ fn parse_sol_value(
                 Ok(DynSolValue::Bytes(parsed))
             } else {
                 let size = t.trim_start_matches("bytes").parse::<usize>().unwrap_or(32);
-                let fixed = alloy::primitives::FixedBytes::<32>::left_padding_from(&parsed);
+                let fixed = FixedBytes::<32>::left_padding_from(&parsed);
                 Ok(DynSolValue::FixedBytes(fixed, size))
             }
         }
@@ -1266,7 +1272,7 @@ pub async fn handle_native_transfer_reorg_recovery(
     network: &str,
     fork_block: u64,
     depth: u64,
-    streams_clients: &Option<Arc<Option<crate::streams::StreamsClients>>>,
+    streams_clients: &Option<Arc<Option<StreamsClients>>>,
 ) {
     let schema = generate_indexer_contract_schema_name(indexer_name, "EvmTraces");
     let event_table_name = "native_transfer";
@@ -1305,11 +1311,11 @@ pub async fn handle_native_transfer_reorg_recovery(
 
 /// Shadow cache entry: just the block hash, kept separately from the main LRU cache.
 /// The verifier reads from this after blocks have been confirmed.
-pub type ShadowCache = Arc<std::sync::Mutex<std::collections::HashMap<u64, B256>>>;
+pub type ShadowCache = Arc<Mutex<HashMap<u64, B256>>>;
 
 /// Creates a new empty shadow cache for post-confirmation verification.
 pub fn new_shadow_cache() -> ShadowCache {
-    Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()))
+    Arc::new(Mutex::new(HashMap::new()))
 }
 
 /// Spawns a background task that periodically verifies block hashes after N confirmations.
@@ -1318,14 +1324,14 @@ pub fn new_shadow_cache() -> ShadowCache {
 /// sends a `ReorgInfo` through the provided channel for the main loop to handle.
 ///
 /// The task runs until the `cancel_token` is cancelled.
-pub fn spawn_post_confirmation_verifier(
+pub fn spawn_post_confirmation_verifier<P: ChainProvider + 'static>(
     shadow_cache: ShadowCache,
-    provider: Arc<JsonRpcCachedProvider>,
+    provider: Arc<P>,
     confirmations: u64,
-    reorg_signal_tx: tokio::sync::mpsc::UnboundedSender<ReorgInfo>,
-    cancel_token: tokio_util::sync::CancellationToken,
+    reorg_signal_tx: UnboundedSender<ReorgInfo>,
+    cancel_token: CancellationToken,
     network: String,
-) -> tokio::task::JoinHandle<()> {
+) -> JoinHandle<()> {
     tokio::spawn(async move {
         let check_interval = std::time::Duration::from_secs(30);
         loop {
