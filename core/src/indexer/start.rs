@@ -35,7 +35,7 @@ use crate::{
         ContractEventDependencies,
     },
     manifest::{contract::ReorgSafeDistance, core::Manifest},
-    provider::{JsonRpcCachedProvider, ProviderError},
+    provider::{ChainProvider, ProviderError},
     PostgresClient,
 };
 
@@ -91,8 +91,8 @@ pub struct ProcessedNetworkContract {
     pub processed_up_to: U64,
 }
 
-async fn get_start_end_block(
-    provider: Arc<JsonRpcCachedProvider>,
+async fn get_start_end_block<P: ChainProvider>(
+    provider: Arc<P>,
     manifest_start_block: Option<U64>,
     manifest_end_block: Option<U64>,
     config: SyncConfig<'_>,
@@ -159,8 +159,12 @@ async fn get_start_end_block(
         }
     }
 
-    let (end_block, indexing_distance_from_head) =
-        calculate_safe_block_number(reorg_safe_distance, &provider, latest_block, end_block);
+    let (end_block, indexing_distance_from_head) = calculate_safe_block_number(
+        reorg_safe_distance,
+        provider.chain().id(),
+        latest_block,
+        end_block,
+    );
 
     Ok((start_block, end_block, indexing_distance_from_head))
 }
@@ -744,13 +748,12 @@ pub async fn initialize_clickhouse(
 
 pub fn calculate_safe_block_number(
     reorg_safe_distance: Option<ReorgSafeDistance>,
-    provider: &Arc<JsonRpcCachedProvider>,
+    chain_id: u64,
     latest_block: U64,
     mut end_block: U64,
 ) -> (U64, U64) {
     let mut indexing_distance_from_head = U64::ZERO;
     if let Some(ref config) = reorg_safe_distance {
-        let chain_id = provider.chain.id();
         if let Some(distance) = config.resolve(chain_id) {
             let safe_distance = U64::from(distance);
             let safe_block_number = latest_block.saturating_sub(safe_distance);
@@ -761,4 +764,208 @@ pub fn calculate_safe_block_number(
         }
     }
     (end_block, indexing_distance_from_head)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::indexer::last_synced::SyncConfig;
+    use crate::manifest::contract::ReorgSafeDistance;
+    use crate::provider::mock::MockChainProvider;
+    use std::path::Path;
+
+    fn empty_sync_config() -> SyncConfig<'static> {
+        SyncConfig {
+            project_path: Path::new("/tmp/test"),
+            postgres: &None,
+            clickhouse: &None,
+            csv_details: &None,
+            stream_details: &None,
+            contract_csv_enabled: false,
+            indexer_name: "test_indexer",
+            contract_name: "test_contract",
+            event_name: "test_event",
+            network: "ethereum",
+        }
+    }
+
+    // ---- calculate_safe_block_number ----
+
+    #[test]
+    fn safe_block_no_reorg_distance() {
+        let (end, distance) =
+            calculate_safe_block_number(None, 1, U64::from(1000), U64::from(1000));
+        assert_eq!(end, U64::from(1000));
+        assert_eq!(distance, U64::ZERO);
+    }
+
+    #[test]
+    fn safe_block_reorg_disabled() {
+        let (end, distance) = calculate_safe_block_number(
+            Some(ReorgSafeDistance::Enabled(false)),
+            1,
+            U64::from(1000),
+            U64::from(1000),
+        );
+        assert_eq!(end, U64::from(1000));
+        assert_eq!(distance, U64::ZERO);
+    }
+
+    #[test]
+    fn safe_block_custom_distance_clamps_end() {
+        // latest=1000, end=1000, distance=20 → safe_block=980, end clamped to 980
+        let (end, distance) = calculate_safe_block_number(
+            Some(ReorgSafeDistance::Custom(20)),
+            1,
+            U64::from(1000),
+            U64::from(1000),
+        );
+        assert_eq!(end, U64::from(980));
+        assert_eq!(distance, U64::from(20));
+    }
+
+    #[test]
+    fn safe_block_end_already_below_safe() {
+        // latest=1000, end=500, distance=20 → safe_block=980, end stays 500
+        let (end, distance) = calculate_safe_block_number(
+            Some(ReorgSafeDistance::Custom(20)),
+            1,
+            U64::from(1000),
+            U64::from(500),
+        );
+        assert_eq!(end, U64::from(500));
+        assert_eq!(distance, U64::from(20));
+    }
+
+    #[test]
+    fn safe_block_enabled_true_uses_chain_default() {
+        // Ethereum mainnet (chain_id=1) should have a non-zero default distance
+        let (end, distance) = calculate_safe_block_number(
+            Some(ReorgSafeDistance::Enabled(true)),
+            1, // ethereum mainnet
+            U64::from(10000),
+            U64::from(10000),
+        );
+        assert!(distance > U64::ZERO);
+        assert!(end < U64::from(10000));
+    }
+
+    // ---- get_start_end_block ----
+
+    #[tokio::test]
+    async fn start_block_higher_than_latest_errors() {
+        let mock = Arc::new(MockChainProvider::new(1).with_block_number(100));
+        let result = get_start_end_block(
+            mock,
+            Some(U64::from(200)), // start > latest
+            None,
+            empty_sync_config(),
+            "Test",
+            "ethereum",
+            None,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(StartIndexingError::StartBlockIsHigherThanLatestBlockError(..))
+        ));
+    }
+
+    #[tokio::test]
+    async fn end_block_higher_than_latest_errors() {
+        let mock = Arc::new(MockChainProvider::new(1).with_block_number(100));
+        let result = get_start_end_block(
+            mock,
+            Some(U64::from(50)),
+            Some(U64::from(200)), // end > latest
+            empty_sync_config(),
+            "Test",
+            "ethereum",
+            None,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(StartIndexingError::EndBlockIsHigherThanLatestBlockError(..))
+        ));
+    }
+
+    #[tokio::test]
+    async fn normal_range_returns_start_and_end() {
+        let mock = Arc::new(MockChainProvider::new(1).with_block_number(1000));
+        let (start, end, distance) = get_start_end_block(
+            mock,
+            Some(U64::from(100)),
+            Some(U64::from(500)),
+            empty_sync_config(),
+            "Test",
+            "ethereum",
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(start, U64::from(100));
+        assert_eq!(end, U64::from(500));
+        assert_eq!(distance, U64::ZERO);
+    }
+
+    #[tokio::test]
+    async fn end_block_clamped_to_latest() {
+        let mock = Arc::new(MockChainProvider::new(1).with_block_number(1000));
+        let (_, end, _) = get_start_end_block(
+            mock,
+            Some(U64::from(100)),
+            None, // no manifest end → defaults to latest
+            empty_sync_config(),
+            "Test",
+            "ethereum",
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(end, U64::from(1000));
+    }
+
+    #[tokio::test]
+    async fn reorg_safe_distance_applied() {
+        let mock = Arc::new(MockChainProvider::new(1).with_block_number(1000));
+        let (start, end, distance) = get_start_end_block(
+            mock,
+            Some(U64::from(100)),
+            None,
+            empty_sync_config(),
+            "Test",
+            "ethereum",
+            Some(ReorgSafeDistance::Custom(50)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(start, U64::from(100));
+        assert_eq!(end, U64::from(950)); // 1000 - 50
+        assert_eq!(distance, U64::from(50));
+    }
+
+    #[tokio::test]
+    async fn no_start_block_defaults_to_latest() {
+        let mock = Arc::new(MockChainProvider::new(1).with_block_number(500));
+        let (start, end, _) = get_start_end_block(
+            mock,
+            None, // no manifest start → defaults to latest
+            None,
+            empty_sync_config(),
+            "Test",
+            "ethereum",
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(start, U64::from(500));
+        assert_eq!(end, U64::from(500));
+    }
 }
