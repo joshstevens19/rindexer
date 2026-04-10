@@ -837,6 +837,89 @@ impl ChainProvider for JsonRpcCachedProvider {
     }
 }
 
+/// Blanket implementation so that `Arc<T>` can be used wherever `T: ChainProvider`.
+///
+/// This lets callers that hold `Arc<JsonRpcCachedProvider>` (or any other
+/// `ChainProvider` impl) pass `&arc_value` to generic functions without
+/// having to dereference manually.
+#[async_trait]
+impl<T: ChainProvider> ChainProvider for Arc<T> {
+    fn chain(&self) -> Chain {
+        (**self).chain()
+    }
+
+    fn max_block_range(&self) -> Option<U64> {
+        (**self).max_block_range()
+    }
+
+    async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
+        (**self).get_latest_block().await
+    }
+
+    async fn get_block_number(&self) -> Result<U64, ProviderError> {
+        (**self).get_block_number().await
+    }
+
+    async fn get_logs(&self, event_filter: &RindexerEventFilter) -> Result<Vec<Log>, ProviderError> {
+        (**self).get_logs(event_filter).await
+    }
+
+    async fn get_block_by_number_batch(
+        &self,
+        block_numbers: &[U64],
+        include_txs: bool,
+    ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
+        (**self).get_block_by_number_batch(block_numbers, include_txs).await
+    }
+
+    async fn get_block_by_number_batch_with_size(
+        &self,
+        block_numbers: &[U64],
+        include_txs: bool,
+        rpc_batch_size: Option<usize>,
+    ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
+        (**self).get_block_by_number_batch_with_size(block_numbers, include_txs, rpc_batch_size).await
+    }
+
+    async fn get_tx_receipts_batch(
+        &self,
+        hashes: &[TxHash],
+    ) -> Result<Vec<AnyTransactionReceipt>, ProviderError> {
+        (**self).get_tx_receipts_batch(hashes).await
+    }
+
+    async fn trace_block(
+        &self,
+        block_number: U64,
+    ) -> Result<Vec<LocalizedTransactionTrace>, ProviderError> {
+        (**self).trace_block(block_number).await
+    }
+
+    async fn debug_trace_block_by_number(
+        &self,
+        block_number: U64,
+    ) -> Result<Vec<LocalizedTransactionTrace>, ProviderError> {
+        (**self).debug_trace_block_by_number(block_number).await
+    }
+
+    async fn eth_call(
+        &self,
+        to: Address,
+        data: Bytes,
+        block_number: u64,
+    ) -> Result<String, ProviderError> {
+        (**self).eth_call(to, data, block_number).await
+    }
+
+    async fn eth_call_latest(
+        &self,
+        to: Address,
+        data: Bytes,
+    ) -> Result<String, ProviderError> {
+        (**self).eth_call_latest(to, data).await
+    }
+}
+
 /// A mock implementation of [`ChainProvider`] for testing.
 ///
 /// Each method returns data from a pre-configured closure or a sensible default.
