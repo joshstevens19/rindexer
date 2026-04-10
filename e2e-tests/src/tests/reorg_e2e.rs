@@ -22,7 +22,7 @@ impl TestModule for ReorgTests {
             .with_chain_id(137),
             TestDefinition::new(
                 "test_reorg_offline_startup_validation",
-                "Reorg: stop/reorg/restart, startup validation catches stale latest_blocks",
+                "Reorg: stop/reorg/restart, startup validation catches stale reorg_block_hashes",
                 reorg_offline_startup_validation,
             )
             .with_timeout(180)
@@ -225,7 +225,7 @@ async fn assert_no_pg_duplicates(conn_str: &str, table: &str) -> Result<()> {
 //
 // The coordinator detects a parent hash mismatch on the next block after
 // anvil_reorg, pauses forward indexing, runs ReorgTask (transactional delete
-// of stale rows from event tables + latest_blocks), then resumes.
+// of stale rows from event tables + reorg_block_hashes), then resumes.
 // ---------------------------------------------------------------------------
 fn reorg_live_pg_recovery(
     context: &mut TestContext,
@@ -320,7 +320,7 @@ fn reorg_live_pg_recovery(
 // ---------------------------------------------------------------------------
 // Test 2: Offline reorg — startup validation
 //
-// The new architecture persists block hashes in `latest_blocks`. On restart,
+// The new architecture persists block hashes in `reorg_block_hashes`. On restart,
 // `validate_on_startup()` batch-fetches canonical blocks for the entire
 // persisted window and compares. If hashes diverge, a ReorgTask runs before
 // indexing resumes — catching reorgs that happened while offline.
@@ -376,7 +376,7 @@ fn reorg_offline_startup_validation(
         context.anvil.trigger_reorg(3).await?;
         context.anvil.mine_block().await?;
 
-        // Restart — startup validation should detect stale latest_blocks
+        // Restart — startup validation should detect stale reorg_block_hashes
         // and run ReorgTask before resuming
         restart_indexer_with_pg(context, pg_port).await?;
 
@@ -388,7 +388,7 @@ fn reorg_offline_startup_validation(
 
         assert_no_pg_duplicates(&conn_str, table).await?;
 
-        // Verify latest_blocks was updated — connect and check entries exist
+        // Verify reorg_block_hashes was updated — connect and check entries exist
         let (client, connection) =
             tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
         tokio::spawn(async move {
@@ -397,14 +397,14 @@ fn reorg_offline_startup_validation(
 
         let lb_rows = client
             .query(
-                "SELECT COUNT(*) FROM rindexer_internal.latest_blocks WHERE network = 'polygon'",
+                "SELECT COUNT(*) FROM rindexer_internal.reorg_block_hashes WHERE network = 'polygon'",
                 &[],
             )
             .await;
 
         if let Ok(rows) = lb_rows {
             let lb_count: i64 = rows[0].get(0);
-            info!("latest_blocks entries after recovery: {}", lb_count);
+            info!("reorg_block_hashes entries after recovery: {}", lb_count);
         }
 
         info!(
@@ -488,7 +488,7 @@ fn reorg_csv_invalidation(
 // Test 4: Double reorg idempotency — two consecutive offline reorgs
 //
 // Exercises crash recovery: after two reorgs + restarts, the DB must have
-// no duplicate tx_hashes and latest_blocks must reflect the canonical chain.
+// no duplicate tx_hashes and reorg_block_hashes must reflect the canonical chain.
 // ---------------------------------------------------------------------------
 fn reorg_double_reorg_idempotency(
     context: &mut TestContext,

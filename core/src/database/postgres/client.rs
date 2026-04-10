@@ -483,8 +483,8 @@ impl PostgresClient {
 
     /// Execute a full reorg rollback atomically in a single PostgreSQL transaction:
     /// 1. Delete stale events from all given event tables (returning affected tx hashes)
-    /// 2. Delete stale entries from `rindexer_internal.latest_blocks` for the block range
-    /// 3. Insert corrected latest_blocks entries (marking reorg as handled)
+    /// 2. Delete stale entries from `rindexer_internal.reorg_block_hashes` for the block range
+    /// 3. Insert corrected reorg_block_hashes entries (marking reorg as handled)
     /// 4. Rewind checkpoint cursors
     ///
     /// Returns `(total_rows_deleted, affected_tx_hashes)`.
@@ -522,15 +522,15 @@ impl PostgresClient {
         all_affected_tx_hashes.sort();
         all_affected_tx_hashes.dedup();
 
-        // 2. Delete stale entries from rindexer_internal.latest_blocks
-        let delete_latest_blocks_query = "DELETE FROM rindexer_internal.latest_blocks \
+        // 2. Delete stale entries from rindexer_internal.reorg_block_hashes
+        let delete_reorg_hashes_query = "DELETE FROM rindexer_internal.reorg_block_hashes \
              WHERE network = $1 AND block_number >= $2 AND block_number <= $3";
         transaction
-            .execute(delete_latest_blocks_query, &[&network, &fork_point_i64, &detection_point_i64])
+            .execute(delete_reorg_hashes_query, &[&network, &fork_point_i64, &detection_point_i64])
             .await?;
 
-        // 3. Insert corrected latest_blocks entries
-        let insert_query = "INSERT INTO rindexer_internal.latest_blocks \
+        // 3. Insert corrected reorg_block_hashes entries
+        let insert_query = "INSERT INTO rindexer_internal.reorg_block_hashes \
              (network, block_number, block_hash, parent_hash) \
              VALUES ($1, $2, $3, $4)";
         for &(block_number, block_hash, parent_hash) in corrected_blocks {

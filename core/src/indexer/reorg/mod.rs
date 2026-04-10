@@ -17,7 +17,7 @@ use crate::notifications::ChainStateNotification;
 use crate::streams::StreamsClients;
 
 pub use coordinator::ReorgCoordinator;
-pub use persistence::LatestBlocksPersistence;
+pub use persistence::ReorgBlockHashPersistence;
 pub use task::{DerivedTableInfo, EventTableInfo};
 pub use window::BlockChainWindow;
 // Re-export ReorgContext so callers can use `reorg::ReorgContext`

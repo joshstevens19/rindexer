@@ -265,9 +265,9 @@ impl ClickhouseClient {
             self.delete_by_block_range(&fq_name, network, fork_point, detection_point).await?;
         }
 
-        // DELETE from rindexer_internal.latest_blocks
+        // DELETE from rindexer_internal.reorg_block_hashes
         self.delete_by_block_range(
-            "rindexer_internal.latest_blocks",
+            "rindexer_internal.reorg_block_hashes",
             network,
             fork_point,
             detection_point,
@@ -278,12 +278,12 @@ impl ClickhouseClient {
         for (database, table_name) in event_tables {
             self.wait_for_mutations(database, table_name).await?;
         }
-        self.wait_for_mutations("rindexer_internal", "latest_blocks").await?;
+        self.wait_for_mutations("rindexer_internal", "reorg_block_hashes").await?;
 
-        // Insert corrected blocks into latest_blocks
+        // Insert corrected blocks into reorg_block_hashes
         for (block_number, block_hash, parent_hash) in corrected_blocks {
             let sql = format!(
-                "INSERT INTO rindexer_internal.latest_blocks (network, block_number, block_hash, parent_hash) VALUES ('{}', {}, '{}', '{}')",
+                "INSERT INTO rindexer_internal.reorg_block_hashes (network, block_number, block_hash, parent_hash) VALUES ('{}', {}, '{}', '{}')",
                 network, block_number, block_hash, parent_hash
             );
             self.execute(&sql).await?;

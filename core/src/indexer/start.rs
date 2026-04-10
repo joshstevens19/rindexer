@@ -19,7 +19,8 @@ use crate::event::config::{ContractEventProcessingConfig, FactoryEventProcessing
 use crate::helpers::{camel_to_snake, format_duration};
 use crate::indexer::native_transfer::native_transfer_block_processor;
 use crate::indexer::reorg::{
-    BlockChainWindow, EventTableInfo, LatestBlocksPersistence, ReorgContext, ReorgCoordinator,
+    reorg_safe_distance_for_chain, BlockChainWindow, EventTableInfo, ReorgBlockHashPersistence,
+    ReorgContext, ReorgCoordinator,
 };
 use crate::indexer::Indexer;
 use crate::manifest::network::ReorgHandlingConfig;
@@ -392,14 +393,14 @@ async fn start_indexing_contract_events(
         }
     }
 
-    // Build per-network reorg handling config lookup
-    let reorg_configs: HashMap<String, ReorgHandlingConfig> = manifest
+    // Build per-network reorg handling config lookup (includes chain_id for window size resolution)
+    let reorg_configs: HashMap<String, (ReorgHandlingConfig, u64)> = manifest
         .networks
         .iter()
         .filter_map(|n| {
             n.reorg_handling.as_ref().and_then(|cfg| {
                 if cfg.enabled {
-                    Some((n.name.clone(), cfg.clone()))
+                    Some((n.name.clone(), (cfg.clone(), n.chain_id)))
                 } else {
                     None
                 }
@@ -425,17 +426,19 @@ async fn start_indexing_contract_events(
 
     // Shared persistence per invocation (shared across all coordinators)
     let reorg_persistence =
-        Arc::new(LatestBlocksPersistence::new(postgres.clone(), clickhouse.clone()));
+        Arc::new(ReorgBlockHashPersistence::new(postgres.clone(), clickhouse.clone()));
 
     // Build one ReorgCoordinator per network (shared across all events on that network).
     // The first non-blocking event on each network takes ownership; subsequent events get None.
     let mut network_coordinators: HashMap<String, ReorgCoordinator> = HashMap::new();
     if !no_live_indexing_forced {
-        for (network_name, reorg_config) in &reorg_configs {
+        for (network_name, (reorg_config, chain_id)) in &reorg_configs {
+            let window_size = reorg_config
+                .window_size
+                .unwrap_or_else(|| 2 * reorg_safe_distance_for_chain(*chain_id) as usize);
             let event_tables = network_event_tables.get(network_name).cloned().unwrap_or_default();
 
-            let window = match reorg_persistence.load(network_name, reorg_config.window_size).await
-            {
+            let window = match reorg_persistence.load(network_name, window_size).await {
                 Ok(window) => {
                     info!(
                         "Loaded {} blocks into reorg window for network {}",
@@ -449,7 +452,7 @@ async fn start_indexing_contract_events(
                         "Failed to load reorg window from persistence for {}: {}. Using empty window.",
                         network_name, e
                     );
-                    BlockChainWindow::new(reorg_config.window_size)
+                    BlockChainWindow::new(window_size)
                 }
             };
 
@@ -718,14 +721,14 @@ async fn start_indexing_contract_events(
             }
 
             // Otherwise build a fresh one
-            if let Some(reorg_config) = reorg_configs.get(network_name) {
+            if let Some((reorg_config, chain_id)) = reorg_configs.get(network_name) {
+                let window_size = reorg_config
+                    .window_size
+                    .unwrap_or_else(|| reorg_safe_distance_for_chain(*chain_id) as usize);
                 let event_tables =
                     network_event_tables.get(network_name).cloned().unwrap_or_default();
 
-                let window = match reorg_persistence
-                    .load(network_name, reorg_config.window_size)
-                    .await
-                {
+                let window = match reorg_persistence.load(network_name, window_size).await {
                     Ok(window) => {
                         info!(
                             "Dependency events - Loaded {} blocks into reorg window for network {}",
@@ -739,7 +742,7 @@ async fn start_indexing_contract_events(
                             "Dependency events - Failed to load reorg window for {}: {}. Using empty window.",
                             network_name, e
                         );
-                        BlockChainWindow::new(reorg_config.window_size)
+                        BlockChainWindow::new(window_size)
                     }
                 };
 

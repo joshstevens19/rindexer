@@ -8,7 +8,7 @@ use std::sync::Arc;
 use alloy::primitives::{Address, B256};
 use reqwest::Client as HttpClient;
 use rindexer::indexer::reorg::{
-    persistence::LatestBlocksPersistence,
+    persistence::ReorgBlockHashPersistence,
     task::{EventTableInfo, ReorgTask},
     window::{BlockChainWindow, ParentValidation},
 };
@@ -218,7 +218,7 @@ async fn test_reorg_detection_and_rollback() {
     pg_client
         .batch_execute(
             "CREATE SCHEMA IF NOT EXISTS rindexer_internal;
-             CREATE TABLE IF NOT EXISTS rindexer_internal.latest_blocks (
+             CREATE TABLE IF NOT EXISTS rindexer_internal.reorg_block_hashes (
                  network VARCHAR(50) NOT NULL,
                  block_number BIGINT NOT NULL,
                  block_hash CHAR(66) NOT NULL,
@@ -264,7 +264,7 @@ async fn test_reorg_detection_and_rollback() {
     }
 
     // -----------------------------------------------------------------------
-    // 5. Insert fake events and latest_blocks into postgres
+    // 5. Insert fake events and reorg_block_hashes into postgres
     // -----------------------------------------------------------------------
     let network = "dev";
     for (ping_id, block_num) in [(1u64, block1), (2, block2), (3, block3)] {
@@ -291,12 +291,12 @@ async fn test_reorg_detection_and_rollback() {
             .expect("failed to insert event");
     }
 
-    // Insert latest_blocks entries
+    // Insert reorg_block_hashes entries
     for block_num in start_block..=block3 {
         let (hash, parent_hash) = get_block_by_number(&http, &rpc_url, block_num).await;
         pg_client
             .execute(
-                "INSERT INTO rindexer_internal.latest_blocks \
+                "INSERT INTO rindexer_internal.reorg_block_hashes \
                  (network, block_number, block_hash, parent_hash) VALUES ($1, $2, $3, $4)",
                 &[
                     &network,
@@ -403,7 +403,7 @@ async fn test_reorg_detection_and_rollback() {
     let rindexer_pg = PostgresClient::new().await.expect("failed to create PostgresClient");
 
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = LatestBlocksPersistence::new(Some(Arc::new(rindexer_pg)), None);
+    let persistence = ReorgBlockHashPersistence::new(Some(Arc::new(rindexer_pg)), None);
 
     // Re-create a fresh PostgresClient for the task execution
     let rindexer_pg2 =
@@ -459,13 +459,13 @@ async fn test_reorg_detection_and_rollback() {
     assert_eq!(post_count, 1, "only Ping(1) should remain after rollback");
 
     // -----------------------------------------------------------------------
-    // Assertion: latest_blocks for invalidated range are removed
+    // Assertion: reorg_block_hashes for invalidated range are removed
     // -----------------------------------------------------------------------
     // When execute() is called without a provider the corrected_blocks list is
     // empty, so the transaction deletes the stale rows but inserts nothing back.
-    let latest_blocks_count: i64 = pg_client
+    let reorg_block_hashes_count: i64 = pg_client
         .query_one(
-            "SELECT count(*) FROM rindexer_internal.latest_blocks \
+            "SELECT count(*) FROM rindexer_internal.reorg_block_hashes \
              WHERE network = $1 AND block_number >= $2 AND block_number <= $3",
             &[&network, &(task.fork_point as i64), &(task.detection_point as i64)],
         )
@@ -473,15 +473,15 @@ async fn test_reorg_detection_and_rollback() {
         .unwrap()
         .get(0);
     assert_eq!(
-        latest_blocks_count, 0,
-        "latest_blocks for invalidated range should be deleted when no provider is given"
+        reorg_block_hashes_count, 0,
+        "reorg_block_hashes for invalidated range should be deleted when no provider is given"
     );
 
     // The entry for block1 (the fork point itself, which is NOT in the invalidated
     // range) should still exist unchanged.
     let fork_block_row = pg_client
         .query_one(
-            "SELECT block_hash FROM rindexer_internal.latest_blocks \
+            "SELECT block_hash FROM rindexer_internal.reorg_block_hashes \
              WHERE network = $1 AND block_number = $2",
             &[&network, &(block1 as i64)],
         )
@@ -490,14 +490,14 @@ async fn test_reorg_detection_and_rollback() {
     let stored_block1_hash: &str = fork_block_row.get(0);
     assert!(
         !stored_block1_hash.is_empty(),
-        "block1 entry in latest_blocks should survive the reorg rollback"
+        "block1 entry in reorg_block_hashes should survive the reorg rollback"
     );
     // Sanity: stored hash should differ from the (post-reorg) hash we captured
     // for block2 — they are different blocks.
     assert_ne!(
         stored_block1_hash,
         old_block2_hash.as_str(),
-        "block1 hash in latest_blocks should not equal block2 hash"
+        "block1 hash in reorg_block_hashes should not equal block2 hash"
     );
 
     // -----------------------------------------------------------------------

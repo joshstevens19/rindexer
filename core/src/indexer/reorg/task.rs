@@ -7,7 +7,7 @@ use crate::database::postgres::client::PostgresClient;
 use crate::metrics::indexing as metrics;
 use crate::provider::JsonRpcCachedProvider;
 
-use super::persistence::LatestBlocksPersistence;
+use super::persistence::ReorgBlockHashPersistence;
 use super::window::BlockChainWindow;
 
 #[derive(Clone)]
@@ -56,7 +56,7 @@ impl ReorgTask {
     pub async fn execute(
         &self,
         window: &mut BlockChainWindow,
-        persistence: &LatestBlocksPersistence,
+        persistence: &ReorgBlockHashPersistence,
         postgres: Option<&PostgresClient>,
         clickhouse: Option<&Arc<ClickhouseClient>>,
         provider: Option<&Arc<JsonRpcCachedProvider>>,

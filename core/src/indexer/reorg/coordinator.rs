@@ -8,7 +8,7 @@ use crate::event::callback_registry::ReorgNotification;
 use crate::metrics::indexing as metrics;
 use crate::provider::JsonRpcCachedProvider;
 
-use super::persistence::LatestBlocksPersistence;
+use super::persistence::ReorgBlockHashPersistence;
 use super::task::{DerivedTableInfo, EventTableInfo, ReorgTask};
 use super::window::{BlockChainWindow, ParentValidation};
 use super::ReorgContext;
@@ -18,7 +18,7 @@ const FLUSH_INTERVAL: u64 = 50;
 pub struct ReorgCoordinator {
     network: String,
     window: BlockChainWindow,
-    persistence: Arc<LatestBlocksPersistence>,
+    persistence: Arc<ReorgBlockHashPersistence>,
     provider: Option<Arc<JsonRpcCachedProvider>>,
     event_tables: Vec<EventTableInfo>,
     derived_tables: Vec<DerivedTableInfo>,
@@ -29,7 +29,7 @@ impl ReorgCoordinator {
     pub fn new(
         network: String,
         window: BlockChainWindow,
-        persistence: Arc<LatestBlocksPersistence>,
+        persistence: Arc<ReorgBlockHashPersistence>,
         provider: Arc<JsonRpcCachedProvider>,
         event_tables: Vec<EventTableInfo>,
     ) -> Self {
@@ -359,7 +359,7 @@ mod tests {
     }
 
     fn make_coordinator(window: BlockChainWindow) -> ReorgCoordinator {
-        let persistence = Arc::new(LatestBlocksPersistence::new(None, None));
+        let persistence = Arc::new(ReorgBlockHashPersistence::new(None, None));
         ReorgCoordinator {
             network: "test".to_string(),
             window,
@@ -420,7 +420,7 @@ mod tests {
     #[test]
     fn test_on_exex_reorg() {
         let window = BlockChainWindow::new(100);
-        let persistence = Arc::new(LatestBlocksPersistence::new(None, None));
+        let persistence = Arc::new(ReorgBlockHashPersistence::new(None, None));
         let coordinator = ReorgCoordinator {
             network: "test".to_string(),
             window,

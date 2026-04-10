@@ -35,8 +35,8 @@ pub fn generate_column_names_only_with_base_properties(inputs: &[ABIInput]) -> V
     column_names
 }
 
-pub fn generate_latest_blocks_table_sql() -> String {
-    r#"CREATE TABLE IF NOT EXISTS rindexer_internal.latest_blocks (
+pub fn generate_reorg_block_hashes_table_sql() -> String {
+    r#"CREATE TABLE IF NOT EXISTS rindexer_internal.reorg_block_hashes (
         network TEXT NOT NULL,
         block_number BIGINT NOT NULL,
         block_hash CHAR(66) NOT NULL,

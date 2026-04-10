@@ -11,12 +11,12 @@ use crate::database::postgres::client::PostgresClient;
 
 use super::window::BlockChainWindow;
 
-pub struct LatestBlocksPersistence {
+pub struct ReorgBlockHashPersistence {
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
 }
 
-impl LatestBlocksPersistence {
+impl ReorgBlockHashPersistence {
     pub fn new(
         postgres: Option<Arc<PostgresClient>>,
         clickhouse: Option<Arc<ClickhouseClient>>,
@@ -24,7 +24,7 @@ impl LatestBlocksPersistence {
         Self { postgres, clickhouse }
     }
 
-    /// Load all entries from the persisted `latest_blocks` table into a new
+    /// Load all entries from the persisted `reorg_block_hashes` table into a new
     /// `BlockChainWindow`. Priority: postgres > clickhouse.
     pub async fn load(
         &self,
@@ -36,12 +36,12 @@ impl LatestBlocksPersistence {
         if let Some(postgres) = &self.postgres {
             let query = r#"
                 SELECT block_number, block_hash, parent_hash
-                FROM rindexer_internal.latest_blocks
+                FROM rindexer_internal.reorg_block_hashes
                 WHERE network = $1
                 ORDER BY block_number ASC"#;
 
             let rows = postgres.query(query, &[&network]).await.map_err(|e| {
-                let msg = format!("Failed to load latest_blocks from postgres: {}", e);
+                let msg = format!("Failed to load reorg_block_hashes from postgres: {}", e);
                 error!("{}", msg);
                 msg
             })?;
@@ -72,7 +72,7 @@ impl LatestBlocksPersistence {
 
         if let Some(clickhouse) = &self.clickhouse {
             #[derive(Row, Deserialize)]
-            struct LatestBlockRow {
+            struct ReorgBlockHashRow {
                 block_number: u64,
                 block_hash: String,
                 parent_hash: String,
@@ -80,14 +80,14 @@ impl LatestBlocksPersistence {
 
             let query = format!(
                 r#"SELECT block_number, block_hash, parent_hash
-                 FROM rindexer_internal.latest_blocks FINAL
+                 FROM rindexer_internal.reorg_block_hashes FINAL
                  WHERE network = '{}'
                  ORDER BY block_number ASC"#,
                 network
             );
 
-            let rows = clickhouse.query_all::<LatestBlockRow>(&query).await.map_err(|e| {
-                let msg = format!("Failed to load latest_blocks from clickhouse: {}", e);
+            let rows = clickhouse.query_all::<ReorgBlockHashRow>(&query).await.map_err(|e| {
+                let msg = format!("Failed to load reorg_block_hashes from clickhouse: {}", e);
                 error!("{}", msg);
                 msg
             })?;
@@ -125,7 +125,7 @@ impl LatestBlocksPersistence {
         parent_hash: &str,
     ) -> Result<(), String> {
         if let Some(postgres) = &self.postgres {
-            let query = r#"INSERT INTO rindexer_internal.latest_blocks
+            let query = r#"INSERT INTO rindexer_internal.reorg_block_hashes
                          (network, block_number, block_hash, parent_hash)
                          VALUES ($1, $2, $3, $4)
                          ON CONFLICT (network, block_number)
@@ -146,7 +146,7 @@ impl LatestBlocksPersistence {
 
         if let Some(clickhouse) = &self.clickhouse {
             let query = format!(
-                "INSERT INTO rindexer_internal.latest_blocks \
+                "INSERT INTO rindexer_internal.reorg_block_hashes \
                  (network, block_number, block_hash, parent_hash) \
                  VALUES ('{}', {}, '{}', '{}')",
                 network, block_number, block_hash, parent_hash
@@ -165,12 +165,12 @@ impl LatestBlocksPersistence {
     /// Delete entries older than the given block number.
     pub async fn prune(&self, network: &str, older_than: u64) -> Result<(), String> {
         if let Some(postgres) = &self.postgres {
-            let query = r#"DELETE FROM rindexer_internal.latest_blocks
+            let query = r#"DELETE FROM rindexer_internal.reorg_block_hashes
                          WHERE network = $1 AND block_number < $2"#;
 
             let older_than_i64 = older_than as i64;
             postgres.execute(query, &[&network, &older_than_i64]).await.map_err(|e| {
-                let msg = format!("Failed to prune latest_blocks in postgres: {}", e);
+                let msg = format!("Failed to prune reorg_block_hashes in postgres: {}", e);
                 error!("{}", msg);
                 msg
             })?;
@@ -178,13 +178,13 @@ impl LatestBlocksPersistence {
 
         if let Some(clickhouse) = &self.clickhouse {
             let query = format!(
-                r#"ALTER TABLE rindexer_internal.latest_blocks DELETE
+                r#"ALTER TABLE rindexer_internal.reorg_block_hashes DELETE
                  WHERE network = '{}' AND block_number < {}"#,
                 network, older_than
             );
 
             clickhouse.execute(&query).await.map_err(|e| {
-                let msg = format!("Failed to prune latest_blocks in clickhouse: {}", e);
+                let msg = format!("Failed to prune reorg_block_hashes in clickhouse: {}", e);
                 error!("{}", msg);
                 msg
             })?;
