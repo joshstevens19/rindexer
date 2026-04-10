@@ -327,6 +327,15 @@ pub struct Table {
     /// Note: This may impact indexing performance as it requires additional RPC calls.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub timestamp: bool,
+
+    /// Optional database/schema override for this table.
+    /// When set, this table is created in the specified database (CH) or schema (PG)
+    /// instead of the default `{indexer_name}_{contract_name}` schema.
+    /// Useful for directing custom tables from multiple contracts into a shared database
+    /// (e.g., `database: indexer` puts all activities_raw tables in `indexer.activities_raw`).
+    /// Raw event tables are NOT affected — they always use the per-contract schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database: Option<String>,
 }
 
 impl Table {

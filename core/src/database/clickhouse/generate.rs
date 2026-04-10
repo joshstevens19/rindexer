@@ -49,7 +49,7 @@ pub fn generate_tables_for_indexer_clickhouse(
 
             // Generate custom tables if defined
             if let Some(tables) = &contract.tables {
-                sql.push_str(&generate_tables_clickhouse(tables, &schema_name));
+                sql.push_str(&generate_tables_clickhouse(tables, &schema_name, &indexer.name));
             }
         }
 
@@ -106,11 +106,19 @@ fn generate_event_table_clickhouse(abi_inputs: &[EventInfo], schema_name: &str) 
 }
 
 /// Generate ClickHouse SQL for custom tables
-fn generate_tables_clickhouse(tables: &[Table], schema_name: &str) -> String {
+fn generate_tables_clickhouse(tables: &[Table], schema_name: &str, indexer_name: &str) -> String {
     tables
         .iter()
         .map(|table| {
-            let table_name = format!("{}.{}", schema_name, camel_to_snake(&table.name));
+            let effective_db = table.database.as_deref().unwrap_or(schema_name);
+            let table_name = format!("{}.{}", effective_db, camel_to_snake(&table.name));
+
+            // Create database if using a custom override (the default per-contract DB is created above)
+            let mut create_db = String::new();
+            if table.database.is_some() {
+                create_db = format!("CREATE DATABASE IF NOT EXISTS {};", effective_db);
+                info!("Creating database if not exists: {} (custom table override)", effective_db);
+            }
             info!("Creating custom table if not exists: {}", table_name);
 
             // Build column definitions
@@ -182,7 +190,8 @@ fn generate_tables_clickhouse(tables: &[Table], schema_name: &str) -> String {
             };
 
             format!(
-                "CREATE TABLE IF NOT EXISTS {} ({}) ENGINE = {} ORDER BY ({});",
+                "{}CREATE TABLE IF NOT EXISTS {} ({}) ENGINE = {} ORDER BY ({});",
+                create_db,
                 table_name,
                 columns.join(", "),
                 engine,
