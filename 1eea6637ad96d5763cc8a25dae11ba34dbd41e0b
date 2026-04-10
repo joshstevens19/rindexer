@@ -1,0 +1,21 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "1eea6637ad96d5763cc8a25dae11ba34dbd41e0b",
+  "prompts": {
+    "b2b7cc4cbb3a23d3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "90b2f33e-6746-404d-ba67-acb796bb6a5a",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 597,
+      "overriden_lines": 0
+    }
+  }
+}
