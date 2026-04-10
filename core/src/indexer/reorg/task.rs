@@ -232,13 +232,7 @@ impl ReorgTask {
             }
         }
 
-        // Step 4: Trigger callbacks for re-indexed events
-        // TODO: Wire up callback triggering (Task 12 integration)
-
-        // Step 5: Fire on_reorg notification
-        // TODO: Wire up on_reorg callback (Task 12 integration)
-
-        // Step 6: Record metrics
+        // Step 4: Record metrics
         let duration = start.elapsed().as_secs_f64();
         metrics::record_reorg_handling_duration(&self.network, duration);
         metrics::record_reorg_events_deleted(&self.network, total_deleted);

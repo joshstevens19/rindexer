@@ -407,6 +407,7 @@ async fn live_indexing_for_contract_event_dependencies(
                 &log_prefix,
                 pg_client.as_deref(),
                 ch_client.as_ref(),
+                None,
             )
             .await
             {

@@ -10,6 +10,7 @@ use tracing::{debug, error, warn};
 
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::postgres::client::PostgresClient;
+use crate::event::callback_registry::EventCallbackRegistry;
 use crate::indexer::fetch_logs::ReorgInfo;
 use crate::metrics::indexing as metrics;
 use crate::notifications::ChainStateNotification;
@@ -28,6 +29,7 @@ pub async fn detect_and_handle_reorg(
     log_prefix: &str,
     postgres: Option<&PostgresClient>,
     clickhouse: Option<&Arc<ClickhouseClient>>,
+    registry: Option<&EventCallbackRegistry>,
 ) -> bool {
     match coordinator.on_new_block(block_number, block_hash, parent_hash).await {
         Ok(Some(reorg_task)) => {
@@ -39,7 +41,9 @@ pub async fn detect_and_handle_reorg(
                 reorg_task.detection_point - reorg_task.fork_point + 1,
             );
 
-            if let Err(e) = coordinator.handle_reorg(reorg_task, postgres, clickhouse).await {
+            if let Err(e) =
+                coordinator.handle_reorg(reorg_task, postgres, clickhouse, registry).await
+            {
                 error!(
                     "{} - Failed to execute reorg rollback: {}",
                     log_prefix, e

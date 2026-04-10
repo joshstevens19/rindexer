@@ -490,6 +490,7 @@ async fn start_indexing_contract_events(
                                 startup_task,
                                 postgres.as_deref(),
                                 clickhouse.as_ref(),
+                                None,
                             )
                             .await
                         {
@@ -769,6 +770,7 @@ async fn start_indexing_contract_events(
                                     startup_task,
                                     postgres.as_deref(),
                                     clickhouse.as_ref(),
+                                    None,
                                 )
                                 .await
                             {

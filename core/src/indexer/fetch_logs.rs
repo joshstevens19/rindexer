@@ -525,6 +525,7 @@ async fn live_indexing_stream(
                             &log_prefix,
                             postgres.as_deref(),
                             clickhouse.as_ref(),
+                            None,
                         )
                         .await
                         {

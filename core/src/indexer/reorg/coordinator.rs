@@ -1,3 +1,4 @@
+use std::str::FromStr;
 use std::sync::Arc;
 
 use alloy::primitives::{B256, U64};
@@ -5,6 +6,7 @@ use tracing::{info, warn};
 
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::postgres::client::PostgresClient;
+use crate::event::callback_registry::{EventCallbackRegistry, ReorgNotification};
 use crate::metrics::indexing as metrics;
 use crate::provider::JsonRpcCachedProvider;
 
@@ -218,8 +220,9 @@ impl ReorgCoordinator {
         reorg_task: ReorgTask,
         postgres: Option<&PostgresClient>,
         clickhouse: Option<&Arc<ClickhouseClient>>,
+        registry: Option<&EventCallbackRegistry>,
     ) -> Result<(), String> {
-        reorg_task
+        let result = reorg_task
             .execute(
                 &mut self.window,
                 &self.persistence,
@@ -228,6 +231,21 @@ impl ReorgCoordinator {
                 self.provider.as_ref(),
             )
             .await?;
+
+        if let Some(registry) = registry {
+            let notification = ReorgNotification {
+                network: reorg_task.network.clone(),
+                fork_block: reorg_task.fork_point,
+                detection_block: reorg_task.detection_point,
+                invalidated_tx_hashes: result
+                    .affected_tx_hashes
+                    .iter()
+                    .filter_map(|h| B256::from_str(h).ok())
+                    .collect(),
+            };
+            registry.fire_on_reorg(notification).await;
+        }
+
         Ok(())
     }
 
