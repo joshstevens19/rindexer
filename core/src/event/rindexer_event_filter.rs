@@ -250,4 +250,16 @@ impl RindexerEventFilter {
             RindexerEventFilter::Factory(filter) => filter.contract_address().await,
         }
     }
+
+    /// Creates a minimal filter for use in tests.
+    #[cfg(test)]
+    pub fn empty_for_test() -> Self {
+        RindexerEventFilter::Filter(SimpleEventFilter {
+            address: None,
+            topic_id: B256::ZERO,
+            topics: Default::default(),
+            current_block: U64::ZERO,
+            next_block: U64::ZERO,
+        })
+    }
 }

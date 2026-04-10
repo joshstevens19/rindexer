@@ -33,6 +33,7 @@ use futures::future::try_join_all;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashSet;
+use std::fmt::Debug;
 use std::future::IntoFuture;
 use std::{
     sync::Arc,
@@ -44,11 +45,62 @@ use tokio::task::JoinError;
 use tracing::{debug, debug_span, error, Instrument};
 use url::Url;
 
+use async_trait::async_trait;
+
 use crate::helpers::chunk_hashset;
 use crate::layer_extensions::RpcLoggingLayer;
 use crate::manifest::network::{AddressFiltering, BlockPollFrequency};
 use crate::metrics::rpc as rpc_metrics;
 use crate::{event::RindexerEventFilter, manifest::core::Manifest};
+
+/// Trait abstracting the chain-facing RPC operations that rindexer needs.
+///
+/// `JsonRpcCachedProvider` is the production implementation (with caching,
+/// batching, metrics, etc.).  Tests can supply a [`MockChainProvider`] that
+/// returns canned data without touching the network.
+#[async_trait]
+pub trait ChainProvider: Send + Sync + Debug {
+    fn chain(&self) -> Chain;
+    fn max_block_range(&self) -> Option<U64>;
+
+    async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError>;
+    async fn get_block_number(&self) -> Result<U64, ProviderError>;
+    async fn get_logs(&self, event_filter: &RindexerEventFilter) -> Result<Vec<Log>, ProviderError>;
+    async fn get_block_by_number_batch(
+        &self,
+        block_numbers: &[U64],
+        include_txs: bool,
+    ) -> Result<Vec<AnyRpcBlock>, ProviderError>;
+    async fn get_block_by_number_batch_with_size(
+        &self,
+        block_numbers: &[U64],
+        include_txs: bool,
+        rpc_batch_size: Option<usize>,
+    ) -> Result<Vec<AnyRpcBlock>, ProviderError>;
+    async fn get_tx_receipts_batch(
+        &self,
+        hashes: &[TxHash],
+    ) -> Result<Vec<AnyTransactionReceipt>, ProviderError>;
+    async fn trace_block(
+        &self,
+        block_number: U64,
+    ) -> Result<Vec<LocalizedTransactionTrace>, ProviderError>;
+    async fn debug_trace_block_by_number(
+        &self,
+        block_number: U64,
+    ) -> Result<Vec<LocalizedTransactionTrace>, ProviderError>;
+    async fn eth_call(
+        &self,
+        to: Address,
+        data: Bytes,
+        block_number: u64,
+    ) -> Result<String, ProviderError>;
+    async fn eth_call_latest(
+        &self,
+        to: Address,
+        data: Bytes,
+    ) -> Result<String, ProviderError>;
+}
 
 /// An alias type for a complex alloy Provider
 pub type RindexerProvider = FillProvider<
@@ -664,15 +716,34 @@ impl JsonRpcCachedProvider {
 
     #[cfg(test)]
     pub fn mock(chain_id: u64) -> Arc<Self> {
+        let (provider, _asserter) = Self::mock_with_asserter(chain_id);
+        provider
+    }
+
+    /// Creates a mock provider backed by alloy's [`Asserter`] transport.
+    ///
+    /// Push canned JSON-RPC responses into the returned [`Asserter`] before
+    /// calling provider methods — responses are consumed FIFO.
+    ///
+    /// ```rust,ignore
+    /// let (provider, asserter) = JsonRpcCachedProvider::mock_with_asserter(1);
+    /// asserter.push_success(&42u64); // next RPC call returns 42
+    /// let num = provider.get_block_number().await.unwrap();
+    /// ```
+    #[cfg(test)]
+    pub fn mock_with_asserter(
+        chain_id: u64,
+    ) -> (Arc<Self>, alloy::transports::mock::Asserter) {
+        use alloy::transports::mock::Asserter;
+
         let chain = Chain::from(chain_id);
-        let client = RpcClient::new_http(
-            Url::parse("http://localhost:8545").expect("mock URL must be valid"),
-        );
+        let asserter = Asserter::new();
+        let client = RpcClient::mocked(asserter.clone());
         let provider =
             ProviderBuilder::new().network::<AnyNetwork>().connect_client(client.clone());
         let is_zk_chain = is_known_zk_evm_compatible_chain(chain).unwrap_or(false);
 
-        Arc::new(Self {
+        let cached = Arc::new(Self {
             provider: Arc::new(provider),
             client,
             cache: Mutex::new(None),
@@ -682,9 +753,225 @@ impl JsonRpcCachedProvider {
             address_filtering: None,
             max_block_range: None,
             chain_state_notification: None,
-        })
+        });
+
+        (cached, asserter)
     }
 }
+
+#[async_trait]
+impl ChainProvider for JsonRpcCachedProvider {
+    fn chain(&self) -> Chain {
+        self.chain
+    }
+
+    fn max_block_range(&self) -> Option<U64> {
+        self.max_block_range
+    }
+
+    async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
+        self.get_latest_block().await
+    }
+
+    async fn get_block_number(&self) -> Result<U64, ProviderError> {
+        self.get_block_number().await
+    }
+
+    async fn get_logs(&self, event_filter: &RindexerEventFilter) -> Result<Vec<Log>, ProviderError> {
+        self.get_logs(event_filter).await
+    }
+
+    async fn get_block_by_number_batch(
+        &self,
+        block_numbers: &[U64],
+        include_txs: bool,
+    ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
+        self.get_block_by_number_batch(block_numbers, include_txs).await
+    }
+
+    async fn get_block_by_number_batch_with_size(
+        &self,
+        block_numbers: &[U64],
+        include_txs: bool,
+        rpc_batch_size: Option<usize>,
+    ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
+        self.get_block_by_number_batch_with_size(block_numbers, include_txs, rpc_batch_size).await
+    }
+
+    async fn get_tx_receipts_batch(
+        &self,
+        hashes: &[TxHash],
+    ) -> Result<Vec<AnyTransactionReceipt>, ProviderError> {
+        self.get_tx_receipts_batch(hashes).await
+    }
+
+    async fn trace_block(
+        &self,
+        block_number: U64,
+    ) -> Result<Vec<LocalizedTransactionTrace>, ProviderError> {
+        self.trace_block(block_number).await
+    }
+
+    async fn debug_trace_block_by_number(
+        &self,
+        block_number: U64,
+    ) -> Result<Vec<LocalizedTransactionTrace>, ProviderError> {
+        self.debug_trace_block_by_number(block_number).await
+    }
+
+    async fn eth_call(
+        &self,
+        to: Address,
+        data: Bytes,
+        block_number: u64,
+    ) -> Result<String, ProviderError> {
+        self.eth_call(to, data, block_number).await
+    }
+
+    async fn eth_call_latest(
+        &self,
+        to: Address,
+        data: Bytes,
+    ) -> Result<String, ProviderError> {
+        self.eth_call_latest(to, data).await
+    }
+}
+
+/// A mock implementation of [`ChainProvider`] for testing.
+///
+/// Each method returns data from a pre-configured closure or a sensible default.
+/// Use the builder methods to set up the responses you need for your test.
+#[cfg(test)]
+pub mod mock {
+    use super::*;
+
+    #[derive(Debug)]
+    pub struct MockChainProvider {
+        pub chain: Chain,
+        pub max_block_range: Option<U64>,
+        pub logs: Vec<Log>,
+        pub blocks: Vec<AnyRpcBlock>,
+        pub block_number: U64,
+        pub receipts: Vec<AnyTransactionReceipt>,
+        pub traces: Vec<LocalizedTransactionTrace>,
+    }
+
+    impl MockChainProvider {
+        pub fn new(chain_id: u64) -> Self {
+            Self {
+                chain: Chain::from(chain_id),
+                max_block_range: None,
+                logs: vec![],
+                blocks: vec![],
+                block_number: U64::ZERO,
+                receipts: vec![],
+                traces: vec![],
+            }
+        }
+
+        pub fn with_block_number(mut self, n: u64) -> Self {
+            self.block_number = U64::from(n);
+            self
+        }
+
+        pub fn with_logs(mut self, logs: Vec<Log>) -> Self {
+            self.logs = logs;
+            self
+        }
+
+        pub fn with_blocks(mut self, blocks: Vec<AnyRpcBlock>) -> Self {
+            self.blocks = blocks;
+            self
+        }
+
+        pub fn with_traces(mut self, traces: Vec<LocalizedTransactionTrace>) -> Self {
+            self.traces = traces;
+            self
+        }
+    }
+
+    #[async_trait]
+    impl ChainProvider for MockChainProvider {
+        fn chain(&self) -> Chain {
+            self.chain
+        }
+
+        fn max_block_range(&self) -> Option<U64> {
+            self.max_block_range
+        }
+
+        async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
+            Ok(self.blocks.last().map(|b| Arc::new(b.clone())))
+        }
+
+        async fn get_block_number(&self) -> Result<U64, ProviderError> {
+            Ok(self.block_number)
+        }
+
+        async fn get_logs(
+            &self,
+            _event_filter: &RindexerEventFilter,
+        ) -> Result<Vec<Log>, ProviderError> {
+            Ok(self.logs.clone())
+        }
+
+        async fn get_block_by_number_batch(
+            &self,
+            _block_numbers: &[U64],
+            _include_txs: bool,
+        ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
+            Ok(self.blocks.clone())
+        }
+
+        async fn get_block_by_number_batch_with_size(
+            &self,
+            block_numbers: &[U64],
+            include_txs: bool,
+            _rpc_batch_size: Option<usize>,
+        ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
+            self.get_block_by_number_batch(block_numbers, include_txs).await
+        }
+
+        async fn get_tx_receipts_batch(
+            &self,
+            _hashes: &[TxHash],
+        ) -> Result<Vec<AnyTransactionReceipt>, ProviderError> {
+            Ok(self.receipts.clone())
+        }
+
+        async fn trace_block(
+            &self,
+            _block_number: U64,
+        ) -> Result<Vec<LocalizedTransactionTrace>, ProviderError> {
+            Ok(self.traces.clone())
+        }
+
+        async fn debug_trace_block_by_number(
+            &self,
+            _block_number: U64,
+        ) -> Result<Vec<LocalizedTransactionTrace>, ProviderError> {
+            Ok(self.traces.clone())
+        }
+
+        async fn eth_call(
+            &self,
+            _to: Address,
+            _data: Bytes,
+            _block_number: u64,
+        ) -> Result<String, ProviderError> {
+            Ok(String::new())
+        }
+
+        async fn eth_call_latest(
+            &self,
+            _to: Address,
+            _data: Bytes,
+        ) -> Result<String, ProviderError> {
+            Ok(String::new())
+        }
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum RetryClientError {
     #[error("Provider can't be created for {0}: {1}")]
@@ -872,4 +1159,60 @@ pub fn get_network_provider<'a>(
     providers: &'a [CreateNetworkProvider],
 ) -> Option<&'a CreateNetworkProvider> {
     providers.iter().find(|item| item.network_name == network)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::mock::MockChainProvider;
+
+    #[test]
+    fn mock_chain_provider_defaults() {
+        let mock = MockChainProvider::new(1);
+        assert_eq!(mock.chain(), Chain::from(1));
+        assert_eq!(mock.max_block_range(), None);
+    }
+
+    #[test]
+    fn mock_chain_provider_builder() {
+        let mock = MockChainProvider::new(137)
+            .with_block_number(12345);
+        assert_eq!(mock.chain(), Chain::from(137));
+        assert_eq!(mock.block_number, U64::from(12345));
+    }
+
+    #[tokio::test]
+    async fn mock_chain_provider_get_block_number() {
+        let mock = MockChainProvider::new(1).with_block_number(42);
+        let num = ChainProvider::get_block_number(&mock).await.unwrap();
+        assert_eq!(num, U64::from(42));
+    }
+
+    #[tokio::test]
+    async fn mock_chain_provider_empty_logs() {
+        let mock = MockChainProvider::new(1);
+        let logs = ChainProvider::get_logs(
+            &mock,
+            &RindexerEventFilter::empty_for_test(),
+        )
+        .await
+        .unwrap();
+        assert!(logs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn mock_with_asserter_get_block_number() {
+        let (provider, asserter) = JsonRpcCachedProvider::mock_with_asserter(1);
+        asserter.push_success(&U64::from(99));
+        let num = provider.get_block_number().await.unwrap();
+        assert_eq!(num, U64::from(99));
+    }
+
+    #[tokio::test]
+    async fn chain_provider_trait_is_object_safe() {
+        let mock: Box<dyn ChainProvider> =
+            Box::new(MockChainProvider::new(1).with_block_number(7));
+        let num = mock.get_block_number().await.unwrap();
+        assert_eq!(num, U64::from(7));
+    }
 }
