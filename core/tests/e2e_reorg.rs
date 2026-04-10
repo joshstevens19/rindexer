@@ -195,7 +195,7 @@ async fn test_reorg_detection_and_rollback() {
     // Wait for reth to produce at least 1 block
     for _ in 0..30 {
         let ok = try_get_block_number(&http, &rpc_url).await;
-        if ok.map_or(false, |n| n >= 1) {
+        if ok.is_some_and(|n| n >= 1) {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;

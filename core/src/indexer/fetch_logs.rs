@@ -25,9 +25,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 /// Metadata for a processed block, used for reorg detection via parent hash chain validation.
+#[allow(dead_code)]
 pub struct BlockMeta {
     pub hash: B256,
-    #[allow(dead_code)]
     pub parent_hash: B256,
     pub timestamp: u64,
 }

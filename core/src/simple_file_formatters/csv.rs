@@ -80,6 +80,7 @@ impl AsyncCsvAppender {
     }
 }
 
+#[allow(dead_code)]
 pub async fn write_reorg_invalidation_file(
     base_path: &Path,
     contract_name: &str,
