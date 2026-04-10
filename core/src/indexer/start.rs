@@ -14,6 +14,7 @@ use tracing::{error, info, warn};
 
 use crate::database::clickhouse::client::{ClickhouseClient, ClickhouseConnectionError};
 use crate::database::generate::generate_indexer_contract_schema_name;
+use crate::database::postgres::generate::generate_internal_event_table_name;
 use crate::event::config::{ContractEventProcessingConfig, FactoryEventProcessingConfig};
 use crate::helpers::{camel_to_snake, format_duration};
 use crate::indexer::native_transfer::native_transfer_block_processor;
@@ -414,10 +415,12 @@ async fn start_indexing_contract_events(
             let schema =
                 generate_indexer_contract_schema_name(&event.indexer_name, &event.contract.name);
             let table_name = camel_to_snake(&event.event_name);
+            let checkpoint_table =
+                generate_internal_event_table_name(&schema, &event.event_name);
             network_event_tables
                 .entry(network_contract.network.clone())
                 .or_default()
-                .push(EventTableInfo::new(schema, table_name));
+                .push(EventTableInfo::new(schema, table_name, checkpoint_table));
         }
     }
 

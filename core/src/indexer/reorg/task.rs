@@ -16,12 +16,14 @@ pub struct EventTableInfo {
     pub table_name: String,
     /// Full table path: schema.table_name
     pub full_name: String,
+    /// Checkpoint table name in rindexer_internal (without schema prefix)
+    pub checkpoint_table: String,
 }
 
 impl EventTableInfo {
-    pub fn new(schema: String, table_name: String) -> Self {
+    pub fn new(schema: String, table_name: String, checkpoint_table: String) -> Self {
         let full_name = format!("{}.{}", schema, table_name);
-        Self { schema, table_name, full_name }
+        Self { schema, table_name, full_name, checkpoint_table }
     }
 }
 
@@ -132,6 +134,8 @@ impl ReorgTask {
         if let Some(pg) = postgres {
             let table_names: Vec<&str> =
                 self.event_tables.iter().map(|t| t.full_name.as_str()).collect();
+            let checkpoint_tables: Vec<&str> =
+                self.event_tables.iter().map(|t| t.checkpoint_table.as_str()).collect();
 
             total_deleted = pg
                 .reorg_rollback_transaction(
@@ -140,6 +144,7 @@ impl ReorgTask {
                     self.fork_point,
                     self.detection_point,
                     &corrected_blocks,
+                    &checkpoint_tables,
                 )
                 .await
                 .map_err(|e| e.to_string())?;
@@ -155,6 +160,23 @@ impl ReorgTask {
             ch.reorg_rollback(&tables, &self.network, self.fork_point, self.detection_point)
                 .await
                 .map_err(|e| e.to_string())?;
+
+            // Rewind ClickHouse checkpoint tables via DELETE + INSERT
+            // (ReplacingMergeTree discards lower values on merge, so we must delete first)
+            let rewind_block = self.fork_point.saturating_sub(1);
+            for table in &self.event_tables {
+                let delete_sql = format!(
+                    "ALTER TABLE rindexer_internal.{} DELETE WHERE network = '{}' SETTINGS mutations_sync = 1",
+                    table.checkpoint_table, self.network
+                );
+                ch.execute(&delete_sql).await.map_err(|e| e.to_string())?;
+
+                let insert_sql = format!(
+                    "INSERT INTO rindexer_internal.{} (network, last_synced_block) VALUES ('{}', {})",
+                    table.checkpoint_table, self.network, rewind_block
+                );
+                ch.execute(&insert_sql).await.map_err(|e| e.to_string())?;
+            }
         }
 
         // Step 2b: Delete rows from derived/custom tables

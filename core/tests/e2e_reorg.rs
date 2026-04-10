@@ -411,7 +411,9 @@ async fn test_reorg_detection_and_rollback() {
         event_tables: vec![EventTableInfo::new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
+            "test_schema_ping".to_string(),
         )],
+        derived_tables: vec![],
     };
 
     // Build a PostgresClient from a pool using the same connection string.

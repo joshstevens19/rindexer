@@ -375,7 +375,7 @@ mod tests {
             window,
             persistence,
             provider: None,
-            event_tables: vec![EventTableInfo::new("schema".to_string(), "table".to_string())],
+            event_tables: vec![EventTableInfo::new("schema".to_string(), "table".to_string(), "schema_table".to_string())],
             derived_tables: vec![],
             blocks_since_flush: 0,
         };
