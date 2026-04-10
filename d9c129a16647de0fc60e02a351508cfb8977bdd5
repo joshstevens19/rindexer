@@ -1,0 +1,31 @@
+core/src/indexer/reorg/task.rs
+  88fdb9834fb286df 19-20,24,26,137-138,147,163-179
+core/src/indexer/reorg/coordinator.rs
+  88fdb9834fb286df 378
+core/tests/e2e_reorg.rs
+  88fdb9834fb286df 414,416
+core/src/indexer/start.rs
+  88fdb9834fb286df 17,414-415,419
+core/src/database/postgres/client.rs
+  88fdb9834fb286df 516,555-562
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.7",
+  "base_commit_sha": "d9c129a16647de0fc60e02a351508cfb8977bdd5",
+  "prompts": {
+    "88fdb9834fb286df": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "873f225a-14f4-44ad-853e-0abc7ff1e218",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 42,
+      "total_deletions": 4,
+      "accepted_lines": 400,
+      "overriden_lines": 0
+    }
+  }
+}
