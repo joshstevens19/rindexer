@@ -692,18 +692,44 @@ async fn live_indexing_stream(
                                                 block_cache.pop(&b);
                                             }
 
-                                            let _ = tx
-                                                .send(Ok(FetchLogsResult {
-                                                    logs: vec![],
-                                                    from_block: U64::from(min_removed_block),
-                                                    to_block: U64::from(min_removed_block),
-                                                    reorg: Some(ReorgInfo {
-                                                        fork_block: U64::from(min_removed_block),
-                                                        depth,
-                                                        affected_tx_hashes: vec![],
-                                                    }),
-                                                }))
-                                                .await;
+                                            // Route through coordinator for full recovery when available
+                                            // (event deletion, checkpoint rewind, window update).
+                                            // Fall back to sending ReorgInfo through the stream when
+                                            // the coordinator is not configured.
+                                            if let Some(ref mut coordinator) = reorg_coordinator {
+                                                let task = coordinator
+                                                    .create_reorg_task_for_block_range(
+                                                        min_removed_block,
+                                                        to_block.to::<u64>(),
+                                                    );
+                                                if let Err(e) = coordinator
+                                                    .handle_reorg(
+                                                        task,
+                                                        postgres.as_deref(),
+                                                        clickhouse.as_ref(),
+                                                        None,
+                                                    )
+                                                    .await
+                                                {
+                                                    error!(
+                                                        "{} - Failed to handle removed-logs reorg: {}",
+                                                        info_log_name, e
+                                                    );
+                                                }
+                                            } else {
+                                                let _ = tx
+                                                    .send(Ok(FetchLogsResult {
+                                                        logs: vec![],
+                                                        from_block: U64::from(min_removed_block),
+                                                        to_block: U64::from(min_removed_block),
+                                                        reorg: Some(ReorgInfo {
+                                                            fork_block: U64::from(min_removed_block),
+                                                            depth,
+                                                            affected_tx_hashes: vec![],
+                                                        }),
+                                                    }))
+                                                    .await;
+                                            }
 
                                             current_filter = current_filter
                                                 .set_from_block(U64::from(min_removed_block));

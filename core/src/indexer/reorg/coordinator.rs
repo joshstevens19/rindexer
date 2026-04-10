@@ -170,6 +170,19 @@ impl ReorgCoordinator {
         }
     }
 
+    /// Create a ReorgTask for a known block range (e.g. from removed-logs detection).
+    /// The caller is responsible for executing the task via `handle_reorg`.
+    pub fn create_reorg_task_for_block_range(&self, fork_point: u64, detection_point: u64) -> ReorgTask {
+        metrics::record_reorg_detection_source(&self.network, "removed_logs");
+        ReorgTask {
+            network: self.network.clone(),
+            fork_point,
+            detection_point,
+            event_tables: self.event_tables.clone(),
+            derived_tables: self.derived_tables.clone(),
+        }
+    }
+
     /// Handle reth ExEx notification — fork point provided directly.
     pub fn on_exex_reorg(&self, revert_from_block: u64, revert_to_block: u64) -> ReorgTask {
         metrics::record_reorg_detection_source(&self.network, "exex");
