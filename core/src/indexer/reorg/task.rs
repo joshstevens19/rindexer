@@ -1,8 +1,11 @@
 use std::sync::Arc;
 
+use alloy::primitives::{B256, U64};
+
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::postgres::client::PostgresClient;
 use crate::metrics::indexing as metrics;
+use crate::provider::JsonRpcCachedProvider;
 
 use super::persistence::LatestBlocksPersistence;
 use super::window::BlockChainWindow;
@@ -41,15 +44,17 @@ pub struct ReorgTaskResult {
     pub events_deleted: u64,
     pub events_reindexed: u64,
     pub duration_secs: f64,
+    pub affected_tx_hashes: Vec<String>,
 }
 
 impl ReorgTask {
     pub async fn execute(
         &self,
-        _window: &mut BlockChainWindow,
+        window: &mut BlockChainWindow,
         _persistence: &LatestBlocksPersistence,
         postgres: Option<&PostgresClient>,
         clickhouse: Option<&Arc<ClickhouseClient>>,
+        provider: Option<&Arc<JsonRpcCachedProvider>>,
     ) -> Result<ReorgTaskResult, String> {
         let start = std::time::Instant::now();
 
@@ -61,9 +66,65 @@ impl ReorgTask {
             "Starting reorg task"
         );
 
-        // Step 1: Re-fetch logs for [fork_point, detection_point]
-        // TODO: Wire up log re-fetching during integration (Task 12)
-        // This will use the existing fetch_logs pipeline
+        let mut corrected_blocks_owned: Vec<(u64, String, String)> = Vec::new();
+        if let Some(provider) = provider {
+            let block_numbers: Vec<U64> = (self.fork_point..=self.detection_point)
+                .map(|n| U64::from(n))
+                .collect();
+            match provider.get_block_by_number_batch(&block_numbers, false).await {
+                Ok(blocks) => {
+                    corrected_blocks_owned = blocks
+                        .iter()
+                        .map(|b| {
+                            (
+                                b.header.number,
+                                format!("{:#x}", b.header.hash),
+                                format!("{:#x}", b.header.parent_hash),
+                            )
+                        })
+                        .collect();
+
+                    let window_updates: Vec<(u64, B256, B256)> = blocks
+                        .iter()
+                        .map(|b| (b.header.number, b.header.hash, b.header.parent_hash))
+                        .collect();
+                    window.update_range(&window_updates);
+                }
+                Err(e) => {
+                    tracing::error!("Failed to fetch corrected blocks for reorg range: {}", e)
+                }
+            }
+        }
+
+        let corrected_blocks: Vec<(u64, &str, &str)> = corrected_blocks_owned
+            .iter()
+            .map(|(n, h, p)| (*n, h.as_str(), p.as_str()))
+            .collect();
+
+        // Collect affected tx hashes before deletion (for on_reorg callback)
+        let mut affected_tx_hashes: Vec<String> = Vec::new();
+        if let Some(pg) = postgres {
+            for table in &self.event_tables {
+                match pg
+                    .collect_affected_tx_hashes(
+                        &table.full_name,
+                        &self.network,
+                        self.fork_point,
+                        self.detection_point,
+                    )
+                    .await
+                {
+                    Ok(hashes) => affected_tx_hashes.extend(hashes),
+                    Err(e) => tracing::warn!(
+                        "Failed to collect tx hashes from {}: {:?}",
+                        table.full_name,
+                        e
+                    ),
+                }
+            }
+        }
+        affected_tx_hashes.sort();
+        affected_tx_hashes.dedup();
 
         // Step 2: Delete stale events + insert new events + update latest_blocks
         let mut total_deleted = 0u64;
@@ -71,10 +132,6 @@ impl ReorgTask {
         if let Some(pg) = postgres {
             let table_names: Vec<&str> =
                 self.event_tables.iter().map(|t| t.full_name.as_str()).collect();
-
-            // corrected_blocks will be populated during integration (Task 12)
-            // when re-fetched blocks provide the correct hashes
-            let corrected_blocks: Vec<(u64, &str, &str)> = vec![];
 
             total_deleted = pg
                 .reorg_rollback_transaction(
@@ -153,9 +210,6 @@ impl ReorgTask {
             }
         }
 
-        // Step 3: Update in-memory window
-        // TODO: Update with corrected hashes from re-fetched blocks (Task 12 integration)
-
         // Step 4: Trigger callbacks for re-indexed events
         // TODO: Wire up callback triggering (Task 12 integration)
 
@@ -176,8 +230,9 @@ impl ReorgTask {
 
         Ok(ReorgTaskResult {
             events_deleted: total_deleted,
-            events_reindexed: 0, // populated during integration (Task 12)
+            events_reindexed: 0,
             duration_secs: duration,
+            affected_tx_hashes,
         })
     }
 }

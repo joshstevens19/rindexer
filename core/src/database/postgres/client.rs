@@ -481,6 +481,25 @@ impl PostgresClient {
             .map_err(|e| e.to_string())
     }
 
+    /// Collect distinct tx_hashes for events in a block range for a given network from a specific table.
+    pub async fn collect_affected_tx_hashes(
+        &self,
+        table_name: &str,
+        network: &str,
+        fork_point: u64,
+        detection_point: u64,
+    ) -> Result<Vec<String>, PostgresError> {
+        let query = format!(
+            "SELECT DISTINCT tx_hash FROM {} WHERE network = $1 AND block_number >= $2 AND block_number <= $3",
+            table_name
+        );
+        let conn = self.pool.get().await?;
+        let fork_i64 = fork_point as i64;
+        let det_i64 = detection_point as i64;
+        let rows = conn.query(&query, &[&network, &fork_i64, &det_i64]).await?;
+        Ok(rows.iter().map(|r| r.get::<_, String>("tx_hash")).collect())
+    }
+
     /// Execute a full reorg rollback atomically in a single PostgreSQL transaction:
     /// 1. Delete stale events from all given event tables in the block range
     /// 2. Delete stale entries from `rindexer_internal.latest_blocks` for the block range
