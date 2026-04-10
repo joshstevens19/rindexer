@@ -1,0 +1,55 @@
+core/src/provider.rs
+  847014acdc95bfaf 925-926,933-939,966,987,1006,1264
+examples/rust_clickhouse/src/rindexer_lib/typings/clickhouse_indexer/events/rocket_pool_abi_gen.rs
+  847014acdc95bfaf 1
+examples/rust_clickhouse/src/rindexer_lib/typings/database.rs
+  847014acdc95bfaf 1
+examples/rindexer_rust_playground/src/rindexer_lib/typings/rindexer_playground/events/uniswap_v3_pool_filter_abi_gen.rs
+  847014acdc95bfaf 1
+examples/rindexer_rust_playground/src/rindexer_lib/typings/rindexer_playground/events/erc_20_filter.rs
+  847014acdc95bfaf 87,90-98,184,191,298,305,491-498,500,502,505-506,510,512,515-516,529,533-539
+examples/rust_clickhouse/src/rindexer_lib/typings/clickhouse_indexer/events/rocket_pool.rs
+  847014acdc95bfaf 417-425
+examples/rindexer_rust_playground/src/rindexer_lib/typings/rindexer_playground/events/erc_20_filter_abi_gen.rs
+  847014acdc95bfaf 1
+examples/rindexer_rust_playground/src/rindexer_lib/typings/rindexer_playground/events/rocket_pool_eth.rs
+  847014acdc95bfaf 87,90-98,184,191,304,311,508-515,517,519,522-523,527,529,532-533,546,550-556
+examples/rindexer_rust_playground/src/rindexer_lib/typings/rindexer_playground/events/uniswap_v3_pool_filter.rs
+  847014acdc95bfaf 186,189-197,285,292,465-472,474,476,479-480,493,497-503
+examples/rindexer_rust_playground/rindexer.yaml
+  847014acdc95bfaf 37
+examples/rindexer_rust_playground/src/rindexer_lib/typings/database.rs
+  847014acdc95bfaf 1
+core/src/indexer/start.rs
+  847014acdc95bfaf 278
+examples/rust_clickhouse/src/rindexer_lib/typings/networks.rs
+  847014acdc95bfaf 1
+core/src/indexer/native_transfer.rs
+  847014acdc95bfaf 36,116-117,126,136,277,279,370-371,385-386,414,430,454-455,514
+examples/rindexer_rust_playground/src/rindexer_lib/typings/global_contracts.rs
+  847014acdc95bfaf 1
+examples/rindexer_rust_playground/src/rindexer_lib/typings/networks.rs
+  847014acdc95bfaf 1
+examples/rindexer_rust_playground/src/rindexer_lib/typings/rindexer_playground/events/rocket_pool_eth_abi_gen.rs
+  847014acdc95bfaf 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "0aac8696b535f3295fca0a50e693800cd4ba14d6",
+  "prompts": {
+    "847014acdc95bfaf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ba97b2b6-c1ec-4c31-8b29-a4cc233ccc5c",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 165,
+      "total_deletions": 83,
+      "accepted_lines": 163,
+      "overriden_lines": 0
+    }
+  }
+}
