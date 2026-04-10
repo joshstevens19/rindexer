@@ -1,0 +1,38 @@
+e2e-tests/src/tests/mod.rs
+  e45478a42aee6e7a 14
+e2e-tests/src/tests/registry.rs
+  e45478a42aee6e7a 80-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.7",
+  "base_commit_sha": "d2cccc693c7558644c1165e17c9e33073a0b39a5",
+  "prompts": {
+    "88fdb9834fb286df": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "873f225a-14f4-44ad-853e-0abc7ff1e218",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 750,
+      "overriden_lines": 0
+    },
+    "e45478a42aee6e7a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "48bbb844-82a0-4860-8857-7567fd2855d2",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 4,
+      "overriden_lines": 0
+    }
+  }
+}
