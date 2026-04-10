@@ -1,0 +1,25 @@
+core/src/event/rindexer_event_filter.rs
+  16dcee90fbfb078d 253-264
+core/src/provider.rs
+  16dcee90fbfb078d 36,48-49,56-103,719-738,740-741,746,756-758,761-974,1163-1218
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "e6e16ab1685f5e224ddfd7b1efc11bf5e04bbb8c",
+  "prompts": {
+    "16dcee90fbfb078d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "633cc1ae-7ee5-47c1-8516-af09d1b75b7e",
+        "model": "unknown"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 360,
+      "total_deletions": 5,
+      "accepted_lines": 360,
+      "overriden_lines": 0
+    }
+  }
+}
