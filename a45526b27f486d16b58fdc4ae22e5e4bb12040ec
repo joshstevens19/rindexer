@@ -1,0 +1,47 @@
+core/src/indexer/reorg/coordinator.rs
+  88fdb9834fb286df 177-181,233-234,260-261,284,377,381,393,402,429-433
+core/src/indexer/start.rs
+  88fdb9834fb286df 414,423-424,431,433,489-491,493,676-682,684-687,777-779,781
+core/tests/e2e_reorg.rs
+  88fdb9834fb286df 9,42,80,97,106,164-168,190,331,358,379,399-402,409-410,498-499,560
+core/src/indexer/reorg/mod.rs
+  88fdb9834fb286df 56-57
+core/src/simple_file_formatters/csv.rs
+  88fdb9834fb286df 93-94,109
+core/src/streams/clients.rs
+  88fdb9834fb286df 948
+core/src/database/clickhouse/client.rs
+  88fdb9834fb286df 197,238-244
+e2e-tests/src/tests/reorg_e2e.rs
+  88fdb9834fb286df 76,239-243,284,337-341,502-506,575
+core/src/indexer/process.rs
+  88fdb9834fb286df 15-17,399
+core/src/indexer/reorg/window.rs
+  88fdb9834fb286df 220
+core/src/metrics/indexing.rs
+  88fdb9834fb286df 5-6
+core/src/indexer/fetch_logs.rs
+  88fdb9834fb286df 3-5,719-721,723-724,738-740
+core/src/indexer/reorg/task.rs
+  88fdb9834fb286df 83-84,109-110,142-154,174-175,179-180,201-202,206-207
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.7",
+  "base_commit_sha": "a45526b27f486d16b58fdc4ae22e5e4bb12040ec",
+  "prompts": {
+    "88fdb9834fb286df": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "873f225a-14f4-44ad-853e-0abc7ff1e218",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 142,
+      "total_deletions": 208,
+      "accepted_lines": 888,
+      "overriden_lines": 0
+    }
+  }
+}
