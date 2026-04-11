@@ -1,7 +1,9 @@
 use alloy::json_abi::Event;
 use alloy::primitives::{keccak256, Address, B256, U64};
 use alloy::rpc::types::ValueOrArray;
+use std::collections::HashMap;
 use std::{path::PathBuf, sync::Arc};
+use tokio::sync::broadcast::Sender;
 use tokio_util::sync::CancellationToken;
 
 use crate::database::clickhouse::client::ClickhouseClient;
@@ -13,6 +15,8 @@ use crate::indexer::tables::TableRuntime;
 use crate::manifest::config::Config;
 use crate::manifest::contract::EventInputIndexedFilters;
 use crate::manifest::core::Constants;
+use crate::provider::ChainProvider;
+use crate::streams::StreamsClients;
 use crate::types::single_or_array::StringOrArray;
 use crate::{
     event::{
@@ -53,18 +57,17 @@ pub struct ContractEventProcessingConfig {
     /// Derived/custom tables associated with this event (for reorg cleanup).
     pub tables: Arc<Vec<TableRuntime>>,
     /// Broadcast sender for reorg events (code-gen mode).
-    pub reorg_sender: Option<tokio::sync::broadcast::Sender<ReorgEvent>>,
+    pub reorg_sender: Option<Sender<ReorgEvent>>,
     /// Streams clients for reorg retraction (no-code mode).
-    pub streams_clients: Arc<Option<crate::streams::StreamsClients>>,
+    pub streams_clients: Arc<Option<StreamsClients>>,
     /// ABI path(s) for reconstructing raw events during replay.
     pub contract_abi: Option<StringOrArray>,
     /// Providers by network for replay parity with no-code table execution.
-    pub providers:
-        Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>>,
+    pub providers: Arc<HashMap<String, Arc<dyn ChainProvider>>>,
     /// Constants for replay parity with no-code table execution.
     pub constants: Arc<Constants>,
     /// Multicall overrides by network for replay parity.
-    pub multicall_addresses: Arc<std::collections::HashMap<String, Option<String>>>,
+    pub multicall_addresses: Arc<HashMap<String, Option<String>>>,
 }
 
 impl ContractEventProcessingConfig {
@@ -146,18 +149,17 @@ pub struct FactoryEventProcessingConfig {
     /// Derived/custom tables associated with this event (for reorg cleanup).
     pub tables: Arc<Vec<TableRuntime>>,
     /// Broadcast sender for reorg events (code-gen mode).
-    pub reorg_sender: Option<tokio::sync::broadcast::Sender<ReorgEvent>>,
+    pub reorg_sender: Option<Sender<ReorgEvent>>,
     /// Streams clients for reorg retraction (no-code mode).
-    pub streams_clients: Arc<Option<crate::streams::StreamsClients>>,
+    pub streams_clients: Arc<Option<StreamsClients>>,
     /// ABI path(s) for reconstructing raw events during replay.
     pub contract_abi: Option<StringOrArray>,
     /// Providers by network for replay parity with no-code table execution.
-    pub providers:
-        Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>>,
+    pub providers: Arc<HashMap<String, Arc<dyn ChainProvider>>>,
     /// Constants for replay parity with no-code table execution.
     pub constants: Arc<Constants>,
     /// Multicall overrides by network for replay parity.
-    pub multicall_addresses: Arc<std::collections::HashMap<String, Option<String>>>,
+    pub multicall_addresses: Arc<HashMap<String, Option<String>>>,
 }
 
 impl FactoryEventProcessingConfig {
@@ -348,14 +350,14 @@ impl EventProcessingConfig {
         }
     }
 
-    pub fn reorg_sender(&self) -> Option<tokio::sync::broadcast::Sender<ReorgEvent>> {
+    pub fn reorg_sender(&self) -> Option<Sender<ReorgEvent>> {
         match self {
             Self::ContractEventProcessing(config) => config.reorg_sender.clone(),
             Self::FactoryEventProcessing(config) => config.reorg_sender.clone(),
         }
     }
 
-    pub fn streams_clients(&self) -> Arc<Option<crate::streams::StreamsClients>> {
+    pub fn streams_clients(&self) -> Arc<Option<StreamsClients>> {
         match self {
             Self::ContractEventProcessing(config) => config.streams_clients.clone(),
             Self::FactoryEventProcessing(config) => config.streams_clients.clone(),
@@ -369,9 +371,7 @@ impl EventProcessingConfig {
         }
     }
 
-    pub fn providers(
-        &self,
-    ) -> Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>> {
+    pub fn providers(&self) -> Arc<HashMap<String, Arc<dyn ChainProvider>>> {
         match self {
             Self::ContractEventProcessing(config) => config.providers.clone(),
             Self::FactoryEventProcessing(config) => config.providers.clone(),
@@ -385,7 +385,7 @@ impl EventProcessingConfig {
         }
     }
 
-    pub fn multicall_addresses(&self) -> Arc<std::collections::HashMap<String, Option<String>>> {
+    pub fn multicall_addresses(&self) -> Arc<HashMap<String, Option<String>>> {
         match self {
             Self::ContractEventProcessing(config) => config.multicall_addresses.clone(),
             Self::FactoryEventProcessing(config) => config.multicall_addresses.clone(),

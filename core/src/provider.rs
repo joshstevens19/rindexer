@@ -2,6 +2,7 @@ use crate::adaptive_concurrency::ADAPTIVE_CONCURRENCY;
 use crate::notifications::ChainStateNotification;
 use alloy::network::{AnyNetwork, AnyRpcBlock, AnyTransactionReceipt};
 use alloy::rpc::types::{Filter, ValueOrArray};
+use alloy::transports::mock::Asserter;
 use alloy::{
     eips::{BlockId, BlockNumberOrTag},
     primitives::{Address, Bytes, TxHash, U256, U64},
@@ -66,7 +67,8 @@ pub trait ChainProvider: Send + Sync + Debug {
 
     async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError>;
     async fn get_block_number(&self) -> Result<U64, ProviderError>;
-    async fn get_logs(&self, event_filter: &RindexerEventFilter) -> Result<Vec<Log>, ProviderError>;
+    async fn get_logs(&self, event_filter: &RindexerEventFilter)
+        -> Result<Vec<Log>, ProviderError>;
     async fn get_block_by_number_batch(
         &self,
         block_numbers: &[U64],
@@ -96,11 +98,7 @@ pub trait ChainProvider: Send + Sync + Debug {
         data: Bytes,
         block_number: u64,
     ) -> Result<String, ProviderError>;
-    async fn eth_call_latest(
-        &self,
-        to: Address,
-        data: Bytes,
-    ) -> Result<String, ProviderError>;
+    async fn eth_call_latest(&self, to: Address, data: Bytes) -> Result<String, ProviderError>;
 }
 
 /// An alias type for a complex alloy Provider
@@ -732,11 +730,7 @@ impl JsonRpcCachedProvider {
     /// let num = provider.get_block_number().await.unwrap();
     /// ```
     #[cfg(test)]
-    pub fn mock_with_asserter(
-        chain_id: u64,
-    ) -> (Arc<Self>, alloy::transports::mock::Asserter) {
-        use alloy::transports::mock::Asserter;
-
+    pub fn mock_with_asserter(chain_id: u64) -> (Arc<Self>, Asserter) {
         let chain = Chain::from(chain_id);
         let asserter = Asserter::new();
         let client = RpcClient::mocked(asserter.clone());
@@ -782,7 +776,10 @@ impl ChainProvider for JsonRpcCachedProvider {
         self.get_block_number().await
     }
 
-    async fn get_logs(&self, event_filter: &RindexerEventFilter) -> Result<Vec<Log>, ProviderError> {
+    async fn get_logs(
+        &self,
+        event_filter: &RindexerEventFilter,
+    ) -> Result<Vec<Log>, ProviderError> {
         self.get_logs(event_filter).await
     }
 
@@ -833,11 +830,7 @@ impl ChainProvider for JsonRpcCachedProvider {
         self.eth_call(to, data, block_number).await
     }
 
-    async fn eth_call_latest(
-        &self,
-        to: Address,
-        data: Bytes,
-    ) -> Result<String, ProviderError> {
+    async fn eth_call_latest(&self, to: Address, data: Bytes) -> Result<String, ProviderError> {
         self.eth_call_latest(to, data).await
     }
 }
@@ -869,7 +862,10 @@ impl<T: ChainProvider + ?Sized> ChainProvider for Arc<T> {
         (**self).get_block_number().await
     }
 
-    async fn get_logs(&self, event_filter: &RindexerEventFilter) -> Result<Vec<Log>, ProviderError> {
+    async fn get_logs(
+        &self,
+        event_filter: &RindexerEventFilter,
+    ) -> Result<Vec<Log>, ProviderError> {
         (**self).get_logs(event_filter).await
     }
 
@@ -887,7 +883,9 @@ impl<T: ChainProvider + ?Sized> ChainProvider for Arc<T> {
         include_txs: bool,
         rpc_batch_size: Option<usize>,
     ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
-        (**self).get_block_by_number_batch_with_size(block_numbers, include_txs, rpc_batch_size).await
+        (**self)
+            .get_block_by_number_batch_with_size(block_numbers, include_txs, rpc_batch_size)
+            .await
     }
 
     async fn get_tx_receipts_batch(
@@ -920,11 +918,7 @@ impl<T: ChainProvider + ?Sized> ChainProvider for Arc<T> {
         (**self).eth_call(to, data, block_number).await
     }
 
-    async fn eth_call_latest(
-        &self,
-        to: Address,
-        data: Bytes,
-    ) -> Result<String, ProviderError> {
+    async fn eth_call_latest(&self, to: Address, data: Bytes) -> Result<String, ProviderError> {
         (**self).eth_call_latest(to, data).await
     }
 }
@@ -980,6 +974,11 @@ pub mod mock {
             self.traces = traces;
             self
         }
+
+        pub fn with_max_block_range(mut self, range: u64) -> Self {
+            self.max_block_range = Some(U64::from(range));
+            self
+        }
     }
 
     #[async_trait]
@@ -1013,10 +1012,17 @@ pub mod mock {
 
         async fn get_block_by_number_batch(
             &self,
-            _block_numbers: &[U64],
+            block_numbers: &[U64],
             _include_txs: bool,
         ) -> Result<Vec<AnyRpcBlock>, ProviderError> {
-            Ok(self.blocks.iter().map(|b| (**b).clone()).collect())
+            use std::collections::HashSet;
+            let requested: HashSet<u64> = block_numbers.iter().map(|n| n.to::<u64>()).collect();
+            Ok(self
+                .blocks
+                .iter()
+                .filter(|b| requested.contains(&b.inner.number()))
+                .map(|b| (**b).clone())
+                .collect())
         }
 
         async fn get_block_by_number_batch_with_size(
@@ -1259,8 +1265,8 @@ pub fn get_network_provider<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::mock::MockChainProvider;
+    use super::*;
 
     #[test]
     fn mock_chain_provider_defaults() {
@@ -1271,8 +1277,7 @@ mod tests {
 
     #[test]
     fn mock_chain_provider_builder() {
-        let mock = MockChainProvider::new(137)
-            .with_block_number(12345);
+        let mock = MockChainProvider::new(137).with_block_number(12345);
         assert_eq!(mock.chain(), Chain::from(137));
         assert_eq!(mock.chain().id(), 137);
     }
@@ -1287,12 +1292,8 @@ mod tests {
     #[tokio::test]
     async fn mock_chain_provider_empty_logs() {
         let mock = MockChainProvider::new(1);
-        let logs = ChainProvider::get_logs(
-            &mock,
-            &RindexerEventFilter::empty_for_test(),
-        )
-        .await
-        .unwrap();
+        let logs =
+            ChainProvider::get_logs(&mock, &RindexerEventFilter::empty_for_test()).await.unwrap();
         assert!(logs.is_empty());
     }
 
@@ -1306,8 +1307,7 @@ mod tests {
 
     #[tokio::test]
     async fn chain_provider_trait_is_object_safe() {
-        let mock: Box<dyn ChainProvider> =
-            Box::new(MockChainProvider::new(1).with_block_number(7));
+        let mock: Box<dyn ChainProvider> = Box::new(MockChainProvider::new(1).with_block_number(7));
         let num = mock.get_block_number().await.unwrap();
         assert_eq!(num, U64::from(7));
     }

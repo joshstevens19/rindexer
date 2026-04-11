@@ -1,14 +1,14 @@
-use std::{
-    io,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
-
 use alloy::{
     dyn_abi::DynSolValue,
     json_abi::{Event, JsonAbi},
 };
 use serde_json::Value;
+use std::collections::HashMap;
+use std::{
+    io,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tokio_postgres::types::Type as PgType;
 use tracing::{debug, error, info, warn};
 
@@ -23,6 +23,7 @@ use crate::database::sql_type_wrapper::{
 };
 use crate::manifest::contract::Contract;
 use crate::manifest::core::Constants;
+use crate::provider::ChainProvider;
 use crate::{
     abi::{ABIItem, CreateCsvFileForEvent, EventInfo, ParamTypeError, ReadAbiError},
     chat::ChatClients,
@@ -105,13 +106,10 @@ pub fn resolve_table_column_types(
         };
 
         // Build event ABI types map
-        let event_abi_types: std::collections::HashMap<
-            String,
-            std::collections::HashMap<String, String>,
-        > = event_infos
+        let event_abi_types: HashMap<String, HashMap<String, String>> = event_infos
             .iter()
             .map(|event_info| {
-                let column_types: std::collections::HashMap<String, String> = event_info
+                let column_types: HashMap<String, String> = event_info
                     .inputs
                     .iter()
                     .map(|input| (input.name.clone(), input.type_.clone()))
@@ -232,12 +230,12 @@ pub async fn setup_no_code(
 
             // Start cron scheduler if any tables have cron triggers
             if manifest_has_cron_tables(&manifest) {
-                let providers_map: Arc<
-                    std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>,
-                > = Arc::new(
+                let providers_map: Arc<HashMap<String, Arc<dyn ChainProvider>>> = Arc::new(
                     network_providers
                         .iter()
-                        .map(|p| (p.network_name.clone(), p.client.clone()))
+                        .map(|p| {
+                            (p.network_name.clone(), p.client.clone() as Arc<dyn ChainProvider>)
+                        })
                         .collect(),
                 );
 
@@ -309,11 +307,11 @@ struct NoCodeCallbackParams {
     /// False when event is only used for custom tables (not in include_events).
     store_raw_events: bool,
     /// RPC providers for view calls in custom tables (keyed by network name)
-    providers: Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>>,
+    providers: Arc<HashMap<String, Arc<dyn ChainProvider>>>,
     /// User-defined constants from the manifest (can be network-scoped)
     constants: Arc<Constants>,
     /// Custom Multicall3 addresses per network (keyed by network name)
-    multicall_addresses: Arc<std::collections::HashMap<String, Option<String>>>,
+    multicall_addresses: Arc<HashMap<String, Option<String>>>,
 }
 
 struct EventCallbacks {
@@ -392,11 +390,7 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
             let mut event_message_data: Vec<Value> = Vec::new();
 
             // table operations data: (log_params, network, tx_metadata)
-            let mut table_events_data: Vec<(
-                Vec<crate::types::core::LogParam>,
-                String,
-                TxMetadata,
-            )> = Vec::new();
+            let mut table_events_data: Vec<(Vec<LogParam>, String, TxMetadata)> = Vec::new();
 
             let owned_results = match &results {
                 CallbackResult::Event(events) => events
@@ -875,14 +869,15 @@ async fn process_contract(
     }
 
     // Build providers map for view calls
-    let providers: Arc<
-        std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>,
-    > = Arc::new(
-        network_providers.iter().map(|p| (p.network_name.clone(), p.client.clone())).collect(),
+    let providers: Arc<HashMap<String, Arc<dyn ChainProvider>>> = Arc::new(
+        network_providers
+            .iter()
+            .map(|p| (p.network_name.clone(), p.client.clone() as Arc<dyn ChainProvider>))
+            .collect(),
     );
 
     // Build multicall3 addresses map from network configs
-    let multicall_addresses: Arc<std::collections::HashMap<String, Option<String>>> = Arc::new(
+    let multicall_addresses: Arc<HashMap<String, Option<String>>> = Arc::new(
         manifest.networks.iter().map(|n| (n.name.clone(), n.multicall3_address.clone())).collect(),
     );
 
@@ -1102,14 +1097,15 @@ pub async fn process_trace_events(
         };
 
         // Build providers map for view calls (native transfers don't use them but need for struct)
-        let providers: Arc<
-            std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>,
-        > = Arc::new(
-            network_providers.iter().map(|p| (p.network_name.clone(), p.client.clone())).collect(),
+        let providers: Arc<HashMap<String, Arc<dyn ChainProvider>>> = Arc::new(
+            network_providers
+                .iter()
+                .map(|p| (p.network_name.clone(), p.client.clone() as Arc<dyn ChainProvider>))
+                .collect(),
         );
 
         // Build multicall3 addresses map from network configs
-        let multicall_addresses: Arc<std::collections::HashMap<String, Option<String>>> = Arc::new(
+        let multicall_addresses: Arc<HashMap<String, Option<String>>> = Arc::new(
             manifest
                 .networks
                 .iter()

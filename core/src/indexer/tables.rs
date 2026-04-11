@@ -174,7 +174,7 @@ use crate::manifest::contract::{
     Table, TableOperation,
 };
 use crate::manifest::core::Constants;
-use crate::provider::JsonRpcCachedProvider;
+use crate::provider::ChainProvider;
 use crate::system_state::is_running;
 use crate::types::core::LogParam;
 
@@ -425,7 +425,7 @@ async fn prefetch_view_calls(
     tables: &[TableRuntime],
     event_name: &str,
     events_data: &[(Vec<LogParam>, String, TxMetadata)],
-    providers: &std::collections::HashMap<String, Arc<JsonRpcCachedProvider>>,
+    providers: &std::collections::HashMap<String, Arc<dyn ChainProvider>>,
     constants: &Constants,
     multicall_addresses: &std::collections::HashMap<String, Option<String>>,
 ) {
@@ -837,7 +837,7 @@ async fn prefetch_view_calls(
 /// Results are stored in STATIC_CALL_CACHE.
 async fn prefetch_static_calls_via_multicall(
     pending_calls: Vec<PendingViewCall>,
-    providers: &std::collections::HashMap<String, Arc<JsonRpcCachedProvider>>,
+    providers: &std::collections::HashMap<String, Arc<dyn ChainProvider>>,
     multicall_addresses: &std::collections::HashMap<String, Option<String>>,
 ) {
     if pending_calls.is_empty() {
@@ -959,7 +959,7 @@ async fn prefetch_static_calls_via_multicall(
 /// Executes a batch of STATIC view calls using Multicall3 at "latest" block.
 /// Results are stored in STATIC_CALL_CACHE (no block number in key).
 async fn execute_static_multicall3_batch(
-    provider: &JsonRpcCachedProvider,
+    provider: &dyn ChainProvider,
     network: &str,
     calls: &[PendingViewCall],
     multicall_address: Address,
@@ -1126,7 +1126,7 @@ fn resolve_view_call_to_pending(
 /// Results are stored in the VIEW_CALL_CACHE.
 /// If the call fails (e.g., Multicall3 not deployed), marks the network as not having Multicall3.
 async fn execute_multicall3_batch(
-    provider: &JsonRpcCachedProvider,
+    provider: &dyn ChainProvider,
     network: &str,
     block_number: u64,
     calls: &[PendingViewCall],
@@ -1254,7 +1254,7 @@ async fn execute_multicall3_batch(
 /// Results are stored in the global BLOCK_TIMESTAMP_CACHE.
 async fn prefetch_block_timestamps(
     events_data: &[(Vec<LogParam>, String, TxMetadata)],
-    providers: &std::collections::HashMap<String, Arc<JsonRpcCachedProvider>>,
+    providers: &std::collections::HashMap<String, Arc<dyn ChainProvider>>,
     needs_timestamp: bool,
 ) {
     if !needs_timestamp {
@@ -2127,7 +2127,7 @@ async fn execute_view_call(
     view_call: &ViewCall,
     log_params: &[LogParam],
     tx_metadata: &TxMetadata,
-    provider: &JsonRpcCachedProvider,
+    provider: &dyn ChainProvider,
     network: &str,
     constants: &Constants,
 ) -> Option<DynSolValue> {
@@ -2302,7 +2302,7 @@ async fn resolve_calls_in_arithmetic_expression(
     expression: &str,
     log_params: &[LogParam],
     tx_metadata: &TxMetadata,
-    provider: &JsonRpcCachedProvider,
+    provider: &dyn ChainProvider,
     network: &str,
     constants: &Constants,
 ) -> Option<String> {
@@ -2550,7 +2550,7 @@ async fn extract_value_from_event_async(
     log_params: &[LogParam],
     tx_metadata: &TxMetadata,
     column_type: &ColumnType,
-    provider: Option<&JsonRpcCachedProvider>,
+    provider: Option<&dyn ChainProvider>,
     network: &str,
     constants: &Constants,
 ) -> Option<EthereumSqlTypeWrapper> {
@@ -3499,7 +3499,7 @@ pub async fn process_table_operations(
     events_data: &[(Vec<LogParam>, String, TxMetadata)], // (log_params, network, tx_metadata)
     postgres: Option<Arc<PostgresClient>>,
     clickhouse: Option<Arc<ClickhouseClient>>,
-    providers: Arc<std::collections::HashMap<String, Arc<crate::provider::JsonRpcCachedProvider>>>,
+    providers: Arc<std::collections::HashMap<String, Arc<dyn crate::provider::ChainProvider>>>,
     constants: &Constants,
     multicall_addresses: &std::collections::HashMap<String, Option<String>>,
     checkpoint_config: Option<&ProgressCheckpointConfig>,
@@ -4282,7 +4282,7 @@ pub async fn execute_view_call_for_cron(
     tx_metadata: &TxMetadata,
     contract_address: &Address,
     column_type: &ColumnType,
-    provider: &JsonRpcCachedProvider,
+    provider: &dyn ChainProvider,
     network: &str,
 ) -> Option<EthereumSqlTypeWrapper> {
     // Parse the view call
@@ -4309,7 +4309,7 @@ async fn execute_view_call_for_cron_internal(
     view_call: &ViewCall,
     tx_metadata: &TxMetadata,
     contract_address: &Address,
-    provider: &JsonRpcCachedProvider,
+    provider: &dyn ChainProvider,
     network: &str,
 ) -> Option<DynSolValue> {
     use alloy::primitives::keccak256;
