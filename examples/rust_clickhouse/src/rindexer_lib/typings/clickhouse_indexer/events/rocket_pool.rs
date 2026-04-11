@@ -33,7 +33,7 @@ use rindexer::{
         contract::{Contract, ContractDetails},
         yaml::read_manifest,
     },
-    provider::{JsonRpcCachedProvider, RindexerProvider},
+    provider::{ChainProvider, JsonRpcCachedProvider, RindexerProvider},
 };
 use std::collections::HashMap;
 use std::error::Error;
@@ -347,7 +347,7 @@ where
         // be fast but for correctness we must await each future.
         let mut providers = HashMap::new();
         for n in contract_details.details.iter() {
-            let provider = self.get_provider(&n.network).await;
+            let provider: Arc<dyn ChainProvider> = self.get_provider(&n.network).await;
             providers.insert(n.network.clone(), provider);
         }
 

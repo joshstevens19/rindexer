@@ -526,7 +526,7 @@ fn generate_event_bindings_code(
                 contract::{{Contract, ContractDetails}},
                 yaml::read_manifest,
             }},
-            provider::{{JsonRpcCachedProvider, RindexerProvider}},
+            provider::{{ChainProvider, JsonRpcCachedProvider, RindexerProvider}},
             {postgres_client_import}
         }};
         use super::super::super::super::typings::networks::get_provider_cache_for_network;
@@ -590,7 +590,7 @@ fn generate_event_bindings_code(
                 "{raw_contract_name}".to_string()
             }}
 
-            async fn get_provider(&self, network: &str) -> Arc<JsonRpcCachedProvider> {{
+            async fn get_provider(&self, network: &str) -> Arc<dyn ChainProvider> {{
                 get_provider_cache_for_network(network).await
             }}
 
@@ -625,7 +625,7 @@ fn generate_event_bindings_code(
                 // be fast but for correctness we must await each future.
                 let mut providers = HashMap::new();
                 for n in contract_details.details.iter() {{
-                    let provider = self.get_provider(&n.network).await;
+                    let provider: Arc<dyn ChainProvider> = self.get_provider(&n.network).await;
                     providers.insert(n.network.clone(), provider);
                 }}
 

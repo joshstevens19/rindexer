@@ -1480,4 +1480,94 @@ mod tests {
         assert_eq!(result.next.from_block(), U64::from(201));
         assert_eq!(result.next.to_block(), U64::from(251));
     }
+
+    // --- retry_with_block_range tests ---
+
+    #[tokio::test]
+    async fn retry_alchemy_block_range_parsing() {
+        let error = ProviderError::CustomError(
+            "this block range should work: [0x100, 0x200]".to_string(),
+        );
+        let result = retry_with_block_range("test", &error, U64::from(0), U64::from(999), None)
+            .await
+            .expect("should return a result");
+        assert_eq!(result.from, U64::from(0x100));
+        assert_eq!(result.to, U64::from(0x200));
+        assert_eq!(result.max_block_range, None);
+    }
+
+    #[tokio::test]
+    async fn retry_ankr_block_range_too_wide() {
+        let error =
+            ProviderError::CustomError("block range is too wide".to_string());
+        let from = U64::from(500);
+        let result = retry_with_block_range("test", &error, from, U64::from(10000), None)
+            .await
+            .expect("should return a result");
+        assert_eq!(result.from, from);
+        assert_eq!(result.to, from + U64::from(3000));
+        assert_eq!(result.max_block_range, Some(U64::from(3000)));
+    }
+
+    #[tokio::test]
+    async fn retry_base_block_range_too_large() {
+        let error =
+            ProviderError::CustomError("block range too large".to_string());
+        let from = U64::from(500);
+        let result = retry_with_block_range("test", &error, from, U64::from(10000), None)
+            .await
+            .expect("should return a result");
+        assert_eq!(result.from, from);
+        assert_eq!(result.to, from + U64::from(2000));
+        assert_eq!(result.max_block_range, Some(U64::from(2000)));
+    }
+
+    #[tokio::test]
+    async fn retry_quicknode_limited_to() {
+        let error =
+            ProviderError::CustomError("limited to a 10,000 block range".to_string());
+        let from = U64::from(500);
+        let result = retry_with_block_range("test", &error, from, U64::from(20000), None)
+            .await
+            .expect("should return a result");
+        assert_eq!(result.from, from);
+        assert_eq!(result.to, from + U64::from(10000));
+        assert_eq!(result.max_block_range, Some(U64::from(10000)));
+    }
+
+    #[tokio::test]
+    async fn retry_response_too_big_halves_range() {
+        let error = ProviderError::CustomError("response is too big".to_string());
+        let from = U64::from(100);
+        let to = U64::from(10100);
+        // halved_block_number(10100, 100) = 100 + (10000 / 2) = 5100
+        let expected_to = halved_block_number(to, from);
+        let result = retry_with_block_range("test", &error, from, to, None)
+            .await
+            .expect("should return a result");
+        assert_eq!(result.from, from);
+        assert_eq!(result.to, expected_to);
+        assert_eq!(result.max_block_range, None);
+    }
+
+    #[tokio::test]
+    async fn retry_fallback_unknown_error_uses_range5000() {
+        let error = ProviderError::CustomError("some unknown rpc error".to_string());
+        let from = U64::from(100);
+        let to = U64::from(10100); // diff = 10000 → FallbackBlockRange::Range5000
+        let result = retry_with_block_range("test", &error, from, to, None)
+            .await
+            .expect("should return a result");
+        assert_eq!(result.from, from);
+        assert_eq!(result.to, from + U64::from(5000));
+        assert_eq!(result.max_block_range, Some(U64::from(5000)));
+    }
+
+    #[tokio::test]
+    async fn retry_equal_from_to_returns_none() {
+        let error = ProviderError::CustomError("some unknown error".to_string());
+        let result =
+            retry_with_block_range("test", &error, U64::from(100), U64::from(100), None).await;
+        assert!(result.is_none());
+    }
 }

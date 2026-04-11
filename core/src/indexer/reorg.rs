@@ -1794,4 +1794,83 @@ mod tests {
             assert_eq!(c.len(), 1);
         }
     }
+
+    // ======================================================================
+    // find_fork_point
+    // ======================================================================
+
+    fn make_block_with_hash(number: u64, hash: B256) -> alloy::network::AnyRpcBlock {
+        use alloy::network::{AnyHeader, AnyRpcHeader, AnyRpcBlock};
+        use alloy::rpc::types::{Block, BlockTransactions};
+        AnyRpcBlock::new(
+            Block::new(
+                AnyRpcHeader::from_sealed(
+                    AnyHeader { number, ..Default::default() }.seal(hash),
+                ),
+                BlockTransactions::Full(vec![]),
+            )
+            .into(),
+        )
+    }
+
+    /// Scenario 1: cache has blocks 98 and 99, canonical chain returns matching hashes.
+    /// Reorg at 100 → fork point should be 100 (block 99 matched → 99 + 1).
+    #[tokio::test]
+    async fn test_find_fork_point_matching_block_found() {
+        use crate::provider::mock::MockChainProvider;
+        use std::num::NonZeroUsize;
+
+        let hash_98 = B256::from([0x98u8; 32]);
+        let hash_99 = B256::from([0x99u8; 32]);
+
+        // Build a cache with blocks 98 and 99, using the same hashes as the canonical provider.
+        let mut cache: LruCache<u64, BlockMeta> = LruCache::new(NonZeroUsize::new(1024).unwrap());
+        cache.put(98, BlockMeta { hash: hash_98, parent_hash: B256::ZERO, timestamp: 0 });
+        cache.put(99, BlockMeta { hash: hash_99, parent_hash: hash_98, timestamp: 0 });
+
+        // Provider returns canonical blocks with the same hashes.
+        let provider = MockChainProvider::new(1).with_blocks(vec![
+            make_block_with_hash(98, hash_98),
+            make_block_with_hash(99, hash_99),
+        ]);
+
+        let fork = find_fork_point(&cache, &provider, 100).await;
+        // Block 99 matches → fork point = 99 + 1 = 100
+        assert_eq!(fork, 100);
+    }
+
+    /// Scenario 2: cache is empty → returns reorged_block unchanged.
+    #[tokio::test]
+    async fn test_find_fork_point_empty_cache() {
+        use crate::provider::mock::MockChainProvider;
+        use std::num::NonZeroUsize;
+
+        let cache: LruCache<u64, BlockMeta> = LruCache::new(NonZeroUsize::new(1024).unwrap());
+        let provider = MockChainProvider::new(1);
+
+        let fork = find_fork_point(&cache, &provider, 100).await;
+        assert_eq!(fork, 100);
+    }
+
+    /// Scenario 3: cache has block 98 with hash 0xAA but canonical chain returns 0xCC for block
+    /// 98. No match found → returns oldest checked block (98).
+    #[tokio::test]
+    async fn test_find_fork_point_all_mismatched() {
+        use crate::provider::mock::MockChainProvider;
+        use std::num::NonZeroUsize;
+
+        let cached_hash = B256::from([0xAAu8; 32]);
+        let canonical_hash = B256::from([0xCCu8; 32]);
+
+        let mut cache: LruCache<u64, BlockMeta> = LruCache::new(NonZeroUsize::new(1024).unwrap());
+        cache.put(98, BlockMeta { hash: cached_hash, parent_hash: B256::ZERO, timestamp: 0 });
+
+        // Provider returns a different hash for block 98.
+        let provider =
+            MockChainProvider::new(1).with_blocks(vec![make_block_with_hash(98, canonical_hash)]);
+
+        let fork = find_fork_point(&cache, &provider, 100).await;
+        // No match → oldest checked block is 98
+        assert_eq!(fork, 98);
+    }
 }

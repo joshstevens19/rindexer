@@ -137,7 +137,7 @@ fn generate_provider_cache_for_network_fn(networks: &[Network]) -> Code {
 
     let provider_cache_for_network_fn = format!(
         r#"
-        pub async fn get_provider_cache_for_network(network: &str) -> Arc<JsonRpcCachedProvider>  {{
+        pub async fn get_provider_cache_for_network(network: &str) -> Arc<dyn ChainProvider>  {{
             {if_code}
         }}
     "#
@@ -158,7 +158,7 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
     use rindexer::{
         lazy_static,
         manifest::network::{AddressFiltering, BlockPollFrequency},
-        provider::{RindexerProvider, create_client, JsonRpcCachedProvider, RetryClientError},
+        provider::{ChainProvider, RindexerProvider, create_client, JsonRpcCachedProvider, RetryClientError},
         notifications::ChainStateNotification,
         public_read_env_value
     };
