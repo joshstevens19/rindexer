@@ -1311,4 +1311,40 @@ mod tests {
         let num = mock.get_block_number().await.unwrap();
         assert_eq!(num, U64::from(7));
     }
+
+    fn make_block(number: u64) -> AnyRpcBlock {
+        use alloy::network::{AnyHeader, AnyRpcHeader};
+        use alloy::rpc::types::{Block, BlockTransactions};
+        use alloy::primitives::B256;
+        AnyRpcBlock::new(
+            Block::new(
+                AnyRpcHeader::from_sealed(
+                    AnyHeader { number, ..Default::default() }.seal(B256::ZERO),
+                ),
+                BlockTransactions::Full(vec![]),
+            )
+            .into(),
+        )
+    }
+
+    #[tokio::test]
+    async fn mock_chain_provider_filters_blocks_by_number() {
+        let block_100 = make_block(100);
+        let block_200 = make_block(200);
+        let mock = MockChainProvider::new(1).with_blocks(vec![block_100, block_200]);
+
+        let result = mock
+            .get_block_by_number_batch(&[U64::from(100)], false)
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].inner.number(), 100);
+    }
+
+    #[test]
+    fn mock_chain_provider_with_max_block_range() {
+        let mock = MockChainProvider::new(1).with_max_block_range(500);
+        assert_eq!(mock.max_block_range(), Some(U64::from(500)));
+    }
 }

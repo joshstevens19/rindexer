@@ -209,10 +209,43 @@ impl BlockFetcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy::network::{AnyHeader, AnyRpcBlock, AnyRpcHeader};
+    use alloy::primitives::{B256, Log as PrimitiveLog};
+    use alloy::rpc::types::{Block, BlockTransactions};
     use crate::provider::mock::MockChainProvider;
 
     fn mock_provider() -> Arc<dyn ChainProvider> {
         Arc::new(MockChainProvider::new(1))
+    }
+
+    fn make_block(number: u64, timestamp: u64) -> AnyRpcBlock {
+        AnyRpcBlock::new(
+            Block::new(
+                AnyRpcHeader::from_sealed(
+                    AnyHeader { number, timestamp, ..Default::default() }.seal(B256::ZERO),
+                ),
+                BlockTransactions::Full(vec![]),
+            )
+            .into(),
+        )
+    }
+
+    fn make_log(block_number: u64, timestamp: Option<u64>) -> Log {
+        Log {
+            inner: PrimitiveLog { address: Default::default(), data: Default::default() },
+            block_hash: None,
+            block_number: Some(block_number),
+            block_timestamp: timestamp,
+            transaction_hash: None,
+            transaction_index: None,
+            log_index: None,
+            removed: false,
+        }
+    }
+
+    fn provider_with_blocks(blocks: Vec<(u64, u64)>) -> Arc<dyn ChainProvider> {
+        let blocks: Vec<AnyRpcBlock> = blocks.into_iter().map(|(n, t)| make_block(n, t)).collect();
+        Arc::new(MockChainProvider::new(1).with_blocks(blocks))
     }
 
     #[test]
@@ -304,5 +337,240 @@ mod tests {
 
         assert!(tight_samples.len() > 2);
         assert!(mid_steps.iter().any(|&step| step < 50));
+    }
+
+    // ======== get_blocks tests ========
+
+    #[tokio::test]
+    async fn get_blocks_returns_exact_timestamps() {
+        let provider = provider_with_blocks(vec![
+            (100, 1000),
+            (101, 1012),
+            (102, 1024),
+        ]);
+        let fetcher = BlockFetcher::new(Some(1.0), provider);
+        let result = fetcher.get_blocks(&[100, 101, 102]).await.unwrap();
+
+        assert_eq!(result[&100], 1000);
+        assert_eq!(result[&101], 1012);
+        assert_eq!(result[&102], 1024);
+    }
+
+    #[tokio::test]
+    async fn get_blocks_single_block() {
+        let provider = provider_with_blocks(vec![(999, 5555)]);
+        let fetcher = BlockFetcher::new(Some(1.0), provider);
+        let result = fetcher.get_blocks(&[999]).await.unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[&999], 5555);
+    }
+
+    #[tokio::test]
+    async fn get_blocks_deduplicates_input() {
+        let provider = provider_with_blocks(vec![(10, 100), (11, 112)]);
+        let fetcher = BlockFetcher::new(Some(1.0), provider);
+        let result = fetcher.get_blocks(&[10, 10, 11, 11, 10]).await.unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[&10], 100);
+        assert_eq!(result[&11], 112);
+    }
+
+    #[tokio::test]
+    async fn get_blocks_sorts_unordered_input() {
+        let provider = provider_with_blocks(vec![
+            (50, 500),
+            (30, 300),
+            (40, 400),
+        ]);
+        let fetcher = BlockFetcher::new(Some(1.0), provider);
+        let result = fetcher.get_blocks(&[50, 30, 40]).await.unwrap();
+
+        assert_eq!(result[&30], 300);
+        assert_eq!(result[&40], 400);
+        assert_eq!(result[&50], 500);
+    }
+
+    #[tokio::test]
+    async fn get_blocks_empty_provider_returns_empty() {
+        let provider = mock_provider();
+        let fetcher = BlockFetcher::new(Some(1.0), provider);
+        let result = fetcher.get_blocks(&[100]).await.unwrap();
+
+        assert!(result.is_empty());
+    }
+
+    // ======== attach_log_timestamps tests ========
+
+    #[tokio::test]
+    async fn attach_timestamps_empty_logs() {
+        let fetcher = BlockFetcher::new(None, mock_provider());
+        let result = fetcher.attach_log_timestamps(vec![]).await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn attach_timestamps_already_present() {
+        let fetcher = BlockFetcher::new(None, mock_provider());
+        let logs = vec![
+            make_log(100, Some(1000)),
+            make_log(101, Some(1012)),
+        ];
+        let result = fetcher.attach_log_timestamps(logs).await.unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].block_timestamp, Some(1000));
+        assert_eq!(result[1].block_timestamp, Some(1012));
+    }
+
+    #[tokio::test]
+    async fn attach_timestamps_fills_missing() {
+        let provider = provider_with_blocks(vec![
+            (100, 1000),
+            (101, 1012),
+            (102, 1024),
+        ]);
+        let fetcher = BlockFetcher::new(Some(1.0), provider);
+        let logs = vec![
+            make_log(100, None),
+            make_log(101, None),
+            make_log(102, None),
+        ];
+        let result = fetcher.attach_log_timestamps(logs).await.unwrap();
+
+        assert_eq!(result.len(), 3);
+        for log in &result {
+            assert!(log.block_timestamp.is_some(), "timestamp should be filled");
+        }
+        // Check actual values — fetcher returns exact timestamps for small ranges
+        assert!(result.iter().any(|l| l.block_number == Some(100) && l.block_timestamp == Some(1000)));
+        assert!(result.iter().any(|l| l.block_number == Some(101) && l.block_timestamp == Some(1012)));
+        assert!(result.iter().any(|l| l.block_number == Some(102) && l.block_timestamp == Some(1024)));
+    }
+
+    #[tokio::test]
+    async fn attach_timestamps_mixed_present_and_missing() {
+        let provider = provider_with_blocks(vec![(102, 1024)]);
+        let fetcher = BlockFetcher::new(Some(1.0), provider);
+        let logs = vec![
+            make_log(100, Some(1000)),  // already has timestamp
+            make_log(101, Some(1012)),  // already has timestamp
+            make_log(102, None),        // needs fetch
+        ];
+        let result = fetcher.attach_log_timestamps(logs).await.unwrap();
+
+        assert_eq!(result.len(), 3);
+        for log in &result {
+            assert!(log.block_timestamp.is_some());
+        }
+        assert!(result.iter().any(|l| l.block_number == Some(102) && l.block_timestamp == Some(1024)));
+    }
+
+    #[tokio::test]
+    async fn attach_timestamps_same_block_multiple_logs() {
+        let provider = provider_with_blocks(vec![(100, 5000)]);
+        let fetcher = BlockFetcher::new(Some(1.0), provider);
+        let logs = vec![
+            make_log(100, None),
+            make_log(100, None),
+            make_log(100, None),
+        ];
+        let result = fetcher.attach_log_timestamps(logs).await.unwrap();
+
+        assert_eq!(result.len(), 3);
+        for log in &result {
+            assert_eq!(log.block_timestamp, Some(5000));
+        }
+    }
+
+    // ======== interpolation edge cases ========
+
+    #[test]
+    fn interpolate_empty_anchors() {
+        let fetcher = BlockFetcher::new(None, mock_provider());
+        let result = fetcher.interpolate(&mut []);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn interpolate_single_anchor() {
+        let fetcher = BlockFetcher::new(None, mock_provider());
+        let result = fetcher.interpolate(&mut [(500, 5000)]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[&500], 5000);
+    }
+
+    #[test]
+    fn interpolate_two_anchors_linear() {
+        let fetcher = BlockFetcher::new(None, mock_provider());
+        // 2s block time: block 10 at t=100, block 20 at t=120
+        let result = fetcher.interpolate(&mut [(10, 100), (20, 120)]);
+        assert_eq!(result[&10], 100);
+        assert_eq!(result[&15], 110);
+        assert_eq!(result[&20], 120);
+    }
+
+    #[test]
+    fn interpolate_unsorted_anchors() {
+        let fetcher = BlockFetcher::new(None, mock_provider());
+        // Pass unsorted — interpolate should sort internally
+        let result = fetcher.interpolate(&mut [(20, 200), (10, 100)]);
+        assert_eq!(result[&10], 100);
+        assert_eq!(result[&15], 150);
+        assert_eq!(result[&20], 200);
+    }
+
+    #[test]
+    fn interpolate_non_uniform_block_times() {
+        let fetcher = BlockFetcher::new(None, mock_provider());
+        // First segment: 1s blocks, second segment: 3s blocks
+        let result = fetcher.interpolate(&mut [(0, 100), (10, 110), (20, 140)]);
+        // Block 5 should be ~105 (1s/block in first segment)
+        assert_eq!(result[&5], 105);
+        // Block 15 should be ~125 (3s/block in second segment)
+        assert_eq!(result[&15], 125);
+    }
+
+    // ======== sampling edge cases ========
+
+    #[test]
+    fn sampling_minimum_rate_clamp() {
+        // Rate below 0.001 should be clamped
+        let fetcher = BlockFetcher::new(Some(0.0001), mock_provider());
+        assert_eq!(fetcher.sample_rate, 0.001);
+    }
+
+    #[test]
+    fn sampling_maximum_rate_clamp() {
+        // Rate above 1.0 should be clamped
+        let fetcher = BlockFetcher::new(Some(5.0), mock_provider());
+        assert_eq!(fetcher.sample_rate, 1.0);
+    }
+
+    #[test]
+    fn sampling_none_defaults_to_full() {
+        let fetcher = BlockFetcher::new(None, mock_provider());
+        assert_eq!(fetcher.sample_rate, 1.0);
+    }
+
+    #[test]
+    fn sampling_boundary_at_recommended_chunk_size() {
+        let fetcher = BlockFetcher::new(Some(0.1), mock_provider());
+        // Range exactly at RECOMMENDED_RPC_CHUNK_SIZE / 2 = 25 → should return all blocks
+        let samples = fetcher.block_range_samples(0, 24);
+        assert_eq!(samples.len(), 25); // all blocks in range
+
+        // One above the boundary → may use sampling
+        let samples = fetcher.block_range_samples(0, 25);
+        assert_eq!(samples.len(), 26); // still all blocks (26 < chunk threshold)
+    }
+
+    #[test]
+    fn sampling_always_includes_endpoints() {
+        let fetcher = BlockFetcher::new(Some(0.01), mock_provider());
+        let samples = fetcher.block_range_samples(1000, 2000);
+        assert_eq!(*samples.first().unwrap(), 1000);
+        assert_eq!(*samples.last().unwrap(), 2000);
     }
 }
