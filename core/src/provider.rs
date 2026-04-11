@@ -2,6 +2,7 @@ use crate::adaptive_concurrency::ADAPTIVE_CONCURRENCY;
 use crate::notifications::ChainStateNotification;
 use alloy::network::{AnyNetwork, AnyRpcBlock, AnyTransactionReceipt};
 use alloy::rpc::types::{Filter, ValueOrArray};
+#[cfg(test)]
 use alloy::transports::mock::Asserter;
 use alloy::{
     eips::{BlockId, BlockNumberOrTag},
@@ -1346,5 +1347,51 @@ mod tests {
     fn mock_chain_provider_with_max_block_range() {
         let mock = MockChainProvider::new(1).with_max_block_range(500);
         assert_eq!(mock.max_block_range(), Some(U64::from(500)));
+    }
+
+    #[test]
+    fn known_zk_chains_return_true() {
+        assert_eq!(
+            is_known_zk_evm_compatible_chain(Chain::from_named(NamedChain::ZkSync)),
+            Some(true)
+        );
+        assert_eq!(
+            is_known_zk_evm_compatible_chain(Chain::from_named(NamedChain::Scroll)),
+            Some(true)
+        );
+        assert_eq!(
+            is_known_zk_evm_compatible_chain(Chain::from_named(NamedChain::Linea)),
+            Some(true)
+        );
+        assert_eq!(
+            is_known_zk_evm_compatible_chain(Chain::from_named(NamedChain::Lens)),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn known_non_zk_chains_return_false() {
+        assert_eq!(
+            is_known_zk_evm_compatible_chain(Chain::from_named(NamedChain::Mainnet)),
+            Some(false)
+        );
+        assert_eq!(
+            is_known_zk_evm_compatible_chain(Chain::from_named(NamedChain::Arbitrum)),
+            Some(false)
+        );
+        assert_eq!(
+            is_known_zk_evm_compatible_chain(Chain::from_named(NamedChain::Base)),
+            Some(false)
+        );
+        assert_eq!(
+            is_known_zk_evm_compatible_chain(Chain::from_named(NamedChain::Polygon)),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn unknown_chain_id_returns_none() {
+        let unknown = Chain::from_id(999999);
+        assert_eq!(is_known_zk_evm_compatible_chain(unknown), None);
     }
 }
