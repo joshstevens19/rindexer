@@ -35,8 +35,12 @@ pub fn write_file(path: &Path, contents: &str) -> Result<(), WriteFileError> {
         fs::create_dir_all(dir).map_err(WriteFileError::CouldNotCreateDir)?;
     }
 
-    let cleaned_contents: String =
-        contents.lines().map(|line| line.trim_end()).collect::<Vec<&str>>().join("\n");
+    let cleaned_contents: String = contents
+        .trim_start_matches('\n')
+        .lines()
+        .map(|line| line.trim_end())
+        .collect::<Vec<&str>>()
+        .join("\n");
 
     let mut file = File::create(path).map_err(WriteFileError::CouldNotCreateFile)?;
     file.write_all(cleaned_contents.as_bytes()).map_err(WriteFileError::CouldNotConvertToBytes)?;
