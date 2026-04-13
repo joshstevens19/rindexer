@@ -1,9 +1,13 @@
 use crate::blockclock::BlockClock;
+use crate::database::clickhouse::client::ClickhouseClient;
+use crate::event::callback_registry::EventCallbackRegistry;
 use crate::helpers::{halved_block_number, is_relevant_block};
 use crate::indexer::reorg::{
     detect_and_handle_reorg, reorg_safe_distance_for_chain, ReorgContext, ReorgCoordinator,
 };
 use crate::metrics::indexing as metrics;
+use crate::streams::StreamsClients;
+use crate::PostgresClient;
 use crate::{
     event::{config::EventProcessingConfig, RindexerEventFilter},
     indexer::{reorg::handle_chain_notification, IndexingEventProgressStatus},
@@ -150,6 +154,7 @@ pub fn fetch_logs_stream(
 
         // Live indexing mode
         if config.live_indexing() && !force_no_live_indexing {
+            let registry = config.registry();
             live_indexing_stream(
                 config.timestamps(),
                 config.network_contract().block_clock.clone(),
@@ -168,6 +173,7 @@ pub fn fetch_logs_stream(
                 config.postgres(),
                 config.clickhouse(),
                 config.streams_clients(),
+                &registry,
             )
             .await;
         }
@@ -431,9 +437,10 @@ async fn live_indexing_stream(
     original_max_limit: Option<U64>,
     cancel_token: CancellationToken,
     mut reorg_coordinator: Option<ReorgCoordinator>,
-    postgres: Option<Arc<crate::PostgresClient>>,
-    clickhouse: Option<Arc<crate::database::clickhouse::client::ClickhouseClient>>,
-    streams_clients: Arc<Option<crate::streams::StreamsClients>>,
+    postgres: Option<Arc<PostgresClient>>,
+    clickhouse: Option<Arc<ClickhouseClient>>,
+    streams_clients: Arc<Option<StreamsClients>>,
+    registry: &EventCallbackRegistry,
 ) {
     let mut last_seen_block_number = last_seen_block_number;
     let mut log_response_to_large_to_block: Option<U64> = None;
@@ -524,7 +531,7 @@ async fn live_indexing_stream(
                         let reorg_ctx = ReorgContext {
                             postgres: postgres.as_deref(),
                             clickhouse: clickhouse.as_ref(),
-                            registry: None,
+                            registry: Some(registry),
                             streams_clients: streams_clients.as_ref().as_ref(),
                         };
                         if let Some(fork_point) = detect_and_handle_reorg(
@@ -715,7 +722,7 @@ async fn live_indexing_stream(
                                                 let reorg_ctx = ReorgContext {
                                                     postgres: postgres.as_deref(),
                                                     clickhouse: clickhouse.as_ref(),
-                                                    registry: None,
+                                                    registry: Some(registry),
                                                     streams_clients: streams_clients
                                                         .as_ref()
                                                         .as_ref(),

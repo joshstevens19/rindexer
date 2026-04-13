@@ -417,6 +417,51 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn test_handle_reorg_fires_on_reorg_callback() {
+        use crate::event::callback_registry::{EventCallbackRegistry, ReorgNotification};
+        use std::sync::Mutex;
+
+        let window = make_window_with_blocks(&[(10, 10, 9), (11, 11, 10), (12, 12, 11)]);
+        let mut coordinator = make_coordinator(window);
+
+        let task = ReorgTask {
+            network: "test".to_string(),
+            fork_point: 11,
+            detection_point: 12,
+            event_tables: vec![],
+            derived_tables: vec![],
+            canonical_blocks: vec![],
+        };
+
+        // Set up a callback that captures the notification
+        let captured: Arc<Mutex<Option<ReorgNotification>>> = Arc::new(Mutex::new(None));
+        let captured_clone = Arc::clone(&captured);
+        let mut registry = EventCallbackRegistry::new();
+        registry.register_on_reorg(Arc::new(move |notification| {
+            let captured = Arc::clone(&captured_clone);
+            Box::pin(async move {
+                *captured.lock().unwrap() = Some(notification);
+            })
+        }));
+
+        let ctx = super::super::ReorgContext {
+            postgres: None,
+            clickhouse: None,
+            registry: Some(&registry),
+            streams_clients: None,
+        };
+
+        coordinator.handle_reorg(task, &ctx).await.unwrap();
+
+        let notification =
+            captured.lock().unwrap().take().expect("on_reorg callback was not fired");
+        assert_eq!(notification.network, "test");
+        assert_eq!(notification.fork_block, 11);
+        assert_eq!(notification.detection_block, 12);
+        assert!(notification.invalidated_tx_hashes.is_empty(), "no PG → no affected hashes");
+    }
+
     #[test]
     fn test_on_exex_reorg() {
         let window = BlockChainWindow::new(100);

@@ -492,7 +492,7 @@ async fn start_indexing_contract_events(
                         let reorg_ctx = ReorgContext {
                             postgres: postgres.as_deref(),
                             clickhouse: clickhouse.as_ref(),
-                            registry: None,
+                            registry: Some(&registry),
                             streams_clients: startup_streams_clients
                                 .as_ref()
                                 .and_then(|a| a.as_ref().as_ref()),
@@ -780,7 +780,7 @@ async fn start_indexing_contract_events(
                             let reorg_ctx = ReorgContext {
                                 postgres: postgres.as_deref(),
                                 clickhouse: clickhouse.as_ref(),
-                                registry: None,
+                                registry: Some(&registry),
                                 streams_clients: dep_streams_clients
                                     .as_ref()
                                     .and_then(|a| a.as_ref().as_ref()),

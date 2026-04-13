@@ -329,6 +329,13 @@ impl EventProcessingConfig {
         }
     }
 
+    pub fn registry(&self) -> Arc<EventCallbackRegistry> {
+        match self {
+            Self::ContractEventProcessing(config) => config.registry.clone(),
+            Self::FactoryEventProcessing(config) => config.registry.clone(),
+        }
+    }
+
     pub fn postgres(&self) -> Option<Arc<PostgresClient>> {
         match self {
             Self::ContractEventProcessing(config) => config.postgres.clone(),

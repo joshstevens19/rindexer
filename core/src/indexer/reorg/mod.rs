@@ -20,8 +20,6 @@ pub use coordinator::ReorgCoordinator;
 pub use persistence::ReorgBlockHashPersistence;
 pub use task::{DerivedTableInfo, EventTableInfo};
 pub use window::BlockChainWindow;
-// Re-export ReorgContext so callers can use `reorg::ReorgContext`
-// (it's defined just below)
 
 /// Bundles the optional DB clients, callback registry, and streams clients
 /// that reorg recovery needs, avoiding parameter sprawl.
