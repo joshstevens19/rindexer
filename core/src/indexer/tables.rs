@@ -1434,7 +1434,12 @@ pub struct TableRuntime {
 
 impl TableRuntime {
     pub fn new(table: Table, indexer_name: &str, contract_name: &str) -> Self {
-        let full_table_name = generate_table_full_name(indexer_name, contract_name, &table.name);
+        let full_table_name = generate_table_full_name(
+            indexer_name,
+            contract_name,
+            &table.name,
+            table.database.as_deref(),
+        );
         Self {
             table,
             full_table_name,
@@ -2659,6 +2664,29 @@ async fn extract_value_from_event_async(
         return Some(dyn_sol_value_to_wrapper(&result, column_type));
     }
 
+    // BlockClock cache fallback for $rindexer_block_timestamp when RPC didn't include it
+    // in eth_getLogs. The prefetch_block_timestamps call earlier in the pipeline will have
+    // fetched it via eth_getBlockByNumber if any table references this field.
+    if after_constants == "$rindexer_block_timestamp" && tx_metadata.block_timestamp.is_none() {
+        if let Some(epoch) = get_cached_block_timestamp(network, tx_metadata.block_number).await {
+            return Some(match column_type {
+                ColumnType::Uint256 | ColumnType::Uint128 | ColumnType::Uint64 => {
+                    EthereumSqlTypeWrapper::U256Numeric(U256::from(epoch))
+                }
+                ColumnType::Timestamp => DateTime::from_timestamp(epoch as i64, 0)
+                    .map(|dt| EthereumSqlTypeWrapper::DateTime(dt.with_timezone(&Utc)))
+                    .unwrap_or_else(|| EthereumSqlTypeWrapper::U256Numeric(U256::from(epoch))),
+                _ => EthereumSqlTypeWrapper::U256Numeric(U256::from(epoch)),
+            });
+        }
+        tracing::warn!(
+            "block_timestamp unavailable for block {} on {} — RPC may not include \
+             blockTimestamp in eth_getLogs and BlockClock cache miss",
+            tx_metadata.block_number,
+            network,
+        );
+    }
+
     // Fall back to sync extraction for everything else
     extract_value_from_event(after_constants, log_params, tx_metadata, column_type)
 }
@@ -3483,9 +3511,29 @@ pub async fn process_table_operations(
     }
 
     // Check if any table needs timestamps and prefetch them in batch
-    let any_table_needs_timestamp = tables
-        .iter()
-        .any(|t| t.table.timestamp && t.table.events.iter().any(|e| e.event == event_name));
+    let any_table_needs_timestamp = tables.iter().any(|t| {
+        let handles_event = t.table.events.iter().any(|e| e.event == event_name);
+        if !handles_event {
+            return false;
+        }
+        // Built-in timestamp column enabled
+        if t.table.timestamp {
+            return true;
+        }
+        // Column mapping references $rindexer_block_timestamp (custom column using the
+        // built-in metadata). Without prefetch, this resolves to NULL when the RPC doesn't
+        // include blockTimestamp in eth_getLogs responses.
+        t.table.events.iter().any(|e| {
+            e.event == event_name
+                && e.operations.iter().any(|op| {
+                    op.where_clause.values().any(|v| v.contains("rindexer_block_timestamp"))
+                        || op
+                            .set
+                            .iter()
+                            .any(|s| s.effective_value().contains("rindexer_block_timestamp"))
+                })
+        })
+    });
 
     if any_table_needs_timestamp {
         prefetch_block_timestamps(events_data, &providers, true).await;
@@ -4882,6 +4930,257 @@ mod tests {
             assert_eq!(s, "ETH");
         } else {
             panic!("Expected String");
+        }
+    }
+
+    // =========================================================================
+    // Tests for block_timestamp BlockClock cache fallback
+    // =========================================================================
+
+    /// When tx_metadata.block_timestamp is Some, $rindexer_block_timestamp resolves
+    /// from metadata directly (no cache needed).
+    #[test]
+    fn test_block_timestamp_resolves_from_metadata_when_present() {
+        let params =
+            vec![LogParam::new("value".to_string(), DynSolValue::Uint(U256::from(1u64), 256))];
+        let meta = TxMetadata {
+            block_number: 84988630,
+            block_timestamp: Some(U256::from(1700000000u64)),
+            tx_hash: B256::ZERO,
+            block_hash: B256::ZERO,
+            contract_address: Address::ZERO,
+            log_index: U256::from(0u64),
+            tx_index: 0,
+        };
+
+        // uint256 column type — should return epoch as U256Numeric
+        let result = extract_value_from_event(
+            "$rindexer_block_timestamp",
+            &params,
+            &meta,
+            &ColumnType::Uint256,
+        );
+        assert!(result.is_some(), "Should resolve from metadata");
+        match result.unwrap() {
+            EthereumSqlTypeWrapper::U256Numeric(val) => {
+                assert_eq!(val, U256::from(1700000000u64));
+            }
+            other => panic!("Expected U256Numeric, got: {:?}", other),
+        }
+
+        // Timestamp column type — should return DateTime
+        let result = extract_value_from_event(
+            "$rindexer_block_timestamp",
+            &params,
+            &meta,
+            &ColumnType::Timestamp,
+        );
+        assert!(result.is_some(), "Should resolve as DateTime");
+        match result.unwrap() {
+            EthereumSqlTypeWrapper::DateTime(dt) => {
+                assert_eq!(dt.timestamp(), 1700000000);
+            }
+            other => panic!("Expected DateTime, got: {:?}", other),
+        }
+    }
+
+    /// When tx_metadata.block_timestamp is None (RPC didn't include blockTimestamp
+    /// in eth_getLogs), the sync extraction returns None. The async path should
+    /// fall back to BlockClock cache — tested separately via tokio runtime.
+    #[test]
+    fn test_block_timestamp_returns_none_when_metadata_missing_sync() {
+        let params =
+            vec![LogParam::new("value".to_string(), DynSolValue::Uint(U256::from(1u64), 256))];
+        let meta = TxMetadata {
+            block_number: 84988630,
+            block_timestamp: None, // RPC didn't include blockTimestamp
+            tx_hash: B256::ZERO,
+            block_hash: B256::ZERO,
+            contract_address: Address::ZERO,
+            log_index: U256::from(0u64),
+            tx_index: 0,
+        };
+
+        let result = extract_value_from_event(
+            "$rindexer_block_timestamp",
+            &params,
+            &meta,
+            &ColumnType::Uint256,
+        );
+        assert!(result.is_none(), "Sync path should return None when metadata missing");
+    }
+
+    /// Async extraction falls back to BlockClock cache when tx_metadata.block_timestamp
+    /// is None. This is the fix for the PayoutRedemption NULL block_timestamp bug.
+    #[tokio::test]
+    async fn test_block_timestamp_async_falls_back_to_cache() {
+        let params =
+            vec![LogParam::new("value".to_string(), DynSolValue::Uint(U256::from(1u64), 256))];
+        let meta = TxMetadata {
+            block_number: 99999999, // Unique block to avoid cache collision
+            block_timestamp: None,  // Simulate missing timestamp from RPC
+            tx_hash: B256::ZERO,
+            block_hash: B256::ZERO,
+            contract_address: Address::ZERO,
+            log_index: U256::from(0u64),
+            tx_index: 0,
+        };
+
+        // Pre-populate the BlockClock cache (simulating prefetch_block_timestamps)
+        {
+            let mut cache = BLOCK_TIMESTAMP_CACHE.write().await;
+            cache.insert(("polygon".to_string(), 99999999), 1700000042);
+        }
+
+        let constants = Constants::default();
+        let result = extract_value_from_event_async(
+            "$rindexer_block_timestamp",
+            &params,
+            &meta,
+            &ColumnType::Uint256,
+            None,
+            "polygon",
+            &constants,
+        )
+        .await;
+
+        assert!(result.is_some(), "Async path should resolve from BlockClock cache");
+        match result.unwrap() {
+            EthereumSqlTypeWrapper::U256Numeric(val) => {
+                assert_eq!(val, U256::from(1700000042u64));
+            }
+            other => panic!("Expected U256Numeric from cache fallback, got: {:?}", other),
+        }
+
+        // Clean up cache entry
+        {
+            let mut cache = BLOCK_TIMESTAMP_CACHE.write().await;
+            cache.remove(&("polygon".to_string(), 99999999));
+        }
+    }
+
+    /// Async extraction with Timestamp column type returns DateTime from cache.
+    #[tokio::test]
+    async fn test_block_timestamp_async_cache_returns_datetime() {
+        let params =
+            vec![LogParam::new("value".to_string(), DynSolValue::Uint(U256::from(1u64), 256))];
+        let meta = TxMetadata {
+            block_number: 99999998,
+            block_timestamp: None,
+            tx_hash: B256::ZERO,
+            block_hash: B256::ZERO,
+            contract_address: Address::ZERO,
+            log_index: U256::from(0u64),
+            tx_index: 0,
+        };
+
+        {
+            let mut cache = BLOCK_TIMESTAMP_CACHE.write().await;
+            cache.insert(("polygon".to_string(), 99999998), 1700000000);
+        }
+
+        let constants = Constants::default();
+        let result = extract_value_from_event_async(
+            "$rindexer_block_timestamp",
+            &params,
+            &meta,
+            &ColumnType::Timestamp,
+            None,
+            "polygon",
+            &constants,
+        )
+        .await;
+
+        assert!(result.is_some(), "Should return DateTime from cache");
+        match result.unwrap() {
+            EthereumSqlTypeWrapper::DateTime(dt) => {
+                assert_eq!(dt.timestamp(), 1700000000);
+            }
+            other => panic!("Expected DateTime from cache, got: {:?}", other),
+        }
+
+        {
+            let mut cache = BLOCK_TIMESTAMP_CACHE.write().await;
+            cache.remove(&("polygon".to_string(), 99999998));
+        }
+    }
+
+    /// When both metadata and cache miss, async extraction returns None (same as
+    /// sync) but we emit a warning (tested by observing return value only).
+    #[tokio::test]
+    async fn test_block_timestamp_async_returns_none_on_total_miss() {
+        let params =
+            vec![LogParam::new("value".to_string(), DynSolValue::Uint(U256::from(1u64), 256))];
+        let meta = TxMetadata {
+            block_number: 88888888, // Not in cache
+            block_timestamp: None,
+            tx_hash: B256::ZERO,
+            block_hash: B256::ZERO,
+            contract_address: Address::ZERO,
+            log_index: U256::from(0u64),
+            tx_index: 0,
+        };
+
+        let constants = Constants::default();
+        let result = extract_value_from_event_async(
+            "$rindexer_block_timestamp",
+            &params,
+            &meta,
+            &ColumnType::Uint256,
+            None,
+            "polygon",
+            &constants,
+        )
+        .await;
+
+        assert!(result.is_none(), "Should return None when both metadata and cache miss");
+    }
+
+    /// When metadata IS present, the async path should use it directly (not touch cache).
+    #[tokio::test]
+    async fn test_block_timestamp_async_prefers_metadata_over_cache() {
+        let params =
+            vec![LogParam::new("value".to_string(), DynSolValue::Uint(U256::from(1u64), 256))];
+        let meta = TxMetadata {
+            block_number: 77777777,
+            block_timestamp: Some(U256::from(1700000001u64)), // Has metadata
+            tx_hash: B256::ZERO,
+            block_hash: B256::ZERO,
+            contract_address: Address::ZERO,
+            log_index: U256::from(0u64),
+            tx_index: 0,
+        };
+
+        // Put a DIFFERENT value in cache to prove metadata wins
+        {
+            let mut cache = BLOCK_TIMESTAMP_CACHE.write().await;
+            cache.insert(("polygon".to_string(), 77777777), 9999999999);
+        }
+
+        let constants = Constants::default();
+        let result = extract_value_from_event_async(
+            "$rindexer_block_timestamp",
+            &params,
+            &meta,
+            &ColumnType::Uint256,
+            None,
+            "polygon",
+            &constants,
+        )
+        .await;
+
+        assert!(result.is_some());
+        match result.unwrap() {
+            EthereumSqlTypeWrapper::U256Numeric(val) => {
+                // Should be metadata value (1700000001), NOT cache value (9999999999)
+                assert_eq!(val, U256::from(1700000001u64));
+            }
+            other => panic!("Expected metadata value, got: {:?}", other),
+        }
+
+        {
+            let mut cache = BLOCK_TIMESTAMP_CACHE.write().await;
+            cache.remove(&("polygon".to_string(), 77777777));
         }
     }
 }

@@ -348,6 +348,7 @@ impl CronScheduler {
                             &manifest.name,
                             &contract.name,
                             &table.name,
+                            table.database.as_deref(),
                         );
 
                         if factory_config.is_some() {
