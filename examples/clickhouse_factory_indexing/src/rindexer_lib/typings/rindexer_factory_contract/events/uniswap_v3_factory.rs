@@ -15,7 +15,6 @@ use super::super::super::super::typings::networks::get_provider_cache_for_networ
 use super::uniswap_v3_factory_abi_gen::RindexerUniswapV3FactoryGen::{
     self, RindexerUniswapV3FactoryGenEvents, RindexerUniswapV3FactoryGenInstance,
 };
-use alloy::network::AnyNetwork;
 use alloy::primitives::{Address, Bytes, B256};
 use alloy::sol_types::{SolEvent, SolEventInterface, SolType};
 use rindexer::{
@@ -33,7 +32,7 @@ use rindexer::{
         contract::{Contract, ContractDetails},
         yaml::read_manifest,
     },
-    provider::{JsonRpcCachedProvider, RindexerProvider},
+    provider::{ChainProvider, JsonRpcCachedProvider},
     ClickhouseClient, FutureExt,
 };
 use std::collections::HashMap;
@@ -225,36 +224,6 @@ where
     OwnerChanged(OwnerChangedEvent<TExtensions>),
 }
 
-pub async fn uniswap_v3_factory_contract(
-    network: &str,
-    address: Address,
-) -> RindexerUniswapV3FactoryGenInstance<Arc<RindexerProvider>, AnyNetwork> {
-    RindexerUniswapV3FactoryGen::new(
-        address,
-        get_provider_cache_for_network(network).await.get_inner_provider(),
-    )
-}
-
-pub async fn decoder_contract(
-    network: &str,
-) -> RindexerUniswapV3FactoryGenInstance<Arc<RindexerProvider>, AnyNetwork> {
-    if network == "base" {
-        RindexerUniswapV3FactoryGen::new(
-            // do not care about address here its decoding makes it easier to handle ValueOrArray
-            Address::ZERO,
-            get_provider_cache_for_network(network).await.get_inner_provider(),
-        )
-    } else if network == "ethereum" {
-        RindexerUniswapV3FactoryGen::new(
-            // do not care about address here its decoding makes it easier to handle ValueOrArray
-            Address::ZERO,
-            get_provider_cache_for_network(network).await.get_inner_provider(),
-        )
-    } else {
-        panic!("Network not supported");
-    }
-}
-
 impl<TExtensions> UniswapV3FactoryEventType<TExtensions>
 where
     TExtensions: 'static + Send + Sync,
@@ -277,7 +246,7 @@ where
         "UniswapV3Factory".to_string()
     }
 
-    async fn get_provider(&self, network: &str) -> Arc<JsonRpcCachedProvider> {
+    async fn get_provider(&self, network: &str) -> Arc<dyn ChainProvider> {
         get_provider_cache_for_network(network).await
     }
 
@@ -285,8 +254,6 @@ where
         &self,
         network: &str,
     ) -> Arc<dyn Fn(Vec<B256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync> {
-        let decoder_contract = decoder_contract(network);
-
         match self {
             UniswapV3FactoryEventType::OwnerChanged(_) => {
                 Arc::new(move |topics: Vec<B256>, data: Bytes| {
@@ -329,7 +296,7 @@ where
         // be fast but for correctness we must await each future.
         let mut providers = HashMap::new();
         for n in contract_details.details.iter() {
-            let provider = self.get_provider(&n.network).await;
+            let provider: Arc<dyn ChainProvider> = self.get_provider(&n.network).await;
             providers.insert(n.network.clone(), provider);
         }
 
@@ -366,15 +333,22 @@ where
             reorg_safe_distance: contract_details.reorg_safe_distance,
         };
 
-        let callback: Arc<
-            dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync,
-        > = match self {
+        let (callback, reorg_sender): (
+            Arc<
+                dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>>
+                    + Send
+                    + Sync,
+            >,
+            Option<tokio::sync::broadcast::Sender<rindexer::ReorgEvent>>,
+        ) = match self {
             UniswapV3FactoryEventType::OwnerChanged(event) => {
+                let reorg_sender = Some(event.context.reorg_tx.clone());
                 let event = Arc::new(event);
-                Arc::new(move |result| {
+                let callback = Arc::new(move |result| {
                     let event = Arc::clone(&event);
                     async move { event.call(result).await }.boxed()
-                })
+                });
+                (callback, reorg_sender)
             }
         };
 
@@ -387,11 +361,17 @@ where
             contract,
             callback,
             tables: Arc::new(vec![]),
-            reorg_sender: None,
+            reorg_sender,
             streams_clients: Arc::new(None),
             providers: Arc::new(providers),
             constants: Arc::new(rindexer_yaml.constants.clone()),
-            multicall_addresses: Arc::new(HashMap::new()),
+            multicall_addresses: Arc::new(
+                rindexer_yaml
+                    .networks
+                    .iter()
+                    .map(|n| (n.name.clone(), n.multicall3_address.clone()))
+                    .collect(),
+            ),
         });
     }
 }

@@ -7,7 +7,9 @@ use rindexer::{
     lazy_static,
     manifest::network::{AddressFiltering, BlockPollFrequency},
     notifications::ChainStateNotification,
-    provider::{create_client, JsonRpcCachedProvider, RetryClientError, RindexerProvider},
+    provider::{
+        create_client, ChainProvider, JsonRpcCachedProvider, RetryClientError, RindexerProvider,
+    },
     public_read_env_value,
 };
 use std::sync::Arc;
@@ -100,7 +102,7 @@ pub async fn get_base_provider() -> Arc<RindexerProvider> {
     get_base_provider_cache().await.get_inner_provider()
 }
 
-pub async fn get_provider_cache_for_network(network: &str) -> Arc<JsonRpcCachedProvider> {
+pub async fn get_provider_cache_for_network(network: &str) -> Arc<dyn ChainProvider> {
     if network == "ethereum" {
         return get_ethereum_provider_cache().await;
     }

@@ -15,7 +15,6 @@ use super::super::super::super::typings::networks::get_provider_cache_for_networ
 use super::uniswap_v3_pool_filter_abi_gen::RindexerUniswapV3PoolFilterGen::{
     self, RindexerUniswapV3PoolFilterGenEvents, RindexerUniswapV3PoolFilterGenInstance,
 };
-use alloy::network::AnyNetwork;
 use alloy::primitives::{Address, B256, Bytes};
 use alloy::sol_types::{SolEvent, SolEventInterface, SolType};
 use rindexer::{
@@ -33,7 +32,7 @@ use rindexer::{
         contract::{Contract, ContractDetails},
         yaml::read_manifest,
     },
-    provider::{JsonRpcCachedProvider, RindexerProvider},
+    provider::{ChainProvider, JsonRpcCachedProvider},
 };
 use std::collections::HashMap;
 use std::error::Error;
@@ -327,30 +326,6 @@ where
     Swap(SwapEvent<TExtensions>),
 }
 
-pub async fn uniswap_v3_pool_filter_contract(
-    network: &str,
-    address: Address,
-) -> RindexerUniswapV3PoolFilterGenInstance<Arc<RindexerProvider>, AnyNetwork> {
-    RindexerUniswapV3PoolFilterGen::new(
-        address,
-        get_provider_cache_for_network(network).await.get_inner_provider(),
-    )
-}
-
-pub async fn decoder_contract(
-    network: &str,
-) -> RindexerUniswapV3PoolFilterGenInstance<Arc<RindexerProvider>, AnyNetwork> {
-    if network == "base" {
-        RindexerUniswapV3PoolFilterGen::new(
-            // do not care about address here its decoding makes it easier to handle ValueOrArray
-            Address::ZERO,
-            get_provider_cache_for_network(network).await.get_inner_provider(),
-        )
-    } else {
-        panic!("Network not supported");
-    }
-}
-
 impl<TExtensions> UniswapV3PoolFilterEventType<TExtensions>
 where
     TExtensions: 'static + Send + Sync,
@@ -373,7 +348,7 @@ where
         "UniswapV3Pool".to_string()
     }
 
-    async fn get_provider(&self, network: &str) -> Arc<JsonRpcCachedProvider> {
+    async fn get_provider(&self, network: &str) -> Arc<dyn ChainProvider> {
         get_provider_cache_for_network(network).await
     }
 
@@ -381,8 +356,6 @@ where
         &self,
         network: &str,
     ) -> Arc<dyn Fn(Vec<B256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync> {
-        let decoder_contract = decoder_contract(network);
-
         match self {
             UniswapV3PoolFilterEventType::Swap(_) => {
                 Arc::new(move |topics: Vec<B256>, data: Bytes| {
@@ -425,7 +398,7 @@ where
         // be fast but for correctness we must await each future.
         let mut providers = HashMap::new();
         for n in contract_details.details.iter() {
-            let provider = self.get_provider(&n.network).await;
+            let provider: Arc<dyn ChainProvider> = self.get_provider(&n.network).await;
             providers.insert(n.network.clone(), provider);
         }
 
