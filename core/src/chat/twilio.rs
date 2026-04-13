@@ -61,8 +61,7 @@ mod tests {
     async fn twilio_send_sms() {
         let account_sid =
             std::env::var("TWILIO_ACCOUNT_SID").expect("TWILIO_ACCOUNT_SID must be set");
-        let auth_token =
-            std::env::var("TWILIO_AUTH_TOKEN").expect("TWILIO_AUTH_TOKEN must be set");
+        let auth_token = std::env::var("TWILIO_AUTH_TOKEN").expect("TWILIO_AUTH_TOKEN must be set");
         let from_number =
             std::env::var("TWILIO_FROM_NUMBER").expect("TWILIO_FROM_NUMBER must be set");
         let to_number = std::env::var("TWILIO_TO_NUMBER").expect("TWILIO_TO_NUMBER must be set");

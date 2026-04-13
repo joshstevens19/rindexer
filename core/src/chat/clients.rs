@@ -399,11 +399,8 @@ impl ChatClients {
                             .find(|e| e.event_name == event_message.event_name);
 
                         if let Some(twilio_event) = twilio_event {
-                            let message = self.twilio_send_message_tasks(
-                                instance,
-                                twilio_event,
-                                data_array,
-                            );
+                            let message =
+                                self.twilio_send_message_tasks(instance, twilio_event, data_array);
                             messages.push(message);
                         }
                     }
