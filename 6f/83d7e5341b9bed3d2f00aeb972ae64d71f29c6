@@ -1,0 +1,53 @@
+examples/rindexer_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/mod.rs
+  74765553b8c9673c 2-5
+examples/rindexer_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/mod.rs
+  74765553b8c9673c 2-5
+examples/rindexer_factory_indexing/src/rindexer_lib/typings/mod.rs
+  74765553b8c9673c 2-5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "6f83d7e5341b9bed3d2f00aeb972ae64d71f29c6",
+  "prompts": {
+    "74765553b8c9673c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c4da830e-5308-439d-8396-83f2e6409a9c",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 12,
+      "total_deletions": 12,
+      "accepted_lines": 13,
+      "overriden_lines": 0
+    },
+    "847014acdc95bfaf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ba97b2b6-c1ec-4c31-8b29-a4cc233ccc5c",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 267,
+      "total_deletions": 0,
+      "accepted_lines": 117,
+      "overriden_lines": 0
+    },
+    "8eb93b81bc1ec27e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "edca3c59-b30f-4bf9-9917-3ad3d23245f6",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 4185,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    }
+  }
+}
