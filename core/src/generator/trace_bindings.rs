@@ -1030,7 +1030,8 @@ mod tests {
         let source = include_str!("trace_bindings.rs");
 
         assert!(
-            source.contains("async fn get_provider(&self, network: &str) -> Arc<dyn ChainProvider>"),
+            source
+                .contains("async fn get_provider(&self, network: &str) -> Arc<dyn ChainProvider>"),
             "trace_bindings template must declare get_provider returning Arc<dyn ChainProvider>"
         );
 

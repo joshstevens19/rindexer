@@ -1315,8 +1315,8 @@ mod tests {
 
     fn make_block(number: u64) -> AnyRpcBlock {
         use alloy::network::{AnyHeader, AnyRpcHeader};
-        use alloy::rpc::types::{Block, BlockTransactions};
         use alloy::primitives::B256;
+        use alloy::rpc::types::{Block, BlockTransactions};
         AnyRpcBlock::new(
             Block::new(
                 AnyRpcHeader::from_sealed(
@@ -1334,10 +1334,7 @@ mod tests {
         let block_200 = make_block(200);
         let mock = MockChainProvider::new(1).with_blocks(vec![block_100, block_200]);
 
-        let result = mock
-            .get_block_by_number_batch(&[U64::from(100)], false)
-            .await
-            .unwrap();
+        let result = mock.get_block_by_number_batch(&[U64::from(100)], false).await.unwrap();
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].inner.number(), 100);

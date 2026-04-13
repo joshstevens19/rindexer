@@ -1062,7 +1062,8 @@ mod tests {
 
         // The get_provider method in the template must return Arc<dyn ChainProvider>
         assert!(
-            source.contains("async fn get_provider(&self, network: &str) -> Arc<dyn ChainProvider>"),
+            source
+                .contains("async fn get_provider(&self, network: &str) -> Arc<dyn ChainProvider>"),
             "events_bindings template must declare get_provider returning Arc<dyn ChainProvider>"
         );
 

@@ -5270,7 +5270,9 @@ mod tests {
     fn test_is_view_call_with_accessor() {
         // Call followed by array index or field access
         assert!(is_view_call("$call($addr, \"getReserves()\")[0]"));
-        assert!(is_view_call("$call($addr, \"getReserves() returns (uint112 r0, uint112 r1)\").r0"));
+        assert!(is_view_call(
+            "$call($addr, \"getReserves() returns (uint112 r0, uint112 r1)\").r0"
+        ));
     }
 
     #[test]
@@ -5384,8 +5386,8 @@ mod tests {
     fn test_dyn_sol_value_to_json_fixed_bytes() {
         // DynSolValue::FixedBytes takes a B256 (Word/32-byte) with a declared size
         let word = B256::from_slice(&[
-            0xbe, 0xef, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0,
+            0xbe, 0xef, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0,
         ]);
         let result = dyn_sol_value_to_json(&DynSolValue::FixedBytes(word, 2));
         assert_eq!(result, json!(format!("0x{}", hex::encode(&word[..]))));
@@ -5520,8 +5522,8 @@ mod tests {
     #[test]
     fn test_dyn_sol_value_to_string_fixed_bytes() {
         let word = B256::from_slice(&[
-            0xab, 0xcd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0,
+            0xab, 0xcd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0,
         ]);
         let result = dyn_sol_value_to_string(&DynSolValue::FixedBytes(word, 2));
         assert_eq!(result, format!("0x{}", hex::encode(&word[..])));
@@ -5599,8 +5601,11 @@ mod tests {
             tx_index: 1,
         };
 
-        let result =
-            expand_string_template("blk=$rindexer_block_number,log=$rindexer_log_index", &params, &meta);
+        let result = expand_string_template(
+            "blk=$rindexer_block_number,log=$rindexer_log_index",
+            &params,
+            &meta,
+        );
         assert_eq!(result, Some("blk=42,log=3".to_string()));
     }
 }

@@ -426,7 +426,9 @@ pub async fn native_transfer_block_consumer(
 
     let blocks = blocks
         .into_iter()
-        .map(|b| TraceResult::new_block(b, network_name, provider.chain().id(), from_block, to_block))
+        .map(|b| {
+            TraceResult::new_block(b, network_name, provider.chain().id(), from_block, to_block)
+        })
         .collect::<Vec<_>>();
     config.trigger_event(blocks).await;
 
@@ -554,9 +556,9 @@ mod tests {
         let cases: Vec<(bool, bool, bool, bool)> = vec![
             // (input_empty, value_zero, has_to, expected)
             (true, false, true, true),   // ETH transfer
-            (false, false, true, false),  // Contract call: has input data
-            (true, true, true, false),    // Zero value: not a transfer
-            (true, false, false, false),  // Contract creation: no to address
+            (false, false, true, false), // Contract call: has input data
+            (true, true, true, false),   // Zero value: not a transfer
+            (true, false, false, false), // Contract creation: no to address
         ];
 
         for (input_empty, value_zero, has_to, expected) in cases {
@@ -604,11 +606,11 @@ mod tests {
 
     #[tokio::test]
     async fn provider_trace_call_dispatches_trace_block() {
-        use alloy::rpc::types::trace::parity::{LocalizedTransactionTrace, TransactionTrace};
-        use crate::indexer::progress::IndexingEventsProgressState;
         use crate::event::callback_registry::TraceCallbackRegistry;
-        use tokio_util::sync::CancellationToken;
+        use crate::indexer::progress::IndexingEventsProgressState;
+        use alloy::rpc::types::trace::parity::{LocalizedTransactionTrace, TransactionTrace};
         use std::path::PathBuf;
+        use tokio_util::sync::CancellationToken;
 
         let trace = LocalizedTransactionTrace {
             trace: TransactionTrace {
@@ -653,11 +655,11 @@ mod tests {
 
     #[tokio::test]
     async fn provider_trace_call_dispatches_debug_trace() {
-        use alloy::rpc::types::trace::parity::{LocalizedTransactionTrace, TransactionTrace};
-        use crate::indexer::progress::IndexingEventsProgressState;
         use crate::event::callback_registry::TraceCallbackRegistry;
-        use tokio_util::sync::CancellationToken;
+        use crate::indexer::progress::IndexingEventsProgressState;
+        use alloy::rpc::types::trace::parity::{LocalizedTransactionTrace, TransactionTrace};
         use std::path::PathBuf;
+        use tokio_util::sync::CancellationToken;
 
         let trace = LocalizedTransactionTrace {
             trace: TransactionTrace {
@@ -734,8 +736,8 @@ mod tests {
         to: Address,
         value: U256,
     ) -> alloy::network::AnyRpcBlock {
-        use alloy::consensus::{Signed, TxEnvelope, TxLegacy};
         use alloy::consensus::transaction::Recovered;
+        use alloy::consensus::{Signed, TxEnvelope, TxLegacy};
         use alloy::network::{AnyHeader, AnyRpcHeader, AnyRpcTransaction, AnyTxEnvelope};
         use alloy::primitives::{Signature, TxKind, B256};
         use alloy::rpc::types::{Block, BlockTransactions, Transaction};

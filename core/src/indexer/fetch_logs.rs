@@ -1284,11 +1284,8 @@ mod tests {
 
     #[test]
     fn to_block_no_limit() {
-        let result = calculate_process_historic_log_to_block(
-            &U64::from(100),
-            &U64::from(5000),
-            &None,
-        );
+        let result =
+            calculate_process_historic_log_to_block(&U64::from(100), &U64::from(5000), &None);
         assert_eq!(result, U64::from(5000));
     }
 
@@ -1485,9 +1482,8 @@ mod tests {
 
     #[tokio::test]
     async fn retry_alchemy_block_range_parsing() {
-        let error = ProviderError::CustomError(
-            "this block range should work: [0x100, 0x200]".to_string(),
-        );
+        let error =
+            ProviderError::CustomError("this block range should work: [0x100, 0x200]".to_string());
         let result = retry_with_block_range("test", &error, U64::from(0), U64::from(999), None)
             .await
             .expect("should return a result");
@@ -1498,8 +1494,7 @@ mod tests {
 
     #[tokio::test]
     async fn retry_ankr_block_range_too_wide() {
-        let error =
-            ProviderError::CustomError("block range is too wide".to_string());
+        let error = ProviderError::CustomError("block range is too wide".to_string());
         let from = U64::from(500);
         let result = retry_with_block_range("test", &error, from, U64::from(10000), None)
             .await
@@ -1511,8 +1506,7 @@ mod tests {
 
     #[tokio::test]
     async fn retry_base_block_range_too_large() {
-        let error =
-            ProviderError::CustomError("block range too large".to_string());
+        let error = ProviderError::CustomError("block range too large".to_string());
         let from = U64::from(500);
         let result = retry_with_block_range("test", &error, from, U64::from(10000), None)
             .await
@@ -1524,8 +1518,7 @@ mod tests {
 
     #[tokio::test]
     async fn retry_quicknode_limited_to() {
-        let error =
-            ProviderError::CustomError("limited to a 10,000 block range".to_string());
+        let error = ProviderError::CustomError("limited to a 10,000 block range".to_string());
         let from = U64::from(500);
         let result = retry_with_block_range("test", &error, from, U64::from(20000), None)
             .await

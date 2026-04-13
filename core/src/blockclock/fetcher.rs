@@ -209,10 +209,10 @@ impl BlockFetcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::network::{AnyHeader, AnyRpcBlock, AnyRpcHeader};
-    use alloy::primitives::{B256, Log as PrimitiveLog};
-    use alloy::rpc::types::{Block, BlockTransactions};
     use crate::provider::mock::MockChainProvider;
+    use alloy::network::{AnyHeader, AnyRpcBlock, AnyRpcHeader};
+    use alloy::primitives::{Log as PrimitiveLog, B256};
+    use alloy::rpc::types::{Block, BlockTransactions};
 
     fn mock_provider() -> Arc<dyn ChainProvider> {
         Arc::new(MockChainProvider::new(1))
@@ -343,11 +343,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_blocks_returns_exact_timestamps() {
-        let provider = provider_with_blocks(vec![
-            (100, 1000),
-            (101, 1012),
-            (102, 1024),
-        ]);
+        let provider = provider_with_blocks(vec![(100, 1000), (101, 1012), (102, 1024)]);
         let fetcher = BlockFetcher::new(Some(1.0), provider);
         let result = fetcher.get_blocks(&[100, 101, 102]).await.unwrap();
 
@@ -379,11 +375,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_blocks_sorts_unordered_input() {
-        let provider = provider_with_blocks(vec![
-            (50, 500),
-            (30, 300),
-            (40, 400),
-        ]);
+        let provider = provider_with_blocks(vec![(50, 500), (30, 300), (40, 400)]);
         let fetcher = BlockFetcher::new(Some(1.0), provider);
         let result = fetcher.get_blocks(&[50, 30, 40]).await.unwrap();
 
@@ -413,10 +405,7 @@ mod tests {
     #[tokio::test]
     async fn attach_timestamps_already_present() {
         let fetcher = BlockFetcher::new(None, mock_provider());
-        let logs = vec![
-            make_log(100, Some(1000)),
-            make_log(101, Some(1012)),
-        ];
+        let logs = vec![make_log(100, Some(1000)), make_log(101, Some(1012))];
         let result = fetcher.attach_log_timestamps(logs).await.unwrap();
 
         assert_eq!(result.len(), 2);
@@ -426,17 +415,9 @@ mod tests {
 
     #[tokio::test]
     async fn attach_timestamps_fills_missing() {
-        let provider = provider_with_blocks(vec![
-            (100, 1000),
-            (101, 1012),
-            (102, 1024),
-        ]);
+        let provider = provider_with_blocks(vec![(100, 1000), (101, 1012), (102, 1024)]);
         let fetcher = BlockFetcher::new(Some(1.0), provider);
-        let logs = vec![
-            make_log(100, None),
-            make_log(101, None),
-            make_log(102, None),
-        ];
+        let logs = vec![make_log(100, None), make_log(101, None), make_log(102, None)];
         let result = fetcher.attach_log_timestamps(logs).await.unwrap();
 
         assert_eq!(result.len(), 3);
@@ -444,9 +425,15 @@ mod tests {
             assert!(log.block_timestamp.is_some(), "timestamp should be filled");
         }
         // Check actual values — fetcher returns exact timestamps for small ranges
-        assert!(result.iter().any(|l| l.block_number == Some(100) && l.block_timestamp == Some(1000)));
-        assert!(result.iter().any(|l| l.block_number == Some(101) && l.block_timestamp == Some(1012)));
-        assert!(result.iter().any(|l| l.block_number == Some(102) && l.block_timestamp == Some(1024)));
+        assert!(result
+            .iter()
+            .any(|l| l.block_number == Some(100) && l.block_timestamp == Some(1000)));
+        assert!(result
+            .iter()
+            .any(|l| l.block_number == Some(101) && l.block_timestamp == Some(1012)));
+        assert!(result
+            .iter()
+            .any(|l| l.block_number == Some(102) && l.block_timestamp == Some(1024)));
     }
 
     #[tokio::test]
@@ -454,9 +441,9 @@ mod tests {
         let provider = provider_with_blocks(vec![(102, 1024)]);
         let fetcher = BlockFetcher::new(Some(1.0), provider);
         let logs = vec![
-            make_log(100, Some(1000)),  // already has timestamp
-            make_log(101, Some(1012)),  // already has timestamp
-            make_log(102, None),        // needs fetch
+            make_log(100, Some(1000)), // already has timestamp
+            make_log(101, Some(1012)), // already has timestamp
+            make_log(102, None),       // needs fetch
         ];
         let result = fetcher.attach_log_timestamps(logs).await.unwrap();
 
@@ -464,18 +451,16 @@ mod tests {
         for log in &result {
             assert!(log.block_timestamp.is_some());
         }
-        assert!(result.iter().any(|l| l.block_number == Some(102) && l.block_timestamp == Some(1024)));
+        assert!(result
+            .iter()
+            .any(|l| l.block_number == Some(102) && l.block_timestamp == Some(1024)));
     }
 
     #[tokio::test]
     async fn attach_timestamps_same_block_multiple_logs() {
         let provider = provider_with_blocks(vec![(100, 5000)]);
         let fetcher = BlockFetcher::new(Some(1.0), provider);
-        let logs = vec![
-            make_log(100, None),
-            make_log(100, None),
-            make_log(100, None),
-        ];
+        let logs = vec![make_log(100, None), make_log(100, None), make_log(100, None)];
         let result = fetcher.attach_log_timestamps(logs).await.unwrap();
 
         assert_eq!(result.len(), 3);

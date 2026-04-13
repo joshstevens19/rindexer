@@ -1800,13 +1800,11 @@ mod tests {
     // ======================================================================
 
     fn make_block_with_hash(number: u64, hash: B256) -> alloy::network::AnyRpcBlock {
-        use alloy::network::{AnyHeader, AnyRpcHeader, AnyRpcBlock};
+        use alloy::network::{AnyHeader, AnyRpcBlock, AnyRpcHeader};
         use alloy::rpc::types::{Block, BlockTransactions};
         AnyRpcBlock::new(
             Block::new(
-                AnyRpcHeader::from_sealed(
-                    AnyHeader { number, ..Default::default() }.seal(hash),
-                ),
+                AnyRpcHeader::from_sealed(AnyHeader { number, ..Default::default() }.seal(hash)),
                 BlockTransactions::Full(vec![]),
             )
             .into(),
@@ -1980,9 +1978,6 @@ mod tests {
 
         // No ReorgInfo should have been sent — whether the cancel fired before or after
         // the iteration, matching hashes never produce a signal.
-        assert!(
-            reorg_rx.try_recv().is_err(),
-            "No ReorgInfo should be sent on matching hash"
-        );
+        assert!(reorg_rx.try_recv().is_err(), "No ReorgInfo should be sent on matching hash");
     }
 }

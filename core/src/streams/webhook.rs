@@ -93,12 +93,7 @@ mod tests {
 
         let webhook = Webhook::new();
         let result = webhook
-            .publish(
-                "msg-002",
-                &format!("{}/webhook", server.url()),
-                "secret",
-                &json!({"data": 1}),
-            )
+            .publish("msg-002", &format!("{}/webhook", server.url()), "secret", &json!({"data": 1}))
             .await;
 
         assert!(matches!(result, Err(WebhookError::WebhookError(_))));

@@ -1707,7 +1707,7 @@ mod tests {
     fn test_compute_sequence_id_slot_overflow() {
         // tx_index >= 1000 overflows into the block number's space.
         // This documents the known limitation of the encoding.
-        let normal = compute_sequence_id(101, 0, 0);    // 10_100_000_000
+        let normal = compute_sequence_id(101, 0, 0); // 10_100_000_000
         let overflow = compute_sequence_id(100, 1000, 0); // 10_100_000_000
         assert_eq!(normal, overflow, "tx_index=1000 aliases with next block");
     }
@@ -2234,10 +2234,7 @@ mod tests {
     fn make_operation(op_type: OperationType, where_cols: &[(&str, &str)]) -> TableOperation {
         TableOperation {
             operation_type: op_type,
-            where_clause: where_cols
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
+            where_clause: where_cols.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
             if_condition: None,
             filter: None,
             set: vec![],
@@ -2281,9 +2278,10 @@ mod tests {
 
     #[test]
     fn test_is_insert_only_false_when_all_upsert() {
-        let table = make_table_with_event_ops(vec![
-            make_operation(OperationType::Upsert, &[("id", "$id")]),
-        ]);
+        let table = make_table_with_event_ops(vec![make_operation(
+            OperationType::Upsert,
+            &[("id", "$id")],
+        )]);
         assert!(!table.is_insert_only());
     }
 
@@ -2397,16 +2395,14 @@ mod tests {
 
     #[test]
     fn test_validate_where_columns_global_insert_err() {
-        let mut table =
-            make_table_with_event_ops(vec![make_operation(OperationType::Insert, &[])]);
+        let mut table = make_table_with_event_ops(vec![make_operation(OperationType::Insert, &[])]);
         table.global = true;
         assert!(table.validate_where_columns().is_err());
     }
 
     #[test]
     fn test_validate_where_columns_global_upsert_no_where_ok() {
-        let mut table =
-            make_table_with_event_ops(vec![make_operation(OperationType::Upsert, &[])]);
+        let mut table = make_table_with_event_ops(vec![make_operation(OperationType::Upsert, &[])]);
         table.global = true;
         assert!(table.validate_where_columns().is_ok());
     }

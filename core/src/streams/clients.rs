@@ -906,10 +906,7 @@ mod tests {
     fn webhook_clients(config: Vec<WebhookStreamConfig>) -> StreamsClients {
         StreamsClients {
             sns: None,
-            webhook: Some(WebhookStream {
-                config,
-                client: Arc::new(Webhook::new()),
-            }),
+            webhook: Some(WebhookStream { config, client: Arc::new(Webhook::new()) }),
             rabbitmq: None,
             #[cfg(feature = "kafka")]
             kafka: None,
@@ -958,34 +955,21 @@ mod tests {
     #[test]
     fn should_send_for_config_requires_event_without_force_or_trace() {
         let events = vec![stream_event("Transfer")];
-        assert!(!StreamsClients::should_send_for_config(
-            &events,
-            "__rindexer_reorg",
-            false,
-            false,
-        ));
+        assert!(
+            !StreamsClients::should_send_for_config(&events, "__rindexer_reorg", false, false,)
+        );
     }
 
     #[test]
     fn should_send_for_config_force_send_bypasses_event_match() {
         let events = vec![stream_event("Transfer")];
-        assert!(StreamsClients::should_send_for_config(
-            &events,
-            "__rindexer_reorg",
-            false,
-            true,
-        ));
+        assert!(StreamsClients::should_send_for_config(&events, "__rindexer_reorg", false, true,));
     }
 
     #[test]
     fn should_send_for_config_trace_event_bypasses_event_match() {
         let events = vec![stream_event("Transfer")];
-        assert!(StreamsClients::should_send_for_config(
-            &events,
-            "NativeTransfer",
-            true,
-            false,
-        ));
+        assert!(StreamsClients::should_send_for_config(&events, "NativeTransfer", true, false,));
     }
 
     #[test]
@@ -1192,7 +1176,8 @@ mod tests {
             events: vec![stream_event("Transfer")],
         };
         let msg = sample_event_message(); // network: ethereum
-        let result = webhook_clients(vec![config]).stream("id".to_string(), &msg, false, false).await;
+        let result =
+            webhook_clients(vec![config]).stream("id".to_string(), &msg, false, false).await;
         assert_eq!(result.unwrap(), 0);
     }
 
@@ -1205,7 +1190,8 @@ mod tests {
             events: vec![stream_event("Approval")],
         };
         let msg = sample_event_message(); // event: Transfer
-        let result = webhook_clients(vec![config]).stream("id".to_string(), &msg, false, false).await;
+        let result =
+            webhook_clients(vec![config]).stream("id".to_string(), &msg, false, false).await;
         assert_eq!(result.unwrap(), 0);
     }
 
@@ -1227,7 +1213,8 @@ mod tests {
         };
 
         let msg = sample_event_message();
-        let result = webhook_clients(vec![config]).stream("id".to_string(), &msg, false, false).await;
+        let result =
+            webhook_clients(vec![config]).stream("id".to_string(), &msg, false, false).await;
 
         assert_eq!(result.unwrap(), 1);
         mock.assert_async().await;
@@ -1236,11 +1223,7 @@ mod tests {
     #[tokio::test]
     async fn stream_webhook_propagates_error() {
         let mut server = mockito::Server::new_async().await;
-        let mock = server
-            .mock("POST", "/hook")
-            .with_status(500)
-            .create_async()
-            .await;
+        let mock = server.mock("POST", "/hook").with_status(500).create_async().await;
 
         let config = WebhookStreamConfig {
             endpoint: format!("{}/hook", server.url()),
@@ -1250,7 +1233,8 @@ mod tests {
         };
 
         let msg = sample_event_message();
-        let result = webhook_clients(vec![config]).stream("id".to_string(), &msg, false, false).await;
+        let result =
+            webhook_clients(vec![config]).stream("id".to_string(), &msg, false, false).await;
 
         assert!(result.is_err());
         mock.assert_async().await;
@@ -1259,11 +1243,7 @@ mod tests {
     #[tokio::test]
     async fn stream_trace_event_bypasses_event_match() {
         let mut server = mockito::Server::new_async().await;
-        let mock = server
-            .mock("POST", "/hook")
-            .with_status(200)
-            .create_async()
-            .await;
+        let mock = server.mock("POST", "/hook").with_status(200).create_async().await;
 
         let config = WebhookStreamConfig {
             endpoint: format!("{}/hook", server.url()),
@@ -1290,12 +1270,7 @@ mod tests {
     #[tokio::test]
     async fn stream_multiple_webhooks() {
         let mut server = mockito::Server::new_async().await;
-        let mock = server
-            .mock("POST", "/hook")
-            .with_status(200)
-            .expect(2)
-            .create_async()
-            .await;
+        let mock = server.mock("POST", "/hook").with_status(200).expect(2).create_async().await;
 
         let config = WebhookStreamConfig {
             endpoint: format!("{}/hook", server.url()),
@@ -1324,11 +1299,7 @@ mod tests {
     #[tokio::test]
     async fn stream_reorg_publishes_to_webhook() {
         let mut server = mockito::Server::new_async().await;
-        let mock = server
-            .mock("POST", "/hook")
-            .with_status(200)
-            .create_async()
-            .await;
+        let mock = server.mock("POST", "/hook").with_status(200).create_async().await;
 
         let config = WebhookStreamConfig {
             endpoint: format!("{}/hook", server.url()),
@@ -1337,9 +1308,8 @@ mod tests {
             events: vec![stream_event("Transfer")], // doesn't matter, force_send
         };
 
-        let result = webhook_clients(vec![config])
-            .stream_reorg("ethereum", 100, 2, &[B256::ZERO])
-            .await;
+        let result =
+            webhook_clients(vec![config]).stream_reorg("ethereum", 100, 2, &[B256::ZERO]).await;
 
         assert!(result.is_ok());
         mock.assert_async().await;

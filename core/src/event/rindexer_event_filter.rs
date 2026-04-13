@@ -511,10 +511,8 @@ mod tests {
     fn new_address_filter_creates_filter_variant_with_address() {
         let topic_id = make_topic_id();
         let addr = make_address();
-        let address_details = AddressDetails {
-            address: ValueOrArray::Value(addr),
-            indexed_filters: None,
-        };
+        let address_details =
+            AddressDetails { address: ValueOrArray::Value(addr), indexed_filters: None };
         let f = RindexerEventFilter::new_address_filter(
             &topic_id,
             "Transfer",
@@ -534,10 +532,8 @@ mod tests {
     async fn new_address_filter_has_contract_address() {
         let topic_id = make_topic_id();
         let addr = make_address();
-        let address_details = AddressDetails {
-            address: ValueOrArray::Value(addr),
-            indexed_filters: None,
-        };
+        let address_details =
+            AddressDetails { address: ValueOrArray::Value(addr), indexed_filters: None };
         let f = RindexerEventFilter::new_address_filter(
             &topic_id,
             "Transfer",

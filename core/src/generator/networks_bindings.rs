@@ -236,7 +236,9 @@ mod tests {
         let networks = vec![test_network("ethereum", 1)];
         let code = generate_networks_code(&networks).to_string();
         assert!(
-            code.contains("get_provider_cache_for_network(network: &str) -> Arc<dyn ChainProvider>"),
+            code.contains(
+                "get_provider_cache_for_network(network: &str) -> Arc<dyn ChainProvider>"
+            ),
             "get_provider_cache_for_network must return Arc<dyn ChainProvider>, got:\n{}",
             code
         );
@@ -244,10 +246,7 @@ mod tests {
 
     #[test]
     fn generated_provider_cache_for_network_dispatches_all_networks() {
-        let networks = vec![
-            test_network("ethereum", 1),
-            test_network("base", 8453),
-        ];
+        let networks = vec![test_network("ethereum", 1), test_network("base", 8453)];
         let code = generate_networks_code(&networks).to_string();
         assert!(code.contains(r#"if network == "ethereum""#));
         assert!(code.contains(r#"if network == "base""#));

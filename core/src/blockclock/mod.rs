@@ -257,10 +257,7 @@ mod tests {
         let clock = BlockClock::new(None, None, mock);
         let log_with = make_log_with_timestamp(100, Some(1_700_000_000));
         let log_without = make_log_with_timestamp(101, None);
-        let result = clock
-            .attach_log_timestamps(vec![log_with, log_without])
-            .await
-            .unwrap();
+        let result = clock.attach_log_timestamps(vec![log_with, log_without]).await.unwrap();
 
         assert_eq!(result.len(), 2);
         // The log that already had a timestamp keeps it
