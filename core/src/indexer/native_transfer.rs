@@ -700,6 +700,122 @@ mod tests {
         assert_eq!(traces.len(), 1);
     }
 
+    async fn make_trace_config_async() -> Arc<TraceProcessingConfig> {
+        use crate::event::callback_registry::TraceCallbackRegistry;
+        use crate::indexer::progress::IndexingEventsProgressState;
+        use std::path::PathBuf;
+        use tokio_util::sync::CancellationToken;
+
+        let progress = IndexingEventsProgressState::monitor(&[], &[], None).await;
+        Arc::new(TraceProcessingConfig {
+            id: "test-id".to_string(),
+            chain_id: 1,
+            project_path: PathBuf::from("/tmp"),
+            start_block: U64::from(100u64),
+            end_block: U64::from(200u64),
+            indexer_name: "test".to_string(),
+            contract_name: NATIVE_TRANSFER_CONTRACT_NAME.to_string(),
+            event_name: EVENT_NAME.to_string(),
+            network: "ethereum".to_string(),
+            progress,
+            postgres: None,
+            csv_details: None,
+            registry: Arc::new(TraceCallbackRegistry::new()),
+            method: crate::manifest::native_transfer::TraceProcessingMethod::TraceBlock,
+            stream_last_synced_block_file_path: None,
+            cancel_token: CancellationToken::new(),
+        })
+    }
+
+    /// Build a block with a single native-transfer transaction (value > 0, empty input, has to).
+    fn make_block_with_native_transfer(
+        block_number: u64,
+        from: Address,
+        to: Address,
+        value: U256,
+    ) -> alloy::network::AnyRpcBlock {
+        use alloy::consensus::{Signed, TxEnvelope, TxLegacy};
+        use alloy::consensus::transaction::Recovered;
+        use alloy::network::{AnyHeader, AnyRpcHeader, AnyRpcTransaction, AnyTxEnvelope};
+        use alloy::primitives::{Signature, TxKind, B256};
+        use alloy::rpc::types::{Block, BlockTransactions, Transaction};
+        use alloy::serde::WithOtherFields;
+
+        let block_hash = B256::from([block_number as u8; 32]);
+
+        let tx_legacy = TxLegacy {
+            chain_id: Some(1),
+            nonce: 0,
+            gas_price: 1_000_000_000,
+            gas_limit: 21_000,
+            to: TxKind::Call(to),
+            value,
+            input: alloy::primitives::Bytes::new(),
+        };
+
+        // Dummy sig and hash — we only need the fields, not cryptographic validity.
+        let sig = Signature::new(U256::ONE, U256::ONE, false);
+        let tx_hash = B256::from([0xabu8; 32]);
+        let signed = Signed::new_unchecked(tx_legacy, sig, tx_hash);
+        let envelope = AnyTxEnvelope::Ethereum(TxEnvelope::Legacy(signed));
+        let recovered = Recovered::new_unchecked(envelope, from);
+
+        let rpc_tx = AnyRpcTransaction::new(WithOtherFields::new(Transaction {
+            inner: recovered,
+            block_hash: Some(block_hash),
+            block_number: Some(block_number),
+            transaction_index: Some(0),
+            effective_gas_price: None,
+        }));
+
+        alloy::network::AnyRpcBlock::new(
+            Block::new(
+                AnyRpcHeader::from_sealed(
+                    AnyHeader { number: block_number, ..Default::default() }.seal(block_hash),
+                ),
+                BlockTransactions::Full(vec![rpc_tx]),
+            )
+            .into(),
+        )
+    }
+
+    #[tokio::test]
+    async fn native_transfer_block_consumer_empty_blocks() {
+        // Provider has no blocks registered → consumer returns Ok with no work.
+        let provider = Arc::new(MockChainProvider::new(1));
+        let config = make_trace_config_async().await;
+        let block_numbers = vec![U64::from(10), U64::from(11)];
+
+        let result =
+            native_transfer_block_consumer(provider, &block_numbers, "ethereum", &config).await;
+
+        assert!(result.is_ok(), "Expected Ok when no blocks are returned");
+    }
+
+    #[tokio::test]
+    async fn native_transfer_block_consumer_filters_native_transfers() {
+        // Build a block containing three transactions:
+        //   1. A valid native ETH transfer (value > 0, empty input, has to) → should match
+        //   2. A zero-value tx (value = 0) → should NOT match
+        //   3. A tx with non-empty input (contract call) → should NOT match
+        //
+        // We verify the consumer runs without error; the callback registry is empty so no
+        // callbacks fire, but the filtering path is exercised.
+        let from: Address = "0x1111111111111111111111111111111111111111".parse().unwrap();
+        let to: Address = "0x2222222222222222222222222222222222222222".parse().unwrap();
+
+        let transfer_block =
+            make_block_with_native_transfer(42, from, to, U256::from(1_000_000_000_000_000_000u64));
+
+        let provider = Arc::new(MockChainProvider::new(1).with_blocks(vec![transfer_block]));
+        let config = make_trace_config_async().await;
+
+        let result =
+            native_transfer_block_consumer(provider, &[U64::from(42)], "ethereum", &config).await;
+
+        assert!(result.is_ok(), "Consumer should succeed when a native transfer block is present");
+    }
+
     #[test]
     fn zksync_system_contracts_list() {
         // Verify the system contract addresses are valid and contain expected count

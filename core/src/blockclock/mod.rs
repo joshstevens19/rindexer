@@ -212,6 +212,101 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].block_timestamp, Some(1_700_000_000));
     }
+
+    #[test]
+    fn new_with_enabled_false_runlencoder_is_none() {
+        let mock = Arc::new(MockChainProvider::new(1));
+        let clock = BlockClock::new(Some(false), None, mock);
+        assert!(clock.runlencoder.is_none());
+    }
+
+    #[test]
+    fn new_with_enabled_none_runlencoder_is_none() {
+        let mock = Arc::new(MockChainProvider::new(1));
+        let clock = BlockClock::new(None, None, mock);
+        assert!(clock.runlencoder.is_none());
+    }
+
+    #[test]
+    fn new_with_enabled_true_no_file_runlencoder_is_none() {
+        // No .blockclock file exists in test environment, so runlencoder stays None
+        let mock = Arc::new(MockChainProvider::new(999_999));
+        let clock = BlockClock::new(Some(true), None, mock);
+        assert!(clock.runlencoder.is_none());
+    }
+
+    #[tokio::test]
+    async fn mixed_logs_some_with_timestamps_some_without() {
+        use alloy::network::{AnyHeader, AnyRpcBlock, AnyRpcHeader};
+        use alloy::primitives::B256;
+        use alloy::rpc::types::{Block, BlockTransactions};
+
+        // Provide a block for block 101 so the fetcher can resolve its timestamp
+        let block_101 = AnyRpcBlock::new(
+            Block::new(
+                AnyRpcHeader::from_sealed(
+                    AnyHeader { number: 101, timestamp: 1_700_000_012, ..Default::default() }
+                        .seal(B256::ZERO),
+                ),
+                BlockTransactions::Full(vec![]),
+            )
+            .into(),
+        );
+
+        let mock = Arc::new(MockChainProvider::new(1).with_blocks(vec![block_101]));
+        let clock = BlockClock::new(None, None, mock);
+        let log_with = make_log_with_timestamp(100, Some(1_700_000_000));
+        let log_without = make_log_with_timestamp(101, None);
+        let result = clock
+            .attach_log_timestamps(vec![log_with, log_without])
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 2);
+        // The log that already had a timestamp keeps it
+        let ts_100 = result.iter().find(|l| l.block_number == Some(100)).unwrap().block_timestamp;
+        assert_eq!(ts_100, Some(1_700_000_000));
+        // The log without a timestamp got it filled from the mock block
+        let ts_101 = result.iter().find(|l| l.block_number == Some(101)).unwrap().block_timestamp;
+        assert_eq!(ts_101, Some(1_700_000_012));
+    }
+
+    #[tokio::test]
+    async fn timestamp_exactly_at_ms_boundary_is_normalized() {
+        // 1_000_000_000_001 > 1_000_000_000_000 → treated as ms → divided by 1000
+        let mock = Arc::new(MockChainProvider::new(1));
+        let clock = BlockClock::new(None, None, mock);
+        let log = make_log_with_timestamp(100, Some(1_000_000_000_001));
+        let result = clock.attach_log_timestamps(vec![log]).await.unwrap();
+        assert_eq!(result[0].block_timestamp, Some(1_000_000_000));
+    }
+
+    #[tokio::test]
+    async fn timestamp_exactly_at_ms_boundary_value_not_normalized() {
+        // Exactly 1_000_000_000_000 is NOT > threshold, so it is treated as seconds
+        let mock = Arc::new(MockChainProvider::new(1));
+        let clock = BlockClock::new(None, None, mock);
+        let log = make_log_with_timestamp(100, Some(1_000_000_000_000));
+        let result = clock.attach_log_timestamps(vec![log]).await.unwrap();
+        assert_eq!(result[0].block_timestamp, Some(1_000_000_000_000));
+    }
+
+    #[tokio::test]
+    async fn all_logs_with_timestamps_returns_early_without_fetch() {
+        // Multiple logs all with timestamps → early-return path, no RPC calls needed
+        let mock = Arc::new(MockChainProvider::new(1));
+        let clock = BlockClock::new(None, None, mock);
+        let logs = vec![
+            make_log_with_timestamp(100, Some(1_700_000_000)),
+            make_log_with_timestamp(101, Some(1_700_000_012)),
+            make_log_with_timestamp(102, Some(1_700_000_024)),
+        ];
+        let result = clock.attach_log_timestamps(logs).await.unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].block_timestamp, Some(1_700_000_000));
+        assert_eq!(result[1].block_timestamp, Some(1_700_000_012));
+        assert_eq!(result[2].block_timestamp, Some(1_700_000_024));
+    }
 }
 
 fn get_blockclock_filepath(network: u64) -> Option<PathBuf> {

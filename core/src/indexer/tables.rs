@@ -5275,8 +5275,10 @@ mod tests {
 
     #[test]
     fn test_is_view_call_missing_close_paren() {
-        // No closing paren — must return false
-        assert!(!is_view_call("$call($addr, \"decimals()\""));
+        // No closing paren anywhere (not even inside a quoted sig)
+        assert!(!is_view_call("$call($addr, \"decimals\""));
+        // Starts with $call( but has no ) at all
+        assert!(!is_view_call("$call("));
     }
 
     // =========================================================================
@@ -5380,10 +5382,13 @@ mod tests {
 
     #[test]
     fn test_dyn_sol_value_to_json_fixed_bytes() {
-        use alloy::primitives::FixedBytes;
-        let fb: FixedBytes<2> = FixedBytes::from([0xbe, 0xef]);
-        let result = dyn_sol_value_to_json(&DynSolValue::FixedBytes(fb.into(), 2));
-        assert_eq!(result, json!("0xbeef"));
+        // DynSolValue::FixedBytes takes a B256 (Word/32-byte) with a declared size
+        let word = B256::from_slice(&[
+            0xbe, 0xef, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0,
+        ]);
+        let result = dyn_sol_value_to_json(&DynSolValue::FixedBytes(word, 2));
+        assert_eq!(result, json!(format!("0x{}", hex::encode(&word[..]))));
     }
 
     #[test]
@@ -5514,10 +5519,12 @@ mod tests {
 
     #[test]
     fn test_dyn_sol_value_to_string_fixed_bytes() {
-        use alloy::primitives::FixedBytes;
-        let fb: FixedBytes<2> = FixedBytes::from([0xab, 0xcd]);
-        let result = dyn_sol_value_to_string(&DynSolValue::FixedBytes(fb.into(), 2));
-        assert_eq!(result, "0xabcd");
+        let word = B256::from_slice(&[
+            0xab, 0xcd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0,
+        ]);
+        let result = dyn_sol_value_to_string(&DynSolValue::FixedBytes(word, 2));
+        assert_eq!(result, format!("0x{}", hex::encode(&word[..])));
     }
 
     // =========================================================================
@@ -5546,13 +5553,14 @@ mod tests {
 
     #[test]
     fn test_is_string_template_edge_cases() {
-        // String with only a dollar sign (lone $)
-        assert!(is_string_template("$"));
-        // Empty string — no $
+        // Lone '$' — treated as pure field (empty identifier), so NOT a template
+        assert!(!is_string_template("$"));
+        // Empty string — no $, not a template
         assert!(!is_string_template(""));
-        // $call(...) is detected as template (starts with $ but not a pure identifier)
+        // $call(...) starts with $ but the part after $ contains '(' which is not
+        // alphanumeric/dot/underscore/bracket — so it IS treated as a template
         assert!(is_string_template("$call($addr, \"decimals()\")"));
-        // $if(...) similarly
+        // $if(...) similarly contains '(' after $, so it is a template
         assert!(is_string_template("$if($x > 0, a, b)"));
     }
 

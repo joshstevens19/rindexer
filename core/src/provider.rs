@@ -1394,4 +1394,83 @@ mod tests {
         let unknown = Chain::from_id(999999);
         assert_eq!(is_known_zk_evm_compatible_chain(unknown), None);
     }
+
+    // ── JsonRpcCachedProvider::mock / mock_with_asserter tests ──────────────
+
+    #[test]
+    fn mock_returns_correct_chain() {
+        let provider = JsonRpcCachedProvider::mock(42);
+        assert_eq!(provider.chain, Chain::from(42));
+    }
+
+    #[test]
+    fn mock_chain_state_notification_is_none() {
+        let provider = JsonRpcCachedProvider::mock(1);
+        assert!(provider.get_chain_state_notification().is_none());
+    }
+
+    #[test]
+    fn mock_max_block_range_is_none() {
+        let provider = JsonRpcCachedProvider::mock(1);
+        assert!(provider.max_block_range.is_none());
+    }
+
+    #[tokio::test]
+    async fn mock_with_asserter_get_block_number_error_on_empty_queue() {
+        let (provider, _asserter) = JsonRpcCachedProvider::mock_with_asserter(1);
+        // No response pushed — should return Err
+        let result = provider.get_block_number().await;
+        assert!(result.is_err(), "expected Err when asserter queue is empty");
+    }
+
+    #[tokio::test]
+    async fn mock_with_asserter_eth_call_returns_hex_string() {
+        let (provider, asserter) = JsonRpcCachedProvider::mock_with_asserter(1);
+        let expected = "0x000000000000000000000000000000000000000000000000000000000000002a";
+        asserter.push_success(&expected);
+
+        let to = Address::ZERO;
+        let data = Bytes::from(vec![0xde, 0xad, 0xbe, 0xef]);
+        let result = provider.eth_call(to, data, 12345).await.unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[tokio::test]
+    async fn mock_with_asserter_eth_call_latest_returns_hex_string() {
+        let (provider, asserter) = JsonRpcCachedProvider::mock_with_asserter(1);
+        let expected = "0x0000000000000000000000000000000000000000000000000000000000000001";
+        asserter.push_success(&expected);
+
+        let to = Address::ZERO;
+        let data = Bytes::from(vec![0x12, 0x34]);
+        let result = provider.eth_call_latest(to, data).await.unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[tokio::test]
+    async fn mock_with_asserter_get_latest_block_caches_second_call() {
+        let (provider, asserter) = JsonRpcCachedProvider::mock_with_asserter(1);
+        let block = make_block(500);
+        // Wrap in Some because get_block returns Option<AnyRpcBlock>
+        asserter.push_success(&Some(&block));
+
+        // First call fetches from the mock RPC
+        let first = provider.get_latest_block().await.unwrap();
+        assert!(first.is_some());
+        assert_eq!(first.unwrap().inner.number(), 500);
+
+        // Second call within the cache TTL (50ms) should return the cached block
+        // without consuming another response from the asserter queue.
+        let second = provider.get_latest_block().await.unwrap();
+        assert!(second.is_some());
+        assert_eq!(second.unwrap().inner.number(), 500);
+    }
+
+    #[tokio::test]
+    async fn mock_with_asserter_get_latest_block_error_on_empty_queue() {
+        let (provider, _asserter) = JsonRpcCachedProvider::mock_with_asserter(1);
+        // No response pushed — should return Err
+        let result = provider.get_latest_block().await;
+        assert!(result.is_err(), "expected Err when asserter queue is empty");
+    }
 }

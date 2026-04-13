@@ -964,4 +964,125 @@ mod tests {
         assert_eq!(start, U64::from(500));
         assert_eq!(end, U64::from(500));
     }
+
+    #[tokio::test]
+    async fn start_block_equals_end_block_single_block_range() {
+        let mock = MockChainProvider::new(1).with_block_number(1000);
+        let (start, end, distance) = get_start_end_block(
+            &mock,
+            Some(U64::from(500)),
+            Some(U64::from(500)),
+            empty_sync_config(),
+            "Test",
+            "ethereum",
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(start, U64::from(500));
+        assert_eq!(end, U64::from(500));
+        assert_eq!(distance, U64::ZERO);
+    }
+
+    #[tokio::test]
+    async fn start_block_zero_genesis() {
+        let mock = MockChainProvider::new(1).with_block_number(1000);
+        let (start, end, _) = get_start_end_block(
+            &mock,
+            Some(U64::ZERO),
+            Some(U64::from(100)),
+            empty_sync_config(),
+            "Test",
+            "ethereum",
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(start, U64::ZERO);
+        assert_eq!(end, U64::from(100));
+    }
+
+    #[tokio::test]
+    async fn very_large_block_numbers() {
+        let large = 18_000_000u64;
+        let mock = MockChainProvider::new(1).with_block_number(large);
+        let (start, end, distance) = get_start_end_block(
+            &mock,
+            Some(U64::from(17_000_000u64)),
+            Some(U64::from(large)),
+            empty_sync_config(),
+            "Test",
+            "ethereum",
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(start, U64::from(17_000_000u64));
+        assert_eq!(end, U64::from(large));
+        assert_eq!(distance, U64::ZERO);
+    }
+
+    #[tokio::test]
+    async fn reorg_safe_distance_larger_than_range_clamps_to_zero() {
+        // latest=100, distance=200 → safe_block = saturating_sub → 0
+        // end (100) > safe_block (0) so end is clamped to 0
+        let mock = MockChainProvider::new(1).with_block_number(100);
+        let (start, end, distance) = get_start_end_block(
+            &mock,
+            Some(U64::from(10)),
+            None,
+            empty_sync_config(),
+            "Test",
+            "ethereum",
+            Some(ReorgSafeDistance::Custom(200)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(start, U64::from(10));
+        assert_eq!(end, U64::ZERO); // clamped due to saturating_sub
+        assert_eq!(distance, U64::from(200));
+    }
+
+    #[test]
+    fn safe_block_distance_larger_than_latest_saturates_to_zero() {
+        // latest=50, distance=100 → saturating_sub = 0, end clamped to 0
+        let (end, distance) = calculate_safe_block_number(
+            Some(ReorgSafeDistance::Custom(100)),
+            1,
+            U64::from(50),
+            U64::from(50),
+        );
+        assert_eq!(end, U64::ZERO);
+        assert_eq!(distance, U64::from(100));
+    }
+
+    #[test]
+    fn safe_block_end_exactly_equals_safe_block() {
+        // latest=1000, distance=20 → safe_block=980, end=980 → no clamp needed
+        let (end, distance) = calculate_safe_block_number(
+            Some(ReorgSafeDistance::Custom(20)),
+            1,
+            U64::from(1000),
+            U64::from(980),
+        );
+        assert_eq!(end, U64::from(980));
+        assert_eq!(distance, U64::from(20));
+    }
+
+    #[test]
+    fn safe_block_custom_zero_distance_no_change() {
+        // distance=0 → safe_block = latest, end unchanged
+        let (end, distance) = calculate_safe_block_number(
+            Some(ReorgSafeDistance::Custom(0)),
+            1,
+            U64::from(1000),
+            U64::from(1000),
+        );
+        assert_eq!(end, U64::from(1000));
+        assert_eq!(distance, U64::ZERO);
+    }
 }
