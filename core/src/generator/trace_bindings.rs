@@ -1023,3 +1023,26 @@ pub fn generate_trace_handlers(
 
     Ok(Code::new(code))
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn trace_bindings_template_uses_dyn_chain_provider() {
+        let source = include_str!("trace_bindings.rs");
+
+        assert!(
+            source.contains("async fn get_provider(&self, network: &str) -> Arc<dyn ChainProvider>"),
+            "trace_bindings template must declare get_provider returning Arc<dyn ChainProvider>"
+        );
+
+        assert!(
+            source.contains("let provider: Arc<dyn ChainProvider> = self.get_provider"),
+            "trace_bindings template must annotate provider as Arc<dyn ChainProvider>"
+        );
+
+        assert!(
+            source.contains("provider::{{ChainProvider,"),
+            "trace_bindings template must import ChainProvider"
+        );
+    }
+}
