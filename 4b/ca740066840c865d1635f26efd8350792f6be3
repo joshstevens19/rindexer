@@ -1,0 +1,38 @@
+core/src/generator/mod.rs
+  74765553b8c9673c 14-17
+core/src/helpers/file.rs
+  74765553b8c9673c 98
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "4bca740066840c865d1635f26efd8350792f6be3",
+  "prompts": {
+    "74765553b8c9673c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c4da830e-5308-439d-8396-83f2e6409a9c",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 69,
+      "total_deletions": 68,
+      "accepted_lines": 21,
+      "overriden_lines": 0
+    },
+    "8eb93b81bc1ec27e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "edca3c59-b30f-4bf9-9917-3ad3d23245f6",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 116,
+      "total_deletions": 108,
+      "accepted_lines": 60,
+      "overriden_lines": 0
+    }
+  }
+}
