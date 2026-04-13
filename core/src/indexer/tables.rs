@@ -5183,4 +5183,416 @@ mod tests {
             cache.remove(&("polygon".to_string(), 77777777));
         }
     }
+
+    // =========================================================================
+    // Tests for is_conditional_value
+    // =========================================================================
+
+    #[test]
+    fn test_is_conditional_value_valid() {
+        assert!(is_conditional_value("$if($amount > 0, $amount, $null)"));
+        assert!(is_conditional_value("$if(a == b, yes, no)"));
+        assert!(is_conditional_value("$if(x, y, z)"));
+    }
+
+    #[test]
+    fn test_is_conditional_value_invalid() {
+        assert!(!is_conditional_value("$if("));
+        assert!(!is_conditional_value("$if(a, b, c"));
+        assert!(!is_conditional_value("if(a, b, c)"));
+        assert!(!is_conditional_value("$from"));
+        assert!(!is_conditional_value(""));
+        assert!(!is_conditional_value("$if"));
+    }
+
+    // =========================================================================
+    // Tests for parse_conditional_value
+    // =========================================================================
+
+    #[test]
+    fn test_parse_conditional_value_basic() {
+        let result = parse_conditional_value("$if($amount > 0, $amount, $null)");
+        assert!(result.is_ok());
+        let (cond, true_val, false_val) = result.unwrap();
+        assert_eq!(cond, "$amount > 0");
+        assert_eq!(true_val, "$amount");
+        assert_eq!(false_val, "$null");
+    }
+
+    #[test]
+    fn test_parse_conditional_value_quoted() {
+        let result = parse_conditional_value("$if($x == 1, \"yes\", \"no\")");
+        assert!(result.is_ok());
+        let (cond, true_val, false_val) = result.unwrap();
+        assert_eq!(cond, "$x == 1");
+        assert_eq!(true_val, "\"yes\"");
+        assert_eq!(false_val, "\"no\"");
+    }
+
+    #[test]
+    fn test_parse_conditional_value_nested_parens() {
+        // Nested call inside condition — comma inside nested parens should not split
+        let result = parse_conditional_value("$if($call(0x1234, \"decimals()\") > 0, $a, $b)");
+        assert!(result.is_ok());
+        let (cond, true_val, false_val) = result.unwrap();
+        assert_eq!(cond, "$call(0x1234, \"decimals()\") > 0");
+        assert_eq!(true_val, "$a");
+        assert_eq!(false_val, "$b");
+    }
+
+    #[test]
+    fn test_parse_conditional_value_wrong_arg_count() {
+        // Only 2 args — should fail
+        let result = parse_conditional_value("$if(a, b)");
+        assert!(result.is_err());
+        // 4 args — should also fail
+        let result = parse_conditional_value("$if(a, b, c, d)");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_conditional_value_invalid_prefix() {
+        let result = parse_conditional_value("if(a, b, c)");
+        assert!(result.is_err());
+    }
+
+    // =========================================================================
+    // Tests for is_view_call (edge cases beyond what already exists)
+    // =========================================================================
+
+    #[test]
+    fn test_is_view_call_static_variant() {
+        assert!(is_view_call("$call_static($addr, \"decimals()\")"));
+        assert!(is_view_call("$call_static(0xABCD, \"totalSupply()\")"));
+    }
+
+    #[test]
+    fn test_is_view_call_with_accessor() {
+        // Call followed by array index or field access
+        assert!(is_view_call("$call($addr, \"getReserves()\")[0]"));
+        assert!(is_view_call("$call($addr, \"getReserves() returns (uint112 r0, uint112 r1)\").r0"));
+    }
+
+    #[test]
+    fn test_is_view_call_missing_close_paren() {
+        // No closing paren — must return false
+        assert!(!is_view_call("$call($addr, \"decimals()\""));
+    }
+
+    // =========================================================================
+    // Tests for is_constant_ref
+    // =========================================================================
+
+    #[test]
+    fn test_is_constant_ref_valid() {
+        assert!(is_constant_ref("$constant(myConst)"));
+        assert!(is_constant_ref("$constant(fee_rate)"));
+        assert!(is_constant_ref("$constant(x)"));
+    }
+
+    #[test]
+    fn test_is_constant_ref_invalid() {
+        assert!(!is_constant_ref("$const_myConst")); // old prefix style
+        assert!(!is_constant_ref("$constant("));
+        assert!(!is_constant_ref("$constant"));
+        assert!(!is_constant_ref("constant(x)"));
+        assert!(!is_constant_ref(""));
+        assert!(!is_constant_ref("$from"));
+    }
+
+    // =========================================================================
+    // Tests for parse_constant_ref
+    // =========================================================================
+
+    #[test]
+    fn test_parse_constant_ref_valid() {
+        assert_eq!(parse_constant_ref("$constant(myConst)"), Some("myConst"));
+        assert_eq!(parse_constant_ref("$constant(fee_rate)"), Some("fee_rate"));
+        assert_eq!(parse_constant_ref("$constant(  spaced  )"), Some("spaced"));
+    }
+
+    #[test]
+    fn test_parse_constant_ref_invalid() {
+        assert!(parse_constant_ref("not_a_constant").is_none());
+        assert!(parse_constant_ref("$from").is_none());
+        assert!(parse_constant_ref("$constant(").is_none());
+        // Empty name: $constant() — start >= end, returns None
+        assert!(parse_constant_ref("$constant()").is_none());
+    }
+
+    // =========================================================================
+    // Tests for dyn_sol_value_to_json
+    // =========================================================================
+
+    #[test]
+    fn test_dyn_sol_value_to_json_address() {
+        let addr: Address = "0x1111111111111111111111111111111111111111".parse().unwrap();
+        let result = dyn_sol_value_to_json(&DynSolValue::Address(addr));
+        assert_eq!(result, json!("0x1111111111111111111111111111111111111111"));
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_json_uint_small() {
+        let result = dyn_sol_value_to_json(&DynSolValue::Uint(U256::from(42u64), 256));
+        assert_eq!(result, json!(42u64));
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_json_uint_large() {
+        // Value larger than u64::MAX should be serialized as string
+        let large = U256::from(u64::MAX) + U256::from(1u64);
+        let result = dyn_sol_value_to_json(&DynSolValue::Uint(large, 256));
+        assert_eq!(result, json!(large.to_string()));
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_json_uint_boundary() {
+        // Exactly u64::MAX — fits, so emitted as number
+        let result = dyn_sol_value_to_json(&DynSolValue::Uint(U256::from(u64::MAX), 256));
+        assert_eq!(result, json!(u64::MAX));
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_json_int() {
+        use alloy::primitives::I256;
+        let neg = I256::try_from(-100i64).unwrap();
+        let result = dyn_sol_value_to_json(&DynSolValue::Int(neg, 256));
+        assert_eq!(result, json!(neg.to_string()));
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_json_bool() {
+        assert_eq!(dyn_sol_value_to_json(&DynSolValue::Bool(true)), json!(true));
+        assert_eq!(dyn_sol_value_to_json(&DynSolValue::Bool(false)), json!(false));
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_json_string() {
+        let result = dyn_sol_value_to_json(&DynSolValue::String("hello".to_string()));
+        assert_eq!(result, json!("hello"));
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_json_bytes() {
+        let result = dyn_sol_value_to_json(&DynSolValue::Bytes(vec![0xde, 0xad]));
+        assert_eq!(result, json!("0xdead"));
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_json_fixed_bytes() {
+        use alloy::primitives::FixedBytes;
+        let fb: FixedBytes<2> = FixedBytes::from([0xbe, 0xef]);
+        let result = dyn_sol_value_to_json(&DynSolValue::FixedBytes(fb.into(), 2));
+        assert_eq!(result, json!("0xbeef"));
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_json_tuple() {
+        let tuple = DynSolValue::Tuple(vec![
+            DynSolValue::Uint(U256::from(1u64), 256),
+            DynSolValue::Bool(true),
+        ]);
+        let result = dyn_sol_value_to_json(&tuple);
+        if let Value::Object(map) = result {
+            assert_eq!(map["0"], json!(1u64));
+            assert_eq!(map["1"], json!(true));
+        } else {
+            panic!("Expected Object");
+        }
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_json_array() {
+        let arr = DynSolValue::Array(vec![
+            DynSolValue::Uint(U256::from(10u64), 256),
+            DynSolValue::Uint(U256::from(20u64), 256),
+        ]);
+        let result = dyn_sol_value_to_json(&arr);
+        assert_eq!(result, json!([10u64, 20u64]));
+    }
+
+    // =========================================================================
+    // Tests for parse_accessor_segments
+    // =========================================================================
+
+    #[test]
+    fn test_parse_accessor_segments_empty() {
+        let segs = parse_accessor_segments("");
+        assert!(segs.is_empty());
+    }
+
+    #[test]
+    fn test_parse_accessor_segments_index_only() {
+        let segs = parse_accessor_segments("[0]");
+        assert_eq!(segs.len(), 1);
+        assert!(matches!(segs[0], AccessorSegment::Index(0)));
+    }
+
+    #[test]
+    fn test_parse_accessor_segments_field_only() {
+        let segs = parse_accessor_segments(".reserve0");
+        assert_eq!(segs.len(), 1);
+        assert!(matches!(segs[0], AccessorSegment::Field(ref s) if s == "reserve0"));
+    }
+
+    #[test]
+    fn test_parse_accessor_segments_mixed() {
+        // "[0].field[1].nested"
+        let segs = parse_accessor_segments("[0].field[1].nested");
+        assert_eq!(segs.len(), 4);
+        assert!(matches!(segs[0], AccessorSegment::Index(0)));
+        assert!(matches!(segs[1], AccessorSegment::Field(ref s) if s == "field"));
+        assert!(matches!(segs[2], AccessorSegment::Index(1)));
+        assert!(matches!(segs[3], AccessorSegment::Field(ref s) if s == "nested"));
+    }
+
+    #[test]
+    fn test_parse_accessor_segments_multiple_indices() {
+        let segs = parse_accessor_segments("[2][3]");
+        assert_eq!(segs.len(), 2);
+        assert!(matches!(segs[0], AccessorSegment::Index(2)));
+        assert!(matches!(segs[1], AccessorSegment::Index(3)));
+    }
+
+    #[test]
+    fn test_parse_accessor_segments_leading_dot_multiple_fields() {
+        let segs = parse_accessor_segments(".point.x");
+        assert_eq!(segs.len(), 2);
+        assert!(matches!(segs[0], AccessorSegment::Field(ref s) if s == "point"));
+        assert!(matches!(segs[1], AccessorSegment::Field(ref s) if s == "x"));
+    }
+
+    #[test]
+    fn test_parse_accessor_segments_invalid_start_stops() {
+        // Starts with a plain character that is neither '[' nor '.' — should return empty
+        let segs = parse_accessor_segments("fieldname");
+        assert!(segs.is_empty());
+    }
+
+    // =========================================================================
+    // Tests for dyn_sol_value_to_string
+    // =========================================================================
+
+    #[test]
+    fn test_dyn_sol_value_to_string_address() {
+        let addr: Address = "0x1111111111111111111111111111111111111111".parse().unwrap();
+        let result = dyn_sol_value_to_string(&DynSolValue::Address(addr));
+        assert_eq!(result, "0x1111111111111111111111111111111111111111");
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_string_uint() {
+        let result = dyn_sol_value_to_string(&DynSolValue::Uint(U256::from(999u64), 256));
+        assert_eq!(result, "999");
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_string_int() {
+        use alloy::primitives::I256;
+        let neg = I256::try_from(-7i64).unwrap();
+        let result = dyn_sol_value_to_string(&DynSolValue::Int(neg, 256));
+        assert_eq!(result, neg.to_string());
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_string_bool() {
+        assert_eq!(dyn_sol_value_to_string(&DynSolValue::Bool(true)), "true");
+        assert_eq!(dyn_sol_value_to_string(&DynSolValue::Bool(false)), "false");
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_string_string() {
+        let result = dyn_sol_value_to_string(&DynSolValue::String("world".to_string()));
+        assert_eq!(result, "world");
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_string_bytes() {
+        let result = dyn_sol_value_to_string(&DynSolValue::Bytes(vec![0xca, 0xfe]));
+        assert_eq!(result, "0xcafe");
+    }
+
+    #[test]
+    fn test_dyn_sol_value_to_string_fixed_bytes() {
+        use alloy::primitives::FixedBytes;
+        let fb: FixedBytes<2> = FixedBytes::from([0xab, 0xcd]);
+        let result = dyn_sol_value_to_string(&DynSolValue::FixedBytes(fb.into(), 2));
+        assert_eq!(result, "0xabcd");
+    }
+
+    // =========================================================================
+    // Edge-case tests for is_arithmetic_expression
+    // =========================================================================
+
+    #[test]
+    fn test_is_arithmetic_expression_edge_cases() {
+        // Subtraction at position > 0
+        assert!(is_arithmetic_expression("$a - $b"));
+        // Unary minus at start — operator at index 0, should NOT count
+        assert!(!is_arithmetic_expression("-$value"));
+        // No $ reference — not an arithmetic expression even with operator
+        assert!(!is_arithmetic_expression("100 + 200"));
+        // Nested $call in arithmetic
+        assert!(is_arithmetic_expression("$amount / $call($asset, \"decimals()\")"));
+        // Comparison operators are NOT arithmetic operators
+        assert!(!is_arithmetic_expression("$x == $y"));
+        assert!(!is_arithmetic_expression("$x != $y"));
+        assert!(!is_arithmetic_expression("$x >= $y"));
+    }
+
+    // =========================================================================
+    // Edge-case tests for is_string_template
+    // =========================================================================
+
+    #[test]
+    fn test_is_string_template_edge_cases() {
+        // String with only a dollar sign (lone $)
+        assert!(is_string_template("$"));
+        // Empty string — no $
+        assert!(!is_string_template(""));
+        // $call(...) is detected as template (starts with $ but not a pure identifier)
+        assert!(is_string_template("$call($addr, \"decimals()\")"));
+        // $if(...) similarly
+        assert!(is_string_template("$if($x > 0, a, b)"));
+    }
+
+    // =========================================================================
+    // Edge-case tests for expand_string_template
+    // =========================================================================
+
+    #[test]
+    fn test_expand_string_template_lone_dollar() {
+        let params: Vec<LogParam> = vec![];
+        let meta = TxMetadata {
+            block_number: 1,
+            block_timestamp: None,
+            tx_hash: B256::ZERO,
+            block_hash: B256::ZERO,
+            contract_address: Address::ZERO,
+            log_index: U256::from(0u64),
+            tx_index: 0,
+        };
+
+        // A lone '$' with no field name should be kept as '$'
+        let result = expand_string_template("prefix $ suffix", &params, &meta);
+        assert_eq!(result, Some("prefix $ suffix".to_string()));
+    }
+
+    #[test]
+    fn test_expand_string_template_metadata_fields() {
+        let params: Vec<LogParam> = vec![];
+        let meta = TxMetadata {
+            block_number: 42,
+            block_timestamp: None,
+            tx_hash: B256::ZERO,
+            block_hash: B256::ZERO,
+            contract_address: Address::ZERO,
+            log_index: U256::from(3u64),
+            tx_index: 1,
+        };
+
+        let result =
+            expand_string_template("blk=$rindexer_block_number,log=$rindexer_log_index", &params, &meta);
+        assert_eq!(result, Some("blk=42,log=3".to_string()));
+    }
 }
