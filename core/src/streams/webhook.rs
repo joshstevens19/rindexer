@@ -49,3 +49,58 @@ impl Webhook {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn publish_sends_correct_headers() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/webhook")
+            .match_header("content-type", "application/json")
+            .match_header("x-rindexer-shared-secret", "my-secret")
+            .match_header(STREAM_MESSAGE_ID_KEY, "msg-001")
+            .with_status(200)
+            .create_async()
+            .await;
+
+        let webhook = Webhook::new();
+        let result = webhook
+            .publish(
+                "msg-001",
+                &format!("{}/webhook", server.url()),
+                "my-secret",
+                &json!({"event": "Transfer"}),
+            )
+            .await;
+
+        assert!(result.is_ok());
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn publish_returns_error_on_server_failure() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/webhook")
+            .with_status(500)
+            .with_body("Internal Server Error")
+            .create_async()
+            .await;
+
+        let webhook = Webhook::new();
+        let result = webhook
+            .publish(
+                "msg-002",
+                &format!("{}/webhook", server.url()),
+                "secret",
+                &json!({"data": 1}),
+            )
+            .await;
+
+        assert!(matches!(result, Err(WebhookError::WebhookError(_))));
+    }
+}
