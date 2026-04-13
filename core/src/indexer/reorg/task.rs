@@ -96,11 +96,6 @@ impl ReorgTask {
             vec![]
         };
 
-        // Update the in-memory window with canonical blocks
-        if !canonical.is_empty() {
-            window.update_range(&canonical);
-        }
-
         let corrected_blocks_owned: Vec<(u64, String, String)> = canonical
             .iter()
             .map(|(n, h, p)| (*n, format!("{:#x}", h), format!("{:#x}", p)))
@@ -208,6 +203,11 @@ impl ReorgTask {
                     ),
                 }
             }
+        }
+
+        // Update the in-memory window with canonical blocks only after all DB changes succeed
+        if !canonical.is_empty() {
+            window.update_range(&canonical);
         }
 
         let duration = start.elapsed().as_secs_f64();
