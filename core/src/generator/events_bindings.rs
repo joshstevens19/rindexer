@@ -1049,6 +1049,36 @@ mod tests {
         assert!(is_array);
     }
 
+    /// Verify that the event bindings template uses `Arc<dyn ChainProvider>` for provider types.
+    ///
+    /// The format template in `generate_event_bindings_code` emits the `get_provider` method
+    /// and the `providers` HashMap construction. Both must use the trait object, not the
+    /// concrete `JsonRpcCachedProvider`, so the generated code compiles against
+    /// `EventCallbackRegistryInformation.providers: HashMap<String, Arc<dyn ChainProvider>>`.
+    #[test]
+    fn event_bindings_template_uses_dyn_chain_provider() {
+        // Read our own source file and verify the template strings
+        let source = include_str!("events_bindings.rs");
+
+        // The get_provider method in the template must return Arc<dyn ChainProvider>
+        assert!(
+            source.contains("async fn get_provider(&self, network: &str) -> Arc<dyn ChainProvider>"),
+            "events_bindings template must declare get_provider returning Arc<dyn ChainProvider>"
+        );
+
+        // The provider variable in register() must be typed as Arc<dyn ChainProvider>
+        assert!(
+            source.contains("let provider: Arc<dyn ChainProvider> = self.get_provider"),
+            "events_bindings template must annotate provider as Arc<dyn ChainProvider>"
+        );
+
+        // The import must include ChainProvider
+        assert!(
+            source.contains("provider::{{ChainProvider,"),
+            "events_bindings template must import ChainProvider"
+        );
+    }
+
     #[test]
     fn test_complex_path() {
         let property = AbiProperty::new(
