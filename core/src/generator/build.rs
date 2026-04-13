@@ -404,7 +404,7 @@ pub fn generate_rindexer_handlers(
             write_file(&generate_file_location(&output, "indexers/all_handlers"), &handlers)
                 .map_err(GenerateRindexerHandlersError::CouldNotWriteEventHandlersCode)?;
 
-            create_mod_file(output.as_path(), false)?;
+            create_mod_file(output.as_path(), true)?;
 
             if format_after_generation {
                 format_all_files_for_project(project_path);
