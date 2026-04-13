@@ -1,0 +1,117 @@
+examples/rust_clickhouse/src/rindexer_lib/typings/clickhouse_indexer/events/rocket_pool.rs
+  b44b22da986211af 35,274
+examples/rindexer_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/uniswap_v3_factory_pool_created_token_0_token_1.rs
+  8eb93b81bc1ec27e 10-12,42,275,326,363-370,372,374,377-378,391,395-401
+core/src/blockclock/mod.rs
+  8eb93b81bc1ec27e 215-309
+examples/rindexer_rust_playground/src/rindexer_lib/typings/mod.rs
+  74765553b8c9673c 2-5
+examples/rindexer_rust_playground/src/rindexer_lib/typings/networks.rs
+  74765553b8c9673c 10,12,105
+examples/rindexer_factory_indexing/src/rindexer_lib/typings/networks.rs
+  8eb93b81bc1ec27e 10,12,105
+examples/clickhouse_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/uniswap_v3_factory_pool_created_pool.rs
+  b44b22da986211af 10-12,14-26,28-46,250,301,338-345,347,349,352-353,366,370-376
+examples/rindexer_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/mod.rs
+  8eb93b81bc1ec27e 4
+examples/rindexer_rust_playground/src/rindexer_lib/typings/rindexer_playground/events/mod.rs
+  74765553b8c9673c 7-10
+examples/clickhouse_factory_indexing/src/rindexer_lib/typings/mod.rs
+  b44b22da986211af 4
+core/src/indexer/native_transfer.rs
+  8eb93b81bc1ec27e 703-818
+examples/rindexer_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/uniswap_v3_factory_pool_created_pool.rs
+  8eb93b81bc1ec27e 10-12,42,274,325,362-369,371,373,376-377,390,394-400
+examples/clickhouse_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/mod.rs
+  b44b22da986211af 12
+examples/rust_clickhouse/src/rindexer_lib/typings/networks.rs
+  b44b22da986211af 10,12,76
+examples/rust_clickhouse/src/rindexer_lib/typings/clickhouse_indexer/events/mod.rs
+  b44b22da986211af 3-6
+examples/clickhouse_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/uniswap_v3_factory_pool_created_token_0_token_1.rs
+  b44b22da986211af 10-12,14-26,28-46,251,302,339-346,348,350,353-354,367,371-377
+core/src/indexer/tables.rs
+  8eb93b81bc1ec27e 5278-5281,5385-5391,5556-5558,5560-5561,5563
+examples/rindexer_factory_indexing/src/rindexer_lib/typings/mod.rs
+  8eb93b81bc1ec27e 4
+examples/rindexer_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/uniswap_v3_pool.rs
+  8eb93b81bc1ec27e 35,358,406,443-450,452,454,457-458,471,475-481
+examples/clickhouse_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/uniswap_v3_pool.rs
+  b44b22da986211af 35,330,378,415-422,424,426,429-430,443,447-453
+core/src/indexer/start.rs
+  8eb93b81bc1ec27e 967-1087
+core/src/provider.rs
+  8eb93b81bc1ec27e 1397-1475
+examples/clickhouse_factory_indexing/src/rindexer_lib/typings/networks.rs
+  b44b22da986211af 10-12,105
+examples/rindexer_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/uniswap_v3_pool_token.rs
+  8eb93b81bc1ec27e 35,257,307,344-351,353,355,358-359,372,376-382
+examples/clickhouse_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/uniswap_v3_pool_token.rs
+  b44b22da986211af 35,233,283,320-327,329,331,334-335,348,352-358
+examples/clickhouse_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/mod.rs
+  b44b22da986211af 4
+examples/rindexer_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/mod.rs
+  8eb93b81bc1ec27e 12
+examples/clickhouse_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/uniswap_v3_factory.rs
+  b44b22da986211af 35,249,299,336-343,345,347,350-351,364,368-374
+examples/rindexer_rust_playground/src/rindexer_lib/typings/rindexer_playground/mod.rs
+  74765553b8c9673c 2-5
+examples/rindexer_rust_playground/src/rindexer_lib/typings/rindexer_playground/events/uniswap_v3_pool_filter.rs
+  74765553b8c9673c 35,351,401
+examples/rindexer_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/uniswap_v3_factory.rs
+  8eb93b81bc1ec27e 35,272,322,359-366,368,370,373-374,387,391-397
+examples/rindexer_rust_playground/src/rindexer_lib/typings/rindexer_playground/events/erc_20_filter.rs
+  74765553b8c9673c 35,369,427
+examples/rust_clickhouse/src/rindexer_lib/typings/mod.rs
+  b44b22da986211af 3-6
+examples/rindexer_rust_playground/src/rindexer_lib/typings/rindexer_playground/events/rocket_pool_eth.rs
+  74765553b8c9673c 35,381,443
+examples/rust_clickhouse/src/rindexer_lib/typings/clickhouse_indexer/mod.rs
+  b44b22da986211af 2-5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "e9c7a8420ea1e726f9bd4e8e62c5c79ee582eb2a",
+  "prompts": {
+    "74765553b8c9673c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c4da830e-5308-439d-8396-83f2e6409a9c",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 32,
+      "overriden_lines": 0
+    },
+    "8eb93b81bc1ec27e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "edca3c59-b30f-4bf9-9917-3ad3d23245f6",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 1413,
+      "overriden_lines": 0
+    },
+    "b44b22da986211af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "df83240b-4c45-438d-b5d0-182f0b37699a",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 7,
+      "accepted_lines": 339,
+      "overriden_lines": 0
+    }
+  }
+}
