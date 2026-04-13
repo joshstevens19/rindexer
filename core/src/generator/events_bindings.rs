@@ -402,195 +402,195 @@ fn generate_event_bindings_code(
     let event_type_name = generate_event_type_name(&contract.name);
     let code = Code::new(format!(
         r#"{GENERATED_ALLOW_ATTRS}
-        {GENERATED_FILE_HEADER}
+{GENERATED_FILE_HEADER}
 
-        use super::{abigen_file_name}::{{
-            {abigen_name}::{{self, {abigen_name}Instance, {abigen_name}Events}}
+use super::{abigen_file_name}::{{
+    {abigen_name}::{{self, {abigen_name}Instance, {abigen_name}Events}}
+}};
+use std::{{any::Any, sync::Arc}};
+use std::error::Error;
+use std::future::Future;
+use std::collections::HashMap;
+use std::pin::Pin;
+use std::path::{{Path, PathBuf}};
+use alloy::primitives::{{Address, Bytes, B256}};
+use alloy::sol_types::{{SolEvent, SolEventInterface, SolType}};
+use rindexer::{{
+    async_trait,
+    {csv_import}
+    generate_random_id,
+    FutureExt,
+    blockclock::BlockClock,
+    event::{{
+        callback_registry::{{
+            EventCallbackRegistry, EventCallbackRegistryInformation, EventCallbackResult,
+            EventResult, TxInformation, HasTxInformation
+        }},
+        contract_setup::{{ContractInformation, NetworkContract}},
+    }},
+    manifest::{{
+        contract::{{Contract, ContractDetails}},
+        yaml::read_manifest,
+    }},
+    provider::{{ChainProvider, JsonRpcCachedProvider}},
+    {postgres_client_import}
+}};
+use super::super::super::super::typings::networks::get_provider_cache_for_network;
+{postgres_import}
+
+{structs}
+
+type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+#[async_trait]
+trait EventCallback {{
+    async fn call(&self, events: Vec<EventResult>) -> EventCallbackResult<()>;
+}}
+
+pub struct EventContext<TExtensions> where TExtensions: Send + Sync {{
+    {event_context_database}
+    {event_context_csv}
+    pub extensions: Arc<TExtensions>,
+    reorg_tx: tokio::sync::broadcast::Sender<rindexer::ReorgEvent>,
+}}
+
+impl<TExtensions> EventContext<TExtensions> where TExtensions: Send + Sync {{
+    /// Subscribe to reorg events. Returns a receiver that will get notified
+    /// whenever a reorg is detected and recovery is complete.
+    pub fn reorg_receiver(&self) -> tokio::sync::broadcast::Receiver<rindexer::ReorgEvent> {{
+        self.reorg_tx.subscribe()
+    }}
+}}
+
+// didn't want to use option or none made harder DX
+// so a blank struct makes interface nice
+pub struct NoExtensions {{}}
+pub fn no_extensions() -> NoExtensions {{
+    NoExtensions {{}}
+}}
+
+{event_callback_structs}
+
+pub enum {event_type_name}<TExtensions> where TExtensions: 'static + Send + Sync {{
+    {event_enums}
+}}
+
+impl<TExtensions> {event_type_name}<TExtensions> where TExtensions: 'static + Send + Sync {{
+    pub fn topic_id(&self) -> &'static str {{
+        match self {{
+            {topic_ids_match_arms}
+        }}
+    }}
+
+    pub fn event_name(&self) -> &'static str {{
+        match self {{
+            {event_names_match_arms}
+        }}
+    }}
+
+    pub fn contract_name(&self) -> String {{
+        "{raw_contract_name}".to_string()
+    }}
+
+    async fn get_provider(&self, network: &str) -> Arc<dyn ChainProvider> {{
+        get_provider_cache_for_network(network).await
+    }}
+
+    fn decoder(&self, network: &str) -> Arc<dyn Fn(Vec<B256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync> {{
+        match self {{
+            {decoder_match_arms}
+        }}
+    }}
+
+    pub async fn register(self, manifest_path: &PathBuf, registry: &mut EventCallbackRegistry) {{
+        let rindexer_yaml = read_manifest(manifest_path).expect("Failed to read rindexer.yaml");
+        let topic_id = self.topic_id();
+        let contract_name = self.contract_name();
+        let event_name = self.event_name();
+
+        let contract_details = rindexer_yaml
+            .all_contracts()
+            .iter()
+            .find(|c| c.name == contract_name)
+            .unwrap_or_else(|| panic!("Contract {{}} not found please make sure its defined in the rindexer.yaml",
+                contract_name))
+            .clone();
+
+          let index_event_in_order = contract_details
+            .index_event_in_order
+            .as_ref()
+            .map_or(false, |vec| vec.contains(&event_name.to_string()));
+
+        // Expect providers to have been initialized, but it's an async init so this should
+        // be fast but for correctness we must await each future.
+        let mut providers = HashMap::new();
+        for n in contract_details.details.iter() {{
+            let provider: Arc<dyn ChainProvider> = self.get_provider(&n.network).await;
+            providers.insert(n.network.clone(), provider);
+        }}
+
+        let contract = ContractInformation {{
+            name: contract_details.before_modify_name_if_filter_readonly().into_owned(),
+            details: contract_details
+                .details
+                .iter()
+                .map(|c| {{
+                    let provider = providers.get(&c.network).expect("must have a provider").clone();
+
+                    NetworkContract {{
+                        id: generate_random_id(10),
+                        network: c.network.clone(),
+                        cached_provider: provider.clone(),
+                        block_clock: BlockClock::new(
+                            rindexer_yaml.timestamps,
+                            rindexer_yaml.config.timestamp_sample_rate,
+                            provider.clone(),
+                        ),
+                        decoder: self.decoder(&c.network),
+                        indexing_contract_setup: c.indexing_contract_setup(manifest_path),
+                        start_block: c.start_block,
+                        end_block: c.end_block,
+                        disable_logs_bloom_checks: rindexer_yaml
+                                                    .networks
+                                                    .iter()
+                                                    .find(|n| n.name == c.network)
+                                                    .map_or(false, |n| n.disable_logs_bloom_checks.unwrap_or_default()),
+                    }}
+                }})
+                .collect(),
+            abi: contract_details.abi,
+            reorg_safe_distance: contract_details.reorg_safe_distance,
         }};
-        use std::{{any::Any, sync::Arc}};
-        use std::error::Error;
-        use std::future::Future;
-        use std::collections::HashMap;
-        use std::pin::Pin;
-        use std::path::{{Path, PathBuf}};
-        use alloy::primitives::{{Address, Bytes, B256}};
-        use alloy::sol_types::{{SolEvent, SolEventInterface, SolType}};
-        use rindexer::{{
-            async_trait,
-            {csv_import}
-            generate_random_id,
-            FutureExt,
-            blockclock::BlockClock,
-            event::{{
-                callback_registry::{{
-                    EventCallbackRegistry, EventCallbackRegistryInformation, EventCallbackResult,
-                    EventResult, TxInformation, HasTxInformation
-                }},
-                contract_setup::{{ContractInformation, NetworkContract}},
-            }},
-            manifest::{{
-                contract::{{Contract, ContractDetails}},
-                yaml::read_manifest,
-            }},
-            provider::{{ChainProvider, JsonRpcCachedProvider}},
-            {postgres_client_import}
+
+        let (callback, reorg_sender): (
+            Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync>,
+            Option<tokio::sync::broadcast::Sender<rindexer::ReorgEvent>>,
+        ) = match self {{
+            {register_match_arms}
         }};
-        use super::super::super::super::typings::networks::get_provider_cache_for_network;
-        {postgres_import}
 
-        {structs}
-
-        type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-
-        #[async_trait]
-        trait EventCallback {{
-            async fn call(&self, events: Vec<EventResult>) -> EventCallbackResult<()>;
-        }}
-
-        pub struct EventContext<TExtensions> where TExtensions: Send + Sync {{
-            {event_context_database}
-            {event_context_csv}
-            pub extensions: Arc<TExtensions>,
-            reorg_tx: tokio::sync::broadcast::Sender<rindexer::ReorgEvent>,
-        }}
-
-        impl<TExtensions> EventContext<TExtensions> where TExtensions: Send + Sync {{
-            /// Subscribe to reorg events. Returns a receiver that will get notified
-            /// whenever a reorg is detected and recovery is complete.
-            pub fn reorg_receiver(&self) -> tokio::sync::broadcast::Receiver<rindexer::ReorgEvent> {{
-                self.reorg_tx.subscribe()
-            }}
-        }}
-
-        // didn't want to use option or none made harder DX
-        // so a blank struct makes interface nice
-        pub struct NoExtensions {{}}
-        pub fn no_extensions() -> NoExtensions {{
-            NoExtensions {{}}
-        }}
-
-        {event_callback_structs}
-
-        pub enum {event_type_name}<TExtensions> where TExtensions: 'static + Send + Sync {{
-            {event_enums}
-        }}
-
-        impl<TExtensions> {event_type_name}<TExtensions> where TExtensions: 'static + Send + Sync {{
-            pub fn topic_id(&self) -> &'static str {{
-                match self {{
-                    {topic_ids_match_arms}
-                }}
-            }}
-
-            pub fn event_name(&self) -> &'static str {{
-                match self {{
-                    {event_names_match_arms}
-                }}
-            }}
-
-            pub fn contract_name(&self) -> String {{
-                "{raw_contract_name}".to_string()
-            }}
-
-            async fn get_provider(&self, network: &str) -> Arc<dyn ChainProvider> {{
-                get_provider_cache_for_network(network).await
-            }}
-
-            fn decoder(&self, network: &str) -> Arc<dyn Fn(Vec<B256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync> {{
-                match self {{
-                    {decoder_match_arms}
-                }}
-            }}
-
-            pub async fn register(self, manifest_path: &PathBuf, registry: &mut EventCallbackRegistry) {{
-                let rindexer_yaml = read_manifest(manifest_path).expect("Failed to read rindexer.yaml");
-                let topic_id = self.topic_id();
-                let contract_name = self.contract_name();
-                let event_name = self.event_name();
-
-                let contract_details = rindexer_yaml
-                    .all_contracts()
-                    .iter()
-                    .find(|c| c.name == contract_name)
-                    .unwrap_or_else(|| panic!("Contract {{}} not found please make sure its defined in the rindexer.yaml",
-                        contract_name))
-                    .clone();
-
-                  let index_event_in_order = contract_details
-                    .index_event_in_order
-                    .as_ref()
-                    .map_or(false, |vec| vec.contains(&event_name.to_string()));
-
-                // Expect providers to have been initialized, but it's an async init so this should
-                // be fast but for correctness we must await each future.
-                let mut providers = HashMap::new();
-                for n in contract_details.details.iter() {{
-                    let provider: Arc<dyn ChainProvider> = self.get_provider(&n.network).await;
-                    providers.insert(n.network.clone(), provider);
-                }}
-
-                let contract = ContractInformation {{
-                    name: contract_details.before_modify_name_if_filter_readonly().into_owned(),
-                    details: contract_details
-                        .details
-                        .iter()
-                        .map(|c| {{
-                            let provider = providers.get(&c.network).expect("must have a provider").clone();
-
-                            NetworkContract {{
-                                id: generate_random_id(10),
-                                network: c.network.clone(),
-                                cached_provider: provider.clone(),
-                                block_clock: BlockClock::new(
-                                    rindexer_yaml.timestamps,
-                                    rindexer_yaml.config.timestamp_sample_rate,
-                                    provider.clone(),
-                                ),
-                                decoder: self.decoder(&c.network),
-                                indexing_contract_setup: c.indexing_contract_setup(manifest_path),
-                                start_block: c.start_block,
-                                end_block: c.end_block,
-                                disable_logs_bloom_checks: rindexer_yaml
-                                                            .networks
-                                                            .iter()
-                                                            .find(|n| n.name == c.network)
-                                                            .map_or(false, |n| n.disable_logs_bloom_checks.unwrap_or_default()),
-                            }}
-                        }})
-                        .collect(),
-                    abi: contract_details.abi,
-                    reorg_safe_distance: contract_details.reorg_safe_distance,
-                }};
-
-                let (callback, reorg_sender): (
-                    Arc<dyn Fn(Vec<EventResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync>,
-                    Option<tokio::sync::broadcast::Sender<rindexer::ReorgEvent>>,
-                ) = match self {{
-                    {register_match_arms}
-                }};
-
-               registry.register_event(EventCallbackRegistryInformation {{
-                    id: generate_random_id(10),
-                    indexer_name: "{indexer_name}".to_string(),
-                    event_name: event_name.to_string(),
-                    index_event_in_order,
-                    topic_id: topic_id.parse::<B256>().unwrap(),
-                    contract,
-                    callback,
-                    tables: Arc::new(vec![]),
-                    reorg_sender,
-                    streams_clients: Arc::new(None),
-                    providers: Arc::new(providers),
-                    constants: Arc::new(rindexer_yaml.constants.clone()),
-                    multicall_addresses: Arc::new(
-                        rindexer_yaml.networks.iter()
-                            .map(|n| (n.name.clone(), n.multicall3_address.clone()))
-                            .collect(),
-                    ),
-                }});
-            }}
-        }}
-        "#,
+       registry.register_event(EventCallbackRegistryInformation {{
+            id: generate_random_id(10),
+            indexer_name: "{indexer_name}".to_string(),
+            event_name: event_name.to_string(),
+            index_event_in_order,
+            topic_id: topic_id.parse::<B256>().unwrap(),
+            contract,
+            callback,
+            tables: Arc::new(vec![]),
+            reorg_sender,
+            streams_clients: Arc::new(None),
+            providers: Arc::new(providers),
+            constants: Arc::new(rindexer_yaml.constants.clone()),
+            multicall_addresses: Arc::new(
+                rindexer_yaml.networks.iter()
+                    .map(|n| (n.name.clone(), n.multicall3_address.clone()))
+                    .collect(),
+            ),
+        }});
+    }}
+}}
+"#,
         postgres_import = if storage.postgres_enabled() {
             "use super::super::super::super::typings::database::get_or_init_postgres_client;"
         } else if storage.clickhouse_enabled() {
@@ -712,18 +712,18 @@ pub fn generate_event_handlers(
     let mut imports = String::new();
     imports.push_str(&format!(
         r#"#![allow(non_snake_case)]
-            {GENERATED_FILE_HEADER}
-            use rindexer::{{
-                event::callback_registry::EventCallbackRegistry,
-                EthereumSqlTypeWrapper, PgType, rindexer_error, rindexer_info
-            }};
-        "#
+{GENERATED_FILE_HEADER}
+use rindexer::{{
+    event::callback_registry::EventCallbackRegistry,
+    EthereumSqlTypeWrapper, PgType, rindexer_error, rindexer_info
+}};
+"#
     ));
     imports.push_str("use std::sync::Arc;\n");
     imports.push_str(&format!(
         r#"use std::path::PathBuf;
-        use alloy::primitives::{{U64, U256, I256}};
-        use super::super::super::typings::{indexer_name_formatted}::events::{handler_registry_name}::{{no_extensions, {event_type_name}"#,
+use alloy::primitives::{{U64, U256, I256}};
+use super::super::super::typings::{indexer_name_formatted}::events::{handler_registry_name}::{{no_extensions, {event_type_name}"#,
         indexer_name_formatted = camel_to_snake(indexer_name),
         handler_registry_name = camel_to_snake(&contract.name),
         event_type_name = generate_event_type_name(&contract.name)

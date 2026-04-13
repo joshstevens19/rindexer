@@ -35,33 +35,12 @@ pub fn write_file(path: &Path, contents: &str) -> Result<(), WriteFileError> {
         fs::create_dir_all(dir).map_err(WriteFileError::CouldNotCreateDir)?;
     }
 
-    let cleaned_contents = dedent(contents);
+    let cleaned_contents: String =
+        contents.lines().map(|line| line.trim_end()).collect::<Vec<&str>>().join("\n");
 
     let mut file = File::create(path).map_err(WriteFileError::CouldNotCreateFile)?;
     file.write_all(cleaned_contents.as_bytes()).map_err(WriteFileError::CouldNotConvertToBytes)?;
     Ok(())
-}
-
-/// Strip common leading whitespace from all non-empty lines and trim trailing whitespace.
-fn dedent(s: &str) -> String {
-    let min_indent = s
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| l.len() - l.trim_start().len())
-        .min()
-        .unwrap_or(0);
-
-    s.lines()
-        .map(|line| {
-            if line.trim().is_empty() {
-                ""
-            } else {
-                &line[min_indent..]
-            }
-        })
-        .map(|line| line.trim_end())
-        .collect::<Vec<&str>>()
-        .join("\n")
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -116,7 +95,10 @@ pub fn create_mod_file(
             .map_err(CreateModFileError::WriteExtraLines)?;
 
         if code_generated_comment {
-            writeln!(mod_file, "{}", crate::generator::GENERATED_FILE_HEADER)
+            // Use regular comments (not doc comments) so rustfmt doesn't
+            // attach them to the next mod item and reorder them.
+            let header = crate::generator::GENERATED_FILE_HEADER.replace("///", "//");
+            writeln!(mod_file, "{header}")
                 .map_err(CreateModFileError::WriteExtraLines)?;
         }
 

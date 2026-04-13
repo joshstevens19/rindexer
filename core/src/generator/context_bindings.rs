@@ -79,15 +79,15 @@ fn generate_contracts_code(contracts: &[Contract], networks: &[Network]) -> Code
     let network_imports: Vec<String> = networks.iter().map(network_provider_fn_name).collect();
     let mut output = Code::new(format!(
         r#"
-        {GENERATED_FILE_HEADER}
+{GENERATED_FILE_HEADER}
 
-        use super::networks::{{{}}};
-        use std::sync::Arc;
-        use alloy::network::AnyNetwork;
-        use rindexer::provider::RindexerProvider;
-        use alloy::primitives::Address;
-        use alloy::sol;
-        "#,
+use super::networks::{{{}}};
+use std::sync::Arc;
+use alloy::network::AnyNetwork;
+use rindexer::provider::RindexerProvider;
+use alloy::primitives::Address;
+use alloy::sol;
+"#,
         network_imports.join(", ")
     ));
 

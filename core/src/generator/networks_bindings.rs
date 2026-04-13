@@ -109,6 +109,10 @@ fn generate_network_provider_code(network: &Network) -> Code {
             pub async fn {fn_name}_cache() -> Arc<JsonRpcCachedProvider> {{
                 {provider_init_fn}
             }}
+
+            pub async fn {fn_name}() -> Arc<RindexerProvider> {{
+                {fn_name}_cache().await.get_inner_provider()
+            }}
         "#,
         fn_name = network_provider_fn_name(network),
         provider_init_fn = generate_network_lazy_provider_code(network),
@@ -151,7 +155,7 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
     use rindexer::{
         lazy_static,
         manifest::network::{AddressFiltering, BlockPollFrequency},
-        provider::{ChainProvider, create_client, JsonRpcCachedProvider, RetryClientError},
+        provider::{ChainProvider, RindexerProvider, create_client, JsonRpcCachedProvider, RetryClientError},
         notifications::ChainStateNotification,
         public_read_env_value
     };
@@ -259,6 +263,16 @@ mod tests {
         assert!(
             code.contains("get_ethereum_provider_cache() -> Arc<JsonRpcCachedProvider>"),
             "individual provider cache should return concrete Arc<JsonRpcCachedProvider>"
+        );
+    }
+
+    #[test]
+    fn generated_provider_fn_returns_rindexer_provider() {
+        let networks = vec![test_network("ethereum", 1)];
+        let code = generate_networks_code(&networks).to_string();
+        assert!(
+            code.contains("get_ethereum_provider() -> Arc<RindexerProvider>"),
+            "get_{{name}}_provider() must return Arc<RindexerProvider>"
         );
     }
 }
