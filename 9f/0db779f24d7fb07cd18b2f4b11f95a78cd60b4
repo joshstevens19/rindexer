@@ -1,0 +1,97 @@
+core/src/event/config.rs
+  1c14f56455e2543e 330-336
+core/src/indexer/start.rs
+  1c14f56455e2543e 491,779
+core/src/indexer/process.rs
+  1c14f56455e2543e 358,360-363,404
+core/src/indexer/fetch_logs.rs
+  9fdfcbbd02b88ab6 2-3,9-10
+  1c14f56455e2543e 157,176,440-443,534,725
+core/src/indexer/reorg/coordinator.rs
+  9fdfcbbd02b88ab6 420-464
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "9f0db779f24d7fb07cd18b2f4b11f95a78cd60b4",
+  "prompts": {
+    "16dcee90fbfb078d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "633cc1ae-7ee5-47c1-8516-af09d1b75b7e",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 6,
+      "overriden_lines": 0
+    },
+    "1b08df16bedb81d2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "38e7988a-b926-4fd3-944a-a1de72fe5c30",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 144,
+      "overriden_lines": 0
+    },
+    "1c14f56455e2543e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ed0e6ef1-d132-4f30-981f-d3226870903e",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 30,
+      "total_deletions": 19,
+      "accepted_lines": 24,
+      "overriden_lines": 0
+    },
+    "5230b843d86bc378": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ebee4bea-20f9-4cf6-8742-0223a382e801",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "9fdfcbbd02b88ab6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "872225f2-fad4-4cd6-9da2-bd89a6ce6efc",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 202,
+      "total_deletions": 50,
+      "accepted_lines": 1358,
+      "overriden_lines": 0
+    },
+    "bfd21b9906a1d96c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1e9cf1e5-d4e3-4bdd-8b7a-1db3228e9e8c",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 4,
+      "overriden_lines": 0
+    }
+  }
+}
