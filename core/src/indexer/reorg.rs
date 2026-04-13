@@ -1646,6 +1646,7 @@ mod tests {
             }],
             cron: None,
             timestamp: false,
+            database: None,
         };
 
         TableRuntime::new(table, "idx", "erc20")

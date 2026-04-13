@@ -273,6 +273,46 @@ throttle to respect these limits - but this can make indexing take hours instead
 
 ---
 
+### database
+
+Optional override for the database (ClickHouse) or schema (PostgreSQL) where this table is created.
+By default, custom tables are created in `{project}_{contract}` (e.g., `myindexer_usdc.balances`).
+When `database` is set, the table is created in the specified database instead.
+
+```yaml
+tables:
+  - name: events
+    database: indexer  // [!code focus]
+    columns:
+      - name: id
+      - name: amount
+```
+
+This is useful when multiple contracts should write to the **same table**. Without `database`, each
+contract gets its own isolated table. With `database`, all contracts sharing the same value write
+to the same `{database}.{table_name}`.
+
+```yaml
+contracts:
+  - name: ExchangeA
+    tables:
+      - name: trades
+        database: shared    # → shared.trades
+        ...
+  - name: ExchangeB
+    tables:
+      - name: trades
+        database: shared    # → shared.trades (same table!)
+        ...
+```
+
+:::info[Raw event tables are not affected]
+The `database` override only applies to custom tables. Raw event tables (auto-generated from ABI)
+always use the default `{project}_{contract}` database for isolation.
+:::
+
+---
+
 ### columns
 
 Define the columns in your table.
