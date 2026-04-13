@@ -15,6 +15,28 @@
 
 all release branches are deployed through `release/VERSION_NUMBER` branches
 
+# 0.38.0-beta - 10th April 2026
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.38.0
+
+- linux binary - https://github.com/joshstevens19/rindexer/releases/download/v0.38.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://github.com/joshstevens19/rindexer/releases/download/v0.38.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://github.com/joshstevens19/rindexer/releases/download/v0.38.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://github.com/joshstevens19/rindexer/releases/download/v0.38.0/rindexer_win32-amd64.zip
+
+
+### Bug fixes
+-------------------------------------------------
+
+- fix: **ClickHouse no-code tables now use native types** — `uint256` columns map to `UInt256` (was `String`), `uint128` to `UInt128`, `int256` to `Int256`, `int128` to `Int128`, and `address` to `FixedString(42)` (was `String`). Custom table types now match raw event table types (`solidity_type_to_clickhouse_type`), ensuring consistent schemas across the same rindexer project.
+- fix: **ClickHouse serialization no longer panics on PG-specific type wrappers** — `U256Numeric`, `I256Numeric`, `U256Bytes`, `I256Bytes`, `AddressBytes`, and their Nullable/Vec variants are now serialized correctly for ClickHouse instead of panicking with `"Clickhouse in no-code should never encounter these types"`. This enables no-code tables with `$if()` conditions, arithmetic expressions, and direct `uint256`/`address` field references to work with the ClickHouse storage backend. Previously, any computed value or conditional expression in a no-code table would crash when writing to ClickHouse.
+
+### Features
+-------------------------------------------------
+
+- feat: **`database` field on custom tables** — optional YAML field that directs a custom table to a specific ClickHouse database (or PostgreSQL schema) instead of the default `{project}_{contract}` naming. Enables multiple contracts to write to a shared table (e.g., `database: indexer` → `indexer.events`).
+
+
 # 0.37.2-beta - 1st April 2026
 
 github branch - https://github.com/joshstevens19/rindexer/tree/release/0.37.2

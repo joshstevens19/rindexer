@@ -283,8 +283,12 @@ pub fn generate_table_full_name(
     indexer_name: &str,
     contract_name: &str,
     table_name: &str,
+    database_override: Option<&str>,
 ) -> String {
-    let schema_name = generate_indexer_contract_schema_name(indexer_name, contract_name);
+    let schema_name = match database_override {
+        Some(db) => db.to_string(),
+        None => generate_indexer_contract_schema_name(indexer_name, contract_name),
+    };
     format!("{}.{}", schema_name, camel_to_snake(table_name))
 }
 
