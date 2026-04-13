@@ -197,3 +197,68 @@ pub fn generate_networks_code(networks: &[Network]) -> Code {
 
     output
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_network(name: &str, chain_id: u64) -> Network {
+        Network {
+            name: name.to_string(),
+            chain_id,
+            rpc: format!("https://{name}.example.com"),
+            block_poll_frequency: None,
+            compute_units_per_second: None,
+            max_block_range: None,
+            get_logs_settings: None,
+            disable_logs_bloom_checks: None,
+            multicall3_address: None,
+            reth: None,
+        }
+    }
+
+    #[test]
+    fn generated_networks_imports_chain_provider() {
+        let networks = vec![test_network("ethereum", 1)];
+        let code = generate_networks_code(&networks).to_string();
+        assert!(
+            code.contains("provider::{ChainProvider,"),
+            "generated code must import ChainProvider"
+        );
+    }
+
+    #[test]
+    fn generated_provider_cache_for_network_returns_dyn_chain_provider() {
+        let networks = vec![test_network("ethereum", 1)];
+        let code = generate_networks_code(&networks).to_string();
+        assert!(
+            code.contains("get_provider_cache_for_network(network: &str) -> Arc<dyn ChainProvider>"),
+            "get_provider_cache_for_network must return Arc<dyn ChainProvider>, got:\n{}",
+            code
+        );
+    }
+
+    #[test]
+    fn generated_provider_cache_for_network_dispatches_all_networks() {
+        let networks = vec![
+            test_network("ethereum", 1),
+            test_network("base", 8453),
+        ];
+        let code = generate_networks_code(&networks).to_string();
+        assert!(code.contains(r#"if network == "ethereum""#));
+        assert!(code.contains(r#"if network == "base""#));
+        assert!(code.contains("get_ethereum_provider_cache()"));
+        assert!(code.contains("get_base_provider_cache()"));
+    }
+
+    #[test]
+    fn generated_individual_provider_cache_returns_concrete_type() {
+        let networks = vec![test_network("ethereum", 1)];
+        let code = generate_networks_code(&networks).to_string();
+        // Individual network provider caches still return the concrete type
+        assert!(
+            code.contains("get_ethereum_provider_cache() -> Arc<JsonRpcCachedProvider>"),
+            "individual provider cache should return concrete Arc<JsonRpcCachedProvider>"
+        );
+    }
+}
