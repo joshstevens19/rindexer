@@ -95,10 +95,7 @@ pub fn create_mod_file(
             .map_err(CreateModFileError::WriteExtraLines)?;
 
         if code_generated_comment {
-            // Use regular comments (not doc comments) so rustfmt doesn't
-            // attach them to the next mod item and reorder them.
-            let header = crate::generator::GENERATED_FILE_HEADER.replace("///", "//");
-            writeln!(mod_file, "{header}")
+            writeln!(mod_file, "{}", crate::generator::GENERATED_FILE_HEADER)
                 .map_err(CreateModFileError::WriteExtraLines)?;
         }
 
