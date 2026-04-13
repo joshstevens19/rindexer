@@ -165,6 +165,56 @@ impl BlockClock {
     }
 }
 
+fn get_blockclock_filepath(network: u64) -> Option<PathBuf> {
+    let filename = &format!("{}.blockclock", network);
+    let mut paths = vec![];
+
+    // Assume `resources` directory is in the same directory as the executable (installed)
+    if let Ok(executable_path) = env::current_exe() {
+        let mut path = executable_path.to_path_buf();
+        path.pop(); // Remove the executable name
+        path.push("resources");
+        path.push("blockclock");
+        path.push(filename);
+        paths.push(path);
+
+        // Also consider when running from within the `rindexer` directory
+        let mut path = executable_path;
+        path.pop(); // Remove the executable name
+        path.pop(); // Remove the 'release' or 'debug' directory
+        path.push("resources");
+        path.push("blockclock");
+        path.push(filename);
+        paths.push(path);
+    }
+
+    // Check additional common paths
+    if let Ok(home_dir) = env::var("HOME") {
+        let mut path = PathBuf::from(home_dir);
+        path.push(".rindexer");
+        path.push("resources");
+        path.push("blockclock");
+        path.push(filename);
+        paths.push(path);
+    }
+
+    // Return the first valid path
+    for path in &paths {
+        if path.exists() {
+            return Some(path.to_path_buf());
+        }
+    }
+
+    let extra_looking =
+        paths.into_iter().next().expect("Failed to determine rindexer blockclock path");
+
+    if !extra_looking.exists() {
+        return None;
+    }
+
+    Some(extra_looking)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,54 +354,4 @@ mod tests {
         assert_eq!(result[1].block_timestamp, Some(1_700_000_012));
         assert_eq!(result[2].block_timestamp, Some(1_700_000_024));
     }
-}
-
-fn get_blockclock_filepath(network: u64) -> Option<PathBuf> {
-    let filename = &format!("{}.blockclock", network);
-    let mut paths = vec![];
-
-    // Assume `resources` directory is in the same directory as the executable (installed)
-    if let Ok(executable_path) = env::current_exe() {
-        let mut path = executable_path.to_path_buf();
-        path.pop(); // Remove the executable name
-        path.push("resources");
-        path.push("blockclock");
-        path.push(filename);
-        paths.push(path);
-
-        // Also consider when running from within the `rindexer` directory
-        let mut path = executable_path;
-        path.pop(); // Remove the executable name
-        path.pop(); // Remove the 'release' or 'debug' directory
-        path.push("resources");
-        path.push("blockclock");
-        path.push(filename);
-        paths.push(path);
-    }
-
-    // Check additional common paths
-    if let Ok(home_dir) = env::var("HOME") {
-        let mut path = PathBuf::from(home_dir);
-        path.push(".rindexer");
-        path.push("resources");
-        path.push("blockclock");
-        path.push(filename);
-        paths.push(path);
-    }
-
-    // Return the first valid path
-    for path in &paths {
-        if path.exists() {
-            return Some(path.to_path_buf());
-        }
-    }
-
-    let extra_looking =
-        paths.into_iter().next().expect("Failed to determine rindexer blockclock path");
-
-    if !extra_looking.exists() {
-        return None;
-    }
-
-    Some(extra_looking)
 }
