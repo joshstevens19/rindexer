@@ -213,17 +213,6 @@ pub static REORG_EVENTS_DELETED: Lazy<CounterVec> = Lazy::new(|| {
     .expect("failed to register rindexer_reorg_events_deleted_total")
 });
 
-/// Total number of events re-indexed after reorg.
-/// Labels: network
-pub static REORG_EVENTS_REINDEXED: Lazy<CounterVec> = Lazy::new(|| {
-    register_counter_vec!(
-        "rindexer_reorg_events_reindexed_total",
-        "Total number of events re-indexed after reorg",
-        &["network"]
-    )
-    .expect("failed to register rindexer_reorg_events_reindexed_total")
-});
-
 /// Number of reorgs detected by source.
 /// Labels: network, source
 pub static REORG_DETECTION_SOURCE: Lazy<CounterVec> = Lazy::new(|| {

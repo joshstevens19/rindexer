@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::{env, time::Instant};
 
 use clickhouse::{Client, Row};
@@ -11,6 +12,11 @@ use crate::EthereumSqlTypeWrapper;
 
 const DEFAULT_CLICKHOUSE_BATCH_SIZE: usize = 1000;
 const CLICKHOUSE_BATCH_SIZE_ENV: &str = "RINDEXER_CLICKHOUSE_BATCH_SIZE";
+
+#[derive(Row, Deserialize)]
+struct CountRow {
+    c: u64,
+}
 
 pub struct ClickhouseConnection {
     url: String,
@@ -226,17 +232,12 @@ impl ClickhouseClient {
     }
 
     async fn wait_for_mutations(&self, database: &str, table: &str) -> Result<(), ClickhouseError> {
-        #[derive(Row, Deserialize)]
-        struct MutationCount {
-            c: u64,
-        }
-
         let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
         loop {
             let sql = format!(
                 "SELECT count() as c FROM system.mutations WHERE database = '{database}' AND table = '{table}' AND is_done = 0"
             );
-            let row: MutationCount = self.conn.query(&sql).fetch_one().await?;
+            let row: CountRow = self.conn.query(&sql).fetch_one().await?;
             if row.c == 0 {
                 return Ok(());
             }
@@ -258,10 +259,32 @@ impl ClickhouseClient {
         detection_point: u64,
         checkpoint_tables: &[String],
         corrected_blocks: &[(u64, &str, &str)],
-    ) -> Result<(), ClickhouseError> {
-        // DELETE from all event tables using fully-qualified names
+    ) -> Result<(u64, Vec<String>), ClickhouseError> {
+        #[derive(Row, Deserialize)]
+        struct CountAndHashes {
+            c: u64,
+            hashes: Vec<String>,
+        }
+
+        let predicate = format!(
+            "block_number >= {} AND block_number <= {} AND network = '{}'",
+            fork_point, detection_point, network
+        );
+
+        let mut total_deleted: u64 = 0;
+        let mut all_tx_hashes: HashSet<String> = HashSet::new();
+
         for (database, table_name) in event_tables {
             let fq_name = format!("{}.{}", database, table_name);
+
+            let sql = format!(
+                "SELECT count() as c, groupArray(DISTINCT tx_hash) as hashes FROM {} WHERE {}",
+                fq_name, predicate
+            );
+            let row: CountAndHashes = self.conn.query(&sql).fetch_one().await?;
+            total_deleted += row.c;
+            all_tx_hashes.extend(row.hashes);
+
             self.delete_by_block_range(&fq_name, network, fork_point, detection_point).await?;
         }
 
@@ -306,7 +329,7 @@ impl ClickhouseClient {
             self.execute(&insert_sql).await?;
         }
 
-        Ok(())
+        Ok((total_deleted, all_tx_hashes.into_iter().collect()))
     }
 }
 

@@ -47,7 +47,6 @@ pub struct ReorgTask {
 
 pub struct ReorgTaskResult {
     pub events_deleted: u64,
-    pub events_reindexed: u64,
     pub duration_secs: f64,
     pub affected_tx_hashes: Vec<String>,
 }
@@ -123,7 +122,15 @@ impl ReorgTask {
                     &checkpoint_tables,
                 )
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| {
+                    let mut msg = e.to_string();
+                    let mut source: Option<&dyn std::error::Error> = std::error::Error::source(&e);
+                    while let Some(s) = source {
+                        msg.push_str(&format!(": {}", s));
+                        source = s.source();
+                    }
+                    msg
+                })?;
             total_deleted = deleted;
             affected_tx_hashes = tx_hashes;
         }
@@ -137,16 +144,29 @@ impl ReorgTask {
             let checkpoint_tables: Vec<String> =
                 self.event_tables.iter().map(|t| t.checkpoint_table.clone()).collect();
 
-            ch.reorg_rollback(
-                &tables,
-                &self.network,
-                self.fork_point,
-                self.detection_point,
-                &checkpoint_tables,
-                &corrected_blocks,
-            )
-            .await
-            .map_err(|e| e.to_string())?;
+            let (ch_deleted, ch_tx_hashes) = ch
+                .reorg_rollback(
+                    &tables,
+                    &self.network,
+                    self.fork_point,
+                    self.detection_point,
+                    &checkpoint_tables,
+                    &corrected_blocks,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+            if postgres.is_none() {
+                total_deleted = ch_deleted;
+                affected_tx_hashes = ch_tx_hashes;
+            } else if ch_deleted != total_deleted {
+                tracing::warn!(
+                    network = %self.network,
+                    postgres_deleted = total_deleted,
+                    clickhouse_deleted = ch_deleted,
+                    "Reorg rollback: postgres and clickhouse deleted counts differ"
+                );
+            }
         }
 
         for dt in &self.derived_tables {
@@ -223,7 +243,6 @@ impl ReorgTask {
 
         Ok(ReorgTaskResult {
             events_deleted: total_deleted,
-            events_reindexed: 0,
             duration_secs: duration,
             affected_tx_hashes,
         })

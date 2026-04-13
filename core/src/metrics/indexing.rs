@@ -3,7 +3,7 @@
 use super::definitions::{
     ACTIVE_INDEXING_TASKS, BLOCKS_BEHIND, BLOCKS_INDEXED_TOTAL, EVENTS_PROCESSED_TOTAL,
     LAST_SYNCED_BLOCK, LATEST_CHAIN_BLOCK, REORGS_DETECTED_TOTAL, REORG_CASCADE, REORG_DEPTH,
-    REORG_DETECTION_SOURCE, REORG_EVENTS_DELETED, REORG_EVENTS_REINDEXED, REORG_HANDLING_DURATION,
+    REORG_DETECTION_SOURCE, REORG_EVENTS_DELETED, REORG_HANDLING_DURATION,
 };
 
 /// Record events being indexed for a contract/event pair.
@@ -91,11 +91,6 @@ pub fn record_reorg_handling_duration(network: &str, duration_secs: f64) {
 /// Record the number of events deleted during reorg rollback.
 pub fn record_reorg_events_deleted(network: &str, count: u64) {
     REORG_EVENTS_DELETED.with_label_values(&[network]).inc_by(count as f64);
-}
-
-/// Record the number of events re-indexed after reorg.
-pub fn record_reorg_events_reindexed(network: &str, count: u64) {
-    REORG_EVENTS_REINDEXED.with_label_values(&[network]).inc_by(count as f64);
 }
 
 /// Record the source of a reorg detection.

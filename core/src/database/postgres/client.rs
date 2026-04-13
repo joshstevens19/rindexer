@@ -9,6 +9,7 @@ use bb8_postgres::PostgresConnectionManager;
 use bytes::Buf;
 use dotenv::dotenv;
 use futures::pin_mut;
+use rust_decimal::Decimal;
 use tokio::{task, time::timeout};
 pub use tokio_postgres::types::{ToSql, Type as PgType};
 use tokio_postgres::{
@@ -502,6 +503,8 @@ impl PostgresClient {
 
         let fork_point_i64 = fork_point as i64;
         let detection_point_i64 = detection_point as i64;
+        let fork_point_decimal = Decimal::from(fork_point);
+        let detection_point_decimal = Decimal::from(detection_point);
         let mut total_deleted: u64 = 0;
         let mut all_affected_tx_hashes: Vec<String> = Vec::new();
 
@@ -512,7 +515,7 @@ impl PostgresClient {
                 table_name
             );
             let rows = transaction
-                .query(&query, &[&network, &fork_point_i64, &detection_point_i64])
+                .query(&query, &[&network, &fork_point_decimal, &detection_point_decimal])
                 .await?;
             total_deleted += rows.len() as u64;
             let hashes: Vec<String> = rows.iter().map(|r| r.get::<_, String>("tx_hash")).collect();
