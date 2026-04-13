@@ -1,0 +1,148 @@
+examples/rindexer_factory_indexing/src/rindexer_lib/indexers/rindexer_factory_contract/mod.rs
+  b44b22da986211af 2-5
+examples/rindexer_rust_playground/src/rindexer_lib/typings/rindexer_playground/events/uniswap_v3_pool_filter.rs
+  847014acdc95bfaf 186,189-197,285,292,439-446,448,450,453-454,467,471-477
+  b44b22da986211af 9-13
+examples/rust_clickhouse/src/rindexer_lib/indexers/mod.rs
+  b44b22da986211af 2-5
+examples/clickhouse_factory_indexing/src/rindexer_lib/indexers/rindexer_factory_contract/mod.rs
+  b44b22da986211af 2-5
+examples/clickhouse_factory_indexing/src/rindexer_lib/indexers/rindexer_factory_contract/uniswap_v3_factory_pool_created_token_0_token_1.rs
+  b44b22da986211af 2-5
+  8eb93b81bc1ec27e 7-10,12-13
+examples/rindexer_rust_playground/src/rindexer_lib/typings/networks.rs
+  b44b22da986211af 1-5
+examples/rust_clickhouse/src/rindexer_lib/typings/clickhouse_indexer/mod.rs
+  b44b22da986211af 2-5
+examples/clickhouse_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/uniswap_v3_factory_pool_created_pool.rs
+  b44b22da986211af 9-12
+examples/rindexer_rust_playground/src/rindexer_lib/indexers/mod.rs
+  b44b22da986211af 2-5
+examples/rindexer_rust_playground/src/rindexer_lib/indexers/rindexer_playground/rocket_pool_eth.rs
+  b44b22da986211af 2-5
+examples/rindexer_factory_indexing/src/rindexer_lib/indexers/rindexer_factory_contract/uniswap_v3_pool_token.rs
+  74765553b8c9673c 2-5
+examples/clickhouse_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/uniswap_v3_factory_pool_created_token_0_token_1.rs
+  b44b22da986211af 9-12
+examples/rust_clickhouse/src/rindexer_lib/indexers/clickhouse_indexer/mod.rs
+  b44b22da986211af 2-5
+examples/rindexer_factory_indexing/src/rindexer_lib/mod.rs
+  b44b22da986211af 2-5
+examples/rust_clickhouse/src/rindexer_lib/typings/mod.rs
+  b44b22da986211af 2-5
+examples/rindexer_rust_playground/src/rindexer_lib/typings/rindexer_playground/events/erc_20_filter.rs
+  847014acdc95bfaf 87,90-98,184,191,298,305,465-472,474,476,479-480,484,486,489-490,503,507-513
+  b44b22da986211af 9-13
+examples/clickhouse_factory_indexing/src/rindexer_lib/indexers/rindexer_factory_contract/uniswap_v3_pool_token.rs
+  b44b22da986211af 2-5
+examples/clickhouse_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/uniswap_v3_pool_token.rs
+  b44b22da986211af 9-13
+examples/rindexer_rust_playground/src/rindexer_lib/indexers/rindexer_playground/uniswap_v3_pool_filter.rs
+  b44b22da986211af 2-5
+examples/rindexer_factory_indexing/src/rindexer_lib/indexers/rindexer_factory_contract/uniswap_v3_factory_pool_created_token_0_token_1.rs
+  74765553b8c9673c 2-5
+  8eb93b81bc1ec27e 7-10,12-13
+examples/rindexer_factory_indexing/src/rindexer_lib/indexers/rindexer_factory_contract/uniswap_v3_factory.rs
+  74765553b8c9673c 2-5
+examples/clickhouse_factory_indexing/src/rindexer_lib/indexers/mod.rs
+  b44b22da986211af 2-5
+examples/clickhouse_factory_indexing/src/rindexer_lib/indexers/rindexer_factory_contract/uniswap_v3_factory.rs
+  b44b22da986211af 2-5
+examples/clickhouse_factory_indexing/src/rindexer_lib/indexers/rindexer_factory_contract/uniswap_v3_factory_pool_created_pool.rs
+  b44b22da986211af 2-5
+  8eb93b81bc1ec27e 7-10,12-13
+examples/rindexer_rust_playground/src/rindexer_lib/indexers/rindexer_playground/mod.rs
+  b44b22da986211af 2-5
+examples/rindexer_rust_playground/src/rindexer_lib/typings/rindexer_playground/events/mod.rs
+  b44b22da986211af 2-5
+examples/rust_clickhouse/src/rindexer_lib/typings/networks.rs
+  b44b22da986211af 1-5
+examples/rust_clickhouse/src/rindexer_lib/typings/clickhouse_indexer/events/rocket_pool.rs
+  847014acdc95bfaf 390-398
+  74765553b8c9673c 323
+  b44b22da986211af 9-13
+examples/rindexer_factory_indexing/src/rindexer_lib/indexers/mod.rs
+  b44b22da986211af 2-5
+examples/rust_clickhouse/src/rindexer_lib/typings/clickhouse_indexer/events/mod.rs
+  b44b22da986211af 2-5
+examples/clickhouse_factory_indexing/src/rindexer_lib/indexers/rindexer_factory_contract/uniswap_v3_pool.rs
+  b44b22da986211af 2-5
+examples/rindexer_rust_playground/src/rindexer_lib/typings/rindexer_playground/events/rocket_pool_eth.rs
+  847014acdc95bfaf 87,90-98,184,191,304,311,481-488,490,492,495-496,500,502,505-506,519,523-529
+  b44b22da986211af 9-13
+examples/rindexer_factory_indexing/src/rindexer_lib/indexers/rindexer_factory_contract/uniswap_v3_factory_pool_created_pool.rs
+  74765553b8c9673c 2-5
+  8eb93b81bc1ec27e 7-10,12-13
+examples/clickhouse_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/mod.rs
+  b44b22da986211af 2-5
+examples/clickhouse_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/mod.rs
+  b44b22da986211af 2-5
+examples/rindexer_rust_playground/src/rindexer_lib/indexers/rindexer_playground/erc_20_filter.rs
+  b44b22da986211af 2-5
+examples/clickhouse_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/uniswap_v3_pool.rs
+  b44b22da986211af 9-13
+examples/rust_clickhouse/src/rindexer_lib/mod.rs
+  b44b22da986211af 2-5
+examples/clickhouse_factory_indexing/src/rindexer_lib/typings/mod.rs
+  b44b22da986211af 2-5
+examples/clickhouse_factory_indexing/src/rindexer_lib/mod.rs
+  b44b22da986211af 2-5
+examples/rindexer_rust_playground/src/rindexer_lib/typings/global_contracts.rs
+  b44b22da986211af 1-5
+examples/rindexer_rust_playground/src/rindexer_lib/mod.rs
+  b44b22da986211af 2-5
+examples/rindexer_rust_playground/src/rindexer_lib/typings/mod.rs
+  b44b22da986211af 2-5
+examples/rindexer_rust_playground/src/rindexer_lib/typings/rindexer_playground/mod.rs
+  b44b22da986211af 2-5
+examples/rust_clickhouse/src/rindexer_lib/indexers/clickhouse_indexer/rocket_pool.rs
+  b44b22da986211af 2-5
+examples/clickhouse_factory_indexing/src/rindexer_lib/typings/networks.rs
+  b44b22da986211af 1-5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "2d2e712756362fd9df91e39a7082124a5a6e49f1",
+  "prompts": {
+    "74765553b8c9673c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c4da830e-5308-439d-8396-83f2e6409a9c",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 16,
+      "overriden_lines": 0
+    },
+    "8eb93b81bc1ec27e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "edca3c59-b30f-4bf9-9917-3ad3d23245f6",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 24,
+      "overriden_lines": 0
+    },
+    "b44b22da986211af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "df83240b-4c45-438d-b5d0-182f0b37699a",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 178,
+      "overriden_lines": 0
+    }
+  }
+}

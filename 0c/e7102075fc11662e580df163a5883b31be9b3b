@@ -1,0 +1,23 @@
+core/src/manifest/contract.rs
+  8eb93b81bc1ec27e 1647-1687,1692-1693,1713-2412
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "0ce7102075fc11662e580df163a5883b31be9b3b",
+  "prompts": {
+    "8eb93b81bc1ec27e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "edca3c59-b30f-4bf9-9917-3ad3d23245f6",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 23,
+      "total_deletions": 2,
+      "accepted_lines": 23,
+      "overriden_lines": 0
+    }
+  }
+}

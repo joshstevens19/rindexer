@@ -1,0 +1,36 @@
+examples/rust_clickhouse/src/rindexer_lib/typings/clickhouse_indexer/events/rocket_pool.rs
+  847014acdc95bfaf 389-397
+  74765553b8c9673c 322
+examples/rindexer_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/events/mod.rs
+  74765553b8c9673c 2-5
+examples/rindexer_rust_playground/src/rindexer_lib/typings/rindexer_playground/events/rocket_pool_eth.rs
+  847014acdc95bfaf 86,89-97,183,190,303,310,480-487,489,491,494-495,499,501,504-505,518,522-528
+examples/rindexer_rust_playground/src/rindexer_lib/typings/rindexer_playground/events/erc_20_filter.rs
+  847014acdc95bfaf 86,89-97,183,190,297,304,464-471,473,475,478-479,483,485,488-489,502,506-512
+examples/rindexer_factory_indexing/src/rindexer_lib/typings/rindexer_factory_contract/mod.rs
+  74765553b8c9673c 2-5
+examples/rindexer_factory_indexing/src/rindexer_lib/typings/mod.rs
+  74765553b8c9673c 2-5
+examples/rindexer_rust_playground/src/rindexer_lib/typings/rindexer_playground/events/uniswap_v3_pool_filter.rs
+  847014acdc95bfaf 185,188-196,284,291,438-445,447,449,452-453,466,470-476
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "54fbd9811f847fd96a2ecf4e651bbe641d6c2456",
+  "prompts": {
+    "74765553b8c9673c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c4da830e-5308-439d-8396-83f2e6409a9c",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 12,
+      "total_deletions": 12,
+      "accepted_lines": 12,
+      "overriden_lines": 0
+    }
+  }
+}
