@@ -1685,10 +1685,31 @@ mod tests {
 
     #[test]
     fn test_compute_sequence_id_ordering() {
-        // Later blocks always yield higher IDs
-        let block1 = compute_sequence_id(100, 99_999, 99_999);
+        // The encoding is: block * 100_000_000 + tx * 100_000 + log
+        // tx_index has a 1000-wide slot (0..999), log_index has 100_000-wide slot (0..99_999).
+        // Within these bounds, later blocks always produce higher IDs.
+        let block1 = compute_sequence_id(100, 999, 99_999);
         let block2 = compute_sequence_id(101, 0, 0);
         assert!(block2 > block1);
+
+        // Same block, higher tx_index wins
+        let a = compute_sequence_id(100, 5, 99_999);
+        let b = compute_sequence_id(100, 6, 0);
+        assert!(b > a);
+
+        // Same block+tx, higher log_index wins
+        let c = compute_sequence_id(100, 5, 0);
+        let d = compute_sequence_id(100, 5, 1);
+        assert!(d > c);
+    }
+
+    #[test]
+    fn test_compute_sequence_id_slot_overflow() {
+        // tx_index >= 1000 overflows into the block number's space.
+        // This documents the known limitation of the encoding.
+        let normal = compute_sequence_id(101, 0, 0);    // 10_100_000_000
+        let overflow = compute_sequence_id(100, 1000, 0); // 10_100_000_000
+        assert_eq!(normal, overflow, "tx_index=1000 aliases with next block");
     }
 
     // =========================================================================
