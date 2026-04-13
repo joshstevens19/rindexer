@@ -1,0 +1,61 @@
+core/src/generator/networks_bindings.rs
+  74765553b8c9673c 157
+core/src/blockclock/mod.rs
+  8eb93b81bc1ec27e 168-216
+core/src/indexer/reorg.rs
+  8eb93b81bc1ec27e 1876-1987
+core/src/indexer/native_transfer.rs
+  8eb93b81bc1ec27e 605-702
+core/src/generator/events_bindings.rs
+  74765553b8c9673c 18,437
+core/src/generator/trace_bindings.rs
+  74765553b8c9673c 18,550
+core/Cargo.toml
+  8eb93b81bc1ec27e 17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "39855dc771ab7ff450777c554d3d85a59cd31b4e",
+  "prompts": {
+    "74765553b8c9673c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c4da830e-5308-439d-8396-83f2e6409a9c",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 44,
+      "total_deletions": 214,
+      "accepted_lines": 15,
+      "overriden_lines": 0
+    },
+    "8eb93b81bc1ec27e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "edca3c59-b30f-4bf9-9917-3ad3d23245f6",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 370,
+      "total_deletions": 110,
+      "accepted_lines": 1118,
+      "overriden_lines": 0
+    },
+    "b44b22da986211af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "df83240b-4c45-438d-b5d0-182f0b37699a",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 124,
+      "total_deletions": 0,
+      "accepted_lines": 124,
+      "overriden_lines": 0
+    }
+  }
+}
