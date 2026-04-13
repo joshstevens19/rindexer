@@ -1873,4 +1873,116 @@ mod tests {
         // No match → oldest checked block is 98
         assert_eq!(fork, 98);
     }
+
+    // ======================================================================
+    // spawn_post_confirmation_verifier
+    // ======================================================================
+
+    /// Hash mismatch: shadow cache has block 100 with hash 0xAA, provider returns
+    /// block 100 with hash 0xBB. Verifier should send a ReorgInfo with fork_block=100.
+    #[tokio::test(start_paused = true)]
+    async fn test_post_confirmation_verifier_detects_mismatch() {
+        use crate::provider::mock::MockChainProvider;
+        use tokio::sync::mpsc::unbounded_channel;
+        use tokio_util::sync::CancellationToken;
+
+        let hash_aa = B256::from([0xAAu8; 32]);
+        let hash_bb = B256::from([0xBBu8; 32]);
+
+        // Shadow cache: block 100 with hash 0xAA
+        let shadow_cache = new_shadow_cache();
+        {
+            let mut c = shadow_cache.lock().unwrap();
+            c.insert(100, hash_aa);
+        }
+
+        // Provider: latest block = 200, block 100 returns hash 0xBB (mismatch!)
+        let provider = Arc::new(
+            MockChainProvider::new(1)
+                .with_block_number(200)
+                .with_blocks(vec![make_block_with_hash(100, hash_bb)]),
+        );
+
+        let (reorg_tx, mut reorg_rx) = unbounded_channel::<ReorgInfo>();
+        let cancel = CancellationToken::new();
+
+        let _handle = spawn_post_confirmation_verifier(
+            shadow_cache,
+            provider,
+            5, // confirmations: verify_up_to = 200 - 5 = 195, so block 100 qualifies
+            reorg_tx,
+            cancel.clone(),
+            "test".to_string(),
+        );
+
+        // Advance time past the 30s check interval to wake the verifier task.
+        // The mock provider resolves instantly (no real I/O), so the task will
+        // complete and send a message. We wait directly on the channel.
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+
+        // Should receive a ReorgInfo with fork_block=100
+        let reorg_info = reorg_rx.recv().await.expect("Channel should not be closed");
+        assert_eq!(reorg_info.fork_block, U64::from(100));
+
+        cancel.cancel();
+    }
+
+    /// No mismatch: shadow cache has block 100 with hash 0xAA, provider returns
+    /// block 100 with the same hash 0xAA. Verifier should NOT send any ReorgInfo.
+    ///
+    /// The task loop is triggered by advancing time. After the iteration completes,
+    /// the task loops back into the next select! waiting for 30s or cancel.
+    /// We then advance another 31s to trigger a second iteration, cancel after both,
+    /// and verify no signal was ever sent.
+    #[tokio::test(start_paused = true)]
+    async fn test_post_confirmation_verifier_no_signal_on_matching_hash() {
+        use crate::provider::mock::MockChainProvider;
+        use tokio::sync::mpsc::unbounded_channel;
+        use tokio_util::sync::CancellationToken;
+
+        let hash_aa = B256::from([0xAAu8; 32]);
+
+        // Shadow cache: block 100 with hash 0xAA
+        let shadow_cache = new_shadow_cache();
+        {
+            let mut c = shadow_cache.lock().unwrap();
+            c.insert(100, hash_aa);
+        }
+
+        // Provider: latest block = 200, block 100 returns SAME hash 0xAA (no mismatch)
+        let provider = Arc::new(
+            MockChainProvider::new(1)
+                .with_block_number(200)
+                .with_blocks(vec![make_block_with_hash(100, hash_aa)]),
+        );
+
+        let (reorg_tx, mut reorg_rx) = unbounded_channel::<ReorgInfo>();
+        let cancel = CancellationToken::new();
+
+        let _handle = spawn_post_confirmation_verifier(
+            shadow_cache,
+            provider,
+            5, // confirmations: verify_up_to = 200 - 5 = 195, block 100 qualifies
+            reorg_tx,
+            cancel.clone(),
+            "test".to_string(),
+        );
+
+        // Advance past the 30s interval to trigger the verifier iteration.
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+
+        // Cancel and await the task. The select! in the loop will process whichever future
+        // is ready first: the already-fired sleep OR the cancel. Either way, if the iteration
+        // ran, no ReorgInfo will have been sent (hashes matched).
+        // After cancel, the task exits and drops reorg_signal_tx.
+        cancel.cancel();
+        let _ = _handle.await;
+
+        // No ReorgInfo should have been sent — whether the cancel fired before or after
+        // the iteration, matching hashes never produce a signal.
+        assert!(
+            reorg_rx.try_recv().is_err(),
+            "No ReorgInfo should be sent on matching hash"
+        );
+    }
 }

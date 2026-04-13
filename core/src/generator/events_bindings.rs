@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use alloy::rpc::types::ValueOrArray;
 use serde_json::Value;
 
 use crate::abi::AbiProperty;
@@ -16,7 +15,7 @@ use crate::{
     },
     helpers::camel_to_snake,
     manifest::{
-        contract::{Contract, ContractDetails, ParseAbiError},
+        contract::{Contract, ParseAbiError},
         storage::{CsvDetails, Storage},
     },
     types::code::Code,
@@ -377,96 +376,6 @@ fn generate_event_callback_structs_code(
     Ok(Code::new(parts.join("\n")))
 }
 
-fn decoder_contract_fn(contracts_details: Vec<&ContractDetails>, abi_gen_name: &str) -> Code {
-    let mut function = String::new();
-    function.push_str(&format!(
-        r#"pub async fn decoder_contract(network: &str) -> {abi_gen_name}Instance<Arc<RindexerProvider>, AnyNetwork> {{"#
-    ));
-
-    let networks: Vec<&String> = contracts_details.iter().map(|c| &c.network).collect();
-    for (index, network) in networks.iter().enumerate() {
-        if index == 0 {
-            function.push_str("    if ");
-        } else {
-            function.push_str("    else if ");
-        }
-
-        function.push_str(&format!(
-            r#"network == "{network}" {{
-                {abi_gen_name}::new(
-                    // do not care about address here its decoding makes it easier to handle ValueOrArray
-                    Address::ZERO,
-                    get_provider_cache_for_network(network).await.get_inner_provider(),
-                 )
-            }}"#
-        ));
-    }
-
-    // Add a fallback else statement to handle unsupported networks
-    function.push_str(
-        r#"
-        else {
-            panic!("Network not supported");
-        }
-    }"#,
-    );
-
-    Code::new(function)
-}
-
-fn build_pub_contract_fn(
-    contract_name: &str,
-    contracts_details: Vec<&ContractDetails>,
-    abi_gen_name: &str,
-) -> Code {
-    let contract_name = camel_to_snake(contract_name);
-
-    let has_array_addresses =
-        contracts_details.iter().any(|c| matches!(c.address(), Some(ValueOrArray::Array(_))));
-
-    let no_address = contracts_details.iter().any(|c| c.address().is_none());
-
-    if contracts_details.len() > 1 || has_array_addresses || no_address {
-        Code::new(format!(
-            r#"pub async fn {contract_name}_contract(network: &str, address: Address) -> {abi_gen_name}Instance<Arc<RindexerProvider>, AnyNetwork> {{
-                {abi_gen_name}::new(
-                    address,
-                    get_provider_cache_for_network(network).await.get_inner_provider(),
-                 )
-               }}
-            "#
-        ))
-    } else {
-        let contract = contracts_details
-            .first()
-            .expect("Contract details should have at least one contract detail");
-
-        match contract.address() {
-            None => {
-                panic!("Contract details should have an address");
-            }
-            Some(value) => match value {
-                ValueOrArray::Value(address) => {
-                    let address = format!("{address:?}");
-                    Code::new(format!(
-                        r#"pub async fn {contract_name}_contract(network: &str) -> {abi_gen_name}Instance<Arc<RindexerProvider>, AnyNetwork> {{
-                                let address: Address = "{address}".parse().expect("Invalid address");
-                                {abi_gen_name}::new(
-                                    address,
-                                    get_provider_cache_for_network(network).await.get_inner_provider(),
-                                 )
-                               }}
-                            "#,
-                    ))
-                }
-                ValueOrArray::Array(_) => {
-                    unreachable!("Contract details should always be an single address");
-                }
-            },
-        }
-    }
-}
-
 #[derive(thiserror::Error, Debug)]
 pub enum GenerateEventBindingCodeError {
     #[error("Could not read ABI string: {0}")]
@@ -506,7 +415,6 @@ fn generate_event_bindings_code(
         use std::collections::HashMap;
         use std::pin::Pin;
         use std::path::{{Path, PathBuf}};
-        use alloy::network::AnyNetwork;
         use alloy::primitives::{{Address, Bytes, B256}};
         use alloy::sol_types::{{SolEvent, SolEventInterface, SolType}};
         use rindexer::{{
@@ -526,7 +434,7 @@ fn generate_event_bindings_code(
                 contract::{{Contract, ContractDetails}},
                 yaml::read_manifest,
             }},
-            provider::{{ChainProvider, JsonRpcCachedProvider, RindexerProvider}},
+            provider::{{ChainProvider, JsonRpcCachedProvider}},
             {postgres_client_import}
         }};
         use super::super::super::super::typings::networks::get_provider_cache_for_network;
@@ -569,10 +477,6 @@ fn generate_event_bindings_code(
             {event_enums}
         }}
 
-        {build_pub_contract_fn}
-
-        {decoder_contract_fn}
-
         impl<TExtensions> {event_type_name}<TExtensions> where TExtensions: 'static + Send + Sync {{
             pub fn topic_id(&self) -> &'static str {{
                 match self {{
@@ -595,8 +499,6 @@ fn generate_event_bindings_code(
             }}
 
             fn decoder(&self, network: &str) -> Arc<dyn Fn(Vec<B256>, Bytes) -> Arc<dyn Any + Send + Sync> + Send + Sync> {{
-                let decoder_contract = decoder_contract(network);
-
                 match self {{
                     {decoder_match_arms}
                 }}
@@ -726,13 +628,6 @@ fn generate_event_bindings_code(
         event_names_match_arms =
             generate_event_names_match_arms_code(&event_type_name, &event_info),
         raw_contract_name = contract.raw_name(),
-        decoder_contract_fn =
-            decoder_contract_fn(contract.details.iter().collect(), &abigen_contract_name(contract)),
-        build_pub_contract_fn = build_pub_contract_fn(
-            &contract.name,
-            contract.details.iter().collect(),
-            &abigen_contract_name(contract)
-        ),
         decoder_match_arms = generate_decoder_match_arms_code(&event_type_name, &event_info),
         register_match_arms = generate_register_match_arms_code(&event_type_name, &event_info)
     ));

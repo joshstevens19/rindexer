@@ -165,6 +165,55 @@ impl BlockClock {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::provider::mock::MockChainProvider;
+    use alloy::primitives::Log as PrimitiveLog;
+    use alloy::rpc::types::Log;
+
+    fn make_log_with_timestamp(block_number: u64, block_timestamp: Option<u64>) -> Log {
+        Log {
+            inner: PrimitiveLog { address: Default::default(), data: Default::default() },
+            block_hash: None,
+            block_number: Some(block_number),
+            block_timestamp,
+            transaction_hash: None,
+            transaction_index: None,
+            log_index: None,
+            removed: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_logs_returns_empty() {
+        let mock = Arc::new(MockChainProvider::new(1));
+        let clock = BlockClock::new(None, None, mock);
+        let result = clock.attach_log_timestamps(vec![]).await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn logs_with_timestamps_returned_unchanged() {
+        let mock = Arc::new(MockChainProvider::new(1));
+        let clock = BlockClock::new(None, None, mock);
+        let log = make_log_with_timestamp(100, Some(1_700_000_000));
+        let result = clock.attach_log_timestamps(vec![log]).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].block_timestamp, Some(1_700_000_000));
+    }
+
+    #[tokio::test]
+    async fn millisecond_timestamps_normalized_to_seconds() {
+        let mock = Arc::new(MockChainProvider::new(1));
+        let clock = BlockClock::new(None, None, mock);
+        let log = make_log_with_timestamp(100, Some(1_700_000_000_000));
+        let result = clock.attach_log_timestamps(vec![log]).await.unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].block_timestamp, Some(1_700_000_000));
+    }
+}
+
 fn get_blockclock_filepath(network: u64) -> Option<PathBuf> {
     let filename = &format!("{}.blockclock", network);
     let mut paths = vec![];

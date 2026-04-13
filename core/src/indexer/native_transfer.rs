@@ -602,6 +602,104 @@ mod tests {
         assert_eq!(increase(40), limit.min(80)); // capped
     }
 
+    #[tokio::test]
+    async fn provider_trace_call_dispatches_trace_block() {
+        use alloy::rpc::types::trace::parity::{LocalizedTransactionTrace, TransactionTrace};
+        use crate::indexer::progress::IndexingEventsProgressState;
+        use crate::event::callback_registry::TraceCallbackRegistry;
+        use tokio_util::sync::CancellationToken;
+        use std::path::PathBuf;
+
+        let trace = LocalizedTransactionTrace {
+            trace: TransactionTrace {
+                action: Action::default(),
+                result: None,
+                trace_address: vec![],
+                subtraces: 0,
+                error: None,
+            },
+            transaction_hash: None,
+            transaction_position: None,
+            block_number: Some(100),
+            block_hash: None,
+        };
+        let provider = Arc::new(MockChainProvider::new(1).with_traces(vec![trace]));
+
+        let progress = IndexingEventsProgressState::monitor(&[], &[], None).await;
+        let config = TraceProcessingConfig {
+            id: "test-id".to_string(),
+            chain_id: 1,
+            project_path: PathBuf::from("/tmp"),
+            start_block: U64::from(100u64),
+            end_block: U64::from(200u64),
+            indexer_name: "test".to_string(),
+            contract_name: NATIVE_TRANSFER_CONTRACT_NAME.to_string(),
+            event_name: EVENT_NAME.to_string(),
+            network: "ethereum".to_string(),
+            progress,
+            postgres: None,
+            csv_details: None,
+            registry: Arc::new(TraceCallbackRegistry::new()),
+            method: TraceProcessingMethod::TraceBlock,
+            stream_last_synced_block_file_path: None,
+            cancel_token: CancellationToken::new(),
+        };
+
+        let result = provider_trace_call(provider, &config, U64::from(100u64)).await;
+        assert!(result.is_ok());
+        let traces = result.unwrap();
+        assert_eq!(traces.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn provider_trace_call_dispatches_debug_trace() {
+        use alloy::rpc::types::trace::parity::{LocalizedTransactionTrace, TransactionTrace};
+        use crate::indexer::progress::IndexingEventsProgressState;
+        use crate::event::callback_registry::TraceCallbackRegistry;
+        use tokio_util::sync::CancellationToken;
+        use std::path::PathBuf;
+
+        let trace = LocalizedTransactionTrace {
+            trace: TransactionTrace {
+                action: Action::default(),
+                result: None,
+                trace_address: vec![],
+                subtraces: 0,
+                error: None,
+            },
+            transaction_hash: None,
+            transaction_position: None,
+            block_number: Some(100),
+            block_hash: None,
+        };
+        let provider = Arc::new(MockChainProvider::new(1).with_traces(vec![trace]));
+
+        let progress = IndexingEventsProgressState::monitor(&[], &[], None).await;
+        let config = TraceProcessingConfig {
+            id: "test-id".to_string(),
+            chain_id: 1,
+            project_path: PathBuf::from("/tmp"),
+            start_block: U64::from(100u64),
+            end_block: U64::from(200u64),
+            indexer_name: "test".to_string(),
+            contract_name: NATIVE_TRANSFER_CONTRACT_NAME.to_string(),
+            event_name: EVENT_NAME.to_string(),
+            network: "ethereum".to_string(),
+            progress,
+            postgres: None,
+            csv_details: None,
+            registry: Arc::new(TraceCallbackRegistry::new()),
+            method: TraceProcessingMethod::DebugTraceBlockByNumber,
+            stream_last_synced_block_file_path: None,
+            cancel_token: CancellationToken::new(),
+        };
+
+        let result = provider_trace_call(provider, &config, U64::from(100u64)).await;
+        assert!(result.is_ok());
+        let traces = result.unwrap();
+        assert_eq!(traces.len(), 1);
+    }
+
     #[test]
     fn zksync_system_contracts_list() {
         // Verify the system contract addresses are valid and contain expected count
