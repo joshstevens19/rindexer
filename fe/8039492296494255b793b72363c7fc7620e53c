@@ -1,0 +1,25 @@
+e2e-tests/src/tests/reorg_e2e.rs
+  b416449b704d5937 291-292
+e2e-tests/src/rindexer_client.rs
+  b416449b704d5937 284-286
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "fe8039492296494255b793b72363c7fc7620e53c",
+  "prompts": {
+    "b416449b704d5937": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9ec8295a-efa7-4aa2-89d5-707dbef01acf",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 6,
+      "overriden_lines": 0
+    }
+  }
+}
