@@ -1,0 +1,51 @@
+core/src/indexer/reorg/persistence.rs
+  7a1d456c5380650d 34
+core/src/indexer/reorg/window.rs
+  7a1d456c5380650d 16-18,129,141,156,167,181,190,200,222,235,242,257,269,279,293,308,318
+core/tests/e2e_reorg.rs
+  b416449b704d5937 483,589,637,699,762,818,924,998,1095,1191,1257,1285,1444,1529,1702,1795,1910,1995,2089,2181,2274,2366,2477,2584,2680,2782,2904,3015,3140,3328,3484
+core/src/indexer/reorg/task.rs
+  b416449b704d5937 252-255,276-279,300-303
+  7a1d456c5380650d 188-189,194,250-251,258-261,273-275,280-290,294,297,299,304-314,319
+core/src/indexer/fetch_logs.rs
+  7a1d456c5380650d 500-514,751-752,755-780
+core/src/indexer/reorg/coordinator.rs
+  7a1d456c5380650d 61,176,180-186,188,195,201-211,213-214,221,306-310,318-326,328-333,337,339,356,392,495,522,529,546
+core/src/database/clickhouse/client.rs
+  7a1d456c5380650d 192,197-204,220-237,255,257-259,263
+core/src/indexer/start.rs
+  7a1d456c5380650d 557,832,850
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "3046f9ef4c7853eda72b441324c9bdb2cec6b2e6",
+  "prompts": {
+    "7a1d456c5380650d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ecda10da-f342-4a72-9eaf-40661238851a",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 235,
+      "total_deletions": 235,
+      "accepted_lines": 189,
+      "overriden_lines": 0
+    },
+    "b416449b704d5937": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9ec8295a-efa7-4aa2-89d5-707dbef01acf",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 43,
+      "total_deletions": 34,
+      "accepted_lines": 1463,
+      "overriden_lines": 0
+    }
+  }
+}
