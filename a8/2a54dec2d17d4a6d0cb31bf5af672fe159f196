@@ -1,0 +1,27 @@
+core/src/indexer/reorg/task.rs
+  1c14f56455e2543e 338-354,359
+core/src/indexer/start.rs
+  1c14f56455e2543e 445,453
+core/src/indexer/tables.rs
+  1c14f56455e2543e 4552-4553
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "a82a54dec2d17d4a6d0cb31bf5af672fe159f196",
+  "prompts": {
+    "1c14f56455e2543e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ed0e6ef1-d132-4f30-981f-d3226870903e",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 22,
+      "total_deletions": 11,
+      "accepted_lines": 22,
+      "overriden_lines": 0
+    }
+  }
+}
