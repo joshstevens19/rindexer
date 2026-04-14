@@ -31,7 +31,7 @@ impl ReorgBlockHashPersistence {
         network: &str,
         max_window_size: usize,
     ) -> anyhow::Result<BlockChainWindow> {
-        let mut window = BlockChainWindow::new(max_window_size);
+        let mut window = BlockChainWindow::try_new(max_window_size)?;
 
         if let Some(postgres) = &self.postgres {
             let query = r#"

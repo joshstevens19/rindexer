@@ -185,11 +185,13 @@ struct ReversalSnapshot {
 impl ReorgTask {
     /// Phase 1: Before event deletion, snapshot aggregated event data into temp tables.
     /// Returns the snapshots needed for phase 2.
+    /// Fails the entire reorg task if any snapshot cannot be created — this prevents
+    /// event deletion from proceeding without proper reversal data.
     async fn snapshot_for_reversal(
         &self,
         pg: Option<&PostgresClient>,
         ch: Option<&Arc<ClickhouseClient>>,
-    ) -> Vec<ReversalSnapshot> {
+    ) -> anyhow::Result<Vec<ReversalSnapshot>> {
         let mut snapshots = Vec::new();
         let mut snap_idx = 0usize;
 
@@ -245,12 +247,18 @@ impl ReorgTask {
                     None => String::new(),
                 };
 
-                let temp_name = format!("_rindexer_reorg_snap_{}", snap_idx);
+                // Include network + fork_point in temp table name to avoid collisions
+                // across concurrent reorg tasks on different networks.
+                let temp_base = format!(
+                    "_rindexer_reorg_snap_{}_{}_{}",
+                    self.network, self.fork_point, snap_idx
+                );
                 snap_idx += 1;
 
-                let create_sql = format!(
-                    "CREATE TEMP TABLE {} AS SELECT {}, {} FROM {} WHERE block_number >= {} AND block_number <= {}{}{} GROUP BY {}",
-                    temp_name,
+                // Build the SELECT portion independently so PG and CH can wrap it
+                // in their own CREATE TABLE syntax without fragile string stripping.
+                let select_sql = format!(
+                    "SELECT {}, {} FROM {} WHERE block_number >= {} AND block_number <= {}{}{} GROUP BY {}",
                     group_cols.join(", "),
                     agg_columns.join(", "),
                     op.event_table,
@@ -262,59 +270,53 @@ impl ReorgTask {
                 );
 
                 if let Some(pg) = pg {
-                    let pg_temp = format!("{}_pg", temp_name);
-                    match pg.batch_execute(&create_sql.replace(&temp_name, &pg_temp)).await {
-                        Ok(_) => {
-                            tracing::debug!(temp_table = %pg_temp, "Created PG reorg reversal snapshot");
-                            snapshots.push(ReversalSnapshot {
-                                backend: SnapshotBackend::Postgres,
-                                temp_table: pg_temp,
-                                derived_table: dt.full_table_name.clone(),
-                                cross_chain: dt.cross_chain,
-                                network: self.network.clone(),
-                                where_columns: op.where_columns.clone(),
-                                set_clauses: set_clauses.clone(),
-                            });
-                        }
-                        Err(e) => tracing::error!(
-                            table = %dt.full_table_name,
-                            "Failed to create PG reorg reversal snapshot: {:?}", e
-                        ),
-                    }
+                    let pg_temp = format!("{}_pg", temp_base);
+                    let pg_create = format!("CREATE TEMP TABLE {} AS {}", pg_temp, select_sql);
+                    pg.batch_execute(&pg_create).await.with_context(|| {
+                        format!(
+                            "Failed to create PG reorg reversal snapshot for {}",
+                            dt.full_table_name
+                        )
+                    })?;
+                    tracing::debug!(temp_table = %pg_temp, "Created PG reorg reversal snapshot");
+                    snapshots.push(ReversalSnapshot {
+                        backend: SnapshotBackend::Postgres,
+                        temp_table: pg_temp,
+                        derived_table: dt.full_table_name.clone(),
+                        cross_chain: dt.cross_chain,
+                        network: self.network.clone(),
+                        where_columns: op.where_columns.clone(),
+                        set_clauses: set_clauses.clone(),
+                    });
                 }
 
                 if let Some(ch) = ch {
-                    let ch_temp = format!("rindexer_internal.{}_ch", temp_name);
-                    // ClickHouse: CREATE TABLE ... ENGINE = Memory AS SELECT ...
+                    let ch_temp = format!("rindexer_internal.{}_ch", temp_base);
                     let ch_create = format!(
                         "CREATE TABLE IF NOT EXISTS {} ENGINE = Memory AS {}",
-                        ch_temp,
-                        create_sql
-                            .trim_start_matches(&format!("CREATE TEMP TABLE {} AS ", temp_name)),
+                        ch_temp, select_sql,
                     );
-                    match ch.execute(&ch_create).await {
-                        Ok(_) => {
-                            tracing::debug!(temp_table = %ch_temp, "Created CH reorg reversal snapshot");
-                            snapshots.push(ReversalSnapshot {
-                                backend: SnapshotBackend::Clickhouse,
-                                temp_table: ch_temp,
-                                derived_table: dt.full_table_name.clone(),
-                                cross_chain: dt.cross_chain,
-                                network: self.network.clone(),
-                                where_columns: op.where_columns.clone(),
-                                set_clauses,
-                            });
-                        }
-                        Err(e) => tracing::error!(
-                            table = %dt.full_table_name,
-                            "Failed to create CH reorg reversal snapshot: {:?}", e
-                        ),
-                    }
+                    ch.execute(&ch_create).await.with_context(|| {
+                        format!(
+                            "Failed to create CH reorg reversal snapshot for {}",
+                            dt.full_table_name
+                        )
+                    })?;
+                    tracing::debug!(temp_table = %ch_temp, "Created CH reorg reversal snapshot");
+                    snapshots.push(ReversalSnapshot {
+                        backend: SnapshotBackend::Clickhouse,
+                        temp_table: ch_temp,
+                        derived_table: dt.full_table_name.clone(),
+                        cross_chain: dt.cross_chain,
+                        network: self.network.clone(),
+                        where_columns: op.where_columns.clone(),
+                        set_clauses,
+                    });
                 }
             }
         }
 
-        snapshots
+        Ok(snapshots)
     }
 
     /// Phase 2: After event deletion, apply reverse UPDATEs from snapshots and drop temp tables.
@@ -712,7 +714,7 @@ impl ReorgTask {
             corrected_blocks_owned.iter().map(|(n, h, p)| (*n, h.as_str(), p.as_str())).collect();
 
         // Phase 1: snapshot event data for accumulative reversal (before deletion)
-        let reversal_snapshots = self.snapshot_for_reversal(postgres, clickhouse).await;
+        let reversal_snapshots = self.snapshot_for_reversal(postgres, clickhouse).await?;
 
         let mut affected_tx_hashes: Vec<String> = Vec::new();
         let mut total_deleted = 0u64;

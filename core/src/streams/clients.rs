@@ -216,7 +216,8 @@ impl StreamsClients {
 
         let mut chunks = Vec::new();
         for item in data_array {
-            let item_str = serde_json::to_string(item).unwrap();
+            let item_str = serde_json::to_string(item)
+                .expect("serde_json::to_string on Value cannot fail for valid JSON data");
             let item_size = item_str.len();
 
             if current_size + item_size > MAX_CHUNK_SIZE {
@@ -259,7 +260,8 @@ impl StreamsClients {
             network: event_message.network.clone(),
         };
 
-        serde_json::to_string(&chunk_message).unwrap()
+        serde_json::to_string(&chunk_message)
+            .expect("serde_json::to_string on EventMessage cannot fail for valid JSON data")
     }
 
     fn create_chunk_message_json(
@@ -275,7 +277,8 @@ impl StreamsClients {
             network: event_message.network.clone(),
         };
 
-        serde_json::to_value(&chunk_message).unwrap()
+        serde_json::to_value(&chunk_message)
+            .expect("serde_json::to_value on EventMessage cannot fail for valid JSON data")
     }
 
     fn generate_publish_message_id(

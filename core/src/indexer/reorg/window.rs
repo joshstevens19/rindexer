@@ -13,8 +13,9 @@ pub enum ParentValidation {
 }
 
 impl BlockChainWindow {
-    pub fn new(max_window_size: usize) -> Self {
-        Self { entries: BTreeMap::new(), max_window_size }
+    pub fn try_new(max_window_size: usize) -> anyhow::Result<Self> {
+        anyhow::ensure!(max_window_size > 0, "window_size must be > 0");
+        Ok(Self { entries: BTreeMap::new(), max_window_size })
     }
 
     pub fn insert(&mut self, block_number: u64, block_hash: B256, parent_hash: B256) {
@@ -125,7 +126,7 @@ mod tests {
 
     #[test]
     fn test_insert_and_get() {
-        let mut w = BlockChainWindow::new(10);
+        let mut w = BlockChainWindow::try_new(10).unwrap();
         w.insert(1, hash(1), hash(0));
         w.insert(2, hash(2), hash(1));
 
@@ -137,7 +138,7 @@ mod tests {
 
     #[test]
     fn test_prune_respects_window_size() {
-        let mut w = BlockChainWindow::new(3);
+        let mut w = BlockChainWindow::try_new(3).unwrap();
         for i in 1u64..=5 {
             w.insert(i, hash(i as u8), hash(i as u8 - 1));
         }
@@ -152,7 +153,7 @@ mod tests {
 
     #[test]
     fn test_validate_parent_valid() {
-        let mut w = BlockChainWindow::new(10);
+        let mut w = BlockChainWindow::try_new(10).unwrap();
         w.insert(10, hash(10), hash(9));
 
         match w.validate_parent(11, hash(10)) {
@@ -163,7 +164,7 @@ mod tests {
 
     #[test]
     fn test_validate_parent_mismatch() {
-        let mut w = BlockChainWindow::new(10);
+        let mut w = BlockChainWindow::try_new(10).unwrap();
         w.insert(10, hash(10), hash(9));
 
         match w.validate_parent(11, hash(99)) {
@@ -177,7 +178,7 @@ mod tests {
 
     #[test]
     fn test_validate_parent_no_previous_block_empty() {
-        let w = BlockChainWindow::new(10);
+        let w = BlockChainWindow::try_new(10).unwrap();
         match w.validate_parent(5, hash(4)) {
             ParentValidation::NoPreviousBlock => {}
             _ => panic!("expected NoPreviousBlock"),
@@ -186,7 +187,7 @@ mod tests {
 
     #[test]
     fn test_validate_parent_no_previous_block_zero() {
-        let w = BlockChainWindow::new(10);
+        let w = BlockChainWindow::try_new(10).unwrap();
         // block_number 0: checked_sub(1) returns None
         match w.validate_parent(0, hash(0)) {
             ParentValidation::NoPreviousBlock => {}
@@ -196,7 +197,7 @@ mod tests {
 
     #[test]
     fn test_find_fork_point_shallow_reorg() {
-        let mut w = BlockChainWindow::new(10);
+        let mut w = BlockChainWindow::try_new(10).unwrap();
         // Insert blocks 1..=5 with "original" hashes
         for i in 1u64..=5 {
             w.insert(i, hash(i as u8), hash(i as u8 - 1));
@@ -218,7 +219,7 @@ mod tests {
 
     #[test]
     fn test_find_fork_point_no_match() {
-        let mut w = BlockChainWindow::new(10);
+        let mut w = BlockChainWindow::try_new(10).unwrap();
         for i in 1u64..=5 {
             w.insert(i, hash(i as u8), hash(i as u8 - 1));
         }
@@ -231,14 +232,14 @@ mod tests {
 
     #[test]
     fn test_find_fork_point_empty_canonical() {
-        let mut w = BlockChainWindow::new(10);
+        let mut w = BlockChainWindow::try_new(10).unwrap();
         w.insert(1, hash(1), hash(0));
         assert_eq!(w.find_fork_point(&[]), None);
     }
 
     #[test]
     fn test_update_range() {
-        let mut w = BlockChainWindow::new(10);
+        let mut w = BlockChainWindow::try_new(10).unwrap();
         w.insert(1, hash(1), hash(0));
         w.insert(2, hash(2), hash(1));
         w.insert(3, hash(3), hash(2));
@@ -253,7 +254,7 @@ mod tests {
 
     #[test]
     fn test_block_numbers_from() {
-        let mut w = BlockChainWindow::new(10);
+        let mut w = BlockChainWindow::try_new(10).unwrap();
         for i in [1u64, 3, 5, 7, 9] {
             w.insert(i, hash(i as u8), hash(i as u8 - 1));
         }
@@ -265,7 +266,7 @@ mod tests {
 
     #[test]
     fn test_block_numbers() {
-        let mut w = BlockChainWindow::new(10);
+        let mut w = BlockChainWindow::try_new(10).unwrap();
         w.insert(3, hash(3), hash(2));
         w.insert(1, hash(1), hash(0));
         w.insert(2, hash(2), hash(1));
@@ -275,7 +276,7 @@ mod tests {
 
     #[test]
     fn test_oldest_and_latest_block() {
-        let mut w = BlockChainWindow::new(10);
+        let mut w = BlockChainWindow::try_new(10).unwrap();
         assert_eq!(w.oldest_block(), None);
         assert_eq!(w.latest_block(), None);
 
@@ -289,7 +290,7 @@ mod tests {
 
     #[test]
     fn test_remove_from() {
-        let mut w = BlockChainWindow::new(10);
+        let mut w = BlockChainWindow::try_new(10).unwrap();
         for i in 1u64..=5 {
             w.insert(i, hash(i as u8), hash(i as u8 - 1));
         }
@@ -304,7 +305,7 @@ mod tests {
 
     #[test]
     fn test_remove_from_all() {
-        let mut w = BlockChainWindow::new(10);
+        let mut w = BlockChainWindow::try_new(10).unwrap();
         w.insert(5, hash(5), hash(4));
         w.insert(6, hash(6), hash(5));
 
@@ -314,7 +315,7 @@ mod tests {
 
     #[test]
     fn test_remove_from_none() {
-        let mut w = BlockChainWindow::new(10);
+        let mut w = BlockChainWindow::try_new(10).unwrap();
         w.insert(1, hash(1), hash(0));
         w.insert(2, hash(2), hash(1));
 

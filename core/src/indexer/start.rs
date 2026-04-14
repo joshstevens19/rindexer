@@ -558,7 +558,7 @@ async fn start_indexing_contract_events(
                         "Failed to load reorg window from persistence for {}: {}. Using empty window.",
                         network_name, e
                     );
-                    BlockChainWindow::new(window_size)
+                    BlockChainWindow::try_new(window_size)?
                 }
             };
 
@@ -833,7 +833,7 @@ async fn start_indexing_contract_events(
             if let Some((reorg_config, chain_id)) = reorg_configs.get(network_name) {
                 let window_size = reorg_config
                     .window_size
-                    .unwrap_or_else(|| reorg_safe_distance_for_chain(*chain_id) as usize);
+                    .unwrap_or_else(|| 2 * reorg_safe_distance_for_chain(*chain_id) as usize);
                 let event_tables =
                     network_event_tables.get(network_name).cloned().unwrap_or_default();
 
@@ -851,7 +851,7 @@ async fn start_indexing_contract_events(
                             "Dependency events - Failed to load reorg window for {}: {}. Using empty window.",
                             network_name, e
                         );
-                        BlockChainWindow::new(window_size)
+                        BlockChainWindow::try_new(window_size)?
                     }
                 };
 

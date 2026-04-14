@@ -497,15 +497,21 @@ async fn live_indexing_stream(
             // rewind, derived table rollback, window update) when available.
             if let Some(ref mut coordinator) = reorg_coordinator {
                 let detection_point = fork_block + reth_reorg.depth;
-                let task = coordinator.on_exex_reorg(detection_point, fork_block);
-                let reorg_ctx = ReorgContext {
-                    postgres: postgres.as_deref(),
-                    clickhouse: clickhouse.as_ref(),
-                    registry: Some(registry),
-                    streams_clients: streams_clients.as_ref().as_ref(),
-                };
-                if let Err(e) = coordinator.handle_reorg(task, &reorg_ctx).await {
-                    error!("{} - Failed to handle ExEx reorg: {:?}", info_log_name, e);
+                match coordinator.on_exex_reorg(detection_point, fork_block) {
+                    Ok(task) => {
+                        let reorg_ctx = ReorgContext {
+                            postgres: postgres.as_deref(),
+                            clickhouse: clickhouse.as_ref(),
+                            registry: Some(registry),
+                            streams_clients: streams_clients.as_ref().as_ref(),
+                        };
+                        if let Err(e) = coordinator.handle_reorg(task, &reorg_ctx).await {
+                            error!("{} - Failed to handle ExEx reorg: {:?}", info_log_name, e);
+                        }
+                    }
+                    Err(e) => {
+                        error!("{} - Invalid ExEx reorg range: {:?}", info_log_name, e);
+                    }
                 }
             }
 
@@ -742,26 +748,36 @@ async fn live_indexing_stream(
                                             // Fall back to sending ReorgInfo through the stream when
                                             // the coordinator is not configured.
                                             if let Some(ref mut coordinator) = reorg_coordinator {
-                                                let task = coordinator
-                                                    .create_reorg_task_for_block_range(
+                                                match coordinator
+                                                    .try_create_reorg_task_for_block_range(
                                                         min_removed_block,
                                                         to_block.to::<u64>(),
-                                                    );
-                                                let reorg_ctx = ReorgContext {
-                                                    postgres: postgres.as_deref(),
-                                                    clickhouse: clickhouse.as_ref(),
-                                                    registry: Some(registry),
-                                                    streams_clients: streams_clients
-                                                        .as_ref()
-                                                        .as_ref(),
-                                                };
-                                                if let Err(e) =
-                                                    coordinator.handle_reorg(task, &reorg_ctx).await
-                                                {
-                                                    error!(
-                                                        "{} - Failed to handle removed-logs reorg: {}",
-                                                        info_log_name, e
-                                                    );
+                                                    ) {
+                                                    Ok(task) => {
+                                                        let reorg_ctx = ReorgContext {
+                                                            postgres: postgres.as_deref(),
+                                                            clickhouse: clickhouse.as_ref(),
+                                                            registry: Some(registry),
+                                                            streams_clients: streams_clients
+                                                                .as_ref()
+                                                                .as_ref(),
+                                                        };
+                                                        if let Err(e) = coordinator
+                                                            .handle_reorg(task, &reorg_ctx)
+                                                            .await
+                                                        {
+                                                            error!(
+                                                                "{} - Failed to handle removed-logs reorg: {}",
+                                                                info_log_name, e
+                                                            );
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        error!(
+                                                            "{} - Invalid removed-logs reorg range: {:?}",
+                                                            info_log_name, e
+                                                        );
+                                                    }
                                                 }
                                             } else {
                                                 let _ = tx

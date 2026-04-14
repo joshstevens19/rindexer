@@ -58,7 +58,7 @@ impl ReorgCoordinator {
         match self.window.validate_parent(block_number, parent_hash) {
             ParentValidation::Valid | ParentValidation::NoPreviousBlock => {
                 self.window.insert(block_number, block_hash, parent_hash);
-                self.persist_and_maybe_prune(block_number, block_hash, parent_hash)?;
+                self.persist_and_maybe_prune(block_number, block_hash, parent_hash).await?;
                 Ok(None)
             }
             ParentValidation::Mismatch { expected, got } => {
@@ -173,36 +173,52 @@ impl ReorgCoordinator {
 
     /// Create a ReorgTask for a known block range (e.g. from removed-logs detection).
     /// The caller is responsible for executing the task via `handle_reorg`.
-    pub fn create_reorg_task_for_block_range(
+    pub fn try_create_reorg_task_for_block_range(
         &self,
         fork_point: u64,
         detection_point: u64,
-    ) -> ReorgTask {
+    ) -> anyhow::Result<ReorgTask> {
+        anyhow::ensure!(
+            fork_point <= detection_point,
+            "fork_point ({}) must be <= detection_point ({})",
+            fork_point,
+            detection_point
+        );
         metrics::record_reorg_detection_source(&self.network, "removed_logs");
-        ReorgTask {
+        Ok(ReorgTask {
             network: self.network.clone(),
             fork_point,
             detection_point,
             event_tables: self.event_tables.clone(),
             derived_tables: self.derived_tables.clone(),
             canonical_blocks: vec![],
-        }
+        })
     }
 
     /// Handle reth ExEx notification — fork point provided directly.
     /// `revert_from_block` is the higher block (detection point),
     /// `revert_to_block` is the lower block (fork point).
-    pub fn on_exex_reorg(&self, revert_from_block: u64, revert_to_block: u64) -> ReorgTask {
+    pub fn on_exex_reorg(
+        &self,
+        revert_from_block: u64,
+        revert_to_block: u64,
+    ) -> anyhow::Result<ReorgTask> {
+        anyhow::ensure!(
+            revert_to_block <= revert_from_block,
+            "revert_to_block ({}) must be <= revert_from_block ({})",
+            revert_to_block,
+            revert_from_block
+        );
         metrics::record_reorg_detection_source(&self.network, "exex");
-        metrics::record_reorg(&self.network, revert_from_block.saturating_sub(revert_to_block) + 1);
-        ReorgTask {
+        metrics::record_reorg(&self.network, revert_from_block - revert_to_block + 1);
+        Ok(ReorgTask {
             network: self.network.clone(),
             fork_point: revert_to_block,
             detection_point: revert_from_block,
             event_tables: self.event_tables.clone(),
             derived_tables: self.derived_tables.clone(),
             canonical_blocks: vec![],
-        }
+        })
     }
 
     /// Find the fork point by comparing window entries against canonical chain from RPC.
@@ -287,8 +303,11 @@ impl ReorgCoordinator {
         Ok(())
     }
 
-    /// Persist the new block to DB (fire-and-forget) and periodically prune old entries.
-    fn persist_and_maybe_prune(
+    /// Persist the new block to DB and periodically prune old entries.
+    /// The insert is awaited directly to ensure block hashes are persisted before
+    /// any reorg detection that depends on them. Pruning is fire-and-forget since
+    /// a missed prune is harmless.
+    async fn persist_and_maybe_prune(
         &mut self,
         block_number: u64,
         block_hash: B256,
@@ -296,36 +315,28 @@ impl ReorgCoordinator {
     ) -> anyhow::Result<()> {
         self.blocks_since_flush += 1;
 
-        // Fire-and-forget: spawn the DB write so the live loop is not blocked.
-        let persistence = Arc::clone(&self.persistence);
-        let network = self.network.clone();
-        let needs_prune = self.blocks_since_flush >= FLUSH_INTERVAL;
-        if needs_prune {
+        self.persistence
+            .insert_block(
+                &self.network,
+                block_number,
+                &format!("{:#x}", block_hash),
+                &format!("{:#x}", parent_hash),
+            )
+            .await
+            .with_context(|| format!("Failed to persist block {} hash to DB", block_number))?;
+
+        if self.blocks_since_flush >= FLUSH_INTERVAL {
             self.blocks_since_flush = 0;
-        }
-        let oldest = self.window.oldest_block();
-
-        tokio::spawn(async move {
-            if let Err(e) = persistence
-                .insert_block(
-                    &network,
-                    block_number,
-                    &format!("{:#x}", block_hash),
-                    &format!("{:#x}", parent_hash),
-                )
-                .await
-            {
-                tracing::error!("Background DB insert failed for block {}: {}", block_number, e);
-            }
-
-            if needs_prune {
-                if let Some(oldest) = oldest {
+            if let Some(oldest) = self.window.oldest_block() {
+                let persistence = Arc::clone(&self.persistence);
+                let network = self.network.clone();
+                tokio::spawn(async move {
                     if let Err(e) = persistence.prune(&network, oldest).await {
                         tracing::error!("Background DB prune failed: {}", e);
                     }
-                }
+                });
             }
-        });
+        }
 
         Ok(())
     }
@@ -342,7 +353,7 @@ mod tests {
     }
 
     fn make_window_with_blocks(blocks: &[(u64, u8, u8)]) -> BlockChainWindow {
-        let mut window = BlockChainWindow::new(100);
+        let mut window = BlockChainWindow::try_new(100).unwrap();
         for &(num, h, p) in blocks {
             window.insert(num, hash(h), hash(p));
         }
@@ -378,7 +389,7 @@ mod tests {
     #[tokio::test]
     async fn test_on_new_block_no_previous_block() {
         // Empty window — NoPreviousBlock path
-        let window = BlockChainWindow::new(100);
+        let window = BlockChainWindow::try_new(100).unwrap();
         let mut coordinator = make_coordinator(window);
 
         let result = coordinator.on_new_block(100, hash(1), hash(0)).await.unwrap();
@@ -481,7 +492,7 @@ mod tests {
         };
 
         // on_exex_reorg creates a task — verify derived_tables are included
-        let task = coordinator.on_exex_reorg(12, 10);
+        let task = coordinator.on_exex_reorg(12, 10).unwrap();
         assert_eq!(task.derived_tables.len(), 2);
         assert_eq!(task.derived_tables[0].full_table_name, "schema.balances");
         assert!(!task.derived_tables[0].cross_chain);
@@ -508,14 +519,14 @@ mod tests {
             blocks_since_flush: 0,
         };
 
-        let task = coordinator.create_reorg_task_for_block_range(10, 11);
+        let task = coordinator.try_create_reorg_task_for_block_range(10, 11).unwrap();
         assert_eq!(task.derived_tables.len(), 1);
         assert_eq!(task.derived_tables[0].full_table_name, "schema.totals");
     }
 
     #[test]
     fn test_on_exex_reorg() {
-        let window = BlockChainWindow::new(100);
+        let window = BlockChainWindow::try_new(100).unwrap();
         let persistence = Arc::new(ReorgBlockHashPersistence::new(None, None));
         let coordinator = ReorgCoordinator {
             network: "test".to_string(),
@@ -532,7 +543,7 @@ mod tests {
             blocks_since_flush: 0,
         };
 
-        let task = coordinator.on_exex_reorg(110, 100);
+        let task = coordinator.on_exex_reorg(110, 100).unwrap();
         assert_eq!(task.network, "test");
         assert_eq!(task.fork_point, 100);
         assert_eq!(task.detection_point, 110);
