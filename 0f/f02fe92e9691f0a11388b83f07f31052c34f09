@@ -1,0 +1,38 @@
+core/src/indexer/no_code.rs
+  79a5c3390d4472c3 199
+core/src/event/callback_registry.rs
+  79a5c3390d4472c3 127,199,210,222,226-227
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "0ff02fe92e9691f0a11388b83f07f31052c34f09",
+  "prompts": {
+    "79a5c3390d4472c3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1b4cd319-9c24-4c07-b169-4ad6c5ccbbc1",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 9,
+      "total_deletions": 110,
+      "accepted_lines": 517,
+      "overriden_lines": 0
+    },
+    "b416449b704d5937": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9ec8295a-efa7-4aa2-89d5-707dbef01acf",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 458,
+      "overriden_lines": 0
+    }
+  }
+}
