@@ -2468,3 +2468,437 @@ async fn test_reorg_journal_set_recalculation() {
         "price should be recalculated to 100 (last Set before reorg)"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Test: Decrement action is reversed (incremented) during reorg
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn test_reorg_reversal_decrement() {
+    let env = TestEnv::new().await;
+    let pg = env.pg_client().await;
+    env.setup_base_tables(&pg).await;
+
+    pg.batch_execute(
+        "CREATE TABLE IF NOT EXISTS test_schema.cooldowns (
+             network VARCHAR(50) NOT NULL,
+             user_addr CHAR(42) NOT NULL,
+             remaining NUMERIC NOT NULL DEFAULT 0,
+             rindexer_block_number BIGINT NOT NULL,
+             PRIMARY KEY (network, user_addr)
+         );",
+    )
+    .await
+    .unwrap();
+
+    let (contract, _) = deploy_ping_pong(&env.http, &env.rpc_url, env.deployer).await;
+    let block1 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 1).await;
+    let block2 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 2).await;
+    let block3 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 3).await;
+
+    let network = "dev";
+    let user = format!("{:#x}", env.deployer);
+    let zero_tx = "0x0000000000000000000000000000000000000000000000000000000000000000";
+    env.insert_event(&pg, network, 1, block1, zero_tx).await;
+    env.insert_event(&pg, network, 2, block2, zero_tx).await;
+    env.insert_event(&pg, network, 3, block3, zero_tx).await;
+    env.insert_block_hashes(&pg, network, block1, block3).await;
+
+    // Started at 10, decremented 3 times → 7
+    pg.execute(
+        "INSERT INTO test_schema.cooldowns (network, user_addr, remaining, rindexer_block_number) \
+         VALUES ($1, $2, $3, $4)",
+        &[&network, &user.as_str(), &rust_decimal::Decimal::from(7u64), &(block3 as i64)],
+    )
+    .await
+    .unwrap();
+
+    trigger_reorg(&env.http, &env.rpc_url, 2).await;
+
+    let task = ReorgTask {
+        network: network.to_string(),
+        fork_point: block2,
+        detection_point: block3,
+        event_tables: vec![EventTableInfo::new(
+            "test_schema".to_string(),
+            "ping_pong_ping".to_string(),
+            "test_schema_ping".to_string(),
+        )],
+        derived_tables: vec![DerivedTableInfo {
+            full_table_name: "test_schema.cooldowns".to_string(),
+            cross_chain: false,
+            rollback_ops: vec![DerivedTableRollbackOp {
+                event_table: "test_schema.ping_pong_ping".to_string(),
+                where_columns: vec![("user_addr".to_string(), "sender".to_string())],
+                columns: vec![DerivedColumnRollback {
+                    derived_column: "remaining".to_string(),
+                    event_column: "id".to_string(),
+                    action: SetAction::Decrement,
+                }],
+                condition: None,
+            }],
+            journal_columns: vec![],
+        }],
+        canonical_blocks: vec![],
+    };
+
+    let rindexer_pg = env.rindexer_pg().await;
+    let mut task_window = BlockChainWindow::new(256);
+    let persistence = ReorgBlockHashPersistence::new(None, None);
+
+    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+        .await
+        .expect("decrement reversal reorg task failed");
+
+    // Was 7, 2 decrements reversed (incremented) → 9
+    let remaining: rust_decimal::Decimal = pg
+        .query_one(
+            "SELECT remaining FROM test_schema.cooldowns WHERE network = $1",
+            &[&network],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(remaining, rust_decimal::Decimal::from(9u64), "remaining should be 7 + 2 = 9");
+}
+
+// ---------------------------------------------------------------------------
+// Test: Min action recalculated from journal after reorg
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn test_reorg_journal_min_recalculation() {
+    let env = TestEnv::new().await;
+    let pg = env.pg_client().await;
+    env.setup_base_tables(&pg).await;
+
+    pg.batch_execute(
+        "CREATE TABLE IF NOT EXISTS test_schema.min_tracker (
+             network VARCHAR(50) NOT NULL,
+             tracker CHAR(42) NOT NULL,
+             min_value NUMERIC NOT NULL DEFAULT 0,
+             rindexer_block_number BIGINT NOT NULL,
+             PRIMARY KEY (network, tracker)
+         );",
+    )
+    .await
+    .unwrap();
+
+    let (contract, _) = deploy_ping_pong(&env.http, &env.rpc_url, env.deployer).await;
+    let block1 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 1).await;
+    let block2 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 2).await;
+    let block3 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 3).await;
+
+    let network = "dev";
+    let tracker = format!("{:#x}", env.deployer);
+    let zero_tx = "0x0000000000000000000000000000000000000000000000000000000000000000";
+    env.insert_event(&pg, network, 1, block1, zero_tx).await;
+    env.insert_event(&pg, network, 2, block2, zero_tx).await;
+    env.insert_event(&pg, network, 3, block3, zero_tx).await;
+    env.insert_block_hashes(&pg, network, block1, block3).await;
+
+    // min_value = 5 (set at block2, which was the lowest)
+    pg.execute(
+        "INSERT INTO test_schema.min_tracker (network, tracker, min_value, rindexer_block_number) \
+         VALUES ($1, $2, $3, $4)",
+        &[&network, &tracker.as_str(), &rust_decimal::Decimal::from(5u64), &(block3 as i64)],
+    )
+    .await
+    .unwrap();
+
+    // Journal: block1=500, block2=5, block3=200
+    let where_key = format!("tracker={}", tracker);
+    for (block, value) in [(block1, 500i64), (block2, 5), (block3, 200)] {
+        pg.execute(
+            "INSERT INTO rindexer_internal.derived_op_log \
+             (derived_table, network, where_key, column_name, value, block_number, tx_index, log_index) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            &[
+                &"test_schema.min_tracker", &network, &where_key.as_str(), &"min_value",
+                &rust_decimal::Decimal::from(value), &(block as i64), &0i32, &0i32,
+            ],
+        )
+        .await
+        .unwrap();
+    }
+
+    trigger_reorg(&env.http, &env.rpc_url, 2).await;
+
+    let task = ReorgTask {
+        network: network.to_string(),
+        fork_point: block2,
+        detection_point: block3,
+        event_tables: vec![EventTableInfo::new(
+            "test_schema".to_string(),
+            "ping_pong_ping".to_string(),
+            "test_schema_ping".to_string(),
+        )],
+        derived_tables: vec![DerivedTableInfo {
+            full_table_name: "test_schema.min_tracker".to_string(),
+            cross_chain: false,
+            rollback_ops: vec![],
+            journal_columns: vec![DerivedColumnJournal {
+                derived_column: "min_value".to_string(),
+                action: SetAction::Min,
+                where_columns: vec!["tracker".to_string()],
+            }],
+        }],
+        canonical_blocks: vec![],
+    };
+
+    let rindexer_pg = env.rindexer_pg().await;
+    let mut task_window = BlockChainWindow::new(256);
+    let persistence = ReorgBlockHashPersistence::new(None, None);
+
+    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+        .await
+        .expect("journal min recalc reorg task failed");
+
+    // Journal entries for block2(5) and block3(200) deleted.
+    // Remaining: block1(500). MIN(500) = 500.
+    let min_value: rust_decimal::Decimal = pg
+        .query_one(
+            "SELECT min_value FROM test_schema.min_tracker WHERE network = $1",
+            &[&network],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(min_value, rust_decimal::Decimal::from(500u64), "min_value should be recalculated to 500");
+}
+
+// ---------------------------------------------------------------------------
+// Test: Mixed reversible + non-reversible columns on same table
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn test_reorg_mixed_reversible_and_journal() {
+    let env = TestEnv::new().await;
+    let pg = env.pg_client().await;
+    env.setup_base_tables(&pg).await;
+
+    pg.batch_execute(
+        "CREATE TABLE IF NOT EXISTS test_schema.mixed_stats (
+             network VARCHAR(50) NOT NULL,
+             user_addr CHAR(42) NOT NULL,
+             total_volume NUMERIC NOT NULL DEFAULT 0,
+             max_trade NUMERIC NOT NULL DEFAULT 0,
+             rindexer_block_number BIGINT NOT NULL,
+             PRIMARY KEY (network, user_addr)
+         );",
+    )
+    .await
+    .unwrap();
+
+    let (contract, _) = deploy_ping_pong(&env.http, &env.rpc_url, env.deployer).await;
+    let block1 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 1).await;
+    let block2 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 2).await;
+    let block3 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 3).await;
+
+    let network = "dev";
+    let user = format!("{:#x}", env.deployer);
+    let zero_tx = "0x0000000000000000000000000000000000000000000000000000000000000000";
+    env.insert_event(&pg, network, 100, block1, zero_tx).await;
+    env.insert_event(&pg, network, 500, block2, zero_tx).await;
+    env.insert_event(&pg, network, 200, block3, zero_tx).await;
+    env.insert_block_hashes(&pg, network, block1, block3).await;
+
+    // total_volume = 100+500+200 = 800 (Add), max_trade = 500 (Max at block2)
+    pg.execute(
+        "INSERT INTO test_schema.mixed_stats (network, user_addr, total_volume, max_trade, rindexer_block_number) \
+         VALUES ($1, $2, $3, $4, $5)",
+        &[
+            &network, &user.as_str(),
+            &rust_decimal::Decimal::from(800u64),
+            &rust_decimal::Decimal::from(500u64),
+            &(block3 as i64),
+        ],
+    )
+    .await
+    .unwrap();
+
+    // Journal for max_trade (non-reversible)
+    let where_key = format!("user_addr={}", user);
+    for (block, value) in [(block1, 100i64), (block2, 500), (block3, 200)] {
+        pg.execute(
+            "INSERT INTO rindexer_internal.derived_op_log \
+             (derived_table, network, where_key, column_name, value, block_number, tx_index, log_index) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            &[
+                &"test_schema.mixed_stats", &network, &where_key.as_str(), &"max_trade",
+                &rust_decimal::Decimal::from(value), &(block as i64), &0i32, &0i32,
+            ],
+        )
+        .await
+        .unwrap();
+    }
+
+    trigger_reorg(&env.http, &env.rpc_url, 2).await;
+
+    let task = ReorgTask {
+        network: network.to_string(),
+        fork_point: block2,
+        detection_point: block3,
+        event_tables: vec![EventTableInfo::new(
+            "test_schema".to_string(),
+            "ping_pong_ping".to_string(),
+            "test_schema_ping".to_string(),
+        )],
+        derived_tables: vec![DerivedTableInfo {
+            full_table_name: "test_schema.mixed_stats".to_string(),
+            cross_chain: false,
+            rollback_ops: vec![DerivedTableRollbackOp {
+                event_table: "test_schema.ping_pong_ping".to_string(),
+                where_columns: vec![("user_addr".to_string(), "sender".to_string())],
+                columns: vec![DerivedColumnRollback {
+                    derived_column: "total_volume".to_string(),
+                    event_column: "id".to_string(),
+                    action: SetAction::Add,
+                }],
+                condition: None,
+            }],
+            journal_columns: vec![DerivedColumnJournal {
+                derived_column: "max_trade".to_string(),
+                action: SetAction::Max,
+                where_columns: vec!["user_addr".to_string()],
+            }],
+        }],
+        canonical_blocks: vec![],
+    };
+
+    let rindexer_pg = env.rindexer_pg().await;
+    let mut task_window = BlockChainWindow::new(256);
+    let persistence = ReorgBlockHashPersistence::new(None, None);
+
+    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+        .await
+        .expect("mixed reversal+journal reorg task failed");
+
+    // total_volume: was 800, reversed Add of 500+200 = 700 → 100
+    // max_trade: journal block2(500)+block3(200) deleted, remaining block1(100) → MAX = 100
+    let row = pg
+        .query_one(
+            "SELECT total_volume, max_trade FROM test_schema.mixed_stats WHERE network = $1",
+            &[&network],
+        )
+        .await
+        .unwrap();
+    let total_volume: rust_decimal::Decimal = row.get(0);
+    let max_trade: rust_decimal::Decimal = row.get(1);
+    assert_eq!(total_volume, rust_decimal::Decimal::from(100u64), "total_volume should be 800 - 700 = 100");
+    assert_eq!(max_trade, rust_decimal::Decimal::from(100u64), "max_trade should be recalculated to 100");
+}
+
+// ---------------------------------------------------------------------------
+// Test: Reversal on row not affected by reorg — value unchanged
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn test_reorg_reversal_uninvolved_row_unchanged() {
+    let env = TestEnv::new().await;
+    let pg = env.pg_client().await;
+    env.setup_base_tables(&pg).await;
+
+    pg.batch_execute(
+        "CREATE TABLE IF NOT EXISTS test_schema.multi_user (
+             network VARCHAR(50) NOT NULL,
+             user_addr CHAR(42) NOT NULL,
+             balance NUMERIC NOT NULL DEFAULT 0,
+             rindexer_block_number BIGINT NOT NULL,
+             PRIMARY KEY (network, user_addr)
+         );",
+    )
+    .await
+    .unwrap();
+
+    let (contract, _) = deploy_ping_pong(&env.http, &env.rpc_url, env.deployer).await;
+    let block1 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 1).await;
+    let block2 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 2).await;
+
+    let network = "dev";
+    let deployer = format!("{:#x}", env.deployer);
+    let other_user = "0x0000000000000000000000000000000000000099";
+    let zero_tx = "0x0000000000000000000000000000000000000000000000000000000000000000";
+    env.insert_event(&pg, network, 50, block1, zero_tx).await;
+    env.insert_event(&pg, network, 30, block2, zero_tx).await;
+    env.insert_block_hashes(&pg, network, block1, block2).await;
+
+    // deployer: balance=80 (50+30), other_user: balance=999 (untouched by events)
+    pg.execute(
+        "INSERT INTO test_schema.multi_user (network, user_addr, balance, rindexer_block_number) \
+         VALUES ($1, $2, $3, $4)",
+        &[&network, &deployer.as_str(), &rust_decimal::Decimal::from(80u64), &(block2 as i64)],
+    )
+    .await
+    .unwrap();
+    pg.execute(
+        "INSERT INTO test_schema.multi_user (network, user_addr, balance, rindexer_block_number) \
+         VALUES ($1, $2, $3, $4)",
+        &[&network, &other_user, &rust_decimal::Decimal::from(999u64), &(block1 as i64)],
+    )
+    .await
+    .unwrap();
+
+    trigger_reorg(&env.http, &env.rpc_url, 1).await;
+
+    let task = ReorgTask {
+        network: network.to_string(),
+        fork_point: block2,
+        detection_point: block2,
+        event_tables: vec![EventTableInfo::new(
+            "test_schema".to_string(),
+            "ping_pong_ping".to_string(),
+            "test_schema_ping".to_string(),
+        )],
+        derived_tables: vec![DerivedTableInfo {
+            full_table_name: "test_schema.multi_user".to_string(),
+            cross_chain: false,
+            rollback_ops: vec![DerivedTableRollbackOp {
+                event_table: "test_schema.ping_pong_ping".to_string(),
+                where_columns: vec![("user_addr".to_string(), "sender".to_string())],
+                columns: vec![DerivedColumnRollback {
+                    derived_column: "balance".to_string(),
+                    event_column: "id".to_string(),
+                    action: SetAction::Add,
+                }],
+                condition: None,
+            }],
+            journal_columns: vec![],
+        }],
+        canonical_blocks: vec![],
+    };
+
+    let rindexer_pg = env.rindexer_pg().await;
+    let mut task_window = BlockChainWindow::new(256);
+    let persistence = ReorgBlockHashPersistence::new(None, None);
+
+    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+        .await
+        .expect("uninvolved row reorg task failed");
+
+    // deployer balance: was 80, reversed Add of 30 (block2 only) → 50
+    let deployer_bal: rust_decimal::Decimal = pg
+        .query_one(
+            "SELECT balance FROM test_schema.multi_user WHERE network = $1 AND user_addr = $2",
+            &[&network, &deployer.as_str()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(deployer_bal, rust_decimal::Decimal::from(50u64), "deployer balance should be 80 - 30 = 50");
+
+    // other_user balance: should be unchanged at 999
+    let other_bal: rust_decimal::Decimal = pg
+        .query_one(
+            "SELECT balance FROM test_schema.multi_user WHERE network = $1 AND user_addr = $2",
+            &[&network, &other_user],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(other_bal, rust_decimal::Decimal::from(999u64), "uninvolved user balance should be unchanged");
+}
