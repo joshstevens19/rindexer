@@ -78,6 +78,13 @@ impl BlockChainWindow {
         }
     }
 
+    /// Removes all entries with block_number >= `from`.
+    /// Used after reorg recovery via removed-logs or ExEx paths where
+    /// canonical replacement blocks are not available.
+    pub fn remove_from(&mut self, from: u64) {
+        self.entries.retain(|&block_number, _| block_number < from);
+    }
+
     /// Returns all block numbers >= `from`, in ascending order.
     pub fn block_numbers_from(&self, from: u64) -> Vec<u64> {
         self.entries.range(from..).map(|(&n, _)| n).collect()
@@ -278,5 +285,40 @@ mod tests {
 
         assert_eq!(w.oldest_block(), Some(3));
         assert_eq!(w.latest_block(), Some(7));
+    }
+
+    #[test]
+    fn test_remove_from() {
+        let mut w = BlockChainWindow::new(10);
+        for i in 1u64..=5 {
+            w.insert(i, hash(i as u8), hash(i as u8 - 1));
+        }
+
+        w.remove_from(3);
+        assert_eq!(w.len(), 2);
+        assert_eq!(w.block_numbers(), vec![1, 2]);
+        assert!(w.get(3).is_none());
+        assert!(w.get(4).is_none());
+        assert!(w.get(5).is_none());
+    }
+
+    #[test]
+    fn test_remove_from_all() {
+        let mut w = BlockChainWindow::new(10);
+        w.insert(5, hash(5), hash(4));
+        w.insert(6, hash(6), hash(5));
+
+        w.remove_from(5);
+        assert!(w.is_empty());
+    }
+
+    #[test]
+    fn test_remove_from_none() {
+        let mut w = BlockChainWindow::new(10);
+        w.insert(1, hash(1), hash(0));
+        w.insert(2, hash(2), hash(1));
+
+        w.remove_from(10); // nothing >= 10
+        assert_eq!(w.len(), 2);
     }
 }

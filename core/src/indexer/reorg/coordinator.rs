@@ -33,8 +33,9 @@ impl ReorgCoordinator {
         persistence: Arc<ReorgBlockHashPersistence>,
         provider: Arc<JsonRpcCachedProvider>,
         event_tables: Vec<EventTableInfo>,
-    ) -> Self {
-        Self {
+    ) -> anyhow::Result<Self> {
+        super::validate_sql_value(&network, "network name")?;
+        Ok(Self {
             network,
             window,
             persistence,
@@ -42,7 +43,7 @@ impl ReorgCoordinator {
             event_tables,
             derived_tables: vec![],
             blocks_since_flush: 0,
-        }
+        })
     }
 
     pub fn set_derived_tables(&mut self, derived_tables: Vec<DerivedTableInfo>) {
@@ -515,7 +516,8 @@ mod tests {
                 "schema".to_string(),
                 "table".to_string(),
                 "schema_table".to_string(),
-            )],
+            )
+            .unwrap()],
             derived_tables: vec![],
             blocks_since_flush: 0,
         };

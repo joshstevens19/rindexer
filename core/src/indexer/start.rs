@@ -91,6 +91,9 @@ pub enum StartIndexingError {
 
     #[error("Encountered unknown error: {0}")]
     UnknownError(String),
+
+    #[error("Invalid configuration: {0}")]
+    ConfigError(#[from] anyhow::Error),
 }
 
 #[derive(Clone)]
@@ -422,7 +425,7 @@ async fn start_indexing_contract_events(
             network_event_tables
                 .entry(network_contract.network.clone())
                 .or_default()
-                .push(EventTableInfo::new(schema, table_name, checkpoint_table));
+                .push(EventTableInfo::new(schema, table_name, checkpoint_table)?);
 
             for tr in event.tables.iter() {
                 let derived =
@@ -462,17 +465,18 @@ async fn start_indexing_contract_events(
                         let columns: Vec<DerivedColumnRollback> = operation
                             .set
                             .iter()
-                            .filter_map(|set_col| {
-                                let action = set_col.action.clone();
-                                action.reverse()?;
-                                let event_field = set_col.event_field_name()?;
-                                Some(DerivedColumnRollback {
-                                    derived_column: set_col.column.clone(),
-                                    event_column: camel_to_snake(event_field),
-                                    action,
-                                })
+                            .filter(|set_col| {
+                                set_col.action.reverse().is_some()
+                                    && set_col.event_field_name().is_some()
                             })
-                            .collect();
+                            .map(|set_col| {
+                                DerivedColumnRollback::new(
+                                    set_col.column.clone(),
+                                    camel_to_snake(set_col.event_field_name().unwrap()),
+                                    set_col.action.clone(),
+                                )
+                            })
+                            .collect::<anyhow::Result<Vec<_>>>()?;
 
                         // Collect non-reversible columns for journal-based recalculation
                         for set_col in &operation.set {
@@ -481,21 +485,21 @@ async fn start_indexing_contract_events(
                             }
                             if !journal_columns.iter().any(|jc| jc.derived_column == set_col.column)
                             {
-                                journal_columns.push(DerivedColumnJournal {
-                                    derived_column: set_col.column.clone(),
-                                    action: set_col.action.clone(),
-                                    where_columns: where_col_names.clone(),
-                                });
+                                journal_columns.push(DerivedColumnJournal::new(
+                                    set_col.column.clone(),
+                                    set_col.action.clone(),
+                                    where_col_names.clone(),
+                                )?);
                             }
                         }
 
                         if !columns.is_empty() {
-                            rollback_ops.push(DerivedTableRollbackOp {
-                                event_table: event_table_name.clone(),
+                            rollback_ops.push(DerivedTableRollbackOp::new(
+                                event_table_name.clone(),
                                 where_columns,
                                 columns,
-                                condition: operation.condition().map(String::from),
-                            });
+                                operation.condition().map(String::from),
+                            )?);
                         }
                     }
                 }
@@ -515,12 +519,12 @@ async fn start_indexing_contract_events(
                         }
                     }
                 } else {
-                    derived.push(DerivedTableInfo {
-                        full_table_name: tr.full_table_name.clone(),
-                        cross_chain: tr.table.cross_chain,
+                    derived.push(DerivedTableInfo::new(
+                        tr.full_table_name.clone(),
+                        tr.table.cross_chain,
                         rollback_ops,
                         journal_columns,
-                    });
+                    )?);
                 }
             }
         }
@@ -573,7 +577,7 @@ async fn start_indexing_contract_events(
                     Arc::clone(&reorg_persistence),
                     provider,
                     event_tables,
-                );
+                )?;
                 coordinator.set_derived_tables(
                     network_derived_tables.get(network_name).cloned().unwrap_or_default(),
                 );
@@ -865,7 +869,7 @@ async fn start_indexing_contract_events(
                         Arc::clone(&reorg_persistence),
                         provider,
                         event_tables,
-                    );
+                    )?;
                     coordinator.set_derived_tables(
                         network_derived_tables.get(network_name).cloned().unwrap_or_default(),
                     );

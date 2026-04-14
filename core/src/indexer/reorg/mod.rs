@@ -25,6 +25,34 @@ pub use task::{
 };
 pub use window::BlockChainWindow;
 
+/// Validates that a string is safe to use as a SQL identifier (table name, column name, schema).
+/// Rejects anything that doesn't match `[a-zA-Z_][a-zA-Z0-9_]*`.
+pub fn validate_sql_identifier(name: &str, kind: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(!name.is_empty(), "{kind} must not be empty");
+    let first = name.as_bytes()[0];
+    anyhow::ensure!(
+        first.is_ascii_alphabetic() || first == b'_',
+        "{kind} '{name}' must start with a letter or underscore"
+    );
+    anyhow::ensure!(
+        name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'),
+        "{kind} '{name}' contains invalid characters (only alphanumeric and underscore allowed)"
+    );
+    Ok(())
+}
+
+/// Validates that a string is safe to use as a SQL string literal value
+/// (e.g. network names in `WHERE network = '...'`).
+/// Allows alphanumeric, underscore, and hyphen.
+pub fn validate_sql_value(value: &str, kind: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(!value.is_empty(), "{kind} must not be empty");
+    anyhow::ensure!(
+        value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'),
+        "{kind} '{value}' contains invalid characters (only alphanumeric, underscore, and hyphen allowed)"
+    );
+    Ok(())
+}
+
 /// Bundles the optional DB clients, callback registry, and streams clients
 /// that reorg recovery needs, avoiding parameter sprawl.
 pub struct ReorgContext<'a> {
@@ -166,6 +194,44 @@ mod tests {
     use super::*;
 
     use crate::manifest::contract::ReorgSafeDistance;
+
+    // ======================================================================
+    // validate_sql_identifier / validate_sql_value
+    // ======================================================================
+
+    #[test]
+    fn test_validate_sql_identifier_valid() {
+        assert!(validate_sql_identifier("users", "test").is_ok());
+        assert!(validate_sql_identifier("_private", "test").is_ok());
+        assert!(validate_sql_identifier("table_123", "test").is_ok());
+        assert!(validate_sql_identifier("CamelCase", "test").is_ok());
+    }
+
+    #[test]
+    fn test_validate_sql_identifier_rejects_invalid() {
+        assert!(validate_sql_identifier("", "test").is_err());
+        assert!(validate_sql_identifier("123start", "test").is_err());
+        assert!(validate_sql_identifier("has space", "test").is_err());
+        assert!(validate_sql_identifier("has-hyphen", "test").is_err());
+        assert!(validate_sql_identifier("drop;--", "test").is_err());
+        assert!(validate_sql_identifier("table'name", "test").is_err());
+    }
+
+    #[test]
+    fn test_validate_sql_value_valid() {
+        assert!(validate_sql_value("ethereum", "test").is_ok());
+        assert!(validate_sql_value("polygon-mainnet", "test").is_ok());
+        assert!(validate_sql_value("bsc_testnet", "test").is_ok());
+        assert!(validate_sql_value("chain123", "test").is_ok());
+    }
+
+    #[test]
+    fn test_validate_sql_value_rejects_invalid() {
+        assert!(validate_sql_value("", "test").is_err());
+        assert!(validate_sql_value("has space", "test").is_err());
+        assert!(validate_sql_value("net'; DROP TABLE --", "test").is_err());
+        assert!(validate_sql_value("name'quote", "test").is_err());
+    }
 
     #[test]
     fn test_reorg_safe_distance_for_chain() {

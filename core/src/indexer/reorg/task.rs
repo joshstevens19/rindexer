@@ -22,9 +22,16 @@ pub struct EventTableInfo {
 }
 
 impl EventTableInfo {
-    pub fn new(schema: String, table_name: String, checkpoint_table: String) -> Self {
+    pub fn new(
+        schema: String,
+        table_name: String,
+        checkpoint_table: String,
+    ) -> anyhow::Result<Self> {
+        super::validate_sql_identifier(&schema, "event table schema")?;
+        super::validate_sql_identifier(&table_name, "event table name")?;
+        super::validate_sql_identifier(&checkpoint_table, "checkpoint table name")?;
         let full_name = format!("{}.{}", schema, table_name);
-        Self { schema, table_name, full_name, checkpoint_table }
+        Ok(Self { schema, table_name, full_name, checkpoint_table })
     }
 }
 
@@ -39,6 +46,18 @@ pub struct DerivedColumnRollback {
     pub action: SetAction,
 }
 
+impl DerivedColumnRollback {
+    pub fn new(
+        derived_column: String,
+        event_column: String,
+        action: SetAction,
+    ) -> anyhow::Result<Self> {
+        super::validate_sql_identifier(&derived_column, "derived column")?;
+        super::validate_sql_identifier(&event_column, "event column")?;
+        Ok(Self { derived_column, event_column, action })
+    }
+}
+
 /// Links a source event table to the derived table for reversal.
 #[derive(Clone, Debug)]
 pub struct DerivedTableRollbackOp {
@@ -48,8 +67,30 @@ pub struct DerivedTableRollbackOp {
     pub where_columns: Vec<(String, String)>,
     /// Columns to reverse
     pub columns: Vec<DerivedColumnRollback>,
-    /// Optional SQL condition re-evaluated against event data
+    /// Optional SQL condition re-evaluated against event data.
     pub condition: Option<String>,
+}
+
+impl DerivedTableRollbackOp {
+    pub fn new(
+        event_table: String,
+        where_columns: Vec<(String, String)>,
+        columns: Vec<DerivedColumnRollback>,
+        condition: Option<String>,
+    ) -> anyhow::Result<Self> {
+        // event_table is "schema.table" — validate both parts
+        if let Some((schema, table)) = event_table.split_once('.') {
+            super::validate_sql_identifier(schema, "rollback op event table schema")?;
+            super::validate_sql_identifier(table, "rollback op event table name")?;
+        } else {
+            super::validate_sql_identifier(&event_table, "rollback op event table")?;
+        }
+        for (dt_col, ev_col) in &where_columns {
+            super::validate_sql_identifier(dt_col, "rollback op WHERE derived column")?;
+            super::validate_sql_identifier(ev_col, "rollback op WHERE event column")?;
+        }
+        Ok(Self { event_table, where_columns, columns, condition })
+    }
 }
 
 /// Describes a non-reversible column (Set/Max/Min) that uses the operation journal
@@ -64,6 +105,20 @@ pub struct DerivedColumnJournal {
     pub where_columns: Vec<String>,
 }
 
+impl DerivedColumnJournal {
+    pub fn new(
+        derived_column: String,
+        action: SetAction,
+        where_columns: Vec<String>,
+    ) -> anyhow::Result<Self> {
+        super::validate_sql_identifier(&derived_column, "journal derived column")?;
+        for col in &where_columns {
+            super::validate_sql_identifier(col, "journal WHERE column")?;
+        }
+        Ok(Self { derived_column, action, where_columns })
+    }
+}
+
 /// Metadata for a derived/custom table needed during reorg rollback.
 #[derive(Clone)]
 pub struct DerivedTableInfo {
@@ -73,6 +128,24 @@ pub struct DerivedTableInfo {
     pub rollback_ops: Vec<DerivedTableRollbackOp>,
     /// Non-reversible columns (Set/Max/Min) — recalculated from operation journal.
     pub journal_columns: Vec<DerivedColumnJournal>,
+}
+
+impl DerivedTableInfo {
+    pub fn new(
+        full_table_name: String,
+        cross_chain: bool,
+        rollback_ops: Vec<DerivedTableRollbackOp>,
+        journal_columns: Vec<DerivedColumnJournal>,
+    ) -> anyhow::Result<Self> {
+        // full_table_name is "schema.table" — validate both parts
+        if let Some((schema, table)) = full_table_name.split_once('.') {
+            super::validate_sql_identifier(schema, "derived table schema")?;
+            super::validate_sql_identifier(table, "derived table name")?;
+        } else {
+            super::validate_sql_identifier(&full_table_name, "derived table name")?;
+        }
+        Ok(Self { full_table_name, cross_chain, rollback_ops, journal_columns })
+    }
 }
 
 pub struct ReorgTask {
@@ -765,9 +838,14 @@ impl ReorgTask {
             }
         }
 
-        // Update the in-memory window with canonical blocks only after all DB changes succeed
+        // Update the in-memory window after all DB changes succeed.
+        // When canonical blocks are available (parent-hash detection), overwrite with corrected hashes.
+        // When canonical blocks are empty (removed-logs / ExEx detection), remove stale entries
+        // so the next parent-hash check doesn't immediately re-trigger.
         if !canonical.is_empty() {
             window.update_range(&canonical);
+        } else {
+            window.remove_from(self.fork_point);
         }
 
         let duration = start.elapsed().as_secs_f64();
