@@ -8,13 +8,27 @@
 
 ### Features
 -------------------------------------------------
-- feat: Add Twilio SMS alerts support — send SMS notifications for on-chain events via the Twilio API
-- feat: **`RINDEXER_CLICKHOUSE_BATCH_SIZE` env var** — configure the ClickHouse batch chunk size used for no-code/custom table writes. Defaults to `1000`. Increasing it reduces the number of sequential `INSERT` statements for high-volume streams, at the cost of larger per-request payloads.
 
 ## Releases
 -------------------------------------------------
 
 all release branches are deployed through `release/VERSION_NUMBER` branches
+
+# 0.39.0-beta - 14th April 2026
+
+github branch - https://github.com/joshstevens19/rindexer/tree/release/0.39.0
+
+- linux binary - https://github.com/joshstevens19/rindexer/releases/download/v0.39.0/rindexer_linux-amd64.tar.gz
+- mac apple silicon binary - https://github.com/joshstevens19/rindexer/releases/download/v0.39.0/rindexer_darwin-arm64.tar.gz
+- mac apple intel binary - https://github.com/joshstevens19/rindexer/releases/download/v0.39.0/rindexer_darwin-amd64.tar.gz
+- windows binary - https://github.com/joshstevens19/rindexer/releases/download/v0.39.0/rindexer_win32-amd64.zip
+
+
+### Features
+-------------------------------------------------
+- feat: Add Twilio SMS alerts support — send SMS notifications for on-chain events via the Twilio API
+- feat: **`RINDEXER_CLICKHOUSE_BATCH_SIZE` env var** — configure the ClickHouse batch chunk size used for no-code/custom table writes. Defaults to `1000`. Increasing it reduces the number of sequential `INSERT` statements for high-volume streams, at the cost of larger per-request payloads.
+
 
 # 0.38.0-beta - 10th April 2026
 
