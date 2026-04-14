@@ -480,7 +480,7 @@ impl TestEnv {
     }
 
     async fn build_window(&self, from_block: u64, to_block: u64) -> BlockChainWindow {
-        let mut window = BlockChainWindow::try_new(256);
+        let mut window = BlockChainWindow::try_new(256).unwrap();
         for block_num in from_block..=to_block {
             let (hash, parent_hash) =
                 get_block_by_number(&self.http, &self.rpc_url, block_num).await;
@@ -586,7 +586,7 @@ async fn test_reorg_detection_and_rollback() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     let result = task
         .execute(&mut task_window, Some(&rindexer_pg), None, None)
@@ -634,7 +634,7 @@ async fn test_reorg_detection_and_rollback() {
     );
 
     // Startup validation detects stale hashes
-    let mut stale_window = BlockChainWindow::try_new(256);
+    let mut stale_window = BlockChainWindow::try_new(256).unwrap();
     for &bn in &block_numbers {
         if let Some(&(hash, parent)) = window.get(bn) {
             stale_window.insert(bn, hash, parent);
@@ -696,7 +696,7 @@ async fn test_reorg_single_block() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     let result = task
         .execute(&mut task_window, Some(&rindexer_pg), None, None)
@@ -759,7 +759,7 @@ async fn test_reorg_deep() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     let result = task
         .execute(&mut task_window, Some(&rindexer_pg), None, None)
@@ -815,7 +815,7 @@ async fn test_reorg_no_events_in_range() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     let result = task
         .execute(&mut task_window, Some(&rindexer_pg), None, None)
@@ -921,7 +921,7 @@ async fn test_reorg_multiple_event_tables() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     let result = task
         .execute(&mut task_window, Some(&rindexer_pg), None, None)
@@ -995,7 +995,7 @@ async fn test_reorg_checkpoint_rewind() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
@@ -1092,7 +1092,7 @@ async fn test_reorg_derived_table_cleanup() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
@@ -1188,7 +1188,7 @@ async fn test_reorg_derived_table_cross_chain() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
@@ -1254,7 +1254,7 @@ async fn test_reorg_consecutive() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     let result1 = task1
         .execute(&mut task_window, Some(&rindexer_pg), None, None)
@@ -1282,7 +1282,7 @@ async fn test_reorg_consecutive() {
     };
 
     let rindexer_pg2 = env.rindexer_pg().await;
-    let mut task_window2 = BlockChainWindow::try_new(256);
+    let mut task_window2 = BlockChainWindow::try_new(256).unwrap();
 
     let result2 = task2
         .execute(&mut task_window2, Some(&rindexer_pg2), None, None)
@@ -1441,7 +1441,7 @@ async fn test_reorg_multicall_tx_deduplication() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     let result = task
         .execute(&mut task_window, Some(&rindexer_pg), None, None)
@@ -1526,7 +1526,7 @@ async fn test_reorg_reindex_continuation() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     let result = task
         .execute(&mut task_window, Some(&rindexer_pg), None, None)
@@ -1699,7 +1699,7 @@ async fn test_reorg_on_reorg_callback_fired() {
         canonical_blocks: vec![],
     };
 
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     let result = task
         .execute(&mut task_window, Some(&rindexer_pg), None, None)
@@ -1792,7 +1792,7 @@ async fn test_reorg_unregistered_derived_table_survives() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
@@ -1907,7 +1907,7 @@ async fn test_reorg_multiple_derived_tables() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
@@ -1992,7 +1992,7 @@ async fn test_reorg_derived_table_deep_range() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
@@ -2086,7 +2086,7 @@ async fn test_reorg_reversal_add() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
@@ -2178,7 +2178,7 @@ async fn test_reorg_reversal_subtract() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
@@ -2271,7 +2271,7 @@ async fn test_reorg_reversal_increment() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
@@ -2363,7 +2363,7 @@ async fn test_reorg_reversal_with_condition() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
@@ -2474,7 +2474,7 @@ async fn test_reorg_journal_max_recalculation() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
@@ -2581,7 +2581,7 @@ async fn test_reorg_journal_set_recalculation() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
@@ -2677,7 +2677,7 @@ async fn test_reorg_reversal_decrement() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
@@ -2779,7 +2779,7 @@ async fn test_reorg_journal_min_recalculation() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
@@ -2901,7 +2901,7 @@ async fn test_reorg_mixed_reversible_and_journal() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
@@ -3012,7 +3012,7 @@ async fn test_reorg_reversal_uninvolved_row_unchanged() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
@@ -3137,7 +3137,7 @@ async fn test_reorg_clickhouse_add_reversal() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     task.execute(&mut task_window, Some(&rindexer_pg), Some(&ch), None)
         .await
@@ -3325,7 +3325,7 @@ async fn test_reorg_two_events_same_table_reversible() {
     .unwrap();
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
@@ -3481,7 +3481,7 @@ async fn test_reorg_two_events_same_table_journal() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let mut task_window = BlockChainWindow::try_new(256);
+    let mut task_window = BlockChainWindow::try_new(256).unwrap();
 
     task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
