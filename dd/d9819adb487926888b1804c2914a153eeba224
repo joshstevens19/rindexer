@@ -1,0 +1,46 @@
+core/src/indexer/fetch_logs.rs
+  7a1d456c5380650d 984,1026
+core/src/indexer/reorg/coordinator.rs
+  7a1d456c5380650d 36,45,457,459-481,493,495-509
+  b416449b704d5937 525
+core/src/indexer/reorg/task.rs
+  7a1d456c5380650d 25,50,75,109,134
+core/src/indexer/start.rs
+  b416449b704d5937 424,469,484,493
+  7a1d456c5380650d 518,570-571,578,862-863,870
+core/tests/e2e_reorg.rs
+  7a1d456c5380650d 578,582-583,688,692-693,751,755-756,807,811-812,906,910-912,916-917,987,991-992,1079,1083-1084,1175,1179-1180,1246,1250-1251,1274,1278-1279,1433,1437-1438,1518,1522-1523,1692,1696-1697,1784,1788-1789,1886,1890-1891,1979,1983-1984,2064,2068-2069,2156,2160-2161,2249,2253-2254,2340,2344-2345,2457,2461-2462,2564,2568-2569,2655,2659-2660,2762,2766-2767,2875,2879-2880,2990,2994-2995,3115,3119-3120,3274,3278-3280,3284-3285,3457,3461-3462
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "ddd9819adb487926888b1804c2914a153eeba224",
+  "prompts": {
+    "7a1d456c5380650d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ecda10da-f342-4a72-9eaf-40661238851a",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 149,
+      "total_deletions": 109,
+      "accepted_lines": 149,
+      "overriden_lines": 0
+    },
+    "b416449b704d5937": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9ec8295a-efa7-4aa2-89d5-707dbef01acf",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 123,
+      "total_deletions": 896,
+      "accepted_lines": 1425,
+      "overriden_lines": 0
+    }
+  }
+}
