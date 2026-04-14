@@ -27,10 +27,19 @@ pub struct GlobalConfig {
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct ReorgHandlingConfig {
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_size: Option<usize>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct NetworkConfig {
     pub name: String,
     pub chain_id: u64,
     pub rpc: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reorg_handling: Option<ReorgHandlingConfig>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]

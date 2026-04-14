@@ -281,7 +281,9 @@ impl RindexerInstance {
                         info!("[RINDEXER] Reorg detected: {}", line);
                         reorg_detected_clone.store(true, Ordering::Relaxed);
                     }
-                    if line.contains("Reorg recovery complete") {
+                    if line.contains("Reorg recovery complete")
+                        || line.contains("Reorg task completed")
+                    {
                         info!("[RINDEXER] Reorg recovery complete: {}", line);
                         reorg_recovery_clone.store(true, Ordering::Relaxed);
                     }
@@ -383,6 +385,7 @@ impl RindexerInstance {
                 name: "anvil".to_string(),
                 chain_id: 31337,
                 rpc: anvil_rpc_url.to_string(),
+                reorg_handling: None,
             }],
             global: crate::test_suite::GlobalConfig { health_port },
             storage: crate::test_suite::StorageConfig {

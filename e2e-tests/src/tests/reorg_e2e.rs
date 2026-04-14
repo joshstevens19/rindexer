@@ -41,6 +41,13 @@ impl TestModule for ReorgTests {
             )
             .with_timeout(240)
             .with_chain_id(137),
+            TestDefinition::new(
+                "test_reorg_live_clickhouse_recovery",
+                "Reorg: live detection via parent hash mismatch, ClickHouse rollback + no duplicates",
+                reorg_live_clickhouse_recovery,
+            )
+            .with_timeout(180)
+            .with_chain_id(137),
         ]
     }
 }
@@ -63,6 +70,8 @@ fn create_reorg_config(
     config.name = "reorg_test".to_string();
     config.networks[0].name = "polygon".to_string();
     config.networks[0].chain_id = 137;
+    config.networks[0].reorg_handling =
+        Some(crate::test_suite::ReorgHandlingConfig { enabled: true, window_size: None });
     config.contracts = vec![crate::test_suite::ContractConfig {
         name: "SimpleERC20".to_string(),
         details: vec![crate::test_suite::ContractDetail {
@@ -218,6 +227,202 @@ async fn assert_no_pg_duplicates(conn_str: &str, table: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// ClickHouse helpers
+// ---------------------------------------------------------------------------
+
+/// Execute an arbitrary SQL query against ClickHouse via HTTP GET.
+/// Returns the response body trimmed.
+#[allow(dead_code)]
+async fn clickhouse_query(port: u16, query: &str) -> Result<String> {
+    let client = reqwest::Client::new();
+    let url = format!("http://localhost:{}/", port);
+    let resp = client.get(&url).query(&[("query", query)]).send().await?;
+    let body = resp.text().await?;
+    Ok(body.trim().to_string())
+}
+
+/// Return the row count for a ClickHouse table.
+#[allow(dead_code)]
+async fn clickhouse_row_count(port: u16, table: &str) -> Result<i64> {
+    let body = clickhouse_query(port, &format!("SELECT count() FROM {}", table)).await?;
+    let count: i64 = body.parse().map_err(|e| anyhow::anyhow!("parse count: {}", e))?;
+    Ok(count)
+}
+
+/// Poll until the ClickHouse row count for `table` reaches `expected`.
+/// Returns the actual count when done (may still be < expected on timeout).
+#[allow(dead_code)]
+async fn wait_for_ch_count(
+    port: u16,
+    table: &str,
+    expected: i64,
+    timeout_secs: u64,
+) -> Result<i64> {
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(timeout_secs);
+    let mut last_count: i64 = 0;
+
+    while start.elapsed() < timeout {
+        if let Ok(count) = clickhouse_row_count(port, table).await {
+            last_count = count;
+            if last_count >= expected {
+                return Ok(last_count);
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    Ok(last_count)
+}
+
+/// Assert no duplicate tx_hashes exist in a ClickHouse table.
+#[allow(dead_code)]
+async fn assert_no_ch_duplicates(port: u16, table: &str) -> Result<()> {
+    let body = clickhouse_query(
+        port,
+        &format!("SELECT tx_hash, count() as cnt FROM {} GROUP BY tx_hash HAVING cnt > 1", table),
+    )
+    .await?;
+
+    if !body.is_empty() {
+        return Err(anyhow::anyhow!(
+            "Found duplicate tx_hash entries in {} after reorg recovery: {}",
+            table,
+            body
+        ));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Dual-backend (PG + CH) indexer management helpers
+// ---------------------------------------------------------------------------
+
+/// Start indexer with both Postgres and ClickHouse env vars.
+#[allow(dead_code)]
+async fn start_indexer_with_pg_and_ch(
+    context: &mut TestContext,
+    config: crate::test_suite::RindexerConfig,
+    pg_port: u16,
+    ch_port: u16,
+) -> Result<()> {
+    helpers::copy_abis_to_project(&context.project_path)?;
+    let yaml = serde_yaml::to_string(&config)?;
+    std::fs::write(context.project_path.join("rindexer.yaml"), yaml)?;
+
+    let mut rindexer = crate::rindexer_client::RindexerInstance::new(
+        &context.rindexer_binary,
+        context.project_path.clone(),
+    );
+    for (k, v) in crate::docker::postgres_env_vars(pg_port) {
+        rindexer = rindexer.with_env(&k, &v);
+    }
+    for (k, v) in crate::docker::clickhouse_env_vars(ch_port) {
+        rindexer = rindexer.with_env(&k, &v);
+    }
+    rindexer.start_indexer().await?;
+    context.rindexer = Some(rindexer);
+    context.wait_for_sync_completion(30).await?;
+    Ok(())
+}
+
+/// Start indexer with ClickHouse env vars only.
+#[allow(dead_code)]
+async fn start_indexer_with_ch(
+    context: &mut TestContext,
+    config: crate::test_suite::RindexerConfig,
+    ch_port: u16,
+) -> Result<()> {
+    helpers::copy_abis_to_project(&context.project_path)?;
+    let yaml = serde_yaml::to_string(&config)?;
+    std::fs::write(context.project_path.join("rindexer.yaml"), yaml)?;
+
+    let mut rindexer = crate::rindexer_client::RindexerInstance::new(
+        &context.rindexer_binary,
+        context.project_path.clone(),
+    );
+    for (k, v) in crate::docker::clickhouse_env_vars(ch_port) {
+        rindexer = rindexer.with_env(&k, &v);
+    }
+    rindexer.start_indexer().await?;
+    context.rindexer = Some(rindexer);
+    context.wait_for_sync_completion(30).await?;
+    Ok(())
+}
+
+/// Restart the indexer with ClickHouse env vars only.
+#[allow(dead_code)]
+async fn restart_indexer_with_ch(context: &mut TestContext, ch_port: u16) -> Result<()> {
+    helpers::copy_abis_to_project(&context.project_path)?;
+    let mut rindexer = crate::rindexer_client::RindexerInstance::new(
+        &context.rindexer_binary,
+        context.project_path.clone(),
+    );
+    for (k, v) in crate::docker::clickhouse_env_vars(ch_port) {
+        rindexer = rindexer.with_env(&k, &v);
+    }
+    rindexer.start_indexer().await?;
+    context.rindexer = Some(rindexer);
+    context.wait_for_sync_completion(30).await?;
+    Ok(())
+}
+
+/// Restart the indexer with both Postgres and ClickHouse env vars.
+#[allow(dead_code)]
+async fn restart_indexer_with_pg_and_ch(
+    context: &mut TestContext,
+    pg_port: u16,
+    ch_port: u16,
+) -> Result<()> {
+    helpers::copy_abis_to_project(&context.project_path)?;
+    let mut rindexer = crate::rindexer_client::RindexerInstance::new(
+        &context.rindexer_binary,
+        context.project_path.clone(),
+    );
+    for (k, v) in crate::docker::postgres_env_vars(pg_port) {
+        rindexer = rindexer.with_env(&k, &v);
+    }
+    for (k, v) in crate::docker::clickhouse_env_vars(ch_port) {
+        rindexer = rindexer.with_env(&k, &v);
+    }
+    rindexer.start_indexer().await?;
+    context.rindexer = Some(rindexer);
+    context.wait_for_sync_completion(30).await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Config builders for ClickHouse tests
+// ---------------------------------------------------------------------------
+
+/// Build a reorg-aware config with ClickHouse enabled, PG and CSV disabled.
+#[allow(dead_code)]
+fn create_reorg_config_ch(
+    context: &TestContext,
+    contract_address: &str,
+) -> crate::test_suite::RindexerConfig {
+    let mut config = create_reorg_config(context, contract_address);
+    config.storage.postgres = None;
+    config.storage.csv.enabled = false;
+    config.storage.clickhouse =
+        Some(crate::test_suite::ClickHouseConfig { enabled: true, drop_each_run: Some(false) });
+    config
+}
+
+/// Build a reorg-aware config with both Postgres and ClickHouse enabled, CSV disabled.
+#[allow(dead_code)]
+fn create_reorg_config_pg_ch(
+    context: &TestContext,
+    contract_address: &str,
+) -> crate::test_suite::RindexerConfig {
+    let mut config = create_reorg_config(context, contract_address);
+    config.storage.postgres = Some(crate::test_suite::PostgresConfig { enabled: true });
+    config.storage.csv.enabled = false;
+    config.storage.clickhouse =
+        Some(crate::test_suite::ClickHouseConfig { enabled: true, drop_each_run: Some(false) });
+    config
 }
 
 // ---------------------------------------------------------------------------
@@ -571,6 +776,103 @@ fn reorg_double_reorg_idempotency(
         info!(
             "Reorg Double Reorg Idempotency Test PASSED: two reorgs, final_count={}, no duplicates",
             final_count
+        );
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Test 5: Live reorg detection + ClickHouse rollback
+//
+// Mirrors test_reorg_live_pg_recovery but targets ClickHouse storage.
+// ClickHouse stores both event data and reorg_block_hashes internally;
+// PG is not required. The coordinator detects a parent hash mismatch, pauses
+// forward indexing, runs ReorgTask (deletes stale rows from CH event tables +
+// reorg_block_hashes in CH), then resumes.
+// ---------------------------------------------------------------------------
+fn reorg_live_clickhouse_recovery(
+    context: &mut TestContext,
+) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
+    Box::pin(async move {
+        info!("Running Reorg Live ClickHouse Recovery Test");
+
+        let (ch_container, ch_port) = match crate::docker::start_clickhouse_container().await {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(crate::tests::test_runner::SkipTest(format!(
+                    "Docker not available: {}",
+                    e
+                ))
+                .into());
+            }
+        };
+        context.register_container(ch_container);
+        crate::docker::wait_for_clickhouse_ready(ch_port, 30).await?;
+
+        let contract_address = context.deploy_test_contract().await?;
+        let amounts = [1000u64, 2000, 3000, 4000, 5000];
+        let recipients: Vec<_> = (0..5).map(generate_test_address).collect();
+
+        for (r, a) in recipients.iter().zip(amounts.iter()) {
+            context.anvil.send_transfer(&contract_address, r, U256::from(*a)).await?;
+            context.anvil.mine_block().await?;
+        }
+
+        let config = create_reorg_config_ch(context, &contract_address);
+
+        start_indexer_with_ch(context, config, ch_port).await?;
+
+        // ClickHouse table name: {indexer_name}_{contract_name}.{event_name}
+        // indexer name = "reorg_test", contract = "SimpleERC20", event = "Transfer"
+        let ch_table = "reorg_test_simple_erc_20.transfer";
+
+        // 1 mint + 5 transfers = 6 rows
+        let pre_count = wait_for_ch_count(ch_port, ch_table, 6, 30).await?;
+        info!("Pre-reorg ClickHouse rows: {}", pre_count);
+
+        if pre_count < 6 {
+            return Err(anyhow::anyhow!(
+                "Expected at least 6 rows (1 mint + 5 transfers) in ClickHouse, got {}",
+                pre_count
+            ));
+        }
+
+        // Send a live transfer to confirm the poller is active and has cached
+        // block hashes in the BlockChainWindow before we trigger the reorg.
+        let live_recipient = generate_test_address(99);
+        context.anvil.send_transfer(&contract_address, &live_recipient, U256::from(777u64)).await?;
+        context.anvil.mine_block().await?;
+        let live_count = wait_for_ch_count(ch_port, ch_table, pre_count + 1, 15).await?;
+        info!("After live transfer: {} ClickHouse rows", live_count);
+
+        // Trigger reorg (depth=2 — invalidates the live block + one more)
+        context.anvil.trigger_reorg(2).await?;
+        // Mine a block so the live poller sees a parent hash mismatch
+        context.anvil.mine_block().await?;
+
+        // Wait for rindexer to detect via parent hash mismatch and recover
+        if let Some(r) = &context.rindexer {
+            r.wait_for_reorg_recovery(60).await?;
+        }
+
+        // Allow re-indexing to settle
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+        let post_count = wait_for_ch_count(ch_port, ch_table, 1, 15).await?;
+        info!("Post-reorg ClickHouse rows: {}", post_count);
+
+        // Verify reorg was detected
+        if let Some(r) = &context.rindexer {
+            if !r.reorg_detected.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(anyhow::anyhow!("Reorg was not detected by rindexer"));
+            }
+        }
+
+        assert_no_ch_duplicates(ch_port, ch_table).await?;
+
+        info!(
+            "Reorg Live ClickHouse Recovery Test PASSED: pre={}, post={}, no duplicates",
+            pre_count, post_count
         );
         Ok(())
     })

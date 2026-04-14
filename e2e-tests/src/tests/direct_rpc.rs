@@ -103,6 +103,7 @@ fn build_direct_rpc_config(
             name: "mainnet".to_string(),
             chain_id: 1,
             rpc: rpc_url.to_string(),
+            reorg_handling: None,
         }],
         global: GlobalConfig { health_port },
         storage: StorageConfig {

@@ -253,11 +253,13 @@ fn build_multi_network_config(
                 name: "ethereum".to_string(),
                 chain_id: 1,
                 rpc: params.mainnet_rpc.to_string(),
+                reorg_handling: None,
             },
             NetworkConfig {
                 name: "anvil".to_string(),
                 chain_id: 31337,
                 rpc: params.anvil_rpc.to_string(),
+                reorg_handling: None,
             },
         ],
         global: GlobalConfig { health_port },
