@@ -288,6 +288,8 @@ fn reorg_live_pg_recovery(
 
         // Trigger reorg (depth=2 — invalidates the live block + one more)
         context.anvil.trigger_reorg(2).await?;
+        // Mine a block so the live poller sees a parent hash mismatch
+        context.anvil.mine_block().await?;
 
         // Wait for rindexer to detect via parent hash mismatch and recover
         if let Some(r) = &context.rindexer {
