@@ -425,7 +425,7 @@ async fn start_indexing_contract_events(
             network_event_tables
                 .entry(network_contract.network.clone())
                 .or_default()
-                .push(EventTableInfo::new(schema, table_name, checkpoint_table)?);
+                .push(EventTableInfo::try_new(schema, table_name, checkpoint_table)?);
 
             for tr in event.tables.iter() {
                 let derived =
@@ -470,7 +470,7 @@ async fn start_indexing_contract_events(
                                     && set_col.event_field_name().is_some()
                             })
                             .map(|set_col| {
-                                DerivedColumnRollback::new(
+                                DerivedColumnRollback::try_new(
                                     set_col.column.clone(),
                                     camel_to_snake(set_col.event_field_name().unwrap()),
                                     set_col.action.clone(),
@@ -485,7 +485,7 @@ async fn start_indexing_contract_events(
                             }
                             if !journal_columns.iter().any(|jc| jc.derived_column == set_col.column)
                             {
-                                journal_columns.push(DerivedColumnJournal::new(
+                                journal_columns.push(DerivedColumnJournal::try_new(
                                     set_col.column.clone(),
                                     set_col.action.clone(),
                                     where_col_names.clone(),
@@ -494,7 +494,7 @@ async fn start_indexing_contract_events(
                         }
 
                         if !columns.is_empty() {
-                            rollback_ops.push(DerivedTableRollbackOp::new(
+                            rollback_ops.push(DerivedTableRollbackOp::try_new(
                                 event_table_name.clone(),
                                 where_columns,
                                 columns,
@@ -519,7 +519,7 @@ async fn start_indexing_contract_events(
                         }
                     }
                 } else {
-                    derived.push(DerivedTableInfo::new(
+                    derived.push(DerivedTableInfo::try_new(
                         tr.full_table_name.clone(),
                         tr.table.cross_chain,
                         rollback_ops,
@@ -571,16 +571,16 @@ async fn start_indexing_contract_events(
                 .map(|nc| nc.cached_provider.clone());
 
             if let Some(provider) = provider {
+                let derived_tables =
+                    network_derived_tables.get(network_name).cloned().unwrap_or_default();
                 let mut coordinator = ReorgCoordinator::new(
                     network_name.clone(),
                     window,
                     Arc::clone(&reorg_persistence),
                     provider,
                     event_tables,
+                    derived_tables,
                 )?;
-                coordinator.set_derived_tables(
-                    network_derived_tables.get(network_name).cloned().unwrap_or_default(),
-                );
 
                 // Get streams_clients for this network (if any event has one)
                 let startup_streams_clients = registry
@@ -863,16 +863,16 @@ async fn start_indexing_contract_events(
                     .map(|e| e.network_contract().cached_provider.clone());
 
                 if let Some(provider) = provider {
+                    let derived_tables =
+                        network_derived_tables.get(network_name).cloned().unwrap_or_default();
                     let mut coordinator = ReorgCoordinator::new(
                         network_name.clone(),
                         window,
                         Arc::clone(&reorg_persistence),
                         provider,
                         event_tables,
+                        derived_tables,
                     )?;
-                    coordinator.set_derived_tables(
-                        network_derived_tables.get(network_name).cloned().unwrap_or_default(),
-                    );
 
                     // Get streams_clients for this network from dependency events
                     let dep_streams_clients = dependency_event_processing_configs

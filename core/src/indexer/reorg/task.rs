@@ -22,7 +22,7 @@ pub struct EventTableInfo {
 }
 
 impl EventTableInfo {
-    pub fn new(
+    pub fn try_new(
         schema: String,
         table_name: String,
         checkpoint_table: String,
@@ -47,7 +47,7 @@ pub struct DerivedColumnRollback {
 }
 
 impl DerivedColumnRollback {
-    pub fn new(
+    pub fn try_new(
         derived_column: String,
         event_column: String,
         action: SetAction,
@@ -72,7 +72,7 @@ pub struct DerivedTableRollbackOp {
 }
 
 impl DerivedTableRollbackOp {
-    pub fn new(
+    pub fn try_new(
         event_table: String,
         where_columns: Vec<(String, String)>,
         columns: Vec<DerivedColumnRollback>,
@@ -106,7 +106,7 @@ pub struct DerivedColumnJournal {
 }
 
 impl DerivedColumnJournal {
-    pub fn new(
+    pub fn try_new(
         derived_column: String,
         action: SetAction,
         where_columns: Vec<String>,
@@ -131,7 +131,7 @@ pub struct DerivedTableInfo {
 }
 
 impl DerivedTableInfo {
-    pub fn new(
+    pub fn try_new(
         full_table_name: String,
         cross_chain: bool,
         rollback_ops: Vec<DerivedTableRollbackOp>,

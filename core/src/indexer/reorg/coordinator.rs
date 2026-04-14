@@ -33,6 +33,7 @@ impl ReorgCoordinator {
         persistence: Arc<ReorgBlockHashPersistence>,
         provider: Arc<JsonRpcCachedProvider>,
         event_tables: Vec<EventTableInfo>,
+        derived_tables: Vec<DerivedTableInfo>,
     ) -> anyhow::Result<Self> {
         super::validate_sql_value(&network, "network name")?;
         Ok(Self {
@@ -41,13 +42,9 @@ impl ReorgCoordinator {
             persistence,
             provider: Some(provider),
             event_tables,
-            derived_tables: vec![],
+            derived_tables,
             blocks_since_flush: 0,
         })
-    }
-
-    pub fn set_derived_tables(&mut self, derived_tables: Vec<DerivedTableInfo>) {
-        self.derived_tables = derived_tables;
     }
 
     /// Called on each new block during live indexing.
@@ -457,25 +454,31 @@ mod tests {
     }
 
     #[test]
-    fn test_set_derived_tables_propagates_to_tasks() {
+    fn test_derived_tables_propagate_to_tasks() {
         let window = make_window_with_blocks(&[(10, 10, 9), (11, 11, 10), (12, 12, 11)]);
-        let mut coordinator = make_coordinator(window);
-
-        let derived = vec![
-            DerivedTableInfo {
-                full_table_name: "schema.balances".to_string(),
-                cross_chain: false,
-                rollback_ops: vec![],
-                journal_columns: vec![],
-            },
-            DerivedTableInfo {
-                full_table_name: "schema.global_stats".to_string(),
-                cross_chain: true,
-                rollback_ops: vec![],
-                journal_columns: vec![],
-            },
-        ];
-        coordinator.set_derived_tables(derived.clone());
+        let persistence = Arc::new(ReorgBlockHashPersistence::new(None, None));
+        let coordinator = ReorgCoordinator {
+            network: "test".to_string(),
+            window,
+            persistence,
+            provider: None,
+            event_tables: vec![],
+            derived_tables: vec![
+                DerivedTableInfo {
+                    full_table_name: "schema.balances".to_string(),
+                    cross_chain: false,
+                    rollback_ops: vec![],
+                    journal_columns: vec![],
+                },
+                DerivedTableInfo {
+                    full_table_name: "schema.global_stats".to_string(),
+                    cross_chain: true,
+                    rollback_ops: vec![],
+                    journal_columns: vec![],
+                },
+            ],
+            blocks_since_flush: 0,
+        };
 
         // on_exex_reorg creates a task — verify derived_tables are included
         let task = coordinator.on_exex_reorg(12, 10);
@@ -487,16 +490,23 @@ mod tests {
     }
 
     #[test]
-    fn test_set_derived_tables_propagates_to_removed_logs_task() {
+    fn test_derived_tables_propagate_to_removed_logs_task() {
         let window = make_window_with_blocks(&[(10, 10, 9), (11, 11, 10)]);
-        let mut coordinator = make_coordinator(window);
-
-        coordinator.set_derived_tables(vec![DerivedTableInfo {
-            full_table_name: "schema.totals".to_string(),
-            cross_chain: false,
-            rollback_ops: vec![],
-            journal_columns: vec![],
-        }]);
+        let persistence = Arc::new(ReorgBlockHashPersistence::new(None, None));
+        let coordinator = ReorgCoordinator {
+            network: "test".to_string(),
+            window,
+            persistence,
+            provider: None,
+            event_tables: vec![],
+            derived_tables: vec![DerivedTableInfo {
+                full_table_name: "schema.totals".to_string(),
+                cross_chain: false,
+                rollback_ops: vec![],
+                journal_columns: vec![],
+            }],
+            blocks_since_flush: 0,
+        };
 
         let task = coordinator.create_reorg_task_for_block_range(10, 11);
         assert_eq!(task.derived_tables.len(), 1);
@@ -512,7 +522,7 @@ mod tests {
             window,
             persistence,
             provider: None,
-            event_tables: vec![EventTableInfo::new(
+            event_tables: vec![EventTableInfo::try_new(
                 "schema".to_string(),
                 "table".to_string(),
                 "schema_table".to_string(),

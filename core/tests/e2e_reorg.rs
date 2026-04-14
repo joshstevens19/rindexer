@@ -575,11 +575,12 @@ async fn test_reorg_detection_and_rollback() {
         network: network.to_string(),
         fork_point: fork_block + 1,
         detection_point: block3,
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![],
         canonical_blocks: vec![],
     };
@@ -684,11 +685,12 @@ async fn test_reorg_single_block() {
         network: network.to_string(),
         fork_point: block2,
         detection_point: block2,
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![],
         canonical_blocks: vec![],
     };
@@ -746,11 +748,12 @@ async fn test_reorg_deep() {
         network: network.to_string(),
         fork_point: blocks[1], // second block is first invalidated
         detection_point: blocks[5],
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![],
         canonical_blocks: vec![],
     };
@@ -801,11 +804,12 @@ async fn test_reorg_no_events_in_range() {
         network: network.to_string(),
         fork_point,
         detection_point: tip,
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![],
         canonical_blocks: vec![],
     };
@@ -899,16 +903,18 @@ async fn test_reorg_multiple_event_tables() {
         fork_point: block2,
         detection_point: block2,
         event_tables: vec![
-            EventTableInfo::new(
+            EventTableInfo::try_new(
                 "test_schema".to_string(),
                 "ping_pong_ping".to_string(),
                 "test_schema_ping".to_string(),
-            ),
-            EventTableInfo::new(
+            )
+            .unwrap(),
+            EventTableInfo::try_new(
                 "test_schema".to_string(),
                 "ping_pong_pong".to_string(),
                 "test_schema_pong".to_string(),
-            ),
+            )
+            .unwrap(),
         ],
         derived_tables: vec![],
         canonical_blocks: vec![],
@@ -978,11 +984,12 @@ async fn test_reorg_checkpoint_rewind() {
         network: network.to_string(),
         fork_point,
         detection_point: block3,
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![],
         canonical_blocks: vec![],
     };
@@ -1069,11 +1076,12 @@ async fn test_reorg_derived_table_cleanup() {
         network: network.to_string(),
         fork_point: block2,
         detection_point: block2,
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![DerivedTableInfo {
             full_table_name: "test_schema.daily_stats".to_string(),
             cross_chain: false,
@@ -1164,11 +1172,12 @@ async fn test_reorg_derived_table_cross_chain() {
         network: network.to_string(),
         fork_point: block2,
         detection_point: block2,
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![DerivedTableInfo {
             full_table_name: "test_schema.cross_stats".to_string(),
             cross_chain: true,
@@ -1234,11 +1243,12 @@ async fn test_reorg_consecutive() {
         network: network.to_string(),
         fork_point: block3,
         detection_point: block3,
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![],
         canonical_blocks: vec![],
     };
@@ -1261,11 +1271,12 @@ async fn test_reorg_consecutive() {
         network: network.to_string(),
         fork_point: block2,
         detection_point: block2,
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![],
         canonical_blocks: vec![],
     };
@@ -1419,11 +1430,12 @@ async fn test_reorg_multicall_tx_deduplication() {
         network: network.to_string(),
         fork_point: block2,
         detection_point: block2,
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![],
         canonical_blocks: vec![],
     };
@@ -1503,11 +1515,12 @@ async fn test_reorg_reindex_continuation() {
         network: network.to_string(),
         fork_point,
         detection_point: block3,
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![],
         canonical_blocks: vec![],
     };
@@ -1676,11 +1689,12 @@ async fn test_reorg_on_reorg_callback_fired() {
         network: network.to_string(),
         fork_point: block2,
         detection_point: block3,
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![],
         canonical_blocks: vec![],
     };
@@ -1767,11 +1781,12 @@ async fn test_reorg_unregistered_derived_table_survives() {
         network: network.to_string(),
         fork_point: block2,
         detection_point: block2,
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![],
         canonical_blocks: vec![],
     };
@@ -1868,11 +1883,12 @@ async fn test_reorg_multiple_derived_tables() {
         network: network.to_string(),
         fork_point: block2,
         detection_point: block2,
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![
             DerivedTableInfo {
                 full_table_name: "test_schema.balances".to_string(),
@@ -1960,11 +1976,12 @@ async fn test_reorg_derived_table_deep_range() {
         network: network.to_string(),
         fork_point: blocks[1],
         detection_point: blocks[4],
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![DerivedTableInfo {
             full_table_name: "test_schema.activity_log".to_string(),
             cross_chain: false,
@@ -2044,11 +2061,12 @@ async fn test_reorg_reversal_add() {
         network: network.to_string(),
         fork_point: block2,
         detection_point: block3,
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![DerivedTableInfo {
             full_table_name: "test_schema.user_balances".to_string(),
             cross_chain: false,
@@ -2135,11 +2153,12 @@ async fn test_reorg_reversal_subtract() {
         network: network.to_string(),
         fork_point: block2,
         detection_point: block2,
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![DerivedTableInfo {
             full_table_name: "test_schema.debt_tracker".to_string(),
             cross_chain: false,
@@ -2227,11 +2246,12 @@ async fn test_reorg_reversal_increment() {
         network: network.to_string(),
         fork_point: block2,
         detection_point: block3,
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![DerivedTableInfo {
             full_table_name: "test_schema.counters".to_string(),
             cross_chain: false,
@@ -2317,11 +2337,12 @@ async fn test_reorg_reversal_with_condition() {
         network: network.to_string(),
         fork_point: block2,
         detection_point: block3,
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![DerivedTableInfo {
             full_table_name: "test_schema.filtered_balances".to_string(),
             cross_chain: false,
@@ -2433,11 +2454,12 @@ async fn test_reorg_journal_max_recalculation() {
         network: network.to_string(),
         fork_point: block2,
         detection_point: block3,
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![DerivedTableInfo {
             full_table_name: "test_schema.trade_stats".to_string(),
             cross_chain: false,
@@ -2539,11 +2561,12 @@ async fn test_reorg_journal_set_recalculation() {
         network: network.to_string(),
         fork_point: block2,
         detection_point: block3,
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![DerivedTableInfo {
             full_table_name: "test_schema.last_price".to_string(),
             cross_chain: false,
@@ -2629,11 +2652,12 @@ async fn test_reorg_reversal_decrement() {
         network: network.to_string(),
         fork_point: block2,
         detection_point: block3,
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![DerivedTableInfo {
             full_table_name: "test_schema.cooldowns".to_string(),
             cross_chain: false,
@@ -2735,11 +2759,12 @@ async fn test_reorg_journal_min_recalculation() {
         network: network.to_string(),
         fork_point: block2,
         detection_point: block3,
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![DerivedTableInfo {
             full_table_name: "test_schema.min_tracker".to_string(),
             cross_chain: false,
@@ -2847,11 +2872,12 @@ async fn test_reorg_mixed_reversible_and_journal() {
         network: network.to_string(),
         fork_point: block2,
         detection_point: block3,
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![DerivedTableInfo {
             full_table_name: "test_schema.mixed_stats".to_string(),
             cross_chain: false,
@@ -2961,11 +2987,12 @@ async fn test_reorg_reversal_uninvolved_row_unchanged() {
         network: network.to_string(),
         fork_point: block2,
         detection_point: block2,
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![DerivedTableInfo {
             full_table_name: "test_schema.multi_user".to_string(),
             cross_chain: false,
@@ -3085,11 +3112,12 @@ async fn test_reorg_clickhouse_add_reversal() {
         network: network.to_string(),
         fork_point: block2,
         detection_point: block3,
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![DerivedTableInfo {
             full_table_name: "test_schema.user_balances".to_string(),
             cross_chain: false,
@@ -3243,16 +3271,18 @@ async fn test_reorg_two_events_same_table_reversible() {
         fork_point: block2,
         detection_point: block3,
         event_tables: vec![
-            EventTableInfo::new(
+            EventTableInfo::try_new(
                 "test_schema".to_string(),
                 "ping_pong_ping".to_string(),
                 "test_schema_ping".to_string(),
-            ),
-            EventTableInfo::new(
+            )
+            .unwrap(),
+            EventTableInfo::try_new(
                 "test_schema".to_string(),
                 "ping_pong_pong".to_string(),
                 "test_schema_pong".to_string(),
-            ),
+            )
+            .unwrap(),
         ],
         derived_tables: vec![DerivedTableInfo {
             full_table_name: "test_schema.dual_balance".to_string(),
@@ -3424,11 +3454,12 @@ async fn test_reorg_two_events_same_table_journal() {
         network: network.to_string(),
         fork_point: block2,
         detection_point: block3,
-        event_tables: vec![EventTableInfo::new(
+        event_tables: vec![EventTableInfo::try_new(
             "test_schema".to_string(),
             "ping_pong_ping".to_string(),
             "test_schema_ping".to_string(),
-        )],
+        )
+        .unwrap()],
         derived_tables: vec![DerivedTableInfo {
             full_table_name: "test_schema.trade_extremes".to_string(),
             cross_chain: false,
