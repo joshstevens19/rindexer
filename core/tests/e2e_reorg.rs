@@ -373,7 +373,10 @@ impl TestEnv {
                 "INSERT INTO rindexer_internal.reorg_block_hashes \
                  (network, block_number, block_hash, parent_hash) \
                  VALUES ('{}', {}, '{}', '{}')",
-                network, block_num, format!("{:#x}", hash), format!("{:#x}", parent_hash),
+                network,
+                block_num,
+                format!("{:#x}", hash),
+                format!("{:#x}", parent_hash),
             );
             ch.execute(&sql).await.expect("failed to insert CH reorg_block_hashes");
         }
@@ -2684,10 +2687,7 @@ async fn test_reorg_reversal_decrement() {
 
     // Was 7, 2 decrements reversed (incremented) → 9
     let remaining: rust_decimal::Decimal = pg
-        .query_one(
-            "SELECT remaining FROM test_schema.cooldowns WHERE network = $1",
-            &[&network],
-        )
+        .query_one("SELECT remaining FROM test_schema.cooldowns WHERE network = $1", &[&network])
         .await
         .unwrap()
         .get(0);
@@ -2790,14 +2790,15 @@ async fn test_reorg_journal_min_recalculation() {
     // Journal entries for block2(5) and block3(200) deleted.
     // Remaining: block1(500). MIN(500) = 500.
     let min_value: rust_decimal::Decimal = pg
-        .query_one(
-            "SELECT min_value FROM test_schema.min_tracker WHERE network = $1",
-            &[&network],
-        )
+        .query_one("SELECT min_value FROM test_schema.min_tracker WHERE network = $1", &[&network])
         .await
         .unwrap()
         .get(0);
-    assert_eq!(min_value, rust_decimal::Decimal::from(500u64), "min_value should be recalculated to 500");
+    assert_eq!(
+        min_value,
+        rust_decimal::Decimal::from(500u64),
+        "min_value should be recalculated to 500"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2919,8 +2920,16 @@ async fn test_reorg_mixed_reversible_and_journal() {
         .unwrap();
     let total_volume: rust_decimal::Decimal = row.get(0);
     let max_trade: rust_decimal::Decimal = row.get(1);
-    assert_eq!(total_volume, rust_decimal::Decimal::from(100u64), "total_volume should be 800 - 700 = 100");
-    assert_eq!(max_trade, rust_decimal::Decimal::from(100u64), "max_trade should be recalculated to 100");
+    assert_eq!(
+        total_volume,
+        rust_decimal::Decimal::from(100u64),
+        "total_volume should be 800 - 700 = 100"
+    );
+    assert_eq!(
+        max_trade,
+        rust_decimal::Decimal::from(100u64),
+        "max_trade should be recalculated to 100"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -3020,7 +3029,11 @@ async fn test_reorg_reversal_uninvolved_row_unchanged() {
         .await
         .unwrap()
         .get(0);
-    assert_eq!(deployer_bal, rust_decimal::Decimal::from(50u64), "deployer balance should be 80 - 30 = 50");
+    assert_eq!(
+        deployer_bal,
+        rust_decimal::Decimal::from(50u64),
+        "deployer balance should be 80 - 30 = 50"
+    );
 
     // other_user balance: should be unchanged at 999
     let other_bal: rust_decimal::Decimal = pg
@@ -3031,7 +3044,11 @@ async fn test_reorg_reversal_uninvolved_row_unchanged() {
         .await
         .unwrap()
         .get(0);
-    assert_eq!(other_bal, rust_decimal::Decimal::from(999u64), "uninvolved user balance should be unchanged");
+    assert_eq!(
+        other_bal,
+        rust_decimal::Decimal::from(999u64),
+        "uninvolved user balance should be unchanged"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -3124,15 +3141,9 @@ async fn test_reorg_clickhouse_add_reversal() {
     let mut task_window = BlockChainWindow::new(256);
     let persistence = ReorgBlockHashPersistence::new(None, None);
 
-    task.execute(
-        &mut task_window,
-        &persistence,
-        Some(&rindexer_pg),
-        Some(&ch),
-        None,
-    )
-    .await
-    .expect("clickhouse add reversal reorg task failed");
+    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), Some(&ch), None)
+        .await
+        .expect("clickhouse add reversal reorg task failed");
 
     // PG: balance was 180, events at block2 (id=50) + block3 (id=30) = 80 subtracted -> 100
     let balance: rust_decimal::Decimal = pg
@@ -3325,10 +3336,7 @@ async fn test_reorg_two_events_same_table_reversible() {
     // Reversal of Pong Subtract in reorg range: +(30 + 10) = +40
     // New balance: 310 - 250 + 40 = 100
     let balance: rust_decimal::Decimal = pg
-        .query_one(
-            "SELECT balance FROM test_schema.dual_balance WHERE network = $1",
-            &[&network],
-        )
+        .query_one("SELECT balance FROM test_schema.dual_balance WHERE network = $1", &[&network])
         .await
         .unwrap()
         .get(0);

@@ -340,10 +340,7 @@ impl ReorgTask {
                         .where_columns
                         .iter()
                         .map(|(dt_col, ev_col)| {
-                            format!(
-                                "{} IN (SELECT {} FROM {})",
-                                dt_col, ev_col, snap.temp_table
-                            )
+                            format!("{} IN (SELECT {} FROM {})", dt_col, ev_col, snap.temp_table)
                         })
                         .collect();
                     let ch_scope = if ch_exists_filter.is_empty() {
