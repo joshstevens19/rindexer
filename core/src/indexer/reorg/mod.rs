@@ -18,7 +18,10 @@ use crate::streams::StreamsClients;
 
 pub use coordinator::ReorgCoordinator;
 pub use persistence::ReorgBlockHashPersistence;
-pub use task::{DerivedTableInfo, EventTableInfo};
+pub use task::{
+    DerivedColumnJournal, DerivedColumnRollback, DerivedTableInfo, DerivedTableRollbackOp,
+    EventTableInfo,
+};
 pub use window::BlockChainWindow;
 
 /// Bundles the optional DB clients, callback registry, and streams clients

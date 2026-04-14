@@ -19,7 +19,8 @@ use crate::event::config::{ContractEventProcessingConfig, FactoryEventProcessing
 use crate::helpers::{camel_to_snake, format_duration};
 use crate::indexer::native_transfer::native_transfer_block_processor;
 use crate::indexer::reorg::{
-    reorg_safe_distance_for_chain, BlockChainWindow, EventTableInfo, ReorgBlockHashPersistence,
+    reorg_safe_distance_for_chain, BlockChainWindow, DerivedColumnJournal, DerivedColumnRollback,
+    DerivedTableInfo, DerivedTableRollbackOp, EventTableInfo, ReorgBlockHashPersistence,
     ReorgContext, ReorgCoordinator,
 };
 use crate::indexer::Indexer;
@@ -408,19 +409,120 @@ async fn start_indexing_contract_events(
         })
         .collect();
 
-    // Build per-network event tables for reorg rollback.
-    // Includes all contract events deployed on each network.
+    // Build per-network event tables and derived tables for reorg rollback.
     let mut network_event_tables: HashMap<String, Vec<EventTableInfo>> = HashMap::new();
+    let mut network_derived_tables: HashMap<String, Vec<DerivedTableInfo>> = HashMap::new();
     for event in registry.events.iter() {
         for network_contract in event.contract.details.iter() {
             let schema =
                 generate_indexer_contract_schema_name(&event.indexer_name, &event.contract.name);
             let table_name = camel_to_snake(&event.event_name);
+            let event_table_full = format!("{}.{}", schema, table_name);
             let checkpoint_table = generate_internal_event_table_name(&schema, &event.event_name);
             network_event_tables
                 .entry(network_contract.network.clone())
                 .or_default()
                 .push(EventTableInfo::new(schema, table_name, checkpoint_table));
+
+            for tr in event.tables.iter() {
+                let derived =
+                    network_derived_tables.entry(network_contract.network.clone()).or_default();
+
+                // Build rollback_ops from table event mappings that reference this event
+                let event_table_name = event_table_full.clone();
+                let mut rollback_ops: Vec<DerivedTableRollbackOp> = Vec::new();
+                let mut journal_columns: Vec<DerivedColumnJournal> = Vec::new();
+
+                for table_event in &tr.table.events {
+                    if table_event.event != event.event_name {
+                        continue;
+                    }
+                    for operation in &table_event.operations {
+                        use crate::manifest::contract::OperationType;
+                        if !matches!(
+                            operation.operation_type,
+                            OperationType::Upsert | OperationType::Update
+                        ) {
+                            continue;
+                        }
+
+                        let mut where_columns: Vec<(String, String)> = operation
+                            .where_clause
+                            .iter()
+                            .filter_map(|(col, val)| {
+                                val.strip_prefix('$')
+                                    .map(|field| (col.clone(), camel_to_snake(field)))
+                            })
+                            .collect();
+                        where_columns.sort_by(|a, b| a.0.cmp(&b.0));
+
+                        let where_col_names: Vec<String> =
+                            where_columns.iter().map(|(col, _)| col.clone()).collect();
+
+                        let columns: Vec<DerivedColumnRollback> = operation
+                            .set
+                            .iter()
+                            .filter_map(|set_col| {
+                                let action = set_col.action.clone();
+                                action.reverse()?;
+                                let event_field = set_col.event_field_name()?;
+                                Some(DerivedColumnRollback {
+                                    derived_column: set_col.column.clone(),
+                                    event_column: camel_to_snake(event_field),
+                                    action,
+                                })
+                            })
+                            .collect();
+
+                        // Collect non-reversible columns for journal-based recalculation
+                        for set_col in &operation.set {
+                            if set_col.action.reverse().is_some() {
+                                continue; // handled by rollback_ops
+                            }
+                            if !journal_columns.iter().any(|jc| jc.derived_column == set_col.column)
+                            {
+                                journal_columns.push(DerivedColumnJournal {
+                                    derived_column: set_col.column.clone(),
+                                    action: set_col.action.clone(),
+                                    where_columns: where_col_names.clone(),
+                                });
+                            }
+                        }
+
+                        if !columns.is_empty() {
+                            rollback_ops.push(DerivedTableRollbackOp {
+                                event_table: event_table_name.clone(),
+                                where_columns,
+                                columns,
+                                condition: operation.condition().map(String::from),
+                            });
+                        }
+                    }
+                }
+
+                // Merge into existing entry or create a new one
+                if let Some(existing) =
+                    derived.iter_mut().find(|d| d.full_table_name == tr.full_table_name)
+                {
+                    existing.rollback_ops.extend(rollback_ops);
+                    for jc in journal_columns {
+                        if !existing
+                            .journal_columns
+                            .iter()
+                            .any(|e| e.derived_column == jc.derived_column)
+                        {
+                            existing.journal_columns.push(jc);
+                        }
+                    }
+                } else {
+                    derived.push(DerivedTableInfo {
+                        full_table_name: tr.full_table_name.clone(),
+                        cross_chain: tr.table.cross_chain,
+                        rollback_ops,
+                        journal_columns,
+                    });
+                }
+            }
         }
     }
 
@@ -471,6 +573,9 @@ async fn start_indexing_contract_events(
                     Arc::clone(&reorg_persistence),
                     provider,
                     event_tables,
+                );
+                coordinator.set_derived_tables(
+                    network_derived_tables.get(network_name).cloned().unwrap_or_default(),
                 );
 
                 // Get streams_clients for this network (if any event has one)
@@ -760,6 +865,9 @@ async fn start_indexing_contract_events(
                         Arc::clone(&reorg_persistence),
                         provider,
                         event_tables,
+                    );
+                    coordinator.set_derived_tables(
+                        network_derived_tables.get(network_name).cloned().unwrap_or_default(),
                     );
 
                     // Get streams_clients for this network from dependency events

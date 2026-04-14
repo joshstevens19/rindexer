@@ -28,6 +28,21 @@ pub fn generate_reorg_block_hashes_table_clickhouse_sql() -> String {
         .to_string()
 }
 
+pub fn generate_derived_op_log_table_clickhouse_sql() -> String {
+    r#"CREATE TABLE IF NOT EXISTS rindexer_internal.derived_op_log (
+        derived_table String,
+        network String,
+        where_key String,
+        column_name String,
+        value Float64,
+        block_number UInt64,
+        tx_index UInt32,
+        log_index UInt32
+    ) ENGINE = MergeTree
+    ORDER BY (derived_table, column_name, where_key, block_number, tx_index, log_index);"#
+        .to_string()
+}
+
 pub fn generate_tables_for_indexer_clickhouse(
     project_path: &Path,
     indexer: &Indexer,
@@ -35,6 +50,7 @@ pub fn generate_tables_for_indexer_clickhouse(
 ) -> Result<Code, GenerateTablesForIndexerSqlError> {
     let mut sql = "CREATE DATABASE IF NOT EXISTS rindexer_internal;".to_string();
     sql.push_str(&generate_reorg_block_hashes_table_clickhouse_sql());
+    sql.push_str(&generate_derived_op_log_table_clickhouse_sql());
 
     for contract in &indexer.contracts {
         let contract_name = contract.before_modify_name_if_filter_readonly();

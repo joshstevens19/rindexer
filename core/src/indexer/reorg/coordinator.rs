@@ -463,6 +463,53 @@ mod tests {
     }
 
     #[test]
+    fn test_set_derived_tables_propagates_to_tasks() {
+        let window = make_window_with_blocks(&[(10, 10, 9), (11, 11, 10), (12, 12, 11)]);
+        let mut coordinator = make_coordinator(window);
+
+        let derived = vec![
+            DerivedTableInfo {
+                full_table_name: "schema.balances".to_string(),
+                cross_chain: false,
+                rollback_ops: vec![],
+                journal_columns: vec![],
+            },
+            DerivedTableInfo {
+                full_table_name: "schema.global_stats".to_string(),
+                cross_chain: true,
+                rollback_ops: vec![],
+                journal_columns: vec![],
+            },
+        ];
+        coordinator.set_derived_tables(derived.clone());
+
+        // on_exex_reorg creates a task — verify derived_tables are included
+        let task = coordinator.on_exex_reorg(12, 10);
+        assert_eq!(task.derived_tables.len(), 2);
+        assert_eq!(task.derived_tables[0].full_table_name, "schema.balances");
+        assert!(!task.derived_tables[0].cross_chain);
+        assert_eq!(task.derived_tables[1].full_table_name, "schema.global_stats");
+        assert!(task.derived_tables[1].cross_chain);
+    }
+
+    #[test]
+    fn test_set_derived_tables_propagates_to_removed_logs_task() {
+        let window = make_window_with_blocks(&[(10, 10, 9), (11, 11, 10)]);
+        let mut coordinator = make_coordinator(window);
+
+        coordinator.set_derived_tables(vec![DerivedTableInfo {
+            full_table_name: "schema.totals".to_string(),
+            cross_chain: false,
+            rollback_ops: vec![],
+            journal_columns: vec![],
+        }]);
+
+        let task = coordinator.create_reorg_task_for_block_range(10, 11);
+        assert_eq!(task.derived_tables.len(), 1);
+        assert_eq!(task.derived_tables[0].full_table_name, "schema.totals");
+    }
+
+    #[test]
     fn test_on_exex_reorg() {
         let window = BlockChainWindow::new(100);
         let persistence = Arc::new(ReorgBlockHashPersistence::new(None, None));

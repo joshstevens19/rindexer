@@ -1239,6 +1239,17 @@ impl SetAction {
     pub fn is_counter_action(&self) -> bool {
         matches!(self, SetAction::Increment | SetAction::Decrement)
     }
+
+    /// Returns the reverse action for reorg rollback, or None if not reversible.
+    pub fn reverse(&self) -> Option<SetAction> {
+        match self {
+            SetAction::Add => Some(SetAction::Subtract),
+            SetAction::Subtract => Some(SetAction::Add),
+            SetAction::Increment => Some(SetAction::Decrement),
+            SetAction::Decrement => Some(SetAction::Increment),
+            SetAction::Set | SetAction::Max | SetAction::Min => None,
+        }
+    }
 }
 
 // ============================================================================
@@ -2405,5 +2416,16 @@ mod tests {
         let mut table = make_table_with_event_ops(vec![make_operation(OperationType::Upsert, &[])]);
         table.global = true;
         assert!(table.validate_where_columns().is_ok());
+    }
+
+    #[test]
+    fn test_set_action_reverse() {
+        assert_eq!(SetAction::Add.reverse(), Some(SetAction::Subtract));
+        assert_eq!(SetAction::Subtract.reverse(), Some(SetAction::Add));
+        assert_eq!(SetAction::Increment.reverse(), Some(SetAction::Decrement));
+        assert_eq!(SetAction::Decrement.reverse(), Some(SetAction::Increment));
+        assert_eq!(SetAction::Set.reverse(), None);
+        assert_eq!(SetAction::Max.reverse(), None);
+        assert_eq!(SetAction::Min.reverse(), None);
     }
 }
