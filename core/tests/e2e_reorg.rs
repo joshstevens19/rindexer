@@ -17,10 +17,12 @@ use rindexer::indexer::reorg::{
     window::{BlockChainWindow, ParentValidation},
 };
 use rindexer::manifest::contract::SetAction;
+use rindexer::ClickhouseClient;
 use rindexer::PostgresClient;
 use serde_json::{json, Value};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{GenericImage, ImageExt};
+use testcontainers_modules::clickhouse::ClickHouse as ClickHouseImage;
 use testcontainers_modules::postgres::Postgres;
 
 // ---------------------------------------------------------------------------
@@ -165,11 +167,13 @@ async fn trigger_reorg(http: &HttpClient, rpc_url: &str, depth: u64) {
 
 struct TestEnv {
     pg_port: u16,
+    _ch_port: u16,
     rpc_url: String,
     http: HttpClient,
     deployer: Address,
     // Keep containers alive for the test duration.
     _pg_container: testcontainers::ContainerAsync<Postgres>,
+    _ch_container: testcontainers::ContainerAsync<ClickHouseImage>,
     _anvil_container: testcontainers::ContainerAsync<GenericImage>,
 }
 
@@ -182,6 +186,11 @@ impl TestEnv {
             Postgres::default().start().await.expect("failed to start postgres container");
         let pg_port =
             pg_container.get_host_port_ipv4(5432).await.expect("failed to get postgres port");
+
+        let ch_container =
+            ClickHouseImage::default().start().await.expect("failed to start clickhouse container");
+        let ch_port =
+            ch_container.get_host_port_ipv4(8123).await.expect("failed to get clickhouse port");
 
         // The foundry image entrypoint is `/bin/sh -c`, so the entire command
         // must be passed as a single string argument.
@@ -215,12 +224,20 @@ impl TestEnv {
             format!("postgres://postgres:postgres@127.0.0.1:{}/postgres", pg_port),
         );
 
+        // Set ClickHouse env vars for ClickhouseClient::new()
+        std::env::set_var("CLICKHOUSE_URL", format!("http://127.0.0.1:{}", ch_port));
+        std::env::set_var("CLICKHOUSE_USER", "default");
+        std::env::set_var("CLICKHOUSE_PASSWORD", "");
+        std::env::set_var("CLICKHOUSE_DB", "default");
+
         Self {
             pg_port,
+            _ch_port: ch_port,
             rpc_url,
             http,
             deployer,
             _pg_container: pg_container,
+            _ch_container: ch_container,
             _anvil_container: anvil_container,
         }
     }
@@ -246,6 +263,120 @@ impl TestEnv {
 
     async fn rindexer_pg(&self) -> PostgresClient {
         PostgresClient::new().await.expect("failed to create PostgresClient")
+    }
+
+    async fn rindexer_ch(&self) -> Arc<ClickhouseClient> {
+        Arc::new(ClickhouseClient::new().await.expect("failed to create ClickhouseClient"))
+    }
+
+    /// Creates the ClickHouse tables that mirror what the PG setup_base_tables creates.
+    async fn setup_ch_tables(&self, ch: &ClickhouseClient) {
+        ch.execute("CREATE DATABASE IF NOT EXISTS rindexer_internal")
+            .await
+            .expect("failed to create rindexer_internal database in CH");
+
+        ch.execute(
+            "CREATE TABLE IF NOT EXISTS rindexer_internal.reorg_block_hashes (
+                 network String,
+                 block_number UInt64,
+                 block_hash FixedString(66),
+                 parent_hash FixedString(66)
+             ) ENGINE = ReplacingMergeTree
+             ORDER BY (network, block_number)",
+        )
+        .await
+        .expect("failed to create reorg_block_hashes in CH");
+
+        ch.execute(
+            "CREATE TABLE IF NOT EXISTS rindexer_internal.derived_op_log (
+                 derived_table String,
+                 network String,
+                 where_key String,
+                 column_name String,
+                 value Float64,
+                 block_number UInt64,
+                 tx_index UInt32,
+                 log_index UInt32
+             ) ENGINE = MergeTree
+             ORDER BY (derived_table, column_name, where_key, block_number, tx_index, log_index)",
+        )
+        .await
+        .expect("failed to create derived_op_log in CH");
+
+        ch.execute(
+            "CREATE TABLE IF NOT EXISTS rindexer_internal.test_schema_ping (
+                 network String,
+                 last_synced_block UInt64
+             ) ENGINE = ReplacingMergeTree
+             ORDER BY (network)",
+        )
+        .await
+        .expect("failed to create test_schema_ping checkpoint table in CH");
+
+        ch.execute("CREATE DATABASE IF NOT EXISTS test_schema")
+            .await
+            .expect("failed to create test_schema database in CH");
+
+        ch.execute(
+            "CREATE TABLE IF NOT EXISTS test_schema.ping_pong_ping (
+                 contract_address FixedString(42),
+                 id UInt64,
+                 sender FixedString(42),
+                 tx_hash FixedString(66),
+                 block_number UInt64,
+                 block_timestamp Nullable(DateTime('UTC')),
+                 block_hash FixedString(66),
+                 network String,
+                 tx_index UInt64,
+                 log_index UInt64
+             ) ENGINE = ReplacingMergeTree
+             ORDER BY (network, block_number, tx_hash, log_index)",
+        )
+        .await
+        .expect("failed to create ping_pong_ping in CH");
+    }
+
+    /// Insert an event row into the ClickHouse event table.
+    async fn insert_ch_event(
+        &self,
+        ch: &ClickhouseClient,
+        network: &str,
+        ping_id: u64,
+        block_num: u64,
+        tx_hash: &str,
+    ) {
+        let (hash, _parent) = get_block_by_number(&self.http, &self.rpc_url, block_num).await;
+        let hash_str = format!("{:#x}", hash);
+        let sender = format!("{:#x}", self.deployer);
+        let contract = format!("{:#x}", Address::ZERO);
+        let sql = format!(
+            "INSERT INTO test_schema.ping_pong_ping \
+             (contract_address, id, sender, tx_hash, block_number, block_timestamp, block_hash, network, tx_index, log_index) \
+             VALUES ('{}', {}, '{}', '{}', {}, NULL, '{}', '{}', 0, 0)",
+            contract, ping_id, sender, tx_hash, block_num, hash_str, network,
+        );
+        ch.execute(&sql).await.expect("failed to insert CH event");
+    }
+
+    /// Insert block hashes into the ClickHouse reorg_block_hashes table.
+    async fn insert_ch_block_hashes(
+        &self,
+        ch: &ClickhouseClient,
+        network: &str,
+        from_block: u64,
+        to_block: u64,
+    ) {
+        for block_num in from_block..=to_block {
+            let (hash, parent_hash) =
+                get_block_by_number(&self.http, &self.rpc_url, block_num).await;
+            let sql = format!(
+                "INSERT INTO rindexer_internal.reorg_block_hashes \
+                 (network, block_number, block_hash, parent_hash) \
+                 VALUES ('{}', {}, '{}', '{}')",
+                network, block_num, format!("{:#x}", hash), format!("{:#x}", parent_hash),
+            );
+            ch.execute(&sql).await.expect("failed to insert CH reorg_block_hashes");
+        }
     }
 
     async fn setup_base_tables(&self, pg: &tokio_postgres::Client) {
@@ -2901,4 +3032,473 @@ async fn test_reorg_reversal_uninvolved_row_unchanged() {
         .unwrap()
         .get(0);
     assert_eq!(other_bal, rust_decimal::Decimal::from(999u64), "uninvolved user balance should be unchanged");
+}
+
+// ---------------------------------------------------------------------------
+// Test: ClickHouse + Postgres reorg reversal (Add action)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn test_reorg_clickhouse_add_reversal() {
+    let env = TestEnv::new().await;
+    let pg = env.pg_client().await;
+    env.setup_base_tables(&pg).await;
+
+    let ch = env.rindexer_ch().await;
+    env.setup_ch_tables(&ch).await;
+
+    // Derived table: user balances accumulated via Add
+    pg.batch_execute(
+        "CREATE TABLE IF NOT EXISTS test_schema.user_balances (
+             network VARCHAR(50) NOT NULL,
+             user_address CHAR(42) NOT NULL,
+             balance NUMERIC NOT NULL DEFAULT 0,
+             rindexer_block_number BIGINT NOT NULL,
+             PRIMARY KEY (network, user_address)
+         );",
+    )
+    .await
+    .unwrap();
+
+    let (contract, _) = deploy_ping_pong(&env.http, &env.rpc_url, env.deployer).await;
+    let block1 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 1).await;
+    let block2 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 2).await;
+    let block3 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 3).await;
+
+    let network = "dev";
+    let user = format!("{:#x}", env.deployer);
+
+    let zero_tx = "0x0000000000000000000000000000000000000000000000000000000000000000";
+
+    // Insert events into BOTH Postgres and ClickHouse
+    env.insert_event(&pg, network, 100, block1, zero_tx).await; // +100
+    env.insert_event(&pg, network, 50, block2, zero_tx).await; // +50
+    env.insert_event(&pg, network, 30, block3, zero_tx).await; // +30
+    env.insert_block_hashes(&pg, network, block1, block3).await;
+
+    env.insert_ch_event(&ch, network, 100, block1, zero_tx).await;
+    env.insert_ch_event(&ch, network, 50, block2, zero_tx).await;
+    env.insert_ch_event(&ch, network, 30, block3, zero_tx).await;
+    env.insert_ch_block_hashes(&ch, network, block1, block3).await;
+
+    // Derived table state in PG: balance = 100 + 50 + 30 = 180
+    pg.execute(
+        "INSERT INTO test_schema.user_balances (network, user_address, balance, rindexer_block_number) \
+         VALUES ($1, $2, $3, $4)",
+        &[&network, &user.as_str(), &rust_decimal::Decimal::from(180u64), &(block3 as i64)],
+    )
+    .await
+    .unwrap();
+
+    trigger_reorg(&env.http, &env.rpc_url, 2).await; // invalidates block2, block3
+
+    let task = ReorgTask {
+        network: network.to_string(),
+        fork_point: block2,
+        detection_point: block3,
+        event_tables: vec![EventTableInfo::new(
+            "test_schema".to_string(),
+            "ping_pong_ping".to_string(),
+            "test_schema_ping".to_string(),
+        )],
+        derived_tables: vec![DerivedTableInfo {
+            full_table_name: "test_schema.user_balances".to_string(),
+            cross_chain: false,
+            rollback_ops: vec![DerivedTableRollbackOp {
+                event_table: "test_schema.ping_pong_ping".to_string(),
+                where_columns: vec![("user_address".to_string(), "sender".to_string())],
+                columns: vec![DerivedColumnRollback {
+                    derived_column: "balance".to_string(),
+                    event_column: "id".to_string(),
+                    action: SetAction::Add,
+                }],
+                condition: None,
+            }],
+            journal_columns: vec![],
+        }],
+        canonical_blocks: vec![],
+    };
+
+    let rindexer_pg = env.rindexer_pg().await;
+    let mut task_window = BlockChainWindow::new(256);
+    let persistence = ReorgBlockHashPersistence::new(None, None);
+
+    task.execute(
+        &mut task_window,
+        &persistence,
+        Some(&rindexer_pg),
+        Some(&ch),
+        None,
+    )
+    .await
+    .expect("clickhouse add reversal reorg task failed");
+
+    // PG: balance was 180, events at block2 (id=50) + block3 (id=30) = 80 subtracted -> 100
+    let balance: rust_decimal::Decimal = pg
+        .query_one(
+            "SELECT balance FROM test_schema.user_balances WHERE network = $1 AND user_address = $2",
+            &[&network, &user.as_str()],
+        )
+        .await
+        .expect("PG balance row should still exist after reversal")
+        .get(0);
+    assert_eq!(balance, rust_decimal::Decimal::from(100u64), "PG balance should be 180 - 80 = 100");
+
+    // PG: only the block1 event should remain
+    assert_eq!(env.event_count(&pg).await, 1, "PG: only Ping(100) at block1 should remain");
+}
+
+// ---------------------------------------------------------------------------
+// Test: Two events write to the same aggregate table with reversible actions
+// (Ping adds to balance, Pong subtracts from balance — both reversed on reorg)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn test_reorg_two_events_same_table_reversible() {
+    let env = TestEnv::new().await;
+    let pg = env.pg_client().await;
+    env.setup_base_tables(&pg).await;
+
+    // Create a second event table (simulating a "Pong" event)
+    pg.batch_execute(
+        "CREATE TABLE IF NOT EXISTS test_schema.ping_pong_pong (
+             rindexer_id SERIAL PRIMARY KEY,
+             id NUMERIC NOT NULL,
+             sender CHAR(42),
+             tx_hash CHAR(66) NOT NULL,
+             block_number NUMERIC NOT NULL,
+             block_hash CHAR(66) NOT NULL,
+             network VARCHAR(50) NOT NULL,
+             tx_index NUMERIC NOT NULL,
+             log_index VARCHAR(78) NOT NULL
+         );",
+    )
+    .await
+    .unwrap();
+
+    // Derived table: balance accumulated from both Ping (Add) and Pong (Subtract)
+    pg.batch_execute(
+        "CREATE TABLE IF NOT EXISTS test_schema.dual_balance (
+             network VARCHAR(50) NOT NULL,
+             user_addr CHAR(42) NOT NULL,
+             balance NUMERIC NOT NULL DEFAULT 0,
+             rindexer_block_number BIGINT NOT NULL,
+             PRIMARY KEY (network, user_addr)
+         );",
+    )
+    .await
+    .unwrap();
+
+    let (contract, _) = deploy_ping_pong(&env.http, &env.rpc_url, env.deployer).await;
+    let block1 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 1).await;
+    let block2 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 2).await;
+    let block3 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 3).await;
+
+    let network = "dev";
+    let user = format!("{:#x}", env.deployer);
+    let zero_tx = "0x0000000000000000000000000000000000000000000000000000000000000000";
+
+    // Ping events: +100 (block1), +200 (block2), +50 (block3)
+    env.insert_event(&pg, network, 100, block1, zero_tx).await;
+    env.insert_event(&pg, network, 200, block2, zero_tx).await;
+    env.insert_event(&pg, network, 50, block3, zero_tx).await;
+
+    // Pong events (second event table): -30 (block2), -10 (block3)
+    let (hash2, _) = get_block_by_number(&env.http, &env.rpc_url, block2).await;
+    let (hash3, _) = get_block_by_number(&env.http, &env.rpc_url, block3).await;
+    pg.execute(
+        "INSERT INTO test_schema.ping_pong_pong \
+         (id, sender, tx_hash, block_number, block_hash, network, tx_index, log_index) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        &[
+            &rust_decimal::Decimal::from(30u64),
+            &user.as_str(),
+            &zero_tx,
+            &rust_decimal::Decimal::from(block2),
+            &format!("{:#x}", hash2).as_str(),
+            &network,
+            &rust_decimal::Decimal::from(0u64),
+            &"0",
+        ],
+    )
+    .await
+    .unwrap();
+    pg.execute(
+        "INSERT INTO test_schema.ping_pong_pong \
+         (id, sender, tx_hash, block_number, block_hash, network, tx_index, log_index) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        &[
+            &rust_decimal::Decimal::from(10u64),
+            &user.as_str(),
+            &zero_tx,
+            &rust_decimal::Decimal::from(block3),
+            &format!("{:#x}", hash3).as_str(),
+            &network,
+            &rust_decimal::Decimal::from(0u64),
+            &"0",
+        ],
+    )
+    .await
+    .unwrap();
+
+    env.insert_block_hashes(&pg, network, block1, block3).await;
+
+    // Derived state: balance = 100 + 200 + 50 - 30 - 10 = 310
+    pg.execute(
+        "INSERT INTO test_schema.dual_balance (network, user_addr, balance, rindexer_block_number) \
+         VALUES ($1, $2, $3, $4)",
+        &[&network, &user.as_str(), &rust_decimal::Decimal::from(310u64), &(block3 as i64)],
+    )
+    .await
+    .unwrap();
+
+    trigger_reorg(&env.http, &env.rpc_url, 2).await;
+
+    // Two rollback_ops: one from Ping (reverse Add), one from Pong (reverse Subtract)
+    let task = ReorgTask {
+        network: network.to_string(),
+        fork_point: block2,
+        detection_point: block3,
+        event_tables: vec![
+            EventTableInfo::new(
+                "test_schema".to_string(),
+                "ping_pong_ping".to_string(),
+                "test_schema_ping".to_string(),
+            ),
+            EventTableInfo::new(
+                "test_schema".to_string(),
+                "ping_pong_pong".to_string(),
+                "test_schema_pong".to_string(),
+            ),
+        ],
+        derived_tables: vec![DerivedTableInfo {
+            full_table_name: "test_schema.dual_balance".to_string(),
+            cross_chain: false,
+            rollback_ops: vec![
+                DerivedTableRollbackOp {
+                    event_table: "test_schema.ping_pong_ping".to_string(),
+                    where_columns: vec![("user_addr".to_string(), "sender".to_string())],
+                    columns: vec![DerivedColumnRollback {
+                        derived_column: "balance".to_string(),
+                        event_column: "id".to_string(),
+                        action: SetAction::Add,
+                    }],
+                    condition: None,
+                },
+                DerivedTableRollbackOp {
+                    event_table: "test_schema.ping_pong_pong".to_string(),
+                    where_columns: vec![("user_addr".to_string(), "sender".to_string())],
+                    columns: vec![DerivedColumnRollback {
+                        derived_column: "balance".to_string(),
+                        event_column: "id".to_string(),
+                        action: SetAction::Subtract,
+                    }],
+                    condition: None,
+                },
+            ],
+            journal_columns: vec![],
+        }],
+        canonical_blocks: vec![],
+    };
+
+    // Need checkpoint table for pong too
+    pg.batch_execute(
+        "CREATE TABLE IF NOT EXISTS rindexer_internal.test_schema_pong (
+             network VARCHAR(50) NOT NULL PRIMARY KEY,
+             last_synced_block BIGINT NOT NULL
+         );",
+    )
+    .await
+    .unwrap();
+
+    let rindexer_pg = env.rindexer_pg().await;
+    let mut task_window = BlockChainWindow::new(256);
+    let persistence = ReorgBlockHashPersistence::new(None, None);
+
+    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+        .await
+        .expect("dual-event reversible reorg task failed");
+
+    // Reversal of Ping Add in reorg range: -(200 + 50) = -250
+    // Reversal of Pong Subtract in reorg range: +(30 + 10) = +40
+    // New balance: 310 - 250 + 40 = 100
+    let balance: rust_decimal::Decimal = pg
+        .query_one(
+            "SELECT balance FROM test_schema.dual_balance WHERE network = $1",
+            &[&network],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(
+        balance,
+        rust_decimal::Decimal::from(100u64),
+        "balance should be 310 - 250 + 40 = 100 (both events reversed)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test: Two events write to the same aggregate table with non-reversible actions
+// (Ping sets max_trade via Max, Pong sets min_trade via Min — both from journal)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn test_reorg_two_events_same_table_journal() {
+    let env = TestEnv::new().await;
+    let pg = env.pg_client().await;
+    env.setup_base_tables(&pg).await;
+
+    // Second event table
+    pg.batch_execute(
+        "CREATE TABLE IF NOT EXISTS test_schema.ping_pong_pong (
+             rindexer_id SERIAL PRIMARY KEY,
+             id NUMERIC NOT NULL,
+             sender CHAR(42),
+             tx_hash CHAR(66) NOT NULL,
+             block_number NUMERIC NOT NULL,
+             block_hash CHAR(66) NOT NULL,
+             network VARCHAR(50) NOT NULL,
+             tx_index NUMERIC NOT NULL,
+             log_index VARCHAR(78) NOT NULL
+         );",
+    )
+    .await
+    .unwrap();
+
+    pg.batch_execute(
+        "CREATE TABLE IF NOT EXISTS test_schema.trade_extremes (
+             network VARCHAR(50) NOT NULL,
+             trader CHAR(42) NOT NULL,
+             max_trade NUMERIC NOT NULL DEFAULT 0,
+             min_trade NUMERIC NOT NULL DEFAULT 999999,
+             rindexer_block_number BIGINT NOT NULL,
+             PRIMARY KEY (network, trader)
+         );",
+    )
+    .await
+    .unwrap();
+
+    let (contract, _) = deploy_ping_pong(&env.http, &env.rpc_url, env.deployer).await;
+    let block1 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 1).await;
+    let block2 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 2).await;
+    let block3 = send_ping(&env.http, &env.rpc_url, env.deployer, contract, 3).await;
+
+    let network = "dev";
+    let trader = format!("{:#x}", env.deployer);
+    let zero_tx = "0x0000000000000000000000000000000000000000000000000000000000000000";
+
+    // Ping events feed max_trade: block1=100, block2=800, block3=50
+    env.insert_event(&pg, network, 100, block1, zero_tx).await;
+    env.insert_event(&pg, network, 800, block2, zero_tx).await;
+    env.insert_event(&pg, network, 50, block3, zero_tx).await;
+    env.insert_block_hashes(&pg, network, block1, block3).await;
+
+    // Derived state: max_trade=800 (from block2 Ping), min_trade=5 (from block3 Pong)
+    pg.execute(
+        "INSERT INTO test_schema.trade_extremes (network, trader, max_trade, min_trade, rindexer_block_number) \
+         VALUES ($1, $2, $3, $4, $5)",
+        &[
+            &network, &trader.as_str(),
+            &rust_decimal::Decimal::from(800u64),
+            &rust_decimal::Decimal::from(5u64),
+            &(block3 as i64),
+        ],
+    )
+    .await
+    .unwrap();
+
+    // Journal for max_trade (from Ping events): all 3 blocks
+    let where_key = format!("trader={}", trader);
+    for (block, value) in [(block1, 100i64), (block2, 800), (block3, 50)] {
+        pg.execute(
+            "INSERT INTO rindexer_internal.derived_op_log \
+             (derived_table, network, where_key, column_name, value, block_number, tx_index, log_index) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            &[
+                &"test_schema.trade_extremes", &network, &where_key.as_str(), &"max_trade",
+                &rust_decimal::Decimal::from(value), &(block as i64), &0i32, &0i32,
+            ],
+        )
+        .await
+        .unwrap();
+    }
+
+    // Journal for min_trade (from Pong events): block1=500, block2=20, block3=5
+    for (block, value) in [(block1, 500i64), (block2, 20), (block3, 5)] {
+        pg.execute(
+            "INSERT INTO rindexer_internal.derived_op_log \
+             (derived_table, network, where_key, column_name, value, block_number, tx_index, log_index) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            &[
+                &"test_schema.trade_extremes", &network, &where_key.as_str(), &"min_trade",
+                &rust_decimal::Decimal::from(value), &(block as i64), &0i32, &0i32,
+            ],
+        )
+        .await
+        .unwrap();
+    }
+
+    trigger_reorg(&env.http, &env.rpc_url, 2).await;
+
+    let task = ReorgTask {
+        network: network.to_string(),
+        fork_point: block2,
+        detection_point: block3,
+        event_tables: vec![EventTableInfo::new(
+            "test_schema".to_string(),
+            "ping_pong_ping".to_string(),
+            "test_schema_ping".to_string(),
+        )],
+        derived_tables: vec![DerivedTableInfo {
+            full_table_name: "test_schema.trade_extremes".to_string(),
+            cross_chain: false,
+            rollback_ops: vec![],
+            journal_columns: vec![
+                DerivedColumnJournal {
+                    derived_column: "max_trade".to_string(),
+                    action: SetAction::Max,
+                    where_columns: vec!["trader".to_string()],
+                },
+                DerivedColumnJournal {
+                    derived_column: "min_trade".to_string(),
+                    action: SetAction::Min,
+                    where_columns: vec!["trader".to_string()],
+                },
+            ],
+        }],
+        canonical_blocks: vec![],
+    };
+
+    let rindexer_pg = env.rindexer_pg().await;
+    let mut task_window = BlockChainWindow::new(256);
+    let persistence = ReorgBlockHashPersistence::new(None, None);
+
+    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+        .await
+        .expect("dual-event journal reorg task failed");
+
+    // max_trade: journal block2(800) + block3(50) deleted → remaining block1(100) → MAX=100
+    // min_trade: journal block2(20) + block3(5) deleted → remaining block1(500) → MIN=500
+    let row = pg
+        .query_one(
+            "SELECT max_trade, min_trade FROM test_schema.trade_extremes WHERE network = $1",
+            &[&network],
+        )
+        .await
+        .unwrap();
+    let max_trade: rust_decimal::Decimal = row.get(0);
+    let min_trade: rust_decimal::Decimal = row.get(1);
+    assert_eq!(
+        max_trade,
+        rust_decimal::Decimal::from(100u64),
+        "max_trade should be recalculated to 100 (only block1 remains)"
+    );
+    assert_eq!(
+        min_trade,
+        rust_decimal::Decimal::from(500u64),
+        "min_trade should be recalculated to 500 (only block1 remains)"
+    );
 }
