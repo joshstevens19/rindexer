@@ -141,6 +141,7 @@ jobs:
 
       - name: Skip if not a release
         if: steps.check_release.outputs.is_release != 'true'
+        shell: bash
         run: echo "Not a release commit — skipping" && exit 0
 
       - name: Checkout release branch
