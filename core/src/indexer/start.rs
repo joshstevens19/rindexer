@@ -530,6 +530,26 @@ async fn start_indexing_contract_events(
         }
     }
 
+    // Register native transfer tables for reorg rollback (if native transfers are enabled).
+    // Native transfers use the virtual contract name "EvmTraces" with event "NativeTransfer".
+    if manifest.native_transfers.enabled {
+        if let Some(networks) = &manifest.native_transfers.networks {
+            for nt_detail in networks {
+                let schema = generate_indexer_contract_schema_name(
+                    &manifest.name,
+                    NATIVE_TRANSFER_CONTRACT_NAME,
+                );
+                let table_name = camel_to_snake("NativeTransfer");
+                let checkpoint_table =
+                    generate_internal_event_table_name(&schema, "NativeTransfer");
+                network_event_tables
+                    .entry(nt_detail.network.clone())
+                    .or_default()
+                    .push(EventTableInfo::try_new(schema, table_name, checkpoint_table)?);
+            }
+        }
+    }
+
     // Shared persistence per invocation (shared across all coordinators)
     let reorg_persistence =
         Arc::new(ReorgBlockHashPersistence::new(postgres.clone(), clickhouse.clone()));
@@ -786,9 +806,12 @@ async fn start_indexing_contract_events(
                 &dependencies,
             );
         } else {
-            // Take ownership of the per-network coordinator for the FIRST event on each
-            // network. Subsequent events on the same network get None — only one event
-            // per network drives reorg detection.
+            // DESIGN: One ReorgCoordinator per network, owned by the first non-blocking event
+            // spawned on that network. The coordinator holds ALL event tables for the network,
+            // so reorg rollbacks cover every table regardless of which event task drives
+            // detection. Subsequent events on the same network receive None. This means if
+            // the owning task exits or errors, reorg detection stops for the network. A
+            // future improvement could wrap the coordinator in Arc<Mutex<>> for redundancy.
             let reorg_coordinator =
                 if event_processing_config.live_indexing() && !no_live_indexing_forced {
                     let network_name = event_processing_config.network_contract().network.clone();

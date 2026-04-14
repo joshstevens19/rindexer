@@ -120,7 +120,10 @@ pub async fn native_transfer_block_fetch(
 ) -> Result<(), ProcessEventError> {
     let mut last_seen_block = start_block;
 
-    // TODO: Add ReorgCoordinator support for native transfer reorg detection
+    // TODO: Native transfer tables are registered in the network's ReorgCoordinator (start.rs)
+    // for rollback during reorg recovery. Detection is driven by the contract event
+    // coordinator on the same network. Standalone native-transfer reorg detection is
+    // not yet implemented.
 
     loop {
         if !is_running() || cancel_token.is_cancelled() {
