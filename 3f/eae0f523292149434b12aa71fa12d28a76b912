@@ -1,0 +1,40 @@
+core/src/indexer/reorg/persistence.rs
+  79a5c3390d4472c3 34,129-142,178
+core/src/indexer/reorg/coordinator.rs
+  79a5c3390d4472c3 124-125
+core/src/indexer/reorg/task.rs
+  79a5c3390d4472c3 237-241
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "3feae0f523292149434b12aa71fa12d28a76b912",
+  "prompts": {
+    "79a5c3390d4472c3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1b4cd319-9c24-4c07-b169-4ad6c5ccbbc1",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 531,
+      "total_deletions": 1337,
+      "accepted_lines": 531,
+      "overriden_lines": 0
+    },
+    "b416449b704d5937": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9ec8295a-efa7-4aa2-89d5-707dbef01acf",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 596,
+      "total_deletions": 140,
+      "accepted_lines": 458,
+      "overriden_lines": 0
+    }
+  }
+}
