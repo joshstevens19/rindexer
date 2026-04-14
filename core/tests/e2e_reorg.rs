@@ -218,17 +218,21 @@ impl TestEnv {
         let accounts = get_accounts(&http, &rpc_url).await;
         let deployer = accounts[0];
 
-        // Set DATABASE_URL for PostgresClient::new()
-        std::env::set_var(
-            "DATABASE_URL",
-            format!("postgres://postgres:postgres@127.0.0.1:{}/postgres", pg_port),
-        );
+        // SAFETY: These tests are run with --test-threads=1 (enforced by #[ignore]).
+        // No other threads are reading these env vars concurrently at this point.
+        unsafe {
+            // Set DATABASE_URL for PostgresClient::new()
+            std::env::set_var(
+                "DATABASE_URL",
+                format!("postgres://postgres:postgres@127.0.0.1:{}/postgres", pg_port),
+            );
 
-        // Set ClickHouse env vars for ClickhouseClient::new()
-        std::env::set_var("CLICKHOUSE_URL", format!("http://127.0.0.1:{}", ch_port));
-        std::env::set_var("CLICKHOUSE_USER", "default");
-        std::env::set_var("CLICKHOUSE_PASSWORD", "");
-        std::env::set_var("CLICKHOUSE_DB", "default");
+            // Set ClickHouse env vars for ClickhouseClient::new()
+            std::env::set_var("CLICKHOUSE_URL", format!("http://127.0.0.1:{}", ch_port));
+            std::env::set_var("CLICKHOUSE_USER", "default");
+            std::env::set_var("CLICKHOUSE_PASSWORD", "");
+            std::env::set_var("CLICKHOUSE_DB", "default");
+        }
 
         Self {
             pg_port,
