@@ -2,9 +2,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use alloy::primitives::B256;
+use anyhow::Context;
 use clickhouse::Row;
 use serde::Deserialize;
-use tracing::error;
 
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::postgres::client::PostgresClient;
@@ -30,7 +30,7 @@ impl ReorgBlockHashPersistence {
         &self,
         network: &str,
         max_window_size: usize,
-    ) -> Result<BlockChainWindow, String> {
+    ) -> anyhow::Result<BlockChainWindow> {
         let mut window = BlockChainWindow::new(max_window_size);
 
         if let Some(postgres) = &self.postgres {
@@ -40,27 +40,26 @@ impl ReorgBlockHashPersistence {
                 WHERE network = $1
                 ORDER BY block_number ASC"#;
 
-            let rows = postgres.query(query, &[&network]).await.map_err(|e| {
-                let msg = format!("Failed to load reorg_block_hashes from postgres: {}", e);
-                error!("{}", msg);
-                msg
-            })?;
+            let rows = postgres
+                .query(query, &[&network])
+                .await
+                .context("Failed to load reorg_block_hashes from postgres")?;
 
             for row in rows {
                 let block_number: i64 = row.get("block_number");
                 let block_hash_str: String = row.get("block_hash");
                 let parent_hash_str: String = row.get("parent_hash");
 
-                let block_hash = B256::from_str(&block_hash_str).map_err(|e| {
+                let block_hash = B256::from_str(&block_hash_str).with_context(|| {
                     format!(
-                        "Failed to parse block_hash '{}' at block {}: {}",
-                        block_hash_str, block_number, e
+                        "Failed to parse block_hash '{}' at block {}",
+                        block_hash_str, block_number
                     )
                 })?;
-                let parent_hash = B256::from_str(&parent_hash_str).map_err(|e| {
+                let parent_hash = B256::from_str(&parent_hash_str).with_context(|| {
                     format!(
-                        "Failed to parse parent_hash '{}' at block {}: {}",
-                        parent_hash_str, block_number, e
+                        "Failed to parse parent_hash '{}' at block {}",
+                        parent_hash_str, block_number
                     )
                 })?;
 
@@ -86,23 +85,22 @@ impl ReorgBlockHashPersistence {
                 network
             );
 
-            let rows = clickhouse.query_all::<ReorgBlockHashRow>(&query).await.map_err(|e| {
-                let msg = format!("Failed to load reorg_block_hashes from clickhouse: {}", e);
-                error!("{}", msg);
-                msg
-            })?;
+            let rows = clickhouse
+                .query_all::<ReorgBlockHashRow>(&query)
+                .await
+                .context("Failed to load reorg_block_hashes from clickhouse")?;
 
             for row in rows {
-                let block_hash = B256::from_str(&row.block_hash).map_err(|e| {
+                let block_hash = B256::from_str(&row.block_hash).with_context(|| {
                     format!(
-                        "Failed to parse block_hash '{}' at block {}: {}",
-                        row.block_hash, row.block_number, e
+                        "Failed to parse block_hash '{}' at block {}",
+                        row.block_hash, row.block_number
                     )
                 })?;
-                let parent_hash = B256::from_str(&row.parent_hash).map_err(|e| {
+                let parent_hash = B256::from_str(&row.parent_hash).with_context(|| {
                     format!(
-                        "Failed to parse parent_hash '{}' at block {}: {}",
-                        row.parent_hash, row.block_number, e
+                        "Failed to parse parent_hash '{}' at block {}",
+                        row.parent_hash, row.block_number
                     )
                 })?;
 
@@ -123,7 +121,7 @@ impl ReorgBlockHashPersistence {
         block_number: u64,
         block_hash: &str,
         parent_hash: &str,
-    ) -> Result<(), String> {
+    ) -> anyhow::Result<()> {
         if let Some(postgres) = &self.postgres {
             let query = r#"INSERT INTO rindexer_internal.reorg_block_hashes
                          (network, block_number, block_hash, parent_hash)
@@ -136,11 +134,8 @@ impl ReorgBlockHashPersistence {
             postgres
                 .execute(query, &[&network, &block_number_i64, &block_hash, &parent_hash])
                 .await
-                .map_err(|e| {
-                    let msg =
-                        format!("Failed to insert block {} into postgres: {}", block_number, e);
-                    error!("{}", msg);
-                    msg
+                .with_context(|| {
+                    format!("Failed to insert block {} into postgres", block_number)
                 })?;
         }
 
@@ -152,10 +147,8 @@ impl ReorgBlockHashPersistence {
                 network, block_number, block_hash, parent_hash
             );
 
-            clickhouse.execute(&query).await.map_err(|e| {
-                let msg = format!("Failed to insert block {} into clickhouse: {}", block_number, e);
-                error!("{}", msg);
-                msg
+            clickhouse.execute(&query).await.with_context(|| {
+                format!("Failed to insert block {} into clickhouse", block_number)
             })?;
         }
 
@@ -163,17 +156,16 @@ impl ReorgBlockHashPersistence {
     }
 
     /// Delete entries older than the given block number.
-    pub async fn prune(&self, network: &str, older_than: u64) -> Result<(), String> {
+    pub async fn prune(&self, network: &str, older_than: u64) -> anyhow::Result<()> {
         if let Some(postgres) = &self.postgres {
             let query = r#"DELETE FROM rindexer_internal.reorg_block_hashes
                          WHERE network = $1 AND block_number < $2"#;
 
             let older_than_i64 = older_than as i64;
-            postgres.execute(query, &[&network, &older_than_i64]).await.map_err(|e| {
-                let msg = format!("Failed to prune reorg_block_hashes in postgres: {}", e);
-                error!("{}", msg);
-                msg
-            })?;
+            postgres
+                .execute(query, &[&network, &older_than_i64])
+                .await
+                .context("Failed to prune reorg_block_hashes in postgres")?;
         }
 
         if let Some(clickhouse) = &self.clickhouse {
@@ -183,11 +175,10 @@ impl ReorgBlockHashPersistence {
                 network, older_than
             );
 
-            clickhouse.execute(&query).await.map_err(|e| {
-                let msg = format!("Failed to prune reorg_block_hashes in clickhouse: {}", e);
-                error!("{}", msg);
-                msg
-            })?;
+            clickhouse
+                .execute(&query)
+                .await
+                .context("Failed to prune reorg_block_hashes in clickhouse")?;
         }
 
         Ok(())

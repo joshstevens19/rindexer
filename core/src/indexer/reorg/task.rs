@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use alloy::primitives::{B256, U64};
+use anyhow::Context;
 
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::postgres::client::PostgresClient;
@@ -8,7 +9,6 @@ use crate::manifest::contract::SetAction;
 use crate::metrics::indexing as metrics;
 use crate::provider::JsonRpcCachedProvider;
 
-use super::persistence::ReorgBlockHashPersistence;
 use super::window::BlockChainWindow;
 
 #[derive(Clone)]
@@ -592,19 +592,17 @@ impl ReorgTask {
     pub async fn execute(
         &self,
         window: &mut BlockChainWindow,
-        persistence: &ReorgBlockHashPersistence,
         postgres: Option<&PostgresClient>,
         clickhouse: Option<&Arc<ClickhouseClient>>,
         provider: Option<&Arc<JsonRpcCachedProvider>>,
-    ) -> Result<ReorgTaskResult, String> {
-        let _ = persistence;
+    ) -> anyhow::Result<ReorgTaskResult> {
         let start = std::time::Instant::now();
 
         tracing::info!(
             network = %self.network,
             fork_point = self.fork_point,
             detection_point = self.detection_point,
-            depth = self.detection_point - self.fork_point + 1,
+            depth = self.detection_point.saturating_sub(self.fork_point) + 1,
             "Starting reorg task"
         );
 
@@ -662,15 +660,7 @@ impl ReorgTask {
                     &checkpoint_tables,
                 )
                 .await
-                .map_err(|e| {
-                    let mut msg = e.to_string();
-                    let mut source: Option<&dyn std::error::Error> = std::error::Error::source(&e);
-                    while let Some(s) = source {
-                        msg.push_str(&format!(": {}", s));
-                        source = s.source();
-                    }
-                    msg
-                })?;
+                .context("PostgreSQL reorg rollback transaction failed")?;
             total_deleted = deleted;
             affected_tx_hashes = tx_hashes;
         }
@@ -694,7 +684,7 @@ impl ReorgTask {
                     &corrected_blocks,
                 )
                 .await
-                .map_err(|e| e.to_string())?;
+                .context("ClickHouse reorg rollback failed")?;
 
             if postgres.is_none() {
                 total_deleted = ch_deleted;

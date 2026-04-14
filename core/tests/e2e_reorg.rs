@@ -370,13 +370,10 @@ impl TestEnv {
             let (hash, parent_hash) =
                 get_block_by_number(&self.http, &self.rpc_url, block_num).await;
             let sql = format!(
-                "INSERT INTO rindexer_internal.reorg_block_hashes \
-                 (network, block_number, block_hash, parent_hash) \
-                 VALUES ('{}', {}, '{}', '{}')",
-                network,
-                block_num,
-                format!("{:#x}", hash),
-                format!("{:#x}", parent_hash),
+                r#"INSERT INTO rindexer_internal.reorg_block_hashes
+                 (network, block_number, block_hash, parent_hash)
+                 VALUES ('{}', {}, '{:#x}', '{:#x}')"#,
+                network, block_num, hash, parent_hash,
             );
             ch.execute(&sql).await.expect("failed to insert CH reorg_block_hashes");
         }
@@ -546,7 +543,7 @@ async fn test_reorg_detection_and_rollback() {
     assert_eq!(env.event_count(&pg).await, 3, "should have 3 events before reorg");
 
     // Trigger reorg — blocks at block2 and block3 get new hashes
-    let reorg_depth = (block3 - block1) as u64; // invalidates block2..=block3
+    let reorg_depth = block3 - block1; // invalidates block2..=block3
     trigger_reorg(&env.http, &env.rpc_url, reorg_depth).await;
 
     // Verify block hashes changed after reorg
@@ -588,12 +585,10 @@ async fn test_reorg_detection_and_rollback() {
     };
 
     let rindexer_pg = env.rindexer_pg().await;
-    let rindexer_pg2 = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(Some(Arc::new(rindexer_pg)), None);
 
     let result = task
-        .execute(&mut task_window, &persistence, Some(&rindexer_pg2), None, None)
+        .execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("reorg task execution failed");
 
@@ -700,10 +695,9 @@ async fn test_reorg_single_block() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
     let result = task
-        .execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+        .execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("single-block reorg task failed");
 
@@ -763,10 +757,9 @@ async fn test_reorg_deep() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
     let result = task
-        .execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+        .execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("deep reorg task failed");
 
@@ -802,7 +795,7 @@ async fn test_reorg_no_events_in_range() {
 
     // Reorg blocks after block1 — no events should be deleted
     let fork_point = block1 + 1;
-    trigger_reorg(&env.http, &env.rpc_url, (tip - block1) as u64).await;
+    trigger_reorg(&env.http, &env.rpc_url, tip - block1).await;
 
     let task = ReorgTask {
         network: network.to_string(),
@@ -819,10 +812,9 @@ async fn test_reorg_no_events_in_range() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
     let result = task
-        .execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+        .execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("no-events reorg task failed");
 
@@ -924,10 +916,9 @@ async fn test_reorg_multiple_event_tables() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
     let result = task
-        .execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+        .execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("multi-table reorg task failed");
 
@@ -998,9 +989,8 @@ async fn test_reorg_checkpoint_rewind() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
-    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+    task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("checkpoint reorg task failed");
 
@@ -1095,9 +1085,8 @@ async fn test_reorg_derived_table_cleanup() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
-    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+    task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("derived table reorg task failed");
 
@@ -1191,9 +1180,8 @@ async fn test_reorg_derived_table_cross_chain() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
-    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+    task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("cross-chain derived table reorg failed");
 
@@ -1257,10 +1245,9 @@ async fn test_reorg_consecutive() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
     let result1 = task1
-        .execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+        .execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("first consecutive reorg failed");
 
@@ -1287,7 +1274,7 @@ async fn test_reorg_consecutive() {
     let mut task_window2 = BlockChainWindow::new(256);
 
     let result2 = task2
-        .execute(&mut task_window2, &persistence, Some(&rindexer_pg2), None, None)
+        .execute(&mut task_window2, Some(&rindexer_pg2), None, None)
         .await
         .expect("second consecutive reorg failed");
 
@@ -1443,10 +1430,9 @@ async fn test_reorg_multicall_tx_deduplication() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
     let result = task
-        .execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+        .execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("multicall dedup reorg task failed");
 
@@ -1528,10 +1514,9 @@ async fn test_reorg_reindex_continuation() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
     let result = task
-        .execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+        .execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("reorg rollback failed");
 
@@ -1701,10 +1686,9 @@ async fn test_reorg_on_reorg_callback_fired() {
     };
 
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
     let result = task
-        .execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+        .execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("reorg task failed");
 
@@ -1794,9 +1778,8 @@ async fn test_reorg_unregistered_derived_table_survives() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
-    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+    task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("reorg task failed");
 
@@ -1909,9 +1892,8 @@ async fn test_reorg_multiple_derived_tables() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
-    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+    task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("multi derived table reorg failed");
 
@@ -1994,9 +1976,8 @@ async fn test_reorg_derived_table_deep_range() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
-    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+    task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("deep derived table reorg failed");
 
@@ -2088,9 +2069,8 @@ async fn test_reorg_reversal_add() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
-    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+    task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("add reversal reorg task failed");
 
@@ -2180,9 +2160,8 @@ async fn test_reorg_reversal_subtract() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
-    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+    task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("subtract reversal reorg task failed");
 
@@ -2273,9 +2252,8 @@ async fn test_reorg_reversal_increment() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
-    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+    task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("increment reversal reorg task failed");
 
@@ -2365,9 +2343,8 @@ async fn test_reorg_reversal_with_condition() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
-    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+    task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("conditional reversal reorg task failed");
 
@@ -2476,9 +2453,8 @@ async fn test_reorg_journal_max_recalculation() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
-    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+    task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("journal max recalc reorg task failed");
 
@@ -2583,9 +2559,8 @@ async fn test_reorg_journal_set_recalculation() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
-    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+    task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("journal set recalc reorg task failed");
 
@@ -2679,9 +2654,8 @@ async fn test_reorg_reversal_decrement() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
-    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+    task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("decrement reversal reorg task failed");
 
@@ -2781,9 +2755,8 @@ async fn test_reorg_journal_min_recalculation() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
-    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+    task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("journal min recalc reorg task failed");
 
@@ -2903,9 +2876,8 @@ async fn test_reorg_mixed_reversible_and_journal() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
-    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+    task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("mixed reversal+journal reorg task failed");
 
@@ -3014,9 +2986,8 @@ async fn test_reorg_reversal_uninvolved_row_unchanged() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
-    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+    task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("uninvolved row reorg task failed");
 
@@ -3139,9 +3110,8 @@ async fn test_reorg_clickhouse_add_reversal() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
-    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), Some(&ch), None)
+    task.execute(&mut task_window, Some(&rindexer_pg), Some(&ch), None)
         .await
         .expect("clickhouse add reversal reorg task failed");
 
@@ -3326,9 +3296,8 @@ async fn test_reorg_two_events_same_table_reversible() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
-    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+    task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("dual-event reversible reorg task failed");
 
@@ -3482,9 +3451,8 @@ async fn test_reorg_two_events_same_table_journal() {
 
     let rindexer_pg = env.rindexer_pg().await;
     let mut task_window = BlockChainWindow::new(256);
-    let persistence = ReorgBlockHashPersistence::new(None, None);
 
-    task.execute(&mut task_window, &persistence, Some(&rindexer_pg), None, None)
+    task.execute(&mut task_window, Some(&rindexer_pg), None, None)
         .await
         .expect("dual-event journal reorg task failed");
 

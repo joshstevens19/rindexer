@@ -534,7 +534,7 @@ async fn live_indexing_stream(
                             registry: Some(registry),
                             streams_clients: streams_clients.as_ref().as_ref(),
                         };
-                        if let Some(fork_point) = detect_and_handle_reorg(
+                        match detect_and_handle_reorg(
                             coordinator,
                             latest_block.header.number,
                             latest_block.header.hash,
@@ -544,9 +544,21 @@ async fn live_indexing_stream(
                         )
                         .await
                         {
-                            current_filter = current_filter.set_from_block(U64::from(fork_point));
-                            last_seen_block_number = U64::from(fork_point.saturating_sub(1));
-                            continue;
+                            Ok(Some(fork_point)) => {
+                                current_filter =
+                                    current_filter.set_from_block(U64::from(fork_point));
+                                last_seen_block_number = U64::from(fork_point.saturating_sub(1));
+                                continue;
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                error!(
+                                    "{} - Reorg handling failed, pausing before retry: {:?}",
+                                    info_log_name, e
+                                );
+                                tokio::time::sleep(Duration::from_secs(2)).await;
+                                continue;
+                            }
                         }
                     }
 

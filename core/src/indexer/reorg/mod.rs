@@ -4,9 +4,10 @@ pub mod task;
 pub mod window;
 
 use alloy::primitives::{B256, U64};
+use anyhow::Context;
 use serde::Serialize;
 use std::sync::Arc;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
 use crate::database::clickhouse::client::ClickhouseClient;
 use crate::database::postgres::client::PostgresClient;
@@ -34,7 +35,7 @@ pub struct ReorgContext<'a> {
 }
 
 /// Returns `Some(fork_point)` if a reorg was detected and handled (caller should rewind and `continue`),
-/// or `None` if no reorg was detected.
+/// or `None` if no reorg was detected. Returns `Err` if detection or rollback failed.
 pub async fn detect_and_handle_reorg(
     coordinator: &mut ReorgCoordinator,
     block_number: u64,
@@ -42,30 +43,27 @@ pub async fn detect_and_handle_reorg(
     parent_hash: B256,
     log_prefix: &str,
     ctx: &ReorgContext<'_>,
-) -> Option<u64> {
-    match coordinator.on_new_block(block_number, block_hash, parent_hash).await {
-        Ok(Some(reorg_task)) => {
-            let fork_point = reorg_task.fork_point;
-            warn!(
-                "{} - REORG DETECTED by coordinator on block {} (fork_point: {}, depth: {}). Executing rollback.",
-                log_prefix,
-                block_number,
-                fork_point,
-                reorg_task.detection_point - fork_point + 1,
-            );
+) -> anyhow::Result<Option<u64>> {
+    let Some(reorg_task) =
+        coordinator.on_new_block(block_number, block_hash, parent_hash).await.with_context(
+            || format!("{} - Reorg detection failed on block {}", log_prefix, block_number),
+        )?
+    else {
+        return Ok(None);
+    };
 
-            if let Err(e) = coordinator.handle_reorg(reorg_task, ctx).await {
-                error!("{} - Failed to execute reorg rollback: {}", log_prefix, e);
-            }
+    let fork_point = reorg_task.fork_point;
+    let depth = reorg_task.detection_point.saturating_sub(fork_point) + 1;
+    warn!(
+        "{} - REORG DETECTED by coordinator on block {} (fork_point: {}, depth: {}). Executing rollback.",
+        log_prefix, block_number, fork_point, depth,
+    );
 
-            Some(fork_point)
-        }
-        Ok(None) => None,
-        Err(e) => {
-            error!("{} - Reorg coordinator error: {}", log_prefix, e);
-            None
-        }
-    }
+    coordinator.handle_reorg(reorg_task, ctx).await.with_context(|| {
+        format!("{} - Reorg rollback failed for fork_point {}", log_prefix, fork_point)
+    })?;
+
+    Ok(Some(fork_point))
 }
 
 /// Broadcast event sent when a reorg is detected and recovery is complete.

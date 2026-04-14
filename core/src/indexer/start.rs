@@ -592,7 +592,7 @@ async fn start_indexing_contract_events(
                             "Startup reorg detected on {} (fork_point: {}, depth: {}). Executing rollback before indexing.",
                             network_name,
                             startup_task.fork_point,
-                            startup_task.detection_point - startup_task.fork_point + 1,
+                            startup_task.detection_point.saturating_sub(startup_task.fork_point) + 1,
                         );
                         let reorg_ctx = ReorgContext {
                             postgres: postgres.as_deref(),
@@ -883,7 +883,7 @@ async fn start_indexing_contract_events(
                                 "Dependency events - Startup reorg detected on {} (fork_point: {}, depth: {}). Executing rollback.",
                                 network_name,
                                 startup_task.fork_point,
-                                startup_task.detection_point - startup_task.fork_point + 1,
+                                startup_task.detection_point.saturating_sub(startup_task.fork_point) + 1,
                             );
                             let reorg_ctx = ReorgContext {
                                 postgres: postgres.as_deref(),

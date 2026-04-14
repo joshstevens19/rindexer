@@ -2,6 +2,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use alloy::primitives::{B256, U64};
+use anyhow::Context;
 use tracing::{info, warn};
 
 use crate::event::callback_registry::ReorgNotification;
@@ -55,7 +56,7 @@ impl ReorgCoordinator {
         block_number: u64,
         block_hash: B256,
         parent_hash: B256,
-    ) -> Result<Option<ReorgTask>, String> {
+    ) -> anyhow::Result<Option<ReorgTask>> {
         match self.window.validate_parent(block_number, parent_hash) {
             ParentValidation::Valid | ParentValidation::NoPreviousBlock => {
                 self.window.insert(block_number, block_hash, parent_hash);
@@ -90,7 +91,7 @@ impl ReorgCoordinator {
 
     /// Called once on restart before indexing resumes.
     /// Checks whether any blocks in the window were reorged while offline.
-    pub async fn validate_on_startup(&self) -> Result<Option<ReorgTask>, String> {
+    pub async fn validate_on_startup(&self) -> anyhow::Result<Option<ReorgTask>> {
         let block_numbers = self.window.block_numbers();
         if block_numbers.is_empty() {
             return Ok(None);
@@ -99,13 +100,13 @@ impl ReorgCoordinator {
         let provider = self
             .provider
             .as_ref()
-            .ok_or_else(|| "No provider configured for startup validation".to_string())?;
+            .ok_or_else(|| anyhow::anyhow!("No provider configured for startup validation"))?;
 
         let block_numbers_u64: Vec<U64> = block_numbers.iter().map(|&n| U64::from(n)).collect();
         let blocks = provider
             .get_block_by_number_batch(&block_numbers_u64, false)
             .await
-            .map_err(|e| format!("Failed to fetch blocks for startup validation: {}", e))?;
+            .context("Failed to fetch blocks for startup validation")?;
 
         let canonical: Vec<(u64, B256)> =
             blocks.iter().map(|b| (b.header.number, b.header.hash)).collect();
@@ -210,22 +211,20 @@ impl ReorgCoordinator {
     /// Returns `(fork_point, canonical_blocks)` where canonical_blocks are the
     /// `(block_number, block_hash, parent_hash)` tuples fetched from the RPC,
     /// so callers can reuse them without a second fetch.
-    async fn find_fork_point(&self) -> Result<(u64, Vec<(u64, B256, B256)>), String> {
+    async fn find_fork_point(&self) -> anyhow::Result<(u64, Vec<(u64, B256, B256)>)> {
         let block_numbers = self.window.block_numbers();
-        if block_numbers.is_empty() {
-            return Err("Cannot find fork point: window is empty".to_string());
-        }
+        anyhow::ensure!(!block_numbers.is_empty(), "Cannot find fork point: window is empty");
 
         let provider = self
             .provider
             .as_ref()
-            .ok_or_else(|| "No provider configured for fork point detection".to_string())?;
+            .ok_or_else(|| anyhow::anyhow!("No provider configured for fork point detection"))?;
 
         let block_numbers_u64: Vec<U64> = block_numbers.iter().map(|&n| U64::from(n)).collect();
         let blocks = provider
             .get_block_by_number_batch(&block_numbers_u64, false)
             .await
-            .map_err(|e| format!("Failed to fetch blocks for fork point detection: {}", e))?;
+            .context("Failed to fetch blocks for fork point detection")?;
 
         let canonical: Vec<(u64, B256)> =
             blocks.iter().map(|b| (b.header.number, b.header.hash)).collect();
@@ -246,15 +245,9 @@ impl ReorgCoordinator {
         &mut self,
         reorg_task: ReorgTask,
         ctx: &ReorgContext<'_>,
-    ) -> Result<(), String> {
+    ) -> anyhow::Result<()> {
         let result = reorg_task
-            .execute(
-                &mut self.window,
-                &self.persistence,
-                ctx.postgres,
-                ctx.clickhouse,
-                self.provider.as_ref(),
-            )
+            .execute(&mut self.window, ctx.postgres, ctx.clickhouse, self.provider.as_ref())
             .await?;
 
         let affected_tx_hashes: Vec<B256> =
@@ -302,7 +295,7 @@ impl ReorgCoordinator {
         block_number: u64,
         block_hash: B256,
         parent_hash: B256,
-    ) -> Result<(), String> {
+    ) -> anyhow::Result<()> {
         self.blocks_since_flush += 1;
 
         // Fire-and-forget: spawn the DB write so the live loop is not blocked.
@@ -409,7 +402,7 @@ mod tests {
         // confirming we entered the Mismatch branch (not Valid or NoPreviousBlock)
         match result {
             Err(err) => assert!(
-                err.contains("No provider configured"),
+                err.to_string().contains("No provider configured"),
                 "Expected provider-related error, got: {}",
                 err
             ),
