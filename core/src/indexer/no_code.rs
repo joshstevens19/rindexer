@@ -194,7 +194,7 @@ pub async fn setup_no_code(
             )
             .await?;
 
-            let registry = EventCallbackRegistry { events, on_reorg: None };
+            let registry = EventCallbackRegistry { events, on_reorg: Vec::new() };
             info!(
                 "Events registered to index:{}",
                 registry

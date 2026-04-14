@@ -129,6 +129,7 @@ pub type EventCallbackType =
 pub type TraceCallbackType =
     Arc<dyn Fn(Vec<TraceResult>) -> BoxFuture<'static, EventCallbackResult<()>> + Send + Sync>;
 
+#[derive(Clone)]
 pub struct ReorgNotification {
     pub network: String,
     pub fork_block: u64,
@@ -199,7 +200,7 @@ impl Clone for EventCallbackRegistryInformation {
 #[derive(Clone)]
 pub struct EventCallbackRegistry {
     pub events: Vec<EventCallbackRegistryInformation>,
-    pub on_reorg: Option<OnReorgCallback>,
+    pub on_reorg: Vec<OnReorgCallback>,
 }
 
 impl Default for EventCallbackRegistry {
@@ -210,7 +211,7 @@ impl Default for EventCallbackRegistry {
 
 impl EventCallbackRegistry {
     pub fn new() -> Self {
-        EventCallbackRegistry { events: Vec::new(), on_reorg: None }
+        EventCallbackRegistry { events: Vec::new(), on_reorg: Vec::new() }
     }
 
     pub fn find_event(&self, id: &String) -> Option<&EventCallbackRegistryInformation> {
@@ -222,12 +223,12 @@ impl EventCallbackRegistry {
     }
 
     pub fn register_on_reorg(&mut self, callback: OnReorgCallback) {
-        self.on_reorg = Some(callback);
+        self.on_reorg.push(callback);
     }
 
     pub async fn fire_on_reorg(&self, notification: ReorgNotification) {
-        if let Some(callback) = &self.on_reorg {
-            callback(notification).await;
+        for callback in &self.on_reorg {
+            callback(notification.clone()).await;
         }
     }
 
