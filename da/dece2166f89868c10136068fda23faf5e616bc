@@ -1,0 +1,36 @@
+core/src/streams/clients.rs
+  79a5c3390d4472c3 1,875
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "dadece2166f89868c10136068fda23faf5e616bc",
+  "prompts": {
+    "79a5c3390d4472c3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1b4cd319-9c24-4c07-b169-4ad6c5ccbbc1",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 543,
+      "overriden_lines": 0
+    },
+    "b416449b704d5937": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9ec8295a-efa7-4aa2-89d5-707dbef01acf",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 458,
+      "overriden_lines": 0
+    }
+  }
+}
