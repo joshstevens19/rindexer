@@ -544,7 +544,7 @@ impl PostgresClient {
         }
 
         // 4. Rewind last_synced_block checkpoints to fork_point - 1
-        let rewind_block = fork_point.saturating_sub(1) as i64;
+        let rewind_block = Decimal::from(fork_point.saturating_sub(1));
         for table in checkpoint_tables {
             let query = format!(
                 "UPDATE rindexer_internal.{} SET last_synced_block = $1 WHERE network = $2",
