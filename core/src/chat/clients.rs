@@ -17,11 +17,12 @@ use crate::{
         slack::{SlackBot, SlackError},
         telegram::{TelegramBot, TelegramError},
         template::Template,
+        twilio::{TwilioBot, TwilioError},
     },
     event::{filter_by_expression, filter_event_data_by_conditions, EventMessage},
     manifest::chat::{
         ChatConfig, DiscordConfig, DiscordEvent, SlackConfig, SlackEvent, TelegramConfig,
-        TelegramEvent,
+        TelegramEvent, TwilioConfig, TwilioEvent,
     },
 };
 
@@ -37,6 +38,9 @@ pub enum ChatError {
 
     #[error("Slack error: {0}")]
     Slack(#[from] SlackError),
+
+    #[error("Twilio error: {0}")]
+    Twilio(#[from] TwilioError),
 
     #[error("Task failed: {0}")]
     JoinError(JoinError),
@@ -60,10 +64,17 @@ struct SlackInstance {
     client: Arc<SlackBot>,
 }
 
+#[derive(Debug, Clone)]
+struct TwilioInstance {
+    config: TwilioConfig,
+    client: Arc<TwilioBot>,
+}
+
 pub struct ChatClients {
     telegram: Option<Vec<TelegramInstance>>,
     discord: Option<Vec<DiscordInstance>>,
     slack: Option<Vec<SlackInstance>>,
+    twilio: Option<Vec<TwilioInstance>>,
 }
 
 impl ChatClients {
@@ -98,7 +109,21 @@ impl ChatClients {
                 .collect()
         });
 
-        Self { telegram, discord, slack }
+        let twilio = chat_config.twilio.map(|config| {
+            config
+                .into_iter()
+                .map(|config| {
+                    let client = Arc::new(TwilioBot::new(
+                        config.account_sid.clone(),
+                        config.auth_token.clone(),
+                        config.from_number.clone(),
+                    ));
+                    TwilioInstance { config, client }
+                })
+                .collect()
+        });
+
+        Self { telegram, discord, slack, twilio }
     }
 
     fn find_accepted_block_range(&self, from_block: &U64, to_block: &U64) -> U64 {
@@ -118,7 +143,10 @@ impl ChatClients {
     }
 
     fn has_any_chat(&self) -> bool {
-        self.telegram.is_some() || self.discord.is_some() || self.slack.is_some()
+        self.telegram.is_some()
+            || self.discord.is_some()
+            || self.slack.is_some()
+            || self.twilio.is_some()
     }
 
     fn telegram_send_message_tasks(
@@ -247,6 +275,45 @@ impl ChatClients {
         tasks
     }
 
+    fn twilio_send_message_tasks(
+        &self,
+        instance: &TwilioInstance,
+        event_for: &TwilioEvent,
+        events_data: &[Value],
+    ) -> SendMessage {
+        let tasks: Vec<_> = events_data
+            .iter()
+            .filter(|event_data| {
+                if let Some(expression) = &event_for.filter_expression {
+                    let result = filter_by_expression(expression, event_data);
+
+                    return match result {
+                        Ok(res) => res,
+                        Err(e) => {
+                            tracing::error!("Error evaluating filter expression: {}", e);
+                            false
+                        }
+                    };
+                }
+                if let Some(conditions) = &event_for.conditions {
+                    return filter_event_data_by_conditions(event_data, conditions);
+                }
+                true
+            })
+            .map(|event_data| {
+                let client = Arc::clone(&instance.client);
+                let to_number = instance.config.to_number.clone();
+                let message = Template::new(event_for.template_inline.clone())
+                    .parse_template_inline(event_data);
+                task::spawn(async move {
+                    client.send_message(&to_number, &message).await?;
+                    Ok(())
+                })
+            })
+            .collect();
+        tasks
+    }
+
     pub async fn send_message(
         &self,
         event_message: &EventMessage,
@@ -316,6 +383,24 @@ impl ChatClients {
                         if let Some(slack_event) = slack_event {
                             let message =
                                 self.slack_send_message_tasks(instance, slack_event, data_array);
+                            messages.push(message);
+                        }
+                    }
+                }
+            }
+
+            if let Some(twilio) = &self.twilio {
+                for instance in twilio {
+                    if instance.config.networks.contains(&event_message.network) {
+                        let twilio_event = instance
+                            .config
+                            .messages
+                            .iter()
+                            .find(|e| e.event_name == event_message.event_name);
+
+                        if let Some(twilio_event) = twilio_event {
+                            let message =
+                                self.twilio_send_message_tasks(instance, twilio_event, data_array);
                             messages.push(message);
                         }
                     }
