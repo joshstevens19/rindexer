@@ -63,7 +63,10 @@ impl ReorgBlockHashPersistence {
                     )
                 })?;
 
-                window.insert(block_number as u64, block_hash, parent_hash);
+                let block_number_u64 = u64::try_from(block_number).with_context(|| {
+                    format!("Negative block_number {} in reorg_block_hashes", block_number)
+                })?;
+                window.insert(block_number_u64, block_hash, parent_hash);
             }
 
             return Ok(window);

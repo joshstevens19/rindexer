@@ -9,6 +9,7 @@ use crate::manifest::contract::SetAction;
 use crate::metrics::indexing as metrics;
 use crate::provider::JsonRpcCachedProvider;
 
+use super::validate_sql_condition;
 use super::window::BlockChainWindow;
 
 #[derive(Clone)]
@@ -88,6 +89,9 @@ impl DerivedTableRollbackOp {
         for (dt_col, ev_col) in &where_columns {
             super::validate_sql_identifier(dt_col, "rollback op WHERE derived column")?;
             super::validate_sql_identifier(ev_col, "rollback op WHERE event column")?;
+        }
+        if let Some(cond) = &condition {
+            validate_sql_condition(cond)?;
         }
         Ok(Self { event_table, where_columns, columns, condition })
     }
@@ -183,6 +187,15 @@ struct ReversalSnapshot {
 }
 
 impl ReorgTask {
+    /// Returns ` AND network = '<network>'` when not cross-chain, empty string otherwise.
+    fn network_filter(&self, cross_chain: bool) -> String {
+        if cross_chain {
+            String::new()
+        } else {
+            format!(" AND network = '{}'", self.network)
+        }
+    }
+
     /// Phase 1: Before event deletion, snapshot aggregated event data into temp tables.
     /// Returns the snapshots needed for phase 2.
     /// Fails the entire reorg task if any snapshot cannot be created — this prevents
@@ -236,11 +249,7 @@ impl ReorgTask {
                 let group_cols: Vec<&str> =
                     op.where_columns.iter().map(|(_, ev_col)| ev_col.as_str()).collect();
 
-                let network_filter = if dt.cross_chain {
-                    String::new()
-                } else {
-                    format!(" AND network = '{}'", self.network)
-                };
+                let network_filter = self.network_filter(dt.cross_chain);
 
                 let condition_filter = match &op.condition {
                     Some(cond) => format!(" AND ({})", cond),
@@ -324,7 +333,7 @@ impl ReorgTask {
         snapshots: &[ReversalSnapshot],
         pg: Option<&PostgresClient>,
         ch: Option<&Arc<ClickhouseClient>>,
-    ) {
+    ) -> anyhow::Result<()> {
         for snap in snapshots {
             let where_join: Vec<String> = snap
                 .where_columns
@@ -349,16 +358,16 @@ impl ReorgTask {
                         where_join.join(" AND "),
                         network_join,
                     );
-                    match pg.batch_execute(&update_sql).await {
-                        Ok(_) => tracing::info!(
-                            table = %snap.derived_table,
-                            "PostgreSQL: reversed accumulative ops"
-                        ),
-                        Err(e) => tracing::error!(
-                            table = %snap.derived_table,
-                            "PostgreSQL: failed to reverse accumulative ops: {:?}", e
-                        ),
-                    }
+                    pg.batch_execute(&update_sql).await.with_context(|| {
+                        format!(
+                            "PostgreSQL: failed to reverse accumulative ops for {}",
+                            snap.derived_table
+                        )
+                    })?;
+                    tracing::info!(
+                        table = %snap.derived_table,
+                        "PostgreSQL: reversed accumulative ops"
+                    );
                     let _ = pg
                         .batch_execute(&format!("DROP TABLE IF EXISTS {}", snap.temp_table))
                         .await;
@@ -431,21 +440,22 @@ impl ReorgTask {
                         ch_scope,
                     );
 
-                    match ch.execute(&ch_update).await {
-                        Ok(_) => tracing::info!(
-                            table = %snap.derived_table,
-                            "ClickHouse: reversed accumulative ops"
-                        ),
-                        Err(e) => tracing::error!(
-                            table = %snap.derived_table,
-                            "ClickHouse: failed to reverse accumulative ops: {:?}", e
-                        ),
-                    }
+                    ch.execute(&ch_update).await.with_context(|| {
+                        format!(
+                            "ClickHouse: failed to reverse accumulative ops for {}",
+                            snap.derived_table
+                        )
+                    })?;
+                    tracing::info!(
+                        table = %snap.derived_table,
+                        "ClickHouse: reversed accumulative ops"
+                    );
 
                     let _ = ch.execute(&format!("DROP TABLE IF EXISTS {}", snap.temp_table)).await;
                 }
             }
         }
+        Ok(())
     }
 
     /// Recalculate non-reversible columns (Set/Max/Min) from the operation journal.
@@ -454,17 +464,13 @@ impl ReorgTask {
         &self,
         pg: Option<&PostgresClient>,
         ch: Option<&Arc<ClickhouseClient>>,
-    ) {
+    ) -> anyhow::Result<()> {
         for dt in &self.derived_tables {
             if dt.journal_columns.is_empty() {
                 continue;
             }
 
-            let network_filter = if dt.cross_chain {
-                String::new()
-            } else {
-                format!(" AND network = '{}'", self.network)
-            };
+            let network_filter = self.network_filter(dt.cross_chain);
 
             // Delete journal entries in the reorg range
             let pg_delete = format!(
@@ -479,20 +485,20 @@ impl ReorgTask {
             );
 
             if let Some(pg) = pg {
-                if let Err(e) = pg.batch_execute(&pg_delete).await {
-                    tracing::error!(
-                        table = %dt.full_table_name,
-                        "PG: failed to delete journal entries for reorg range: {:?}", e
-                    );
-                }
+                pg.batch_execute(&pg_delete).await.with_context(|| {
+                    format!(
+                        "PG: failed to delete journal entries for reorg range in {}",
+                        dt.full_table_name
+                    )
+                })?;
             }
             if let Some(ch) = ch {
-                if let Err(e) = ch.execute(&ch_delete).await {
-                    tracing::error!(
-                        table = %dt.full_table_name,
-                        "CH: failed to delete journal entries for reorg range: {:?}", e
-                    );
-                }
+                ch.execute(&ch_delete).await.with_context(|| {
+                    format!(
+                        "CH: failed to delete journal entries for reorg range in {}",
+                        dt.full_table_name
+                    )
+                })?;
             }
 
             // Recalculate each non-reversible column from remaining journal entries
@@ -546,18 +552,17 @@ impl ReorgTask {
                         )
                     };
 
-                    match pg.batch_execute(&update_sql).await {
-                        Ok(_) => tracing::info!(
-                            table = %dt.full_table_name,
-                            column = %jc.derived_column,
-                            "PG: recalculated non-reversible column from journal"
-                        ),
-                        Err(e) => tracing::error!(
-                            table = %dt.full_table_name,
-                            column = %jc.derived_column,
-                            "PG: failed to recalculate from journal: {:?}", e
-                        ),
-                    }
+                    pg.batch_execute(&update_sql).await.with_context(|| {
+                        format!(
+                            "PG: failed to recalculate journal column {} in {}",
+                            jc.derived_column, dt.full_table_name
+                        )
+                    })?;
+                    tracing::info!(
+                        table = %dt.full_table_name,
+                        column = %jc.derived_column,
+                        "PG: recalculated non-reversible column from journal"
+                    );
                 }
 
                 // --- ClickHouse recalculation ---
@@ -604,21 +609,21 @@ impl ReorgTask {
                         dt.full_table_name, jc.derived_column, ch_subquery, ch_network,
                     );
 
-                    match ch.execute(&ch_update).await {
-                        Ok(_) => tracing::info!(
-                            table = %dt.full_table_name,
-                            column = %jc.derived_column,
-                            "CH: recalculated non-reversible column from journal"
-                        ),
-                        Err(e) => tracing::error!(
-                            table = %dt.full_table_name,
-                            column = %jc.derived_column,
-                            "CH: failed to recalculate from journal: {:?}", e
-                        ),
-                    }
+                    ch.execute(&ch_update).await.with_context(|| {
+                        format!(
+                            "CH: failed to recalculate journal column {} in {}",
+                            jc.derived_column, dt.full_table_name
+                        )
+                    })?;
+                    tracing::info!(
+                        table = %dt.full_table_name,
+                        column = %jc.derived_column,
+                        "CH: recalculated non-reversible column from journal"
+                    );
                 }
             }
         }
+        Ok(())
     }
 
     /// Build a WHERE clause joining derived table rows to journal where_key.
@@ -671,6 +676,9 @@ impl ReorgTask {
         clickhouse: Option<&Arc<ClickhouseClient>>,
         provider: Option<&Arc<JsonRpcCachedProvider>>,
     ) -> anyhow::Result<ReorgTaskResult> {
+        // Validate network before any SQL interpolation
+        super::validate_sql_value(&self.network, "reorg task network")?;
+
         let start = std::time::Instant::now();
 
         tracing::info!(
@@ -775,68 +783,56 @@ impl ReorgTask {
         }
 
         // Phase 2: apply accumulative reversals from snapshots (after event deletion)
-        Self::apply_reversal_from_snapshots(&reversal_snapshots, postgres, clickhouse).await;
+        Self::apply_reversal_from_snapshots(&reversal_snapshots, postgres, clickhouse)
+            .await
+            .context("Accumulative reversal from snapshots failed")?;
 
         // Phase 3: recalculate non-reversible columns (Set/Max/Min) from operation journal
-        self.recalculate_from_journal(postgres, clickhouse).await;
+        self.recalculate_from_journal(postgres, clickhouse)
+            .await
+            .context("Journal recalculation failed")?;
 
         // Phase 4: DELETE insert-only derived tables (no rollback_ops and no journal_columns)
         for dt in &self.derived_tables {
             if !dt.rollback_ops.is_empty() || !dt.journal_columns.is_empty() {
                 continue; // handled by reversal and/or journal recalculation
             }
-            if let Some(pg) = postgres {
-                let query = if dt.cross_chain {
-                    format!(
-                        "DELETE FROM {} WHERE rindexer_block_number >= {}",
-                        dt.full_table_name, self.fork_point
-                    )
-                } else {
-                    format!(
-                        "DELETE FROM {} WHERE rindexer_block_number >= {} AND network = '{}'",
-                        dt.full_table_name, self.fork_point, self.network
-                    )
-                };
+            let network_filter = self.network_filter(dt.cross_chain);
 
-                match pg.batch_execute(&query).await {
-                    Ok(_) => tracing::info!(
-                        "PostgreSQL: deleted derived table rows from block >= {} in {}",
-                        self.fork_point,
+            if let Some(pg) = postgres {
+                let query = format!(
+                    "DELETE FROM {} WHERE rindexer_block_number >= {}{}",
+                    dt.full_table_name, self.fork_point, network_filter
+                );
+                pg.batch_execute(&query).await.with_context(|| {
+                    format!(
+                        "PostgreSQL: failed to delete derived table rows in {}",
                         dt.full_table_name
-                    ),
-                    Err(e) => tracing::error!(
-                        "PostgreSQL: failed to delete derived table rows in {}: {:?}",
-                        dt.full_table_name,
-                        e
-                    ),
-                }
+                    )
+                })?;
+                tracing::info!(
+                    "PostgreSQL: deleted derived table rows from block >= {} in {}",
+                    self.fork_point,
+                    dt.full_table_name
+                );
             }
 
             if let Some(ch) = clickhouse {
-                let query = if dt.cross_chain {
+                let query = format!(
+                    "ALTER TABLE {} DELETE WHERE rindexer_block_number >= {}{} SETTINGS mutations_sync = 1",
+                    dt.full_table_name, self.fork_point, network_filter
+                );
+                ch.execute(&query).await.with_context(|| {
                     format!(
-                        "ALTER TABLE {} DELETE WHERE rindexer_block_number >= {} SETTINGS mutations_sync = 1",
-                        dt.full_table_name, self.fork_point
-                    )
-                } else {
-                    format!(
-                        "ALTER TABLE {} DELETE WHERE rindexer_block_number >= {} AND network = '{}' SETTINGS mutations_sync = 1",
-                        dt.full_table_name, self.fork_point, self.network
-                    )
-                };
-
-                match ch.execute(&query).await {
-                    Ok(_) => tracing::info!(
-                        "ClickHouse: deleted derived table rows from block >= {} in {}",
-                        self.fork_point,
+                        "ClickHouse: failed to delete derived table rows in {}",
                         dt.full_table_name
-                    ),
-                    Err(e) => tracing::error!(
-                        "ClickHouse: failed to delete derived table rows in {}: {:?}",
-                        dt.full_table_name,
-                        e
-                    ),
-                }
+                    )
+                })?;
+                tracing::info!(
+                    "ClickHouse: deleted derived table rows from block >= {} in {}",
+                    self.fork_point,
+                    dt.full_table_name
+                );
             }
         }
 

@@ -41,6 +41,29 @@ pub fn validate_sql_identifier(name: &str, kind: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Validates that a SQL condition expression (from YAML `if`/`filter` field) is safe
+/// to interpolate into a WHERE clause. Rejects strings containing characters or patterns
+/// that could be used for SQL injection: semicolons, comments, quotes, UNION, etc.
+pub fn validate_sql_condition(condition: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(!condition.is_empty(), "SQL condition must not be empty");
+    // Reject dangerous characters
+    for ch in [';', '\'', '"', '-', '/', '*'] {
+        anyhow::ensure!(
+            !condition.contains(ch),
+            "SQL condition contains forbidden character '{ch}': {condition}"
+        );
+    }
+    // Reject dangerous SQL keywords (case-insensitive)
+    let upper = condition.to_ascii_uppercase();
+    for keyword in ["UNION", "DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "EXEC", "SLEEP"] {
+        anyhow::ensure!(
+            !upper.contains(keyword),
+            "SQL condition contains forbidden keyword '{keyword}': {condition}"
+        );
+    }
+    Ok(())
+}
+
 /// Validates that a string is safe to use as a SQL string literal value
 /// (e.g. network names in `WHERE network = '...'`).
 /// Allows alphanumeric, underscore, and hyphen.
