@@ -1,0 +1,36 @@
+core/tests/e2e_reorg.rs
+  1c14f56455e2543e 20,25,170,176,190-194,227-232,235,240,268-381,3036-3504
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "a75355d45f476faf27874ae05345d8908cc298df",
+  "prompts": {
+    "1c14f56455e2543e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ed0e6ef1-d132-4f30-981f-d3226870903e",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 603,
+      "total_deletions": 3,
+      "accepted_lines": 1034,
+      "overriden_lines": 0
+    },
+    "b416449b704d5937": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9ec8295a-efa7-4aa2-89d5-707dbef01acf",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 28,
+      "total_deletions": 24,
+      "accepted_lines": 6,
+      "overriden_lines": 0
+    }
+  }
+}
