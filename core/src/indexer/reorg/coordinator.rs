@@ -121,7 +121,8 @@ impl ReorgCoordinator {
                     return Ok(None);
                 }
 
-                // Partial match: fork found after last_match
+                // last_match is the highest block whose hash still matches the canonical chain.
+                // The fork therefore starts at last_match + 1 (the first divergent block).
                 let fork_point = last_match + 1;
                 let detection_point = latest;
                 let depth = detection_point.saturating_sub(fork_point) + 1;

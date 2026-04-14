@@ -234,7 +234,11 @@ impl ReorgTask {
                     let op_symbol = match reversed {
                         SetAction::Add | SetAction::Increment => "+",
                         SetAction::Subtract | SetAction::Decrement => "-",
-                        _ => unreachable!(),
+                        other => anyhow::bail!(
+                            "unexpected reversed action {:?} for column {}",
+                            other,
+                            col.derived_column,
+                        ),
                     };
                     set_clauses.push(format!(
                         "{} = dt.{} {} snap.{}_agg",

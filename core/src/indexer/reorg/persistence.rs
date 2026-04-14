@@ -31,6 +31,7 @@ impl ReorgBlockHashPersistence {
         network: &str,
         max_window_size: usize,
     ) -> anyhow::Result<BlockChainWindow> {
+        super::validate_sql_value(network, "network")?;
         let mut window = BlockChainWindow::try_new(max_window_size)?;
 
         if let Some(postgres) = &self.postgres {
@@ -125,6 +126,20 @@ impl ReorgBlockHashPersistence {
         block_hash: &str,
         parent_hash: &str,
     ) -> anyhow::Result<()> {
+        super::validate_sql_value(network, "network")?;
+        anyhow::ensure!(
+            block_hash.starts_with("0x")
+                && block_hash.len() == 66
+                && block_hash[2..].chars().all(|c| c.is_ascii_hexdigit()),
+            "block_hash is not a valid 0x-prefixed hex string: {block_hash}"
+        );
+        anyhow::ensure!(
+            parent_hash.starts_with("0x")
+                && parent_hash.len() == 66
+                && parent_hash[2..].chars().all(|c| c.is_ascii_hexdigit()),
+            "parent_hash is not a valid 0x-prefixed hex string: {parent_hash}"
+        );
+
         if let Some(postgres) = &self.postgres {
             let query = r#"INSERT INTO rindexer_internal.reorg_block_hashes
                          (network, block_number, block_hash, parent_hash)
@@ -160,6 +175,7 @@ impl ReorgBlockHashPersistence {
 
     /// Delete entries older than the given block number.
     pub async fn prune(&self, network: &str, older_than: u64) -> anyhow::Result<()> {
+        super::validate_sql_value(network, "network")?;
         if let Some(postgres) = &self.postgres {
             let query = r#"DELETE FROM rindexer_internal.reorg_block_hashes
                          WHERE network = $1 AND block_number < $2"#;
