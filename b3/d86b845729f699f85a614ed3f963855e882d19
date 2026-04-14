@@ -1,0 +1,50 @@
+e2e-tests/src/test_suite.rs
+  b416449b704d5937 30-35,41-42
+e2e-tests/src/tests/direct_rpc.rs
+  b416449b704d5937 106
+core/src/indexer/reorg/task.rs
+  b5836ffeb324de2f 12,93-95,190-198,252,336,361-370,443-452,458,467,473,488-493,496-501,555-565,612-622,626,679-681,786-788,791-793,800-801,803-807,809,811-817,821-825,827,829-835
+e2e-tests/src/rindexer_client.rs
+  b416449b704d5937 386
+e2e-tests/src/tests/multi_network.rs
+  b416449b704d5937 256,262
+core/src/indexer/reorg/mod.rs
+  b5836ffeb324de2f 44-66
+e2e-tests/src/tests/reorg_e2e.rs
+  b416449b704d5937 73-74,294,389,393,426-427,876-879
+core/src/indexer/reorg/persistence.rs
+  b5836ffeb324de2f 66-69
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "b3d86b845729f699f85a614ed3f963855e882d19",
+  "prompts": {
+    "b416449b704d5937": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9ec8295a-efa7-4aa2-89d5-707dbef01acf",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 892,
+      "total_deletions": 0,
+      "accepted_lines": 1331,
+      "overriden_lines": 3
+    },
+    "b5836ffeb324de2f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff3564f2-f83d-475e-baf0-097090248f80",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 137,
+      "total_deletions": 115,
+      "accepted_lines": 137,
+      "overriden_lines": 0
+    }
+  }
+}
