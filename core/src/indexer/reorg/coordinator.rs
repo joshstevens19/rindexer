@@ -299,8 +299,6 @@ impl ReorgCoordinator {
             }
         }
 
-        // TODO: Part B — FinalizedBuffer integration.
-
         Ok(())
     }
 

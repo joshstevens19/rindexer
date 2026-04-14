@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc, time::Instant};
+use std::{sync::Arc, time::Instant};
 
 use alloy::primitives::B256;
 use aws_sdk_sns::{config::http::HttpResponse, error::SdkError, operation::publish::PublishError};
@@ -867,42 +867,6 @@ impl StreamsClients {
             true,
         )
         .await
-    }
-}
-
-#[allow(dead_code)]
-pub struct FinalizedBuffer {
-    buffer: BTreeMap<u64, Vec<serde_json::Value>>,
-    reorg_safe_distance: u64,
-}
-
-#[allow(dead_code)]
-impl FinalizedBuffer {
-    pub fn new(reorg_safe_distance: u64) -> Self {
-        Self { buffer: BTreeMap::new(), reorg_safe_distance }
-    }
-
-    pub fn add(&mut self, block_number: u64, events: Vec<serde_json::Value>) {
-        self.buffer.entry(block_number).or_default().extend(events);
-    }
-
-    pub fn flush(&mut self, current_head: u64) -> Vec<(u64, Vec<serde_json::Value>)> {
-        let finality_threshold = current_head.saturating_sub(self.reorg_safe_distance);
-        let ready_keys: Vec<u64> =
-            self.buffer.keys().copied().filter(|&k| k <= finality_threshold).collect();
-        ready_keys.into_iter().filter_map(|k| self.buffer.remove(&k).map(|v| (k, v))).collect()
-    }
-
-    pub fn discard_range(&mut self, fork_point: u64, detection_point: u64) {
-        let keys_to_remove: Vec<u64> = self
-            .buffer
-            .keys()
-            .copied()
-            .filter(|&k| k >= fork_point && k <= detection_point)
-            .collect();
-        for k in keys_to_remove {
-            self.buffer.remove(&k);
-        }
     }
 }
 
