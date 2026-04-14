@@ -1,0 +1,23 @@
+e2e-tests/src/rindexer_client.rs
+  b416449b704d5937 284-286
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "9a376fc7adc4b2b35165c8634d0066e6f5fe696c",
+  "prompts": {
+    "b416449b704d5937": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9ec8295a-efa7-4aa2-89d5-707dbef01acf",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 895,
+      "total_deletions": 1,
+      "accepted_lines": 5,
+      "overriden_lines": 0
+    }
+  }
+}
