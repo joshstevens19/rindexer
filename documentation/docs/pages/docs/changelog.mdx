@@ -9,6 +9,7 @@
 ### Features
 -------------------------------------------------
 - feat: Add Twilio SMS alerts support — send SMS notifications for on-chain events via the Twilio API
+- feat: **`RINDEXER_CLICKHOUSE_BATCH_SIZE` env var** — configure the ClickHouse batch chunk size used for no-code/custom table writes. Defaults to `1000`. Increasing it reduces the number of sequential `INSERT` statements for high-volume streams, at the cost of larger per-request payloads.
 
 ## Releases
 -------------------------------------------------
@@ -35,7 +36,6 @@ github branch - https://github.com/joshstevens19/rindexer/tree/release/0.38.0
 -------------------------------------------------
 
 - feat: **`database` field on custom tables** — optional YAML field that directs a custom table to a specific ClickHouse database (or PostgreSQL schema) instead of the default `{project}_{contract}` naming. Enables multiple contracts to write to a shared table (e.g., `database: indexer` → `indexer.events`).
-
 
 # 0.37.2-beta - 1st April 2026
 

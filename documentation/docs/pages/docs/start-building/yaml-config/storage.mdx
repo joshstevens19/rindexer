@@ -1010,7 +1010,12 @@ CLICKHOUSE_URL="http://[host]:[port]"
 CLICKHOUSE_DB="default"
 CLICKHOUSE_USER="default"
 CLICKHOUSE_PASSWORD="default"
+RINDEXER_CLICKHOUSE_BATCH_SIZE="1000"
 ```
+
+`RINDEXER_CLICKHOUSE_BATCH_SIZE` controls the chunk size used when rindexer writes dynamic/no-code ClickHouse batches. The default is `1000`.
+
+For high-volume streams, increasing this value reduces the number of sequential ClickHouse `INSERT` requests. The tradeoff is that each request becomes larger, so values should be increased carefully based on the workload and ClickHouse capacity.
 
 ### enabled
 

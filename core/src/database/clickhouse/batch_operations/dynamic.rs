@@ -22,7 +22,7 @@ pub async fn execute_dynamic_batch_operation(
         return Ok(());
     }
 
-    for batch in rows.chunks(1000) {
+    for batch in rows.chunks(database.batch_size()) {
         execute_batch(database, table_name, op_type, batch).await.map_err(|e| {
             tracing::error!("{} - Batch operation failed: {}", event_name, e);
             e
