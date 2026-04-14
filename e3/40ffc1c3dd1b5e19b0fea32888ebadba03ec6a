@@ -1,0 +1,23 @@
+core/tests/e2e_reorg.rs
+  1c14f56455e2543e 20,25,170,176,190-194,227-232,235,240,268-381,3036-3150
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "e340ffc1c3dd1b5e19b0fea32888ebadba03ec6a",
+  "prompts": {
+    "1c14f56455e2543e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ed0e6ef1-d132-4f30-981f-d3226870903e",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 249,
+      "total_deletions": 3,
+      "accepted_lines": 246,
+      "overriden_lines": 0
+    }
+  }
+}
