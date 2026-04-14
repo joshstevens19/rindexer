@@ -1,0 +1,361 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "release/**"
+      - master
+
+jobs:
+  version-bump:
+    name: Bump Version
+    runs-on: ubuntu-latest
+    if: |
+      github.actor != 'github-actions[bot]' &&
+      startsWith(github.ref, 'refs/heads/release/')
+    outputs:
+      version: ${{ steps.extract.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Extract version from branch name
+        id: extract
+        run: |
+          VERSION=${GITHUB_REF#refs/heads/release/}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-edit
+        run: cargo install cargo-edit --locked
+
+      - name: Set version in Cargo.toml files
+        run: |
+          cd cli && cargo set-version ${{ steps.extract.outputs.version }} && cd ..
+          cd core && cargo set-version ${{ steps.extract.outputs.version }} && cd ..
+
+      - name: Commit and push version bump
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add cli/Cargo.toml core/Cargo.toml Cargo.lock
+          git diff --cached --quiet && echo "No version changes" && exit 0
+          git commit -m "Release v${{ steps.extract.outputs.version }}"
+          git push origin release/${{ steps.extract.outputs.version }}
+
+  create-pr:
+    name: Create Release PR
+    runs-on: ubuntu-latest
+    needs: version-bump
+    if: |
+      github.actor != 'github-actions[bot]' &&
+      startsWith(github.ref, 'refs/heads/release/')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Check if PR already exists
+        id: check_pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=${GITHUB_REF#refs/heads/release/}
+          PR_EXISTS=$(gh pr list --base master --head release/$VERSION --json number --jq length)
+          echo "pr_exists=$( [ "$PR_EXISTS" -gt 0 ] && echo true || echo false )" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create Pull Request
+        if: steps.check_pr.outputs.pr_exists == 'false'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=${{ steps.check_pr.outputs.version }}
+          gh pr create \
+            --title "Release v${VERSION}" \
+            --body "## Release v${VERSION}
+
+          This PR contains:
+          - Version bump to ${VERSION}
+          - Ready for release
+
+          **Merging this PR will automatically build binaries and create a GitHub Release.**" \
+            --base master \
+            --head release/${VERSION}
+
+  release-build:
+    name: Build Release — ${{ matrix.target }} (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    if: |
+      github.actor != 'github-actions[bot]' &&
+      github.ref == 'refs/heads/master' &&
+      github.event_name == 'push'
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            svm_target_platform: linux-amd64
+            platform: linux
+            arch: amd64
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            svm_target_platform: macosx-amd64
+            platform: darwin
+            arch: amd64
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+            svm_target_platform: macosx-aarch64
+            platform: darwin
+            arch: arm64
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            svm_target_platform: windows-amd64
+            platform: win32
+            arch: amd64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if release commit
+        id: check_release
+        shell: bash
+        run: |
+          MSG=$(git log --oneline -1 --pretty=format:"%s")
+          VERSION=$(echo "$MSG" | grep -o 'Release v[0-9]*\.[0-9]*\.[0-9]*' | sed 's/Release v//' || echo "")
+          if [[ -n "$VERSION" ]]; then
+            echo "VERSION_NAME=$VERSION" >> $GITHUB_ENV
+            echo "is_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Skip if not a release
+        if: steps.check_release.outputs.is_release != 'true'
+        run: echo "Not a release commit — skipping" && exit 0
+
+      - name: Checkout release branch
+        if: steps.check_release.outputs.is_release == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: release/${{ env.VERSION_NAME }}
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.check_release.outputs.is_release == 'true'
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.check_release.outputs.is_release == 'true'
+        with:
+          key: release-${{ matrix.target }}
+          cache-on-failure: true
+
+      - name: Setup Node.js
+        if: steps.check_release.outputs.is_release == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Apple M1 setup
+        if: steps.check_release.outputs.is_release == 'true' && matrix.target == 'aarch64-apple-darwin'
+        run: |
+          echo "SDKROOT=$(xcrun -sdk macosx --show-sdk-path)" >> $GITHUB_ENV
+          echo "MACOSX_DEPLOYMENT_TARGET=$(xcrun -sdk macosx --show-sdk-platform-version)" >> $GITHUB_ENV
+
+      - name: Install MSVC target
+        if: steps.check_release.outputs.is_release == 'true' && matrix.target == 'x86_64-pc-windows-msvc'
+        run: rustup target add x86_64-pc-windows-msvc
+
+      - name: Install OpenSSL dev libraries
+        if: steps.check_release.outputs.is_release == 'true' && matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Install and setup NASM on Windows
+        if: steps.check_release.outputs.is_release == 'true' && matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          choco install nasm
+          $nasmPath = "C:\Program Files\NASM"
+          $env:PATH += ";$nasmPath"
+          echo "$nasmPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "NASM_PATH=$nasmPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          refreshenv
+          nasm -v
+
+      - name: Install vcpkg on Windows
+        if: steps.check_release.outputs.is_release == 'true' && matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          git clone https://github.com/Microsoft/vcpkg.git C:\vcpkg
+          C:\vcpkg\bootstrap-vcpkg.bat
+          C:\vcpkg\vcpkg integrate install
+          echo "VCPKG_ROOT=C:\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "C:\vcpkg" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install CMake on Windows
+        if: steps.check_release.outputs.is_release == 'true' && matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          choco install cmake --version=3.20.0 --installargs 'ADD_CMAKE_TO_PATH=System'
+          refreshenv
+          cmake --version
+          echo "CMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install dependencies with vcpkg on Windows
+        if: steps.check_release.outputs.is_release == 'true' && matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          C:\vcpkg\vcpkg install openssl:x64-windows-static-md zlib:x64-windows-static-md
+
+      - name: Build binaries
+        if: steps.check_release.outputs.is_release == 'true'
+        working-directory: cli
+        env:
+          SVM_TARGET_PLATFORM: ${{ matrix.svm_target_platform }}
+          CMAKE_TOOLCHAIN_FILE: C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+        shell: bash
+        run: |
+          set -eo pipefail
+          target="${{ matrix.target }}"
+          flags=()
+
+          if [[ "$target" != *msvc* && "$target" != "aarch64-unknown-linux-gnu" ]]; then
+            flags+=(--features jemalloc,reth)
+          else
+            flags+=(--features reth)
+          fi
+
+          if [[ "$target" == *windows* ]]; then
+            export PATH="$PATH:/c/Program Files/NASM:/c/vcpkg"
+            export NASM="$NASM_PATH/nasm.exe"
+            "$NASM" -v
+          fi
+
+          RUST_BACKTRACE=1 CMAKE_TOOLCHAIN_FILE="$CMAKE_TOOLCHAIN_FILE" cargo build --release --target "$target" "${flags[@]}" -vv
+
+      - name: Smoke test
+        if: steps.check_release.outputs.is_release == 'true'
+        shell: bash
+        run: |
+          set -eo pipefail
+          target="${{ matrix.target }}"
+          binary_path="${{ github.workspace }}/target/$target/release/rindexer_cli"
+          [[ "$target" == *windows* ]] && binary_path+=".exe"
+          "$binary_path" --version
+          "$binary_path" help
+
+      - name: Archive binaries
+        if: steps.check_release.outputs.is_release == 'true'
+        id: artifacts
+        env:
+          PLATFORM_NAME: ${{ matrix.platform }}
+          TARGET: ${{ matrix.target }}
+          ARCH: ${{ matrix.arch }}
+        shell: bash
+        run: |
+          set -eo pipefail
+          BUILD_DIR="${{ github.workspace }}/target/${TARGET}/release"
+          CLI_BINARY_NAME="rindexer_cli"
+          [[ "$PLATFORM_NAME" == "win32" ]] && CLI_BINARY_NAME="rindexer_cli.exe"
+
+          mkdir -p staging
+          cp "$BUILD_DIR/$CLI_BINARY_NAME" staging/
+
+          if [ "$PLATFORM_NAME" == "linux" ] || [ "$PLATFORM_NAME" == "darwin" ]; then
+            FILE_NAME="rindexer_${PLATFORM_NAME}-${ARCH}.tar.gz"
+            tar -czvf "$FILE_NAME" -C staging .
+          else
+            FILE_NAME="rindexer_${PLATFORM_NAME}-${ARCH}.zip"
+            (cd staging && 7z a -tzip "${{ github.workspace }}/$FILE_NAME" .)
+          fi
+
+          echo "file_name=$FILE_NAME" >> $GITHUB_OUTPUT
+
+      - name: Upload artifact
+        if: steps.check_release.outputs.is_release == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.platform }}-${{ matrix.arch }}
+          path: ${{ steps.artifacts.outputs.file_name }}
+
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: release-build
+    if: |
+      github.actor != 'github-actions[bot]' &&
+      github.ref == 'refs/heads/master' &&
+      github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if release commit
+        id: check_release
+        shell: bash
+        run: |
+          MSG=$(git log --oneline -1 --pretty=format:"%s")
+          VERSION=$(echo "$MSG" | grep -o 'Release v[0-9]*\.[0-9]*\.[0-9]*' | sed 's/Release v//' || echo "")
+          if [[ -n "$VERSION" ]]; then
+            echo "VERSION_NAME=$VERSION" >> $GITHUB_ENV
+            echo "is_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download release artifacts
+        if: steps.check_release.outputs.is_release == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          path: ./release-artifacts
+
+      - name: Create GitHub Release
+        if: steps.check_release.outputs.is_release == 'true'
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ env.VERSION_NAME }}
+          release_name: Release v${{ env.VERSION_NAME }}
+          draft: false
+          prerelease: false
+          body: |
+            Release v${{ env.VERSION_NAME }}
+
+            ## Installation
+            ```bash
+            # Latest version
+            curl -L https://rindexer.xyz/install.sh | bash
+
+            # Specific version
+            curl -L https://rindexer.xyz/install.sh | bash -s -- --version ${{ env.VERSION_NAME }}
+            ```
+        continue-on-error: true
+
+      - name: Upload Release Assets
+        if: steps.check_release.outputs.is_release == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for platform_dir in ./release-artifacts/*/; do
+            for file in "$platform_dir"*; do
+              if [[ -f "$file" ]]; then
+                echo "Uploading $(basename "$file")"
+                gh release upload v${{ env.VERSION_NAME }} "$file" --clobber
+              fi
+            done
+          done

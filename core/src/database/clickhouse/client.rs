@@ -8,6 +8,9 @@ use tracing::info;
 use crate::metrics::database::{self as db_metrics, ops};
 use crate::EthereumSqlTypeWrapper;
 
+const DEFAULT_CLICKHOUSE_BATCH_SIZE: usize = 1000;
+const CLICKHOUSE_BATCH_SIZE_ENV: &str = "RINDEXER_CLICKHOUSE_BATCH_SIZE";
+
 pub struct ClickhouseConnection {
     url: String,
     user: String,
@@ -45,11 +48,35 @@ pub enum ClickhouseError {
 
 pub struct ClickhouseClient {
     pub(crate) conn: Client,
+    batch_size: usize,
+}
+
+fn parse_clickhouse_batch_size() -> usize {
+    parse_clickhouse_batch_size_value(env::var(CLICKHOUSE_BATCH_SIZE_ENV).ok())
+}
+
+fn parse_clickhouse_batch_size_value(value: Option<String>) -> usize {
+    match value {
+        Some(raw) => match raw.parse::<usize>() {
+            Ok(parsed) if parsed > 0 => parsed,
+            _ => {
+                tracing::warn!(
+                    "{} is invalid (value: {:?}); using default {}",
+                    CLICKHOUSE_BATCH_SIZE_ENV,
+                    raw,
+                    DEFAULT_CLICKHOUSE_BATCH_SIZE
+                );
+                DEFAULT_CLICKHOUSE_BATCH_SIZE
+            }
+        },
+        None => DEFAULT_CLICKHOUSE_BATCH_SIZE,
+    }
 }
 
 impl ClickhouseClient {
     pub async fn new() -> Result<Self, ClickhouseConnectionError> {
         let connection = clickhouse_connection()?;
+        let batch_size = parse_clickhouse_batch_size();
 
         let client = Client::default()
             .with_url(connection.url)
@@ -58,9 +85,13 @@ impl ClickhouseClient {
             .with_password(connection.password);
 
         client.query("select 1").execute().await?;
-        info!("Clickhouse client connected successfully!");
+        info!("Clickhouse client connected successfully! dynamic batch size={}", batch_size);
 
-        Ok(ClickhouseClient { conn: client })
+        Ok(ClickhouseClient { conn: client, batch_size })
+    }
+
+    pub fn batch_size(&self) -> usize {
+        self.batch_size
     }
 
     pub async fn query_one<T>(&self, sql: &str) -> Result<T, ClickhouseError>
@@ -175,5 +206,32 @@ impl ClickhouseClient {
         bulk_data: &[Vec<EthereumSqlTypeWrapper>],
     ) -> Result<u64, ClickhouseError> {
         self.bulk_insert_via_query(table_name, column_names, bulk_data).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_clickhouse_batch_size_value, DEFAULT_CLICKHOUSE_BATCH_SIZE};
+
+    #[test]
+    fn clickhouse_batch_size_defaults_when_env_missing() {
+        assert_eq!(parse_clickhouse_batch_size_value(None), DEFAULT_CLICKHOUSE_BATCH_SIZE);
+    }
+
+    #[test]
+    fn clickhouse_batch_size_reads_positive_env_override() {
+        assert_eq!(parse_clickhouse_batch_size_value(Some("5000".to_string())), 5000);
+    }
+
+    #[test]
+    fn clickhouse_batch_size_rejects_zero_or_invalid_values() {
+        assert_eq!(
+            parse_clickhouse_batch_size_value(Some("0".to_string())),
+            DEFAULT_CLICKHOUSE_BATCH_SIZE
+        );
+        assert_eq!(
+            parse_clickhouse_batch_size_value(Some("invalid".to_string())),
+            DEFAULT_CLICKHOUSE_BATCH_SIZE
+        );
     }
 }
