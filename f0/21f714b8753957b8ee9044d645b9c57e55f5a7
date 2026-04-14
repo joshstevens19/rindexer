@@ -1,0 +1,36 @@
+core/src/generator/mod.rs
+  74765553b8c9673c 11-13,18-20
+core/src/generator/events_bindings.rs
+  b44b22da986211af 1050-1051
+  74765553b8c9673c 19,404,713,721
+core/src/generator/trace_bindings.rs
+  b44b22da986211af 1025
+  74765553b8c9673c 19,518,763,771
+core/src/helpers/file.rs
+  74765553b8c9673c 98-99
+core/src/generator/networks_bindings.rs
+  b44b22da986211af 137,199
+  74765553b8c9673c 1,147-148,181
+core/src/generator/context_bindings.rs
+  74765553b8c9673c 4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "f021f714b8753957b8ee9044d645b9c57e55f5a7",
+  "prompts": {
+    "74765553b8c9673c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c4da830e-5308-439d-8396-83f2e6409a9c",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 45,
+      "total_deletions": 60,
+      "accepted_lines": 21,
+      "overriden_lines": 0
+    }
+  }
+}

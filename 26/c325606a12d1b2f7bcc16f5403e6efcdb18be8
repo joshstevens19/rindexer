@@ -1,0 +1,24 @@
+core/src/helpers/file.rs
+  74765553b8c9673c 103
+  b44b22da986211af 38-43
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "26c325606a12d1b2f7bcc16f5403e6efcdb18be8",
+  "prompts": {
+    "b44b22da986211af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "df83240b-4c45-438d-b5d0-182f0b37699a",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 6,
+      "total_deletions": 6,
+      "accepted_lines": 6,
+      "overriden_lines": 0
+    }
+  }
+}

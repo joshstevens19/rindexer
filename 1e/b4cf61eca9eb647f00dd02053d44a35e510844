@@ -1,0 +1,104 @@
+examples/rindexer_rust_playground/src/rindexer_lib/typings/rindexer_playground/events/erc_20_filter.rs
+  847014acdc95bfaf 87,90-98,184,191,298,305,491-498,500,502,505-506,510,512,515-516,529,533-539
+examples/rindexer_rust_playground/src/rindexer_lib/typings/rindexer_playground/events/uniswap_v3_pool_filter.rs
+  847014acdc95bfaf 186,189-197,285,292,465-472,474,476,479-480,493,497-503
+core/src/indexer/native_transfer.rs
+  847014acdc95bfaf 36,117,135,278,370,385,413,429,454,513,536-627
+examples/rindexer_rust_playground/src/rindexer_lib/typings/rindexer_playground/events/rocket_pool_eth.rs
+  847014acdc95bfaf 87,90-98,184,191,304,311,508-515,517,519,522-523,527,529,532-533,546,550-556
+examples/rindexer_rust_playground/src/rindexer_lib/typings/global_contracts.rs
+  b44b22da986211af 1
+core/src/indexer/last_synced.rs
+  847014acdc95bfaf 277
+examples/rust_clickhouse/src/rindexer_lib/typings/networks.rs
+  b44b22da986211af 1
+core/src/indexer/fetch_logs.rs
+  847014acdc95bfaf 9,178,181,436,650,1274-1283,1285-1340,1342-1364,1366-1390,1392-1416,1418-1442,1444-1466,1468-1481,1483
+  8eb93b81bc1ec27e 1482
+core/src/blockclock/mod.rs
+  847014acdc95bfaf 42,86,88,143
+examples/rindexer_rust_playground/src/rindexer_lib/typings/networks.rs
+  b44b22da986211af 1
+examples/rust_clickhouse/src/rindexer_lib/typings/clickhouse_indexer/events/rocket_pool.rs
+  847014acdc95bfaf 417-425
+core/src/provider.rs
+  16dcee90fbfb078d 36,48-49,56-64,66-68,70-97,103-104,720-734,741-742,747,757-759,762-770,777-784,786-833,932-933,936-941,949-974,976-980,983-992,999,1001-1015,1017-1018,1020-1070,1259-1261,1264-1273,1276,1278-1289,1296-1308,1311-1312,1314,846,930,997
+  847014acdc95bfaf 771-772,834-835,837-840,842-844,993-994,845,847-850,852-853,856-857,864-865,868-869,873,876-881,884-889,893-897,900-904,907-911,914-920,924-928,65,773-774,851,860-861,934-935,942-948,975,995-996,1000,1277
+  8eb93b81bc1ec27e 981-982,854-855,858-859,866-867,870-871,874-875,882-883,891-892,898-899,905-906,912-913,921-922,929,931,775-776,862-863,998
+core/src/blockclock/fetcher.rs
+  847014acdc95bfaf 1,21,25,161,212,214-215,307
+core/src/indexer/start.rs
+  847014acdc95bfaf 38,162-167,751,768-790,792-852,854,856-872,874,876-892,894,896-912,914,916-930,932,934-950,952,954-955,967
+core/src/indexer/progress.rs
+  847014acdc95bfaf 150,200
+core/src/indexer/process.rs
+  847014acdc95bfaf 21,287,479
+core/src/event/callback_registry.rs
+  847014acdc95bfaf 101
+core/src/indexer/reorg.rs
+  847014acdc95bfaf 1,11-14,31-32,136,138,1139,1314,1331-1332,1334,1327,1329
+  8eb93b81bc1ec27e 1796
+core/src/event/contract_setup.rs
+  847014acdc95bfaf 13,31,49,88,121,133,163,167
+examples/rindexer_rust_playground/rindexer.yaml
+  847014acdc95bfaf 37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "1eb4cf61eca9eb647f00dd02053d44a35e510844",
+  "prompts": {
+    "16dcee90fbfb078d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "633cc1ae-7ee5-47c1-8516-af09d1b75b7e",
+        "model": "unknown"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 360,
+      "total_deletions": 5,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "847014acdc95bfaf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ba97b2b6-c1ec-4c31-8b29-a4cc233ccc5c",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 366,
+      "total_deletions": 183,
+      "accepted_lines": 298,
+      "overriden_lines": 0
+    },
+    "8eb93b81bc1ec27e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "edca3c59-b30f-4bf9-9917-3ad3d23245f6",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 293,
+      "total_deletions": 6,
+      "accepted_lines": 5,
+      "overriden_lines": 0
+    },
+    "b44b22da986211af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "df83240b-4c45-438d-b5d0-182f0b37699a",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 3,
+      "overriden_lines": 0
+    }
+  }
+}
