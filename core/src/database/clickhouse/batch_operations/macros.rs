@@ -211,7 +211,7 @@ macro_rules! create_batch_clickhouse_operation {
                 Ok(())
             }
 
-            for batch in filtered_results.chunks(1000) {
+            for batch in filtered_results.chunks(database.batch_size()) {
                 if let Err(e) = execute_batch(database, batch).await {
                     rindexer_error!("{} - Batch operation failed: {}", $event_name, e);
                     return Err(e);
