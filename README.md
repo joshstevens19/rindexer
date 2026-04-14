@@ -1,5 +1,7 @@
 # 🦀 rindexer 🦀 
 
+[![codecov](https://codecov.io/gh/joshstevens19/rindexer/graph/badge.svg)](https://codecov.io/gh/joshstevens19/rindexer)
+
 Note rindexer is brand new and actively under development, things will change and bugs will exist - if you find any bugs or have any
 feature requests please open an issue on [github](https://github.com/joshstevens19/rindexer/issues).
 
