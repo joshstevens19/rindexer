@@ -14,6 +14,8 @@ use tokio::{
 use crate::{
     chat::{
         discord::{DiscordBot, DiscordError},
+        opsgenie::{OpsGenieBot, OpsGenieError},
+        pagerduty::{PagerDutyBot, PagerDutyError},
         slack::{SlackBot, SlackError},
         telegram::{TelegramBot, TelegramError},
         template::Template,
@@ -21,8 +23,9 @@ use crate::{
     },
     event::{filter_by_expression, filter_event_data_by_conditions, EventMessage},
     manifest::chat::{
-        ChatConfig, DiscordConfig, DiscordEvent, SlackConfig, SlackEvent, TelegramConfig,
-        TelegramEvent, TwilioConfig, TwilioEvent,
+        ChatConfig, DiscordConfig, DiscordEvent, OpsGenieConfig, OpsGenieEvent, PagerDutyConfig,
+        PagerDutyEvent, SlackConfig, SlackEvent, TelegramConfig, TelegramEvent, TwilioConfig,
+        TwilioEvent,
     },
 };
 
@@ -41,6 +44,12 @@ pub enum ChatError {
 
     #[error("Twilio error: {0}")]
     Twilio(#[from] TwilioError),
+
+    #[error("PagerDuty error: {0}")]
+    PagerDuty(#[from] PagerDutyError),
+
+    #[error("OpsGenie error: {0}")]
+    OpsGenie(#[from] OpsGenieError),
 
     #[error("Task failed: {0}")]
     JoinError(JoinError),
@@ -70,11 +79,25 @@ struct TwilioInstance {
     client: Arc<TwilioBot>,
 }
 
+#[derive(Debug, Clone)]
+struct PagerDutyInstance {
+    config: PagerDutyConfig,
+    client: Arc<PagerDutyBot>,
+}
+
+#[derive(Debug, Clone)]
+struct OpsGenieInstance {
+    config: OpsGenieConfig,
+    client: Arc<OpsGenieBot>,
+}
+
 pub struct ChatClients {
     telegram: Option<Vec<TelegramInstance>>,
     discord: Option<Vec<DiscordInstance>>,
     slack: Option<Vec<SlackInstance>>,
     twilio: Option<Vec<TwilioInstance>>,
+    pagerduty: Option<Vec<PagerDutyInstance>>,
+    opsgenie: Option<Vec<OpsGenieInstance>>,
 }
 
 impl ChatClients {
@@ -123,7 +146,33 @@ impl ChatClients {
                 .collect()
         });
 
-        Self { telegram, discord, slack, twilio }
+        let pagerduty = chat_config.pagerduty.map(|config| {
+            config
+                .into_iter()
+                .map(|config| {
+                    let client = Arc::new(PagerDutyBot::new(
+                        config.routing_key.clone(),
+                        config.severity.clone(),
+                    ));
+                    PagerDutyInstance { config, client }
+                })
+                .collect()
+        });
+
+        let opsgenie = chat_config.opsgenie.map(|config| {
+            config
+                .into_iter()
+                .map(|config| {
+                    let client = Arc::new(OpsGenieBot::new(
+                        config.api_key.clone(),
+                        config.priority.clone(),
+                    ));
+                    OpsGenieInstance { config, client }
+                })
+                .collect()
+        });
+
+        Self { telegram, discord, slack, twilio, pagerduty, opsgenie }
     }
 
     fn find_accepted_block_range(&self, from_block: &U64, to_block: &U64) -> U64 {
@@ -147,6 +196,8 @@ impl ChatClients {
             || self.discord.is_some()
             || self.slack.is_some()
             || self.twilio.is_some()
+            || self.pagerduty.is_some()
+            || self.opsgenie.is_some()
     }
 
     fn telegram_send_message_tasks(
@@ -314,6 +365,82 @@ impl ChatClients {
         tasks
     }
 
+    fn pagerduty_send_message_tasks(
+        &self,
+        instance: &PagerDutyInstance,
+        event_for: &PagerDutyEvent,
+        events_data: &[Value],
+    ) -> SendMessage {
+        let tasks: Vec<_> = events_data
+            .iter()
+            .filter(|event_data| {
+                if let Some(expression) = &event_for.filter_expression {
+                    let result = filter_by_expression(expression, event_data);
+
+                    return match result {
+                        Ok(res) => res,
+                        Err(e) => {
+                            tracing::error!("Error evaluating filter expression: {}", e);
+                            false
+                        }
+                    };
+                }
+                if let Some(conditions) = &event_for.conditions {
+                    return filter_event_data_by_conditions(event_data, conditions);
+                }
+                true
+            })
+            .map(|event_data| {
+                let client = Arc::clone(&instance.client);
+                let message = Template::new(event_for.template_inline.clone())
+                    .parse_template_inline(event_data);
+                task::spawn(async move {
+                    client.send_message(&message).await?;
+                    Ok(())
+                })
+            })
+            .collect();
+        tasks
+    }
+
+    fn opsgenie_send_message_tasks(
+        &self,
+        instance: &OpsGenieInstance,
+        event_for: &OpsGenieEvent,
+        events_data: &[Value],
+    ) -> SendMessage {
+        let tasks: Vec<_> = events_data
+            .iter()
+            .filter(|event_data| {
+                if let Some(expression) = &event_for.filter_expression {
+                    let result = filter_by_expression(expression, event_data);
+
+                    return match result {
+                        Ok(res) => res,
+                        Err(e) => {
+                            tracing::error!("Error evaluating filter expression: {}", e);
+                            false
+                        }
+                    };
+                }
+                if let Some(conditions) = &event_for.conditions {
+                    return filter_event_data_by_conditions(event_data, conditions);
+                }
+                true
+            })
+            .map(|event_data| {
+                let client = Arc::clone(&instance.client);
+                let message = Template::new(event_for.template_inline.clone())
+                    .parse_template_inline(event_data);
+                task::spawn(async move {
+                    client.send_message(&message).await?;
+                    Ok(())
+                })
+            })
+            .collect();
+        tasks
+    }
+
     pub async fn send_message(
         &self,
         event_message: &EventMessage,
@@ -401,6 +528,48 @@ impl ChatClients {
                         if let Some(twilio_event) = twilio_event {
                             let message =
                                 self.twilio_send_message_tasks(instance, twilio_event, data_array);
+                            messages.push(message);
+                        }
+                    }
+                }
+            }
+
+            if let Some(pagerduty) = &self.pagerduty {
+                for instance in pagerduty {
+                    if instance.config.networks.contains(&event_message.network) {
+                        let pagerduty_event = instance
+                            .config
+                            .messages
+                            .iter()
+                            .find(|e| e.event_name == event_message.event_name);
+
+                        if let Some(pagerduty_event) = pagerduty_event {
+                            let message = self.pagerduty_send_message_tasks(
+                                instance,
+                                pagerduty_event,
+                                data_array,
+                            );
+                            messages.push(message);
+                        }
+                    }
+                }
+            }
+
+            if let Some(opsgenie) = &self.opsgenie {
+                for instance in opsgenie {
+                    if instance.config.networks.contains(&event_message.network) {
+                        let opsgenie_event = instance
+                            .config
+                            .messages
+                            .iter()
+                            .find(|e| e.event_name == event_message.event_name);
+
+                        if let Some(opsgenie_event) = opsgenie_event {
+                            let message = self.opsgenie_send_message_tasks(
+                                instance,
+                                opsgenie_event,
+                                data_array,
+                            );
                             messages.push(message);
                         }
                     }
