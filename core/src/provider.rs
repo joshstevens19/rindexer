@@ -997,7 +997,7 @@ pub mod mock {
         }
 
         async fn get_latest_block(&self) -> Result<Option<Arc<AnyRpcBlock>>, ProviderError> {
-            Ok(self.blocks.last().cloned())
+            Ok(self.blocks.iter().max_by_key(|b| b.inner.number()).cloned())
         }
 
         async fn get_block_number(&self) -> Result<U64, ProviderError> {
@@ -1006,9 +1006,36 @@ pub mod mock {
 
         async fn get_logs(
             &self,
-            _event_filter: &RindexerEventFilter,
+            event_filter: &RindexerEventFilter,
         ) -> Result<Vec<Log>, ProviderError> {
-            Ok(self.logs.clone())
+            let from = event_filter.from_block().to::<u64>();
+            let to = event_filter.to_block().to::<u64>();
+            let topic_id = event_filter.event_signature();
+            let addresses = event_filter.contract_addresses().await;
+            Ok(self
+                .logs
+                .iter()
+                .filter(|log| match log.block_number {
+                    Some(n) => n >= from && n <= to,
+                    // Logs without a block number are always included
+                    None => true,
+                })
+                .filter(|log| {
+                    // If topic_id is zero (e.g. empty_for_test), skip topic filtering
+                    if topic_id.is_zero() {
+                        return true;
+                    }
+                    log.topics().first().is_some_and(|t| *t == topic_id)
+                })
+                .filter(|log| {
+                    // If no contract addresses are specified, include all logs
+                    match &addresses {
+                        Some(addrs) => addrs.contains(&log.address()),
+                        None => true,
+                    }
+                })
+                .cloned()
+                .collect())
         }
 
         async fn get_block_by_number_batch(
@@ -1037,9 +1064,15 @@ pub mod mock {
 
         async fn get_tx_receipts_batch(
             &self,
-            _hashes: &[TxHash],
+            hashes: &[TxHash],
         ) -> Result<Vec<AnyTransactionReceipt>, ProviderError> {
-            Ok(self.receipts.clone())
+            let requested: HashSet<TxHash> = hashes.iter().copied().collect();
+            Ok(self
+                .receipts
+                .iter()
+                .filter(|r| requested.contains(&r.transaction_hash))
+                .cloned()
+                .collect())
         }
 
         async fn trace_block(
