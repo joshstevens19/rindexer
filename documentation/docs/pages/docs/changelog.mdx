@@ -2,6 +2,7 @@
 
 ### Breaking changes
 -------------------------------------------------
+- breaking: **Generated code uses `Arc<dyn ChainProvider>` instead of `Arc<JsonRpcCachedProvider>`** — Rust-mode projects that call concrete-type methods (e.g. `get_inner_provider()`) through the generated provider binding will need to use the network-specific accessors (`get_ethereum_provider_cache()`, etc.) which still return the concrete type. After upgrading, run `rindexer codegen typings` to regenerate.
 
 ### Bug fixes
 -------------------------------------------------
