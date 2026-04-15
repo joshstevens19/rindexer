@@ -46,11 +46,11 @@ pub fn validate_sql_identifier(name: &str, kind: &str) -> anyhow::Result<()> {
 /// that could be used for SQL injection: semicolons, comments, quotes, UNION, etc.
 pub fn validate_sql_condition(condition: &str) -> anyhow::Result<()> {
     anyhow::ensure!(!condition.is_empty(), "SQL condition must not be empty");
-    // Reject dangerous characters
-    for ch in [';', '\'', '"', '-', '/', '*'] {
+    // Reject injection patterns (comments, statement terminators, string literals)
+    for pattern in ["--", "/*", "*/", ";", "'", "\""] {
         anyhow::ensure!(
-            !condition.contains(ch),
-            "SQL condition contains forbidden character '{ch}': {condition}"
+            !condition.contains(pattern),
+            "SQL condition contains forbidden pattern '{pattern}': {condition}"
         );
     }
     // Reject dangerous SQL keywords (case-insensitive)

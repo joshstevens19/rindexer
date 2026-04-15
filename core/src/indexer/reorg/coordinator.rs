@@ -14,6 +14,8 @@ use super::task::{DerivedTableInfo, EventTableInfo, ReorgTask};
 use super::window::{BlockChainWindow, ParentValidation};
 use super::ReorgContext;
 
+/// Number of blocks between periodic flushes of the in-memory block window to the database.
+/// Balances write frequency against data-loss risk on crash.
 const FLUSH_INTERVAL: u64 = 50;
 
 pub struct ReorgCoordinator {

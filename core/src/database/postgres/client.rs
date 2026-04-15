@@ -57,6 +57,9 @@ pub enum PostgresError {
 
     #[error("Connection pool error: {0}")]
     ConnectionPoolError(#[from] RunError<tokio_postgres::Error>),
+
+    #[error("{0}")]
+    Custom(String),
 }
 
 #[allow(unused)]
@@ -475,8 +478,10 @@ impl PostgresClient {
             "DELETE FROM {} WHERE network = $1 AND block_number >= $2 AND block_number <= $3",
             table_name
         );
-        let fork_point = fork_point as i64;
-        let detection_point = detection_point as i64;
+        let fork_point =
+            i64::try_from(fork_point).map_err(|_| "fork_point exceeds i64 range".to_string())?;
+        let detection_point = i64::try_from(detection_point)
+            .map_err(|_| "detection_point exceeds i64 range".to_string())?;
         self.execute(&query, &[&network, &fork_point, &detection_point])
             .await
             .map_err(|e| e.to_string())
@@ -501,8 +506,10 @@ impl PostgresClient {
         let mut conn = self.pool.get().await?;
         let transaction = conn.transaction().await?;
 
-        let fork_point_i64 = fork_point as i64;
-        let detection_point_i64 = detection_point as i64;
+        let fork_point_i64 = i64::try_from(fork_point)
+            .map_err(|_| PostgresError::Custom("fork_point exceeds i64 range".to_string()))?;
+        let detection_point_i64 = i64::try_from(detection_point)
+            .map_err(|_| PostgresError::Custom("detection_point exceeds i64 range".to_string()))?;
         let fork_point_decimal = Decimal::from(fork_point);
         let detection_point_decimal = Decimal::from(detection_point);
         let mut total_deleted: u64 = 0;
@@ -537,7 +544,9 @@ impl PostgresClient {
              (network, block_number, block_hash, parent_hash) \
              VALUES ($1, $2, $3, $4)";
         for &(block_number, block_hash, parent_hash) in corrected_blocks {
-            let block_number_i64 = block_number as i64;
+            let block_number_i64 = i64::try_from(block_number).map_err(|_| {
+                PostgresError::Custom(format!("block_number {} exceeds i64 range", block_number))
+            })?;
             transaction
                 .execute(insert_query, &[&network, &block_number_i64, &block_hash, &parent_hash])
                 .await?;

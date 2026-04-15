@@ -262,9 +262,11 @@ impl ReorgTask {
 
                 // Include network + fork_point in temp table name to avoid collisions
                 // across concurrent reorg tasks on different networks.
+                // Replace hyphens with underscores so the name is a valid SQL identifier.
+                let safe_network = self.network.replace('-', "_");
                 let temp_base = format!(
                     "_rindexer_reorg_snap_{}_{}_{}",
-                    self.network, self.fork_point, snap_idx
+                    safe_network, self.fork_point, snap_idx
                 );
                 snap_idx += 1;
 

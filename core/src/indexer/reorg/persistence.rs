@@ -148,7 +148,8 @@ impl ReorgBlockHashPersistence {
                          DO UPDATE SET block_hash = EXCLUDED.block_hash,
                          parent_hash = EXCLUDED.parent_hash"#;
 
-            let block_number_i64 = block_number as i64;
+            let block_number_i64 = i64::try_from(block_number)
+                .with_context(|| format!("block_number {} exceeds i64 range", block_number))?;
             postgres
                 .execute(query, &[&network, &block_number_i64, &block_hash, &parent_hash])
                 .await
