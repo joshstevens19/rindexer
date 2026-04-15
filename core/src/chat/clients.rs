@@ -163,10 +163,8 @@ impl ChatClients {
             config
                 .into_iter()
                 .map(|config| {
-                    let client = Arc::new(OpsGenieBot::new(
-                        config.api_key.clone(),
-                        config.priority.clone(),
-                    ));
+                    let client =
+                        Arc::new(OpsGenieBot::new(config.api_key.clone(), config.priority.clone()));
                     OpsGenieInstance { config, client }
                 })
                 .collect()
