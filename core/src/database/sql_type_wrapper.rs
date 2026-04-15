@@ -491,26 +491,47 @@ impl EthereumSqlTypeWrapper {
             EthereumSqlTypeWrapper::U64Nullable(v) => v.to_string(),
             EthereumSqlTypeWrapper::U256Nullable(v) => v.to_string(),
             EthereumSqlTypeWrapper::U64BigInt(v) => v.to_string(),
-            EthereumSqlTypeWrapper::StringVarchar(v) => v.to_string(),
-            EthereumSqlTypeWrapper::StringChar(v) => v.to_string(),
-            EthereumSqlTypeWrapper::StringNullable(v) => v.to_string(),
-            EthereumSqlTypeWrapper::StringVarcharNullable(v) => v.to_string(),
-            EthereumSqlTypeWrapper::StringCharNullable(v) => v.to_string(),
-            EthereumSqlTypeWrapper::AddressNullable(v) => v.to_string(),
+            EthereumSqlTypeWrapper::StringVarchar(v) => format!("'{}'", v.replace("'", "\\'")),
+            EthereumSqlTypeWrapper::StringChar(v) => format!("'{}'", v.replace("'", "\\'")),
+            EthereumSqlTypeWrapper::StringNullable(v) => format!("'{}'", v.replace("'", "\\'")),
+            EthereumSqlTypeWrapper::StringVarcharNullable(v) => {
+                format!("'{}'", v.replace("'", "\\'"))
+            }
+            EthereumSqlTypeWrapper::StringCharNullable(v) => {
+                format!("'{}'", v.replace("'", "\\'"))
+            }
+            EthereumSqlTypeWrapper::AddressNullable(v) => format!("'{v}'"),
             EthereumSqlTypeWrapper::BytesNullable(v) => format!("'0x{}'", hex::encode(v)),
 
             #[allow(deprecated)]
-            EthereumSqlTypeWrapper::H160(v) => v.to_string(),
+            EthereumSqlTypeWrapper::H160(v) => format!("'{v}'"),
             #[allow(deprecated)]
             EthereumSqlTypeWrapper::VecH160(values) => {
-                format!("[{}]", values.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", "))
+                format!(
+                    "[{}]",
+                    values.iter().map(|v| format!("'{v}'")).collect::<Vec<_>>().join(", ")
+                )
             }
 
             EthereumSqlTypeWrapper::VecStringVarchar(values) => {
-                format!("[{}]", values.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", "))
+                format!(
+                    "[{}]",
+                    values
+                        .iter()
+                        .map(|v| format!("'{}'", v.replace("'", "\\'")))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
             }
             EthereumSqlTypeWrapper::VecStringChar(values) => {
-                format!("[{}]", values.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", "))
+                format!(
+                    "[{}]",
+                    values
+                        .iter()
+                        .map(|v| format!("'{}'", v.replace("'", "\\'")))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
             }
 
             // PostgreSQL-specific Numeric wrappers — serialize as string for ClickHouse.
@@ -2419,6 +2440,30 @@ mod tests {
     fn test_ch_u64_bigint() {
         let wrapper = EthereumSqlTypeWrapper::U64BigInt(12345678u64);
         assert_eq!(wrapper.to_clickhouse_value(), "12345678");
+    }
+
+    #[test]
+    fn test_ch_string_char_is_quoted() {
+        let wrapper = EthereumSqlTypeWrapper::StringChar(
+            "0x145c6705ffbf461e85d08b4a7f5850d6b52a7364d93a057722ca1194034f3ba4".to_string(),
+        );
+        assert_eq!(
+            wrapper.to_clickhouse_value(),
+            "'0x145c6705ffbf461e85d08b4a7f5850d6b52a7364d93a057722ca1194034f3ba4'"
+        );
+    }
+
+    #[test]
+    fn test_ch_string_varchar_escapes_quotes() {
+        let wrapper = EthereumSqlTypeWrapper::StringVarchar("abc'def".to_string());
+        assert_eq!(wrapper.to_clickhouse_value(), "'abc\\'def'");
+    }
+
+    #[test]
+    fn test_ch_vec_string_char_is_quoted() {
+        let wrapper =
+            EthereumSqlTypeWrapper::VecStringChar(vec!["0xaaa".to_string(), "0xbbb".to_string()]);
+        assert_eq!(wrapper.to_clickhouse_value(), "['0xaaa', '0xbbb']");
     }
 
     #[test]
