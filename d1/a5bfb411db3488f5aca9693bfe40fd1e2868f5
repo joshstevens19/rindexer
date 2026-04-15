@@ -1,0 +1,23 @@
+documentation/docs/pages/docs/changelog.mdx
+  e2b0f6af09ffa59f 12,14-15,17,19-20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "d1a5bfb411db3488f5aca9693bfe40fd1e2868f5",
+  "prompts": {
+    "e2b0f6af09ffa59f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c9c34c02-cf32-40a1-8de5-46d8839d948e",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 6,
+      "total_deletions": 3,
+      "accepted_lines": 6,
+      "overriden_lines": 0
+    }
+  }
+}
