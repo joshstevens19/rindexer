@@ -282,6 +282,7 @@ fn build_multi_network_config(
                 reorg_safe_distance: None,
                 include_events: Some(vec![EventConfig { name: "Transfer".to_string() }]),
                 tables: None,
+                streams: None,
             },
             ContractConfig {
                 name: "SimpleERC20".to_string(),
@@ -295,6 +296,7 @@ fn build_multi_network_config(
                 reorg_safe_distance: None,
                 include_events: Some(vec![EventConfig { name: "Transfer".to_string() }]),
                 tables: None,
+                streams: None,
             },
         ],
     }

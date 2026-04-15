@@ -83,6 +83,8 @@ pub struct ContractConfig {
     pub include_events: Option<Vec<EventConfig>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tables: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub streams: Option<serde_json::Value>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]

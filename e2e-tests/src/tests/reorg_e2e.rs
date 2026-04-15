@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use ethers::types::U256;
 use std::future::Future;
 use std::pin::Pin;
@@ -83,6 +83,20 @@ impl TestModule for ReorgTests {
             )
             .with_timeout(180)
             .with_chain_id(137),
+            TestDefinition::new(
+                "test_reorg_offline_new_events_on_fork",
+                "Reorg: offline reorg with new events on canonical fork, PG reflects new data",
+                reorg_offline_new_events_on_fork,
+            )
+            .with_timeout(240)
+            .with_chain_id(137),
+            TestDefinition::new(
+                "test_reorg_webhook_stream_notification",
+                "Reorg: webhook stream receives __rindexer_reorg retraction event after live reorg",
+                reorg_webhook_stream_notification,
+            )
+            .with_timeout(240)
+            .with_chain_id(137),
         ]
     }
 }
@@ -119,6 +133,7 @@ fn create_reorg_config(
         reorg_safe_distance: Some(serde_json::json!(false)),
         include_events: Some(vec![crate::test_suite::EventConfig { name: "Transfer".to_string() }]),
         tables: None,
+        streams: None,
     }];
     config
 }
@@ -1332,6 +1347,317 @@ fn reorg_live_deep_reorg(
             "Reorg Live Deep Test PASSED: pre={}, post={}, no duplicates",
             pre_count, post_count
         );
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Test 11: Offline reorg with new events on the canonical fork
+//
+// Stop indexer, trigger reorg, send NEW transfers on the canonical chain,
+// then restart. The startup validation should detect the reorg, delete stale
+// rows, and re-index the new fork's events.
+// ---------------------------------------------------------------------------
+fn reorg_offline_new_events_on_fork(
+    context: &mut TestContext,
+) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
+    Box::pin(async move {
+        info!("Running Reorg Offline New Events On Fork Test");
+
+        let (container_name, pg_port) = match crate::docker::start_postgres_container().await {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(crate::tests::test_runner::SkipTest(format!(
+                    "Docker not available: {}",
+                    e
+                ))
+                .into());
+            }
+        };
+        context.register_container(container_name);
+        crate::docker::wait_for_postgres_ready(pg_port, 30).await?;
+
+        let contract_address = context.deploy_test_contract().await?;
+
+        // Phase 1: Send 3 transfers, index them
+        let amounts = [1000u64, 2000, 3000];
+        let recipients: Vec<_> = (0..3).map(generate_test_address).collect();
+        for (r, a) in recipients.iter().zip(amounts.iter()) {
+            context.anvil.send_transfer(&contract_address, r, U256::from(*a)).await?;
+            context.anvil.mine_block().await?;
+        }
+
+        let mut config = create_reorg_config(context, &contract_address);
+        config.storage.postgres = Some(crate::test_suite::PostgresConfig { enabled: true });
+        config.storage.csv.enabled = false;
+
+        start_indexer_with_pg(context, config, pg_port).await?;
+
+        let conn_str = format!(
+            "host=localhost port={} user=postgres password=postgres dbname=postgres",
+            pg_port
+        );
+        let table = "reorg_test_simple_erc_20.transfer";
+
+        // 1 mint + 3 transfers = 4 rows
+        let pre_count = wait_for_pg_count(&conn_str, table, 4, 15).await?;
+        info!("Pre-reorg PG rows: {}", pre_count);
+
+        // Phase 2: Stop indexer
+        stop_indexer(context).await?;
+
+        // Phase 3: Reorg the last 2 blocks, then send NEW events on the fork
+        context.anvil.trigger_reorg(2).await?;
+
+        // Send 2 new transfers on the canonical fork (different recipients/amounts)
+        let fork_recipient_1 = generate_test_address(200);
+        let fork_recipient_2 = generate_test_address(201);
+        context
+            .anvil
+            .send_transfer(&contract_address, &fork_recipient_1, U256::from(8888u64))
+            .await?;
+        context.anvil.mine_block().await?;
+        context
+            .anvil
+            .send_transfer(&contract_address, &fork_recipient_2, U256::from(9999u64))
+            .await?;
+        context.anvil.mine_block().await?;
+
+        // Phase 4: Restart — should detect reorg, delete stale rows, re-index new fork
+        restart_indexer_with_pg(context, pg_port).await?;
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+        let post_count = wait_for_pg_count(&conn_str, table, 1, 15).await?;
+        info!("Post-reorg PG rows: {}", post_count);
+
+        assert_no_pg_duplicates(&conn_str, table).await?;
+
+        // Verify the new fork's events are present by checking for the new amounts
+        let (client, connection) =
+            tokio_postgres::connect(&conn_str, tokio_postgres::NoTls).await?;
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        let new_events = client
+            .query(
+                &format!(
+                    "SELECT value FROM {} WHERE value IN ('8888', '9999') ORDER BY value",
+                    table
+                ),
+                &[],
+            )
+            .await?;
+        info!("New fork events found: {}", new_events.len());
+
+        if new_events.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Expected events from the new fork (values 8888, 9999) but found none"
+            ));
+        }
+
+        info!(
+            "Reorg Offline New Events On Fork Test PASSED: pre={}, post={}, new fork events={}",
+            pre_count,
+            post_count,
+            new_events.len()
+        );
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Test 12: Webhook stream receives __rindexer_reorg notification
+//
+// Starts a lightweight TCP listener as a webhook endpoint, configures
+// rindexer with a webhook stream, triggers a live reorg, and asserts the
+// listener received a JSON payload with type=reorg.
+// ---------------------------------------------------------------------------
+fn reorg_webhook_stream_notification(
+    context: &mut TestContext,
+) -> Pin<Box<dyn Future<Output = Result<()>> + '_>> {
+    Box::pin(async move {
+        info!("Running Reorg Webhook Stream Notification Test");
+
+        let (container_name, pg_port) = match crate::docker::start_postgres_container().await {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(crate::tests::test_runner::SkipTest(format!(
+                    "Docker not available: {}",
+                    e
+                ))
+                .into());
+            }
+        };
+        context.register_container(container_name);
+        crate::docker::wait_for_postgres_ready(pg_port, 30).await?;
+
+        // Start a simple HTTP listener to collect webhook payloads
+        let webhook_port = crate::docker::allocate_free_port()?;
+        let received_bodies: std::sync::Arc<tokio::sync::Mutex<Vec<String>>> =
+            std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+
+        let bodies_clone = received_bodies.clone();
+        let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", webhook_port))
+            .await
+            .context("Failed to bind webhook listener")?;
+        info!("Webhook listener started on port {}", webhook_port);
+
+        // Spawn a task that accepts connections and collects POST bodies
+        tokio::spawn(async move {
+            loop {
+                if let Ok((mut stream, _)) = listener.accept().await {
+                    let bodies = bodies_clone.clone();
+                    tokio::spawn(async move {
+                        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                        let mut buf = vec![0u8; 65536];
+                        if let Ok(n) = stream.read(&mut buf).await {
+                            let request = String::from_utf8_lossy(&buf[..n]).to_string();
+                            // Extract body after the \r\n\r\n separator
+                            if let Some(body_start) = request.find("\r\n\r\n") {
+                                let body = request[body_start + 4..].to_string();
+                                if !body.is_empty() {
+                                    bodies.lock().await.push(body);
+                                }
+                            }
+                            // Send HTTP 200 response
+                            let response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+                            let _ = stream.write_all(response.as_bytes()).await;
+                        }
+                    });
+                }
+            }
+        });
+
+        let contract_address = context.deploy_test_contract().await?;
+        let amounts = [1000u64, 2000, 3000, 4000, 5000];
+        let recipients: Vec<_> = (0..5).map(generate_test_address).collect();
+
+        for (r, a) in recipients.iter().zip(amounts.iter()) {
+            context.anvil.send_transfer(&contract_address, r, U256::from(*a)).await?;
+            context.anvil.mine_block().await?;
+        }
+
+        // Build config with webhook stream pointing to our listener
+        let mut config = create_reorg_config(context, &contract_address);
+        config.storage.postgres = Some(crate::test_suite::PostgresConfig { enabled: true });
+        config.storage.csv.enabled = false;
+
+        // Add streams config to the contract
+        if let Some(contract) = config.contracts.get_mut(0) {
+            contract.streams = Some(serde_json::json!({
+                "webhooks": [{
+                    "endpoint": format!("http://127.0.0.1:{}/webhook", webhook_port),
+                    "shared_secret": "test-secret",
+                    "networks": ["polygon"],
+                    "events": [
+                        { "event_name": "Transfer" }
+                    ]
+                }]
+            }));
+        }
+
+        start_indexer_with_pg(context, config, pg_port).await?;
+
+        let conn_str = format!(
+            "host=localhost port={} user=postgres password=postgres dbname=postgres",
+            pg_port
+        );
+        let table = "reorg_test_simple_erc_20.transfer";
+
+        // Wait for initial indexing
+        let pre_count = wait_for_pg_count(&conn_str, table, 6, 15).await?;
+        info!("Pre-reorg PG rows: {}", pre_count);
+
+        // Send a live transfer to confirm poller is active
+        let live_recipient = generate_test_address(99);
+        context
+            .anvil
+            .send_transfer(&contract_address, &live_recipient, U256::from(777u64))
+            .await?;
+        context.anvil.mine_block().await?;
+        let live_count = wait_for_pg_count(&conn_str, table, pre_count + 1, 15).await?;
+        info!("After live transfer: {} PG rows", live_count);
+
+        // Clear any initial webhook payloads from indexing
+        received_bodies.lock().await.clear();
+
+        // Trigger reorg
+        context.anvil.trigger_reorg(2).await?;
+        context.anvil.mine_block().await?;
+
+        // Wait for reorg recovery
+        if let Some(r) = &context.rindexer {
+            r.wait_for_reorg_recovery(60).await?;
+        }
+
+        // Give webhook delivery a moment to complete
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+        // Check webhook received a reorg notification
+        let bodies = received_bodies.lock().await;
+        info!("Webhook received {} payloads after reorg", bodies.len());
+
+        let reorg_payload = bodies.iter().find(|b| b.contains("reorg"));
+
+        if let Some(payload) = reorg_payload {
+            info!("Reorg webhook payload: {}", payload);
+
+            // Payload structure: { event_name: "__rindexer_reorg", event_data: [{ type: "reorg", network, fork_block, depth, affected_tx_hashes }], ... }
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(payload) {
+                let event_name = json.get("event_name").and_then(|v| v.as_str());
+                if event_name != Some("__rindexer_reorg") {
+                    return Err(anyhow::anyhow!(
+                        "Expected event_name=__rindexer_reorg, got: {:?}",
+                        event_name
+                    ));
+                }
+
+                let event_data = json
+                    .get("event_data")
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| arr.first());
+                let reorg_entry = event_data.ok_or_else(|| {
+                    anyhow::anyhow!("Missing event_data array in reorg webhook payload")
+                })?;
+
+                let event_type = reorg_entry.get("type").and_then(|v| v.as_str());
+                if event_type != Some("reorg") {
+                    return Err(anyhow::anyhow!(
+                        "Expected type=reorg in event_data, got: {:?}",
+                        event_type
+                    ));
+                }
+
+                let network = reorg_entry.get("network").and_then(|v| v.as_str());
+                if network != Some("polygon") {
+                    return Err(anyhow::anyhow!(
+                        "Expected network=polygon in event_data, got: {:?}",
+                        network
+                    ));
+                }
+
+                let fork_block = reorg_entry.get("fork_block").and_then(|v| v.as_u64());
+                info!(
+                    "Webhook payload validated: type=reorg, network=polygon, fork_block={:?}",
+                    fork_block
+                );
+            } else {
+                return Err(anyhow::anyhow!(
+                    "Webhook payload is not valid JSON: {}",
+                    payload
+                ));
+            }
+        } else {
+            return Err(anyhow::anyhow!(
+                "No reorg notification received via webhook. Got {} payloads: {:?}",
+                bodies.len(),
+                bodies.iter().take(3).collect::<Vec<_>>()
+            ));
+        }
+
+        assert_no_pg_duplicates(&conn_str, table).await?;
+
+        info!("Reorg Webhook Stream Notification Test PASSED");
         Ok(())
     })
 }

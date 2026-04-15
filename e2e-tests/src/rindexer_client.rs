@@ -419,6 +419,7 @@ impl RindexerInstance {
                 name: "Transfer".to_string(),
             }]),
             tables: None,
+            streams: None,
         }];
         config
     }

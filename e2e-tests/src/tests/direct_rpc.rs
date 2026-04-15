@@ -124,6 +124,7 @@ fn build_direct_rpc_config(
             reorg_safe_distance: None,
             include_events: Some(vec![EventConfig { name: "Transfer".to_string() }]),
             tables: None,
+            streams: None,
         }],
     }
 }
