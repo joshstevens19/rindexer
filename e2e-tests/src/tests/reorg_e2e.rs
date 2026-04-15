@@ -1228,9 +1228,8 @@ fn reorg_aggregation_table_rollback(
         tokio::spawn(async move {
             let _ = connection.await;
         });
-        let pre_agg_rows = client
-            .query(&format!("SELECT COUNT(*) FROM {}", agg_table), &[])
-            .await?;
+        let pre_agg_rows =
+            client.query(&format!("SELECT COUNT(*) FROM {}", agg_table), &[]).await?;
         let pre_agg_count: i64 = pre_agg_rows[0].get(0);
         info!("Pre-reorg aggregation rows: {}", pre_agg_count);
 
@@ -1253,9 +1252,8 @@ fn reorg_aggregation_table_rollback(
         tokio::spawn(async move {
             let _ = connection2.await;
         });
-        let post_agg_rows = client2
-            .query(&format!("SELECT COUNT(*) FROM {}", agg_table), &[])
-            .await?;
+        let post_agg_rows =
+            client2.query(&format!("SELECT COUNT(*) FROM {}", agg_table), &[]).await?;
         let post_agg_count: i64 = post_agg_rows[0].get(0);
         info!("Post-reorg aggregation rows: {}", post_agg_count);
 
@@ -1314,10 +1312,7 @@ fn reorg_live_deep_reorg(
 
         // Send a live transfer to confirm poller is active
         let live_recipient = generate_test_address(99);
-        context
-            .anvil
-            .send_transfer(&contract_address, &live_recipient, U256::from(777u64))
-            .await?;
+        context.anvil.send_transfer(&contract_address, &live_recipient, U256::from(777u64)).await?;
         context.anvil.mine_block().await?;
         let live_count = wait_for_ch_count(ch_port, ch_table, pre_count + 1, 15).await?;
         info!("After live transfer: {} CH rows", live_count);
@@ -1343,10 +1338,7 @@ fn reorg_live_deep_reorg(
 
         assert_no_ch_duplicates(ch_port, ch_table).await?;
 
-        info!(
-            "Reorg Live Deep Test PASSED: pre={}, post={}, no duplicates",
-            pre_count, post_count
-        );
+        info!("Reorg Live Deep Test PASSED: pre={}, post={}, no duplicates", pre_count, post_count);
         Ok(())
     })
 }
@@ -1570,10 +1562,7 @@ fn reorg_webhook_stream_notification(
 
         // Send a live transfer to confirm poller is active
         let live_recipient = generate_test_address(99);
-        context
-            .anvil
-            .send_transfer(&contract_address, &live_recipient, U256::from(777u64))
-            .await?;
+        context.anvil.send_transfer(&contract_address, &live_recipient, U256::from(777u64)).await?;
         context.anvil.mine_block().await?;
         let live_count = wait_for_pg_count(&conn_str, table, pre_count + 1, 15).await?;
         info!("After live transfer: {} PG rows", live_count);
@@ -1612,10 +1601,8 @@ fn reorg_webhook_stream_notification(
                     ));
                 }
 
-                let event_data = json
-                    .get("event_data")
-                    .and_then(|v| v.as_array())
-                    .and_then(|arr| arr.first());
+                let event_data =
+                    json.get("event_data").and_then(|v| v.as_array()).and_then(|arr| arr.first());
                 let reorg_entry = event_data.ok_or_else(|| {
                     anyhow::anyhow!("Missing event_data array in reorg webhook payload")
                 })?;
@@ -1642,10 +1629,7 @@ fn reorg_webhook_stream_notification(
                     fork_block
                 );
             } else {
-                return Err(anyhow::anyhow!(
-                    "Webhook payload is not valid JSON: {}",
-                    payload
-                ));
+                return Err(anyhow::anyhow!("Webhook payload is not valid JSON: {}", payload));
             }
         } else {
             return Err(anyhow::anyhow!(
