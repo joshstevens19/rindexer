@@ -1,0 +1,36 @@
+core/src/indexer/start.rs
+  e252e181ce39b20d 555-559,561-565,567-583,585-591,593-603,605-606,609-610,612-629,631,636-641,643,645-647
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "b1c95f5eb9a2f3ef1af407c084688fe9c9a134cb",
+  "prompts": {
+    "79a5c3390d4472c3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1b4cd319-9c24-4c07-b169-4ad6c5ccbbc1",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 508,
+      "overriden_lines": 0
+    },
+    "e252e181ce39b20d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f755f5ae-867d-42a0-8627-6d5ad1e1d91f",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 81,
+      "total_deletions": 74,
+      "accepted_lines": 81,
+      "overriden_lines": 0
+    }
+  }
+}
