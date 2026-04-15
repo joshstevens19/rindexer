@@ -1,0 +1,57 @@
+core/src/indexer/reorg/mod.rs
+  e2b0f6af09ffa59f 49-50,52-53
+core/src/indexer/reorg/coordinator.rs
+  e2b0f6af09ffa59f 17-18
+core/src/indexer/reorg/persistence.rs
+  e2b0f6af09ffa59f 151-152
+core/src/database/postgres/client.rs
+  e2b0f6af09ffa59f 60-62,481-484,509-512,547-549
+core/src/indexer/reorg/task.rs
+  e2b0f6af09ffa59f 265-266,269
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "8bf0da7134ca210c6a26bbd2c157d00585cd61a9",
+  "prompts": {
+    "79a5c3390d4472c3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1b4cd319-9c24-4c07-b169-4ad6c5ccbbc1",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 508,
+      "overriden_lines": 0
+    },
+    "b416449b704d5937": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9ec8295a-efa7-4aa2-89d5-707dbef01acf",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 339,
+      "total_deletions": 7,
+      "accepted_lines": 333,
+      "overriden_lines": 0
+    },
+    "e2b0f6af09ffa59f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c9c34c02-cf32-40a1-8de5-46d8839d948e",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 25,
+      "total_deletions": 11,
+      "accepted_lines": 25,
+      "overriden_lines": 0
+    }
+  }
+}
