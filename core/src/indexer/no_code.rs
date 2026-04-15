@@ -338,46 +338,29 @@ fn no_code_callback(params: Arc<NoCodeCallbackParams>) -> EventCallbacks {
                 return Ok(());
             }
 
-            // TODO
-            // Remove unwrap
-            let (from_block, to_block) = match &results {
-                CallbackResult::Event(event) => (
-                    event.first().unwrap().found_in_request.from_block,
-                    event.first().unwrap().found_in_request.to_block,
-                ),
-                CallbackResult::Trace(event) => {
-                    // Filter to only NativeTransfer events and get the first one
-                    let native_transfer = event
-                        .iter()
-                        .filter_map(|result| match result {
-                            TraceResult::NativeTransfer { found_in_request, .. } => {
-                                Some(found_in_request)
-                            }
-                            TraceResult::Block { .. } => None,
-                        })
-                        .next()
-                        .unwrap();
-                    (native_transfer.from_block, native_transfer.to_block)
-                }
-            };
-
-            let network = match &results {
+            // event_length > 0 check above guarantees at least one entry. Both trace
+            // variants carry the same metadata in found_in_request/tx_information, so
+            // we extract from whichever variant is first without discriminating.
+            let (from_block, to_block, network) = match &results {
                 CallbackResult::Event(event) => {
-                    event.first().unwrap().tx_information.network.clone()
+                    let first = event.first().expect("event_length > 0");
+                    (
+                        first.found_in_request.from_block,
+                        first.found_in_request.to_block,
+                        first.tx_information.network.clone(),
+                    )
                 }
                 CallbackResult::Trace(event) => {
-                    // Filter to only NativeTransfer events and get the first one
-                    event
-                        .iter()
-                        .filter_map(|result| match result {
-                            TraceResult::NativeTransfer { tx_information, .. } => {
-                                Some(&tx_information.network)
-                            }
-                            TraceResult::Block { .. } => None,
-                        })
-                        .next()
-                        .unwrap()
-                        .clone()
+                    let first = event.first().expect("event_length > 0");
+                    let (fir, tx_info) = match first {
+                        TraceResult::NativeTransfer {
+                            found_in_request, tx_information, ..
+                        } => (found_in_request, tx_information),
+                        TraceResult::Block { found_in_request, tx_information, .. } => {
+                            (found_in_request, tx_information)
+                        }
+                    };
+                    (fir.from_block, fir.to_block, tx_info.network.clone())
                 }
             };
 
