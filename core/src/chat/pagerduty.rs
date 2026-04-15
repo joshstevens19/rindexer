@@ -59,6 +59,20 @@ impl PagerDutyBot {
 mod tests {
     use super::*;
 
+    #[test]
+    fn test_pagerduty_bot_new() {
+        let bot = PagerDutyBot::new("test-routing-key".to_string(), "critical".to_string());
+        assert_eq!(bot.routing_key, "test-routing-key");
+        assert_eq!(bot.severity, "critical");
+    }
+
+    #[tokio::test]
+    async fn test_pagerduty_send_message_invalid_key() {
+        let bot = PagerDutyBot::new("invalid-key".to_string(), "critical".to_string());
+        let result = bot.send_message("test").await;
+        assert!(result.is_err());
+    }
+
     /// Smoke test that sends a real PagerDuty event.
     /// Requires env vars: PAGERDUTY_ROUTING_KEY
     ///

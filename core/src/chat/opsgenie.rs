@@ -56,6 +56,20 @@ impl OpsGenieBot {
 mod tests {
     use super::*;
 
+    #[test]
+    fn test_opsgenie_bot_new() {
+        let bot = OpsGenieBot::new("test-api-key".to_string(), "P1".to_string());
+        assert_eq!(bot.api_key, "test-api-key");
+        assert_eq!(bot.priority, "P1");
+    }
+
+    #[tokio::test]
+    async fn test_opsgenie_send_message_invalid_key() {
+        let bot = OpsGenieBot::new("invalid-key".to_string(), "P1".to_string());
+        let result = bot.send_message("test").await;
+        assert!(result.is_err());
+    }
+
     /// Smoke test that sends a real OpsGenie alert.
     /// Requires env vars: OPSGENIE_API_KEY
     ///
