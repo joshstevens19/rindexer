@@ -1,0 +1,37 @@
+core/src/provider.rs
+  fb35848fbf119991 1000,1013-1014,1022-1035,1067,1070-1075
+  93f804be50375d7c 1009,1011-1012,1015-1021,1036-1038
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "67ff191eca9f798ced2be75f22a1133a17411b76",
+  "prompts": {
+    "93f804be50375d7c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1704ea78-75a0-4661-9821-de36d7500f41",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 13,
+      "overriden_lines": 0
+    },
+    "fb35848fbf119991": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "642ad615-3262-4385-a0ea-2be1d89aaa56",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 25,
+      "total_deletions": 3,
+      "accepted_lines": 24,
+      "overriden_lines": 1
+    }
+  }
+}
