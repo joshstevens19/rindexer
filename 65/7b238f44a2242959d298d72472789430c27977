@@ -1,0 +1,23 @@
+core/src/generator/build.rs
+  b44b22da986211af 407
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "657b238f44a2242959d298d72472789430c27977",
+  "prompts": {
+    "b44b22da986211af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "df83240b-4c45-438d-b5d0-182f0b37699a",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 199,
+      "total_deletions": 121,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    }
+  }
+}

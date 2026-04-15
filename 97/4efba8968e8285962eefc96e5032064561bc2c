@@ -1,0 +1,23 @@
+core/src/indexer/start.rs
+  847014acdc95bfaf 38,162-167,751,768-790,794-852,855-856,858,860-876,878,880-896,898,900-916,918,920-934,936,938-954,956,958,971
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "974efba8968e8285962eefc96e5032064561bc2c",
+  "prompts": {
+    "847014acdc95bfaf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ba97b2b6-c1ec-4c31-8b29-a4cc233ccc5c",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 224,
+      "total_deletions": 17,
+      "accepted_lines": 183,
+      "overriden_lines": 0
+    }
+  }
+}

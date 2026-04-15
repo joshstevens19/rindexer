@@ -1,0 +1,24 @@
+core/src/generator/networks_bindings.rs
+  b44b22da986211af 137,199,200-234,236-242,247-264
+  74765553b8c9673c 1,147-148,181
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "1e6901fd34e6390b165e47e4a0f428a75311727a",
+  "prompts": {
+    "b44b22da986211af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "df83240b-4c45-438d-b5d0-182f0b37699a",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 125,
+      "total_deletions": 2,
+      "accepted_lines": 60,
+      "overriden_lines": 0
+    }
+  }
+}
