@@ -556,92 +556,99 @@ async fn start_indexing_contract_events(
 
     // Build one ReorgCoordinator per network (shared across all events on that network).
     // The first non-blocking event on each network takes ownership; subsequent events get None.
+    //
+    // Startup reorg validation MUST run before any indexing begins — including the
+    // historical phase — so that stale checkpoints are corrected before events are
+    // fetched.  Coordinators are only kept for live indexing; when we are in the
+    // historical-only pass they are dropped after validation.
     let mut network_coordinators: HashMap<String, ReorgCoordinator> = HashMap::new();
-    if !no_live_indexing_forced {
-        for (network_name, (reorg_config, chain_id)) in &reorg_configs {
-            let window_size = reorg_config
-                .window_size
-                .unwrap_or_else(|| 2 * reorg_safe_distance_for_chain(*chain_id) as usize);
-            let event_tables = network_event_tables.get(network_name).cloned().unwrap_or_default();
+    for (network_name, (reorg_config, chain_id)) in &reorg_configs {
+        let window_size = reorg_config
+            .window_size
+            .unwrap_or_else(|| 2 * reorg_safe_distance_for_chain(*chain_id) as usize);
+        let event_tables = network_event_tables.get(network_name).cloned().unwrap_or_default();
 
-            let window = match reorg_persistence.load(network_name, window_size).await {
-                Ok(window) => {
-                    info!(
-                        "Loaded {} blocks into reorg window for network {}",
-                        window.len(),
-                        network_name,
-                    );
-                    window
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to load reorg window from persistence for {}: {}. Using empty window.",
-                        network_name, e
-                    );
-                    BlockChainWindow::try_new(window_size)?
-                }
-            };
+        let window = match reorg_persistence.load(network_name, window_size).await {
+            Ok(window) => {
+                info!(
+                    "Loaded {} blocks into reorg window for network {}",
+                    window.len(),
+                    network_name,
+                );
+                window
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to load reorg window from persistence for {}: {}. Using empty window.",
+                    network_name, e
+                );
+                BlockChainWindow::try_new(window_size)?
+            }
+        };
 
-            // Get a provider for this network from any registry event targeting it
-            let provider = registry
+        // Get a provider for this network from any registry event targeting it
+        let provider = registry
+            .events
+            .iter()
+            .flat_map(|e| e.contract.details.iter())
+            .find(|nc| nc.network == *network_name)
+            .map(|nc| nc.cached_provider.clone());
+
+        if let Some(provider) = provider {
+            let derived_tables =
+                network_derived_tables.get(network_name).cloned().unwrap_or_default();
+            let mut coordinator = ReorgCoordinator::new(
+                network_name.clone(),
+                window,
+                Arc::clone(&reorg_persistence),
+                provider,
+                event_tables,
+                derived_tables,
+            )?;
+
+            // Get streams_clients for this network (if any event has one)
+            let startup_streams_clients = registry
                 .events
                 .iter()
-                .flat_map(|e| e.contract.details.iter())
-                .find(|nc| nc.network == *network_name)
-                .map(|nc| nc.cached_provider.clone());
+                .find(|e| e.contract.details.iter().any(|d| d.network == *network_name))
+                .map(|e| e.streams_clients.clone());
 
-            if let Some(provider) = provider {
-                let derived_tables =
-                    network_derived_tables.get(network_name).cloned().unwrap_or_default();
-                let mut coordinator = ReorgCoordinator::new(
-                    network_name.clone(),
-                    window,
-                    Arc::clone(&reorg_persistence),
-                    provider,
-                    event_tables,
-                    derived_tables,
-                )?;
-
-                // Get streams_clients for this network (if any event has one)
-                let startup_streams_clients = registry
-                    .events
-                    .iter()
-                    .find(|e| e.contract.details.iter().any(|d| d.network == *network_name))
-                    .map(|e| e.streams_clients.clone());
-
-                // Run startup validation
-                match coordinator.validate_on_startup().await {
-                    Ok(Some(startup_task)) => {
-                        warn!(
-                            "Startup reorg detected on {} (fork_point: {}, depth: {}). Executing rollback before indexing.",
-                            network_name,
-                            startup_task.fork_point,
-                            startup_task.detection_point.saturating_sub(startup_task.fork_point) + 1,
-                        );
-                        let reorg_ctx = ReorgContext {
-                            postgres: postgres.as_deref(),
-                            clickhouse: clickhouse.as_ref(),
-                            registry: Some(&registry),
-                            streams_clients: startup_streams_clients
-                                .as_ref()
-                                .and_then(|a| a.as_ref().as_ref()),
-                        };
-                        if let Err(e) = coordinator.handle_reorg(startup_task, &reorg_ctx).await {
-                            error!(
-                                "Failed to execute startup reorg rollback for {}: {}",
-                                network_name, e
-                            );
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
+            // Run startup validation
+            match coordinator.validate_on_startup().await {
+                Ok(Some(startup_task)) => {
+                    warn!(
+                        "Startup reorg detected on {} (fork_point: {}, depth: {}). Executing rollback before indexing.",
+                        network_name,
+                        startup_task.fork_point,
+                        startup_task.detection_point.saturating_sub(startup_task.fork_point) + 1,
+                    );
+                    let reorg_ctx = ReorgContext {
+                        postgres: postgres.as_deref(),
+                        clickhouse: clickhouse.as_ref(),
+                        registry: Some(&registry),
+                        streams_clients: startup_streams_clients
+                            .as_ref()
+                            .and_then(|a| a.as_ref().as_ref()),
+                    };
+                    if let Err(e) = coordinator.handle_reorg(startup_task, &reorg_ctx).await {
                         error!(
-                            "Startup reorg validation failed for {}: {}. Proceeding without validation.",
+                            "Failed to execute startup reorg rollback for {}: {}",
                             network_name, e
                         );
                     }
                 }
+                Ok(None) => {}
+                Err(e) => {
+                    error!(
+                        "Startup reorg validation failed for {}: {}. Proceeding without validation.",
+                        network_name, e
+                    );
+                }
+            }
 
+            // Only keep coordinators for live indexing; in the historical-only pass
+            // they served their purpose (startup validation) and can be dropped.
+            if !no_live_indexing_forced {
                 network_coordinators.insert(network_name.clone(), coordinator);
             }
         }
