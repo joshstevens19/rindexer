@@ -88,6 +88,58 @@ pub struct TwilioEvent {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PagerDutyConfig {
+    pub routing_key: String,
+    #[serde(default = "default_pagerduty_severity")]
+    pub severity: String,
+    pub networks: Vec<String>,
+    pub messages: Vec<PagerDutyEvent>,
+}
+
+fn default_pagerduty_severity() -> String {
+    "critical".to_string()
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PagerDutyEvent {
+    pub event_name: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conditions: Option<Vec<Map<String, Value>>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter_expression: Option<String>,
+
+    pub template_inline: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct OpsGenieConfig {
+    pub api_key: String,
+    #[serde(default = "default_opsgenie_priority")]
+    pub priority: String,
+    pub networks: Vec<String>,
+    pub messages: Vec<OpsGenieEvent>,
+}
+
+fn default_opsgenie_priority() -> String {
+    "P1".to_string()
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct OpsGenieEvent {
+    pub event_name: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conditions: Option<Vec<Map<String, Value>>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter_expression: Option<String>,
+
+    pub template_inline: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChatConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telegram: Option<Vec<TelegramConfig>>,
@@ -100,4 +152,10 @@ pub struct ChatConfig {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub twilio: Option<Vec<TwilioConfig>>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pagerduty: Option<Vec<PagerDutyConfig>>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opsgenie: Option<Vec<OpsGenieConfig>>,
 }

@@ -152,6 +152,9 @@ export default defineConfig({
             },
             { text: "Discord", link: "/docs/start-building/chatbots/discord" },
             { text: "Slack", link: "/docs/start-building/chatbots/slack" },
+            { text: "Twilio", link: "/docs/start-building/chatbots/twilio" },
+            { text: "PagerDuty", link: "/docs/start-building/chatbots/pagerduty" },
+            { text: "OpsGenie", link: "/docs/start-building/chatbots/opsgenie" },
           ],
         },
         {
